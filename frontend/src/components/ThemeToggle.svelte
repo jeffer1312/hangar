@@ -30,11 +30,11 @@
   });
 
   const opts = $derived<{ v: ThemePref; label: string; aria: string }[]>([
-    { v: 'system', label: 'Auto', aria: m.config_idioma_sistema() },
+    { v: 'system', label: m.config_tema_auto(), aria: m.config_idioma_sistema() },
     { v: 'light', label: '☀', aria: m.config_tema_claro() },
     { v: 'dark', label: '☾', aria: m.config_tema_escuro() },
     ...(temPaleta
-      ? [{ v: 'desktop' as ThemePref, label: 'Desktop', aria: m.config_tema_desktop() }]
+      ? [{ v: 'desktop' as ThemePref, label: m.config_aparencia_desktop(), aria: m.config_tema_desktop() }]
       : []),
   ]);
 </script>

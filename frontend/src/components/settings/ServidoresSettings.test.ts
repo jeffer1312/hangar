@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import ServidoresSettings from './ServidoresSettings.svelte';
+import * as m from '../../paraglide/messages';
 import * as auth from '../../lib/auth';
 import * as api from '../../lib/api';
 import type { Server } from '../../lib/auth';
@@ -139,7 +140,7 @@ describe('ServidoresSettings — logout idempotente', () => {
     await tick();
     expect(onLogoutCalls).toHaveBeenCalledTimes(1);
     const aviso = t.el.querySelector<HTMLElement>('.ss-aviso');
-    expect(aviso?.innerText).toContain('Não foi possível sair');
+    expect(aviso?.innerText).toContain(m.config_servidores_sair_erro());
     expect(aviso?.getAttribute('role')).toBe('status');
     // Guard resetado: nova tentativa funciona
     t.el.querySelector<HTMLButtonElement>('.ss-danger')!.click();

@@ -9,6 +9,7 @@
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import QrScanner from '../QrScanner.svelte';
   import type { RemovalSnapshot, Server } from '../../lib/auth';
+  import * as m from '../../paraglide/messages';
 
   // Tela Servidores das Configurações (item C): controller LOCAL do CRUD de servidores, do alvo de
   // edição e do logout global. O App continua dono do roteamento, do servidor resolvido e do
@@ -63,9 +64,9 @@
   // ?token= recusada — tudo ANTES de tocar storage. Gravar URL quebrada como credencial vira um
   // 401 sem pista depois.
   function erroPareamento(cru: string): string {
-    if (!cru.includes('://')) return 'Cole a URL de pareamento (com o token).';
-    if (cru.includes('?token=')) return 'URL de pareamento inválida — use http/https com token.';
-    return 'essa URL não tem ?token= — cole a URL de pareamento completa.';
+    if (!cru.includes('://')) return m.config_servidores_erro_cole();
+    if (cru.includes('?token=')) return m.config_servidores_erro_invalida();
+    return m.config_servidores_erro_token();
   }
   let showAdd = $state(false);
   let addUrlText = $state('');
@@ -90,7 +91,7 @@
       // Erro TARDIO não some: o usuário pode ter fechado o diálogo enquanto a transação rodava —
       // reabre com a mensagem visível (mesmo caminho do QR logo abaixo).
       showAdd = true;
-      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
     } finally {
       addBusy = false;
     }
@@ -114,7 +115,7 @@
       window.location.reload();
     } catch (err) {
       showAdd = true;
-      addError = err instanceof Error ? `Falha na conexão: ${err.message}` : 'Erro desconhecido';
+      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
     } finally {
       addBusy = false;
     }
@@ -165,7 +166,7 @@
     try {
       await onLogout();
     } catch {
-      logoutMsg = 'Não foi possível sair — tente de novo.';
+      logoutMsg = m.config_servidores_sair_erro();
     } finally {
       logoutInFlight = false;
     }
@@ -180,11 +181,10 @@
 
 {#if resolvedServer}
   <p class="ss-editando">
-    Notificações, chaves de API e motores serão gravados em <strong>{resolvedServer.label}</strong>.
-    Toque em outro para trocar.
+    {m.config_servidores_editando_1()} <strong>{resolvedServer.label}</strong>{m.config_servidores_editando_2()}
   </p>
 {:else}
-  <p class="ss-editando ss-muted">Toque num servidor para escolher onde as configurações serão gravadas.</p>
+  <p class="ss-editando ss-muted">{m.config_servidores_escolha()}</p>
 {/if}
 {#if avisoRemocao}<p class="ss-aviso" role="status">{avisoRemocao}</p>{/if}
 {#if logoutMsg}<p class="ss-aviso" role="status">{logoutMsg}</p>{/if}
@@ -205,40 +205,39 @@
   <!-- Bloco de natureza MISTA, e por isso a legenda existe: ativar o push é do aparelho (assina o
        navegador e registra em todos os servidores de uma vez), as horas silenciosas são do servidor
        escolhido acima. Sem dizer isso, a tela deixava as duas parecendo a mesma coisa. -->
-  <p class="ss-secao">Notificações</p>
+  <p class="ss-secao">{m.config_modal_notificacoes()}</p>
   <p class="ss-legenda">
-    Ativar vale para este aparelho; as horas silenciosas são gravadas
-    {resolvedServer ? `em ${resolvedServer.label}` : 'no servidor escolhido acima'}.
+    {m.config_servidores_push_1()} {resolvedServer ? m.config_modal_em({ nome: resolvedServer.label }) : m.config_servidores_push_global()}{m.config_servidores_push_2()}
   </p>
   <PushQuiet target={pushTarget} open={true} />
 {:else}
   <div class="ss-sep"></div>
-  <p class="ss-muted">Notificações não estão disponíveis neste navegador.</p>
+  <p class="ss-muted">{m.config_servidores_sem_push()}</p>
 {/if}
 
 <div class="ss-sep"></div>
 <!-- Fronteira explícita: daqui pra baixo NADA vai pro servidor escolhido acima. Reconectar refaz as
      conexões deste aparelho e Sair apaga os tokens guardados AQUI — em todos os servidores. Era o
      que mais confundia: a tela misturava as duas coisas sem dizer qual era qual. -->
-<p class="ss-secao">Neste aparelho</p>
+<p class="ss-secao">{m.config_servidores_neste_aparelho()}</p>
 <div class="ss-acoes">
-  <button class="ss-btn" onclick={() => sessionsStore.reconnect()} disabled={logoutInFlight}>Reconectar</button>
-  <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)} disabled={logoutInFlight}>Sair</button>
+  <button class="ss-btn" onclick={() => sessionsStore.reconnect()} disabled={logoutInFlight}>{m.config_servidores_reconectar()}</button>
+  <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)} disabled={logoutInFlight}>{m.sessao_sair_curto()}</button>
 </div>
 
 {#if showAdd}
-  <ConfirmDialog title="Adicionar servidor" aria="Adicionar servidor" role="dialog"
+  <ConfirmDialog title={m.sessao_adicionar_servidor()} aria={m.sessao_adicionar_servidor()} role="dialog"
     {fallbackFocus}
     onClose={() => (showAdd = false)}
     actions={[
-      { label: 'Escanear QR', disabled: addBusy, onClick: () => { showAdd = false; scanning = true; } },
-      { label: 'Adicionar', kind: 'primary', disabled: !addUrlText.trim() || addBusy, onClick: submitPasteServer },
+      { label: m.sessao_escanear_qr(), disabled: addBusy, onClick: () => { showAdd = false; scanning = true; } },
+      { label: m.config_servidores_adicionar(), kind: 'primary', disabled: !addUrlText.trim() || addBusy, onClick: submitPasteServer },
     ]}>
     <input
       type="url"
       class="ss-add-input"
       bind:value={addUrlText}
-      placeholder="Colar URL do servidor (com token)"
+      placeholder={m.config_servidores_colar_url()}
       autocomplete="off"
       autocorrect="off"
       autocapitalize="off"
@@ -246,7 +245,7 @@
       use:autofocus
       onkeydown={(e) => { addError = ''; if (e.key === 'Enter' && !addBusy) submitPasteServer(); }}
       disabled={addBusy}
-      aria-label="URL de pareamento do servidor"
+      aria-label={m.config_servidores_url_pareamento()}
       aria-invalid={!!addError}
       aria-describedby={addError ? 'ss-add-err' : undefined}
     />
@@ -259,26 +258,26 @@
 {/if}
 
 {#if pendingRemoval}
-  <ConfirmDialog title={`Remover ${pendingRemoval.label}?`} aria="Confirmar remoção do servidor"
+  <ConfirmDialog title={m.config_servidores_remover({ nome: pendingRemoval.label })} aria={m.config_servidores_remover_aria()}
     {fallbackFocus}
     onClose={() => (pendingRemoval = null)}
     actions={[
-      { label: 'Cancelar', onClick: () => (pendingRemoval = null) },
-      { label: 'Remover', kind: 'danger', onClick: confirmRemoval },
+      { label: m.comum_cancelar(), onClick: () => (pendingRemoval = null) },
+      { label: m.lista_remover(), kind: 'danger', onClick: confirmRemoval },
     ]}>
-    <p class="ss-dialog-copy">O token salvo neste aparelho será removido.</p>
+    <p class="ss-dialog-copy">{m.config_servidores_token_removido()}</p>
   </ConfirmDialog>
 {/if}
 
 {#if confirmLogout}
-  <ConfirmDialog title="Sair do Hangar?" aria="Confirmar saída"
+  <ConfirmDialog title={m.config_servidores_sair_titulo()} aria={m.config_servidores_sair_aria()}
     {fallbackFocus}
     onClose={() => (confirmLogout = false)}
     actions={[
-      { label: 'Cancelar', onClick: () => (confirmLogout = false) },
-      { label: 'Sair', kind: 'danger', onClick: () => { confirmLogout = false; void logout(); } },
+      { label: m.comum_cancelar(), onClick: () => (confirmLogout = false) },
+      { label: m.sessao_sair_curto(), kind: 'danger', onClick: () => { confirmLogout = false; void logout(); } },
     ]}>
-    <p class="ss-dialog-copy">Você precisará do token ou QR de pareamento para voltar.</p>
+    <p class="ss-dialog-copy">{m.config_servidores_voltar()}</p>
   </ConfirmDialog>
 {/if}
 

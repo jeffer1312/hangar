@@ -58,16 +58,16 @@
   });
 
   const TITULO: Record<TelaConfig, string> = {
-    root: 'Configurações',
+    root: m.config_modal_titulo(),
     geral: m.config_geral_titulo(),
-    aparencia: 'Aparência',
-    ditado: 'Ditado',
-    sobre: 'Sobre',
-    servidores: 'Servidores',
-    notificacoes: 'Notificações',
-    anexos: 'Anexos e transcrição',
-    avancado: 'Avançado do servidor',
-    motores: 'Motores de modelo',
+    aparencia: m.config_modal_aparencia(),
+    ditado: m.config_modal_ditado(),
+    sobre: m.config_modal_sobre(),
+    servidores: m.config_modal_servidores(),
+    notificacoes: m.config_modal_notificacoes(),
+    anexos: m.config_modal_anexos(),
+    avancado: m.config_modal_avancado(),
+    motores: m.config_modal_motores(),
   };
 
   // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
@@ -75,22 +75,22 @@
   const LINHAS = [
     { id: 'geral', secao: 'App', rotulo: m.config_geral_linha(), icone: '🌐',
       descricao: m.config_geral_descricao(), servidor: false },
-    { id: 'aparencia', secao: 'App', rotulo: 'Aparência', icone: '🎨',
-      descricao: 'tema, fundo, leitura e texto', servidor: false },
-    { id: 'ditado', secao: 'App', rotulo: 'Ditado', icone: '🎤',
-      descricao: 'mãos-livres: parar no silêncio e enviar', servidor: false },
-    { id: 'sobre', secao: 'App', rotulo: 'Sobre', icone: 'ℹ️',
-      descricao: 'versão, marca e repositório', servidor: false },
-    { id: 'servidores', secao: 'Servidor', rotulo: 'Servidores', icone: '🖥️',
-      descricao: 'qual editar, tokens, reconectar e sair', servidor: false },
-    { id: 'notificacoes', secao: 'Servidor', rotulo: 'Notificações', icone: '🔔',
-      descricao: 'quando avisar que terminou, caiu ou travou', servidor: true },
-    { id: 'anexos', secao: 'Servidor', rotulo: 'Anexos e transcrição', icone: '📎',
-      descricao: 'chave da Groq e por quanto tempo guardar', servidor: true },
-    { id: 'avancado', secao: 'Servidor', rotulo: 'Avançado do servidor', icone: '🛠️',
-      descricao: 'automações, editor e o que só muda pelo .env', servidor: true },
-    { id: 'motores', secao: 'Servidor', rotulo: 'Motores de modelo', icone: '🔌',
-      descricao: 'rodar uma sessão em outro provedor', servidor: true },
+    { id: 'aparencia', secao: 'App', rotulo: m.config_modal_aparencia(), icone: '🎨',
+      descricao: m.config_modal_desc_aparencia(), servidor: false },
+    { id: 'ditado', secao: 'App', rotulo: m.config_modal_ditado(), icone: '🎤',
+      descricao: m.config_modal_desc_ditado(), servidor: false },
+    { id: 'sobre', secao: 'App', rotulo: m.config_modal_sobre(), icone: 'ℹ️',
+      descricao: m.config_modal_desc_sobre(), servidor: false },
+    { id: 'servidores', secao: 'Servidor', rotulo: m.config_modal_servidores(), icone: '🖥️',
+      descricao: m.config_modal_desc_servidores(), servidor: false },
+    { id: 'notificacoes', secao: 'Servidor', rotulo: m.config_modal_notificacoes(), icone: '🔔',
+      descricao: m.config_modal_desc_notificacoes(), servidor: true },
+    { id: 'anexos', secao: 'Servidor', rotulo: m.config_modal_anexos(), icone: '📎',
+      descricao: m.config_modal_desc_anexos(), servidor: true },
+    { id: 'avancado', secao: 'Servidor', rotulo: m.config_modal_avancado(), icone: '🛠️',
+      descricao: m.config_modal_desc_avancado(), servidor: true },
+    { id: 'motores', secao: 'Servidor', rotulo: m.config_modal_motores(), icone: '🔌',
+      descricao: m.config_modal_desc_motores(), servidor: true },
   ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
   const SECOES = ['App', 'Servidor'] as const;
 
@@ -200,14 +200,14 @@
        veu e trap de foco, o oposto do que se quer aqui. -->
   <!-- `role="region"`, nao `dialog`: dialogo promete semantica modal (foco presto, Esc fecha) e esta
        caixinha e o oposto de proposito — o app atras segue clicavel e ela so sai no ✕. -->
-  <div class="vivo" role="region" aria-label="Aparência — ao vivo" bind:this={caixaEl}
+  <div class="vivo" role="region" aria-label={m.config_modal_ao_vivo_aria()} bind:this={caixaEl}
        style={pos ? `left: ${pos.x}px; top: ${pos.y}px; right: auto; bottom: auto;` : ''}>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <header class="vivo-head" onpointerdown={dragStart} onpointermove={dragMove}
             onpointerup={dragEnd} onpointercancel={dragEnd}>
-      <h2 class="vivo-titulo">Aparência</h2>
-      <button class="vivo-btn" onclick={() => (aoVivo = false)} title="Voltar ao painel">⤢</button>
-      <button class="vivo-btn" onclick={onFechar} aria-label="Fechar">✕</button>
+      <h2 class="vivo-titulo">{m.config_modal_aparencia()}</h2>
+      <button class="vivo-btn" onclick={() => (aoVivo = false)} title={m.config_modal_voltar_painel()}>⤢</button>
+      <button class="vivo-btn" onclick={onFechar} aria-label={m.sessao_fechar()}>✕</button>
     </header>
     <div class="vivo-corpo">
       <AppearanceSettings semPrevia />
@@ -222,10 +222,10 @@
            conteudo (e `sticky` num container com padding brigaria com o topo do formulario).
            Primeiro no DOM (ele e `position: absolute`, a ordem aqui nao muda onde ele aparece) pra
            quem navega por teclado chegar nele antes de percorrer a navegacao e o conteudo inteiros. -->
-      <button class="st-fechar" bind:this={fecharEl} onclick={onFechar} aria-label="Fechar">✕</button>
+      <button class="st-fechar" bind:this={fecharEl} onclick={onFechar} aria-label={m.sessao_fechar()}>✕</button>
       <aside class="st-nav">
         {#each SECOES as secao (secao)}
-          <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? `Servidor · ${nomeAlvo}` : secao}</p>
+          <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'Servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
           {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
             <button class="st-nav-item" class:sel={telaAtual === l.id}
                     aria-current={telaAtual === l.id ? 'page' : undefined}
@@ -243,14 +243,14 @@
   {:else}
     <header class="st-head">
       <button class="st-icone" bind:this={fecharEl} onclick={botaoEsquerdo}
-        aria-label={tela === 'root' ? 'Fechar' : 'Voltar'}>{tela === 'root' ? '✕' : '‹'}</button>
+        aria-label={tela === 'root' ? m.sessao_fechar() : m.comum_voltar()}>{tela === 'root' ? '✕' : '‹'}</button>
       <!-- tabindex=-1: alvo do foco na troca de tela, sem entrar na ordem do Tab. -->
       <h2 class="st-titulo" bind:this={tituloEl} tabindex="-1">{TITULO[tela]}</h2>
       <span class="st-icone st-vazio" aria-hidden="true"></span>
       {#if TELAS_DE_SERVIDOR.includes(telaAtual) && nomeAlvo}
         <!-- Sem isto nao da pra saber em que maquina se esta mexendo: o app roda no front de um
              servidor e a lista e agregada, entao a config aberta pode ser de outra maquina. -->
-        <p class="st-sub">em {nomeAlvo}</p>
+        <p class="st-sub">{m.config_modal_em({ nome: nomeAlvo })}</p>
       {/if}
     </header>
     {@render corpo()}
@@ -261,12 +261,12 @@
 {#snippet corpo()}
   {#if telaAtual === 'root'}
     {#each SECOES as secao (secao)}
-      <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? `Servidor · ${nomeAlvo}` : secao}</p>
+      <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'Servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
       <div class="st-cartao">
         {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
           <SettingsRow icone={l.icone} rotulo={l.rotulo} descricao={l.descricao}
             desabilitada={l.servidor && semServidor}
-            motivo="escolha um servidor na lista pra configurar"
+            motivo={m.config_modal_escolha_servidor()}
             onPick={() => onIrPara(l.id)} />
         {/each}
       </div>

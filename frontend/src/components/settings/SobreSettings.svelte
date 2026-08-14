@@ -1,5 +1,6 @@
 <script lang="ts">
   import HangarMark from '../icons/HangarMark.svelte';
+  import * as m from '../../paraglide/messages';
   const REPO = 'https://github.com/jeffer1312/hangar';
 </script>
 
@@ -7,7 +8,7 @@
   <span class="mark" aria-hidden="true"><HangarMark size={56} /></span>
   <strong>Hangar</strong>
   <span class="version">{__HANGAR_VERSION__} · {__HANGAR_BUILD_DATE__}</span>
-  <p>Dirija sessões Claude Code, Codex e Pi rodando no seu computador — do celular ou do desktop.</p>
+  <p>{m.config_sobre_desc()}</p>
   <a href={REPO} target="_blank" rel="noopener noreferrer">github.com/jeffer1312/hangar</a>
 </div>
 

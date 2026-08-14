@@ -37,7 +37,7 @@
       // arquivo que o navegador nao decodifica (HEIC sem suporte, PNG corrompido) e canvas
       // indisponivel. Culpar sempre a cota mandava o usuario diminuir uma imagem que o problema
       // nunca foi o tamanho. O erro cru vai pro console: sem isso nao ha o que investigar depois.
-      console.error('[fundo] falha ao aplicar a imagem:', e);
+      console.error(m.config_fundo_falha_aplicar(), e);
       const cota = (e instanceof DOMException && /quota/i.test(e.name))
         || (e instanceof Error && /grande demais/.test(e.message));
       erro = cota
@@ -62,7 +62,7 @@
     { v: 'aurora', label: m.config_fundo_luz(), aria: m.config_fundo_aurora() },
     { v: 'image', label: m.config_fundo_imagem(), aria: m.config_fundo_usar_imagem() },
     ...(isShell()
-      ? [{ v: 'desktop' as BgPref, label: 'Desktop', aria: m.config_fundo_desktop() }]
+      ? [{ v: 'desktop' as BgPref, label: m.config_aparencia_desktop(), aria: m.config_fundo_desktop() }]
       : []),
   ];
 </script>

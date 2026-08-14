@@ -12,5 +12,6 @@
   "OpenAI",
   "Space",
   "application/json",
-  "text/plain"
+  "text/plain",
+  "github.com/jeffer1312/hangar"
 ]

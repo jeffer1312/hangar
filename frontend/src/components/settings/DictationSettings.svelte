@@ -1,5 +1,6 @@
 <script lang="ts">
   import { lerMaosLivres, setMaosLivres } from '../../lib/maosLivres';
+  import * as m from '../../paraglide/messages';
 
   let ligado = $state(lerMaosLivres());
 </script>
@@ -7,18 +8,17 @@
 <div class="dt">
   <div class="dt-row">
     <div class="dt-label">
-      <strong>Mãos-livres</strong>
-      <span>o silêncio encerra a gravação e a mensagem vai sozinha, com 3s pra cancelar</span>
+      <strong>{m.config_ditado_titulo()}</strong>
+      <span>{m.config_ditado_desc()}</span>
     </div>
     <label>
       <input class="switch" type="checkbox" bind:checked={ligado}
              onchange={() => setMaosLivres(ligado)} />
-      <span class="sr-only">Ditado mãos-livres</span>
+      <span class="sr-only">{m.config_ditado_sr()}</span>
     </label>
   </div>
   <p class="dt-nota">
-    Guardado só neste aparelho. Depois de enviar, o microfone não religa sozinho — toque de novo
-    para falar outra vez.
+    {m.config_ditado_nota()}
   </p>
 </div>
 

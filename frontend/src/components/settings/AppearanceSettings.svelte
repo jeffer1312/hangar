@@ -20,6 +20,7 @@
   import { toolLook, type ToolLook } from '../../lib/toolLook.svelte';
   import { taskRows, type TaskRowsPref } from '../../lib/taskRows.svelte';
   import { tableChartPref, type TableChartPref } from '../../lib/tableChartPref.svelte';
+  import * as m from '../../paraglide/messages';
 
   interface Props {
     /** Desktop: oferece o botao "Ver ao vivo", que troca o painel pela caixinha flutuante. */
@@ -50,33 +51,33 @@
   });
 
   const medidasTexto: { v: MedidaTexto; label: string; aria: string }[] = [
-    { v: 'size', label: 'Tamanho', aria: 'Tamanho do texto da conversa' },
-    { v: 'lh', label: 'Entrelinha', aria: 'Espaço entre as linhas da conversa' },
-    { v: 'width', label: 'Largura da coluna', aria: 'Largura da coluna de leitura' },
+    { v: 'size', label: m.config_aparencia_tamanho(), aria: m.config_aparencia_tamanho_aria() },
+    { v: 'lh', label: m.config_aparencia_entrelinha(), aria: m.config_aparencia_entrelinha_aria() },
+    { v: 'width', label: m.config_aparencia_largura(), aria: m.config_aparencia_largura_aria() },
   ];
 
   const opcoesLeitura: { v: ReadMode; label: string; aria: string }[] = [
-    { v: 'auto', label: 'Automática', aria: 'Reforça o texto só quando o fundo é uma imagem' },
-    { v: 'glass', label: 'Nenhum', aria: 'Nada muda na conversa' },
-    { v: 'text', label: 'Texto', aria: 'Sem caixa: só o texto ganha contraste e sombra' },
-    { v: 'solid', label: 'Folha', aria: 'A conversa inteira numa folha opaca' },
+    { v: 'auto', label: m.config_aparencia_automatica(), aria: m.config_aparencia_automatica_aria() },
+    { v: 'glass', label: m.lista_agrupar_nenhum(), aria: m.config_aparencia_nenhum_aria() },
+    { v: 'text', label: m.config_aparencia_texto(), aria: m.config_aparencia_texto_aria() },
+    { v: 'solid', label: m.config_aparencia_folha(), aria: m.config_aparencia_folha_aria() },
   ];
   const opcoesFonte: { v: FontPref; label: string; aria: string }[] = [
-    { v: 'system', label: 'Sistema', aria: 'A fonte de interface do sistema' },
-    { v: 'mono', label: 'Monoespaçada', aria: 'A fonte de largura fixa, como no terminal' },
+    { v: 'system', label: m.config_aparencia_sistema(), aria: m.config_aparencia_sistema_aria() },
+    { v: 'mono', label: m.config_aparencia_mono(), aria: m.config_aparencia_mono_aria() },
   ];
   const opcoesDesfoque: { v: BackdropBlurPref; label: string; aria: string }[] = [
-    { v: 'off', label: 'Nenhum', aria: 'A foto fica nítida atrás da conversa, como sempre foi' },
-    { v: 'light', label: 'Leve', aria: 'Um leve embaçado ajuda texto sobre foto muito detalhada' },
-    { v: 'strong', label: 'Forte', aria: 'A foto vira uma mancha de cor — máximo alívio pra leitura' },
+    { v: 'off', label: m.lista_agrupar_nenhum(), aria: m.config_aparencia_desfoque_off_aria() },
+    { v: 'light', label: m.config_aparencia_leve(), aria: m.config_aparencia_leve_aria() },
+    { v: 'strong', label: m.config_aparencia_forte(), aria: m.config_aparencia_forte_aria() },
   ];
   const opcoesVidroDesktop: { v: 'janela' | 'vidro'; label: string; aria: string }[] = [
-    { v: 'janela', label: 'Janela', aria: 'A janela fica transparente e mostra a área de trabalho de verdade' },
-    { v: 'vidro', label: 'Vidro', aria: 'O app copia o papel de parede do sistema pra dentro da página e ganha vidro' },
+    { v: 'janela', label: m.config_aparencia_janela(), aria: m.config_aparencia_janela_aria() },
+    { v: 'vidro', label: m.config_aparencia_vidro(), aria: m.config_aparencia_vidro_aria() },
   ];
   const opcoesPaineis: { v: PanelStyle; label: string; aria: string }[] = [
-    { v: 'card', label: 'Caixa solta', aria: 'Painéis flutuando, com folga e cantos redondos' },
-    { v: 'edge', label: 'Colados', aria: 'Painéis colados na borda da tela, de ponta a ponta' },
+    { v: 'card', label: m.config_aparencia_caixa_solta(), aria: m.config_aparencia_caixa_solta_aria() },
+    { v: 'edge', label: m.config_aparencia_colados(), aria: m.config_aparencia_colados_aria() },
   ];
   let resetSeq = $state(0);
   // Espelho da "Solidez das caixas" (o slider vive no BackgroundToggle) so pra o botao saber se ha o
@@ -138,15 +139,15 @@
   }
 
   const opcoesAltura: { v: SidebarHeight; label: string; aria: string }[] = [
-    { v: 'full', label: 'Altura total', aria: 'A barra lateral vai de ponta a ponta da tela' },
-    { v: 'content', label: 'Só o conteúdo', aria: 'A barra lateral encolhe até a altura das sessões' },
+    { v: 'full', label: m.config_aparencia_altura_total(), aria: m.config_aparencia_altura_total_aria() },
+    { v: 'content', label: m.config_aparencia_so_conteudo(), aria: m.config_aparencia_so_conteudo_aria() },
   ];
 
   // Follow-up visual: MODO da navegação com a sidebar recolhida. O rail (Barra lateral) é o
   // padrão — decisão do usuário; 'Abas no topo' é a faixa horizontal da SessionTabs.
   const opcoesModo: { v: NavMode; label: string; aria: string }[] = [
-    { v: 'rail', label: 'Barra lateral', aria: 'Recolhida, a barra vira o trilho vertical de iniciais' },
-    { v: 'tabs', label: 'Abas no topo', aria: 'Recolhida, a barra vira a faixa horizontal de abas no topo' },
+    { v: 'rail', label: m.config_aparencia_barra_lateral(), aria: m.config_aparencia_barra_lateral_aria() },
+    { v: 'tabs', label: m.config_aparencia_abas_topo(), aria: m.config_aparencia_abas_topo_aria() },
   ];
 </script>
 
@@ -163,18 +164,18 @@
       {#if podeAoVivo}
         <!-- Desktop: a previa embutida e uma amostra; isto revela a conversa DE VERDADE atras,
              encolhendo o painel numa caixinha no canto. -->
-        <button class="ap-padrao" onclick={onVerAoVivo}>Ver ao vivo</button>
+        <button class="ap-padrao" onclick={onVerAoVivo}>{m.config_aparencia_ver_ao_vivo()}</button>
       {/if}
       <button class="ap-padrao" onclick={voltarAoPadrao} disabled={!temAjuste}>
-        Voltar ao padrão
+        {m.config_aparencia_voltar_padrao()}
       </button>
     </div>
   </div>
 
   <div class="ap-row">
     <div class="ap-label">
-      <strong>Tema</strong>
-      <span>claro, escuro ou o do sistema</span>
+      <strong>{m.config_tema_curto()}</strong>
+      <span>{m.config_aparencia_tema_desc()}</span>
     </div>
     <ThemeToggle onEscolha={(p) => (tema = p)} />
   </div>
@@ -182,16 +183,16 @@
   {#if tema === 'desktop'}
     <div class="ap-row">
       <div class="ap-label">
-        <strong>Cor do texto</strong>
-        <span>as letras seguem o papel de parede ou ficam nas do app</span>
+        <strong>{m.config_aparencia_cor_texto()}</strong>
+        <span>{m.config_aparencia_cor_texto_desc()}</span>
       </div>
       <SegmentedPicker
         value={textoDesktop ? 'desktop' : 'app'}
         options={[
-          { v: 'desktop', label: 'Desktop', aria: 'Cor do texto vinda do papel de parede' },
-          { v: 'app', label: 'App', aria: 'Cor do texto padrão do app' },
+          { v: 'desktop', label: m.config_aparencia_desktop(), aria: m.config_aparencia_cor_texto_desktop_aria() },
+          { v: 'app', label: m.config_aparencia_app(), aria: m.config_aparencia_cor_texto_app_aria() },
         ]}
-        ariaLabel="Cor do texto"
+        ariaLabel={m.config_aparencia_cor_texto()}
         onPick={(v) => {
           // So persiste (e so deixa a escolha nova visivel) se o repaint realmente aconteceu — senao
           // o segmentado mostraria "Desktop" com as letras ainda na cor do app (ou vice-versa), o
@@ -209,8 +210,8 @@
 
   <div class="ap-row ap-row--stack">
     <div class="ap-label">
-      <strong>Fundo</strong>
-      <span>textura, luz ou uma imagem sua — guardada só neste dispositivo</span>
+      <strong>{m.config_fundo_curto()}</strong>
+      <span>{m.config_aparencia_fundo_desc()}</span>
     </div>
     <!-- `{#key}`: o "Voltar ao padrao" grava a solidez das caixas, mas o slider vive aqui dentro com
          estado proprio — remontar e o que faz o numero na tela bater com o valor aplicado. -->
@@ -224,13 +225,13 @@
   {#if fundo === 'desktop'}
     <div class="ap-row">
       <div class="ap-label">
-        <strong>Papel de parede do sistema</strong>
-        <span>deixar a janela vazada, ou copiar a foto pra dentro do app e ter vidro de verdade</span>
+        <strong>{m.config_aparencia_papel_parede()}</strong>
+        <span>{m.config_aparencia_papel_parede_desc()}</span>
       </div>
       <SegmentedPicker
         value={vidroDesktop ? 'vidro' : 'janela'}
         options={opcoesVidroDesktop}
-        ariaLabel="Papel de parede do sistema"
+        ariaLabel={m.config_aparencia_papel_parede()}
         onPick={(v) => { vidroDesktop = v === 'vidro'; setDesktopGlass(vidroDesktop); }}
       />
     </div>
@@ -241,14 +242,14 @@
        das caixas ficam intocados. -->
   <div class="ap-row">
     <div class="ap-label">
-      <strong>Desfoque do fundo</strong>
-      <span>quanto a foto atrás da conversa fica embaçada — ajuda o texto a se ler</span>
+      <strong>{m.config_aparencia_desfoque()}</strong>
+      <span>{m.config_aparencia_desfoque_desc()}</span>
     </div>
     {#if fundo !== 'desktop' || vidroDesktop}
-      <SegmentedPicker value={desfoque} options={opcoesDesfoque} ariaLabel="Desfoque do fundo"
+      <SegmentedPicker value={desfoque} options={opcoesDesfoque} ariaLabel={m.config_aparencia_desfoque()}
                        onPick={(v) => { desfoque = v; setBackdropBlur(v); }} />
     {:else}
-      <p class="hint">O desfoque aqui é do seu sistema, não do app — veja shell/README.md.</p>
+      <p class="hint">{m.config_aparencia_desfoque_hint()}</p>
     {/if}
   </div>
 
@@ -257,16 +258,16 @@
        o realce do Read continuam iguais nas duas. -->
   <div class="ap-row">
     <div class="ap-label">
-      <strong>Chamadas de ferramenta</strong>
-      <span>como cada Bash/Edit/Read aparece no chat: duas linhas com a saída embaixo, ou uma linha com o argumento num chip</span>
+      <strong>{m.config_aparencia_chamadas()}</strong>
+      <span>{m.config_aparencia_chamadas_desc()}</span>
     </div>
     <SegmentedPicker
       value={toolLook.look}
       options={[
-        { v: 'classico', label: 'Clássico', aria: 'Bloco de duas linhas' },
-        { v: 'chips', label: 'Chips', aria: 'Uma linha com o argumento num chip' },
+        { v: 'classico', label: m.config_aparencia_classico(), aria: m.config_aparencia_classico_aria() },
+        { v: 'chips', label: m.config_aparencia_chips(), aria: m.config_aparencia_chips_aria() },
       ]}
-      ariaLabel="Chamadas de ferramenta"
+      ariaLabel={m.config_aparencia_chamadas()}
       onPick={(v) => { toolLook.look = v as ToolLook; }}
     />
   </div>
@@ -275,16 +276,16 @@
        Desligada, as chamadas de tarefa continuam aparecendo como linha de ferramenta normal. -->
   <div class="ap-row">
     <div class="ap-label">
-      <strong>Lista de tarefas</strong>
-      <span>desenha as tarefas do agente como cápsulas no fim da conversa, com estado e contagem, em vez de linhas de ferramenta soltas</span>
+      <strong>{m.config_aparencia_tarefas()}</strong>
+      <span>{m.config_aparencia_tarefas_desc()}</span>
     </div>
     <SegmentedPicker
       value={taskRows.pref}
       options={[
-        { v: 'off', label: 'Não mostrar', aria: 'Tarefas como linha de ferramenta' },
-        { v: 'on', label: 'Cápsulas', aria: 'Tarefas como cápsulas' },
+        { v: 'off', label: m.config_aparencia_nao_mostrar(), aria: m.config_aparencia_nao_mostrar_aria() },
+        { v: 'on', label: m.config_aparencia_capsulas(), aria: m.config_aparencia_capsulas_aria() },
       ]}
-      ariaLabel="Lista de tarefas"
+      ariaLabel={m.config_aparencia_tarefas()}
       onPick={(v) => { taskRows.pref = v as TaskRowsPref; }}
     />
   </div>
@@ -293,16 +294,16 @@
        caso de uso. Com off o uPlot nem é baixado (import dinâmico). -->
   <div class="ap-row">
     <div class="ap-label">
-      <strong>Gráfico nas tabelas</strong>
-      <span>tabela com coluna numérica ganha um botão pra virar gráfico de barras — uma coluna por vez</span>
+      <strong>{m.config_aparencia_grafico()}</strong>
+      <span>{m.config_aparencia_grafico_desc()}</span>
     </div>
     <SegmentedPicker
       value={tableChartPref.pref}
       options={[
-        { v: 'off', label: 'Não mostrar', aria: 'Tabelas sem botão de gráfico' },
-        { v: 'on', label: 'Mostrar', aria: 'Tabelas com botão de gráfico' },
+        { v: 'off', label: m.config_aparencia_nao_mostrar(), aria: m.config_aparencia_sem_grafico_aria() },
+        { v: 'on', label: m.config_aparencia_mostrar(), aria: m.config_aparencia_com_grafico_aria() },
       ]}
-      ariaLabel="Gráfico nas tabelas"
+      ariaLabel={m.config_aparencia_grafico()}
       onPick={(v) => { tableChartPref.pref = v as TableChartPref; }}
     />
   </div>
@@ -310,17 +311,17 @@
   <div class="ap-row ap-row--stack">
     <div class="ap-head">
       <div class="ap-label">
-        <strong>Leitura</strong>
-        <span>o que segura o texto quando há foto de fundo: reforçar só o texto ou pôr a conversa numa folha</span>
+        <strong>{m.config_aparencia_leitura()}</strong>
+        <span>{m.config_aparencia_leitura_desc()}</span>
       </div>
-      <SegmentedPicker value={leitura} options={opcoesLeitura} ariaLabel="Leitura"
+      <SegmentedPicker value={leitura} options={opcoesLeitura} ariaLabel={m.config_aparencia_leitura()}
                        onPick={(v) => { leitura = v; setReadMode(v); }} />
     </div>
     {#if leitura !== 'glass'}
       <!-- Mesma lógica do slider do fundo: 100 tapa a foto atrás da conversa, 0 deixa ela passar
            inteira. "Sólida" no talo virava um bloco escuro — o ponto certo é olhando. -->
       <label class="ap-slider">
-        <span>{leitura === 'solid' ? 'Solidez da folha' : 'Força'}</span>
+        <span>{leitura === 'solid' ? m.config_aparencia_solidez_folha() : m.config_aparencia_forca()}</span>
         <input type="range" min="0" max="100" step="1" value={solidez}
                oninput={(e) => { solidez = +(e.currentTarget as HTMLInputElement).value; setReadAlpha(solidez); }} />
         <em>{solidez}</em>
@@ -330,7 +331,7 @@
       <!-- Contraste do texto: os tokens do app são propositalmente mais escuros que branco (conforto
            em sessão longa); sobre foto isso não vale, e aqui você escolhe quanto do branco volta. -->
       <label class="ap-slider">
-        <span>Contraste do texto</span>
+        <span>{m.config_aparencia_contraste()}</span>
         <input type="range" min="0" max="100" step="1" value={contraste}
                oninput={(e) => { contraste = +(e.currentTarget as HTMLInputElement).value; setTextBoost(contraste); }} />
         <em>{contraste}</em>
@@ -344,8 +345,8 @@
        a faixa confortavel de leitura e 45 a 75, e e por isso que o mesmo texto cansa mais no monitor. -->
   <div class="ap-row ap-row--stack">
     <div class="ap-label">
-      <strong>Texto da conversa</strong>
-      <span>tamanho, entrelinha e largura da coluna — 100 é como vem de fábrica</span>
+      <strong>{m.config_aparencia_texto_conversa()}</strong>
+      <span>{m.config_aparencia_texto_conversa_desc()}</span>
     </div>
     {#each medidasTexto as m (m.v)}
       {#if m.v !== 'width' || isDesktop}
@@ -366,19 +367,19 @@
        navegador em vez de brigar com ele. -->
   <div class="ap-row">
     <div class="ap-label">
-      <strong>Fonte</strong>
-      <span>a do sistema ou a de largura fixa, como no terminal</span>
+      <strong>{m.config_aparencia_fonte()}</strong>
+      <span>{m.config_aparencia_fonte_desc()}</span>
     </div>
-    <SegmentedPicker value={fonte} options={opcoesFonte} ariaLabel="Fonte"
+    <SegmentedPicker value={fonte} options={opcoesFonte} ariaLabel={m.config_aparencia_fonte()}
                      onPick={(v) => { fonte = v; setFontPref(v); }} />
   </div>
 
   <div class="ap-row">
     <div class="ap-label">
-      <strong>Painéis</strong>
-      <span>contexto e aparência como caixa flutuante ou colados na borda</span>
+      <strong>{m.config_aparencia_paineis()}</strong>
+      <span>{m.config_aparencia_paineis_desc()}</span>
     </div>
-    <SegmentedPicker value={paineis} options={opcoesPaineis} ariaLabel="Painéis"
+    <SegmentedPicker value={paineis} options={opcoesPaineis} ariaLabel={m.config_aparencia_paineis()}
                      onPick={(v) => { paineis = v; setPanelStyle(v); }} />
   </div>
 
@@ -388,18 +389,18 @@
        altura. O modo reage na hora, sem reload (store $state, follow-up visual round 2). -->
   <div class="ap-row ap-row--desktop">
     <div class="ap-label">
-      <strong>Navegação recolhida</strong>
-      <span>trilho vertical de iniciais, ou abas no topo</span>
+      <strong>{m.config_aparencia_nav()}</strong>
+      <span>{m.config_aparencia_nav_desc()}</span>
     </div>
-    <SegmentedPicker value={navMode.mode} options={opcoesModo} ariaLabel="Navegação com a barra recolhida"
+    <SegmentedPicker value={navMode.mode} options={opcoesModo} ariaLabel={m.config_aparencia_nav_aria()}
                      onPick={(v) => (navMode.mode = v)} />
   </div>
   <div class="ap-row ap-row--desktop">
     <div class="ap-label">
-      <strong>Altura da barra lateral</strong>
-      <span>de ponta a ponta, ou encolhida até onde as sessões terminam</span>
+      <strong>{m.config_aparencia_altura()}</strong>
+      <span>{m.config_aparencia_altura_desc()}</span>
     </div>
-    <SegmentedPicker value={sidebarPrefs.height} options={opcoesAltura} ariaLabel="Altura da barra lateral"
+    <SegmentedPicker value={sidebarPrefs.height} options={opcoesAltura} ariaLabel={m.config_aparencia_altura()}
                      onPick={(v) => (sidebarPrefs.height = v)} />
   </div>
 </div>

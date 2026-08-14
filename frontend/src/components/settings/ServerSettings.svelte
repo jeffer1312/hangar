@@ -6,6 +6,7 @@ import { intlLocale } from '../../lib/locale';
   import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
   import { ouvirAmostra } from '../../lib/ouvir';
   import { cortarAmostra } from '../../lib/ttsFormat';
+  import * as m from '../../paraglide/messages';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
   // transcrição ou a retenção de anexos era preciso editar arquivo no servidor e reiniciar o
@@ -21,9 +22,9 @@ import { intlLocale } from '../../lib/locale';
   let { store, secao }: Props = $props();
 
   const TITULOS: Record<Props['secao'], string> = {
-    notificacoes: 'Notificações',
-    anexos: 'Anexos e transcrição',
-    avancado: 'Avançado do servidor',
+    notificacoes: m.config_modal_notificacoes(),
+    anexos: m.config_modal_anexos(),
+    avancado: m.config_modal_avancado(),
   };
 
   interface Campo {
@@ -36,40 +37,40 @@ import { intlLocale } from '../../lib/locale';
   }
 
   const CAMPOS: Campo[] = [
-    { chave: 'groq_api_key', rotulo: 'Chave da Groq', tipo: 'segredo', secao: 'anexos',
-      ajuda: 'Transcreve áudio gravado e a fala dos vídeos anexados. Vazia = transcrição desligada.' },
-    { chave: 'upload_retention_days', rotulo: 'Guardar anexos por', tipo: 'numero', sufixo: 'dias', secao: 'anexos',
-      ajuda: 'Anexo mais velho que isso é apagado no próximo upload. 0 = nunca apagar.' },
-    { chave: 'automations', rotulo: 'Automações', tipo: 'liga', secao: 'avancado',
-      ajuda: 'Chave mestra do que roda sem você olhar: encadeamento de sessão e auto-resume.' },
-    { chave: 'notify_finished', rotulo: 'Avisar quando terminar', tipo: 'liga', secao: 'notificacoes',
-      ajuda: 'Notificação quando um turno longo acaba.' },
-    { chave: 'finish_min_seconds', rotulo: 'Turno curto não avisa', tipo: 'numero', sufixo: 'seg', secao: 'notificacoes',
-      ajuda: 'Turno mais rápido que isso não gera notificação.' },
-    { chave: 'notify_dead', rotulo: 'Avisar quando cair', tipo: 'liga', secao: 'notificacoes',
-      ajuda: 'Notificação quando uma sessão morre.' },
-    { chave: 'stall_seconds', rotulo: 'Marcar travada após', tipo: 'numero', sufixo: 'seg', secao: 'notificacoes',
-      ajuda: 'Sessão "trabalhando" e calada por mais que isso ganha o aviso de travada.' },
-    { chave: 'editor', rotulo: 'Editor', tipo: 'texto', secao: 'avancado',
-      ajuda: 'Binário que abre a pasta da sessão no desktop (ex: code, subl).' },
-    { chave: 'llm_base_url', rotulo: 'Endpoint do LLM', tipo: 'texto', secao: 'avancado',
-      ajuda: 'Serviço compatível com a API da OpenAI que trata o texto do ditado e da leitura em voz. Vazio = Groq.' },
-    { chave: 'llm_api_key', rotulo: 'Chave do LLM', tipo: 'segredo', secao: 'avancado',
-      ajuda: 'Chave do serviço acima. Obrigatória quando o endpoint não é o padrão.' },
-    { chave: 'llm_model', rotulo: 'Modelo do LLM', tipo: 'texto', secao: 'avancado',
-      ajuda: 'Nome do modelo no serviço escolhido. Vazio = llama-3.3-70b-versatile.' },
-    { chave: 'elevenlabs_api_key', rotulo: 'Chave da ElevenLabs', tipo: 'segredo', secao: 'anexos',
-      ajuda: 'Gera a voz que lê os trechos do chat. Vazia = leitura em voz desligada.' },
-    { chave: 'tts_max_chars', rotulo: 'Confirmar leitura acima de', tipo: 'numero', sufixo: 'car.', secao: 'anexos',
-      ajuda: 'Seleção maior que isso pede confirmação antes de gerar áudio. 0 = usa o padrão de 5000.' },
-    { chave: 'tts_local_cmd', rotulo: 'Comando de voz local', tipo: 'texto', secao: 'avancado',
-      ajuda: 'Opcional. Programa que recebe o texto na entrada e devolve WAV na saída (ex: Kokoro, piper). Vazio = só ElevenLabs.' },
+    { chave: 'groq_api_key', rotulo: m.config_server_groq(), tipo: 'segredo', secao: 'anexos',
+      ajuda: m.config_server_groq_ajuda() },
+    { chave: 'upload_retention_days', rotulo: m.config_server_guardar_anexos(), tipo: 'numero', sufixo: m.config_server_dias(), secao: 'anexos',
+      ajuda: m.config_server_guardar_ajuda() },
+    { chave: 'automations', rotulo: m.config_server_automacoes(), tipo: 'liga', secao: 'avancado',
+      ajuda: m.config_server_automacoes_ajuda() },
+    { chave: 'notify_finished', rotulo: m.config_server_avisar_terminar(), tipo: 'liga', secao: 'notificacoes',
+      ajuda: m.config_server_avisar_terminar_ajuda() },
+    { chave: 'finish_min_seconds', rotulo: m.config_server_turno_curto(), tipo: 'numero', sufixo: m.config_server_seg(), secao: 'notificacoes',
+      ajuda: m.config_server_turno_curto_ajuda() },
+    { chave: 'notify_dead', rotulo: m.config_server_avisar_cair(), tipo: 'liga', secao: 'notificacoes',
+      ajuda: m.config_server_avisar_cair_ajuda() },
+    { chave: 'stall_seconds', rotulo: m.config_server_marcar_travada(), tipo: 'numero', sufixo: m.config_server_seg(), secao: 'notificacoes',
+      ajuda: m.config_server_marcar_travada_ajuda() },
+    { chave: 'editor', rotulo: m.config_server_editor(), tipo: 'texto', secao: 'avancado',
+      ajuda: m.config_server_editor_ajuda() },
+    { chave: 'llm_base_url', rotulo: m.config_server_endpoint_llm(), tipo: 'texto', secao: 'avancado',
+      ajuda: m.config_server_endpoint_llm_ajuda() },
+    { chave: 'llm_api_key', rotulo: m.config_server_chave_llm(), tipo: 'segredo', secao: 'avancado',
+      ajuda: m.config_server_chave_llm_ajuda() },
+    { chave: 'llm_model', rotulo: m.config_server_modelo_llm(), tipo: 'texto', secao: 'avancado',
+      ajuda: m.config_server_modelo_llm_ajuda() },
+    { chave: 'elevenlabs_api_key', rotulo: m.config_server_elevenlabs(), tipo: 'segredo', secao: 'anexos',
+      ajuda: m.config_server_elevenlabs_ajuda() },
+    { chave: 'tts_max_chars', rotulo: m.config_server_confirmar_leitura(), tipo: 'numero', sufixo: m.config_server_car(), secao: 'anexos',
+      ajuda: m.config_server_confirmar_leitura_ajuda() },
+    { chave: 'tts_local_cmd', rotulo: m.config_server_comando_voz(), tipo: 'texto', secao: 'avancado',
+      ajuda: m.config_server_comando_voz_ajuda() },
   ];
 
   const ROTULO_LEITURA: Record<string, string> = {
-    port: 'Porta', lan_bind_ip: 'IP de bind', server_id: 'ID deste servidor',
-    public_url: 'URL pública', scan_roots: 'Raízes do scanner',
-    terminal_panel: 'Painel de terminal',
+    port: m.config_server_porta(), lan_bind_ip: m.config_server_ip_bind(), server_id: m.config_server_id(),
+    public_url: m.config_server_url_publica(), scan_roots: m.config_server_raizes(),
+    terminal_panel: m.config_server_painel_terminal(),
   };
 
   // Vozes e saldo: sob demanda, no botao. As duas chamadas batem no provedor (ElevenLabs) e custam
@@ -118,18 +119,18 @@ import { intlLocale } from '../../lib/locale';
   }
 
   const AJUSTES_VOZ: AjusteSlider[] = [
-    { chave: 'tts_stability', rotulo: 'Estabilidade', padrao: 50, min: 0, max: 100,
-      esquerda: 'mais emotiva', direita: 'mais constante',
-      ajuda: 'Voz mais constante lê igual do começo ao fim; mais emotiva varia o tom, e às vezes erra.' },
-    { chave: 'tts_similarity_boost', rotulo: 'Aderência à voz original', padrao: 75, min: 0, max: 100,
-      esquerda: 'mais livre', direita: 'mais fiel',
-      ajuda: 'Mais fiel gruda na voz gravada original; mais livre dá margem pro modelo variar.' },
-    { chave: 'tts_style', rotulo: 'Exagero de estilo', padrao: 0, min: 0, max: 100,
-      esquerda: 'neutro', direita: 'marcante',
-      ajuda: 'Acentua o jeito característico da voz — passado do ponto, a fala fica exagerada.' },
-    { chave: 'tts_speed', rotulo: 'Velocidade da fala', padrao: 100, min: 70, max: 120,
-      esquerda: 'mais devagar', direita: 'mais rápido',
-      ajuda: 'Ajusta o ritmo da leitura sem mudar o tom da voz.' },
+    { chave: 'tts_stability', rotulo: m.config_server_estabilidade(), padrao: 50, min: 0, max: 100,
+      esquerda: m.config_server_mais_emotiva(), direita: m.config_server_mais_constante(),
+      ajuda: m.config_server_estabilidade_ajuda() },
+    { chave: 'tts_similarity_boost', rotulo: m.config_server_aderencia(), padrao: 75, min: 0, max: 100,
+      esquerda: m.config_server_mais_livre(), direita: m.config_server_mais_fiel(),
+      ajuda: m.config_server_aderencia_ajuda() },
+    { chave: 'tts_style', rotulo: m.config_server_exagero(), padrao: 0, min: 0, max: 100,
+      esquerda: m.config_server_neutro(), direita: m.config_server_marcante(),
+      ajuda: m.config_server_exagero_ajuda() },
+    { chave: 'tts_speed', rotulo: m.config_server_velocidade(), padrao: 100, min: 70, max: 120,
+      esquerda: m.config_server_mais_devagar(), direita: m.config_server_mais_rapido(),
+      ajuda: m.config_server_velocidade_ajuda() },
   ];
 
   // Le o rascunho/salvo como numero; sem valor nenhum (nunca tocou o slider) cai no padrao do
@@ -155,14 +156,14 @@ import { intlLocale } from '../../lib/locale';
 <div class="cfg">
   <header class="cfg-head">
     <h2>{TITULOS[secao]}</h2>
-    <p class="sub">Valem para este servidor, na hora — sem reiniciar.</p>
+    <p class="sub">{m.config_server_valem()}</p>
   </header>
 
   {#if store.carregando}
-    <p class="aviso">Carregando…</p>
+    <p class="aviso">{m.comum_carregando()}</p>
   {:else if store.erro && !Object.keys(store.campos).length}
     <p class="aviso erro">{store.erro}</p>
-    <button class="btn" onclick={() => void store.carregar()}>Tentar de novo</button>
+    <button class="btn" onclick={() => void store.carregar()}>{m.config_server_tentar_de_novo()}</button>
   {:else}
     <div class="lista">
       {#each CAMPOS.filter((c) => c.secao === secao) as c (c.chave)}
@@ -171,7 +172,7 @@ import { intlLocale } from '../../lib/locale';
           <div class="txt">
             <label class="rot" for={`cfg-${c.chave}`}>
               {c.rotulo}
-              {#if estado?.origem === 'app'}<span class="tag">editado</span>{/if}
+              {#if estado?.origem === 'app'}<span class="tag">{m.config_server_editado()}</span>{/if}
             </label>
             <span class="ajuda">{c.ajuda}</span>
           </div>
@@ -201,8 +202,8 @@ import { intlLocale } from '../../lib/locale';
                  qualquer toque no input mandar o texto mascarado de volta e sobrescrever a chave
                  real. A máscara aparece ao lado, como informação, não como valor editável. -->
             {#if estado?.definido}
-              <span class="mascara" title="A chave não volta inteira do servidor">
-                {estado.valor} <span class="mascara-nota">configurada</span>
+              <span class="mascara" title={m.config_server_chave_nao_volta()}>
+                {estado.valor} <span class="mascara-nota">{m.config_server_configurada()}</span>
               </span>
             {/if}
             <input
@@ -212,7 +213,7 @@ import { intlLocale } from '../../lib/locale';
               autocomplete="off"
               autocapitalize="off"
               spellcheck={false}
-              placeholder={estado?.definido ? 'colar nova chave para trocar' : 'colar a chave'}
+              placeholder={estado?.definido ? m.config_motores_colar_nova() : m.config_motores_colar()}
               value={store.rascunhoDe(c.chave)}
               oninput={(e) => store.setRascunho(c.chave, e.currentTarget.value)}
             />
@@ -234,10 +235,10 @@ import { intlLocale } from '../../lib/locale';
 
     {#if secao === 'anexos'}
       <div class="tts-extra">
-        <h3>Voz da leitura</h3>
+        <h3>{m.config_server_voz_leitura()}</h3>
         {#if vozErro}
           <p class="aviso erro">{vozErro}</p>
-          <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>Tentar de novo</button>
+          <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>{m.config_server_tentar_de_novo()}</button>
         {:else if vozes.length}
           <!-- Sem fallback pra vozes[0]: o servidor usa VOZ_PADRAO (tts.py) quando o campo esta
                vazio, que NAO e a primeira voz da conta — mostrar a 1a aqui mentia sobre o que toca.
@@ -245,15 +246,15 @@ import { intlLocale } from '../../lib/locale';
                escolhe-la deixava o value igual ao que ja estava e o onchange nunca disparava. -->
           <Select
             class="campo-select"
-            ariaLabel="Voz"
+            ariaLabel={m.config_server_voz()}
             value={String(store.valorAtual('elevenlabs_voice_id') ?? '')}
-            opcoes={[{ value: '', label: 'Padrão do servidor' },
+            opcoes={[{ value: '', label: m.config_server_padrao_servidor() },
                      ...vozes.map((v) => ({ value: v.id, label: v.nome }))]}
             onchange={(v) => store.setRascunho('elevenlabs_voice_id', v)}
           />
         {:else}
           <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>
-            {carregandoVozes ? 'Carregando…' : 'Carregar vozes da conta'}
+            {carregandoVozes ? m.comum_carregando() : m.config_server_carregar_vozes()}
           </button>
         {/if}
 
@@ -264,7 +265,7 @@ import { intlLocale } from '../../lib/locale';
               <div class="ajuste-cabeca">
                 <span class="ajuste-rot">{a.rotulo} <em>{valor}</em></span>
                 {#if valor !== a.padrao}
-                  <button class="ajuste-reset" onclick={() => ajusteResetar(a)}>voltar ao padrão</button>
+                  <button class="ajuste-reset" onclick={() => ajusteResetar(a)}>{m.config_server_voltar_padrao()}</button>
                 {/if}
               </div>
               <span class="ajuda">{a.ajuda}</span>
@@ -287,10 +288,10 @@ import { intlLocale } from '../../lib/locale';
 
         <div class="amostra">
           <button class="btn" onclick={ouvirAmostraDaVoz} disabled={!ttsPlayer.ultimoTexto}>
-            🔊 Ouvir amostra desta voz{ttsPlayer.ultimoTexto ? ` · ${amostraTexto.length.toLocaleString(intlLocale())} car.` : ''}
+            {m.config_server_ouvir_amostra()}{ttsPlayer.ultimoTexto ? m.config_server_caracteres({ n: amostraTexto.length.toLocaleString(intlLocale()) }) : ''}
           </button>
           {#if !ttsPlayer.ultimoTexto}
-            <span class="ajuda">ouça algum trecho primeiro pra comparar vozes com ele</span>
+            <span class="ajuda">{m.config_server_ouca_antes()}</span>
           {/if}
           <!-- A falha da amostra PRECISA aparecer aqui, e nao so na TtsBar. Esta tela vive dentro de
                um modal cujo veu esta em z-index 100; a barra do player fica em 39 de proposito, pra
@@ -300,7 +301,7 @@ import { intlLocale } from '../../lib/locale';
         </div>
 
         {#if saldo}
-          <p class="sub">Consumo do mês: {saldo.usados ?? '?'} de {saldo.limite ?? '?'} caracteres.</p>
+          <p class="sub">{m.config_server_consumo({ usados: saldo.usados ?? '?', limite: saldo.limite ?? '?' })}</p>
         {/if}
         {#if saldoErro}<p class="aviso erro">{saldoErro}</p>{/if}
       </div>
@@ -308,15 +309,14 @@ import { intlLocale } from '../../lib/locale';
 
     {#if secao === 'avancado'}
       <div class="somente-leitura">
-        <h3>Só pelo servidor</h3>
+        <h3>{m.config_server_so_servidor()}</h3>
         <p class="ajuda">
-          Mudar qualquer uma exige editar o <code>.env</code> e reiniciar o serviço — por isso não
-          são editáveis daqui.
+          {m.config_server_so_servidor_1()} <code>.env</code>{m.config_server_so_servidor_2()}
         </p>
         {#each Object.entries(store.leitura) as [k, v] (k)}
           <div class="ro-linha">
             <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
-            <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? 'sim' : 'não') : v}</span>
+            <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? m.config_server_sim() : m.config_server_nao()) : v}</span>
           </div>
         {/each}
       </div>
@@ -331,9 +331,9 @@ import { intlLocale } from '../../lib/locale';
        desta tela. E o unico significado honesto: com rascunho compartilhado, um Salvar que gravasse so
        a propria fatia faria o MESMO botao significar coisas diferentes conforme a tela. -->
   <div class="rodape">
-    {#if store.salvo}<span class="ok">salvo</span>{/if}
+    {#if store.salvo}<span class="ok">{m.config_server_salvo()}</span>{/if}
     <button class="btn primario" onclick={store.salvar} disabled={!store.temMudanca || store.salvando}>
-      {store.salvando ? 'Salvando…' : 'Salvar'}
+      {store.salvando ? m.config_motores_salvando() : m.ctx_salvar()}
     </button>
   </div>
 {/if}

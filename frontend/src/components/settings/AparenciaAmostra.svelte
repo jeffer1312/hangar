@@ -1,4 +1,6 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
+
   // Amostra viva da conversa, dentro da propria tela de Aparencia.
   //
   // Por que existe: TODO slider daqui edita algo que fica ATRAS do painel — tamanho do texto,
@@ -14,19 +16,18 @@
   // no commit de nascimento.
 </script>
 
-<div class="amostra" aria-label="Prévia da conversa">
-  <span class="amostra-tag">Prévia</span>
+<div class="amostra" aria-label={m.config_amostra_aria()}>
+  <span class="amostra-tag">{m.config_amostra_titulo()}</span>
 
   <div class="linha-user">
     <div class="bolha-user">
-      <p class="txt">como ficou o texto?</p>
+      <p class="txt">{m.config_amostra_pergunta()}</p>
     </div>
   </div>
 
   <div class="resposta">
     <p class="txt">
-      Assim. Esta é a sua conversa com os ajustes de agora — tamanho, entrelinha,
-      contraste e o quanto a foto atravessa as caixas.
+      {m.config_amostra_resposta()}
     </p>
     <p class="txt cod"><code>npm run check</code></p>
   </div>
@@ -35,7 +36,7 @@
   <div class="faixa">
     <span class="chip">/</span>
     <span class="chip">⌘</span>
-    <span class="faixa-txt">Mensagem para Claude…</span>
+    <span class="faixa-txt">{m.config_amostra_placeholder()}</span>
   </div>
 </div>
 

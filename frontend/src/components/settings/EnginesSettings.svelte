@@ -9,6 +9,7 @@
     type Motor, type ModeloProvedor,
   } from '../../lib/api';
   import type { Server } from '../../lib/auth';
+  import * as m from '../../paraglide/messages';
 
   // Motores de modelo: rodar uma sessão em Kimi, num gateway próprio, ou em qualquer endpoint que
   // fale a Messages API — sem perder skills, hooks nem histórico, e sem tocar a conta Anthropic.
@@ -22,8 +23,8 @@
   let { targetServer = null }: Props = $props();
 
   const DICAS: { label: string; base_url: string }[] = [
-    { label: 'Kimi Code', base_url: 'https://api.kimi.com/coding' },
-    { label: 'OmniRoute (o seu)', base_url: 'https://ai.omniwise.com.br' },
+    { label: m.config_motores_dica_kimi(), base_url: 'https://api.kimi.com/coding' },
+    { label: m.config_motores_dica_omni(), base_url: 'https://ai.omniwise.com.br' },
   ];
 
   let motores = $state<Record<string, Motor>>({});
@@ -130,7 +131,7 @@
       arquivoCorrompido = r.arquivo_corrompido;
       arquivoCaminho = r.arquivo_caminho;
     } catch (e) {
-      erro = e instanceof Error ? e.message : 'Falha ao carregar';
+      erro = e instanceof Error ? e.message : m.config_motores_erro_carregar();
     } finally {
       carregando = false;
     }
@@ -198,11 +199,11 @@
         ? await engineModelosForServer(targetServer, corpo)
         : await engineModelos(corpo);
       modelos = r.modelos;
-      okBusca = `${r.modelos.length} modelo(s) — conexão e chave OK`;
+      okBusca = m.config_motores_modelos_ok({ n: r.modelos.length });
       const atual = modelos.find((m) => m.id === form!.model) ?? modelos[0];
       if (atual) escolherModelo(atual.id);
     } catch (e) {
-      erroBusca = e instanceof Error ? e.message : 'Falha ao consultar o provedor';
+      erroBusca = e instanceof Error ? e.message : m.config_motores_erro_consultar();
     } finally {
       buscando = false;
     }
@@ -259,7 +260,7 @@
         : (await putEngine(form.nome.trim(), corpo)).motores;
       form = null;
     } catch (e) {
-      erro = e instanceof Error ? e.message : 'Falha ao salvar';
+      erro = e instanceof Error ? e.message : m.config_motores_erro_salvar();
     } finally {
       salvando = false;
     }
@@ -288,42 +289,39 @@
       const { [nome]: _fora, ...resto } = motores;
       motores = resto;
     } catch (e) {
-      erro = e instanceof Error ? e.message : 'Falha ao remover';
+      erro = e instanceof Error ? e.message : m.config_motores_erro_remover();
     }
   }
 </script>
 
 <div class="mot">
   <header class="mot-head">
-    <h2>Motores de modelo</h2>
+    <h2>{m.config_modal_motores()}</h2>
     <p class="sub">
-      Rode uma sessão em outro modelo sem perder skills, hooks nem histórico. Sua conta Anthropic
-      fica intocada — o motor vale só para a sessão que você abrir com ele.
+      {m.config_motores_sub()}
     </p>
   </header>
 
   {#if carregando}
-    <p class="aviso">Carregando…</p>
+    <p class="aviso">{m.comum_carregando()}</p>
   {:else if form}
     <div class="form">
       <label class="campo">
-        <span class="rot">Nome curto</span>
+        <span class="rot">{m.config_motores_nome_curto()}</span>
         <input type="text" placeholder="kimi" autocapitalize="off" spellcheck={false}
                disabled={form.existente}
                value={form.nome} oninput={(e) => (form!.nome = e.currentTarget.value)} />
         <span class="ajuda">
-          No terminal você usa <code>claude-engine {form.nome || 'kimi'}</code>. Minúsculas, sem espaço.
+          {m.config_motores_terminal_1()} <code>claude-engine {form.nome || 'kimi'}</code>{m.config_motores_terminal_2()}
         </span>
       </label>
 
       <label class="campo">
-        <span class="rot">Endereço da API</span>
+        <span class="rot">{m.config_motores_endereco()}</span>
         <input type="text" autocapitalize="off" spellcheck={false} placeholder="https://…"
                value={form.base_url} oninput={(e) => (form!.base_url = e.currentTarget.value)} />
         <span class="ajuda">
-          <strong>Sem o /v1 no fim</strong> — o Claude Code monta o caminho sozinho. Precisa falar a
-          Messages API da Anthropic; gateway só-OpenAI exige um proxy tradutor em 127.0.0.1.
-          Endereço público tem que ser https, senão a chave viaja em claro.
+          <strong>{m.config_motores_sem_v1()}</strong> {m.config_motores_messages()}
         </span>
         <span class="dicas">
           {#each DICAS as d (d.base_url)}
@@ -333,36 +331,36 @@
       </label>
 
       <label class="campo">
-        <span class="rot">Chave da API</span>
+        <span class="rot">{m.config_motores_chave()}</span>
         {#if form.api_key_definida}
-          <span class="def">chave configurada — deixe vazio para manter</span>
+          <span class="def">{m.config_motores_chave_definida()}</span>
         {/if}
         <input type="text" autocomplete="off" autocapitalize="off" spellcheck={false}
-               placeholder={form.api_key_definida ? 'colar nova chave para trocar' : 'colar a chave'}
+               placeholder={form.api_key_definida ? m.config_motores_colar_nova() : m.config_motores_colar()}
                value={form.api_key} oninput={(e) => (form!.api_key = e.currentTarget.value)} />
       </label>
 
       <div class="campo">
         <button class="btn" onclick={buscarModelos}
                 disabled={buscando || !form.base_url.trim() || (!form.api_key.trim() && !form.api_key_definida)}>
-          {buscando ? 'Consultando…' : 'Testar e listar modelos'}
+          {buscando ? m.config_motores_consultando() : m.config_motores_testar()}
         </button>
         {#if okBusca}<span class="ok">{okBusca}</span>{/if}
         {#if enderecoMudouSemChave}
           <!-- Testar sem chave nova reusa a key salva, mas o servidor só aceita isso com o
                endereço TAMBÉM salvo — o endereço que você acabou de editar aqui não entra no
                teste até você colar a chave de novo. -->
-          <span class="ajuda erro">Você mudou o endereço: para testar um endereço novo, cole a chave também.</span>
+          <span class="ajuda erro">{m.config_motores_endereco_mudou()}</span>
         {/if}
         <!-- A mensagem crua do provedor é a informação útil ("401 Invalid Authentication"). -->
         {#if erroBusca}<span class="ajuda erro">{erroBusca}</span>{/if}
       </div>
 
       <label class="campo">
-        <span class="rot">Modelo</span>
+        <span class="rot">{m.composer_modelo()}</span>
         {#if modelos.length}
           <Select
-            ariaLabel="Modelo"
+            ariaLabel={m.composer_modelo()}
             value={form.model}
             opcoes={modelos.map((m) => ({
               value: m.id,
@@ -372,54 +370,50 @@
             onchange={escolherModelo}
           />
         {:else}
-          <input type="text" placeholder="id do modelo" autocapitalize="off" spellcheck={false}
+          <input type="text" placeholder={m.config_motores_id_modelo()} autocapitalize="off" spellcheck={false}
                  value={form.model} oninput={(e) => (form!.model = e.currentTarget.value)} />
-          <span class="ajuda">Use "Testar" acima para listar os ids do seu provedor.</span>
+          <span class="ajuda">{m.config_motores_testar_ids()}</span>
         {/if}
         {#if modeloAtual?.vision === false}
           <!-- O app manda foto do celular; motor cego quebra esse fluxo e o usuário tem que saber
                ANTES de abrir a sessão, não quando a foto for ignorada. -->
-          <span class="ajuda erro">Este modelo não enxerga imagem: anexar foto não vai funcionar.</span>
+          <span class="ajuda erro">{m.config_motores_sem_visao()}</span>
         {/if}
       </label>
 
       <label class="campo">
-        <span class="rot">Modelo dos subagentes</span>
+        <span class="rot">{m.config_motores_subagentes()}</span>
         {#if modelos.length}
           <Select
-            ariaLabel="Modelo dos subagentes"
+            ariaLabel={m.config_motores_subagentes()}
             value={form.subagent_model}
-            opcoes={[{ value: '', label: 'mesmo que o principal' },
-                     ...modelos.map((m) => ({ value: m.id, label: m.id }))]}
+            opcoes={[{ value: '', label: m.config_motores_mesmo_principal() },
+                     ...modelos.map((md) => ({ value: md.id, label: md.id }))]}
             onchange={(v) => (form!.subagent_model = v)}
           />
         {:else}
-          <input type="text" placeholder="vazio = mesmo que o principal" autocapitalize="off" spellcheck={false}
+          <input type="text" placeholder={m.config_motores_vazio_principal()} autocapitalize="off" spellcheck={false}
                  value={form.subagent_model} oninput={(e) => (form!.subagent_model = e.currentTarget.value)} />
         {/if}
         <span class="ajuda">
-          Subagentes fazem busca mecânica repetitiva; um modelo mais barato aqui é economia real,
-          sem tocar no modelo principal da sessão.
+          {m.config_motores_subagentes_ajuda()}
         </span>
       </label>
 
       <label class="campo">
-        <span class="rot">Janela de contexto</span>
-        <input type="number" inputmode="numeric" min="1" placeholder="tokens"
+        <span class="rot">{m.config_motores_janela()}</span>
+        <input type="number" inputmode="numeric" min="1" placeholder={m.ctx_tokens()}
                value={form.context_window}
                oninput={(e) => (form!.context_window = e.currentTarget.value)} />
         <span class="ajuda">
-          Vem do provedor ao testar. Em branco, o Claude Code assume 200k e compacta cedo mesmo num
-          modelo maior — capacidade jogada fora. Confira na sessão com <code>/context</code>.
+          {m.config_motores_janela_ajuda_1()} <code>/context</code>{m.config_motores_janela_ajuda_2()}
         </span>
       </label>
 
       <details class="avancado">
-        <summary>Avançado — recursos do harness</summary>
+        <summary>{m.config_motores_avancado()}</summary>
         <p class="ajuda topo">
-          O Claude Code manda recursos que só a API da Anthropic entende; num provedor de terceiro
-          eles são recusados ou ignorados. Cada linha já traz o veredito: abra "por quê?" só se
-          quiser o motivo.
+          {m.config_motores_avancado_ajuda()}
         </p>
 
         <!-- Uma linha por recurso, no MESMO vocabulário do ServerSettings (rótulo à esquerda,
@@ -434,7 +428,7 @@
                 <span class="vered {tom}">{vered}</span>
                 <button type="button" class="pq" aria-expanded={porQue === chave}
                         onclick={() => (porQue = porQue === chave ? null : chave)}>
-                  por quê?<span class="chev" class:aberta={porQue === chave} aria-hidden="true">▾</span>
+                  {m.config_motores_por_que()}<span class="chev" class:aberta={porQue === chave} aria-hidden="true">▾</span>
                 </button>
               </span>
             </div>
@@ -443,7 +437,7 @@
                      checked={ligado(chave)} aria-label={rot}
                      onchange={(e) => setLigado(chave, e.currentTarget.checked)} />
             {:else}
-              <input class="num" type="number" inputmode="numeric" min="1" placeholder="padrão"
+              <input class="num" type="number" inputmode="numeric" min="1" placeholder={m.config_motores_padrao()}
                      aria-label={rot} value={numero(chave)}
                      oninput={(e) => setNumero(chave, e.currentTarget.value)} />
             {/if}
@@ -454,90 +448,70 @@
         {/snippet}
 
         {#snippet mSkills()}
-          Uma invocação da <code>claude-api</code> injeta 206k tokens de uma vez (medido: 12% → 67%
-          da janela num modelo de 372k). Suas skills de plugin e de <code>~/.claude/skills</code>
-          não são afetadas.
+          {m.config_motores_motivo_skills_1()}<code>claude-api</code>{m.config_motores_motivo_skills_2()}<code>~/.claude/skills</code>{m.config_motores_motivo_skills_3()}
         {/snippet}
         {#snippet mBetas()}
-          Campos beta que o Claude Code envia sozinho (<code>context_management</code> e os campos
-          beta de tool). Ligado num upstream que não os aceita dá
-          <code>400 Extra inputs are not permitted</code>.
+          {m.config_motores_motivo_betas_1()}<code>context_management</code>{m.config_motores_motivo_betas_2()}<code>400 Extra inputs are not permitted</code>{m.config_motores_motivo_betas_3()}
         {/snippet}
         {#snippet mCache()}
-          Num gateway o cache já degrada sozinho e calado: se o breakpoint for recusado, aquele
-          bloco fica sem cache pelo resto da conversa, sem erro. Desligar só faz sentido em
-          provedor que cobra o cache mais caro que o miss.
+          {m.config_motores_motivo_cache()}
         {/snippet}
         {#snippet mThinking()}
-          Desligar é destrutivo em alguns provedores: a doc da Moonshot diz que sem thinking o K3 e
-          o K2.7 caem para K2.6, calado.
-          {#if ehMoonshot}Este endereço é Moonshot/Kimi, então a regra vale aqui.{/if}
-          Só desmarque se o upstream devolver <code>400</code> citando <code>thinking</code> ou
-          <code>adaptive</code>.
+          {m.config_motores_motivo_thinking_1()}
+          {#if ehMoonshot}{m.config_motores_motivo_thinking_moonshot()}{/if}
+          {m.config_motores_motivo_thinking_2()} <code>400</code>{m.config_motores_motivo_thinking_3()}<code>thinking</code>{m.config_motores_motivo_thinking_4()}<code>adaptive</code>{m.config_motores_motivo_thinking_5()}
         {/snippet}
         {#snippet mToolSearch()}
           {#if !form?.experimental_betas}
-            O desligamento dos betas mantém o tool search off e este controle não sobrepõe. Ligue
-            os betas antes, se o provedor os aceitar.
+            {m.config_motores_motivo_toolsearch_off()}
           {:else}
-            Carrega as definições de tool sob demanda em vez de todas por turno (50 tools ≈ 10–20k
-            tokens). O Claude Code já desliga sozinho quando a URL não é da Anthropic, porque a
-            maioria dos proxies não repassa os blocos <code>tool_reference</code>.
+            {m.config_motores_motivo_toolsearch_1()} <code>tool_reference</code>{m.config_motores_motivo_toolsearch_2()}
           {/if}
         {/snippet}
         {#snippet mDescoberta()}
-          Consulta o <code>/v1/models</code> do provedor e popula o seletor <code>/model</code>
-          dentro da sessão. É o mesmo endpoint que o botão "Testar" aqui em cima chama: se ele
-          trouxe modelos, a descoberta funciona.
+          {m.config_motores_motivo_descoberta_1()} <code>/v1/models</code>{m.config_motores_motivo_descoberta_2()}<code>/model</code>{m.config_motores_motivo_descoberta_3()}
         {/snippet}
         {#snippet mStreaming()}
-          O Claude Code desliga por padrão atrás de URL customizada. Ligue se o provedor suportar
-          streaming parcial dos argumentos de tool.
+          {m.config_motores_motivo_streaming()}
         {/snippet}
         {#snippet mCompactar()}
-          Preencha quando o provedor impõe uma janela menor que a do modelo e reescreve a mensagem
-          de erro: o Claude Code não reconhece, não compacta sozinho, e a sessão trava em
-          <code>exceeds the context window</code>. Deixe abaixo do limite real do provedor.
+          {m.config_motores_motivo_compactar_1()} <code>exceeds the context window</code>{m.config_motores_motivo_compactar_2()}
         {/snippet}
         {#snippet mSaida()}
-          Par do campo acima. Mantenha abaixo do limite de saída do modelo no provedor.
+          {m.config_motores_motivo_saida()}
         {/snippet}
         {#snippet mAuthHeader()}
-          Ligue só se o provedor recusar a chave com <code>401 Missing API key</code> mesmo com a
-          chave certa. Alguns provedores (opencode zen, em <code>opencode.ai/zen/go</code>) leem a
-          chave apenas no header <code>x-api-key</code> e ignoram o <code>Authorization: Bearer</code>
-          que vai por padrão — para eles, o Bearer equivale a não mandar credencial. Ligado, a chave
-          vai nos dois headers.
+          {m.config_motores_motivo_auth_1()} <code>401 Missing API key</code>{m.config_motores_motivo_auth_2()}<code>opencode.ai/zen/go</code>{m.config_motores_motivo_auth_3()} <code>x-api-key</code>{m.config_motores_motivo_auth_4()}<code>Authorization: Bearer</code>{m.config_motores_motivo_auth_5()}
         {/snippet}
 
         <div class="grade">
-          {@render linha('bundled_skills', 'Skills empacotadas', 'Recomendado: desligado', '', mSkills)}
-          {@render linha('experimental_betas', 'Recursos beta', 'Recomendado: desligado', '', mBetas)}
-          {@render linha('prompt_caching', 'Prompt caching', 'Recomendado: ligado', 'sim', mCache)}
-          {@render linha('adaptive_thinking', 'Raciocínio adaptativo',
-            ehMoonshot ? 'Obrigatório neste provedor' : 'Recomendado: ligado',
+          {@render linha('bundled_skills', m.config_motores_skills(), m.config_motores_recomendado_desligado(), '', mSkills)}
+          {@render linha('experimental_betas', m.config_motores_betas(), m.config_motores_recomendado_desligado(), '', mBetas)}
+          {@render linha('prompt_caching', m.config_motores_cache(), m.config_motores_recomendado_ligado(), 'sim', mCache)}
+          {@render linha('adaptive_thinking', m.config_motores_raciocinio(),
+            ehMoonshot ? m.config_motores_obrigatorio() : m.config_motores_recomendado_ligado(),
             ehMoonshot ? 'forte' : 'sim', mThinking)}
-          {@render linha('tool_search', 'Tool search',
-            form.experimental_betas ? 'Recomendado: desligado' : 'Sem efeito: betas desligados',
+          {@render linha('tool_search', m.config_motores_tool_search(),
+            form.experimental_betas ? m.config_motores_recomendado_desligado() : m.config_motores_sem_efeito(),
             '', mToolSearch, !form.experimental_betas)}
-          {@render linha('gateway_model_discovery', 'Descoberta de modelos',
-            descobertaComprovada ? `Recomendado: ligado (${modelos.length} modelos)` : 'Teste o provedor antes',
+          {@render linha('gateway_model_discovery', m.config_motores_descoberta(),
+            descobertaComprovada ? m.config_motores_ligado_n({ n: modelos.length }) : m.config_motores_teste_antes(),
             descobertaComprovada ? 'sim' : '', mDescoberta)}
-          {@render linha('fine_grained_tool_streaming', 'Streaming fino de tool', 'Recomendado: desligado', '', mStreaming)}
-          {@render linha('auth_via_api_key', 'Chave também em x-api-key',
-            'Ligue só se o provedor devolver 401 Missing API key', '', mAuthHeader)}
-          {@render linha('auto_compact_window', 'Disparar compactação em', 'Recomendado: em branco', '', mCompactar)}
-          {@render linha('max_output_tokens', 'Teto de saída', 'Recomendado: em branco', '', mSaida)}
+          {@render linha('fine_grained_tool_streaming', m.config_motores_streaming(), m.config_motores_recomendado_desligado(), '', mStreaming)}
+          {@render linha('auth_via_api_key', m.config_motores_x_api_key(),
+            m.config_motores_ligue_401(), '', mAuthHeader)}
+          {@render linha('auto_compact_window', m.config_motores_compactar(), m.config_motores_recomendado_branco(), '', mCompactar)}
+          {@render linha('max_output_tokens', m.config_motores_teto_saida(), m.config_motores_recomendado_branco(), '', mSaida)}
         </div>
       </details>
 
       {#if erro}<p class="aviso erro">{erro}</p>{/if}
 
       <div class="acoes">
-        <button class="btn" onclick={() => (form = null)}>Cancelar</button>
+        <button class="btn" onclick={() => (form = null)}>{m.comum_cancelar()}</button>
         <button class="btn primario" onclick={salvar}
                 disabled={salvando || !form.nome.trim() || !form.model.trim() || !form.base_url.trim()}>
-          {salvando ? 'Salvando…' : 'Salvar'}
+          {salvando ? m.config_motores_salvando() : m.ctx_salvar()}
         </button>
       </div>
     </div>
@@ -548,45 +522,42 @@
            Adicionar um motor agora falha ao salvar de propósito (o backend recusa sobrescrever
            um arquivo que não conseguiu ler) — melhor isso do que apagar o que já está lá. -->
       <p class="aviso erro">
-        Não consegui ler <code>{arquivoCaminho}</code> — o arquivo existe mas está com erro de
-        formato (JSON inválido). Se você já tinha motores configurados, eles continuam no
-        arquivo: corrija-o à mão (ou restaure um backup) antes de adicionar um novo.
+        {m.config_motores_nao_consegui_1()} <code>{arquivoCaminho}</code>{m.config_motores_nao_consegui_2()}
       </p>
     {:else if !Object.keys(motores).length}
       <p class="aviso">
-        Nenhum motor ainda. Adicione um e ele aparece no seletor ao criar sessão, e no terminal como
-        <code>claude-engine &lt;nome&gt;</code>.
+        {m.config_motores_nenhum_1()} <code>claude-engine &lt;nome&gt;</code>{m.config_motores_nenhum_2()}
       </p>
     {/if}
     <div class="lista">
-      {#each Object.entries(motores) as [nome, m] (nome)}
+      {#each Object.entries(motores) as [nome, motor] (nome)}
         <div class="card">
           <div class="card-txt">
-            <span class="card-nome">{m.label ?? nome}</span>
-            <span class="card-sub">{m.model}{m.context_window ? ` · ${Math.round(m.context_window / 1000)}k` : ''}</span>
-            <span class="card-url">{m.base_url}</span>
-            <span class="card-key">{m.api_key}</span>
+            <span class="card-nome">{motor.label ?? nome}</span>
+            <span class="card-sub">{motor.model}{motor.context_window ? ` · ${Math.round(motor.context_window / 1000)}k` : ''}</span>
+            <span class="card-url">{motor.base_url}</span>
+            <span class="card-key">{motor.api_key}</span>
           </div>
           <div class="card-acoes">
-            <button class="btn" onclick={() => editar(nome)}>Editar</button>
-            <button class="btn perigo" onclick={() => remover(nome)}>Remover</button>
+            <button class="btn" onclick={() => editar(nome)}>{m.config_motores_editar()}</button>
+            <button class="btn perigo" onclick={() => remover(nome)}>{m.lista_remover()}</button>
           </div>
         </div>
       {/each}
     </div>
     {#if erro}<p class="aviso erro">{erro}</p>{/if}
-    <button class="btn primario largo" onclick={novo}>Adicionar motor</button>
+    <button class="btn primario largo" onclick={novo}>{m.config_motores_adicionar()}</button>
   {/if}
 </div>
 
 {#if confirmRemoverNome}
-  <ConfirmDialog title={`Remover o motor "${confirmRemoverNome}"?`} aria="Remover motor"
+  <ConfirmDialog title={m.config_motores_remover_motor({ nome: confirmRemoverNome })} aria={m.config_motores_remover_aria()}
     onClose={() => (confirmRemoverNome = null)}
     actions={[
-      { label: 'Cancelar', onClick: () => (confirmRemoverNome = null) },
-      { label: 'Remover', kind: 'danger', onClick: removerConfirmado },
+      { label: m.comum_cancelar(), onClick: () => (confirmRemoverNome = null) },
+      { label: m.lista_remover(), kind: 'danger', onClick: removerConfirmado },
     ]}>
-    <p class="ajuda">Sessões abertas nele continuam rodando.</p>
+    <p class="ajuda">{m.config_motores_sessoes_abertas()}</p>
   </ConfirmDialog>
 {/if}
 
