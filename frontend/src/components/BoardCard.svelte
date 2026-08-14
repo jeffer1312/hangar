@@ -237,11 +237,27 @@
         recState = 'busy';
         try {
           const blob = new Blob(recChunks, { type: recorder?.mimeType || 'audio/webm' });
-          const { path, text: tx } = await transcribeFileForServer(
+          // `limpar: true` porque isto é o MICROFONE, não um anexo — mesma regra do Composer. Sem
+          // ele o card devolvia a transcrição crua ("cp send list", sem pontuação, com os "é... é")
+          // enquanto o chat, com o mesmo áudio, devolvia limpa. Era o mesmo botão dando resultados
+          // diferentes conforme a tela.
+          const { path, text: tx, aviso } = await transcribeFileForServer(
             server, session.name, new File([blob], 'audio.webm', { type: blob.type || 'audio/webm' }),
+            { limpar: true },
           );
+          // Gravação sem fala (silêncio, ruído) volta com texto vazio e SEM aviso — a limpeza rodou
+          // certo, só não havia o que limpar. Sem esta guarda o card montava um rascunho
+          // " — 📎 audio: <path>" e não dizia nada: você falou, viu o mic parar, e não aconteceu
+          // nada visível. O chat já barra isso (Composer.svelte:554); o card ficou pra trás pelo
+          // mesmo motivo que ficou sem a limpeza.
+          const t = tx.trim();
+          if (!t) { onSendError('Transcrição vazia — grave de novo'); return; }
+          // A limpeza pode desistir e devolver o cru (provedor fora do ar, resposta rejeitada pelas
+          // travas do narrar.py). O texto entra do mesmo jeito — perder o ditado seria pior —, mas o
+          // motivo aparece: silenciar aqui é a falha calada que a regra do projeto proíbe.
+          if (aviso) onSendError(aviso);
           // Igual ao chat: transcrição entra como texto editável + marcador do áudio original.
-          const nt = (text ? text + ' ' : '') + tx + ' — 📎 audio: ' + path;
+          const nt = (text ? text + ' ' : '') + t + ' — 📎 audio: ' + path;
           text = nt;
           // DIRETO no draft içado do Board (não só via $effect): se o card foi destruído durante o
           // await da transcrição (troca de coluna), o $effect já morreu e o texto sumia calado —
