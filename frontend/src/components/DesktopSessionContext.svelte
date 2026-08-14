@@ -226,7 +226,7 @@ import * as m from '../paraglide/messages';
            coluna de leitura em lados opostos. -->
       <div class="metric-row">
         <span>
-          {#if status.ctxUsed != null && status.ctxTotal}{ctxWindow(status.ctxUsed)} de {ctxWindow(status.ctxTotal)}{:else}{status.ctxTotal ? `${ctxWindow(status.ctxTotal)} ${m.ctx_tokens()}` : m.ctx_janela()}{/if}
+          {#if status.ctxUsed != null && status.ctxTotal}{m.ctx_usado_de_total({ usado: ctxWindow(status.ctxUsed), total: ctxWindow(status.ctxTotal) })}{:else}{status.ctxTotal ? `${ctxWindow(status.ctxTotal)} ${m.ctx_tokens()}` : m.ctx_janela()}{/if}
         </span>
         <strong>{Math.round(status.ctxPct)}%</strong>
       </div>

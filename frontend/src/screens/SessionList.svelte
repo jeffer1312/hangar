@@ -311,7 +311,7 @@ import { intlLocale } from '../lib/locale';
     if (prevActive) selectServer(prevActive);
     broadcastBusy = false;
     if (failed.length) {
-      broadcastMsg = `falha: ${failed.join(', ')}`;
+      broadcastMsg = m.lista_broadcast_falha({ nomes: failed.join(', ') });
     } else {
       broadcastText = '';
       selected = new Set();
@@ -622,14 +622,14 @@ import { intlLocale } from '../lib/locale';
                via effectiveGroupBy) — com 1 servidor "por servidor" seria 1 grupo so, entao o toggle vira
                ruido e some. -->
           <div class="group-toggle" role="radiogroup" aria-label={m.lista_agrupar()}>
-            <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>Servidor</button>
-            <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>Projeto</button>
+            <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>{m.lista_agrupar_servidor()}</button>
+            <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>{m.lista_agrupar_projeto()}</button>
           </div>
         {/if}
         {#if serverErrors.length > 0}
           {@const warn = serverErrors.length === 1
-            ? `${serverErrors[0].label} offline`
-            : `${serverErrors.length} servidores offline (${serverErrors.map((e) => e.label).join(', ')})`}
+            ? m.lista_servidor_offline({ label: serverErrors[0].label })
+            : m.lista_servidores_offline_lista({ n: serverErrors.length, lista: serverErrors.map((e) => e.label).join(', ') })}
           <!-- Uma linha-resumo (N chips só enchiam a tela do celular — pedido do usuário). -->
           <span class="server-warn-item" role="status" title={warn}>⚠ {warn}</span>
         {/if}
@@ -643,7 +643,7 @@ import { intlLocale } from '../lib/locale';
     {:else if error}
       <div class="empty-state">
         <p class="error-text">{error}</p>
-        <button class="retry-btn" onclick={() => sessionsStore.reconnect()}>Tentar novamente</button>
+        <button class="retry-btn" onclick={() => sessionsStore.reconnect()}>{m.lista_tentar_novamente()}</button>
       </div>
     {:else if sessions.length === 0}
       <div class="empty-state">

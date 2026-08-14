@@ -375,7 +375,7 @@ import * as m from '../paraglide/messages';
       </button>
       {#if hiddenRows.length}
         <button class="cv-btn" class:active={showHidden} onclick={() => (showHidden = !showHidden)}>
-          Ocultos ({hiddenRows.length})
+          {m.canvas_ocultos_n({ n: hiddenRows.length })}
         </button>
       {/if}
     </div>

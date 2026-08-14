@@ -169,7 +169,7 @@ import * as m from '../paraglide/messages';
   {#if model.offlineLabels.length > 0}
     <span class="tab-offline" title={model.offlineLabels.join(', ')}
       aria-label={m.tabs_servidores_offline({ n: model.offlineLabels.length, lista: model.offlineLabels.join(', ') })}>
-      ⚠ {model.offlineLabels.length} offline
+      ⚠ {m.tabs_offline_curto({ n: model.offlineLabels.length })}
     </span>
   {/if}
 

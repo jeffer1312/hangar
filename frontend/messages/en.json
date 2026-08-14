@@ -367,5 +367,15 @@
   "paleta_titulo_aria": "Search and commands",
   "sessao_branch_git_atual": "current git branch",
   "comum_carregando": "Loading…",
-  "canvas_mover_aria": "Move {name}"
+  "canvas_mover_aria": "Move {name}",
+  "lista_tentar_novamente": "Try again",
+  "lista_servidor_offline": "{label} offline",
+  "lista_servidores_offline_lista": "{n} servers offline ({lista})",
+  "tabs_offline_curto": "{n} offline",
+  "canvas_ocultos_n": "Hidden ({n})",
+  "fwd_enviado": "sent",
+  "sessao_grupo_pareado": "Paired group: {label}",
+  "lista_broadcast_falha": "failed: {nomes}",
+  "sessao_stash_falhou": "stash failed",
+  "ctx_usado_de_total": "{usado} of {total}"
 }

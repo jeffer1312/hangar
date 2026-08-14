@@ -500,7 +500,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     try {
       await withServer(serverId, async () => {
         const r = await gitAction(name, 'stash');
-        if (!r.ok) throw new Error(r.output || 'stash falhou');
+        if (!r.ok) throw new Error(r.output || m.sessao_stash_falhou());
         await checkoutBranch(name, branch);
       });
       flash(m.sessao_flash_branch({ n: branch }));
@@ -758,7 +758,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (prev) selectServer(prev);
     broadcastBusy = false;
     if (failed.length) {
-      broadcastMsg = `falha: ${failed.join(', ')}`;
+      broadcastMsg = m.lista_broadcast_falha({ nomes: failed.join(', ') });
     } else {
       broadcastText = '';
       selected = new Set();
@@ -873,7 +873,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           {#if expanded}
           <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo, dentro do servidor. -->
           <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
-                  aria-expanded={!collapsedGroups.has(`pair:${item.gid}`)} title={`Grupo pareado: ${item.label}`}>
+                  aria-expanded={!collapsedGroups.has(`pair:${item.gid}`)} title={m.sessao_grupo_pareado({ label: item.label })}>
             <span class="grp-chevron" class:collapsed={collapsedGroups.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
             <span class="pair-head-label">🤝&nbsp;{item.label}</span>
             <span class="grp-count">{item.count}</span>

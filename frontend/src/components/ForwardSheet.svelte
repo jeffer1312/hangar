@@ -67,7 +67,7 @@ import * as m from '../paraglide/messages';
               <span class="row-name">{s.name}</span>
               {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
             </span>
-            {#if sentTo === s.name}<span class="sent">✓ enviado</span>{/if}
+            {#if sentTo === s.name}<span class="sent">✓ {m.fwd_enviado()}</span>{/if}
           </button>
         {/each}
       {/if}
