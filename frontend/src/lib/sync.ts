@@ -1,4 +1,5 @@
 import * as m from '../paraglide/messages';
+import { errorDetail } from './api';
 import type { Server } from './auth';
 
 // Zero-knowledge: the password never leaves the browser. From PBKDF2(masterKey) we split two HKDF
@@ -97,7 +98,7 @@ export async function register(user: string, password: string, bootstrap: string
   const r = await jf('/api/sync/register', {
     method: 'POST', body: JSON.stringify({ user, salt, auth_hash: authHash, bootstrap }),
   });
-  if (!r.ok) throw new Error((await r.json()).detail ?? 'register failed');
+  if (!r.ok) throw new Error(await errorDetail(r));
 }
 
 export async function login(user: string, password: string): Promise<CryptoKey> {

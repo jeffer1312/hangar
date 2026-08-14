@@ -11,6 +11,7 @@ const store = new Map<string, string>();
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
 const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile } = await import('./api');
+const { mensagemDeErro } = await import('./errosApi');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 
@@ -223,6 +224,39 @@ describe('errorDetail (Task 10)', () => {
       new Response(JSON.stringify({ detail: 'sessao nao existe' }), { status: 404 }),
     );
     await expect(getConfigForServer(server)).rejects.toThrow('sessao nao existe');
+  });
+
+  it('detail com code que e nome herdado do prototipo cai no msg, nao em [object Undefined]', async () => {
+    // Parecer task 10, bloqueador 2: ERROS['toString'] devolve a funcao HERDADA do prototipo e a
+    // chamada retorna '[object Undefined]' — so a leitura com hasOwnProperty faz codigo ausente
+    // cair no msg em portugues, que e o contrato do mecanismo.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: { code: 'toString', params: {}, msg: 'mensagem fallback' } }), { status: 400 }),
+    );
+    await expect(getConfigForServer(server)).rejects.toThrow(/mensagem fallback$/);
+  });
+});
+
+// Parecer task 10, bloqueador 3: sete valores pt entraram sem acento (o mapa os entrega direto na
+// UI quando o code e conhecido). O teste fixa o locale pt e exige o texto com acento — e que
+// codigos herdados do prototipo devolvem undefined em vez de quebrar ou chamar funcao errada.
+describe('mensagemDeErro (parecer task 10)', () => {
+  beforeEach(() => {
+    overwriteGetLocale(() => 'pt');
+  });
+
+  it('erro_motor_invalido vem com acento em pt', () => {
+    expect(mensagemDeErro('erro_motor_invalido')).toBe('motor inválido');
+  });
+
+  it('erro_tts_sem_cache vem com acento em pt', () => {
+    expect(mensagemDeErro('erro_tts_sem_cache')).toBe('áudio não está mais em cache');
+  });
+
+  it('code herdado do prototipo devolve undefined, nao quebra nem chama funcao errada', () => {
+    expect(mensagemDeErro('constructor')).toBeUndefined();
+    expect(mensagemDeErro('__proto__')).toBeUndefined();
+    expect(mensagemDeErro('hasOwnProperty')).toBeUndefined();
   });
 });
 

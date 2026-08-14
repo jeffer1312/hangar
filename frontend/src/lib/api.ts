@@ -74,7 +74,7 @@ function authHeaders(): HeadersInit {
 // codigo desconhecido (backend mais novo que o front) cai no `msg` em portugues — mostrar o codigo
 // cru na tela seria pior que mostrar a lingua errada. Endpoint ainda nao migrado manda string,
 // e o caminho antigo continua inteiro.
-async function errorDetail(res: Response): Promise<string> {
+export async function errorDetail(res: Response): Promise<string> {
   const text = await res.text().catch(() => '');
   try {
     const j = JSON.parse(text);

@@ -75,6 +75,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 };
 
 export function mensagemDeErro(code: string, params: Parametros = {}): string | undefined {
-  const fn = ERROS[code];
-  return fn ? fn(params) : undefined;
+  // Propriedade PROPRIA, nunca a leitura crua: nome herdado do prototipo (toString, constructor,
+  // hasOwnProperty, __proto__) existe em todo objeto e chamaria a funcao errada — medido:
+  // `ERROS['toString']` devolve a funcao herdada e a chamada retorna '[object Undefined]'.
+  if (!Object.prototype.hasOwnProperty.call(ERROS, code)) return undefined;
+  return ERROS[code](params);
 }

@@ -253,3 +253,53 @@ def test_get_push_prefs(tmp_path, monkeypatch):
     prefs = push.get_push_prefs()
     assert prefs["muted"] == ["s1"]
     assert prefs["quiet_hours"] == {"start": "22:00", "end": "07:00"}
+
+
+# ---------------------------------------------------------------------------
+# Parecer task 10, bloqueador 4: notify_loop respeita o idioma da inscricao
+# ---------------------------------------------------------------------------
+
+def _mock_webpush_duas_linguas(monkeypatch, tmp_path):
+    """2 inscricoes (en e pt) + VAPID; captura o payload por endpoint."""
+    import pywebpush
+    f = tmp_path / "subs.json"
+    monkeypatch.setattr(push, "_file", lambda: f)
+    push.add_subscription({"endpoint": "https://x/en", "keys": {"p256dh": "a", "auth": "b"}}, "Casa", "srv1", locale="en")
+    push.add_subscription({"endpoint": "https://x/pt", "keys": {"p256dh": "a", "auth": "b"}}, "Casa", "srv1", locale="pt")
+    monkeypatch.setattr(push.settings, "vapid_private", "priv")
+    monkeypatch.setattr(push.settings, "vapid_public", "pub")
+    sent: dict[str, dict] = {}
+    def _fake_webpush(subscription_info, data, vapid_private_key, vapid_claims):
+        sent[subscription_info["endpoint"]] = json.loads(data)
+    monkeypatch.setattr(pywebpush, "webpush", _fake_webpush)
+    return sent
+
+
+@pytest.mark.parametrize("body,esperado_en,esperado_pt", [
+    ("loop concluído: check passou",
+     "loop finished: check passou", "loop concluído: check passou"),
+    ("Claude declarou pronto — confirmar?",
+     "Claude declared done — confirm?", "Claude declarou pronto — confirmar?"),
+    ("loop parado: pelo usuário",
+     "loop stopped: pelo usuário", "loop parado: pelo usuário"),
+    ("loop esgotou as iterações: esgotou 5 iterações",
+     "loop exhausted its iterations: esgotou 5 iterações",
+     "loop esgotou as iterações: esgotou 5 iterações"),
+    ("loop falhou: check_cmd não executável: x",
+     "loop failed: check_cmd não executável: x", "loop falhou: check_cmd não executável: x"),
+])
+def test_notify_loop_traduz_parte_fixa_no_idioma_da_inscricao(tmp_path, monkeypatch, body, esperado_en, esperado_pt):
+    """A parte FIXA sai no idioma da inscricao; o reason (dado dinamico) fica intacto."""
+    sent = _mock_webpush_duas_linguas(monkeypatch, tmp_path)
+    push.notify_loop("s", body)
+    assert sent["https://x/en"]["body"] == esperado_en
+    assert sent["https://x/pt"]["body"] == esperado_pt
+
+
+def test_notify_loop_corpo_desconhecido_preserva_cru(tmp_path, monkeypatch):
+    """Corpo que nao casa com nenhum formato de loop._body segue como chegou (caller custom,
+    versao antiga do loop) — a traducao e best-effort, nunca mutila o texto."""
+    sent = _mock_webpush_duas_linguas(monkeypatch, tmp_path)
+    push.notify_loop("s", "corpo custom que nao casa com loop._body")
+    assert sent["https://x/en"]["body"] == "corpo custom que nao casa com loop._body"
+    assert sent["https://x/pt"]["body"] == "corpo custom que nao casa com loop._body"

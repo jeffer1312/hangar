@@ -26,6 +26,11 @@ _MSG = {
         "limite": "Limite de uso atingido",
         "volta": "volta {reset}",
         "sessoes": "{n} sessões aguardando",
+        "loop_done": "loop concluído: {reason}",
+        "loop_done_claimed": "Claude declarou pronto — confirmar?",
+        "loop_stopped": "loop parado: {reason}",
+        "loop_exhausted": "loop esgotou as iterações: {reason}",
+        "loop_failed": "loop falhou: {reason}",
     },
     "en": {
         "aguardando": "Awaiting your reply",
@@ -35,6 +40,11 @@ _MSG = {
         "limite": "Usage limit reached",
         "volta": "resets {reset}",
         "sessoes": "{n} sessions waiting",
+        "loop_done": "loop finished: {reason}",
+        "loop_done_claimed": "Claude declared done — confirm?",
+        "loop_stopped": "loop stopped: {reason}",
+        "loop_exhausted": "loop exhausted its iterations: {reason}",
+        "loop_failed": "loop failed: {reason}",
     },
 }
 
@@ -310,7 +320,31 @@ def notify_limited(session_name: str, reset: str | None = None) -> None:
 def notify_loop(session_name: str, body: str) -> None:
     """Push do loop runner (harness bloco A). Envio burro (padrao notify_stalled); o dedupe mora
     no app.loop, por transicao de status do sidecar — aqui e so o envio. O body vem pronto do
-    caller (texto do proprio loop, fora da tabela deste modulo)."""
+    caller (loop._body, sempre em portugues): os cinco formatos fixos sao reconhecidos e a parte
+    fixa sai no idioma da inscricao, com o dado dinamico (reason) intacto; corpo que nao casa com
+    nenhum (caller custom, versao antiga do loop) segue cru como antes."""
     if _suppressed(session_name):
         return
-    _broadcast(session_name, lambda _l: body)
+    estado = _loop_estado(body)
+    if estado is None:
+        _broadcast(session_name, lambda _l: body)
+        return
+    status, reason = estado
+    def corpo(locale: str) -> str:
+        chave = f"loop_{status}"
+        return _msg(locale, chave, reason=reason) if reason is not None else _msg(locale, chave)
+    _broadcast(session_name, corpo)
+
+
+def _loop_estado(body: str) -> tuple[str, str | None] | None:
+    """Reconhece os formatos que loop._body produz (todos em pt) e devolve (status, reason).
+    A fonte das frases fixas e a chave pt do _MSG: se o loop mudar a redacao, o parse para de
+    casar e o corpo cai no caminho cru (perde a traducao, nunca quebra a notificacao)."""
+    claimed = _MSG["pt"]["loop_done_claimed"]
+    if body == claimed:
+        return "done_claimed", None
+    for status in ("done", "stopped", "exhausted", "failed"):
+        prefixo = _MSG["pt"][f"loop_{status}"].split("{reason}")[0]
+        if body.startswith(prefixo):
+            return status, body[len(prefixo):]
+    return None

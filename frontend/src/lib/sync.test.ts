@@ -1,6 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { webcrypto } from 'node:crypto';
-import { deriveKeys, encryptList, decryptList } from './sync';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+// O import de './sync' puxa './api' -> './auth', que roda migrate() no import-time e precisa de
+// localStorage/document/window (mesmo stub do api.test.ts, antes do import DINAMICO — import
+// estatico e hoisted e executaria antes destes stubs).
+const store = new Map<string, string>();
+(globalThis as any).localStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => store.set(k, String(v)),
+  removeItem: (k: string) => store.delete(k),
+};
+(globalThis as any).document = { cookie: '' };
+(globalThis as any).window = { location: { origin: 'https://app.test' } };
+
+const { deriveKeys, encryptList, decryptList, register } = await import('./sync');
 
 // Node 20+ exposes WebCrypto at globalThis.crypto; ensure it for the module under test.
 if (!globalThis.crypto) (globalThis as any).crypto = webcrypto;
@@ -33,5 +47,26 @@ describe('sync crypto', () => {
     const a = await deriveKeys('pw1', salt, 600000);
     const b = await deriveKeys('pw2', salt, 600000);
     expect(a.authHash).not.toBe(b.authHash);
+  });
+});
+
+// Parecer task 10, bloqueador 1: register lia `(await r.json()).detail` cru — com o backend novo
+// mandando dict {code, params, msg} (backend/app/mensagens.py), new Error(dict).message vira
+// '[object Object]' na tela. Agora passa pelo MESMO errorDetail do api.ts (um parser so, o do
+// endpoint migrado e o do sync nao divergem) e o texto sai legivel.
+describe('register (erro da API de sync)', () => {
+  it('detail em dict {code,params,msg} vira a mensagem traduzida, nunca [object Object]', async () => {
+    overwriteGetLocale(() => 'pt');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: { code: 'erro_bootstrap_invalido', params: {}, msg: 'bad bootstrap' } }), { status: 400 }),
+    );
+    await expect(register('u', 'p', 'b')).rejects.toThrow('bootstrap inválido');
+  });
+
+  it('detail em string (endpoint antigo) continua funcionando como hoje', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'register failed' }), { status: 400 }),
+    );
+    await expect(register('u', 'p', 'b')).rejects.toThrow('register failed');
   });
 });
