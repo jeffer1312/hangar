@@ -2337,9 +2337,12 @@ def test_unpair_warning_estruturado_sem_server_id(api_client, monkeypatch):
     assert r.status_code == 200
     w = r.json()["warning"]
     assert w["code"] == "erro_pareamento_saida_falhou"
-    assert w["params"]["avisos"] == [
-        {"sessao": "srv-a::x", "erro": "CP_SERVER_ID ausente — par remoto não avisado"},
-    ]
+    # O item vira envelope aninhado: o front traduz pelo code (a string crua em pt misturaria
+    # idiomas na linha em ingles — parecer c0fc8a84).
+    item = w["params"]["avisos"][0]
+    assert item["sessao"] == "srv-a::x"
+    assert item["erro"]["code"] == "erro_pareamento_server_id_ausente"
+    assert "CP_SERVER_ID" in item["erro"]["msg"]
 
 
 def test_unpair_peer_error_serializa_causa_textual(api_client, monkeypatch):

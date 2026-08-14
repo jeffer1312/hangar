@@ -2277,7 +2277,10 @@ async def unpair_session(name: str):
         if not peers.is_remote(p):
             continue
         if not settings.server_id:
-            errs.append({"sessao": p, "erro": "CP_SERVER_ID ausente — par remoto não avisado"})
+            errs.append({"sessao": p,
+                        "erro": erro("erro_pareamento_server_id_ausente",
+                                     "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
+                                     "pareamento cross-server (é o endereço de resposta srv::sessao)")})
             continue
         srv, sess = peers.split_addr(p)
         try:

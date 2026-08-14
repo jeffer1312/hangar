@@ -330,6 +330,19 @@ describe('formataErro (Task 11 round 2: envelopes nos helpers de envio e avisos 
     expect(t).toBe('aviso falhou em: voce: falha de rede');
   });
 
+  it('array misto em ingles: envelope traduz, string de peer fica crua (parecer c0fc8a84)', () => {
+    overwriteGetLocale(() => 'en');
+    const t = mensagemDeErro('erro_pareamento_saida_falhou', {
+      avisos: [
+        { sessao: 'srv-a::x', erro: { code: 'erro_pareamento_server_id_ausente', params: {}, msg: 'CP_SERVER_ID ausente' } },
+        { sessao: 'peer2', erro: 'rede caiu' },
+      ],
+    });
+    expect(t).toBe(
+      'leave notification failed: srv-a::x: CP_SERVER_ID missing in backend/.env — required for cross-server pairing (it\'s the reply address srv::sessao); peer2: rede caiu',
+    );
+  });
+
   it('não-envelope devolve undefined', () => {
     expect(formataErro(undefined)).toBeUndefined();
     expect(formataErro(42)).toBeUndefined();
