@@ -942,7 +942,7 @@
         {/if}
         <div class="twrap"><table class="breakdown">
           <thead>
-            <tr><th></th><th class="n">{m.custos_tokens()}</th><th class="n">{m.custos_custo()}</th><th class="n">{m.custos_pct_conta()}</th></tr>
+            <tr><th></th><th class="n">{m.ctx_tokens()}</th><th class="n">{m.custos_custo()}</th><th class="n">{m.custos_pct_conta()}</th></tr>
           </thead>
           <tbody>
             {#each fatias as f}
@@ -1152,7 +1152,7 @@
             onchange={(v) => setDimComp(v as Dim)} />
         </span>
         <span class="seg" role="group" aria-label={m.custos_metrica()}>
-          <button aria-pressed={metrica === 'tokens'} onclick={() => (metrica = 'tokens')}>{m.custos_tokens()}</button>
+          <button aria-pressed={metrica === 'tokens'} onclick={() => (metrica = 'tokens')}>{m.ctx_tokens()}</button>
           <button aria-pressed={metrica === 'custo'} onclick={() => (metrica = 'custo')}>{m.custos_custo()}</button>
         </span>
       </div>
@@ -1208,7 +1208,7 @@
           <div class="chartbox">
             <svg viewBox="0 0 {grafComp.W} {grafComp.H}" width={grafComp.W} height={grafComp.H}
               role="img"
-              aria-label={m.custos_grafico_comp_aria({ metrica: metrica === 'custo' ? m.custos_custo() : m.custos_tokens(), modo: semanal ? m.custos_semana() : m.custos_dia() })}>
+              aria-label={m.custos_grafico_comp_aria({ metrica: metrica === 'custo' ? m.custos_custo() : m.ctx_tokens(), modo: semanal ? m.custos_semana() : m.custos_dia() })}>
               {#each [0, grafComp.teto / 2, grafComp.teto] as g}
                 <line class="grid-line" x1={grafComp.padL} x2={grafComp.W}
                   y1={grafComp.yDe(g)} y2={grafComp.yDe(g)} />
