@@ -52,7 +52,9 @@ def test_corrige_ocioso_kimi(tmp_path):
     from app.state import corrige_ocioso_kimi
 
     wire = tmp_path / "wire.jsonl"
-    wire.write_text("{}\n", encoding="utf-8")
+    # Fim de turno ABERTO: e o caso que a funcao existe pra pegar (prompt enfileirado na TUI nao
+    # dispara hook, mas grava turn.prompt no wire).
+    wire.write_text('{"type":"turn.prompt"}\n', encoding="utf-8")
 
     def com_mtime(mt):
         os.utime(wire, (mt, mt))
@@ -84,3 +86,44 @@ def test_corrige_ocioso_kimi(tmp_path):
     # (build longo) voltar a "idle" e disparar as automacoes em cima da sessao viva — ver a
     # docstring de corrige_ocioso_kimi. Erra-se pro lado visivel.
     assert corrige(("idle", 1000.0), com_mtime(1090.0)) == ("working", 1090.0)
+
+    # Wire ilegivel/sem nenhum evento de turno: segue no mtime (comportamento antigo), nunca inventa
+    # ociosidade por nao ter conseguido ler.
+    mudo = tmp_path / "mudo.jsonl"
+    mudo.write_text("{}\n", encoding="utf-8")
+    os.utime(mudo, (1090.0, 1090.0))
+    assert corrige(("idle", 1000.0), str(mudo)) == ("working", 1090.0)
+
+
+# 14/08/2026: sessao Kimi apareceu "em execucao" com o pane parado no prompt. O turno tinha fechado
+# as 08:28:44 e as 08:40:46 o Kimi gravou um `config.update` (o system prompt inteiro, ~90KB) — o
+# mtime sozinho leu isso como turno andando. Quem decide agora e a ultima FRONTEIRA de turno do wire.
+def test_corrige_ocioso_kimi_escrita_que_nao_e_turno(tmp_path):
+    import os
+    from app.state import corrige_ocioso_kimi as corrige
+
+    wire = tmp_path / "wire.jsonl"
+
+    def escreve(*linhas, mtime=1090.0):
+        wire.write_text("".join(ln + "\n" for ln in linhas), encoding="utf-8")
+        os.utime(wire, (mtime, mtime))
+        return str(wire)
+
+    ocioso = ("idle", 1000.0)
+    gordo = '{"type":"config.update","systemPrompt":"%s"}' % ("x" * 200_000)
+
+    # O caso real: turno fechado, e DEPOIS uma escrita que nao e turno (inclusive maior que o chunk
+    # de leitura, pra exercitar a montagem das linhas cortadas).
+    assert corrige(ocioso, escreve('{"type":"turn.ended","turnId":4}', gordo)) == ocioso
+    # Turno ANDANDO continua sendo working, com ou sem lixo depois do turn.prompt.
+    assert corrige(ocioso, escreve('{"type":"turn.prompt"}', gordo)) == ("working", 1090.0)
+    # turn.steer = usuario falando NO MEIO do turno -> segue aberto.
+    assert corrige(ocioso, escreve('{"type":"turn.ended"}', '{"type":"turn.prompt"}',
+                                   '{"type":"turn.steer"}')) == ("working", 1090.0)
+    # turn.cancel (Esc) fecha, mesmo antes do turn.ended que sempre vem depois.
+    assert corrige(ocioso, escreve('{"type":"turn.prompt"}', '{"type":"turn.cancel"}')) == ocioso
+    # Mensagem CITANDO o nome do evento nao e fronteira: quem vale e o `type` de topo da linha.
+    assert corrige(ocioso, escreve(
+        '{"type":"turn.ended"}',
+        '{"type":"context.append_message","text":"olha o \\"type\\":\\"turn.prompt\\" ali"}',
+    )) == ocioso

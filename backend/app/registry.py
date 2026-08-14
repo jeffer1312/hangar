@@ -982,6 +982,18 @@ class SessionRegistry:
             # sob o session_id) e toda sessao Kimi caia no fallback de pane. La o spinner e fase de
             # lua, fora de SPINNER_GLYPHS, entao sessao trabalhando aparecia OCIOSA na lista.
             return session_key(jsonl) if jsonl else None
+        # `corrige_ocioso_kimi` LE o fim do wire.jsonl (state._kimi_turno_aberto) quando o mtime
+        # contradiz um marcador ocioso — I/O de arquivo, nao mais um stat. Esta corrotina e awaitada
+        # DIRETO no event loop (/api/sessions, o poller do SSE, o stall_watch), entao a leitura vai
+        # pro threadpool numa tacada so: mesma regra do git status em `_decorate_git`, e o mesmo
+        # incidente que ela documenta — feature lenta na corrotina congela o backend pra TODAS as
+        # sessoes e conexoes, nao so pra dona do arquivo grande.
+        kimis = [i for i in infos if getattr(i, "provider", "claude") == "kimi"]
+        corrigidos: dict[str, object] = {}
+        if kimis:
+            brutos = {i.name: hook_state.get_state(_sid(i.jsonl)) for i in kimis}
+            corrigidos = await asyncio.to_thread(
+                lambda: {i.name: _kimi_corrige_ocioso(i, brutos[i.name]) for i in kimis})
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         for info in infos:
             # Sessoes Codex nao vivem no tmux -> nunca raspar o pane (capture_pane erraria numa
@@ -990,8 +1002,8 @@ class SessionRegistry:
             if getattr(info, "provider", "claude") == "codex":
                 info.last_activity = _jsonl_mtime(info.jsonl)
                 continue
-            marker = hook_state.get_state(_sid(info.jsonl))
-            marker = _kimi_corrige_ocioso(info, marker)
+            marker = (corrigidos[info.name] if info.name in corrigidos
+                      else hook_state.get_state(_sid(info.jsonl)))
             # Marker autoritativo pra working/idle/dead (custo ~0). Pra awaiting_input o marcador NAO
             # carrega a pergunta -> raspa o pane (junto das sem-marcador) pra pegar question/options.
             # LIMITACAO CONHECIDA (rate-limit radar, feature #8): este fast-path PULA a captura do pane,

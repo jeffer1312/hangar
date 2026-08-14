@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import os
 import re
 import time
@@ -8,6 +10,8 @@ from app import tmux
 from app.hook_state import hook_state
 from app.models import StateEvent
 from app.statusline import read as _sidecar_status
+
+_log = logging.getLogger("claude_pocket.state")
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
 _OPTION_RE = re.compile(r"^\s*[❯>]?\s*\d+\.\s+(.*\S)\s*$")
@@ -236,6 +240,75 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
 # segundo da ultima linha. A sessao travada media +1089s. 2s separa os dois casos com folga.
 KIMI_FOLGA_S = 2.0
 
+# Fronteiras de turno no wire.jsonl do Kimi (levantado em 14/08/2026 sobre todos os wire.jsonl da
+# maquina: 185 turn.prompt, 166 turn.ended, 29 turn.steer, 3 turn.cancel — nao ha outro `turn.*`).
+# `turn.steer` e o usuario falando NO MEIO do turno, entao mantem aberto; `turn.cancel` e o Esc, e
+# medido que sempre vem seguido de um `turn.ended`.
+_KIMI_ABRE = ("turn.prompt", "turn.steer")
+_KIMI_FECHA = ("turn.ended", "turn.cancel")
+_KIMI_TURNO_RE = re.compile(rb'"type"\s*:\s*"(turn\.[a-z]+)"')
+_KIMI_CHUNK = 64 << 10
+_KIMI_TETO = 4 << 20
+
+
+# Uma linha por arquivo, nao por chamada: quem chama e o poll da lista (~5s por sessao), entao um
+# wire ilegivel viraria uma linha de log a cada ciclo, pra sempre. O sinal aqui e "aconteceu", nao a
+# frequencia. Sem expiracao de proposito — o conjunto tem no maximo uma entrada por sessao viva.
+_KIMI_AVISADOS: set[str] = set()
+
+
+def _avisa_uma_vez(chave: str, msg: str, *args) -> None:
+    if chave in _KIMI_AVISADOS:
+        return
+    _KIMI_AVISADOS.add(chave)
+    _log.warning(msg, *args)
+
+
+def _kimi_turno_aberto(jsonl: str, teto: int = _KIMI_TETO) -> Optional[bool]:
+    """Ha turno ABERTO no fim do wire.jsonl? True/False; None = nao deu pra saber.
+
+    Le o arquivo de TRAS PRA FRENTE ate a primeira linha que seja uma fronteira de turno — na
+    pratica isso e uma ou duas linhas, porque o wire de uma sessao parada termina no `turn.ended`.
+    O `teto` existe pro caso patologico (arquivo sem nenhum evento de turno): melhor devolver None e
+    cair no mtime do que varrer megabytes a cada poll.
+
+    O regex e so o filtro barato — quem decide e o `type` de TOPO da linha, via json. Sem isso, uma
+    mensagem do usuario CITANDO "turn.ended" (este commit, por exemplo) seria lida como fronteira.
+    """
+    try:
+        with open(jsonl, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fim = pos = fh.tell()
+            resto = b""
+            while pos > 0 and fim - pos < teto:
+                passo = min(_KIMI_CHUNK, pos)
+                pos -= passo
+                fh.seek(pos)
+                linhas = (fh.read(passo) + resto).split(b"\n")
+                # linhas[0] so esta INTEIRA quando ja chegamos ao inicio do arquivo; ate la ela e o
+                # rabo cortado pelo chunk e volta colada no proximo pedaco.
+                resto, inicio = (b"", 0) if pos == 0 else (linhas[0], 1)
+                for ln in reversed(linhas[inicio:]):
+                    if not _KIMI_TURNO_RE.search(ln):
+                        continue
+                    try:
+                        tipo = json.loads(ln).get("type")
+                    except (ValueError, AttributeError):
+                        continue
+                    if tipo in _KIMI_FECHA:
+                        return False
+                    if tipo in _KIMI_ABRE:
+                        return True
+    except OSError:
+        # None faz o chamador voltar a decidir SO pelo mtime — que e exatamente o comportamento que
+        # esta funcao existe pra corrigir. Sem log, "decidiu False" e "desistiu e caiu no mtime"
+        # ficam indistinguiveis, e uma sessao presa em "em execucao" nao tem onde ser diagnosticada.
+        _avisa_uma_vez(jsonl, "kimi: nao deu pra ler o fim do wire jsonl=%s", jsonl)
+        return None
+    _avisa_uma_vez(jsonl, "kimi: nenhuma fronteira de turno no fim de %s — decidindo pelo mtime",
+                   jsonl)
+    return None
+
 
 def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S):
     """Kimi: marcador 'idle' velho + transcript crescendo = turno ANDANDO, nao sessao parada.
@@ -246,9 +319,18 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     aparecendo "pronta" na lista e no chat). O hook nao tem como cobrir isso: o evento nao existe.
 
     O Stop, porem, e o ULTIMO evento do turno — sempre DEPOIS da ultima escrita no transcript. Logo
-    transcript mais novo que um marcador OCIOSO so pode ser turno em andamento. Sem raspar o pane,
-    de proposito: o spinner do Kimi e fase de lua, fora de SPINNER_GLYPHS, e nunca seria detectado
-    la — foi por isso que o fallback visual tambem nao salvou.
+    transcript mais novo que um marcador OCIOSO indica turno em andamento. Sem raspar o pane, de
+    proposito: o spinner do Kimi e fase de lua, fora de SPINNER_GLYPHS, e nunca seria detectado la —
+    foi por isso que o fallback visual tambem nao salvou.
+
+    So que o mtime SOZINHO mente: nem toda escrita no wire e turno. Medido em 14/08/2026 numa sessao
+    real — turno fechou 08:28:44, as 08:40:46 o Kimi gravou um `config.update` (o system prompt
+    inteiro, ~90KB, com a sessao parada) e o mtime, 12min a frente do marcador, deixou a sessao
+    "em execucao" na lista e "Trabalhando..." no chat com o pane parado no prompt. Por isso o mtime
+    virou so o portao BARATO (um stat por poll): quando ele acusa, `_kimi_turno_aberto` le o rabo do
+    wire e a ultima fronteira de turno decide. `turn.ended` por ultimo = ociosa, por mais novo que
+    seja o arquivo. Isso preserva o caso que criou esta funcao (prompt enfileirado grava
+    `turn.prompt` sem disparar hook nenhum) e continua sem raspar pane.
 
     So corrige idle -> working. 'awaiting_input' segue seu caminho (a pergunta so existe no pane) e
     'working' ja esta certo.
@@ -263,8 +345,8 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     escrevendo numa sessao viva ele nao ve. Entre os dois, erra-se pro lado visivel.
 
     Limitacao conhecida que isso deixa: Kimi que morre dentro de um pane que continua vivo aparece
-    "em execucao" ate o pane ser fechado. O custo e um `stat()` por poll — o reagendamento do api.py
-    e uma cadeia SO (ver _armar_recheca), entao nao multiplica.
+    "em execucao" ate o pane ser fechado. O custo e um `stat()` por poll (+ o rabo do wire so quando
+    o stat acusa) — o reagendamento do api.py e uma cadeia SO (ver _armar_recheca), nao multiplica.
 
     Recebe o CAMINHO (e nao o mtime ja lido) porque sao tres chamadores — a lista, o monitor do chat
     aberto e o gatilho de automacoes — e a leitura com try/except tem que ser a mesma nos tres."""
@@ -275,6 +357,8 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     except OSError:
         mtime = None
     if mtime is None or mtime <= marker[1] + folga:
+        return marker
+    if _kimi_turno_aberto(jsonl) is False:   # None (wire ilegivel/sem turno) segue no mtime
         return marker
     return ("working", mtime)
 
