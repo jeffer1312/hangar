@@ -66,7 +66,7 @@ import * as m from '../paraglide/messages';
   // abria com foco no body e digitar nao filtrava) e reseta o destaque.
   $effect(() => {
     if (open) {
-      mode = searchOnly ? 'search' : 'sessions';   // "Buscar conversas" abre direto na busca
+      mode = searchOnly ? 'search' : 'sessions';   // modo busca abre direto na busca
       query = '';
       results = [];
       askAnswer = null; askErr = ''; asking = false;

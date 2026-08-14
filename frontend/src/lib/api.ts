@@ -29,8 +29,8 @@ import type {
   PlanDetail,
 } from './types';
 
-// URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque <img> não
-// manda header Authorization e cross-origin (multi-PC) não leva cookie — o backend aceita ?token.
+// URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque a tag img
+// não manda header Authorization e cross-origin (multi-PC) não leva cookie — o backend aceita ?token.
 export function transcriptImageUrl(name: string, id: string, idx: number): string {
   const t = getToken() ?? '';
   return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;

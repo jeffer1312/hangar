@@ -28,6 +28,7 @@ Hangar is a self-hosted PWA that lets you keep an eye on agent sessions without 
 - **Alternative Claude engines:** run a session through another compatible provider while keeping its skills and history in the same Claude environment.
 - **Pairing:** use `cp-send` to message sibling sessions and coordinate a working group with a shared contract.
 - **Cost view:** inspect usage estimates by day, provider, source, and project. It is an estimate, not an invoice.
+- **Portuguese & English UI:** the interface follows your system language by default; switch it any time in Settings → Language (the app reloads on change).
 
 ## See it in action
 

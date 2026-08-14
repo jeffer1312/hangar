@@ -1,4 +1,10 @@
 [
+  {
+    "_justificativas": {
+      "Workflow": "activity.ts:171 — case de protocolo (tipo de evento do transcript do agente), nao e texto exibido; o rotulo do badge usa m.atividade_workflow()",
+      "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow"
+    }
+  },
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
   "'Exceção: identificador que ninguém decora de ouvido — hash de commit, id, token, caminho de URL —',",
   "'NÃO é resumo: mantenha TODA a informação, todos os passos e todos os nomes.',",
@@ -84,6 +90,7 @@
   ": nao ha como resolver isso olhando so onde a selecao",
   "Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador",
   "Agent",
+  "Aguardando sua resposta",
   "Anthropic",
   "Bash",
   "Claude",
@@ -111,6 +118,7 @@
   "Shell",
   "Sonnet",
   "Space",
+  "Workflow",
   "Write",
   "` -> passa a rastreá-la, continuando a",
   "` cru, que é o comportamento de sempre.",

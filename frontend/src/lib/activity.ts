@@ -175,7 +175,7 @@ export function createActivityFolder(): ActivityFolder {
           agents.push({
             id: e.tool_use_id,
             kind: 'workflow',
-            description: workflowName(input.script) ?? 'Workflow',
+            description: workflowName(input.script) ?? m.atividade_workflow(),
           });
         }
         break;

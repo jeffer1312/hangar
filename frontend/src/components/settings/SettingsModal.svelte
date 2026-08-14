@@ -73,26 +73,26 @@
   // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
   // existir (valor de funcao nao e literal), mas o `satisfies` fica — e ele que checa a forma.
   const LINHAS = [
-    { id: 'geral', secao: 'App', rotulo: m.config_geral_linha(), icone: '🌐',
+    { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: '🌐',
       descricao: m.config_geral_descricao(), servidor: false },
-    { id: 'aparencia', secao: 'App', rotulo: m.config_modal_aparencia(), icone: '🎨',
+    { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: '🎨',
       descricao: m.config_modal_desc_aparencia(), servidor: false },
-    { id: 'ditado', secao: 'App', rotulo: m.config_modal_ditado(), icone: '🎤',
+    { id: 'ditado', secao: 'app', rotulo: m.config_modal_ditado(), icone: '🎤',
       descricao: m.config_modal_desc_ditado(), servidor: false },
-    { id: 'sobre', secao: 'App', rotulo: m.config_modal_sobre(), icone: 'ℹ️',
+    { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'ℹ️',
       descricao: m.config_modal_desc_sobre(), servidor: false },
-    { id: 'servidores', secao: 'Servidor', rotulo: m.config_modal_servidores(), icone: '🖥️',
+    { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: '🖥️',
       descricao: m.config_modal_desc_servidores(), servidor: false },
-    { id: 'notificacoes', secao: 'Servidor', rotulo: m.config_modal_notificacoes(), icone: '🔔',
+    { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: '🔔',
       descricao: m.config_modal_desc_notificacoes(), servidor: true },
-    { id: 'anexos', secao: 'Servidor', rotulo: m.config_modal_anexos(), icone: '📎',
+    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos(), icone: '📎',
       descricao: m.config_modal_desc_anexos(), servidor: true },
-    { id: 'avancado', secao: 'Servidor', rotulo: m.config_modal_avancado(), icone: '🛠️',
+    { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: '🛠️',
       descricao: m.config_modal_desc_avancado(), servidor: true },
-    { id: 'motores', secao: 'Servidor', rotulo: m.config_modal_motores(), icone: '🔌',
+    { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: '🔌',
       descricao: m.config_modal_desc_motores(), servidor: true },
   ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
-  const SECOES = ['App', 'Servidor'] as const;
+  const SECOES = ['app', 'servidor'] as const;
 
   let tituloEl = $state<HTMLElement | null>(null);
   // Fallback de foco das confirmações da tela Servidores: o botão FECHAR do modal é o controle que
@@ -225,7 +225,7 @@
       <button class="st-fechar" bind:this={fecharEl} onclick={onFechar} aria-label={m.sessao_fechar()}>✕</button>
       <aside class="st-nav">
         {#each SECOES as secao (secao)}
-          <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'Servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
+          <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
           {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
             <button class="st-nav-item" class:sel={telaAtual === l.id}
                     aria-current={telaAtual === l.id ? 'page' : undefined}
@@ -261,7 +261,7 @@
 {#snippet corpo()}
   {#if telaAtual === 'root'}
     {#each SECOES as secao (secao)}
-      <p class="st-secao">{secao === 'Servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'Servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
+      <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
       <div class="st-cartao">
         {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
           <SettingsRow icone={l.icone} rotulo={l.rotulo} descricao={l.descricao}

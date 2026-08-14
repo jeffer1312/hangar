@@ -30,7 +30,7 @@
   const anyError = $derived(phases.includes('error'));
   // Todas do mesmo tipo -> o nome ja esta no cabecalho e some de cada filho (o que a arvore do Pi
   // faz); misturadas -> cada filho carrega o proprio nome, senao a linha vira um path sem dono.
-  const mixed = $derived(label === m.formato_ferramentas());
+  const mixed = $derived(label === m.lista_ferramentas());
 
   // Faixa de chips de diff (pele 'chips'): o resumo dos ARQUIVOS que a rodada tocou, com +add/-del,
   // que a pele classica nao tem — hoje o diff so existe dentro de cada Edit, e uma rodada de 8

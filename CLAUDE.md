@@ -172,6 +172,10 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   Chave nova primeiro procura no `pt.json` (reuso antes de duplicar), e `pt.json`/`en.json` andam
   juntos no mesmo commit — chave que falta num deles aparece como ID cru na tela sem erro nenhum.
   Dado do servidor (nome de sessão, caminho, mensagem do agente, saída de comando) **não** vira chave.
+  O idioma segue o sistema por padrão e troca em Configurações → Geral (a tela recarrega — as
+  mensagens são funções compiladas, não valores reativos); o seletor guarda em `PARAGLIDE_LOCALE`.
+  Texto que o **backend** manda pra tela (erros, descrições de built-ins) chega como chave/código e é
+  traduzido no front — exceção: frontmatter de skills e conteúdo de chat são dados, não interface.
 - **iOS black-rectangle repaint.** Glass on NavBar/Composer lives in a `::before` leaf with a near-opaque
   solid bg and **no** `backdrop-filter` / `transform` / `translateZ` on WebKit — those promote a layer that
   renders pure black during momentum scroll. Don't reintroduce them. Liquid-glass blur is Chromium-only

@@ -151,6 +151,10 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
 
 ## 4. Operar o chat
 
+### Idioma
+- O app fala **português e inglês** e segue o idioma do sistema por padrão. Para trocar
+  manualmente: **Configurações → Geral → Idioma · Language** (o app recarrega ao trocar).
+
 ### Sessões
 - **Criar:** botão **＋ / Nova sessão** → escolha a pasta (cwd). O backend roda
   `claude --session-id <novo>` num tmux novo → vem **limpa** (resolve o transcript pelo

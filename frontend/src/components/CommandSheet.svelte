@@ -34,7 +34,7 @@
     if (!q) return true;
     return (
       c.name.toLowerCase().includes(q) ||
-      (c.description?.toLowerCase().includes(q) ?? false)
+      (descricao(c)?.toLowerCase().includes(q) ?? false)
     );
   }
 
@@ -79,6 +79,40 @@
   function badge(source: CommandInfo['source']): string {
     return source === 'builtin' ? 'base' : source === 'plugin' ? 'plugin' : 'skill';
   }
+
+  // Descrições dos built-ins são INTERFACE (o catálogo fixo do Claude Code), então vivem em
+  // chaves traduzidas aqui no front — o backend manda o nome + a description em pt como fallback
+  // (skills/plugins seguem cruas de propósito: frontmatter do usuário é dado, não interface).
+  const DESCRICAO_BUILTIN: Record<string, () => string> = {
+    clear: m.cmd_clear,
+    compact: m.cmd_compact,
+    context: m.cmd_context,
+    model: m.cmd_model,
+    effort: m.cmd_effort,
+    resume: m.cmd_resume,
+    rewind: m.cmd_rewind,
+    'release-notes': m.cmd_release_notes,
+    help: m.cmd_help,
+    status: m.cmd_status,
+    cost: m.cmd_cost,
+    export: m.cmd_export,
+    init: m.cmd_init,
+    agents: m.cmd_agents,
+    mcp: m.cmd_mcp,
+    memory: m.cmd_memory,
+    vim: m.cmd_vim,
+    config: m.cmd_config,
+    doctor: m.cmd_doctor,
+    quit: m.cmd_quit,
+  };
+
+  function descricao(c: CommandInfo): string | null {
+    if (c.source === 'builtin') {
+      const t = DESCRICAO_BUILTIN[c.name];
+      if (t) return t();
+    }
+    return c.description ?? null;
+  }
 </script>
 
 <BottomSheet {open} {onClose} ariaLabel={m.comandos_titulo()}>
@@ -118,7 +152,7 @@
                   <button class="cmd-row" onclick={() => handleTap(c)}>
                     <span class="cmd-main">
                       <span class="cmd-name">{c.display}</span>
-                      {#if c.description}<span class="cmd-desc">{c.description}</span>{/if}
+                      {#if descricao(c)}<span class="cmd-desc">{descricao(c)}</span>{/if}
                     </span>
                     {#if c.argumentHint}<span class="arg">{c.argumentHint}</span>{/if}
                     <span class="badge badge--{c.source}">{badge(c.source)}</span>

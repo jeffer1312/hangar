@@ -1277,7 +1277,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     onClose={() => (renameDialog = null)}
     actions={[
       { label: m.comum_cancelar(), onClick: () => (renameDialog = null) },
-      { label: m.sessao_renomear_curto(), kind: 'primary', disabled: renameBusy || !renameValue.trim() || renameValue.trim() === rd.old, onClick: submitRenameDialog },
+      { label: m.ctx_renomear(), kind: 'primary', disabled: renameBusy || !renameValue.trim() || renameValue.trim() === rd.old, onClick: submitRenameDialog },
     ]}>
     <input
       class="rename-dialog-input"

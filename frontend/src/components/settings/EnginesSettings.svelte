@@ -406,7 +406,7 @@
                value={form.context_window}
                oninput={(e) => (form!.context_window = e.currentTarget.value)} />
         <span class="ajuda">
-          {m.config_motores_janela_ajuda_1()} <code>/context</code>{m.config_motores_janela_ajuda_2()}
+          {m.config_motores_janela_ajuda_1()} <code>/context</code>{m.comum_ponto()}
         </span>
       </label>
 
@@ -451,7 +451,7 @@
           {m.config_motores_motivo_skills_1()} <code>claude-api</code>{m.config_motores_motivo_skills_2()} <code>~/.claude/skills</code>{m.config_motores_motivo_skills_3()}
         {/snippet}
         {#snippet mBetas()}
-          {m.config_motores_motivo_betas_1()}<code>context_management</code>{m.config_motores_motivo_betas_2()} <code>400 Extra inputs are not permitted</code>{m.config_motores_motivo_betas_3()}
+          {m.config_motores_motivo_betas_1()}<code>context_management</code>{m.config_motores_motivo_betas_2()} <code>400 Extra inputs are not permitted</code>{m.comum_ponto()}
         {/snippet}
         {#snippet mCache()}
           {m.config_motores_motivo_cache()}
@@ -459,13 +459,13 @@
         {#snippet mThinking()}
           {m.config_motores_motivo_thinking_1()}
           {#if ehMoonshot}{m.config_motores_motivo_thinking_moonshot()}{/if}
-          {m.config_motores_motivo_thinking_2()} <code>400</code>{m.config_motores_motivo_thinking_3()} <code>thinking</code>{m.config_motores_motivo_thinking_4()} <code>adaptive</code>{m.config_motores_motivo_thinking_5()}
+          {m.config_motores_motivo_thinking_2()} <code>400</code>{m.config_motores_motivo_thinking_3()} <code>thinking</code>{m.config_motores_motivo_thinking_4()} <code>adaptive</code>{m.comum_ponto()}
         {/snippet}
         {#snippet mToolSearch()}
           {#if !form?.experimental_betas}
             {m.config_motores_motivo_toolsearch_off()}
           {:else}
-            {m.config_motores_motivo_toolsearch_1()} <code>tool_reference</code>{m.config_motores_motivo_toolsearch_2()}
+            {m.config_motores_motivo_toolsearch_1()} <code>tool_reference</code>{m.comum_ponto()}
           {/if}
         {/snippet}
         {#snippet mDescoberta()}
@@ -526,7 +526,7 @@
       </p>
     {:else if !Object.keys(motores).length}
       <p class="aviso">
-        {m.config_motores_nenhum_1()} <code>claude-engine &lt;nome&gt;</code>{m.config_motores_nenhum_2()}
+        {m.config_motores_nenhum_1()} <code>claude-engine &lt;nome&gt;</code>{m.comum_ponto()}
       </p>
     {/if}
     <div class="lista">

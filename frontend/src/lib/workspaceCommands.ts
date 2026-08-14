@@ -94,6 +94,6 @@ export function workspaceSessionItems(rows: AggSession[]): WorkspaceSessionItem[
     title: session.name,
     detail: `${session.serverLabel} · ${session.cwd ?? m.paleta_sem_diretorio()}`,
     keywords: [session.serverId, session.serverLabel, session.cwd ?? ''],
-    group: m.paleta_grupo_sessoes(),
+    group: m.lista_titulo(),
   }));
 }

@@ -207,7 +207,7 @@
        escolhido acima. Sem dizer isso, a tela deixava as duas parecendo a mesma coisa. -->
   <p class="ss-secao">{m.config_modal_notificacoes()}</p>
   <p class="ss-legenda">
-    {m.config_servidores_push_1()} {resolvedServer ? m.config_modal_em({ nome: resolvedServer.label }) : m.config_servidores_push_global()}{m.config_servidores_push_2()}
+    {m.config_servidores_push_1()} {resolvedServer ? m.config_modal_em({ nome: resolvedServer.label }) : m.config_servidores_push_global()}{m.comum_ponto()}
   </p>
   <PushQuiet target={pushTarget} open={true} />
 {:else}

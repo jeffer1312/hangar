@@ -1,8 +1,1 @@
-{
-  "components/PlanPanel.svelte": 1,
-  "components/SessionSwitcherSheet.svelte": 1,
-  "components/settings/SettingsModal.svelte": 11,
-  "lib/activity.ts": 2,
-  "lib/api.ts": 1,
-  "sw.ts": 1
-}
+{}

@@ -952,7 +952,7 @@ import { intlLocale } from '../lib/locale';
             <p id="sl-add-err" class="error-msg" role="alert">{addError}</p>
           {/if}
           <button type="submit" class="add-primary" disabled={addBusy || !addUrl.trim() || !addToken.trim()}>
-            {addBusy ? 'Conectando…' : 'Adicionar'}
+            {addBusy ? m.login_conectando() : m.config_servidores_adicionar()}
           </button>
           <button type="button" class="add-secondary" onclick={() => { showAddServer = false; scanning = true; }}>
             {m.sessao_escanear_qr()}

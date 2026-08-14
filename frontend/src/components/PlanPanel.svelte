@@ -68,7 +68,7 @@
   });
 
   async function trocar(stem: string) {
-    const alvo = stem || null;   // '' = a opção "automático"
+    const alvo = stem || null;   // '' = a opção automática (rótulo vem de plano_automatico)
     pickerErr = '';
     const minha = ++vez;
     try {

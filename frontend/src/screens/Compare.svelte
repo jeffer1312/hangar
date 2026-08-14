@@ -167,7 +167,7 @@ import * as m from '../paraglide/messages';
           {:else if c.invalidServer}
             <p class="cc-empty">{m.compare_servidor_nao_encontrado()}</p>
           {:else if c.offline}
-            <p class="cc-empty">{m.compare_sem_conexao()}</p>
+            <p class="cc-empty">{m.board_sem_conexao()}</p>
           {:else}
             <p class="cc-empty">{m.compare_sem_respostas()}</p>
           {/if}

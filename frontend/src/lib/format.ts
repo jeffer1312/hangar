@@ -573,7 +573,7 @@ export function summarizeToolResult(
 // rótulo genérico. É o que dá sentido a esconder o nome em cada filho da árvore.
 export function toolGroupLabel(names: (string | null | undefined)[]): string {
   const first = names[0] ?? m.formato_tool_generico();
-  return names.every((n) => (n ?? m.formato_tool_generico()) === first) ? first : m.formato_ferramentas();
+  return names.every((n) => (n ?? m.formato_tool_generico()) === first) ? first : m.lista_ferramentas();
 }
 
 // Contagem por fase no cabeçalho do grupo ("2 rodando • 3 concluídos"), na ordem rodando → ok → erro.
