@@ -13,6 +13,27 @@ from app.uploads import _safe_ext
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
 
+# O que se dita neste app e prompt pra agente: nome de ferramenta, comando, caminho e sigla. Sao
+# exatamente as palavras que a Whisper mais erra, porque nenhuma delas e portugues ("cp-send" sai
+# "CP send", "Kimi K3" sai "QIMI K3"). O campo `prompt` da Whisper e vocabulario, nao instrucao:
+# ele so enviesa a decodificacao pra grafia certa dessas palavras. Consertar aqui e melhor que
+# consertar depois no LLM — a limpeza tem ordem explicita de PRESERVAR nome proprio como veio,
+# entao o que a Whisper errou chega errado no fim.
+#
+# `language` fixo em pt: o audio deste app e sempre ditado do usuario. Sem ele a Whisper detecta o
+# idioma sozinha e ja trocou frase curta com jargao ingles por transcricao em ingles.
+IDIOMA = "pt"
+# Vocabulario BASE: so termos do proprio app, que valem pra qualquer pessoa que o use. O que e de
+# UMA pessoa (nome de projeto, de sessao, de cliente) entra pela config `ditado_vocabulario` e e
+# somado a este.
+VOCAB_BASE = (
+    "cp-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
+    "frontend, commit, merge request, deploy, endpoint, worktree, prompt, token"
+)
+# A Whisper le no maximo ~224 tokens de prompt e ignora calada o resto — uma lista que cresceu
+# demais perderia justamente os termos do fim, sem aviso. Corta por caractere, com folga.
+_VOCAB_MAX = 700
+
 
 class TranscribeError(Exception):
     """Erro de transcricao com status HTTP pra o endpoint mapear direto."""
@@ -22,13 +43,24 @@ class TranscribeError(Exception):
         self.detail = detail
 
 
-def build_multipart(filename: str, content: bytes) -> tuple[bytes, str]:
-    """Monta um corpo multipart/form-data (model + response_format + file) e devolve (body, boundary).
-    Separado da chamada de rede pra ser testavel sem tocar na Groq."""
+def vocabulario() -> str:
+    """Lista de termos que a Whisper deve grafar direito: a base do app mais o que o usuario
+    acrescentou na tela. Truncada em _VOCAB_MAX pra nao cair no corte silencioso da API."""
+    extra = (runtime_config.get("ditado_vocabulario") or "").strip()
+    juntos = f"{VOCAB_BASE}, {extra}" if extra else VOCAB_BASE
+    return juntos[:_VOCAB_MAX]
+
+
+def build_multipart(filename: str, content: bytes, vocab: str = "") -> tuple[bytes, str]:
+    """Monta um corpo multipart/form-data (model + response_format + language + prompt + file) e
+    devolve (body, boundary). Separado da chamada de rede pra ser testavel sem tocar na Groq."""
     boundary = "----claudepocket" + secrets.token_hex(16)
     b = boundary.encode()
     parts: list[bytes] = []
-    for name, value in (("model", GROQ_MODEL), ("response_format", "text")):
+    campos = [("model", GROQ_MODEL), ("response_format", "text"), ("language", IDIOMA)]
+    if vocab:
+        campos.append(("prompt", vocab))
+    for name, value in campos:
         parts += [b"--" + b,
                   f'Content-Disposition: form-data; name="{name}"'.encode(),
                   b"", value.encode()]
@@ -51,7 +83,7 @@ def transcribe(content: bytes, filename: str | None) -> str:
     ext = _safe_ext(filename)
     if ext == "bin":
         ext = "webm"
-    body, boundary = build_multipart(f"audio.{ext}", content)
+    body, boundary = build_multipart(f"audio.{ext}", content, vocabulario())
     req = urllib.request.Request(
         GROQ_URL, data=body, method="POST",
         headers={

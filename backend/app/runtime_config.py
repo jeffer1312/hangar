@@ -44,6 +44,14 @@ EDITAVEIS: dict[str, type] = {
     "llm_base_url": str,   # endpoint compativel com OpenAI (vazio = Groq)
     "llm_api_key": str,    # chave do provedor (so usada quando ha base_url proprio)
     "llm_model": str,      # nome do modelo (vazio = o padrao)
+    # reasoning_effort mandado ao provedor. Vazio = campo AUSENTE do payload (o de sempre) — nem
+    # todo provedor conhece a chave, e mandar pra quem nao conhece e 400. Serve pra DESLIGAR o
+    # raciocinio ("none") num modelo que raciocina: a limpeza do ditado tem timeout de 8s e um
+    # modelo pensando estoura isso. Ver narrar._esforco_raciocinio.
+    "llm_reasoning_effort": str,
+    # Palavras que a Whisper tem que grafar direito (nome de projeto, de sessao, jargao do seu
+    # dia). Somadas a transcribe.VOCAB_BASE. Ver transcribe.vocabulario.
+    "ditado_vocabulario": str,
 }
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você

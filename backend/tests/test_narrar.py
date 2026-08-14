@@ -209,6 +209,40 @@ def test_base_url_e_modelo_custom_chegam_na_request(monkeypatch):
     assert corpo["model"] == "modelo-custom"
 
 
+def _corpo_enviado(monkeypatch) -> dict:
+    """Dispara uma narracao e devolve o JSON que foi pro provedor."""
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    narrar.narrar("texto", [], "explica isso")
+    return json.loads(captured["req"].data)
+
+
+def test_sem_esforco_configurado_o_payload_nao_muda(monkeypatch):
+    # `reasoning_effort` nao e universal: mandar a chave pra um provedor que nao a conhece e um 400
+    # que derruba a limpeza inteira. Vazio (o padrao) tem que sair do payload por completo — nao
+    # basta ir como "" ou null.
+    _config(monkeypatch, {"groq_api_key": "k"})
+    assert "reasoning_effort" not in _corpo_enviado(monkeypatch)
+
+
+def test_esforco_configurado_vai_no_payload(monkeypatch):
+    # "none" e o valor que importa: desliga o raciocinio num modelo que raciocina, e foi o que fez
+    # o deepseek-v4-flash sair de 6,4s (3/15 estourando o timeout de 8s) pra 1,8s sem estouro.
+    _config(monkeypatch, {"groq_api_key": "k", "llm_reasoning_effort": "none"})
+    assert _corpo_enviado(monkeypatch)["reasoning_effort"] == "none"
+
+
 def test_resposta_sem_texto_esperado_levanta_502(monkeypatch):
     _com_chave(monkeypatch)
 

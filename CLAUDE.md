@@ -311,6 +311,35 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **Ditado: a transcrição não é o problema, o que vem depois é** (`app/transcribe.py` +
+  `app/narrar.py:limpar_ditado`). Duas etapas, dois modelos: a Whisper (`whisper-large-v3-turbo`)
+  ouve, e um LLM limpa. Tudo aqui foi **medido em 14/08/2026** — 5 ditados reais × 3 execuções ×
+  4 modelos —, e as três coisas que mudaram valem como regra, não como preferência:
+  - **O modelo da limpeza importa mais do que parece, e o critério não é tamanho — é obediência.**
+    O `llama-3.3-70b-versatile`, o padrão até aqui, inventava pasta em caminho ditado
+    ("backend barra app barra narrar ponto py" → `backend/barra/app/barra/narrar.py`, 3/3) e mantinha
+    **as duas versões** quando a pessoa se corrigia falando. Padrão agora é `openai/gpt-oss-120b`
+    (Groq, ~1,2s). O melhor dos quatro foi o `deepseek-v4-flash`, mas ele **raciocina**: 6,4s de
+    mediana e **3 de 15 chamadas estourando o timeout de 8s** da limpeza — o ditado voltava cru. Com
+    `reasoning_effort: "none"` ele cai pra 1,8s e acerta tudo. Daí o campo `llm_reasoning_effort`, que
+    é **opcional de propósito**: vazio = a chave some do payload, porque mandá-la a um provedor que
+    não a conhece é um 400 que derruba a limpeza inteira.
+  - **Regra de prompt só funciona com exemplo de entrada e saída.** A regra "aplique as correções que
+    a pessoa falou" era a razão de ser da limpeza e falhava 0/3 em dois modelos: eles *pontuavam* a
+    correção ("A primeira é o custo do carretel. Não, desculpa. A primeira vai ser…") em vez de apagar
+    a versão errada. Trocar o verbo por **APAGUE** e colar um par entrada/saída levou a 3/3. Mesmo
+    padrão na regra 4 (`barra` → `/`, `traço traço` → `--`): sem o par, o `gpt-oss-120b` deixava a
+    frase literal 3/3. Toda regra nova aqui **nasce com exemplo**, e com um contra-exemplo quando ela
+    pode generalizar demais ("o ponto principal", "a barra de rolagem" não podem virar pontuação).
+  - **Vocabulário vai pra Whisper, não pro LLM.** O `prompt` da API é enviesamento de decodificação,
+    e é onde `cp-send` para de sair "CP send". Consertar depois é impossível por construção: a
+    limpeza tem ordem explícita de **preservar** nome próprio como veio, então o que a Whisper errou
+    chega errado no fim. `VOCAB_BASE` (termos do app, valem pra todo mundo) + `ditado_vocabulario`
+    (o que é de uma pessoa só), truncados em `_VOCAB_MAX` porque a API corta em ~224 tokens **calada**.
+    `language=pt` fixo pelo mesmo motivo: sem ele, frase curta cheia de jargão inglês voltava em inglês.
+  - Cuidado de cota: o prompt novo tem ~940 tokens por chamada (era ~400). No plano gratuito da Groq
+    (8000 tokens/minuto) isso não incomoda um ditado por vez, mas **estoura em teste automatizado** —
+    um 429 lá é cota, não qualidade; separe os dois antes de culpar o modelo.
 - **Statusline por sidecar, não pelo pane** (`app/statusline.py` + `scripts/omniroute-statusline.js`
   + `scripts/pi/rich-status-line.ts` + `~/.kimi-code/statusline.js`): a linha que o app mostra
   (modelo, contexto, ⚡5h/📅7d, custo)
