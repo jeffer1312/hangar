@@ -136,7 +136,7 @@ export function createActivityFolder(): ActivityFolder {
         const id = String(createSeq); // TaskUpdate.taskId é o id sequencial "1","2",...
         byId.set(id, {
           id,
-          title: String(input.subject ?? input.content ?? 'Tarefa'),
+          title: String(input.subject ?? input.content ?? m.atividade_tarefa_fallback()),
           activeForm: typeof input.activeForm === 'string' ? input.activeForm : undefined,
           status: 'pending',
         });

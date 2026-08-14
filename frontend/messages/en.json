@@ -1467,5 +1467,7 @@
   "loop_sinais_corpo": "Same error 2× → the app stops on its own (stagnation); fix A breaking B alternately → split the scope; agent touching tests → the re-prompt already forbids it, but review the diff.",
   "loop_dica_titulo": "Final tip:",
   "loop_dica_corpo": "ask for evidence, not promises — include \"run the check and show the output\" in the goal.",
-  "plano_progresso_anel": "Plan progress: {pct}%"
+  "plano_progresso_anel": "Plan progress: {pct}%",
+  "atividade_tarefa_fallback": "Task",
+  "tasks_sem_titulo": "(no title)"
 }

@@ -1,3 +1,5 @@
+import * as m from '../paraglide/messages';
+
 // Reconstrução da lista de tarefas do agente a partir do transcript.
 //
 // Diferente do TodoWrite (que mandava a lista INTEIRA a cada chamada), o TaskCreate/TaskUpdate do
@@ -51,10 +53,10 @@ export function foldTasks(
 
     if (ev.tool_name === 'TaskCreate') {
       const res = resultadoDe(ev.tool_use_id ?? '');
-      const m = comoTexto(res?.result).match(ID_NO_RESULTADO);
+      const mm = comoTexto(res?.result).match(ID_NO_RESULTADO);
       const t: Task = {
-        id: m ? m[1] : '',
-        subject: comoTexto(input['subject']) || '(sem título)',
+        id: mm ? mm[1] : '',
+        subject: comoTexto(input['subject']) || m.tasks_sem_titulo(),
         description: comoTexto(input['description']),
         activeForm: comoTexto(input['activeForm']),
         status: 'pending',

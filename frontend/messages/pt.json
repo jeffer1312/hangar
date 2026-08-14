@@ -1467,5 +1467,7 @@
   "loop_sinais_corpo": "Mesmo erro 2× → o app já para sozinho (estagnação); fix A quebra B alternando → divida o escopo; agente mexendo em teste → o re-prompt já proíbe, mas revise o diff.",
   "loop_dica_titulo": "Dica final:",
   "loop_dica_corpo": "peça evidência, não promessa — inclua no objetivo \"rode o check e mostre a saída\".",
-  "plano_progresso_anel": "Progresso do plano: {pct}%"
+  "plano_progresso_anel": "Progresso do plano: {pct}%",
+  "atividade_tarefa_fallback": "Tarefa",
+  "tasks_sem_titulo": "(sem título)"
 }
