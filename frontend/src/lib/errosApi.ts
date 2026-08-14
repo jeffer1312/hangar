@@ -158,6 +158,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_fila_nao_digitada: () => m.erro_fila_nao_digitada(),
   erro_fila_nao_entregue: () => m.erro_fila_nao_entregue(),
   erro_envio_falhou_desconhecida: () => m.erro_envio_falhou_desconhecida(),
+  erro_envio_falhou: (p) => m.erro_envio_falhou({ erro: fmtParam(p.erro) }),
   erro_group_message_slash: () => m.erro_group_message_slash(),
   erro_sessao_sem_grupo: () => m.erro_sessao_sem_grupo(),
   erro_sessao_nao_pareada: () => m.erro_sessao_nao_pareada(),

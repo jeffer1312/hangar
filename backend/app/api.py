@@ -1757,8 +1757,10 @@ def _send_one(name: str, text: str) -> dict:
             pass
     except ValueError as e:
         # send_prompt rejeita control chars (ex: '\n'). Sem isto virava 500 -> a msg sumia sem
-        # feedback. Agora vira 400 limpo (o frontend mostra). (Multi-linha de verdade: backlog.)
-        return {"ok": False, "error": str(e)}
+        # feedback. Agora vira 400 com envelope (o frontend traduz o prefixo e mostra a causa em
+        # params.erro). (Multi-linha de verdade: backlog.)
+        return {"ok": False, "error": erro("erro_envio_falhou",
+                                           f"falha ao enviar: {e}", erro=str(e))}
     if result == "partial":
         # Entrega PARCIAL no fatiamento do Windows: parte do texto ficou no composer e o Enter NAO foi
         # enviado (ver terminal_input.send_prompt). Reporta erro em vez de seguir pro caminho de
@@ -1924,7 +1926,8 @@ async def _send_one_codex(name: str, text: str) -> dict:
         result = await adapter.send_prompt(name, text)
     except Exception as e:
         _log.exception("codex send_prompt falhou name=%s", name)
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": erro("erro_envio_falhou",
+                                           f"falha ao enviar: {e}", erro=str(e))}
     if result == "sent":
         if entry is not None:
             # turno iniciou -> marca entregue pra o drain-on-complete nao reenviar a mesma entrada.
@@ -2035,10 +2038,11 @@ def _group_text(me: str, others: list[str], task: str) -> str:
     )
 
 
-async def _deliver(name: str, text: str) -> str | None:
+async def _deliver(name: str, text: str) -> dict | None:
     # Mesma esteira do /input (fila durável se ocupada), ramificada por provider.
-    # Devolve o erro (str) ou None — _send_one/_send_one_codex NUNCA levantam, reportam no dict;
-    # engolir isso fazia o pareamento dizer "ok" com o aviso jamais entregue.
+    # Devolve o envelope {code, params, msg} (ou string crua de erro tecnico ainda nao migrado)
+    # ou None — _send_one/_send_one_codex NUNCA levantam, reportam no dict; engolir isso fazia o
+    # pareamento dizer "ok" com o aviso jamais entregue.
     if _provider_of(name) == "codex":
         res = await _send_one_codex(name, text)
     else:
@@ -2100,7 +2104,8 @@ async def pair_session(name: str, body: PairBody):
     return {"ok": True, "members": members,
             "warning": erro("erro_pareamento_aviso_parcial",
                             "aviso falhou em: " + "; ".join(
-                                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs))
+                                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs),
+                            avisos=errs)
             if errs else None}
 
 
@@ -2237,7 +2242,8 @@ async def group_message(name: str, body: GroupMsgBody):
     return {"ok": True, "peers": peers,
             "warning": erro("erro_pareamento_grupo_falha",
                             "falha em: " + "; ".join(
-                                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in failed))
+                                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in failed),
+                            avisos=failed)
             if failed else None}
 
 
@@ -2271,7 +2277,7 @@ async def unpair_session(name: str):
         if not peers.is_remote(p):
             continue
         if not settings.server_id:
-            errs.append(f"{p}: CP_SERVER_ID ausente — par remoto não avisado")
+            errs.append({"sessao": p, "erro": "CP_SERVER_ID ausente — par remoto não avisado"})
             continue
         srv, sess = peers.split_addr(p)
         try:
@@ -2284,7 +2290,7 @@ async def unpair_session(name: str):
             # do warning no result. ponytail: sem fila de retry durável — single-user, recuperável na
             # mão; se virar comum, enfileirar via pqueue como o /input faz.
             _log.warning("unpair: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
-            errs.append({"sessao": p, "erro": ex})
+            errs.append({"sessao": p, "erro": str(ex)})
     e = await _deliver(name, "[de: claude-pocket] Você saiu do grupo de trabalho "
                              f"({', '.join(expeers)}). Volte a operar independente; use cp-send só "
                              "quando o usuário pedir.")
@@ -2301,7 +2307,8 @@ async def unpair_session(name: str):
             errs.append({"sessao": p, "erro": e})
     return {"ok": True, "warning": erro("erro_pareamento_saida_falhou",
             "aviso de saída falhou: " + "; ".join(
-                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs))
+                f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs),
+            avisos=errs)
             if errs else None}
 
 

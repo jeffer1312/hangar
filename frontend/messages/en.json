@@ -1585,5 +1585,6 @@
   "erro_pareamento_aviso_unpair": "{sessao}: {erro}",
   "erro_pareamento_grupo_falha": "failure in: {avisos}",
   "erro_pareamento_saida_falhou": "leave notification failed: {avisos}",
-  "erro_provider_sessao_invalido": "invalid provider"
+  "erro_provider_sessao_invalido": "invalid provider",
+  "erro_envio_falhou": "failed to send: {erro}"
 }

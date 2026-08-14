@@ -2259,3 +2259,132 @@ def test_texto_do_fallback_nao_diz_que_falhou():
     assert "falhou" not in t.lower()
     assert "Rota nova (Recomendado)" in t
     assert api_mod._pi_answer_fallback_text({"kind": "option", "labels": []}) == ""
+
+
+# ---------------------------------------------------------------------------
+# Round 2 do parecer task 11: warnings estruturados, unpair sem 500, envio dinamico envelopado
+# ---------------------------------------------------------------------------
+
+def test_pair_warning_parcial_carrega_avisos_estruturados(api_client):
+    # B1: falha parcial do aviso -> warning com params.avisos = [{sessao, erro}] (o front monta a
+    # lista traduzida a partir dela; sem o param o template renderizaria "aviso falhou em: " vazio).
+    async def fake_deliver(name, text):
+        if name == "voce":
+            return {"code": "erro_fila_nao_digitada", "params": {"erro": "No space"},
+                    "msg": "fila indisponivel e prompt nao foi digitado: No space"}
+        return None
+    with patch("app.api.registry.list",
+              return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
+         patch("app.api.pair.join_group", return_value=(["me", "voce"], "snap")), \
+         patch("app.api.PairLink.get", return_value={"peers": ["voce"], "task": "", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/me/pair", headers=_h(),
+                            json={"peers": ["voce"], "task": "t"})
+    assert r.status_code == 200
+    w = r.json()["warning"]
+    assert w["code"] == "erro_pareamento_aviso_parcial"
+    assert w["params"]["avisos"] == [{
+        "sessao": "voce",
+        "erro": {"code": "erro_fila_nao_digitada", "params": {"erro": "No space"},
+                 "msg": "fila indisponivel e prompt nao foi digitado: No space"},
+    }]
+
+
+def test_pair_warning_none_quando_todos_avisados(api_client):
+    # B1: sem falha -> warning None (array vazio nunca chega ao formatador do front).
+    with patch("app.api.registry.list",
+              return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
+         patch("app.api.pair.join_group", return_value=(["me", "voce"], "snap")), \
+         patch("app.api.PairLink.get", return_value={"peers": ["voce"], "task": "", "gid": "g1"}), \
+         patch("app.api._deliver", return_value=None):
+        r = api_client.post("/api/sessions/me/pair", headers=_h(),
+                            json={"peers": ["voce"], "task": "t"})
+    assert r.status_code == 200
+    assert r.json()["warning"] is None
+
+
+def test_group_message_warning_carrega_avisos(api_client):
+    # B1: group-message com falha em TODOS os peers -> warning com a lista estruturada.
+    from app import api as api_mod
+    async def fake_thread(*a):
+        if a[0] is api_mod._session_exists:
+            return True
+        return {"ok": False, "error": {"code": "erro_envio_falhou", "params": {"erro": "rede"},
+                                       "msg": "falha ao enviar: rede"}}
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.api._send_thread", side_effect=fake_thread):
+        r = api_client.post("/api/sessions/a/group-message", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 200
+    w = r.json()["warning"]
+    assert w["code"] == "erro_pareamento_grupo_falha"
+    assert w["params"]["avisos"] == [
+        {"sessao": "b", "erro": {"code": "erro_envio_falhou", "params": {"erro": "rede"},
+                                 "msg": "falha ao enviar: rede"}},
+        {"sessao": "c", "erro": {"code": "erro_envio_falhou", "params": {"erro": "rede"},
+                                 "msg": "falha ao enviar: rede"}},
+    ]
+
+
+def test_unpair_warning_estruturado_sem_server_id(api_client, monkeypatch):
+    # B2: peer remoto com CP_SERVER_ID vazio -> item {sessao, erro} (antes era string solta e o
+    # x['sessao'] seguinte virava TypeError -> 500). O sair do grupo continua 200 com warning.
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod.settings, "server_id", "")
+    with patch("app.api.pair.leave", return_value=["srv-a::x"]), \
+         patch("app.api.peers.is_remote", return_value=True), \
+         patch("app.api._deliver", return_value=None):
+        r = api_client.delete("/api/sessions/me/pair", headers=_h())
+    assert r.status_code == 200
+    w = r.json()["warning"]
+    assert w["code"] == "erro_pareamento_saida_falhou"
+    assert w["params"]["avisos"] == [
+        {"sessao": "srv-a::x", "erro": "CP_SERVER_ID ausente — par remoto não avisado"},
+    ]
+
+
+def test_unpair_peer_error_serializa_causa_textual(api_client, monkeypatch):
+    # B2: PeerError entra como str(ex) no aviso — o objeto serializaria {"transport": ...} e a
+    # UI perderia o motivo. Os dois transportes: a causa textual tem que sobreviver.
+    from app import api as api_mod
+    from app import peers as peers_mod
+    monkeypatch.setattr(api_mod.settings, "server_id", "srv-a")
+    for transport in (True, False):
+        with patch("app.api.pair.leave", return_value=["srv-b::x"]), \
+             patch("app.api.peers.is_remote", return_value=True), \
+             patch("app.api.peers.split_addr", return_value=("srv-b", "x")), \
+             patch("app.api.peers.call",
+                   side_effect=peers_mod.PeerError("rede caiu", transport=transport)), \
+             patch("app.api._deliver", return_value=None):
+            r = api_client.delete("/api/sessions/me/pair", headers=_h())
+        assert r.status_code == 200, transport
+        w = r.json()["warning"]
+        assert w["params"]["avisos"][0]["sessao"] == "srv-b::x"
+        assert "rede caiu" in w["params"]["avisos"][0]["erro"], transport
+        assert isinstance(w["params"]["avisos"][0]["erro"], str), transport
+
+
+def test_input_value_error_do_send_vira_envelope(api_client):
+    # B3: ValueError do send_prompt (ex.: control chars) -> envelope erro_envio_falhou com a causa
+    # em params.erro — antes o detail era a string crua, intraduzivel no front em ingles.
+    with patch("app.api._session_exists", return_value=True), \
+         patch("app.api.terminal.send_prompt",
+               side_effect=ValueError("control characters not allowed")):
+        r = api_client.post("/api/sessions/cc/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    d = r.json()["detail"]
+    assert d["code"] == "erro_envio_falhou"
+    assert d["params"]["erro"] == "control characters not allowed"
+
+
+def test_input_codex_exception_do_adapter_vira_envelope(api_client):
+    # B3: excecao do adapter.send_prompt do Codex -> mesmo envelope.
+    fake = _fake_codex_adapter(deliverable=True)
+    fake.send_prompt = AsyncMock(side_effect=RuntimeError("adapter broken"))
+    with patch("app.api._provider_of", return_value="codex"), \
+         patch("app.api.get_adapter", return_value=fake), \
+         patch("app.api._session_exists", return_value=True):
+        r = api_client.post("/api/sessions/cx/input", json={"text": "oi"}, headers=_h())
+    assert r.status_code == 400
+    d = r.json()["detail"]
+    assert d["code"] == "erro_envio_falhou"
+    assert d["params"]["erro"] == "adapter broken"

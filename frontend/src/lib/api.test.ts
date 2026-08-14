@@ -322,6 +322,14 @@ describe('formataErro (Task 11 round 2: envelopes nos helpers de envio e avisos 
     expect(t).toBe('falha em: me: fila indisponível e o prompt não foi digitado; voce: falha de rede');
   });
 
+  it('um unico aviso nao deixa ; sobrando', () => {
+    overwriteGetLocale(() => 'pt');
+    const t = mensagemDeErro('erro_pareamento_aviso_parcial', {
+      avisos: [{ sessao: 'voce', erro: 'falha de rede' }],
+    });
+    expect(t).toBe('aviso falhou em: voce: falha de rede');
+  });
+
   it('não-envelope devolve undefined', () => {
     expect(formataErro(undefined)).toBeUndefined();
     expect(formataErro(42)).toBeUndefined();
