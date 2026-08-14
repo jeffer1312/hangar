@@ -138,3 +138,19 @@ def test_llm_base_url_aceita_http_e_vazio():
     assert rc.get("llm_base_url") == "https://x/v1"
     rc.aplicar({"llm_base_url": ""})
     assert rc.get("llm_base_url") == ""
+
+
+def test_vocabulario_grande_demais_e_RECUSADO_na_gravacao():
+    """O teto tem que doer na hora de salvar, nao na hora de transcrever. Sem isto a tela diz
+    "salvo", o corte acontece calado depois, e os nomes que a pessoa cadastrou pra parar de sair
+    errado continuam saindo errado sem nenhuma explicacao em lugar nenhum."""
+    from app.transcribe import VOCAB_USUARIO_MAX
+    with pytest.raises(ValueError) as ei:
+        rc._coagir("ditado_vocabulario", "x" * (VOCAB_USUARIO_MAX + 1))
+    assert str(VOCAB_USUARIO_MAX) in str(ei.value)
+
+
+def test_vocabulario_no_limite_passa():
+    from app.transcribe import VOCAB_USUARIO_MAX
+    texto = "x" * VOCAB_USUARIO_MAX
+    assert rc._coagir("ditado_vocabulario", texto) == texto

@@ -79,12 +79,26 @@ def test_transcribe_manda_idioma_e_vocabulario_no_corpo_real(monkeypatch):
     assert "Acme, projeto-x".encode() in body   # e o vocabulario do usuario tambem
 
 
-def test_vocabulario_trunca(monkeypatch):
+def test_vocabulario_trunca_e_GRITA(monkeypatch, caplog):
     # Lista gigante nao pode passar em silencio: a API corta em ~224 tokens e perderia o fim sem
-    # avisar. O corte aqui e explicito e testado.
+    # avisar. O corte aqui e explicito, testado — e RUIDOSO. Cortar calado seria reimplementar
+    # exatamente o defeito da API que este codigo existe pra contornar.
     monkeypatch.setattr(mod_transcribe.runtime_config, "get",
                         lambda campo: "palavra, " * 500 if campo == "ditado_vocabulario" else None)
-    assert len(vocabulario()) == mod_transcribe._VOCAB_MAX
+    with caplog.at_level("WARNING"):
+        assert len(vocabulario()) == mod_transcribe._VOCAB_MAX
+    assert "cortado" in caplog.text
+
+
+def test_vocabulario_no_teto_nao_grita(monkeypatch, caplog):
+    # O aviso so pode aparecer quando algo foi PERDIDO. Gritar no caso normal treina quem le o log
+    # a ignorar o aviso — e ai ele nao serve pra nada no dia em que importa.
+    monkeypatch.setattr(mod_transcribe.runtime_config, "get",
+                        lambda campo: "x" * mod_transcribe.VOCAB_USUARIO_MAX
+                        if campo == "ditado_vocabulario" else None)
+    with caplog.at_level("WARNING"):
+        assert len(vocabulario()) == mod_transcribe._VOCAB_MAX
+    assert caplog.text == ""
 
 
 def test_transcribe_sem_chave_levanta_503(monkeypatch):

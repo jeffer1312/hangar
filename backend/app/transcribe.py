@@ -1,4 +1,5 @@
 import http.client
+import logging
 import secrets
 import urllib.error
 import urllib.request
@@ -6,6 +7,8 @@ import urllib.request
 from app.config import settings
 from app import runtime_config
 from app.uploads import _safe_ext
+
+logger = logging.getLogger(__name__)
 
 # Transcricao de audio via Groq (whisper-large-v3-turbo). Groq aceita webm/mp4/m4a/mp3/wav/ogg
 # direto -> sem pre-conversao com ffmpeg. HTTP feito com urllib (stdlib): multipart montado a mao,
@@ -33,6 +36,10 @@ VOCAB_BASE = (
 # A Whisper le no maximo ~224 tokens de prompt e ignora calada o resto — uma lista que cresceu
 # demais perderia justamente os termos do fim, sem aviso. Corta por caractere, com folga.
 _VOCAB_MAX = 700
+# Quanto sobra pro usuario depois da base. DERIVADO, nunca digitado a mao: mexer no VOCAB_BASE sem
+# mexer aqui deixaria a tela aceitar um texto que o corte come depois — o silencio que este teto
+# existe pra matar.
+VOCAB_USUARIO_MAX = _VOCAB_MAX - len(VOCAB_BASE) - 2  # 2 = o ", " que junta as duas partes
 
 
 class TranscribeError(Exception):
@@ -45,9 +52,21 @@ class TranscribeError(Exception):
 
 def vocabulario() -> str:
     """Lista de termos que a Whisper deve grafar direito: a base do app mais o que o usuario
-    acrescentou na tela. Truncada em _VOCAB_MAX pra nao cair no corte silencioso da API."""
+    acrescentou na tela.
+
+    O teto de verdade e na GRAVACAO (runtime_config._coagir recusa acima de VOCAB_USUARIO_MAX),
+    porque e la que da pra falar com a pessoa: ela ve o erro na hora de salvar, em vez de descobrir
+    meses depois que a Whisper nunca soube dos ultimos nomes que ela cadastrou. O corte aqui e a
+    ULTIMA barreira (config escrita a mao no JSON, VOCAB_BASE que cresceu num upgrade) e por isso
+    grita no log: repetir aqui o corte calado da API seria o mesmo defeito que este codigo evita."""
     extra = (runtime_config.get("ditado_vocabulario") or "").strip()
     juntos = f"{VOCAB_BASE}, {extra}" if extra else VOCAB_BASE
+    if len(juntos) > _VOCAB_MAX:
+        logger.warning(
+            "vocabulario do ditado cortado: %d caracteres acima do teto de %d — os %d ultimos "
+            "termos nao chegam na Whisper. Encurte o campo 'Palavras do seu ditado'.",
+            len(juntos) - _VOCAB_MAX, _VOCAB_MAX, len(juntos) - _VOCAB_MAX,
+        )
     return juntos[:_VOCAB_MAX]
 
 

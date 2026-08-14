@@ -123,6 +123,22 @@ def _coagir(campo: str, valor: Any) -> Any:
         # (code, nvim, subl) e impede apontar pra um binario solto tipo /tmp/qualquer.sh.
         if "/" in texto or "\\" in texto or texto.startswith("-") or ".." in texto:
             raise ValueError("editor: use o nome do binario (ex: code), sem caminho")
+    if campo == "ditado_vocabulario" and texto:
+        # Import LOCAL: transcribe importa este modulo, entao um import no topo fecharia o ciclo —
+        # mesmo motivo (e mesma solucao) de config.automations_enabled.
+        #
+        # O teto vive AQUI, e nao so no corte de transcribe.vocabulario, porque este e o unico
+        # ponto da corrente que consegue falar com a pessoa. Cortando so na leitura, ela cadastra
+        # 40 termos, a tela diz "salvo", e os ultimos simplesmente nunca chegam na Whisper: os
+        # nomes que ela configurou pra parar de sair errado continuam saindo errado, sem nada em
+        # lugar nenhum explicando por que. Recusar na gravacao transforma isso num erro visivel no
+        # segundo em que ela aperta salvar.
+        from app.transcribe import VOCAB_USUARIO_MAX
+        if len(texto) > VOCAB_USUARIO_MAX:
+            raise ValueError(
+                f"ditado_vocabulario: {len(texto)} caracteres, o maximo e {VOCAB_USUARIO_MAX} "
+                "(a Whisper ignora o resto). Tire os termos que voce menos erra."
+            )
     if campo == "llm_base_url" and texto and not (texto.startswith("http://") or texto.startswith("https://")):
         # Mesmo argumento do editor: antes so o dono da maquina escolhia o endpoint (env), agora o
         # celular escreve. Aceita vazio (volta ao padrao) ou uma URL http(s) de verdade.
