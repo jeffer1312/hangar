@@ -635,42 +635,55 @@ def _confirm_and_drain(name: str) -> None:
         # so estava esperando a vez na fila da propria TUI.
         if m and info.provider == "kimi":
             m = corrige_ocioso_kimi(m, info.jsonl)
-        if m and m[0] == "working":
-            threading.Timer(_CONFIRM_GRACE + 0.5, _confirm_and_drain, args=(name,)).start()
-            return
-        # Estado DESCONHECIDO (marcador ausente): nao da pra provar que a sessao nao esta no meio de
-        # um turno — e redigitar e a acao destrutiva daqui (mete texto num prompt em uso). Entao
-        # confirma sem NUNCA redigitar (max_attempts=0). O caso real e sessao RESSUSCITADA: o
-        # kill-server de 2026-08-11 13:55 matou o tmux, a sessao voltou por `claude --resume` e a
-        # fila duravel (arquivo por NOME) sobreviveu ao pane — o guard acima caiu pra frente com
-        # get_state()=None e o backend redigitou dentro do turno vivo (log REQUEUE 14:01:48).
-        # Pior caso agora = comportamento antigo: envio engolido fica visivel como bolha da fila,
-        # que e falha VISIVEL. Duplicar a msg do usuario nao e.
-        # Kimi NUNCA redigita. Prompt digitado durante um turno fica na fila da TUI e so entra no
-        # wire.jsonl quando o turno chega nele — nao ha o equivalente do `queue-operation` do Claude
-        # Code, que e o registro feito NO MOMENTO da digitacao. Entao, no Kimi, "ausente do
-        # transcript" nao prova engolido, e redigitar e a acao destrutiva. Some a isso o marcador de
-        # estado dizer "ociosa" no meio do turno (o Stop do SUBAGENTE grava na chave do pai) e o
-        # guard de working acima nao segura nada: medido em 13/08/2026, a mesma mensagem entrou 3x na
-        # fila de uma sessao Kimi (REQUEUE n=3 no log das 08:29). Pior caso agora e o mesmo aceito
-        # logo acima pro estado desconhecido: envio de verdade engolido fica VISIVEL como bolha da
-        # fila (`desistiu`), que e falha visivel — duplicar a msg do usuario nao e.
-        max_attempts = 0 if (m is None or info.provider == "kimi") else 2
-        # Kimi espera MAIS antes de declarar perdida. Com max_attempts=0 nao ha segunda chance: a
-        # primeira checagem depois do prazo ja carimba `desistiu`. Subir pra 1 nao serve — no
-        # reconcile, attempts < max REDIGITA, que e exatamente a duplicacao que este provider nao
-        # pode ter. Entao o que se estica e o PRAZO: 30s cobrem o tempo entre a TUI aceitar o texto
-        # e ele aparecer no wire.jsonl, sem nunca digitar duas vezes.
+        # Kimi espera MAIS antes de declarar perdida (30s contra 8s): ver o comentario no else.
         grace = _CONFIRM_GRACE_KIMI if info.provider == "kimi" else _CONFIRM_GRACE
-        requeued = q.reconcile_delivered(
-            committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
-            time.time(),
-            grace=grace,
-            max_attempts=max_attempts,
-        )
-        if requeued:
-            _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
-            drain(name, info.jsonl, info.provider)
+        if m and m[0] == "working":
+            # Turno vivo: REDIGITAR e DESISTIR no meio do turno sao perigosos (o texto pode ainda
+            # estar na fila interna da TUI — desistiu viraria aviso falso de "nao chegou" sobre
+            # msg que chega depois). CONFIRMAR nao: o transcript e a fonte de verdade, e texto
+            # comprovadamente la = a bolha real ja cobre, o eco da fila so duplica. Sem isto, uma
+            # sessao que trabalha HORAS sem ficar ociosa nunca confirmava e o follow reemitia a
+            # fila inteira como bolha fantasma a cada reconexao do SSE. `confirm_only` carimba so
+            # o provado e deixa o resto pra proxima checagem (reagendada la embaixo).
+            q.reconcile_delivered(
+                committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
+                time.time(),
+                grace=grace,
+                confirm_only=True,
+            )
+        else:
+            # Estado DESCONHECIDO (marcador ausente): nao da pra provar que a sessao nao esta no meio de
+            # um turno — e redigitar e a acao destrutiva daqui (mete texto num prompt em uso). Entao
+            # confirma sem NUNCA redigitar (max_attempts=0). O caso real e sessao RESSUSCITADA: o
+            # kill-server de 2026-08-11 13:55 matou o tmux, a sessao voltou por `claude --resume` e a
+            # fila duravel (arquivo por NOME) sobreviveu ao pane — o guard acima caiu pra frente com
+            # get_state()=None e o backend redigitou dentro do turno vivo (log REQUEUE 14:01:48).
+            # Pior caso agora = comportamento antigo: envio engolido fica visivel como bolha da fila,
+            # que e falha VISIVEL. Duplicar a msg do usuario nao e.
+            # Kimi NUNCA redigita. Prompt digitado durante um turno fica na fila da TUI e so entra no
+            # wire.jsonl quando o turno chega nele — nao ha o equivalente do `queue-operation` do Claude
+            # Code, que e o registro feito NO MOMENTO da digitacao. Entao, no Kimi, "ausente do
+            # transcript" nao prova engolido, e redigitar e a acao destrutiva. Some a isso o marcador de
+            # estado dizer "ociosa" no meio do turno (o Stop do SUBAGENTE grava na chave do pai) e o
+            # guard de working acima nao segura nada: medido em 13/08/2026, a mesma mensagem entrou 3x na
+            # fila de uma sessao Kimi (REQUEUE n=3 no log das 08:29). Pior caso agora e o mesmo aceito
+            # logo acima pro estado desconhecido: envio de verdade engolido fica VISIVEL como bolha da
+            # fila (`desistiu`), que e falha visivel — duplicar a msg do usuario nao e.
+            max_attempts = 0 if (m is None or info.provider == "kimi") else 2
+            # Kimi espera MAIS antes de declarar perdida: com max_attempts=0 nao ha segunda chance — a
+            # primeira checagem depois do prazo ja carimba `desistiu`. Subir pra 1 nao serve (no
+            # reconcile, attempts < max REDIGITA, a duplicacao que este provider nao pode ter). Entao
+            # o que se estica e o PRAZO (grace=30s): cobre o tempo entre a TUI aceitar o texto e ele
+            # aparecer no wire.jsonl, sem nunca digitar duas vezes.
+            requeued = q.reconcile_delivered(
+                committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
+                time.time(),
+                grace=grace,
+                max_attempts=max_attempts,
+            )
+            if requeued:
+                _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
+                drain(name, info.jsonl, info.provider)
         # Sobrou entrada AINDA DENTRO do prazo (o reconcile a pulou por "recente demais")? Volta a
         # olhar. Os agendamentos usam _CONFIRM_GRACE (8,5s) e o prazo do Kimi e 30s, entao num turno
         # curto a unica checagem caia cedo demais e a entrada ficava sem confirmar E sem desistir —

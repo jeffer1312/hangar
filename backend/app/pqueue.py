@@ -323,7 +323,8 @@ class PromptQueue:
             return len(rows) - len(kept)
 
     def reconcile_delivered(self, committed: set[str], min_ts: float, now: float,
-                            grace: float = 8.0, max_attempts: int = 2) -> list[dict]:
+                            grace: float = 8.0, max_attempts: int = 2,
+                            confirm_only: bool = False) -> list[dict]:
         """Confirma entregas contra o transcript ou RE-ENFILEIRA as engolidas. delivered=True quer
         dizer 'send_keys chamado', nao 'Claude recebeu' — a TUI pode engolir as teclas (redraw) e a
         msg sumia com cara de entregue. Entrada delivered, nao-confirmada, da sessao atual e mais
@@ -332,7 +333,13 @@ class PromptQueue:
         (`desistiu=True`: fica VISIVEL como bubble = comportamento antigo, sem loop de redigitacao).
         Os dois desfechos sao campos DIFERENTES de proposito — `confirmed` esconde o eco, `desistiu`
         nao. Ate 2026-08-11 os dois gravavam `confirmed` e a msg engolida sumia da tela.
-        Devolve as re-enfileiradas."""
+        Devolve as re-enfileiradas.
+
+        `confirm_only` (usado no MEIO do turno, sessao `working`): so carimba o que esta
+        comprovado no transcript — texto casou, ou sessao anterior (min_ts). Ausente do transcript
+        NAO decide nada (nem desistiu, nem requeue): o texto pode ainda estar na fila interna da
+        TUI, e o desistiu viraria aviso falso de "nao chegou" sobre msg que chega depois. Quem
+        chama reagenda a checagem enquanto sobrar pendente."""
         with _append_lock:
             rows = self.load()
             requeued: list[dict] = []
@@ -388,6 +395,11 @@ class PromptQueue:
                 if not text_raw or lines & disponiveis:
                     disponiveis -= lines         # uma linha do transcript confirma UMA entrada so
                     r["confirmed"] = True
+                elif confirm_only:
+                    # Meio do turno sem prova: nao decide. Entrada segue entregue/nao-confirmada e
+                    # o caller reagenda — quando a sessao ficar ociosa, o caminho normal desiste ou
+                    # re-enfileira com tentativa contada.
+                    continue
                 elif int(r.get("attempts") or 0) >= max_attempts:
                     # DESISTIU != CONFIRMADA. `confirmed` quer dizer "o texto esta comprovadamente
                     # no transcript" e e o que faz merged_history/follow ESCONDEREM o eco (a bolha
