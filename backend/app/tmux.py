@@ -822,8 +822,16 @@ def pane_scrollback(name: str) -> int:
     return int(out) if out.isdigit() else 0
 
 
-def capture_pane(name: str, lines: int = 200) -> str:
-    cp = _run(["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"])
+def capture_pane(name: str, lines: int = 200, cores: bool = False) -> str:
+    """`cores=True` mantem os codigos ANSI (`-e`). Padrao False: TODO o resto do backend (classify,
+    statusline, gate de envio) casa texto puro, e um `\\x1b[...m` no meio quebraria cada regex.
+
+    So a previa do Kimi liga isso, e por um motivo que o texto puro nao resolve: la o raciocinio e a
+    resposta sao desenhados com o MESMO marcador `●` e so a cor/italico os separa."""
+    alvo = ["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"]
+    if cores:
+        alvo.insert(3, "-e")
+    cp = _run(alvo)
     if cp.returncode != 0:
         # stdout vazio numa falha e indistinguivel de um pane genuinamente vazio -> o /pane devolvia
         # 200 com texto "" e ninguem ficava sabendo que o tmux tinha falhado. Devolve "" (o caller
