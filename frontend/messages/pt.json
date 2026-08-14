@@ -875,5 +875,8 @@
   "config_servidores_voltar": "Você precisará do token ou QR de pareamento para voltar.",
   "config_servidores_sair_erro": "Não foi possível sair — tente de novo.",
   "config_motores_dica_kimi": "Kimi Code",
-  "config_motores_dica_omni": "OmniRoute (o seu)"
+  "config_motores_dica_omni": "OmniRoute (o seu)",
+  "config_servidores_aviso_ja_removido": "Este servidor já foi removido em outro aparelho.",
+  "config_servidores_aviso_lista_mudou": "A lista de servidores mudou em outro aparelho — revise antes de remover.",
+  "config_servidores_aviso_mudou": "Este servidor mudou em outro aparelho — revise antes de remover."
 }

@@ -3,6 +3,7 @@
 // header Bearer (cross-origin OK via CORS); SSE same-origin usa cookie, cross-origin usa ?token.
 
 import { normalizeBaseUrl } from './url';
+import * as m from '../paraglide/messages';
 
 const SERVERS_KEY = 'cp_servers';
 const ACTIVE_KEY = 'cp_active';
@@ -441,9 +442,9 @@ export function removalStillMatches(
   revision: number,
 ): string | null {
   const s = current.find((x) => x.id === snapshot.id);
-  if (!s) return 'Este servidor já foi removido em outro aparelho.';
-  if (revision !== snapshot.revision) return 'A lista de servidores mudou em outro aparelho — revise antes de remover.';
-  if (serverFingerprint(s) !== snapshot.fingerprint) return 'Este servidor mudou em outro aparelho — revise antes de remover.';
+  if (!s) return m.config_servidores_aviso_ja_removido();
+  if (revision !== snapshot.revision) return m.config_servidores_aviso_lista_mudou();
+  if (serverFingerprint(s) !== snapshot.fingerprint) return m.config_servidores_aviso_mudou();
   return null;
 }
 

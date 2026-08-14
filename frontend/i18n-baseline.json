@@ -54,7 +54,7 @@
   "components/settings/SettingsModal.svelte": 11,
   "lib/activity.ts": 6,
   "lib/api.ts": 9,
-  "lib/auth.ts": 4,
+  "lib/auth.ts": 1,
   "lib/autoEnvio.ts": 2,
   "lib/background.ts": 3,
   "lib/canvasLayout.ts": 1,

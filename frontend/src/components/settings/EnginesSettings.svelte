@@ -448,10 +448,10 @@
         {/snippet}
 
         {#snippet mSkills()}
-          {m.config_motores_motivo_skills_1()}<code>claude-api</code>{m.config_motores_motivo_skills_2()}<code>~/.claude/skills</code>{m.config_motores_motivo_skills_3()}
+          {m.config_motores_motivo_skills_1()} <code>claude-api</code>{m.config_motores_motivo_skills_2()} <code>~/.claude/skills</code>{m.config_motores_motivo_skills_3()}
         {/snippet}
         {#snippet mBetas()}
-          {m.config_motores_motivo_betas_1()}<code>context_management</code>{m.config_motores_motivo_betas_2()}<code>400 Extra inputs are not permitted</code>{m.config_motores_motivo_betas_3()}
+          {m.config_motores_motivo_betas_1()}<code>context_management</code>{m.config_motores_motivo_betas_2()} <code>400 Extra inputs are not permitted</code>{m.config_motores_motivo_betas_3()}
         {/snippet}
         {#snippet mCache()}
           {m.config_motores_motivo_cache()}
@@ -459,7 +459,7 @@
         {#snippet mThinking()}
           {m.config_motores_motivo_thinking_1()}
           {#if ehMoonshot}{m.config_motores_motivo_thinking_moonshot()}{/if}
-          {m.config_motores_motivo_thinking_2()} <code>400</code>{m.config_motores_motivo_thinking_3()}<code>thinking</code>{m.config_motores_motivo_thinking_4()}<code>adaptive</code>{m.config_motores_motivo_thinking_5()}
+          {m.config_motores_motivo_thinking_2()} <code>400</code>{m.config_motores_motivo_thinking_3()} <code>thinking</code>{m.config_motores_motivo_thinking_4()} <code>adaptive</code>{m.config_motores_motivo_thinking_5()}
         {/snippet}
         {#snippet mToolSearch()}
           {#if !form?.experimental_betas}
@@ -469,7 +469,7 @@
           {/if}
         {/snippet}
         {#snippet mDescoberta()}
-          {m.config_motores_motivo_descoberta_1()} <code>/v1/models</code>{m.config_motores_motivo_descoberta_2()}<code>/model</code>{m.config_motores_motivo_descoberta_3()}
+          {m.config_motores_motivo_descoberta_1()} <code>/v1/models</code>{m.config_motores_motivo_descoberta_2()} <code>/model</code>{m.config_motores_motivo_descoberta_3()}
         {/snippet}
         {#snippet mStreaming()}
           {m.config_motores_motivo_streaming()}
@@ -481,7 +481,7 @@
           {m.config_motores_motivo_saida()}
         {/snippet}
         {#snippet mAuthHeader()}
-          {m.config_motores_motivo_auth_1()} <code>401 Missing API key</code>{m.config_motores_motivo_auth_2()}<code>opencode.ai/zen/go</code>{m.config_motores_motivo_auth_3()} <code>x-api-key</code>{m.config_motores_motivo_auth_4()}<code>Authorization: Bearer</code>{m.config_motores_motivo_auth_5()}
+          {m.config_motores_motivo_auth_1()} <code>401 Missing API key</code>{m.config_motores_motivo_auth_2()} <code>opencode.ai/zen/go</code>{m.config_motores_motivo_auth_3()} <code>x-api-key</code>{m.config_motores_motivo_auth_4()} <code>Authorization: Bearer</code>{m.config_motores_motivo_auth_5()}
         {/snippet}
 
         <div class="grade">

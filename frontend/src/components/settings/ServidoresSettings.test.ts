@@ -126,7 +126,7 @@ describe('ServidoresSettings — logout idempotente', () => {
     await tick();
     expect(authMock.removeServer).not.toHaveBeenCalled();
     const aviso = t.el.querySelector<HTMLElement>('.ss-aviso');
-    expect(aviso?.innerText).toContain('mudou');
+    expect(aviso?.innerText).toContain(m.config_servidores_aviso_lista_mudou());
     expect(aviso?.getAttribute('role')).toBe('status');
     unmount(t.comp);
   });
@@ -180,7 +180,7 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
     await tick();
     expect(authMock.removeServer).not.toHaveBeenCalled();
     const aviso = t.el.querySelector<HTMLElement>('.ss-aviso');
-    expect(aviso?.innerText).toContain('removido');
+    expect(aviso?.innerText).toContain(m.config_servidores_aviso_ja_removido());
     expect(aviso?.getAttribute('role')).toBe('status');
     unmount(t.comp);
   });

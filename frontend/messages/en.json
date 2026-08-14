@@ -875,5 +875,8 @@
   "config_servidores_voltar": "You will need the pairing token or QR to get back in.",
   "config_servidores_sair_erro": "Couldn't sign out — try again.",
   "config_motores_dica_kimi": "Kimi Code",
-  "config_motores_dica_omni": "OmniRoute (yours)"
+  "config_motores_dica_omni": "OmniRoute (yours)",
+  "config_servidores_aviso_ja_removido": "This server was already removed on another device.",
+  "config_servidores_aviso_lista_mudou": "The server list changed on another device — review before removing.",
+  "config_servidores_aviso_mudou": "This server changed on another device — review before removing."
 }

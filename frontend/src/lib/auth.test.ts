@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import * as m from '../paraglide/messages';
 import type { Server } from './auth';
 
 // auth.ts toca localStorage no load (migrate()). vitest env=node nao tem -> stub minimo ANTES do
@@ -195,17 +196,17 @@ describe('updateServer', () => {
     });
 
     it('ausente → motivo "removido"', () => {
-      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S2], 1)).toMatch(/removido/);
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S2], 1)).toBe(m.config_servidores_aviso_ja_removido());
     });
 
     it('revision mudou → motivo "mudou", mesmo com fingerprint igual', () => {
-      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S1], 2)).toMatch(/mudou/);
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [S1], 2)).toBe(m.config_servidores_aviso_lista_mudou());
     });
 
     it('fingerprint mudou (token/label/base isoladamente) → motivo "mudou"', () => {
-      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, token: 't1-novo' }], 1)).toMatch(/mudou/);
-      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, label: 'Outra' }], 1)).toMatch(/mudou/);
-      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, baseUrl: 'http://nova:9999' }], 1)).toMatch(/mudou/);
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, token: 't1-novo' }], 1)).toBe(m.config_servidores_aviso_mudou());
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, label: 'Outra' }], 1)).toBe(m.config_servidores_aviso_mudou());
+      expect(removalStillMatches(snapshotRemocao(S1, 1)!, [{ ...S1, baseUrl: 'http://nova:9999' }], 1)).toBe(m.config_servidores_aviso_mudou());
     });
 
     it('reintroduzida com a MESMA entidade (fingerprint+revision iguais) pode remover', () => {
