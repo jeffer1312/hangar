@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   import OptionButtons from './OptionButtons.svelte';
   import { selectOption } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
@@ -55,7 +56,7 @@
       // Reabre as opções: a pergunta continua de pé, e fechar o picker junto com o erro deixaria o
       // usuário sem nada pra tocar depois de ler o aviso.
       expandedKey = k;
-      erro = { key: k, msg: e instanceof Error ? e.message : 'não deu pra enviar a opção' };
+      erro = { key: k, msg: e instanceof Error ? e.message : m.comum_falha_envio_opcao() };
       erroTimer = setTimeout(() => (erro = null), 8000);  // aviso, não estado: some sozinho
     } finally {
       if (prev && prev !== s.serverId) selectServer(prev); // restaura pra o chat aberto ficar no server dele
@@ -64,10 +65,10 @@
 </script>
 
 {#if feed.length > 0}
-  <section class="attn" aria-label="Precisa de você">
+  <section class="attn" aria-label={m.board_precisa_de_voce()}>
     <div class="attn-head">
       <span class="attn-dot" aria-hidden="true"></span>
-      <span class="attn-title">Precisa de você</span>
+      <span class="attn-title">{m.board_precisa_de_voce()}</span>
       <span class="attn-count">{feed.length}</span>
     </div>
     {#each feed as s (keyOf(s))}

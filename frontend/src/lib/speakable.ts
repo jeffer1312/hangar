@@ -8,13 +8,15 @@
 // O marcador de bloco de codigo tambem so pode ser decidido aqui: <pre> e elemento; depois de
 // achatar em string nao ha como saber onde comecava.
 
-const MARCADOR = ' trecho de código omitido. ';
+import * as m from '../paraglide/messages';
+
+const MARCADOR = () => m.tts_marcador_codigo();
 // Cartao de ferramenta (ToolCard.svelte, raiz `.tool-row`): saida de Bash/comando, nao prosa. Uma
 // selecao que ATRAVESSA um cartao (comeca na mensagem, passa por cima do card, continua depois) nao
 // e barrada por `dentroDoChat` — o ancora dela e a mensagem, nao o card. Por isso o corte tem que
 // ser aqui, no que foi CLONADO, igual ao <pre>: nao ha como resolver isso olhando so onde a selecao
 // termina.
-const MARCADOR_FERRAMENTA = ' saída de comando omitida. ';
+const MARCADOR_FERRAMENTA = () => m.tts_marcador_saida();
 
 // Elementos de bloco do renderMarkdown (markdown.ts: `out.join('')`, sem separador nenhum entre
 // eles). Sem uma quebra aqui, "## Passo 1" + o paragrafo seguinte viram "Passo 1Fazer X" no
@@ -35,10 +37,10 @@ function extrair(raiz: HTMLElement): { texto: string; blocos: string[] } {
   copia.querySelectorAll('.code-head').forEach((h) => h.remove());
   copia.querySelectorAll('pre').forEach((p) => {
     blocos.push(p.textContent ?? '');
-    p.replaceWith(document.createTextNode(MARCADOR));
+    p.replaceWith(document.createTextNode(MARCADOR()));
   });
   copia.querySelectorAll('.tool-row').forEach((c) => {
-    c.replaceWith(document.createTextNode(MARCADOR_FERRAMENTA));
+    c.replaceWith(document.createTextNode(MARCADOR_FERRAMENTA()));
   });
   // Marca o FIM de cada bloco com \n antes de achatar (ordem importa: <pre> ja virou texto acima,
   // entao um <pre> dentro de <li> ganha a quebra do <li> em volta, no lugar certo).

@@ -2,6 +2,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import { getRunners, startRun, stopRun, getRunPane } from '../lib/api';
   import type { Runner, RunInfo } from '../lib/types';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     open: boolean;
@@ -67,14 +68,14 @@
   });
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Rodar projeto">
-  <h2 class="sheet-title">Rodar</h2>
+<BottomSheet {open} {onClose} ariaLabel={m.ctx_rodar_projeto()}>
+  <h2 class="sheet-title">{m.ctx_rodar()}</h2>
 
   {#if err}<p class="err">{err}</p>{/if}
 
   {#if picking}
     {#if detected.length === 0}
-      <p class="empty">Nenhum script detectado neste projeto.</p>
+      <p class="empty">{m.run_nenhum_script()}</p>
     {:else}
       <ul class="run-list">
         {#each detected as r (r.source + ':' + r.label)}
@@ -92,8 +93,8 @@
     <div class="run-head">
       <span class="run-cmd">{running?.command ?? ''}</span>
       <div class="run-actions">
-        <button class="act" onclick={() => (picking = true)}>Trocar</button>
-        <button class="act act--stop" onclick={stop}>Parar</button>
+        <button class="act" onclick={() => (picking = true)}>{m.run_trocar()}</button>
+        <button class="act act--stop" onclick={stop}>{m.loop_parar()}</button>
       </div>
     </div>
     <pre class="mirror">{paneText}</pre>

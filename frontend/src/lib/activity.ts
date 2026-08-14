@@ -1,3 +1,4 @@
+import * as m from '../paraglide/messages';
 import type { ChatEvent } from './types';
 
 // Painel de atividade: deriva, SÓ no cliente, a lista de tarefas (TaskCreate/TaskUpdate/TaskStop,
@@ -42,8 +43,8 @@ function normStatus(s: unknown): TaskStatus {
 
 function workflowName(script: unknown): string | null {
   if (typeof script !== 'string') return null;
-  const m = script.match(/name:\s*['"]([^'"]+)['"]/);
-  return m ? m[1] : null;
+  const match = script.match(/name:\s*['"]([^'"]+)['"]/);
+  return match ? match[1] : null;
 }
 
 export interface ActivityFolder {
@@ -90,11 +91,11 @@ export function createActivityFolder(): ActivityFolder {
       }
       const r = e.result ?? '';
       if (/Async agent launched/i.test(r)) {
-        const m = r.match(/agentId:\s*([A-Za-z0-9_-]+)/);
-        if (m) {
-          bgAgent.set(m[1], e.tool_use_id);
+        const match = r.match(/agentId:\s*([A-Za-z0-9_-]+)/);
+        if (match) {
+          bgAgent.set(match[1], e.tool_use_id);
           // o fim ja tinha chegado antes do launch (reorder do reseed) -> fecha o par agora.
-          if (completedIds.delete(m[1])) resulted.add(e.tool_use_id);
+          if (completedIds.delete(match[1])) resulted.add(e.tool_use_id);
         }
         return; // launch imediato: so marca resulted se o fim ja veio; senao segue rodando
       }
@@ -102,8 +103,8 @@ export function createActivityFolder(): ActivityFolder {
       return;
     }
     if (e.kind === 'user_msg' && e.text && e.text.includes('<task-notification>')) {
-      const m = e.text.match(/<task-id>([^<]+)<\/task-id>/);
-      if (m) completeAgent(m[1].trim());
+      const match = e.text.match(/<task-id>([^<]+)<\/task-id>/);
+      if (match) completeAgent(match[1].trim());
       return;
     }
     if (e.kind !== 'tool_use' || !e.tool_name) return;
@@ -159,7 +160,7 @@ export function createActivityFolder(): ActivityFolder {
           agents.push({
             id: e.tool_use_id,
             kind: 'agent',
-            description: String(input.description ?? input.subagent_type ?? 'Agente'),
+            description: String(input.description ?? input.subagent_type ?? m.atividade_agente()),
             subagentType: typeof input.subagent_type === 'string' ? input.subagent_type : undefined,
             model: typeof input.model === 'string' ? input.model : undefined,
             prompt: typeof input.prompt === 'string' ? input.prompt : undefined,

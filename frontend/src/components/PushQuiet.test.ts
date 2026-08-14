@@ -10,6 +10,10 @@ import PushQuiet from './PushQuiet.svelte';
 import * as api from '../lib/api';
 import type { PushTarget } from '../lib/quietHours';
 import type { Server } from '../lib/auth';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
+
 
 vi.mock('../lib/api', () => ({
   getPushSettings: vi.fn(),

@@ -1,3 +1,4 @@
+import * as m from '../paraglide/messages';
 import type { Server } from './auth';
 
 // Zero-knowledge: the password never leaves the browser. From PBKDF2(masterKey) we split two HKDF
@@ -105,7 +106,7 @@ export async function login(user: string, password: string): Promise<CryptoKey> 
   const r = await jf('/api/sync/login', {
     method: 'POST', body: JSON.stringify({ user, auth_hash: authHash }),
   });
-  if (!r.ok) throw new Error(r.status === 429 ? 'muitas tentativas' : 'usuário ou senha inválidos');
+  if (!r.ok) throw new Error(r.status === 429 ? m.sync_muitas_tentativas() : m.sync_credenciais_invalidas());
   return encKey;
 }
 

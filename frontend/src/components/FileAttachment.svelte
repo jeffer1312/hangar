@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import { fileUrl } from '../lib/api';
   import { zoomable } from '../lib/zoomable';
@@ -36,13 +37,13 @@
   <div class="atts">
     {#each refs as r (r.path)}
       {#if failed.has(r.path)}
-        <span class="att-broken" title={r.path}>⚠ {r.name} — não carregou</span>
+        <span class="att-broken" title={r.path}>⚠ {m.anexos_nao_carregou({ nome: r.name })}</span>
       {:else if r.kind === 'image'}
-        <button class="thumb-btn" onclick={() => (open = r)} aria-label="Ver {r.name}">
+        <button class="thumb-btn" onclick={() => (open = r)} aria-label={m.anexos_ver({ n: r.name })}>
           <img class="thumb" src={url(r)} alt={r.name} loading="lazy" onerror={() => fail(r)} />
         </button>
       {:else if r.kind === 'video'}
-        <button class="thumb-btn" onclick={() => (open = r)} aria-label="Tocar {r.name}">
+        <button class="thumb-btn" onclick={() => (open = r)} aria-label={m.anexos_tocar({ nome: r.name })}>
           <!-- svelte-ignore a11y_media_has_caption -->
           <!-- #t=0.1: media fragment -> faz o browser (incl. iOS) buscar e mostrar o 1o frame no thumb -->
           <video class="thumb" src={url(r) + '#t=0.1'} preload="metadata" muted playsinline onerror={() => fail(r)}></video>
@@ -55,7 +56,7 @@
         <button class="att-chip" onclick={() => (open = r)}>
           <span class="att-ico" aria-hidden="true">{icon(r.kind)}</span>
           <span class="att-name">{r.name}</span>
-          <span class="att-open" aria-hidden="true">abrir ›</span>
+          <span class="att-open" aria-hidden="true">{m.paleta_abrir()} ›</span>
         </button>
       {/if}
     {/each}
@@ -66,20 +67,20 @@
   {@const cur = open}
   <ModalDialog
     open={true}
-    ariaLabel={`Visualizar ${cur.name}`}
+    ariaLabel={m.anexos_visualizar({ nome: cur.name })}
     onClose={() => (open = null)}
     initialFocus={cur.kind === 'video' ? videoClose : null}
     className="attachment-dialog"
   >
     {#if cur.kind === 'image'}
       <div class="media-modal">
-        <button bind:this={imageClose} class="media-close" type="button" onclick={() => (open = null)} aria-label="Fechar visualização">✕</button>
+        <button bind:this={imageClose} class="media-close" type="button" onclick={() => (open = null)} aria-label={m.anexos_fechar_visualizacao()}>✕</button>
         <!-- Mesmo gesto do ImageBubble: pinch / duplo-toque / arrastar. -->
         <img class="full-media" src={url(cur)} alt={cur.name} use:zoomable />
       </div>
     {:else if cur.kind === 'video'}
       <div class="media-modal">
-        <button bind:this={videoClose} class="media-close" type="button" onclick={() => (open = null)} aria-label="Fechar visualização">✕</button>
+        <button bind:this={videoClose} class="media-close" type="button" onclick={() => (open = null)} aria-label={m.anexos_fechar_visualizacao()}>✕</button>
         <!-- svelte-ignore a11y_media_has_caption -->
         <video class="full-media" src={url(cur)} controls autoplay playsinline></video>
       </div>
@@ -87,8 +88,8 @@
       <div class="doc-modal">
         <div class="doc-bar">
           <span class="doc-name">{cur.name}</span>
-          <a class="doc-btn" href={url(cur)} target="_blank" rel="noopener noreferrer" aria-label={`Abrir ${cur.name} em nova aba`}>↗ nova aba</a>
-          <button class="doc-btn" type="button" onclick={() => (open = null)} aria-label="Fechar visualização">✕</button>
+          <a class="doc-btn" href={url(cur)} target="_blank" rel="noopener noreferrer" aria-label={m.anexos_abrir_nova_aba({ nome: cur.name })}>↗ {m.anexos_nova_aba()}</a>
+          <button class="doc-btn" type="button" onclick={() => (open = null)} aria-label={m.anexos_fechar_visualizacao()}>✕</button>
         </div>
         <!-- html: sandbox SEM allow-same-origin -> roda isolado, nao toca no app. pdf: viewer do browser. -->
         <iframe class="doc-frame" src={url(cur)} title={cur.name}

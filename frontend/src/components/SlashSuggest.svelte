@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CommandInfo } from '../lib/types';
+  import * as m from '../paraglide/messages';
 
   // Tira inline de autocomplete acima do textarea. Aparece so quando o texto comeca com '/'
   // (primeiro caractere nao-branco) e ainda nao tem argumento (sem espaco depois do nome).
@@ -45,7 +46,7 @@
 </script>
 
 {#if matches.length > 0}
-  <div class="suggest" role="listbox" aria-label="Sugestões de comando">
+  <div class="suggest" role="listbox" aria-label={m.slash_sugestoes()}>
     {#each matches as c (c.name)}
       <button class="row" role="option" aria-selected="false" onclick={() => onPick(c)}>
         <span class="name">{c.display}</span>

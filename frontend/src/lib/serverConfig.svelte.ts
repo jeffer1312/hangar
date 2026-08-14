@@ -2,6 +2,7 @@
 // componente e destruido em dois caminhos normais: ir pra Aparencia/Motores (troca o ramo do {#if}) e
 // atravessar os 820px (o corpo do modal remonta). Com o estado no componente, o rascunho sumiria nos
 // dois — e rascunho unico foi a decisao explicita do usuario.
+import * as m from '../paraglide/messages';
 import {
   getConfig, getConfigForServer, patchConfig, patchConfigForServer, type CampoConfig,
 } from './api';
@@ -57,7 +58,7 @@ export function criarConfigServidor(alvo: () => Server | null, identidade?: () =
       leitura = c.somente_leitura;
     } catch (e) {
       if (mine !== geracao || donoDe() !== dono) return;
-      erro = e instanceof Error ? e.message : 'Falha ao carregar';
+      erro = e instanceof Error ? e.message : m.config_motores_erro_carregar();
     } finally {
       if (mine === geracao) carregando = false;
     }
@@ -95,7 +96,7 @@ export function criarConfigServidor(alvo: () => Server | null, identidade?: () =
       if (mine !== geracao || donoDe() !== dono) return;
       // Erro de validacao do servidor aparece como veio ("upload_retention_days: esperado numero").
       // O rascunho fica INTACTO: reject/timeout deixa salvando=false, erro visível e retry possível.
-      erro = e instanceof Error ? e.message : 'Falha ao salvar';
+      erro = e instanceof Error ? e.message : m.config_motores_erro_salvar();
     } finally {
       if (mine === geracao) salvando = false;
     }

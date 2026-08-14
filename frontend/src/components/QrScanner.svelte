@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import type QrScanner from 'qr-scanner';
   import ModalDialog from './ModalDialog.svelte';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     onScan: (text: string) => void;
@@ -46,7 +47,7 @@
     try {
       await scanner.start();
     } catch {
-      error = 'Não consegui abrir a câmera. Permita o acesso (precisa de HTTPS).';
+      error = m.qr_erro_camera();
     }
   });
 
@@ -56,7 +57,7 @@
   });
 </script>
 
-<ModalDialog open={dialogOpen} ariaLabel="Escanear QR" closeOnBackdrop={false} className="scanner-dialog" onClose={closeScanner}>
+<ModalDialog open={dialogOpen} ariaLabel={m.sessao_escanear_qr()} closeOnBackdrop={false} className="scanner-dialog" onClose={closeScanner}>
 <div class="scanner">
   <div class="scanner-stage">
     <!-- svelte-ignore a11y_media_has_caption -->
@@ -66,10 +67,10 @@
   {#if error}
     <p class="scanner-error" role="alert">{error}</p>
   {:else}
-    <p class="scanner-hint">Aponte para o QR do terminal</p>
+    <p class="scanner-hint">{m.qr_aponte_terminal()}</p>
   {/if}
 
-  <button class="scanner-close" onclick={closeScanner}>Cancelar</button>
+  <button class="scanner-close" onclick={closeScanner}>{m.comum_cancelar()}</button>
 </div>
 </ModalDialog>
 

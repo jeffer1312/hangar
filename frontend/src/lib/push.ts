@@ -1,6 +1,7 @@
 // Web Push no celular: liga notificacao de "sessao aguardando". Uma inscricao + uma VAPID
 // compartilhada serve TODOS os servidores (single-user controla os 3). Registra a inscricao em cada
 // servidor com o label/id locais, pra notif mostrar "Casa · sessao" e linkar certo.
+import * as m from '../paraglide/messages';
 import { listServers } from './auth';
 import { getVapidKey, subscribePush } from './api';
 
@@ -24,13 +25,13 @@ export function pushSupported(): boolean {
 // com push ligado / nenhum aceitou. Servidor offline e pulado (nao derruba os outros).
 export async function enablePush(): Promise<number> {
   if (!pushSupported()) {
-    throw new Error('Push não suportado aqui — instale o app na tela inicial (iOS 16.4+).');
+    throw new Error(m.push_nao_suportado());
   }
   const perm = await Notification.requestPermission();
-  if (perm !== 'granted') throw new Error('Permissão de notificação negada.');
+  if (perm !== 'granted') throw new Error(m.push_permissao_negada());
 
   const servers = listServers();
-  if (servers.length === 0) throw new Error('Nenhum servidor cadastrado.');
+  if (servers.length === 0) throw new Error(m.push_sem_servidor());
 
   // VAPID compartilhada: pega do 1o servidor que responder com chave. Servidor offline -> tenta o proximo.
   let vapid = '';
@@ -62,6 +63,6 @@ export async function enablePush(): Promise<number> {
       /* servidor offline / sem push: pula, registra nos que dao */
     }
   }
-  if (ok === 0) throw new Error('Nenhum servidor aceitou a inscrição.');
+  if (ok === 0) throw new Error(m.push_inscricao_negada());
   return ok;
 }

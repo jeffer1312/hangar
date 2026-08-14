@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
 
   // Acoes que saíram da NavBar do CELULAR pro menu "⋯". Elas custavam 80px fixos da barra e sao de
@@ -25,9 +26,9 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Mais ações">
+<BottomSheet {open} {onClose} ariaLabel={m.navbar_mais_acoes()}>
   <div class="more">
-    <h2 class="more-title">Mais ações</h2>
+    <h2 class="more-title">{m.navbar_mais_acoes()}</h2>
 
     <button class="item" onclick={() => pick(onRun)}>
       <span class="ico" class:on={runRunning} aria-hidden="true">
@@ -36,10 +37,10 @@
         </svg>
       </span>
       <span class="txt">
-        <span class="label">{runRunning ? 'Rodando' : 'Rodar projeto'}</span>
-        <span class="sub">{runRunning ? 'Abrir a saída do processo' : 'Detecta o comando do repo'}</span>
+        <span class="label">{runRunning ? m.ctx_rodando() : m.ctx_rodar_projeto()}</span>
+        <span class="sub">{runRunning ? m.more_abrir_saida_processo() : m.more_detecta_comando_repo()}</span>
       </span>
-      {#if runRunning}<span class="pill on">ativo</span>{/if}
+      {#if runRunning}<span class="pill on">{m.servidor_ativo()}</span>{/if}
       <span class="chev" aria-hidden="true">›</span>
     </button>
 
@@ -51,8 +52,8 @@
         </svg>
       </span>
       <span class="txt">
-        <span class="label">Atividade</span>
-        <span class="sub">{onActivity ? 'Tarefas e agentes desta sessão' : 'Nada rodando agora'}</span>
+        <span class="label">{m.ctx_atividade()}</span>
+        <span class="sub">{onActivity ? m.more_tarefas_agentes() : m.more_nada_rodando()}</span>
       </span>
       <!-- Hoje activityBadge > 0 implica hasActivity (ver lib/activity.ts), mas o componente nao
            depende disso: sem o guard, um contador aceso num item cinza dizendo "Nada rodando agora"
@@ -68,8 +69,8 @@
         </svg>
       </span>
       <span class="txt">
-        <span class="label">Anexos</span>
-        <span class="sub">Fotos, vídeos e arquivos desta sessão</span>
+        <span class="label">{m.ctx_anexos()}</span>
+        <span class="sub">{m.more_fotos_videos_arquivos()}</span>
       </span>
       <span class="chev" aria-hidden="true">›</span>
     </button>

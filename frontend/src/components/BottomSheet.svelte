@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   import { onDestroy, untrack } from 'svelte';
   import type { Snippet } from 'svelte';
   import { focusableElements, nextFocusIndex, restoreFocus } from '../lib/focusCycle';
@@ -28,7 +29,7 @@
     split?: boolean;
     children: Snippet;
   }
-  let { open, onClose, ariaLabel = 'Painel', resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, fallbackFocus = null, persistent = false, split = false, children }: Props = $props();
+  let { open, onClose, ariaLabel = m.shell_painel(), resizable = false, widthKey = 'cp_gitsheet_w', defaultWidth = 460, wide = false, centered = false, fallbackFocus = null, persistent = false, split = false, children }: Props = $props();
 
   // `persistent` só vale no dock desktop: abaixo de 820px a sheet volta a ser modal.
   // `centered` GANHA de `persistent`: quem pede centrado está pedindo MODAL, e o dock é o oposto
@@ -256,13 +257,13 @@
           onpointerup={resizeEnd}
           onpointercancel={resizeEnd}
           role="separator"
-          aria-label="Redimensionar painel"
+          aria-label={m.shell_redimensionar_painel()}
           aria-orientation="vertical"
         ></div>
       {/if}
       {#if naoModal}
         <!-- Sem véu e sem clique-fora, o × é a ÚNICA saída visível (o Esc segue valendo). -->
-        <button class="sheet-close" onclick={onClose} aria-label="Fechar painel" title="Fechar (Esc)">×</button>
+        <button class="sheet-close" onclick={onClose} aria-label={m.shell_fechar_painel()} title={m.shell_fechar_esc()}>×</button>
       {/if}
       <div class="drag-handle" aria-hidden="true"></div>
       {@render children()}

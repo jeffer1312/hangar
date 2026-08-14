@@ -1,6 +1,7 @@
 <script lang="ts">
   // Task B: limites de uso da conta Codex (account/rateLimits/read via GET /limits) — so sessoes
   // Codex, aberto pelo badge "Codex" da NavBar. Fetch-on-open, mesmo padrao do RunSheet.
+  import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
   import { getLimits } from '../lib/api';
   import { resetsIn } from '../lib/format';
@@ -33,35 +34,35 @@
     const pct = w.usedPercent != null ? `${Math.round(w.usedPercent)}%` : '—';
     const inTxt = resetsIn(w.resetsAt);
     const reset = inTxt ? ` · reseta ${inTxt}` : '';
-    return `Uso: ${pct}${reset}`;
+    return m.codex_limite_uso({ pct, reset });
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Limites da conta Codex">
-  <h2 class="sheet-title">Limites</h2>
+<BottomSheet {open} {onClose} ariaLabel={m.codex_limites_titulo()}>
+  <h2 class="sheet-title">{m.ctx_limites()}</h2>
 
   {#if err}
     <p class="err">{err}</p>
   {:else if !limits}
-    <p class="empty">Carregando…</p>
+    <p class="empty">{m.comum_carregando()}</p>
   {:else if !limits.primary && !limits.secondary}
-    <p class="empty">Sem dados de limite no momento.</p>
+    <p class="empty">{m.codex_sem_dados_limite()}</p>
   {:else}
     <ul class="limit-list">
       {#if limits.primary}
         <li class="limit-row">
-          <span class="limit-label">Principal</span>
+          <span class="limit-label">{m.codex_limite_principal()}</span>
           <span class="limit-value">{label(limits.primary)}</span>
         </li>
       {/if}
       {#if limits.secondary}
         <li class="limit-row">
-          <span class="limit-label">Secundário</span>
+          <span class="limit-label">{m.codex_limite_secundario()}</span>
           <span class="limit-value">{label(limits.secondary)}</span>
         </li>
       {/if}
     </ul>
-    {#if limits.planType}<p class="plan">Plano: {limits.planType}</p>{/if}
+    {#if limits.planType}<p class="plan">{m.codex_plano({ plano: limits.planType })}</p>{/if}
   {/if}
 </BottomSheet>
 

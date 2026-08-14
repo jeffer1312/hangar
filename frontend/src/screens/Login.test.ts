@@ -7,6 +7,10 @@ import Login from './Login.svelte';
 import * as auth from '../lib/auth';
 import * as api from '../lib/api';
 import * as sync from '../lib/sync';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
+
 
 vi.mock('../lib/auth', () => ({
   addServerWithRollback: vi.fn(async () => ({ id: 'srv-x', succeeded: true })),

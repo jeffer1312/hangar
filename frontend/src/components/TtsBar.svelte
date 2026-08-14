@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import { formatClock } from '../lib/ttsFormat';
+  import * as m from '../paraglide/messages';
 
   const RATES = [1, 1.25, 1.5];
 
@@ -32,28 +33,28 @@
 </script>
 
 {#if ttsPlayer.active}
-  <div class="tts-bar" bind:this={barEl} role="region" aria-label="Leitura em voz">
+  <div class="tts-bar" bind:this={barEl} role="region" aria-label={m.tts_leitura_voz()}>
     {#if ttsPlayer.error}
       <span class="tts-err">{ttsPlayer.error}</span>
     {:else if ttsPlayer.loading}
-      <span class="tts-load">gerando áudio…</span>
+      <span class="tts-load">{m.tts_gerando_audio()}</span>
     {:else}
       <button class="tts-play" onclick={() => ttsPlayer.toggle()}
-              aria-label={ttsPlayer.playing ? 'Pausar' : 'Tocar'}>
+              aria-label={ttsPlayer.playing ? m.tts_pausar() : m.tts_tocar()}>
         {ttsPlayer.playing ? '⏸' : '▶'}
       </button>
       <input class="tts-seek" type="range" min="0" step="0.1"
              max={Number.isFinite(ttsPlayer.duration) && ttsPlayer.duration > 0 ? ttsPlayer.duration : 0}
              value={ttsPlayer.current}
              oninput={(e) => ttsPlayer.seek(Number((e.currentTarget as HTMLInputElement).value))}
-             aria-label="Posição" />
+             aria-label={m.tts_posicao()} />
       <span class="tts-time">{formatClock(ttsPlayer.current)}/{formatClock(ttsPlayer.duration)}</span>
       {#if ttsPlayer.engineLocal}
-        <span class="tts-engine">(motor local)</span>
+        <span class="tts-engine">{m.tts_motor_local()}</span>
       {/if}
-      <button class="tts-rate" onclick={proximaVelocidade} aria-label="Velocidade">{ttsPlayer.rate}×</button>
+      <button class="tts-rate" onclick={proximaVelocidade} aria-label={m.tts_velocidade()}>{ttsPlayer.rate}×</button>
     {/if}
-    <button class="tts-close" onclick={() => ttsPlayer.close()} aria-label="Fechar">✕</button>
+    <button class="tts-close" onclick={() => ttsPlayer.close()} aria-label={m.sessao_fechar()}>✕</button>
   </div>
 {/if}
 

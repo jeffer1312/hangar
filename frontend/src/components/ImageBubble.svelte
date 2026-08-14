@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   import { zoomable } from '../lib/zoomable';
 
   interface Props {
@@ -24,8 +25,8 @@
   <!-- Anexos primeiro (miniaturas), legenda embaixo — disposicao estilo Claude. -->
   <div class="thumb-row" class:thumb-row--multi={srcs.length > 1}>
     {#each srcs as src}
-      <button class="thumb-btn" onclick={() => (lightbox = src)} aria-label="Ver imagem original">
-        <img class="thumb" {src} alt="imagem enviada" loading="lazy" />
+      <button class="thumb-btn" onclick={() => (lightbox = src)} aria-label={m.anexos_ver_original()}>
+        <img class="thumb" {src} alt={m.anexos_imagem_enviada()} loading="lazy" />
       </button>
     {/each}
   </div>
@@ -42,7 +43,7 @@
     use:portal
     class="lightbox"
     onclick={() => { if (!gesto) lightbox = null; }}
-    aria-label="Fechar imagem"
+    aria-label={m.anexos_fechar_imagem()}
   >
     <!-- Pinch, duplo-toque e arrastar. `gesto` segura o fechar: sem isso, terminar um arrasto
          fechava a imagem no clique que o browser dispara logo atrás. -->

@@ -3,6 +3,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QuietHoursController, type QuietState, type QuietHoursApi, type PushTarget } from './quietHours';
 import type { Server } from './auth';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
+
 
 const SERVER: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'x' } as Server;
 

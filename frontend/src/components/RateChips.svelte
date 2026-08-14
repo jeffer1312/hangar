@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { StatusFields } from '../lib/statusline';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     status: StatusFields | null;
@@ -69,9 +70,9 @@
 
   // Texto pro leitor de tela: o desenho e aria-hidden, entao o rotulo carrega os numeros.
   const a11y = $derived(
-    `Uso: 5 horas ${known(five) ? Math.round(clamp(five)) + '%' : 'sem dado'}` +
-    `, 7 dias ${known(week) ? Math.round(clamp(week)) + '%' : 'sem dado'}` +
-    (known(month) ? `, 30 dias ${Math.round(clamp(month))}%` : ''),
+    m.rate_uso_5h({ pct: known(five) ? Math.round(clamp(five)) + '%' : m.rate_sem_dado() }) +
+    m.rate_7d({ pct: known(week) ? Math.round(clamp(week)) + '%' : m.rate_sem_dado() }) +
+    (known(month) ? m.rate_30d({ pct: Math.round(clamp(month)) + '%' }) : ''),
   );
 </script>
 
@@ -83,25 +84,25 @@
       <button class="bars" onclick={onExpand} aria-label={a11y} title={a11y}>
         {#if known(five)}
           <span class="bar-row tone-{tone(five)}">
-            <span class="bar-head"><span class="bar-cap">5 horas</span><span class="bar-pct">{label(five)}%</span></span>
+            <span class="bar-head"><span class="bar-cap">{m.rate_5h()}</span><span class="bar-pct">{label(five)}%</span></span>
             <span class="bar"><span style:width={`${clamp(five)}%`}></span></span>
             <!-- Quando zera: a statusline crua ja traz ("↺1h20m", "↺sab 18h·4d7h") e o painel tem
                  largura pra isso — sem ele a barra diz o quanto foi, nunca ate quando dura. -->
-            {#if status?.fiveHourReset}<span class="bar-reset">reseta {status.fiveHourReset}</span>{/if}
+            {#if status?.fiveHourReset}<span class="bar-reset">{m.rate_reseta({ quando: status.fiveHourReset })}</span>{/if}
           </span>
         {/if}
         {#if known(week)}
           <span class="bar-row tone-{tone(week)}">
-            <span class="bar-head"><span class="bar-cap">7 dias</span><span class="bar-pct">{label(week)}%</span></span>
+            <span class="bar-head"><span class="bar-cap">{m.custos_periodo_7d()}</span><span class="bar-pct">{label(week)}%</span></span>
             <span class="bar"><span style:width={`${clamp(week)}%`}></span></span>
-            {#if status?.weeklyReset}<span class="bar-reset">reseta {status.weeklyReset}</span>{/if}
+            {#if status?.weeklyReset}<span class="bar-reset">{m.rate_reseta({ quando: status.weeklyReset })}</span>{/if}
           </span>
         {/if}
         {#if known(month)}
           <span class="bar-row tone-{tone(month)}">
-            <span class="bar-head"><span class="bar-cap">30 dias</span><span class="bar-pct">{label(month)}%</span></span>
+            <span class="bar-head"><span class="bar-cap">{m.custos_periodo_30d()}</span><span class="bar-pct">{label(month)}%</span></span>
             <span class="bar"><span style:width={`${clamp(month)}%`}></span></span>
-            {#if status?.monthlyReset}<span class="bar-reset">reseta {status.monthlyReset}</span>{/if}
+            {#if status?.monthlyReset}<span class="bar-reset">{m.rate_reseta({ quando: status.monthlyReset })}</span>{/if}
           </span>
         {/if}
       </button>
@@ -152,8 +153,8 @@
     {#if limited}
       <!-- Banner de limite detectado no pane (feature #8), independente da statusline custom.
            Calmo (mesma cor "warm" do resto), nao alarmante. -->
-      <button class="rchip warm" onclick={onExpand} aria-label="Limite de uso atingido">
-        <span aria-hidden="true">⏳</span>{limitReset ? `volta ${limitReset}` : 'limitado'}
+      <button class="rchip warm" onclick={onExpand} aria-label={m.sessao_limite()}>
+        <span aria-hidden="true">⏳</span>{limitReset ? m.rate_volta({ quando: limitReset }) : m.rate_limitado()}
       </button>
     {/if}
   </div>

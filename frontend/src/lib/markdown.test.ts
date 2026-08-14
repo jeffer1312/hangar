@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { renderMarkdown } from './markdown';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
+
 
 describe('renderMarkdown — cercas de código', () => {
   it('renderiza cerca indentada dentro de item de lista', () => {

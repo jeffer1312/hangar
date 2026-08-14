@@ -2,9 +2,13 @@
 // Unico arquivo da suite com DOM de verdade (o resto e node puro, ver vitest.config.ts): textoFalavel
 // manipula <pre> aninhado com cloneNode/querySelectorAll/replaceWith, e stub manual reimplementaria
 // DOM em vez de testa-lo.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { textoFalavel, textoFalavelComCodigo } from './speakable';
 import { renderMarkdown } from './markdown';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
+
 
 function montar(html: string): HTMLElement {
   const d = document.createElement('div');

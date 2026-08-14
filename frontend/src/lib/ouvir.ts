@@ -1,3 +1,4 @@
+import * as m from '../paraglide/messages';
 import { ttsPlayer } from './ttsPlayer.svelte';
 import { sintetizarTts, ttsAudioUrl } from './api';
 
@@ -39,9 +40,9 @@ export function ouvirTexto(
             .then((ok) => {
               if (ok) return pedir(true);
               // e.message ja vem limpo (ensureOk em api.ts nao embute mais o status no texto).
-              ttsPlayer.fail(`acima do limite de leitura — ${e.message}`);
+              ttsPlayer.fail(m.ouvir_acima_limite({ msg: e.message }));
             })
-            .catch(() => ttsPlayer.fail('não deu pra confirmar a leitura'));
+            .catch(() => ttsPlayer.fail(m.ouvir_erro_confirma_leitura()));
         }
         ttsPlayer.fail(e.message);
       });
@@ -55,7 +56,7 @@ export function ouvirTexto(
  * limite de aviso), então não há susto de custo pra confirmar.
  */
 export function ouvirAmostra(texto: string, voz: string): void {
-  if (!texto) { ttsPlayer.fail('não há texto pra ouvir'); return; }
+  if (!texto) { ttsPlayer.fail(m.ouvir_sem_texto()); return; }
   if (ttsPlayer.loading) return;
   ttsPlayer.unlock(texto);
   sintetizarTts({ text: texto, voice: voz })

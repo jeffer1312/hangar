@@ -1,5 +1,6 @@
 // Estado + ações git do modal de git (Git.svelte -> GitTabs -> as tres abas), nas duas views.
 // .svelte.ts permite runes fora de componente.
+import * as m from '../paraglide/messages';
 import {
   getBranches, checkoutBranch, gitAction, getGitLog, getChangedFiles,
   commitFiles, gitPush, discardFile,
@@ -60,12 +61,12 @@ export function createGitStore(sessionName: string) {
     busy = action; error = ''; output = '';
     try {
       const r = await gitAction(sessionName, action);
-      output = r.output || (r.ok ? 'ok' : 'sem saída');
+      output = r.output || (r.ok ? 'ok' : m.git_sem_saida());
       // git_action NAO levanta em returncode != 0 (git_ops.py) -- so `output` gravava a falha, e o
       // <pre> dela usa a MESMA cor cinza de um "ok" (ex. um `pull` com conflito/auth expirada/branch
       // divergida passava despercebido, sem nunca setar `error`). abortOp() so trata o `ok`; aqui e o
       // dono unico da mensagem de erro pra qualquer acao via runActionResult.
-      if (!r.ok) error = r.output || 'sem saída';
+      if (!r.ok) error = r.output || m.git_sem_saida();
       await refresh();
       return r;
     } catch (e) { error = cleanErr(e); return null; } finally { busy = ''; }
@@ -160,7 +161,7 @@ export function createGitStore(sessionName: string) {
     busy = 'commit'; error = ''; output = '';
     try {
       const r = await commitFiles(sessionName, message, paths, opts);
-      output = r.output || 'commit ok';
+      output = r.output || m.git_commit_ok();
       // refresh/openLog FORA do escopo de erro do commit: o commit ja foi gravado no disco quando
       // chegamos aqui -- uma falha na releitura nao pode virar 'erro' e levar o usuario a commitar
       // de novo (commit duplicado).
@@ -173,7 +174,7 @@ export function createGitStore(sessionName: string) {
   async function doPush() {
     if (busy) return false;
     busy = 'push'; error = ''; output = '';
-    try { const r = await gitPush(sessionName); output = r.output || 'push ok'; return true; }
+    try { const r = await gitPush(sessionName); output = r.output || m.git_push_ok(); return true; }
     catch (e) { error = cleanErr(e); return false; } finally { busy = ''; }
   }
   // ── Diff aberto ────────────────────────────────────────────────────────────

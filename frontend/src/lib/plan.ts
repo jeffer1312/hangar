@@ -1,6 +1,7 @@
 // Helpers puros do progresso do plano (app/planprog.py no backend). Espelha lib/loop.ts: o rótulo e
 // a porcentagem são montados aqui, os componentes só renderizam.
 
+import * as m from '../paraglide/messages';
 import type { SessionInfo } from './types';
 
 export interface PlanBadge {
@@ -29,7 +30,7 @@ export function planBadge(s: PlanCarrier | null | undefined): PlanBadge | null {
     // lido e nada na tela dizia QUAL plano estava rodando — so o progresso dele. Com varios planos
     // no repo (13 aqui), "Task 4/5" sozinho nao identifica nada. O nome vem primeiro porque e o que
     // se procura; quem corta quando falta espaco e o CSS do chip, e o numero fica preso na ponta.
-    label: complete ? `📋 ${s.plan_name} · concluído` : `📋 ${s.plan_name} · ${task}`,
+    label: complete ? m.plan_chip_concluido({ nome: s.plan_name }) : m.plan_chip_progresso({ nome: s.plan_name, progresso: task }),
     pct,
     // sem task, o rótulo já É done/total — repetir daria "x · 3/10 · 3/10 steps"
     title: hasTask ? `${s.plan_name} · ${task} · ${done}/${total} steps`

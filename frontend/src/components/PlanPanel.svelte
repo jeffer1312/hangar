@@ -3,6 +3,7 @@
   // primeiro ○ da lista. O markdown cru vem do próprio /plan (o /file não serve este arquivo).
   import PlanBar from './PlanBar.svelte';
   import Select from './Select.svelte';
+  import * as m from '../paraglide/messages';
   import { renderMarkdown } from '../lib/markdown';
   import { getPlans, setPlanPin, type PlanListItem } from '../lib/api';
   import { planBadge } from '../lib/plan';
@@ -91,11 +92,11 @@
          reacende um plano, e não havia como deixar o painel/chip apagados. -->
     <Select
       class="plan-pick"
-      ariaLabel="Trocar o plano exibido"
+      ariaLabel={m.plano_trocar()}
       value={pinned ?? ''}
       opcoes={[
-        { value: '', label: `automático${session.plan_name ? ` · ${session.plan_name}` : ''}` },
-        { value: PIN_NONE, label: 'nenhum — esconder o plano' },
+        { value: '', label: `${m.plano_automatico()}${session.plan_name ? ` · ${session.plan_name}` : ''}` },
+        { value: PIN_NONE, label: m.plano_nenhum() },
         ...plans.map((p) => ({
           value: p.stem,
           label: p.name,
@@ -105,7 +106,7 @@
       onchange={trocar}
     />
     <button class="chev-btn" onclick={() => (showMd = !showMd)}
-      aria-label={showMd ? 'Esconder o plano inteiro' : 'Ver o plano inteiro'}>
+      aria-label={showMd ? m.plano_esconder_inteiro() : m.plano_ver_inteiro()}>
       <span class="chev" class:open={showMd}>›</span>
     </button>
   </div>
@@ -118,10 +119,10 @@
        lugar dela. Gatear so por `temBarra` deixava a lista na tela sem nada que a feche. -->
   {#if temBarra || detail}
   <button class="bar-btn" onclick={alternarTasks} aria-expanded={showTasks}
-    aria-label={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}
-    title={showTasks ? 'Esconder as tasks' : 'Mostrar as tasks'}>
+    aria-label={showTasks ? m.plano_esconder_tasks() : m.plano_mostrar_tasks()}
+    title={showTasks ? m.plano_esconder_tasks() : m.plano_mostrar_tasks()}>
     <span class="bar-wrap">
-      {#if temBarra}<PlanBar {session} />{:else}<span class="bar-rot">Tasks</span>{/if}
+      {#if temBarra}<PlanBar {session} />{:else}<span class="bar-rot">{m.plano_tasks()}</span>{/if}
     </span>
     <span class="chev" class:open={showTasks}>›</span>
   </button>
@@ -130,7 +131,7 @@
   {#if !showTasks}
     <!-- nada: o usuario fechou -->
   {:else if loading && !detail}
-    <p class="muted">carregando o plano…</p>
+    <p class="muted">{m.plano_carregando()}</p>
   {:else if detail}
     <ul class="tasks">
       {#each detail.tasks as t, i}
@@ -146,7 +147,7 @@
                 <li class:done={s.done}>
                   <span class="mark">{s.done ? '✓' : '○'}</span>
                   <span class="ttl">{s.title}</span>
-                  {#if s.manual}<span class="manual" title="precisa de conferência humana">🙋</span>{/if}
+                  {#if s.manual}<span class="manual" title={m.plano_conferencia_humana()}>🙋</span>{/if}
                 </li>
               {/each}
             </ul>
@@ -155,7 +156,7 @@
       {/each}
     </ul>
   {:else if error}
-    <p class="muted">não deu pra ler o plano</p>
+    <p class="muted">{m.plano_falha_leitura()}</p>
   {/if}
 
   <!-- Fora do gate das Tasks: fechar a lista nao pode desarmar o `›` do cabecalho, que e outro

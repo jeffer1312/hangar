@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-import { intlLocale } from '../lib/locale';
+  import { intlLocale } from '../lib/locale';
+  import * as m from '../paraglide/messages';
   import { ttsSelection, iniciarCapturaDeSelecao } from '../lib/ttsSelection.svelte';
   import { ouvirTexto } from '../lib/ouvir';
   import { ttsNarracao } from '../lib/ttsNarracao.svelte';
@@ -60,7 +61,7 @@ import { intlLocale } from '../lib/locale';
   });
 
   const temCodigoSel = $derived(blocosSel.length > 0);
-  const rotulo = $derived(`🔊 Ouvir · ${textoSel.length.toLocaleString(intlLocale())} car.`);
+  const rotulo = $derived(`🔊 ${m.tts_ouvir()} · ${textoSel.length.toLocaleString(intlLocale())} ${m.config_server_car()}`);
   // Instrucao que VAI valer se o usuario tocar "Ouvir" agora: texto livre sempre vence; senao, a
   // escolha explicita de "ler como esta"; senao o padrao esperto (explicar codigo quando ha bloco
   // de codigo, ler como esta senao).
@@ -136,14 +137,14 @@ import { intlLocale } from '../lib/locale';
          fora da tela, e nao havia nem X pra fechar naquele estado. -->
     <div class="tts-sel-top">
       {#if ttsNarracao.carregando || ttsNarracao.erro || ttsNarracao.pendente}
-        <span class="tts-sel-titulo">{ttsNarracao.pendente ? 'Texto adaptado' : 'Leitura em voz'}</span>
+        <span class="tts-sel-titulo">{ttsNarracao.pendente ? m.tts_texto_adaptado() : m.tts_leitura_voz()}</span>
       {:else}
         <button type="button" class="tts-sel-head" onclick={ouvirClique}>{rotulo}</button>
         <button type="button" class="tts-sel-mais" onclick={() => (expandido = !expandido)}
-                aria-expanded={expandido} aria-label={expandido ? 'Menos opções' : 'Mais opções'}
+                aria-expanded={expandido} aria-label={expandido ? m.tts_menos_opcoes() : m.tabs_mais_opcoes()}
         >{expandido ? '⌃' : '⌄'}</button>
       {/if}
-      <button type="button" class="tts-sel-x" onclick={fechar} aria-label="Fechar">✕</button>
+      <button type="button" class="tts-sel-x" onclick={fechar} aria-label={m.sessao_fechar()}>✕</button>
     </div>
 
     {#if ttsNarracao.carregando}
@@ -151,14 +152,14 @@ import { intlLocale } from '../lib/locale';
            (narrar.py). Sem ele, uma consulta travada prende a faixa inteira: nao da pra tocar nada
            nem descartar o pedido. Nao aborta a requisicao em voo — so libera a interface, que e o
            que a pessoa precisa. -->
-      <span class="tts-sel-load">consultando o modelo…</span>
+      <span class="tts-sel-load">{m.tts_consultando_modelo()}</span>
     {:else if ttsNarracao.erro}
       <span class="tts-sel-err">{ttsNarracao.erro}</span>
     {:else if ttsNarracao.pendente}
       <p class="tts-sel-preview">{ttsNarracao.textoTratado}</p>
       <div class="tts-sel-row">
-        <button type="button" class="tts-sel-btn tts-sel-go" onclick={confirmarLeitura}>🔊 Ouvir</button>
-        <button type="button" class="tts-sel-btn" onclick={fechar}>Cancelar</button>
+        <button type="button" class="tts-sel-btn tts-sel-go" onclick={confirmarLeitura}>🔊 {m.tts_ouvir()}</button>
+        <button type="button" class="tts-sel-btn" onclick={fechar}>{m.comum_cancelar()}</button>
       </div>
     {:else if expandido}
       <div class="tts-sel-row">
@@ -170,7 +171,7 @@ import { intlLocale } from '../lib/locale';
                   preferirLerLiteral = false;
                   instrucao = PRESET_FALA;
                   void ttsNarracao.pedir(textoSel, blocosSel, PRESET_FALA);
-                }}>Adaptar pra fala</button>
+                }}>{m.tts_preset_fala()}</button>
         <!-- Os presets AGEM no clique, nao so marcam modo. "Ler como está" quer dizer "lê agora,
              sem LLM" — nao sobra nada pra configurar depois, entao exigir um segundo toque no botao
              de cima fazia o clique parecer morto. Sincrono ate ouvirTexto: e aqui que o audio
@@ -184,7 +185,7 @@ import { intlLocale } from '../lib/locale';
                   engajado = false;
                   ttsSelection.setEngajado(false);
                   ouvirTexto(texto, confirmar, '');
-                }}>Ler como está</button>
+                }}>{m.tts_preset_ler()}</button>
         {#if temCodigoSel}
           <!-- Idem: escolher "explicar o código" JA pede a explicacao. O segundo toque continua
                existindo depois, no botao Ouvir da tela de revisao, que e onde o unlock acontece
@@ -194,7 +195,7 @@ import { intlLocale } from '../lib/locale';
                     preferirLerLiteral = false;
                     instrucao = PRESET_CODIGO;
                     void ttsNarracao.pedir(textoSel, blocosSel, PRESET_CODIGO);
-                  }}>Explicar o código</button>
+                  }}>{m.tts_preset_codigo()}</button>
         {/if}
       </div>
       <input
@@ -202,11 +203,11 @@ import { intlLocale } from '../lib/locale';
         type="text"
         bind:value={instrucao}
         oninput={() => { preferirLerLiteral = false; }}
-        placeholder="ou digite uma instrução…"
+        placeholder={m.tts_instrucao_placeholder()}
         onkeydown={(e) => { if (e.key === 'Enter') ouvirClique(); }}
       />
       {#if efetiva}
-        <span class="tts-sel-custo">{charsGroq.toLocaleString(intlLocale())} car. para o modelo</span>
+        <span class="tts-sel-custo">{charsGroq.toLocaleString(intlLocale())} {m.tts_car_para_modelo()}</span>
       {/if}
     {/if}
   </div>

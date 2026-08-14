@@ -4,6 +4,8 @@
  * code blocks, headings, listas (marcadores - + ou numeradas), tabelas GFM (pipe + separador), links.
  */
 
+import * as m from '../paraglide/messages';
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -111,8 +113,8 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
       // Header estilo app do Claude: nome da linguagem (ou "Código") + copiar + expandir.
       // Handlers delegados GLOBAIS (lib/codeActions.svelte.ts, listener no document): valem aqui e
       // em qualquer tela que renderize markdown (PairSheet, ActivitySheet, plano...).
-      const rotulo = lang ? escapeHtml(lang) : 'Código';
-      out.push(`<div class="code-block"><div class="code-head"><span class="code-lang">${rotulo}</span><button class="copy-btn" type="button" aria-label="Copiar código"></button><button class="expand-btn" type="button" aria-label="Expandir código"></button></div><pre><code${langAttr}>${escapeHtml(code.join('\n'))}</code></pre></div>`);
+      const rotulo = lang ? escapeHtml(lang) : m.comum_codigo();
+      out.push(`<div class="code-block"><div class="code-head"><span class="code-lang">${rotulo}</span><button class="copy-btn" type="button" aria-label="${m.comum_copiar_codigo()}"></button><button class="expand-btn" type="button" aria-label="${m.comum_expandir_codigo()}"></button></div><pre><code${langAttr}>${escapeHtml(code.join('\n'))}</code></pre></div>`);
       continue;
     }
 
@@ -154,9 +156,9 @@ export function renderMarkdown(input: string, opts: MarkdownOptions = {}): strin
       const ordered = !!olm;
       const items: string[] = [];
       while (i < lines.length) {
-        const m = ordered ? lines[i].match(/^\s*\d+[.)]\s+(.+)$/) : lines[i].match(/^\s*[-*+]\s+(.+)$/);
-        if (!m) break;
-        items.push(`<li>${renderInline(escapeHtml(m[1]))}</li>`);
+        const match = ordered ? lines[i].match(/^\s*\d+[.)]\s+(.+)$/) : lines[i].match(/^\s*[-*+]\s+(.+)$/);
+        if (!match) break;
+        items.push(`<li>${renderInline(escapeHtml(match[1]))}</li>`);
         i++;
       }
       const tag = ordered ? 'ol' : 'ul';

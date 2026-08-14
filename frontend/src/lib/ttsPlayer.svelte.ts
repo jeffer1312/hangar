@@ -8,6 +8,8 @@
 //
 // .svelte.ts porque usa runes fora de componente — mesmo padrao do sessionsStore.
 
+import * as m from '../paraglide/messages';
+
 // Silencio de 0,05s em mp3 (540 bytes, 44.1k mono, com ID3). Serve so pra destravar o elemento.
 //
 // Era um WAV de 46 bytes — 1 frame so. O iOS NAO decodifica aquilo: o usuario relatou a barra
@@ -72,7 +74,7 @@ function element(): HTMLAudioElement {
     // exatamente isto que pintou "codigo 3" na tela enquanto o audio de verdade tocava normal.
     if (fonte === SILENCE) return;
     loading = false; playing = false;
-    error = `não consegui tocar o áudio gerado (código ${codigo})`;
+    error = m.tts_erro_tocar({ codigo });
   });
   el = a;
   return a;
@@ -87,7 +89,7 @@ function publicarNaTelaDeBloqueio() {
   if (!('mediaSession' in navigator)) return;
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: label || 'Leitura em voz',
+      title: label || m.tts_leitura_voz(),
       artist: 'hangar',
     });
     navigator.mediaSession.setActionHandler('play', () => ttsPlayer.toggle());
@@ -131,7 +133,7 @@ export const ttsPlayer = {
     a.playbackRate = rate;
     a.play().catch(() => {
       // Chegou aqui = o unlock nao segurou (ex: aba em segundo plano). Diz o que fazer.
-      error = 'toque em ▶ para tocar';
+      error = m.tts_toque_tocar();
     });
     publicarNaTelaDeBloqueio();
   },
@@ -140,7 +142,7 @@ export const ttsPlayer = {
 
   toggle() {
     const a = element();
-    if (a.paused) a.play().catch(() => { error = 'não consegui tocar'; });
+    if (a.paused) a.play().catch(() => { error = m.tts_erro_tocar_curto(); });
     else a.pause();
   },
 

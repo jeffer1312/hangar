@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { planBadge } from './plan';
 import type { SessionInfo } from './types';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
+
 
 const base = { name: 's', state: 'idle' } as unknown as SessionInfo;
 

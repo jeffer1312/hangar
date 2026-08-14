@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   import { codeOverlay } from '../lib/codeActions.svelte';
   import { highlightCodeBlocks } from '../lib/highlight';
 
@@ -26,11 +27,11 @@
   {@const atual = codeOverlay.atual}
   <!-- svelte-ignore a11y_click_events_have_key_events (o Esc ja fecha, ver codeActions) -->
   <div class="code-overlay" onclick={aoCliqueFora} role="presentation">
-    <div class="code-overlay-card code-block" role="dialog" aria-label="Código expandido">
+    <div class="code-overlay-card code-block" role="dialog" aria-label={m.comum_codigo_expandido()}>
       <div class="code-head">
-        <span class="code-lang">{atual.lang || 'Código'}</span>
-        <button class="copy-btn" type="button" aria-label="Copiar código"></button>
-        <button class="code-overlay-close" type="button" aria-label="Fechar" onclick={() => codeOverlay.fechar()}>✕</button>
+        <span class="code-lang">{atual.lang || m.comum_codigo()}</span>
+        <button class="copy-btn" type="button" aria-label={m.comum_copiar_codigo()}></button>
+        <button class="code-overlay-close" type="button" aria-label={m.sessao_fechar()} onclick={() => codeOverlay.fechar()}>✕</button>
       </div>
       <pre bind:this={preEl}><code class={atual.lang ? `language-${atual.lang}` : ''}>{atual.code}</code></pre>
     </div>

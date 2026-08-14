@@ -1,4 +1,5 @@
 import { getBaseUrl, getToken, dropActiveServer } from './auth';
+import * as m from '../paraglide/messages';
 import type { Server } from './auth';
 import type {
   SessionInfo,
@@ -85,7 +86,7 @@ async function ensureOk(res: Response): Promise<void> {
   if (res.status === 401 && getToken()) {
     dropActiveServer();
     if (typeof window !== 'undefined') window.location.reload();
-    throw Object.assign(new Error('sessão expirada — faça login novamente'), { status: 401 });
+    throw Object.assign(new Error(m.sessao_expirada()), { status: 401 });
   }
   // `status` no proprio erro: sem ele quem chama (ex: ouvir.ts) nao consegue distinguir um 409
   // (acima do limite de aviso, pede confirmacao) de qualquer outra falha so pela mensagem. A

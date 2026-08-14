@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { falavelDaSelecao, falavelDaSelecaoComCodigo } from './selectionText';
+import { overwriteGetLocale } from '../paraglide/runtime';
+
+beforeEach(() => overwriteGetLocale(() => 'pt'));
+
 
 function selecionarTudo(html: string): Selection | null {
   document.body.innerHTML = `<div id="alvo">${html}</div>`;

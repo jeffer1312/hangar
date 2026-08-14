@@ -12,6 +12,7 @@
 //
 // 'idle' cobre quem NUNCA configurou sync: nesse caso o listener do App nem chega a ser
 // registrado, ninguém publica nada aqui, e a UI não mostra aviso nenhum. Sem falso alarme.
+import * as m from '../paraglide/messages';
 export type VaultPushEstado = 'idle' | 'ok' | 'locked' | 'error';
 
 let estado = $state<VaultPushEstado>('idle');
@@ -29,11 +30,11 @@ export const vaultPush = {
   // Não é o caso de "nunca usou sync", então avisar aqui é informação, não ruído.
   locked() {
     estado = 'locked';
-    detalhe = 'sync deslogado — a mudança ficou só neste aparelho';
+    detalhe = m.vault_sync_deslogado();
   },
   error(e: unknown) {
     estado = 'error';
-    detalhe = `não subiu pro hub: ${e instanceof Error ? e.message : String(e)}`;
+    detalhe = m.vault_nao_subiu({ msg: e instanceof Error ? e.message : String(e) });
   },
   clear() {
     estado = 'idle';

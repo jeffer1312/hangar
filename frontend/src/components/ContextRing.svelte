@@ -1,5 +1,6 @@
 <script lang="ts">
   // Ring de uso de contexto: a % vai DENTRO do circulo (centralizada). Cor muda so nos limiares.
+  import * as m from '../paraglide/messages';
   interface Props {
     pct?: number | null;
     size?: number;
@@ -20,7 +21,7 @@
   aria-valuemin="0"
   aria-valuemax="100"
   aria-valuenow={known ? Math.round(value) : undefined}
-  aria-label="Uso de contexto"
+  aria-label={m.ctx_uso_contexto()}
 >
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r={R} class="track" />

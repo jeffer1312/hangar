@@ -3,6 +3,7 @@
   import { getActiveId, selectServer } from '../lib/auth';
   import { attentionFeed } from '../lib/format';
   import type { AggSession } from '../lib/types';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     rows: AggSession[];
@@ -30,7 +31,7 @@
     try {
       await selectOption(first.name, option);
     } catch (e) {
-      erro = e instanceof Error ? e.message : 'não deu pra enviar a opção';
+      erro = e instanceof Error ? e.message : m.comum_falha_envio_opcao();
       erroTimer = setTimeout(() => (erro = ''), 8000);  // aviso, não estado: some sozinho
     } finally {
       if (prev && prev !== first.serverId) selectServer(prev);
@@ -40,18 +41,18 @@
 </script>
 
 {#if first}
-  <section class="attention-strip" aria-label={`${feed.length} sessão${feed.length === 1 ? '' : 'ões'} precisa${feed.length === 1 ? '' : 'm'} de você`}>
+  <section class="attention-strip" aria-label={feed.length === 1 ? m.atencao_sessao_precisa() : m.atencao_sessoes_precisam({ n: feed.length })}>
     <button class="attention-main" type="button" onclick={() => onOpenSession(first)}>
       <span class="pulse" aria-hidden="true"></span>
       <span class="attention-copy">
         <span class="attention-name">{first.name}</span>
-        <span class="attention-question">{first.question ?? 'Aguardando sua resposta'}</span>
+        <span class="attention-question">{first.question ?? m.atencao_aguardando_resposta()}</span>
       </span>
       <span class="server" style="color: {first.serverColor}">{first.serverLabel}</span>
     </button>
 
     {#if first.options?.length}
-      <div class="quick-options" aria-label="Respostas rápidas">
+      <div class="quick-options" aria-label={m.atencao_respostas_rapidas()}>
         {#each first.options.slice(0, 2) as option, i}
           <button type="button" disabled={busy} onclick={() => pick(i + 1)}>{option}</button>
         {/each}
@@ -60,7 +61,7 @@
 
     {#if feed.length > 1}
       <button class="more" type="button" onclick={() => onOpenSession(first)}
-              aria-label={`Mais ${feed.length - 1} sessões aguardando`}>
+              aria-label={m.atencao_mais_sessoes({ n: feed.length - 1 })}>
         +{feed.length - 1}
       </button>
     {/if}

@@ -7,25 +7,27 @@ export interface LoopGuideSection {
   body: string;
 }
 
+import * as m from '../paraglide/messages';
+
 export const LOOP_GUIDE: LoopGuideSection[] = [
   {
-    title: 'Objetivo — uma coisa só.',
-    body: 'Resultado final, não passos; pequeno e verificável. ✗ "refatore o projeto" / ✓ "migre utils/date.ts pra date-fns e mantenha npm run check verde". Tarefa grande → quebrar num arquivo de plano e mandar o loop fazer "o próximo item pendente".',
+    title: m.loop_objetivo_titulo(),
+    body: m.loop_objetivo_corpo(),
   },
   {
-    title: 'Check — quem decide que acabou é um comando.',
-    body: 'Exit 0 = pronto. Usar o gate real do projeto (chips sugeridos). Check bom: rápido (<2min), determinístico, roda igual duas vezes. Sem check possível → o loop só para com a TUA confirmação; supervise mais de perto. O check roda como comando único (argv), sem shell: "&&", "|" e redirecionamento não funcionam — pra encadear, crie um script no repo e use ele como check.',
+    title: m.loop_check_titulo(),
+    body: m.loop_check_corpo(),
   },
   {
-    title: 'Iterações — o freio.',
-    body: 'Começar com 5–10. Estourou sem passar? Não aumente o número — melhore o objetivo ou o check. Loop que "precisa da noite toda" = escopo grande demais.',
+    title: m.loop_iteracoes_titulo(),
+    body: m.loop_iteracoes_corpo(),
   },
   {
-    title: 'Sinais de problema.',
-    body: 'Mesmo erro 2× → o app já para sozinho (estagnação); fix A quebra B alternando → divida o escopo; agente mexendo em teste → o re-prompt já proíbe, mas revise o diff.',
+    title: m.loop_sinais_titulo(),
+    body: m.loop_sinais_corpo(),
   },
   {
-    title: 'Dica final:',
-    body: 'peça evidência, não promessa — inclua no objetivo "rode o check e mostre a saída".',
+    title: m.loop_dica_titulo(),
+    body: m.loop_dica_corpo(),
   },
 ];

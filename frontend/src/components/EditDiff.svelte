@@ -3,6 +3,7 @@
   // (verde), lado vazio hachurado. Fonte = old_string/new_string do tool_input (NUNCA o
   // tool_result) — entao o diff aparece no momento da chamada, antes do "Successfully replaced".
   // Estreito (celular) -> unificado de uma coluna, o mesmo dado em outra ordem.
+  import * as m from '../paraglide/messages';
   import { computeEditDiff, type EditDiff, type SplitRow } from '../lib/editdiff';
   import { highlightCodeLines, type DiffToken } from '../lib/highlight';
   import { toolLook } from '../lib/toolLook.svelte';
@@ -104,7 +105,7 @@
           <span class="ed-chip-file">{pathParts.base}</span>
           {#if totalAdd}<span class="stat-add">+{totalAdd}</span>{/if}
           {#if totalDel}<span class="stat-del">−{totalDel}</span>{/if}
-          {#if !totalAdd && !totalDel}<span class="stat-same">sem mudança de linhas</span>{/if}
+          {#if !totalAdd && !totalDel}<span class="stat-same">{m.editdiff_sem_mudanca()}</span>{/if}
         </span>
       </div>
     {:else}
@@ -115,7 +116,7 @@
   {/if}
   {#each rendered as re, ei (ei)}
     {#if rendered.length > 1}
-      <div class="ed-edit-head">Edição {ei + 1}/{rendered.length}</div>
+      <div class="ed-edit-head">{m.editdiff_edicao({ n: ei + 1, total: rendered.length })}</div>
     {/if}
     <!-- Com UMA edição a contagem já está no chip acima; com várias, cada uma mostra a sua. -->
     {#if !(toolLook.look === 'chips' && rendered.length === 1 && path)}
@@ -123,7 +124,7 @@
         {#if re.diff.add || re.diff.del}
           <span class="stat-add">+{re.diff.add}</span> <span class="stat-del">−{re.diff.del}</span>
         {:else}
-          <span class="stat-same">sem mudança de linhas</span>
+          <span class="stat-same">{m.editdiff_sem_mudanca()}</span>
         {/if}
       </div>
     {/if}

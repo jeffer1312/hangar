@@ -16,6 +16,7 @@
 //   tardia não pinta nada (geração avançada);
 // - dispose(): limpa o watchdog e avança a geração — nenhum callback tardio publica nem inicia load.
 
+import * as m from '../paraglide/messages';
 import type { Server } from './auth';
 
 export type PushTarget =
@@ -89,7 +90,7 @@ export class QuietHoursController {
     }
     if (!this.d.getOpen() || !this.d.podePush()) return;
     if (alvo.mode === 'unavailable') {
-      this.d.estado.qhMsg = 'Servidor indisponível';
+      this.d.estado.qhMsg = m.quiet_servidor_indisponivel();
       return;
     }
     if (this.d.estado.saving) {
@@ -117,7 +118,7 @@ export class QuietHoursController {
       this.generation++;
       this.refreshDepois = false;
       this.d.estado.saving = false;
-      this.d.estado.qhMsg = 'erro ao salvar';
+      this.d.estado.qhMsg = m.quiet_erro_salvar();
     });
     let sucesso = false;
     try {
@@ -126,7 +127,7 @@ export class QuietHoursController {
       } else if (alvo.mode === 'global') {
         await this.d.api.setQuietHours(inicio || null, fim || null);
       } else {
-        throw new Error('Servidor indisponível');
+        throw new Error(m.quiet_servidor_indisponivel());
       }
       if (mine !== this.generation) return;
       sucesso = true;
@@ -136,7 +137,7 @@ export class QuietHoursController {
     } catch (e) {
       if (mine !== this.generation) return;
       this.refreshDepois = false;  // falhou: nada de refresh; draft e erro ficam na tela
-      this.d.estado.qhMsg = e instanceof Error ? e.message : 'erro ao salvar';
+      this.d.estado.qhMsg = e instanceof Error ? e.message : m.quiet_erro_salvar();
     } finally {
       // Limpa SÓ o watchdog desta operação: o this.watchdog pode já ser de um save novo (alvo
       // trocou no meio), e limpá-lo deixaria a operação nova sem timeout.
@@ -190,7 +191,7 @@ export class QuietHoursController {
       this.generation++;
       this.loadInFlight = false;
       this.d.estado.loading = false;
-      this.d.estado.qhMsg = 'não foi possível carregar';
+      this.d.estado.qhMsg = m.quiet_erro_carregar();
     });
     try {
       const result = alvo.mode === 'server'
@@ -207,7 +208,7 @@ export class QuietHoursController {
       // Por-servidor NÃO: apiFetchForServer não faz o self-heal de 401 de propósito (não pode
       // derrubar a credencial de outra máquina), então token morto ficaria como "campos vazios"
       // pra sempre — indistinguível de "nunca configurei".
-      if (alvo.mode === 'server') this.d.estado.qhMsg = e instanceof Error ? e.message : 'não foi possível carregar';
+      if (alvo.mode === 'server') this.d.estado.qhMsg = e instanceof Error ? e.message : m.quiet_erro_carregar();
     } finally {
       if (meuWatchdog) clearTimeout(meuWatchdog);
       if (mine === this.generation) {

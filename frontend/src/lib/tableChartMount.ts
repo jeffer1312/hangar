@@ -10,6 +10,7 @@
 // O uPlot entra por import DINÂMICO: estático, os ~66 KB dele iam no pacote inicial de todo mundo,
 // inclusive de quem nunca abre um gráfico (e o recurso nasce desligado). Assim o custo só é pago no
 // primeiro clique em "Gráfico".
+import * as m from '../paraglide/messages';
 import type uPlotTipo from 'uplot';
 import { lerTabela, formatarValor, type TabelaLida } from './tableChart';
 
@@ -118,7 +119,7 @@ export function enhanceTables(raiz: HTMLElement): void {
     const botao = document.createElement('button');
     botao.type = 'button';
     botao.className = 'cp-chart-btn';
-    botao.textContent = 'Gráfico';
+    botao.textContent = m.tabela_botao_grafico();
 
     const seletor = document.createElement('select');
     seletor.className = 'cp-chart-sel';
@@ -159,7 +160,7 @@ export function enhanceTables(raiz: HTMLElement): void {
         palco.hidden = true;
         el.hidden = false;
         seletor.hidden = true;
-        botao.textContent = 'Gráfico';
+        botao.textContent = m.tabela_botao_grafico();
         botao.classList.remove('ativo');
       };
       void desenhar(palco, lida, Number(seletor.value || 0))
@@ -181,7 +182,7 @@ export function enhanceTables(raiz: HTMLElement): void {
       palco.hidden = !aberto;
       el.hidden = aberto;              // tabela e gráfico são a MESMA informação: um de cada vez
       seletor.hidden = !aberto || !temEscolha;
-      botao.textContent = aberto ? 'Tabela' : 'Gráfico';
+      botao.textContent = aberto ? m.tabela_botao_tabela() : m.tabela_botao_grafico();
       botao.classList.toggle('ativo', aberto);
       render();
     });

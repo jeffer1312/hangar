@@ -4,6 +4,7 @@
   import { getPushSettings, getPushSettingsForServer, setQuietHours, setQuietHoursForServer } from '../lib/api';
   import { QuietHoursController, type PushTarget, type QuietState } from '../lib/quietHours';
   import type { Server } from '../lib/auth';
+  import * as m from '../paraglide/messages';
 
   // Ativação de push + horas silenciosas, com alvo explícito: global (desktop), servidor específico
   // (drawer mobile) ou indisponível (sem servidor resolvido — campos desabilitados). Extraído do
@@ -32,9 +33,9 @@
     pushMsg = '';
     try {
       const n = await enablePush();
-      pushMsg = `Ativado em ${n} servidor${n > 1 ? 'es' : ''}.`;
+      pushMsg = n === 1 ? m.push_ativado_em_1() : m.push_ativado_em_n({ n });
     } catch (e) {
-      pushMsg = e instanceof Error ? e.message : 'Erro ao ativar.';
+      pushMsg = e instanceof Error ? e.message : m.push_erro_ativar();
     } finally {
       pushBusy = false;
     }
@@ -65,19 +66,19 @@
 
 <button class="pq-item" type="button" role={menuitem ? 'menuitem' : undefined} onclick={handleEnablePush} disabled={pushBusy}>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
-  {pushBusy ? 'Ativando…' : 'Ativar notificações em todos os servidores'}
+  {pushBusy ? m.push_ativando() : m.push_ativar_todos()}
 </button>
 {#if pushMsg}<div class="pq-msg" role="status">{pushMsg}</div>{/if}
 <div class="pq-quiet">
   <div class="pq-quiet-head">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></svg>
-    <span>Horas silenciosas</span>
+    <span>{m.push_horas_silenciosas()}</span>
   </div>
   <div class="pq-quiet-row">
-    <input type="time" bind:value={estado.qhStart} aria-label="Início do silêncio" disabled={target.mode === 'unavailable' || estado.loading || estado.saving} />
-    <span>e</span>
-    <input type="time" bind:value={estado.qhEnd} aria-label="Fim do silêncio" disabled={target.mode === 'unavailable' || estado.loading || estado.saving} />
-    <button class="pq-quiet-save" onclick={() => void ctrl.save()} disabled={target.mode === 'unavailable' || estado.loading || estado.saving}>Salvar</button>
+    <input type="time" bind:value={estado.qhStart} aria-label={m.push_inicio_silencio()} disabled={target.mode === 'unavailable' || estado.loading || estado.saving} />
+    <span>{m.push_e()}</span>
+    <input type="time" bind:value={estado.qhEnd} aria-label={m.push_fim_silencio()} disabled={target.mode === 'unavailable' || estado.loading || estado.saving} />
+    <button class="pq-quiet-save" onclick={() => void ctrl.save()} disabled={target.mode === 'unavailable' || estado.loading || estado.saving}>{m.ctx_salvar()}</button>
   </div>
   {#if estado.qhMsg}<div class="pq-msg" role="status">{estado.qhMsg}</div>{/if}
 </div>

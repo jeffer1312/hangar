@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import Chat from '../screens/Chat.svelte';
 
@@ -20,9 +21,9 @@
        muda — mesma razão do {#key} do overlay em DesktopShell.svelte:212. Como o modal é um só
        (`name` é string|null, nunca lista), no máximo 2 SSE ficam abertos: o chat de trás e este. -->
   {#key name}
-    <ModalDialog open={true} ariaLabel={`Sessão ${name}`} className="pair-chat-dialog" onClose={onClose}>
+    <ModalDialog open={true} ariaLabel={m.par_sessao({ nome: name })} className="pair-chat-dialog" onClose={onClose}>
       <div class="pcm">
-        <button class="pcm-close" onclick={onClose} aria-label="Fechar" title="Fechar (Esc)">×</button>
+        <button class="pcm-close" onclick={onClose} aria-label={m.sessao_fechar()} title={m.shell_fechar_esc()}>×</button>
         <Chat
           sessionName={name}
           {desktop}

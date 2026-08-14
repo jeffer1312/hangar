@@ -6,6 +6,7 @@
   import { syncStatus, register as syncRegister, login as syncLogin } from '../lib/sync';
   import QrScanner from '../components/QrScanner.svelte';
   import HangarIntro from '../components/icons/HangarIntro.svelte';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     onLogin: () => void;
@@ -46,8 +47,8 @@
     if (!pareamento) {
       erroValidacao = true;
       error = cru.includes('://')
-        ? 'QR inválido — use a URL de pareamento (http/https com ?token=).'
-        : 'QR sem URL — escaneie a URL de pareamento do servidor.';
+        ? m.lista_qr_invalido()
+        : m.login_qr_sem_url();
       return;
     }
     baseUrl = pareamento.base;
@@ -66,8 +67,8 @@
     if (!pareamento) {
       erroValidacao = true;
       error = !base || !tok
-        ? 'Informe a URL do servidor e o token.'
-        : 'URL ou token inválidos — use http/https com o token (sem espaços).';
+        ? m.login_informe_url_token()
+        : m.login_url_token_invalidos();
       return;
     }
 
@@ -81,15 +82,15 @@
     try {
       const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
       if (!r.succeeded) {
-        error = 'URL ou token inválidos — use http/https com o token (sem espaços).';
+        error = m.login_url_token_invalidos();
         return;
       }
       onLogin();
     } catch (err) {
       erroValidacao = false;   // erro de REDE: visível, mas não marca campo
       error = err instanceof Error
-        ? `Falha na conexão: ${err.message}`
-        : 'Erro desconhecido';
+        ? `${m.falha_conexao()}: ${err.message}`
+        : m.erro_desconhecido();
     } finally {
       loading = false;
     }
@@ -114,7 +115,7 @@
       await onSyncLogin?.(encKey);
       onLogin();
     } catch (err) {
-      syncError = err instanceof Error ? err.message : 'falha';
+      syncError = err instanceof Error ? err.message : m.login_falha();
     } finally {
       syncLoading = false;
     }
@@ -139,7 +140,7 @@
       // preenche campos e NÃO conecta — erro visível com retry manual. erroValidacao associa o
       // erro aos campos (aria-invalid/aria-describedby) e o $effect foca o primeiro inválido.
       erroValidacao = true;
-      error = 'Deep-link de pareamento inválido — o link tem token/api duplicados ou api vazia.';
+      error = m.login_deeplink_invalido();
       return;
     }
     // baseUrl ABSOLUTO = ?api= ou a origem onde o app foi aberto (ex: https://casa.ts.net).
@@ -155,21 +156,21 @@
   <div class="login-content">
     <div class="app-mark"><HangarIntro size={64} /></div>
     <h1 class="app-name">Hangar</h1>
-    <p class="app-tagline">Controle suas sessões de qualquer lugar</p>
+    <p class="app-tagline">{m.login_tagline()}</p>
 
     {#if syncMode}
       <form onsubmit={doSyncSubmit} class="login-form">
         <div class="field">
-          <label class="field-label" for="sync-user">Usuário</label>
+          <label class="field-label" for="sync-user">{m.login_usuario()}</label>
           <input id="sync-user" class="field-input" bind:value={user} autocomplete="username" autocapitalize="off" spellcheck={false} required />
         </div>
         <div class="field">
-          <label class="field-label" for="sync-pass">Senha</label>
+          <label class="field-label" for="sync-pass">{m.login_senha()}</label>
           <input id="sync-pass" type="password" class="field-input" bind:value={password} autocomplete="current-password" required />
         </div>
         {#if !syncMode.registered}
           <div class="field">
-            <label class="field-label" for="sync-boot">Token de ativação (primeiro acesso)</label>
+            <label class="field-label" for="sync-boot">{m.login_token_ativacao()}</label>
             <input id="sync-boot" type="password" class="field-input" bind:value={bootstrap} required />
           </div>
         {/if}
@@ -177,13 +178,13 @@
           <p class="error-msg" role="alert">{syncError}</p>
         {/if}
         <button type="submit" class="connect-btn" disabled={syncLoading || !user.trim() || !password}>
-          {syncLoading ? 'Entrando…' : (syncMode.registered ? 'Entrar' : 'Criar acesso')}
+          {syncLoading ? m.login_entrando() : (syncMode.registered ? m.login_entrar() : m.login_criar_acesso())}
         </button>
       </form>
     {:else}
     <form onsubmit={handleSubmit} class="login-form" bind:this={loginFormEl}>
       <div class="field">
-        <label class="field-label" for="base-url">URL do servidor</label>
+        <label class="field-label" for="base-url">{m.sessao_url_servidor()}</label>
         <input
           id="base-url"
           type="url"
@@ -201,7 +202,7 @@
       </div>
 
       <div class="field">
-        <label class="field-label" for="token">Token</label>
+        <label class="field-label" for="token">{m.sessao_token()}</label>
         <input
           id="token"
           type="password"
@@ -224,11 +225,11 @@
         class="connect-btn"
         disabled={loading || !token.trim()}
       >
-        {loading ? 'Conectando…' : 'Conectar'}
+        {loading ? m.login_conectando() : m.login_conectar()}
       </button>
 
       <button type="button" class="scan-btn" onclick={() => (scanning = true)}>
-        Escanear QR
+        {m.sessao_escanear_qr()}
       </button>
     </form>
     {/if}

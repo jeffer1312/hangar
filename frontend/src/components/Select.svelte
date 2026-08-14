@@ -8,6 +8,7 @@
   // Aqui a lista é HTML comum, em portal pro <body> com posição calculada: cabe na viewport, escolhe
   // o lado por espaço real, e segue o tema. Bônus que o nativo não dá: filtro por digitação, que num
   // combo de 20 modelos com nomes parecidos (deepseek-v4-flash / -pro) é o que evita erro de clique.
+  import * as m from '../paraglide/messages';
   interface Opcao {
     value: string;
     label: string;
@@ -176,7 +177,7 @@
         bind:this={campoFiltro}
         class="sel-filtro"
         type="text"
-        placeholder="filtrar…"
+        placeholder={m.select_filtrar()}
         autocapitalize="off"
         spellcheck="false"
         role="combobox"
@@ -211,7 +212,7 @@
           {#if o.hint}<span class="sel-item-hint">{o.hint}</span>{/if}
         </button>
       {:else}
-        <p class="sel-vazio">nada encontrado</p>
+        <p class="sel-vazio">{m.select_nada_encontrado()}</p>
       {/each}
     </div>
   </div>

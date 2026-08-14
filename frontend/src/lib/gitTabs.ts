@@ -6,12 +6,14 @@
 // A aba ativa e guardada por ID, nunca por indice: mexer na lista de abas nao pode trocar a aba
 // ativa debaixo do usuario (mesma classe do plan_name no _list_sig).
 
+import * as m from '../paraglide/messages';
+
 export type GitTabId = 'changes' | 'history' | 'branches';
 
 export const GIT_TABS = [
-  { id: 'changes',  label: 'Mudanças',  maxLevel: 1 },
-  { id: 'history',  label: 'Histórico', maxLevel: 2 },
-  { id: 'branches', label: 'Branches',  maxLevel: 0 },
+  { id: 'changes',  label: m.git_aba_mudancas(),  maxLevel: 1 },
+  { id: 'history',  label: m.git_aba_historico(), maxLevel: 2 },
+  { id: 'branches', label: m.git_aba_branches(),  maxLevel: 0 },
 ] as const satisfies readonly { id: GitTabId; label: string; maxLevel: number }[];
 
 export interface GitNav {

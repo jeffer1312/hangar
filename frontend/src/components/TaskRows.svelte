@@ -8,6 +8,7 @@
   // Medidas do original (computed style): cápsula de 44px, respiro 10px, gap 10px entre os itens,
   // raio 22px fechada e 14px aberta, distintivo de 24px, rótulo 13px/500, etiqueta 22px.
   import type { Task } from '../lib/tasks';
+  import * as m from '../paraglide/messages';
 
   interface Props {
     tasks: Task[];
@@ -45,7 +46,7 @@
       >
         <span class="tr-marca">
           {#if t.status === 'completed'}
-            <span class="tr-selo tr-selo--ok" aria-label="concluída">
+            <span class="tr-selo tr-selo--ok" aria-label={m.tasks_concluida()}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M20 6L9 17l-5-5" />
@@ -71,7 +72,7 @@
         </span>
 
         {#if t.status === 'completed'}
-          <span class="tr-etiqueta">Concluída</span>
+          <span class="tr-etiqueta">{m.tasks_concluida()}</span>
         {/if}
 
         <span class="tr-chevron" class:open={aberta} aria-hidden="true">
@@ -83,7 +84,7 @@
       <!-- Mesma gramática de expandir do resto: grid 0fr -> 1fr, sem medir altura no JS. -->
       <div class="tr-wrap" style:grid-template-rows={aberta ? '1fr' : '0fr'} style:opacity={aberta ? 1 : 0}>
         <div class="tr-clip">
-          <div class="tr-detalhe">{t.description || 'sem descrição'}</div>
+          <div class="tr-detalhe">{t.description || m.tasks_sem_descricao()}</div>
         </div>
       </div>
     </div>

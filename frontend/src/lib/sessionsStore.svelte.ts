@@ -5,6 +5,7 @@
 // Nota (architect): nas trocas board↔canvas↔chat do desktop o refcount nunca toca 0 porque a Sidebar
 // fica montada o tempo todo segurando 1 retain — não há fecha-e-reabre de streams. Se um dia nenhum
 // consumidor ficar permanentemente montado, considerar um keep-alive com delay no release.
+import * as m from '../paraglide/messages';
 import { openSessionsStream } from './api';
 import { listServers, onServersChanged, type Server } from './auth';
 import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from './sessions';
@@ -98,7 +99,7 @@ function createSessionsStore() {
       // indistinguível de zero sessões. Mantém a última lista boa; o erro aparece distinto de offline.
       es.addEventListener('list_error', () => {
         arm();   // conexão está viva — só o produtor de dados falhou
-        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'erro no servidor' });
+        slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: m.sessao_erro_servidor() });
         recompute();
       });
       es.onerror = () => {

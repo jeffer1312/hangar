@@ -7,6 +7,8 @@
 // eles leem como retângulo escuro em vez de material. E o grão mata o banding que gradiente escuro
 // produz em tela de 8 bits.
 
+import * as m from '../paraglide/messages';
+
 export type BgPref = 'flat' | 'texture' | 'aurora' | 'image' | 'desktop';
 
 // Marca injetada pelo processo main do shell (shell/main.cjs) via app.userAgentFallback.
@@ -149,7 +151,7 @@ export async function setBgImage(file: File): Promise<void> {
     if (dataUrl.length <= TETO_CHARS) break;
   }
   if (dataUrl.length > TETO_CHARS) {
-    throw new Error('imagem grande demais mesmo depois de reduzir');
+    throw new Error(m.fundo_imagem_grande());
   }
   localStorage.setItem(IMG_KEY, dataUrl);
   setBgPref('image');
@@ -306,10 +308,10 @@ export function getReadMode(): ReadMode {
   return v === 'glass' || v === 'solid' || v === 'text' ? v : 'auto';
 }
 
-export function setReadMode(m: ReadMode): void {
+export function setReadMode(modo: ReadMode): void {
   try {
-    if (m === 'auto') localStorage.removeItem(READ_KEY);
-    else localStorage.setItem(READ_KEY, m);
+    if (modo === 'auto') localStorage.removeItem(READ_KEY);
+    else localStorage.setItem(READ_KEY, modo);
   } catch { /* modo privado */ }
   aplicarLeitura();
 }
@@ -351,12 +353,12 @@ export function setTextBoost(v: number): void {
 
 function aplicarLeitura(): void {
   if (typeof document === 'undefined') return;
-  const m = getReadMode();
+  const modo = getReadMode();
   // 'auto' liga o modo TEXTO (o mais leve) e só quando há foto — sem imagem não há o que resolver.
   // Desktop conta como fundo ocupado pelo mesmo motivo da foto: atrás do texto tem a área de
   // trabalho de quem usa, que pode ser tão movimentada quanto uma imagem.
   const fundoOcupado = getBgPref() === 'image' || getBgPref() === 'desktop';
-  const efetivo = m === 'auto' ? (fundoOcupado ? 'text' : null) : (m === 'glass' ? null : m);
+  const efetivo = modo === 'auto' ? (fundoOcupado ? 'text' : null) : (modo === 'glass' ? null : modo);
   const raiz = document.documentElement;
   if (efetivo) {
     raiz.dataset.read = efetivo;
@@ -479,26 +481,26 @@ function lerEscala(chave: string): number {
   return Number.isFinite(v) && v >= 50 && v <= 150 ? v : 100;
 }
 
-export function getMedidaTexto(m: MedidaTexto): number {
-  return lerEscala(TEXTO_KEYS[m]);
+export function getMedidaTexto(modo: MedidaTexto): number {
+  return lerEscala(TEXTO_KEYS[modo]);
 }
 
-export function setMedidaTexto(m: MedidaTexto, v: number): void {
+export function setMedidaTexto(modo: MedidaTexto, v: number): void {
   const n = Math.max(50, Math.min(150, Math.round(v)));
   try {
     // 100 e o padrao e NAO grava chave — mesma convencao do tema, da fonte e dos paineis: so o
     // desvio persiste, entao quem nunca abriu isto continua exatamente como estava.
-    if (n === 100) localStorage.removeItem(TEXTO_KEYS[m]);
-    else localStorage.setItem(TEXTO_KEYS[m], String(n));
+    if (n === 100) localStorage.removeItem(TEXTO_KEYS[modo]);
+    else localStorage.setItem(TEXTO_KEYS[modo], String(n));
   } catch { /* modo privado */ }
   // Mesmo motivo do setSurfaceSolid: gravacao que falha calada nao pode deixar a tela no valor
   // velho enquanto o slider mostra o novo.
-  aplicarTexto({ [m]: n });
+  aplicarTexto({ [modo]: n });
 }
 
 function aplicarTexto(over?: Partial<Record<MedidaTexto, number>>): void {
   if (typeof document === 'undefined') return;
-  const val = (m: MedidaTexto) => over?.[m] ?? getMedidaTexto(m);
+  const val = (modo: MedidaTexto) => over?.[modo] ?? getMedidaTexto(modo);
   const raiz = document.documentElement;
   raiz.style.setProperty('--cp-text-scale', (val('size') / 100).toFixed(3));
   raiz.style.setProperty('--cp-lh-scale', (val('lh') / 100).toFixed(3));

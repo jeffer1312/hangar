@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   interface Props { pct: number; complete?: boolean; size?: number }
   let { pct, complete = false, size = 24 }: Props = $props();
   const R = 9;
@@ -17,7 +18,7 @@
 
 <div class="ring" class:done={complete} role="meter"
   aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value)}
-  aria-label={`Progresso do plano: ${Math.round(value)}%`}>
+  aria-label={m.plano_progresso_anel({ pct: Math.round(value) })}>
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r={R} class="track" />
     <circle cx="12" cy="12" r={R} class="arc" stroke-dasharray={C}
