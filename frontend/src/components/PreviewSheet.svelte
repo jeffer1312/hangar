@@ -106,7 +106,7 @@ import * as m from '../paraglide/messages';
         <button class="pv-btn" disabled={busy} onclick={openTunnel}>{m.preview_trocar()}</button>
         <button class="pv-btn danger" disabled={busy} onclick={stopTunnel}>{m.preview_parar()}</button>
       {:else}
-        <button class="pv-btn accent" disabled={busy || loading} onclick={openTunnel}>{m.preview_abrir()}</button>
+        <button class="pv-btn accent" disabled={busy || loading} onclick={openTunnel}>{m.paleta_abrir()}</button>
       {/if}
     </div>
 
@@ -128,9 +128,9 @@ import * as m from '../paraglide/messages';
         {/key}
       {/if}
     {:else if loading}
-      <p class="pv-muted">{m.preview_carregando()}</p>
+      <p class="pv-muted">{m.board_carregando()}</p>
     {:else}
-      <p class="pv-muted">{m.preview_vazio()} <b>{m.preview_abrir()}</b>.</p>
+      <p class="pv-muted">{m.preview_vazio()} <b>{m.paleta_abrir()}</b>.</p>
     {/if}
 
     {#if error}<p class="pv-error">{error}</p>{/if}

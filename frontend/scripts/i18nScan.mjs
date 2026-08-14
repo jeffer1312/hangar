@@ -79,11 +79,15 @@ export function escanearArquivo(caminho, fonte, permitidas = new Set()) {
   const corpos = caminho.endsWith('.svelte') ? scripts : [fonte];
   for (const corpo of corpos) {
     const semImport = corpo.replace(/^\s*import .*$/gm, '');
-    // Comentario de bloco sai inteiro; comentario de linha so quando ocupa a linha sozinho (ver
-    // cabecalho do arquivo: o `//` no fim de codigo nao e cortado, pra nao comer https://…).
+    // Comentario de linha sai primeiro (so quando ocupa a linha sozinho; ver cabecalho: o `//` no
+    // fim de codigo nao e cortado, pra nao comer https://…). A ORDEM importa: um `/*` dentro de
+    // comentario de linha (ex: "audio/*") abriria um bloco fantasma que engole codigo ate o
+    // proximo `*/` real — medido em 13/08/2026 (2 console.* do Composer sumiam do scan).
+    // Limitacao residual: `/*` dentro de STRING/template (ex: "audio/*") continua abrindo
+    // fantasma — a parede de visao da Task 12 e a rede.
     const semComentario = semImport
-      .replace(/\/\*[\s\S]*?\*\//g, ' ')
-      .replace(/^\s*\/\/.*$/gm, '');
+      .replace(/^\s*\/\/.*$/gm, '')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ');
     for (const m of semComentario.matchAll(/'([^'\\\n]{3,200})'|"([^"\\\n]{3,200})"|`([^`\\$\n]{3,200})`/g)) {
       const t = pareceTexto(m[1] ?? m[2] ?? m[3], permitidas);
       if (t) achados.push(t);

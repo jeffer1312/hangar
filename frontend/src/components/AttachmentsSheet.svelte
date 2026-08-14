@@ -89,12 +89,12 @@
               </button>
             {:else if kind === 'video'}
               <!-- #t=0.1: media fragment -> o browser (inclusive iOS) busca o 1o frame pro thumb -->
-              <a class="tile" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label={m.anexos_abrir({ n: f.filename })}>
+              <a class="tile" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label={m.compare_abrir({ n: f.filename })}>
                 <video class="media" src={url(f) + '#t=0.1'} preload="metadata" muted playsinline></video>
                 <span class="play" aria-hidden="true">▶</span>
               </a>
             {:else}
-              <a class="tile chip" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label={m.anexos_abrir({ n: f.filename })}>
+              <a class="tile chip" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label={m.compare_abrir({ n: f.filename })}>
                 <span class="chip-ico" aria-hidden="true">{icone(f)}</span>
               </a>
             {/if}

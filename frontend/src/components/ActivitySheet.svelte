@@ -283,7 +283,7 @@
                  é onde fica o seletor pra voltar ao automático — desmontaria junto. -->
             {#if showPlan && (session?.plan_name || session?.plan_hidden)}
               <div class="section">
-                <span class="section-label">{m.atividade_plano()}</span>
+                <span class="section-label">{m.ctx_plano()}</span>
                 <PlanPanel {session} detail={planDetail} loading={planLoading} error={planError} />
               </div>
             {/if}
@@ -301,7 +301,7 @@
                         <span class="wf-card-name">{w.name}</span>
                         <span class="wf-card-meta">{w.agentCount} {m.atividade_agentes()} · {fmtTokens(w.totalTokens)} {m.ctx_tokens()}{w.phaseCount ? ` · ${w.phaseCount} ${m.atividade_fases_curto()}` : ''}</span>
                       </div>
-                      <span class="wf-card-badge" class:running={w.running}>{w.running ? m.estado_em_execucao() : m.estado_pronto()}</span>
+                      <span class="wf-card-badge" class:running={w.running}>{w.running ? m.atividade_rodando() : m.atividade_concluido()}</span>
                       <span class="row-chevron" aria-hidden="true">›</span>
                     </button>
                   {/each}

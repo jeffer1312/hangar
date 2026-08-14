@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
+  import * as m from '../paraglide/messages';
   import { summarizeToolInput, toolGroupCounts, toolGroupLabel, toolPhase } from '../lib/format';
   import { computeEditDiff, extractEdits, extractFilePath } from '../lib/editdiff';
   import { toolLook } from '../lib/toolLook.svelte';
@@ -29,7 +30,7 @@
   const anyError = $derived(phases.includes('error'));
   // Todas do mesmo tipo -> o nome ja esta no cabecalho e some de cada filho (o que a arvore do Pi
   // faz); misturadas -> cada filho carrega o proprio nome, senao a linha vira um path sem dono.
-  const mixed = $derived(label === 'Ferramentas');
+  const mixed = $derived(label === m.formato_ferramentas());
 
   // Faixa de chips de diff (pele 'chips'): o resumo dos ARQUIVOS que a rodada tocou, com +add/-del,
   // que a pele classica nao tem — hoje o diff so existe dentro de cada Edit, e uma rodada de 8
@@ -84,7 +85,7 @@
   >
     {#if toolLook.look === 'chips'}
       <!-- Cabeçalho da pele 'chips': chevron + contagem, e mais nada — no original a linha é limpa
-           e o próprio chevron ensina que abre. A bolinha de estado e a dica "clique para ver" da
+           e o próprio chevron ensina que abre. A bolinha de estado e a dica de expandir/ocultar da
            pele clássica sairiam de cena aqui, então o ERRO ganha a cor no lugar da bolinha. -->
       <svg class="tg-chevron" class:open={expanded} width="12" height="12" viewBox="0 0 24 24"
            fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
@@ -97,8 +98,8 @@
       <span class="tg-counts">{counts}</span>
       <span class="tg-hint">
         <span class="sep" aria-hidden="true">•</span>
-        <span class="coarse">{expanded ? 'toque para ocultar' : 'toque para ver'}</span><span
-              class="fine">{expanded ? 'clique para ocultar' : 'clique para ver'}</span>
+        <span class="coarse">{expanded ? m.tool_toque_ocultar() : m.tool_toque_ver()}</span><span
+              class="fine">{expanded ? m.tool_clique_ocultar() : m.tool_clique_ver()}</span>
       </span>
     {/if}
   </div>
@@ -121,7 +122,7 @@
               {#if d.del > 0}<span class="dchip-del">−{d.del}</span>{/if}
             </span>
           {/each}
-          {#if chipsOcultos > 0}<span class="dchip-mais">+{chipsOcultos} outro{chipsOcultos > 1 ? 's' : ''}</span>{/if}
+          {#if chipsOcultos > 0}<span class="dchip-mais">+{chipsOcultos} {chipsOcultos > 1 ? m.tool_outros() : m.tool_outro_1()}</span>{/if}
         </div>
       {/if}
     </div>

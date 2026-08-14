@@ -1,5 +1,6 @@
 <script lang="ts">
   import AskQuestionStepper from './AskQuestionStepper.svelte';
+  import * as m from '../paraglide/messages';
   import type { AskQuestionPayload, AnswerItem } from '../lib/types';
 
   // Container desktop: card inline no fluxo do chat (sem backdrop/modal) — o contexto acima
@@ -14,7 +15,7 @@
 </script>
 
 {#if open}
-  <div class="ask-card" role="group" aria-label="Perguntas">
+  <div class="ask-card" role="group" aria-label={m.ask_perguntas()}>
     <AskQuestionStepper {open} {payload} {onSubmit} {onClose} />
   </div>
 {/if}

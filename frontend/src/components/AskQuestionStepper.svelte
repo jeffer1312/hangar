@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import * as m from '../paraglide/messages';
   import type { AnswerItem, AskQuestionPayload } from '../lib/types';
 
   // Estado interno de cada pergunta: opção(ões), texto digitado ou "conversar"
@@ -102,7 +103,7 @@
     try {
       await onSubmit(buildAnswers());
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Erro ao enviar respostas';
+      error = e instanceof Error ? e.message : m.askq_erro_envio();
     } finally {
       sending = false;
     }
@@ -113,7 +114,7 @@
     const p = picks[qi];
     if (!p) return '—';
     if (p.kind === 'text') return p.value;
-    if (p.kind === 'chat') return 'Conversar';
+    if (p.kind === 'chat') return m.askq_conversar();
     const q = questions[qi];
     if (!q) return '—';
     return p.indices.map((i) => q.options[i]?.label ?? '').filter(Boolean).join(', ') || '—';
@@ -129,7 +130,7 @@
 
   <div class="step-nav">
     {#if step > 0}
-      <button class="back-link" onclick={goBack}>‹ Voltar</button>
+      <button class="back-link" onclick={goBack}>{'‹ '}{m.comum_voltar()}</button>
     {:else}
       <span></span>
     {/if}
@@ -166,14 +167,14 @@
 
   {#if q.multiSelect && !textOpen}
     <button class="primary-btn" onclick={advance} disabled={selectedIndices.length === 0}>
-      Próximo
+      {m.askq_proximo()}
     </button>
   {/if}
 
   {#if !textOpen}
     <div class="escapes">
-      <button class="ghost-btn" onclick={() => (textOpen = true)}>✎ Digitar resposta</button>
-      <button class="ghost-btn" onclick={setChat}>💬 Conversar sobre isso</button>
+      <button class="ghost-btn" onclick={() => (textOpen = true)}>{m.askq_digitar_resposta()}</button>
+      <button class="ghost-btn" onclick={setChat}>{m.askq_conversar_sobre()}</button>
     </div>
   {:else}
     <div class="text-escape">
@@ -182,19 +183,19 @@
         type="text"
         class="field-input"
         bind:value={textValue}
-        placeholder="Sua resposta…"
+        placeholder={m.askq_sua_resposta()}
         autofocus
       />
       <div class="text-actions">
-        <button class="primary-btn" onclick={confirmText} disabled={!textValue.trim()}>Confirmar</button>
-        <button class="ghost-btn" onclick={() => { textOpen = false; textValue = ''; }}>Cancelar</button>
+        <button class="primary-btn" onclick={confirmText} disabled={!textValue.trim()}>{m.comum_confirmar()}</button>
+        <button class="ghost-btn" onclick={() => { textOpen = false; textValue = ''; }}>{m.comum_cancelar()}</button>
       </div>
     </div>
   {/if}
 
 {:else if questions.length > 0}
   <!-- Revisão das respostas antes de enviar -->
-  <h2 class="sheet-title">Revisar respostas</h2>
+  <h2 class="sheet-title">{m.askq_revisar()}</h2>
 
   <div class="review-list">
     {#each questions as q, qi}
@@ -210,9 +211,9 @@
   {/if}
 
   <button class="primary-btn" onclick={submit} disabled={sending}>
-    {sending ? 'Enviando…' : 'Enviar'}
+    {sending ? m.askq_enviando() : m.lista_enviar()}
   </button>
-  <button class="ghost-btn" onclick={onClose}>Cancelar</button>
+  <button class="ghost-btn" onclick={onClose}>{m.comum_cancelar()}</button>
 {/if}
 
 <style>

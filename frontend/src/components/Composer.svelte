@@ -590,7 +590,7 @@
       autoGrow();
       textareaEl?.focus();
     } catch (err) {
-      console.error('transcrição falhou', err);
+      console.error(m.composer_transcricao_falhou(), err);
       cancelarContagem();   // erro de transcricao nunca inicia contagem
       const status = (err as { status?: number } | null)?.status;
       // Sem o ditado ao vivo, ficar sem chave da Groq passa a significar SEM DITADO NENHUM -> avisa
@@ -630,7 +630,7 @@
     // Maos-livres: o contexto foi destravado pelo toque no mic e ainda vai tocar os bipes depois da
     // gravacao. Fechar aqui deixaria o aviso sonoro mudo no iPhone. Quem fecha e o fecharBipes().
     if (!maosLivres) {
-      audioCtx?.close().catch((err) => console.warn('audioCtx.close falhou', err));
+      audioCtx?.close().catch((err) => console.warn(m.composer_audiocontext_close_falhou(), err));
       audioCtx = undefined;
     }
     recStream?.getTracks().forEach((t) => t.stop());
@@ -1090,7 +1090,7 @@
                 <span class="attach-file-name">{a.file.name}</span>
               </span>
             {/if}
-            <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label={m.composer_remover_anexo()}>×</button>
+            <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label={m.board_remover_anexo()}>×</button>
           </div>
         {/each}
         {#if uploading}<span class="attach-status">{m.composer_enviando()}</span>{/if}
@@ -1138,7 +1138,7 @@
     {#if transcribing}
       <div class="rec-hint" role="status" aria-label={m.composer_transcrevendo_audio()}>
         <span class="rec-dot" aria-hidden="true"></span>
-        <span class="rec-time">{m.composer_transcrevendo_curto()}</span>
+        <span class="rec-time">{m.board_transcrevendo()}</span>
       </div>
     {/if}
     {#if contagem !== null}

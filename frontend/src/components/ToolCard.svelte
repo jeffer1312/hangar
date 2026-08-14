@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChatEvent } from '../lib/types';
+  import * as m from '../paraglide/messages';
   import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase } from '../lib/format';
   import { extractEdits, extractFilePath } from '../lib/editdiff';
   import { toolLook } from '../lib/toolLook.svelte';
@@ -117,8 +118,8 @@
              fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"
              stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
       </span>
-      <span class="tc-label">{event.tool_name ?? 'Tool'}</span>
-      {#if isBackground}<span class="tr-badge">background</span>{/if}
+      <span class="tc-label">{event.tool_name ?? m.formato_tool_generico()}</span>
+      {#if isBackground}<span class="tr-badge">{m.tool_background()}</span>{/if}
       <!-- O chip TOMA o resto da linha (flex:1), como no original — é o que dá o desenho; pílula do
            tamanho do texto deixa a linha frouxa e desalinhada entre chamadas. Sem argumento ele
            some e o desfecho ocupa o lugar, senão sobra um retângulo vazio. -->
@@ -159,8 +160,8 @@
 >
   <div class="tr-call">
     <span class="tr-dot" class:pending={phase === 'pending'} data-phase={phase} aria-hidden="true"></span>
-    <span class="tr-name">{event.tool_name ?? 'Tool'}</span>
-    {#if isBackground}<span class="tr-badge">background</span>{/if}
+    <span class="tr-name">{event.tool_name ?? m.formato_tool_generico()}</span>
+    {#if isBackground}<span class="tr-badge">{m.tool_background()}</span>{/if}
     {#if summary}<span class="tr-arg" class:open={expanded}>{summary}</span>{/if}
   </div>
 
@@ -170,8 +171,8 @@
     {#if result?.result || showDiff}
       <span class="tr-hint">
         <span class="sep" aria-hidden="true">•</span>
-        <span class="coarse">{expanded ? 'toque para ocultar' : 'toque para ver'}</span><span
-              class="fine">{expanded ? 'clique para ocultar' : 'clique para ver'}</span>
+        <span class="coarse">{expanded ? m.tool_toque_ocultar() : m.tool_toque_ver()}</span><span
+              class="fine">{expanded ? m.tool_clique_ocultar() : m.tool_clique_ver()}</span>
       </span>
     {/if}
   </div>
