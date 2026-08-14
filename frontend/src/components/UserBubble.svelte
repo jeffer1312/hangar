@@ -1,5 +1,6 @@
 <script lang="ts">
 import { intlLocale } from '../lib/locale';
+import * as m from '../paraglide/messages';
   interface Props {
     text: string;
     ts?: number | null;
@@ -29,10 +30,10 @@ import { intlLocale } from '../lib/locale';
     class:group={scope === 'group'}
   >
     {#if from}
-      {@const label = scope === 'group' ? `📣 grupo · ${from}` : `📟 de: ${from}`}
+      {@const label = scope === 'group' ? m.board_peer_grupo({ n: from }) : m.board_peer_de({ n: from })}
       {#if onOpenPeer}
         <button class="peer-chip peer-chip--link" onclick={onOpenPeer}
-                title={`Abrir o chat de ${from}`}>{label} ›</button>
+                aria-label={m.user_abrir_chat_de({ n: from })} title={m.user_abrir_chat_de({ n: from })}>{label} ›</button>
       {:else}
         <span class="peer-chip">{label}</span>
       {/if}
@@ -45,7 +46,7 @@ import { intlLocale } from '../lib/locale';
         <span class="ts">{formatTime(ts)}</span>
       {/if}
       {#if onForward}
-        <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
+        <button class="msg-fwd" onclick={onForward} aria-label={m.forward_para_outra()} title={m.forward_para_outra()}></button>
       {/if}
     </div>
   {/if}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../paraglide/messages';
   interface Props {
     question: string;
     options: string[];
@@ -26,7 +27,7 @@
 
 <div class="options-wrap">
   {#if isPermission}
-    <span class="perm-chip">🔐 Pedido de permissão</span>
+    <span class="perm-chip">{m.permissao_pedido()}</span>
   {/if}
   <p class="question">
     <!-- Trechos entre crases (comando/arquivo do pedido) viram <code> — legivel no celular. -->
@@ -52,7 +53,7 @@
       onclick={onCancel}
     >
       <span class="opt-num">✕</span>
-      <span class="opt-text">Cancelar</span>
+      <span class="opt-text">{m.comum_cancelar()}</span>
     </button>
   </div>
 </div>

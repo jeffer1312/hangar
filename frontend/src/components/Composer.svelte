@@ -16,6 +16,7 @@
 
 <script lang="ts">
   import { tick, onDestroy } from 'svelte';
+  import * as m from '../paraglide/messages';
   import { novoEstadoVad, passoVad } from '../lib/vad';
   import type { EstadoVad } from '../lib/vad';
   import { lerMaosLivres } from '../lib/maosLivres';
@@ -99,9 +100,9 @@
     cacheAtivo && !!lastCache && cacheLeftS <= Math.max(60, lastCache.ttl * 0.2),
   );
   const cacheLabel = $derived.by(() => {
-    if (!cacheAtivo) return 'expirou';
-    const m = Math.ceil(cacheLeftS / 60);
-    return m >= 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}` : `${m}min`;
+    if (!cacheAtivo) return m.composer_expirou();
+    const min = Math.ceil(cacheLeftS / 60);
+    return min >= 60 ? `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}` : `${min}min`;
   });
 
   const isCodex = $derived(provider === 'codex');
@@ -263,7 +264,7 @@
     // em voo). Quem esta na mesa ve o texto parado; quem dirige, nao. Regra do projeto: falha
     // aparece, nao some.
     if (!canSend) {
-      recError = 'Não deu para enviar sozinho — toque em enviar';
+      recError = m.composer_nao_enviou_sozinho();
       somRecusa();
       setTimeout(fecharBipes, 400);
       return;
@@ -402,8 +403,8 @@
   // Reconciliacao do modelo: quando o statusline confirma a escolha (substring match),
   // solta a escolha otimista pra que mudancas feitas direto no terminal reaparecam.
   $effect(() => {
-    const m = status?.model?.toLowerCase();
-    if (chosenModel && m && m.includes(chosenModel.toLowerCase())) {
+    const modelo = status?.model?.toLowerCase();
+    if (chosenModel && modelo && modelo.includes(chosenModel.toLowerCase())) {
       chosenModel = null;
     }
   });
@@ -540,14 +541,14 @@
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
     // (ex: multi-selecao no picker) cai aqui e avisa em vez de correr concorrente e pisar no estado
     // compartilhado (transcribing/recError/inputText) — que sairia fora de ordem.
-    if (transcribing) { recError = 'Aguarde a transcrição atual terminar'; return; }
+    if (transcribing) { recError = m.composer_aguarde_transcricao(); return; }
     transcribing = true;
     recError = '';
     try {
       const { text, raw, aviso } = await transcribeFile(sessionName, file, { limpar: !!opts?.ditado });
       const t = text.trim();
       if (!t) {
-        recError = 'Transcrição vazia — grave de novo';
+        recError = m.composer_transcricao_vazia();
         // Ditado do mic: falou, ouviu a gravacao encerrar sozinha e nada vai acontecer -- mesmo
         // aviso sonoro dos outros motivos de supressao. So ditado (nao anexo de audio pelo 📎).
         if (opts?.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
@@ -571,7 +572,7 @@
       // Teto (3min sem detectar silencio): diz o motivo provavel em vez de "grave de novo" -- so
       // quando nao ha aviso da limpeza pra mostrar (esse e mais grave, tem prioridade).
       else if (opts?.avisoTeto) {
-        recError = 'Não identifiquei silêncio — muito barulho de fundo? A gravação foi encerrada aos 3 minutos.';
+        recError = m.composer_silencio();
       }
       if (opts?.ditado) {
         if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
@@ -595,8 +596,8 @@
       // Sem o ditado ao vivo, ficar sem chave da Groq passa a significar SEM DITADO NENHUM -> avisa
       // onde resolver, nao so "falhou".
       recError = status === 503
-        ? 'Configure a chave da Groq em Configurações → Anexos e transcrição'
-        : err instanceof Error ? err.message : 'Falha na transcrição';
+        ? m.composer_groq_chave()
+        : err instanceof Error ? err.message : m.composer_falha_transcricao();
       // Mesmo aviso sonoro do ditado que termina sem texto -- inclui o 503 de chave da Groq
       // ausente. So ditado (nao anexo de audio pelo 📎, que nunca teve bipe).
       if (opts?.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
@@ -645,7 +646,7 @@
     const ctx = audioCtx;
     if (!ctx || ctx.state === 'closed') return;   // sem contexto destravado: segue sem som
     try {
-      void ctx.resume().catch((err) => console.warn('audioCtx.resume falhou', err));
+      void ctx.resume().catch((err) => console.warn(m.composer_audiocontext_falhou(), err));
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.frequency.value = freq;
@@ -654,7 +655,7 @@
       osc.start();
       setTimeout(() => { try { osc.stop(); } catch { /* ja parado */ } }, ms);
     } catch (err) {
-      console.warn('bipe falhou', err);
+      console.warn(m.composer_bipes_falhou(), err);
     }
   }
 
@@ -679,7 +680,7 @@
       }
       wakeLock = lock;
     } catch (err) {
-      console.warn('wakeLock indisponível', err);   // degrada: o visibilitychange abaixo cobre
+      console.warn(m.composer_wake_lock(), err);   // degrada: o visibilitychange abaixo cobre
     }
   }
 
@@ -724,7 +725,7 @@
       audioCtx?.close().catch(() => {});
       audioCtx = new AudioContext();
       // iOS: pode iniciar 'suspended' -> waveform ficaria parada. Loga se nao resumir (unica pista).
-      void audioCtx.resume().catch((err) => console.warn('audioCtx.resume falhou', err));
+      void audioCtx.resume().catch((err) => console.warn(m.composer_audiocontext_falhou(), err));
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
       audioCtx.createMediaStreamSource(stream).connect(analyser);
@@ -756,7 +757,7 @@
       };
       rafId = requestAnimationFrame(loop);
     } catch (err) {
-      console.warn('medidor de áudio indisponível', err);
+      console.warn(m.composer_medidor_audio(), err);
       audioCtx?.close().catch(() => {});   // wiring falhou apos criar o ctx -> fecha ja, nao deixa ocioso
       audioCtx = undefined;
     }
@@ -785,14 +786,14 @@
           { ditado: true, avisoTeto: motivoDoFim === 'teto' });
         teardownRecording();
       } else {
-        recError = 'Gravação vazia, tente de novo';
+        recError = m.composer_gravacao_vazia();
         teardownRecording();
       }
     };
     mediaRecorder.onerror = (e) => {
-      console.error('MediaRecorder erro', (e as { error?: unknown }).error ?? e);
+      console.error(m.composer_mediarecorder_erro(), (e as { error?: unknown }).error ?? e);
       recFailed = true;
-      recError = 'Falha na gravação';
+      recError = m.composer_falha_gravacao();
       // Maos-livres: audioCtx ainda esta aberto (teardownRecording so fecha quando !maosLivres) --
       // e o unico caminho de falha do arquivo sem som, entao avisa quem esta dirigindo. Fora do
       // maos-livres o contexto ja fechou e a pessoa esta com o celular na mao, vendo o erro na tela.
@@ -836,11 +837,11 @@
       // zerar starting aqui mataria o hint de uma tentativa NOVA em voo, e o recError seria um
       // erro de algo que o usuario deliberadamente cancelou.
       if (destroyed || geracao !== recGeracao) return;
-      console.error('getUserMedia falhou', err);
+      console.error(m.composer_getusermedia_falhou(), err);
       const name = err instanceof DOMException ? err.name : '';
-      recError = name === 'NotFoundError' ? 'Nenhum microfone encontrado'
-        : name === 'NotReadableError' ? 'Microfone em uso por outro app'
-        : 'Sem acesso ao microfone';
+      recError = name === 'NotFoundError' ? m.composer_sem_microfone()
+        : name === 'NotReadableError' ? m.composer_mic_em_uso()
+        : m.composer_sem_acesso_mic();
       starting = false;
       return;
     }
@@ -868,8 +869,8 @@
       }, 1000);
       startMeter(stream);
     } catch (err) {
-      console.error('início da gravação falhou', err);
-      recError = 'Gravação de áudio não suportada neste navegador';
+      console.error(m.composer_inicio_gravacao_falhou(), err);
+      recError = m.composer_audio_nao_suportado();
       teardownRecording();
       starting = false;
       return;
@@ -947,12 +948,12 @@
           // Encolhe foto/converte HEIC antes de subir. Falhou? prepareImage devolve o original.
           const arquivo = a.isImage ? await prepareImage(a.file) : a.file;
           const { path, frames, transcript } = await uploadFile(sessionName, arquivo);
-          parts.push((a.isImage ? '📎 imagem: ' : '📎 arquivo: ') + path);
+          parts.push((a.isImage ? `📎 ${m.board_imagem()}: ` : `📎 ${m.board_arquivo()}: `) + path);
           // Video: o backend extraiu quadros ao longo da duracao e transcreveu a fala. Os quadros
           // entram como imagens (o Read abre; a lista tambem vira miniatura no chat) e a fala vai
           // como texto — sem isso o mp4 era um caminho que o modelo nao consegue abrir.
-          for (const q of frames ?? []) parts.push('📎 imagem: ' + q);
-          if (transcript) parts.push(`fala do vídeo: "${transcript}"`);
+          for (const q of frames ?? []) parts.push(`📎 ${m.board_imagem()}: ` + q);
+          if (transcript) parts.push(m.composer_fala_video({ texto: transcript }));
         }
         const attachPart = parts.join(' ');
         const msg = (caption ? caption + ' — ' : '') + attachPart;
@@ -962,7 +963,7 @@
         clearAttachments();
       } catch (err) {
         // upload OU envio falhou -> mantem as fotos e o texto, mostra o erro.
-        attachError = err instanceof Error ? err.message : 'Falha no envio';
+        attachError = err instanceof Error ? err.message : m.composer_falha_envio();
         ok = false;
       } finally {
         uploading = false;
@@ -982,7 +983,7 @@
       // falhou -> devolve o texto, MAS so se a caixa segue vazia (nao pisa no que o usuario digitou
       // na janela do envio em voo).
       if (!inputText.trim()) inputText = caption;
-      sendError = err instanceof Error ? err.message : 'Falha no envio';
+      sendError = err instanceof Error ? err.message : m.composer_falha_envio();
       ok = false;
     } finally {
       sending = false;
@@ -1018,46 +1019,46 @@
     <div class="composer-top">
       <div class="top-left">
         {#if !isCodex}
-          <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label="Comandos">
+          <button class="slash-btn" onclick={() => (commandSheetOpen = true)} aria-label={m.comandos_titulo()}>
             <span class="slash-glyph" aria-hidden="true">/</span>
           </button>
         {/if}
-        <button class="slash-btn" onclick={onOpenPreview} aria-label="Preview de projeto rodando">
+        <button class="slash-btn" onclick={onOpenPreview} aria-label={m.composer_preview_rodando()}>
           <IconMonitor size={17} />
         </button>
         {#if onOpenPair}
           {@const pairLabel = pairPeers?.length === 1 ? pairPeers[0]
             : pairPeers?.length ? `grupo (${pairPeers.length + 1})` : null}
           <button class="repo-chip pair-chip" class:pair-chip--on={!!pairPeers?.length}
-                  title={pairPeers?.length ? `Grupo: você + ${pairPeers.join(', ')} — gerenciar` : 'Parear com outra sessão'}
-                  onclick={onOpenPair} aria-label="Pareamento de sessões">
+                  title={pairPeers?.length ? m.composer_grupo_voce({ n: pairPeers.join(', ') }) : m.composer_parear_outra()}
+                  onclick={onOpenPair} aria-label={m.composer_pareamento_sessoes()}>
             <span class="repo-glyph" aria-hidden="true">🤝</span>
             {#if pairLabel}
               <span class="repo-name">{pairLabel}</span>
               {#if pairedState}
                 <!-- Estado vivo do par ÚNICO (mesmas cores da lista); grupo de N não tem bolinha. -->
                 <span class="pair-dot" style="background: {stateColors[pairedState as keyof typeof stateColors] ?? 'var(--text-muted)'};"
-                      title={`par: ${pairedState}`} aria-hidden="true"></span>
+                      title={m.composer_par_estado({ n: pairedState })} aria-hidden="true"></span>
               {/if}
             {/if}
           </button>
           {#if pairPeers?.length && onToggleSendToPair}
             <!-- "Mandar pro grupo": prompt vai pra esta sessão E pros membros (broadcast). Aceso = ativo. -->
             <button class="repo-chip both-chip" class:both-chip--on={sendToPair}
-                    title={sendToPair ? 'Mandando pro grupo — tocar desliga' : `Mandar também pra ${pairPeers.join(', ')}`}
-                    onclick={onToggleSendToPair} aria-pressed={sendToPair} aria-label="Mandar pro grupo">
+                    title={sendToPair ? m.composer_mandando_grupo() : m.composer_mandar_tambem({ n: pairPeers.join(', ') })}
+                    onclick={onToggleSendToPair} aria-pressed={sendToPair} aria-label={m.composer_mandar_grupo()}>
               <span class="repo-glyph" aria-hidden="true">⇄</span>
-              {#if sendToPair}<span class="repo-name">{pairPeers.length === 1 ? 'pros dois' : 'pro grupo'}</span>{/if}
+              {#if sendToPair}<span class="repo-name">{pairPeers.length === 1 ? m.composer_pros_dois() : m.composer_pro_grupo()}</span>{/if}
             </button>
           {/if}
         {/if}
         {#if status?.repo}
-          <button class="repo-chip" title="Git: trocar branch / status / pull" onclick={onOpenGit}>
+          <button class="repo-chip" title={m.composer_git_chip()} onclick={onOpenGit}>
             <IconFolder size={13} />
             <span class="repo-name">{status.repo}</span>
             {#if status.branch}
               <span class="repo-sep" aria-hidden="true">·</span>
-              <span class="repo-branch">{status.branch}{#if status.dirty}<span class="repo-dirty" aria-label="alterações não commitadas">*</span>{/if}</span>
+              <span class="repo-branch">{status.branch}{#if status.dirty}<span class="repo-dirty" aria-label={m.composer_alteracoes_nao_commitadas()}>*</span>{/if}</span>
             {/if}
           </button>
         {/if}
@@ -1069,8 +1070,8 @@
           class:acabando={cacheAcabando}
           class:frio={!cacheAtivo}
           title={cacheAtivo
-            ? `Cache de prompt vale por mais ${cacheLabel} (janela de ${lastCache.ttl >= 3600 ? '1 hora' : '5 minutos'}, contando do último turno)`
-            : 'Cache de prompt expirou — o próximo turno reprocessa o contexto inteiro'}
+            ? m.composer_cache_vale({ label: cacheLabel, janela: lastCache.ttl >= 3600 ? m.composer_cache_1_hora() : m.composer_cache_5_min() })
+            : m.composer_cache_expirou()}
         >
           <span class="cache-glyph" aria-hidden="true"></span>{cacheLabel}
         </span>
@@ -1089,10 +1090,10 @@
                 <span class="attach-file-name">{a.file.name}</span>
               </span>
             {/if}
-            <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label="Remover anexo">×</button>
+            <button class="attach-remove" onclick={() => removeAttachment(idx)} aria-label={m.composer_remover_anexo()}>×</button>
           </div>
         {/each}
-        {#if uploading}<span class="attach-status">enviando…</span>{/if}
+        {#if uploading}<span class="attach-status">{m.composer_enviando()}</span>{/if}
         {#if attachError}<span class="attach-error">{attachError}</span>{/if}
       </div>
     {/if}
@@ -1105,12 +1106,12 @@
       bind:this={textareaEl}
       bind:value={inputText}
       class="composer-textarea"
-      placeholder={isCodex ? "Mensagem para Codex…" : isKimi ? "Mensagem para Kimi…" : "Mensagem para Claude…"}
+      placeholder={isCodex ? m.composer_mensagem_para({ nome: 'Codex' }) : isKimi ? m.composer_mensagem_para({ nome: 'Kimi' }) : m.composer_mensagem_para({ nome: 'Claude' })}
       rows={1}
       oninput={handleInput}
       onkeydown={handleKeydown}
       onpaste={onPaste}
-      aria-label="Mensagem"
+      aria-label={m.composer_aria_mensagem()}
     ></textarea>
 
     {#if starting && !recording}
@@ -1118,13 +1119,13 @@
            e ja sai falando nao ve nada acontecer e perde o comeco da frase. Quando o recorder
            dispara, este hint vira o de "gravando" (timer + waveform) logo abaixo: o timer e o
            sinal de "pode falar". -->
-      <div class="rec-hint" role="status" aria-label="Preparando microfone">
+      <div class="rec-hint" role="status" aria-label={m.composer_preparando_mic()}>
         <span class="rec-dot rec-dot--waiting" aria-hidden="true"></span>
-        <span class="rec-time">preparando microfone…</span>
+        <span class="rec-time">{m.composer_preparando_mic_curto()}</span>
       </div>
     {/if}
     {#if recording}
-      <div class="rec-hint" role="status" aria-label="Gravando áudio">
+      <div class="rec-hint" role="status" aria-label={m.composer_gravando_audio()}>
         <span class="rec-dot" aria-hidden="true"></span>
         <!-- timer aria-hidden: senao o leitor de tela re-anunciaria a cada segundo (a live region so
              precisa dizer "Gravando áudio" uma vez, via aria-label). -->
@@ -1135,22 +1136,22 @@
       </div>
     {/if}
     {#if transcribing}
-      <div class="rec-hint" role="status" aria-label="Transcrevendo áudio">
+      <div class="rec-hint" role="status" aria-label={m.composer_transcrevendo_audio()}>
         <span class="rec-dot" aria-hidden="true"></span>
-        <span class="rec-time">transcrevendo…</span>
+        <span class="rec-time">{m.composer_transcrevendo_curto()}</span>
       </div>
     {/if}
     {#if contagem !== null}
       <div class="rec-hint" role="status">
-        <span>Enviando em {contagem}… toque para cancelar</span>
+        <span>{m.composer_enviando_cancelar({ n: contagem })}</span>
       </div>
     {/if}
     {#if undo}
       <!-- Oferece voltar ao texto cru do ditado (antes da limpeza). Some sozinha (limparUndo): ao
            enviar, ao editar o campo, ou apos ~10s. -->
       <div class="rec-hint" role="status">
-        <span class="rec-time">Ditado limpo.</span>
-        <button type="button" class="undo-btn" onclick={desfazerLimpeza}>↩ original</button>
+        <span class="rec-time">{m.composer_ditado_limpo()}</span>
+        <button type="button" class="undo-btn" onclick={desfazerLimpeza}>{m.composer_original()}</button>
       </div>
     {/if}
     {#if recError}
@@ -1172,10 +1173,10 @@
             onclick={() => (piPopOpen = true)}
             aria-haspopup="dialog"
             aria-expanded={piPopOpen}
-            aria-label="Modelo do Pi"
+            aria-label={m.composer_modelo_pi()}
           >
             <span class="pill-label">
-              <span class="pill-model">{piModel ?? status?.model ?? 'Modelo'}</span>
+              <span class="pill-model">{piModel ?? status?.model ?? m.composer_modelo()}</span>
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
           </button>
@@ -1187,10 +1188,10 @@
             onclick={() => (piEffortOpen = true)}
             aria-haspopup="dialog"
             aria-expanded={piEffortOpen}
-            aria-label="Nível de raciocínio do Pi"
+            aria-label={m.composer_nivel_raciocinio_pi()}
           >
             <span class="pill-label">
-              <span class="pill-model">{piEffort ?? 'Nível'}</span>
+              <span class="pill-model">{piEffort ?? m.composer_nivel()}</span>
             </span>
           </button>
         {:else if isKimi}
@@ -1198,7 +1199,7 @@
                passivo com o modelo da statusline, sem abrir nada — nem o popover de modelo do Claude. -->
           <span class="model-pill">
             <span class="pill-label">
-              <span class="pill-model">{status?.model ?? 'Modelo'}</span>
+              <span class="pill-model">{status?.model ?? m.composer_modelo()}</span>
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
           </span>
@@ -1209,10 +1210,10 @@
             onclick={() => (claudePopOpen = true)}
             aria-haspopup="dialog"
             aria-expanded={claudePopOpen}
-            aria-label="Modelo e contexto"
+            aria-label={m.composer_modelo_contexto()}
           >
             <span class="pill-label">
-              <span class="pill-model">{pillModel ?? 'Modelo'}</span>
+              <span class="pill-model">{pillModel ?? m.composer_modelo()}</span>
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
           </button>
@@ -1225,10 +1226,10 @@
               onclick={() => (claudeEffortOpen = true)}
               aria-haspopup="dialog"
               aria-expanded={claudeEffortOpen}
-              aria-label="Esforço de raciocínio"
+              aria-label={m.composer_esforco_raciocinio()}
             >
               <span class="pill-label">
-                <span class="pill-model">{pillEffort ?? 'Esforço'}</span>
+                <span class="pill-model">{pillEffort ?? m.composer_esforco()}</span>
               </span>
             </button>
           {/if}
@@ -1236,23 +1237,23 @@
           <button
             class="model-pill"
             onclick={() => (codexSheetOpen = true)}
-            aria-label="Modelo do Codex"
+            aria-label={m.composer_modelo_codex()}
           >
             <span class="pill-label">
-              <span class="pill-model">{codexModel ?? 'Modelo'}</span>
+              <span class="pill-model">{codexModel ?? m.composer_modelo()}</span>
               {#if codexEffort}<span class="pill-effort">· {codexEffort}</span>{/if}
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
           </button>
         {/if}
-        <button class="attach-btn" onclick={() => fileInput?.click()} aria-label="Anexar arquivo">
+        <button class="attach-btn" onclick={() => fileInput?.click()} aria-label={m.composer_anexar_arquivo()}>
           <IconAttach size={20} />
         </button>
         <button
           class="attach-btn mic-btn"
           class:mic-btn--recording={recording}
           onclick={toggleRecord}
-          aria-label={recording ? 'Parar gravação' : starting ? 'Cancelar preparação do microfone' : 'Gravar áudio'}
+          aria-label={recording ? m.composer_parar_gravacao() : starting ? m.composer_cancelar_prep_mic() : m.composer_gravar_audio()}
         >
           {#if recording}<IconInterrupt size={18} />{:else}<IconMic size={20} />{/if}
         </button>
@@ -1262,7 +1263,7 @@
         {#if isWorking && !hasInput}
           <!-- Pensando + input vazio -> o slot vira STOP. Ao digitar/colar algo, volta a ser SEND
                (enfileira a msg). Um slot so -> ganha espaco. -->
-          <button class="stop-btn" onclick={() => (confirmStopOpen = true)} aria-label="Interromper Claude">
+          <button class="stop-btn" onclick={() => (confirmStopOpen = true)} aria-label={m.composer_interromper_aria()}>
             <IconInterrupt size={18} />
           </button>
         {:else}
@@ -1271,7 +1272,7 @@
             class:send-btn--disabled={!canSend}
             onclick={submit}
             disabled={!canSend}
-            aria-label="Enviar mensagem"
+            aria-label={m.composer_enviar_mensagem()}
           >
             <IconSend size={18} />
           </button>
@@ -1334,9 +1335,9 @@
 
   <ConfirmSheet
     open={confirmStopOpen}
-    title="Interromper o Claude?"
-    message="Isso envia ESC e para a resposta atual."
-    confirmLabel="Interromper"
+    title={m.composer_interromper_claude()}
+    message={m.composer_interromper_msg()}
+    confirmLabel={m.composer_interromper()}
     danger={true}
     onConfirm={onInterrupt}
     onClose={() => (confirmStopOpen = false)}

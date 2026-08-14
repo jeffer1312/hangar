@@ -1,6 +1,7 @@
 <script lang="ts">
   import { chavesUnicas } from '../lib/messageKeys';
   import { tick } from 'svelte';
+  import * as m from '../paraglide/messages';
   import type { ChatEvent, StateEvent, AskQuestionPayload, AnswerItem } from '../lib/types';
   import UserBubble from './UserBubble.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
@@ -288,7 +289,7 @@
   style="--dock-h: {dockH}px"
   bind:this={listEl}
   onscroll={onScroll}
-  aria-label="Mensagens"
+  aria-label={m.msg_aria_mensagens()}
 >
   <div class="messages-inner">
     {#each renderItems as item (item.id)}
@@ -331,7 +332,7 @@
                           onOpenPeer={peer && onOpenSession ? () => onOpenSession(peer.from) : null} />
             {/if}
             {#if ev.desistiu}
-              <p class="queued-perdida" role="status">não chegou na sessão — reenvie</p>
+              <p class="queued-perdida" role="status">{m.msg_nao_chegou_reenvie()}</p>
             {/if}
           </div>
         {:else if imgFotos}
@@ -401,7 +402,7 @@
     class="to-bottom"
     style="bottom: calc({dockH}px + var(--space-3))"
     onclick={() => { extra = piso; atBottom = true; scrollToBottom(); }}
-    aria-label="Ir para a última mensagem"
+    aria-label={m.msg_ir_ultima()}
   >
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>

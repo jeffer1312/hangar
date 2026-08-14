@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getWorkflows, getWorkflow, getWorkflowAgent, getSubagents, getSubagent } from '../lib/api';
+  import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import { renderMarkdown } from '../lib/markdown';
@@ -47,7 +48,7 @@
     subError = '';
     getSubagents(sessionName)
       .then((s) => (subs = s))
-      .catch(() => (subError = 'não consegui ler os subagentes desta sessão'));
+      .catch(() => (subError = m.atividade_erro_subagentes()));
   });
 
   async function openWorkflow(rid: string) {
@@ -132,18 +133,18 @@
         subs = await getSubagents(sessionName);
         subError = '';
       } catch {
-        subError = 'não consegui ler os subagentes desta sessão';
+        subError = m.atividade_erro_subagentes();
         return;   // clique que nao faz nada e pior que erro: some sem explicar
       }
     }
-    const m = matchSub(prompt);
-    if (!m) return;
+    const match = matchSub(prompt);
+    if (!match) return;
     subTitle = title;
-    subDetail = m;
+    subDetail = match;
     level = 'subagent';
     const tick = async () => {
       try {
-        subDetail = await getSubagent(sessionName, m.agentId, 200);
+        subDetail = await getSubagent(sessionName, match.agentId, 200);
         subFails = 0;
         subError = '';
       } catch {
@@ -152,7 +153,7 @@
         // fingir que esta ao vivo.
         if (++subFails >= 3) {
           stopSubPoll();
-          subError = 'atualização ao vivo parou (erro ao ler o subagente)';
+          subError = m.atividade_erro_vivo();
         }
       }
     };
@@ -200,19 +201,19 @@
     return '⟳';
   }
   // claude-opus-4-8 -> "Opus 4.8" · claude-fable-5 -> "Fable 5" · claude-haiku-4-5-2025... -> "Haiku 4.5"
-  function modelShort(m: string | null): string {
-    if (!m) return '';
-    const s = m.toLowerCase();
+  function modelShort(id: string | null): string {
+    if (!id) return '';
+    const s = id.toLowerCase();
     const two = s.match(/(\d+)-(\d+)/);
     const ver = two ? `${two[1]}.${two[2]}` : (s.match(/-(\d+)(?:-|$)/)?.[1] ?? '');
     if (s.includes('opus')) return `Opus ${ver}`.trim();
     if (s.includes('sonnet')) return `Sonnet ${ver}`.trim();
     if (s.includes('haiku')) return `Haiku ${ver}`.trim();
     if (s.includes('fable')) return `Fable ${ver}`.trim();
-    return m.replace(/^claude-/, '');
+    return id.replace(/^claude-/, '');
   }
-  function modelClass(m: string | null): string {
-    const s = (m ?? '').toLowerCase();
+  function modelClass(id: string | null): string {
+    const s = (id ?? '').toLowerCase();
     if (s.includes('opus')) return 'm-opus';
     if (s.includes('sonnet')) return 'm-sonnet';
     if (s.includes('haiku')) return 'm-haiku';
@@ -252,10 +253,10 @@
 
   // Título do header do modal por nível.
   const headerTitle = $derived(
-    level === 'list' ? 'Atividade'
-    : level === 'subagent' ? (subTitle || 'Subagente')
-    : level === 'workflow' ? (detail?.name ?? 'Workflow')
-    : (agentDetail?.label ?? 'Agente')
+    level === 'list' ? m.ctx_atividade()
+    : level === 'subagent' ? (subTitle || m.atividade_subagente())
+    : level === 'workflow' ? (detail?.name ?? m.atividade_workflow())
+    : (agentDetail?.label ?? m.atividade_agente())
   );
 
 </script>
@@ -264,7 +265,7 @@
     <div class="modal">
       <header class="modal-head">
         {#if level !== 'list'}
-          <button class="modal-icon-btn" onclick={back} aria-label="Voltar">‹</button>
+          <button class="modal-icon-btn" onclick={back} aria-label={m.comum_voltar()}>‹</button>
         {/if}
         <h2 class="modal-title">{headerTitle}</h2>
         {#if level === 'list' && activity.total > 0}
@@ -272,7 +273,7 @@
         {:else if level === 'workflow' && detail}
           <span class="wf-status wf-status--{detail.status}">{detail.status}</span>
         {/if}
-        <button class="modal-icon-btn modal-close" onclick={onClose} aria-label="Fechar">✕</button>
+        <button class="modal-icon-btn modal-close" onclick={onClose} aria-label={m.sessao_fechar()}>✕</button>
       </header>
 
       <div class="modal-body">
@@ -282,14 +283,14 @@
                  é onde fica o seletor pra voltar ao automático — desmontaria junto. -->
             {#if showPlan && (session?.plan_name || session?.plan_hidden)}
               <div class="section">
-                <span class="section-label">Plano</span>
+                <span class="section-label">{m.atividade_plano()}</span>
                 <PlanPanel {session} detail={planDetail} loading={planLoading} error={planError} />
               </div>
             {/if}
 
             {#if workflows.length > 0}
               <div class="section">
-                <span class="section-label">Workflows</span>
+                <span class="section-label">{m.atividade_workflows()}</span>
                 <div class="wf-cards">
                   {#each workflows as w (w.runId)}
                     <button class="wf-card" onclick={() => openWorkflow(w.runId)}>
@@ -298,9 +299,9 @@
                       </span>
                       <div class="wf-card-body">
                         <span class="wf-card-name">{w.name}</span>
-                        <span class="wf-card-meta">{w.agentCount} agentes · {fmtTokens(w.totalTokens)} tokens{w.phaseCount ? ` · ${w.phaseCount} fases` : ''}</span>
+                        <span class="wf-card-meta">{w.agentCount} {m.atividade_agentes()} · {fmtTokens(w.totalTokens)} {m.ctx_tokens()}{w.phaseCount ? ` · ${w.phaseCount} ${m.atividade_fases_curto()}` : ''}</span>
                       </div>
-                      <span class="wf-card-badge" class:running={w.running}>{w.running ? 'rodando' : 'concluído'}</span>
+                      <span class="wf-card-badge" class:running={w.running}>{w.running ? m.estado_em_execucao() : m.estado_pronto()}</span>
                       <span class="row-chevron" aria-hidden="true">›</span>
                     </button>
                   {/each}
@@ -310,7 +311,7 @@
 
             {#if runningAgents.length > 0}
               <div class="section">
-                <span class="section-label">Rodando agora</span>
+                <span class="section-label">{m.atividade_rodando_agora()}</span>
                 {#each runningAgents as a (a.id)}
                   {@const sub = matchSub(a.prompt)}
                   <svelte:element this={sub ? 'button' : 'div'} class="agent-row" class:openable={!!sub}
@@ -327,7 +328,7 @@
                         <!-- O que ele esta tocando AGORA (ultima tool do transcript dele). O prompt
                              inteiro nao vive mais aqui: virava parede de texto na lista. -->
                         <span class="agent-now">
-                          {sub.toolCalls} chamadas{#if sub.recent.length} · {sub.recent[sub.recent.length - 1].name}{/if}
+                          {m.atividade_chamadas({ n: sub.toolCalls })}{#if sub.recent.length} · {sub.recent[sub.recent.length - 1].name}{/if}
                         </span>
                       {/if}
                     </span>
@@ -339,7 +340,7 @@
 
             {#if activity.tasks.length > 0}
               <div class="section">
-                <span class="section-label">Tarefas</span>
+                <span class="section-label">{m.atividade_tarefas()}</span>
                 {#each activity.tasks as t (t.id)}
                   <div class="task-row" class:done={t.status === 'completed'} class:active={t.status === 'in_progress'}>
                     <span class="task-mark" aria-hidden="true">{mark(t.status)}</span>
@@ -351,14 +352,14 @@
 
             {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
             {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0}
-              <p class="activity-empty">Nada rolando agora. Tarefas, agentes e workflows que o Claude criar nesta sessão aparecem aqui, ao vivo.</p>
+              <p class="activity-empty">{m.atividade_vazio()}</p>
             {/if}
           </div>
         {:else if level === 'subagent'}
           <!-- Subagente ao vivo: o transcript dele, lido pelo backend a cada 2,5s. -->
           <div class="activity">
             {#if !subDetail}
-              <p class="activity-empty">Sem transcript pra esse agente ainda.</p>
+              <p class="activity-empty">{m.atividade_sem_transcript()}</p>
             {:else}
               <!-- MESMO renderizador do chat: o arquivo do subagente e um jsonl no formato de
                    sempre, entao o backend converte com a `parse_line` do transcript e a UI reusa a
@@ -379,15 +380,15 @@
               {:else if subDetail.toolCalls > 0}
                 <!-- Ele JA chamou ferramentas, mas o transcript nao veio: e falha de leitura, nao
                      agente parado. Dizer "ainda pensando" aqui seria mentir sobre o estado dele. -->
-                <p class="activity-empty">Não consegui ler o transcript dele agora.</p>
+                <p class="activity-empty">{m.atividade_erro_transcript()}</p>
               {:else}
-                <p class="activity-empty">Ainda pensando — nenhuma ferramenta chamada.</p>
+                <p class="activity-empty">{m.atividade_pensando()}</p>
               {/if}
               {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
 
               {#if subDetail.tools.length > 0}
                 <div class="section sub-foot">
-                  <span class="section-label">Ferramentas · {subDetail.toolCalls} chamadas</span>
+                  <span class="section-label">{m.atividade_ferramentas_chamadas({ n: subDetail.toolCalls })}</span>
                   <div class="sub-tools">
                     {#each subDetail.tools as t (t.name)}
                       <span class="agent-tag">{t.name} <b>{t.count}</b></span>
@@ -400,20 +401,20 @@
         {:else if level === 'workflow'}
           <div class="activity">
             {#if loading}
-              <p class="activity-empty">Carregando…</p>
+              <p class="activity-empty">{m.comum_carregando()}</p>
             {:else if !detail}
-              <p class="activity-empty">Não encontrei esse run.</p>
+              <p class="activity-empty">{m.atividade_run_nao_encontrado()}</p>
             {:else}
               <div class="wf-metrics">
-                <span class="wf-metric"><b>{detail.agents.length}</b> agentes</span>
-                <span class="wf-metric"><b>{fmtTokens(detail.totalTokens)}</b> tokens</span>
-                {#if detail.phases.length}<span class="wf-metric"><b>{detail.phases.length}</b> fases</span>{/if}
+                <span class="wf-metric"><b>{detail.agents.length}</b> {m.atividade_agentes()}</span>
+                <span class="wf-metric"><b>{fmtTokens(detail.totalTokens)}</b> {m.ctx_tokens()}</span>
+                {#if detail.phases.length}<span class="wf-metric"><b>{detail.phases.length}</b> {m.atividade_fases_curto()}</span>{/if}
                 {#if detail.durationMs}<span class="wf-metric">{fmtDur(detail.durationMs)}</span>{/if}
               </div>
 
               <div class="wf-cols">
                 {#if hasPhaseNav}
-                  <nav class="phase-nav" aria-label="Fases">
+                  <nav class="phase-nav" aria-label={m.atividade_fases()}>
                     {#each phaseGroups as g, idx (g.title)}
                       <button class="phase-tab" class:active={idx === selectedPhaseIdx} onclick={() => (selectedPhaseIdx = idx)}>
                         <span class="phase-tab-name">{g.title || 'Agentes'}</span>
@@ -436,8 +437,8 @@
                         {#if a.agentId}<span class="row-chevron" aria-hidden="true">›</span>{/if}
                       </div>
                       <div class="wf-agent-stats">
-                        <span>{fmtTokens(a.tokens)} tok</span>
-                        {#if a.toolCalls}<span>· {a.toolCalls} tools</span>{/if}
+                        <span>{fmtTokens(a.tokens)} {m.atividade_tok()}</span>
+                        {#if a.toolCalls}<span>· {a.toolCalls} {m.atividade_tools()}</span>{/if}
                         {#if a.lastToolName}<span class="wf-agent-tool">· {a.lastToolName}</span>{/if}
                         {#if a.durationMs}<span>· {fmtDur(a.durationMs)}</span>{/if}
                       </div>
@@ -448,7 +449,7 @@
 
               {#if detail.summary}
                 <div class="ag-block wf-summary">
-                  <span class="section-label">Resumo</span>
+                  <span class="section-label">{m.atividade_resumo()}</span>
                   <p class="ag-text">{detail.summary}</p>
                 </div>
               {/if}
@@ -458,13 +459,13 @@
           <!-- Detalhe do agente: prompt + resultado completo + ferramentas -->
           <div class="activity">
             {#if loading}
-              <p class="activity-empty">Carregando…</p>
+              <p class="activity-empty">{m.comum_carregando()}</p>
             {:else if !agentDetail}
-              <p class="activity-empty">Não encontrei esse agente.</p>
+              <p class="activity-empty">{m.atividade_agente_nao_encontrado()}</p>
             {:else}
               <div class="wf-detail-meta">
                 <span class="wf-agent-state wf-agent-state--{agentDetail.state}">{stateGlyph(agentDetail.state)}</span>
-                {fmtTokens(agentDetail.tokens)} tokens · {agentDetail.toolCalls} tools{agentDetail.durationMs ? ` · ${fmtDur(agentDetail.durationMs)}` : ''}{agentDetail.model ? ` · ${modelShort(agentDetail.model)}` : ''}
+                {fmtTokens(agentDetail.tokens)} {m.ctx_tokens()} · {agentDetail.toolCalls} {m.atividade_tools()}{agentDetail.durationMs ? ` · ${fmtDur(agentDetail.durationMs)}` : ''}{agentDetail.model ? ` · ${modelShort(agentDetail.model)}` : ''}
               </div>
 
               {#if agentDetail.tools.length > 0}
@@ -475,13 +476,13 @@
 
               {#if agentDetail.prompt}
                 <div class="ag-block">
-                  <span class="section-label">Prompt</span>
+                  <span class="section-label">{m.atividade_prompt()}</span>
                   <p class="ag-text">{agentDetail.prompt}</p>
                 </div>
               {/if}
               {#if agentDetail.result}
                 <div class="ag-block">
-                  <span class="section-label">Resultado</span>
+                  <span class="section-label">{m.atividade_resultado()}</span>
                   <pre class="ag-result">{agentDetail.result}</pre>
                 </div>
               {/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import RateChips from './RateChips.svelte';
+  import * as m from '../paraglide/messages';
   import type { StatusFields } from '../lib/statusline';
 
   interface Props {
@@ -63,7 +64,7 @@
 <nav class="navbar">
   <div class="navbar-inner">
     {#if showBack}
-      <button class="nav-btn back-btn" onclick={onBack} aria-label="Voltar">
+      <button class="nav-btn back-btn" onclick={onBack} aria-label={m.comum_voltar()}>
         <svg width="10" height="17" viewBox="0 0 10 17" fill="none" aria-hidden="true">
           <path d="M9 1L1.5 8.5L9 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -97,11 +98,11 @@
         {/if}
         {#if stateLabel}<span class="state-pill" style="color: {stateColor};">{stateLabel}</span>{/if}
         {#if loopLabel}
-          <button type="button" class="loop-chip" style="color: {loopColor};" onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }} aria-label="Loop da sessão: {loopLabel}">{loopLabel}</button>
+          <button type="button" class="loop-chip" style="color: {loopColor};" onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }} aria-label={m.ctx_aria_loop({ n: loopLabel })}>{loopLabel}</button>
         {/if}
       </div>
     {:else if onTitleTap}
-      <button class="title-chip" onclick={onTitleTap} aria-label="Trocar de sessão">
+      <button class="title-chip" onclick={onTitleTap} aria-label={m.sessao_trocar_de()}>
         <span class="chip-text">{title}</span>
         {#if providerLabel && onProviderTap}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -122,7 +123,7 @@
             role="button"
             tabindex="0"
             style="color: {loopColor};"
-            aria-label="Loop da sessão: {loopLabel}"
+            aria-label={m.ctx_aria_loop({ n: loopLabel })}
             onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onLoopTap?.(); } }}
           >{loopLabel}</span>
@@ -142,7 +143,7 @@
 
     <div class="nav-right">
       {#if onOpenTerminal}
-        <button class="nav-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label="Terminal">
+        <button class="nav-btn terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="2.5" y="4" width="19" height="16" rx="2"/>
             <path d="M6.5 9l3 3-3 3"/>
@@ -152,7 +153,7 @@
       {/if}
       {#if onOpenRun}
         <button class="nav-btn run-btn" class:running={runRunning} onclick={onOpenRun}
-                aria-label={runRunning ? 'Rodando (abrir)' : 'Rodar projeto'}>
+                aria-label={runRunning ? m.ctx_rodando_abrir() : m.ctx_rodar_projeto()}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             {#if runRunning}
               <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -163,14 +164,14 @@
         </button>
       {/if}
       {#if onOpenAttachments}
-        <button class="nav-btn" onclick={onOpenAttachments} aria-label="Anexos da sessão">
+        <button class="nav-btn" onclick={onOpenAttachments} aria-label={m.ctx_anexos_da_sessao()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L16 6"/>
           </svg>
         </button>
       {/if}
       {#if onOpenActivity}
-        <button class="nav-btn activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label="Atividade">
+        <button class="nav-btn activity-btn" class:running={activityRunning} onclick={onOpenActivity} aria-label={m.ctx_atividade()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="3 5 4.5 6.5 7 4"/>
             <polyline points="3 11.5 4.5 13 7 10.5"/>
@@ -188,7 +189,7 @@
            numa sessao com statusline). No celular o "⋯" guarda Rodar/Atividade; o ponto acende
            quando algo esta rodando la dentro, pra o sinal nao se perder junto com os botoes. -->
       {#if onMenu}
-        <button class="nav-btn menu-btn" onclick={onMenu} aria-label="Mais ações">
+        <button class="nav-btn menu-btn" onclick={onMenu} aria-label={m.navbar_mais_acoes()}>
           <svg width="20" height="5" viewBox="0 0 20 5" fill="currentColor" aria-hidden="true">
             <circle cx="2.5" cy="2.5" r="2.5"/>
             <circle cx="10" cy="2.5" r="2.5"/>

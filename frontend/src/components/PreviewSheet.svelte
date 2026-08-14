@@ -1,5 +1,6 @@
 <script lang="ts">
 import BottomSheet from './BottomSheet.svelte';
+import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import { getPreview, startPreview, stopPreview } from '../lib/api';
 
@@ -17,8 +18,8 @@ import BottomSheet from './BottomSheet.svelte';
   let expanded = $state(false); // preview em tela cheia (overlay fixed — funciona em iOS, sem Fullscreen API)
 
   function cleanErr(e: unknown): string {
-    const m = e instanceof Error ? e.message : 'falhou';
-    return m.replace(/^\d+:\s*/, '');   // tira o prefixo "403: " do status HTTP
+    const msg = e instanceof Error ? e.message : m.preview_falhou();
+    return msg.replace(/^\d+:\s*/, '');   // tira o prefixo "403: " do status HTTP
   }
 
   // Ao abrir: consulta o túnel atual (pode já haver um preview no ar de antes). Fechar não mexe.
@@ -41,7 +42,7 @@ import BottomSheet from './BottomSheet.svelte';
 
   async function openTunnel() {
     const p = parseInt(port, 10);
-    if (!(p >= 1 && p <= 65535)) { error = 'porta inválida (1–65535)'; return; }
+    if (!(p >= 1 && p <= 65535)) { error = m.preview_erro_porta(); return; }
     busy = true;
     error = '';
     try {
@@ -69,24 +70,24 @@ import BottomSheet from './BottomSheet.svelte';
 </script>
 
 {#if open && expanded && url}
-  <ModalDialog open={true} ariaLabel="Preview em tela cheia" className="pv-fs-dialog" onClose={() => (expanded = false)}>
+  <ModalDialog open={true} ariaLabel={m.preview_tela_cheia()} className="pv-fs-dialog" onClose={() => (expanded = false)}>
     <div class="pv-fs">
-    <button class="pv-fs-close" onclick={() => (expanded = false)} aria-label="Reduzir preview">⤢ reduzir</button>
+    <button class="pv-fs-close" onclick={() => (expanded = false)} aria-label={m.preview_reduzir()}>{m.preview_reduzir_curto()}</button>
     <iframe
       class="pv-fs-frame"
       src={url}
-      title="preview do projeto (tela cheia)"
+      title={m.preview_projeto_tela_cheia()}
       allow="clipboard-read; clipboard-write"
     ></iframe>
     </div>
   </ModalDialog>
 {/if}
 
-<BottomSheet {open} {onClose} ariaLabel="Preview">
+<BottomSheet {open} {onClose} ariaLabel={m.preview_titulo()}>
   <div class="pv">
     <div class="pv-head">
-      <h2 class="pv-title">Preview</h2>
-      <p class="pv-sub">Vê um projeto rodando nesta máquina (porta local) via túnel HTTPS da tailnet.</p>
+      <h2 class="pv-title">{m.preview_titulo()}</h2>
+      <p class="pv-sub">{m.preview_descricao()}</p>
     </div>
 
     <div class="pv-form">
@@ -96,24 +97,24 @@ import BottomSheet from './BottomSheet.svelte';
         inputmode="numeric"
         min="1"
         max="65535"
-        placeholder="porta (ex: 3000)"
+        placeholder={m.preview_porta()}
         bind:value={port}
         disabled={busy}
         onkeydown={(e) => { if (e.key === 'Enter') openTunnel(); }}
       />
       {#if url}
-        <button class="pv-btn" disabled={busy} onclick={openTunnel}>trocar</button>
-        <button class="pv-btn danger" disabled={busy} onclick={stopTunnel}>parar</button>
+        <button class="pv-btn" disabled={busy} onclick={openTunnel}>{m.preview_trocar()}</button>
+        <button class="pv-btn danger" disabled={busy} onclick={stopTunnel}>{m.preview_parar()}</button>
       {:else}
-        <button class="pv-btn accent" disabled={busy || loading} onclick={openTunnel}>abrir</button>
+        <button class="pv-btn accent" disabled={busy || loading} onclick={openTunnel}>{m.preview_abrir()}</button>
       {/if}
     </div>
 
     {#if url}
       <div class="pv-bar">
         <span class="pv-url" title={url}>{url}</span>
-        <button class="pv-ext" onclick={() => (expanded = true)} aria-label="Expandir para tela cheia">⛶ maior</button>
-        <a class="pv-ext" href={url} target="_blank" rel="noopener noreferrer">nova aba ↗</a>
+        <button class="pv-ext" onclick={() => (expanded = true)} aria-label={m.preview_expandir()}>{m.preview_maior()}</button>
+        <a class="pv-ext" href={url} target="_blank" rel="noopener noreferrer">{m.preview_nova_aba()}</a>
       </div>
       {#if !expanded}
         <!-- trocar a src recria o iframe (não fica com o projeto antigo preso) -->
@@ -121,15 +122,15 @@ import BottomSheet from './BottomSheet.svelte';
           <iframe
             class="pv-frame"
             src={url}
-            title="preview do projeto"
+            title={m.preview_projeto()}
             allow="clipboard-read; clipboard-write"
           ></iframe>
         {/key}
       {/if}
     {:else if loading}
-      <p class="pv-muted">carregando…</p>
+      <p class="pv-muted">{m.preview_carregando()}</p>
     {:else}
-      <p class="pv-muted">Nenhum preview no ar. Digite a porta do projeto e toque em <b>abrir</b>.</p>
+      <p class="pv-muted">{m.preview_vazio()} <b>{m.preview_abrir()}</b>.</p>
     {/if}
 
     {#if error}<p class="pv-error">{error}</p>{/if}

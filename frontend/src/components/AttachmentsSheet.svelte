@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import * as m from '../paraglide/messages';
   import { listUploads, uploadUrl } from '../lib/api';
   import { fileKind, fmtBytes, relativeTime } from '../lib/format';
   import { zoomable } from '../lib/zoomable';
@@ -49,10 +50,10 @@
   // Prazo em texto curto. O backend pode mandar negativo (o prune só roda no próximo upload), e aí
   // o honesto é avisar que o arquivo está vencido, não arredondar pra "expira em 0 d".
   function prazo(d: number | null): { txt: string; urgente: boolean } {
-    if (d === null) return { txt: 'sem expiração', urgente: false };
-    if (d <= 0) return { txt: 'vencido', urgente: true };
-    if (d < 1) return { txt: `expira em ${Math.max(1, Math.round(d * 24))} h`, urgente: true };
-    return { txt: `expira em ${Math.round(d)} d`, urgente: d <= 3 };
+    if (d === null) return { txt: m.anexos_sem_expiracao(), urgente: false };
+    if (d <= 0) return { txt: m.anexos_vencido(), urgente: true };
+    if (d < 1) return { txt: m.anexos_expira_h({ n: Math.max(1, Math.round(d * 24)) }), urgente: true };
+    return { txt: m.anexos_expira_d({ n: Math.round(d) }), urgente: d <= 3 };
   }
 
   // Move o overlay pro <body>: o painel do sheet rola e ganha transform no swipe, o que vira bloco
@@ -63,19 +64,19 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Anexos da sessão">
+<BottomSheet {open} {onClose} ariaLabel={m.ctx_anexos_da_sessao()}>
   <div class="atts">
     <h2 class="atts-title">
-      Anexos
+      {m.ctx_anexos()}
       {#if files.length}<span class="count">{files.length}</span>{/if}
     </h2>
 
     {#if loading}
-      <p class="atts-msg">Carregando…</p>
+      <p class="atts-msg">{m.comum_carregando()}</p>
     {:else if erro}
-      <p class="atts-msg erro">Não deu pra listar os anexos: {erro}</p>
+      <p class="atts-msg erro">{m.anexos_erro_listar()} {erro}</p>
     {:else if !files.length}
-      <p class="atts-msg">Nenhum anexo nesta sessão.</p>
+      <p class="atts-msg">{m.anexos_nenhum()}</p>
     {:else}
       <ul class="grid">
         {#each files as f (f.filename)}
@@ -83,17 +84,17 @@
           {@const p = prazo(f.expires_in_days)}
           <li class="item">
             {#if kind === 'image'}
-              <button class="tile" onclick={() => (lightbox = f)} aria-label="Ver {f.filename}">
+              <button class="tile" onclick={() => (lightbox = f)} aria-label={m.anexos_ver({ n: f.filename })}>
                 <img class="media" src={url(f)} alt={f.filename} loading="lazy" />
               </button>
             {:else if kind === 'video'}
               <!-- #t=0.1: media fragment -> o browser (inclusive iOS) busca o 1o frame pro thumb -->
-              <a class="tile" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label="Abrir {f.filename}">
+              <a class="tile" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label={m.anexos_abrir({ n: f.filename })}>
                 <video class="media" src={url(f) + '#t=0.1'} preload="metadata" muted playsinline></video>
                 <span class="play" aria-hidden="true">▶</span>
               </a>
             {:else}
-              <a class="tile chip" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label="Abrir {f.filename}">
+              <a class="tile chip" href={url(f)} target="_blank" rel="noopener noreferrer" aria-label={m.anexos_abrir({ n: f.filename })}>
                 <span class="chip-ico" aria-hidden="true">{icone(f)}</span>
               </a>
             {/if}
@@ -122,7 +123,7 @@
 
 {#if lightbox}
   {@const cur = lightbox}
-  <button use:portal class="lightbox" onclick={() => { if (!gesto) lightbox = null; }} aria-label="Fechar imagem">
+  <button use:portal class="lightbox" onclick={() => { if (!gesto) lightbox = null; }} aria-label={m.anexos_fechar_imagem()}>
     <!-- Pinch / duplo-toque / arrastar vêm da action compartilhada (a mesma do chat). -->
     <img class="lightbox-img" src={url(cur)} alt={cur.filename} use:zoomable={{ onGesture: (a) => (gesto = a) }} />
   </button>

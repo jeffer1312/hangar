@@ -1,6 +1,7 @@
 <script lang="ts">
   import { renderMarkdown } from '../lib/markdown';
-import { intlLocale } from '../lib/locale';
+  import { intlLocale } from '../lib/locale';
+  import * as m from '../paraglide/messages';
   import { parseFilePaths, parseMediaUrls, splitTodoBlock } from '../lib/format';
   import { copyText } from '../lib/clipboard';
   import { textoFalavelComCodigo } from '../lib/speakable';
@@ -121,7 +122,7 @@ import { intlLocale } from '../lib/locale';
   // O hint do atalho so aparece no desktop: no celular o botao existe mas Ctrl+Shift+Espaco nao
   // (onGlobalKey do Chat retorna cedo fora do desktop), e tooltip que anuncia tecla morta engana.
   const dicaAtalho = typeof window !== 'undefined' && window.matchMedia('(min-width: 820px)').matches
-    ? ' (Ctrl+Shift+Espaço: última resposta visível)' : '';
+    ? ' ' + m.bubble_atalho() : '';
 
   function ouvirMensagem() {
     if (!proseEl) return;
@@ -171,13 +172,13 @@ import { intlLocale } from '../lib/locale';
       {#if ts}
         <span class="ts">{formatTime(ts)}</span>
       {/if}
-      <button class="msg-copy" class:copied={msgCopied} onclick={copyMessage} aria-label="Copiar mensagem" title="Copiar mensagem"></button>
+      <button class="msg-copy" class:copied={msgCopied} onclick={copyMessage} aria-label={m.bubble_copiar()} title={m.bubble_copiar()}></button>
       {#if onForward}
-        <button class="msg-fwd" onclick={onForward} aria-label="Encaminhar pra outra sessão" title="Encaminhar pra outra sessão"></button>
+        <button class="msg-fwd" onclick={onForward} aria-label={m.forward_para_outra()} title={m.forward_para_outra()}></button>
       {/if}
       <!-- Nunca na bolha de preview: aquele texto e full-replace a cada ~150ms (MessageList:274),
            e o audio sairia de um bloco de DOM que ja nao existe mais. -->
-      <button class="msg-tts" onclick={ouvirMensagem} aria-label="Ouvir mensagem" title={`Ouvir mensagem${dicaAtalho}`}><IconSpeaker size={15} /></button>
+      <button class="msg-tts" onclick={ouvirMensagem} aria-label={m.bubble_ouvir()} title={`${m.bubble_ouvir()}${dicaAtalho}`}><IconSpeaker size={15} /></button>
     </div>
   {/if}
 </div>

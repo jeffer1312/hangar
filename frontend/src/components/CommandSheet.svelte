@@ -1,5 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
+  import * as m from '../paraglide/messages';
   import type { CommandInfo } from '../lib/types';
 
   // Folha de comandos: busca no topo + lista agrupada (Built-ins, Suas skills, Plugins).
@@ -41,9 +42,9 @@
   const groups = $derived(
     (
       [
-        { key: 'builtin', label: 'Built-ins' },
-        { key: 'skill', label: 'Suas skills' },
-        { key: 'plugin', label: 'Plugins' },
+        { key: 'builtin', label: m.comandos_builtins() },
+        { key: 'skill', label: m.comandos_suas_skills() },
+        { key: 'plugin', label: m.comandos_plugins() },
       ] as const
     )
       .map((g) => ({ ...g, items: filtered.filter((c) => c.source === g.key) }))
@@ -80,23 +81,23 @@
   }
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel="Comandos">
-  <h2 class="sheet-title">Comandos</h2>
+<BottomSheet {open} {onClose} ariaLabel={m.comandos_titulo()}>
+  <h2 class="sheet-title">{m.comandos_titulo()}</h2>
 
   <input
     type="text"
     class="search"
     bind:value={query}
-    placeholder="Buscar comando"
+    placeholder={m.comandos_buscar()}
     autocomplete="off"
     autocorrect="off"
     autocapitalize="off"
     spellcheck={false}
-    aria-label="Buscar comando"
+    aria-label={m.comandos_buscar()}
   />
 
   {#if groups.length === 0}
-    <p class="empty">Nenhum comando encontrado.</p>
+    <p class="empty">{m.comandos_vazio()}</p>
   {:else}
     <div class="groups">
       {#each groups as g (g.key)}
@@ -107,10 +108,10 @@
               <li>
                 {#if confirming === c.name}
                   <div class="cmd-row cmd-row--confirm">
-                    <span class="confirm-text">Confirmar {c.display}?</span>
+                    <span class="confirm-text">{m.comandos_confirmar({ n: c.display })}</span>
                     <div class="confirm-actions">
-                      <button class="cbtn cbtn--no" onclick={() => (confirming = null)}>Não</button>
-                      <button class="cbtn cbtn--yes" onclick={() => confirm(c)}>Sim</button>
+                      <button class="cbtn cbtn--no" onclick={() => (confirming = null)}>{m.comandos_nao()}</button>
+                      <button class="cbtn cbtn--yes" onclick={() => confirm(c)}>{m.comandos_sim()}</button>
                     </div>
                   </div>
                 {:else}

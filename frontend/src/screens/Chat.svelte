@@ -48,6 +48,7 @@
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { rotuloEstado, stateColors, countAwaiting, nextAwaiting, providerName, untrackedReason } from '../lib/format';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
+  import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';
   import { textoFalavelComCodigo } from '../lib/speakable';
 
@@ -413,7 +414,7 @@
       // Chat vazio ou so mensagens tuas: o atalho nao pode morrer em silencio (regra do projeto) —
       // unlock() monta a barra e o fail() deixa o motivo nela.
       ttsPlayer.unlock('');
-      ttsPlayer.fail('nenhuma resposta do assistente pra ler');
+      ttsPlayer.fail(m.chat_tts_sem_resposta());
       return;
     }
     const { texto } = textoFalavelComCodigo(alvo);
@@ -514,7 +515,7 @@
         };
       }).filter((item) => item.question && item.options.length);
       if (!qs.length) {
-        console.warn('[kimi-question] payload inesperado, sheet nao abre', args);
+        console.warn(m.chat_kimi_payload(), args);
         return;
       }
       askPayload = { questions: qs };
@@ -523,7 +524,7 @@
       if (!options.length || !args.question) {
         // Shape inesperado (o Pi mudou o tool?) — sem o warn o sheet simplesmente parava de abrir um
         // dia, calado. O OptionButtons cru segue como saida.
-        console.warn('[pi-question] payload inesperado, sheet nao abre', args);
+        console.warn(m.chat_pi_payload(), args);
         return;
       }
       askPayload = {
@@ -577,31 +578,31 @@
   function action(id: string, title: string, run: () => void): WorkspaceAction {
     const metadata: Record<string, Pick<WorkspaceAction, 'detail' | 'keywords' | 'group'>> = {
       git: {
-        detail: 'Abrir alterações Git da sessão atual',
-        keywords: ['git', 'alterações', 'diff', 'branch'],
-        group: 'Ferramentas',
+        detail: m.chat_acao_git_detalhe(),
+        keywords: ['git', m.chat_alteracoes(), 'diff', 'branch'],
+        group: m.lista_ferramentas(),
       },
       loop: {
-        detail: 'Configurar o loop da sessão atual',
-        keywords: ['loop', 'automação', 'iterações'],
-        group: 'Ferramentas',
+        detail: m.chat_acao_loop_detalhe(),
+        keywords: ['loop', m.chat_automacao(), m.chat_iteracoes()],
+        group: m.lista_ferramentas(),
       },
       pair: {
-        detail: 'Parear a sessão atual com outra sessão',
-        keywords: ['parear', 'pair', 'par', 'sessão', 'split'],
-        group: 'Colaboração',
+        detail: m.chat_acao_parear_detalhe(),
+        keywords: ['parear', 'pair', 'par', m.sessao_singular(), 'split'],
+        group: m.lista_colaboracao(),
       },
       run: {
-        detail: 'Executar um workflow na sessão atual',
+        detail: m.chat_acao_run_detalhe(),
         keywords: ['executar', 'workflow', 'run'],
-        group: 'Ferramentas',
+        group: m.lista_ferramentas(),
       },
       terminal: {
         detail: currentState === 'dead'
-          ? 'Indisponível porque a sessão atual foi encerrada'
-          : 'Abrir o espelho do terminal da sessão atual',
+          ? m.chat_acao_terminal_indisponivel()
+          : m.chat_acao_terminal_detalhe(),
         keywords: ['terminal', 'espelho', 'tui', 'pane'],
-        group: 'Ferramentas',
+        group: m.lista_ferramentas(),
       },
     };
     return {
@@ -617,11 +618,11 @@
     const publish = onWorkspaceActionsChange;
     if (!desktop || !publishWorkspaceActions || !publish) return;
     publish([
-      action('git', 'Git', () => (gitOpen = true)),
-      action('loop', 'Loop', () => (loopSheetOpen = true)),
-      action('pair', 'Parear sessão', () => (pairOpen = true)),
-      action('run', 'Executar workflow', () => (runOpen = true)),
-      action('terminal', 'Terminal', abrirTerminalReal),
+      action('git', m.sessao_git(), () => (gitOpen = true)),
+      action('loop', m.chat_loop(), () => (loopSheetOpen = true)),
+      action('pair', m.chat_parear_sessao(), () => (pairOpen = true)),
+      action('run', m.chat_executar_workflow(), () => (runOpen = true)),
+      action('terminal', m.ctx_terminal(), abrirTerminalReal),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
     return () => publish([]);
@@ -634,8 +635,8 @@
   $effect(() => {
     const s = currentState;
     if (prevAnnounced !== null && s !== prevAnnounced) {
-      if (s === 'awaiting_input') stateAnnounce = `${sessionName} aguardando sua resposta`;
-      else if (s === 'dead') stateAnnounce = `Sessão ${sessionName} encerrada`;
+      if (s === 'awaiting_input') stateAnnounce = m.chat_sessao_aguardando_resposta({ n: sessionName });
+      else if (s === 'dead') stateAnnounce = m.chat_sessao_encerrada_anuncio({ n: sessionName });
       else stateAnnounce = '';
     }
     prevAnnounced = s;
@@ -738,7 +739,7 @@
       if (tail.length >= TAIL_FIRST) loadOlderInBackground(g);
     } catch (err) {
       if (isAbortError(err) || g !== histGen) return;   // cancelado ≠ falhou: nada na tela
-      const msg = err instanceof Error ? err.message : 'Erro ao carregar histórico';
+      const msg = err instanceof Error ? err.message : m.chat_erro_carregar_historico();
       // Kimi pre-1o-prompt: o 404 do /history e ESPERADO (sem jsonl ainda) -> vira hint, nao a
       // tela de erro "Não encontrei o transcript" (que apavorava num estado que e por design).
       // Pelo `.status` que o apiFetch anexa, NAO por regex na frase do backend: o texto do detail
@@ -1170,8 +1171,8 @@
         if (failed.length) {
           const ok = Object.keys(results).filter((n) => results[n].ok);
           throw new Error(
-            `${ok.length ? `chegou em ${ok.join(', ')}, mas ` : ''}não chegou em ` +
-            `${failed.map(([n]) => n).join(', ')} (${failed[0][1].error ?? 'falha no envio'})`
+            `${ok.length ? m.chat_chegou_mas({ n: ok.join(', ') }) : ''}${m.chat_nao_chegou_em()}` +
+            `${failed.map(([n]) => n).join(', ')} (${failed[0][1].error ?? m.chat_falha_envio()})`
           );
         }
       } else {
@@ -1292,7 +1293,7 @@
 
   function mostrarAviso(err: unknown) {
     clearTimeout(avisoErrTimer);
-    avisoErr = err instanceof Error ? err.message : 'não deu pra enviar a resposta';
+    avisoErr = err instanceof Error ? err.message : m.chat_nao_deu_enviar_resposta();
     avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
   }
 
@@ -1407,7 +1408,7 @@
 
   {#if loading}
     <!-- Entrando na sessao: skeleton shimmer (familia Respiracao) enquanto o /history carrega. -->
-    <div class="chat-skeleton" aria-label="Carregando histórico" aria-busy="true">
+    <div class="chat-skeleton" aria-label={m.chat_carregando_historico()} aria-busy="true">
       <div class="sk-line sk-r" style="width:46%"></div>
       <div class="sk-line" style="width:82%"></div>
       <div class="sk-line" style="width:64%"></div>
@@ -1420,27 +1421,27 @@
          O composer la embaixo segue usavel: e justamente ele que faz a sessao nascer (o /input vai
          por tmux, sem jsonl). O flip tracked do poll da lista dispara a carga normal. -->
     <div class="chat-error">
-      <p class="chat-error-title">A sessão Kimi ainda não tem transcript.</p>
+      <p class="chat-error-title">{m.chat_sem_transcript_kimi()}</p>
       <p class="chat-error-hint">{untrackedReason('kimi')}</p>
-      <p class="chat-error-hint">Envie a primeira mensagem abaixo — o Kimi cria a sessão nesse envio e a conversa aparece aqui sozinha.</p>
+      <p class="chat-error-hint">{m.chat_envie_primeira_kimi()}</p>
       {#if pending.length}
         <!-- O eco pendente some da tela enquanto o hint substitui a MessageList — sem esta linha
              o 1o envio parecia engolido nos ~5s ate o poll da lista reportar o flip tracked. -->
-        <p class="chat-error-hint">Mensagem enviada — a conversa aparece aqui assim que a sessão nascer.</p>
+        <p class="chat-error-hint">{m.chat_mensagem_enviada_kimi()}</p>
       {/if}
     </div>
   {:else if error}
     <div class="chat-error">
       {#if errorInfo.notFound}
-        <p class="chat-error-title">Não encontrei o transcript desta sessão.</p>
-        <p class="chat-error-hint">O transcript pode ter sido trocado (por exemplo com <code>/clear</code>) ou o backend reiniciou. Tentar de novo costuma resolver.</p>
+        <p class="chat-error-title">{m.chat_nao_achei_transcript()}</p>
+        <p class="chat-error-hint">{m.chat_transcript_trocado_1()}<code>/clear</code>{m.chat_transcript_trocado_2()}</p>
       {:else}
-        <p class="chat-error-title">Não deu pra carregar o histórico.</p>
+        <p class="chat-error-title">{m.chat_nao_carregou_historico()}</p>
         <p class="chat-error-hint">{error}</p>
       {/if}
       <div class="chat-error-actions">
-        <button class="retry-btn" onclick={loadHistory}>Tentar novamente</button>
-        <button class="back-btn-inline" onclick={onBack}>Voltar às sessões</button>
+        <button class="retry-btn" onclick={loadHistory}>{m.lista_tentar_novamente()}</button>
+        <button class="back-btn-inline" onclick={onBack}>{m.chat_voltar_sessoes()}</button>
       </div>
     </div>
   {:else}
@@ -1473,11 +1474,11 @@
          tela, senão as três pills daqui ficam por baixo dela. -->
     {#if histGap === 'failed'}
       <button class="hist-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={() => loadOlderInBackground(histGen)}>
-        Histórico antigo não carregou — tocar pra tentar
+        {m.chat_historico_antigo()}
       </button>
     {:else}
       <div class="hist-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`}>
-        Sem o histórico anterior — o transcript mudou
+        {m.chat_sem_historico_anterior()}
       </div>
     {/if}
   {/if}
@@ -1485,9 +1486,9 @@
   {#if tuiOverlay && !mirrorOpen && !terminalPanelOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
-    <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={abrirTerminalReal} aria-label={needsLogin ? 'Abrir terminal para fazer login' : 'Abrir terminal para interagir'}>
+    <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={abrirTerminalReal} aria-label={needsLogin ? m.chat_abrir_terminal_login() : m.chat_abrir_terminal_interagir()}>
       <span class="tui-pill-dot"></span>
-      <span class="tui-pill-text">{needsLogin ? 'Sessão precisa de login — toque pra entrar' : 'Interação só pela TUI — toque pra abrir'}</span>
+      <span class="tui-pill-text">{needsLogin ? m.chat_precisa_login() : m.chat_interacao_tui()}</span>
     </button>
   {/if}
 
@@ -1504,16 +1505,16 @@
     <!-- Triage mobile (feature #4): pula pra proxima sessao aguardando resposta (wrap-around).
          Canto inferior direito (alcance do polegar) pra nao brigar com o tui-pill (centralizado)
          nem cobrir o composer/navbar. Some sozinha quando o contador zera (derived, sem cache). -->
-    <button class="awaiting-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={goNextAwaiting} aria-label={`${awaitingCount} sessão${awaitingCount > 1 ? 'ões' : ''} aguardando — ir para a próxima`}>
-      {awaitingCount} aguardando →
+    <button class="awaiting-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={goNextAwaiting} aria-label={awaitingCount > 1 ? m.chat_aguardando_proxima({ n: awaitingCount }) : m.chat_aguardando_proxima_1({ n: awaitingCount })}>
+      {m.chat_aguardando_pill({ n: awaitingCount })}
     </button>
   {/if}
 
   <div class="bottom-dock" bind:this={dockEl}>
     {#if currentState === 'dead'}
       <div class="dead-footer">
-        <p class="dead-text">Esta sessão foi encerrada.</p>
-        <button class="back-btn" onclick={onBack}>← Voltar</button>
+        <p class="dead-text">{m.chat_sessao_encerrada()}</p>
+        <button class="back-btn" onclick={onBack}>{'← '}{m.comum_voltar()}</button>
       </div>
     {:else}
       <!-- Composer SEMPRE visivel (exceto sessao morta). Antes ele sumia em awaiting_input e,
