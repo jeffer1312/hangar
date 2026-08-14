@@ -67,6 +67,9 @@ REGISTRADO 1: <uma linha> — não corrige agora porque <motivo>; fica no contra
 - Não existe achado "pequeno, entra junto com a próxima Task". Ou é bloqueador (recebe
   receita e trava esta Task), ou é REGISTRADO e **ninguém** corrige agora.
 - **Rode as verificações você mesmo.** A contagem de testes do executor é relato, não prova.
+  E **ninguém re-roda depois de você**: o árbitro confere metadado (hash, arquivos,
+  intocáveis), nunca código. Verificação que você não rodou não existe no portão — teu APROVA
+  é a última linha antes da Task seguinte.
 
 ## A receita — cinco campos, mais o inventário
 

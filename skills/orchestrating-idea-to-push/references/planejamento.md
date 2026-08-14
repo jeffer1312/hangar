@@ -213,6 +213,19 @@ própria é proibido, e largar um time de doze commits na `main` é pior. Chegue
 escolher. Se ele pedir `pull` antes, **reconfira os números do plano depois**: um pull que traz
 centenas de linhas move as linhas que o plano cita e pode mudar as contagens que a fase 1 mediu.
 
+**Baseline verde antes da Task 1.** Rode cada comando de verificação que o plano define, **uma
+vez, na base** — ainda antes de criar sessão. Só isso pega dois modos de falha que custam uma
+round inteira cada:
+
+- suíte já vermelha no HEAD de partida → a primeira REPROVA culpa o executor por quebra
+  herdada, e ninguém mais separa o que é dele do que já estava lá;
+- comando que não roda nesta máquina → DEVOLVIDO na primeira revisão ("as verificações não
+  rodam"), descoberto por quem não tem como consertar.
+
+Registre o resultado no contrato: `baseline: <comando> → <verde, N testes>, <data>`. Vermelho →
+decisão do usuário **antes** de largar: consertar antes, ou registrar como falha conhecida que
+a revisão ignora. Nunca largar calado com a base quebrada.
+
 ### Criar, na ordem
 
 ```bash
@@ -247,6 +260,53 @@ contrato** → só então os kick-offs. Endereço apontando pra arquivo que aind
 uma sessão parada perguntando.
 
 Motor inexistente devolve `400` e a sessão não nasce. Ver os motores: `claude-engine`.
+
+### O contrato nasce de esqueleto, não de memória
+
+O conteúdo do contrato está descrito em prosa em três arquivos; reconstruir de cabeça é como
+campo esquecido aparece — no meio da execução, como lacuna que ninguém decidiu (já custou um
+revisor revisando sem nenhum dos subagentes instalados, porque a seção de ferramental ficou em
+branco). Copie e preencha; campo que não se aplica leva `n/a`, **nunca some** — campo apagado é
+invisível pra quem lê depois:
+
+````markdown
+> Sessões deste grupo: invoquem a skill `orchestrating-idea-to-push`.
+> Plano: <caminho>. Branch: <branch>. HEAD de partida: <hash>.
+
+## Quem é quem
+| Papel | Sessão | Agente/motor | Conta | Como abrir |
+|---|---|---|---|---|
+| árbitro | <esta sessão> | ... | ... | (já aberta) |
+| executor | ... | ... | ... | `<comando literal>` |
+| revisor | ... | ... | ... | `<comando literal>` |
+| revisão final | ... | ... | ... | `<comando literal>` — dispara quando TODAS as Tasks de código estiverem aprovadas |
+
+Aviso de grupo contradizendo esta tabela: vale a tabela.
+
+## O que o plano possui (aponte, não copie)
+Ordem das Tasks, Steps, verificação por Task, intocáveis, barras da fase 1: <plano, seção>.
+Baseline: <comando> → <resultado>, <data>.
+
+## Ferramental de revisão (por tipo de Task)
+| Tipo de Task | Subagentes/skills a despachar | Não usar (motivo em uma linha) |
+|---|---|---|
+
+## O que a revisão precisa cobrir
+<do plano da fase 1: fluxo completo, callers irmãos, concorrência, estado final, visual>
+
+## Teto
+<custo/cota que o usuário aceita, e o que faz parar>
+
+## Barras decididas DEPOIS da aprovação do plano
+Task N — Barra: <tela, estado, largura> | nenhuma — decisão do usuário, <data>
+
+## Progresso
+| Task | Hash | Veredito | Quem corrigiu (se round de correção) |
+|---|---|---|---|
+
+## Decisões supervenientes
+<data> — <decisão, de quem, motivo em uma linha>
+````
 
 ### A sessão nova prova modelo e effort ao vivo
 

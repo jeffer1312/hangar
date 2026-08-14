@@ -50,18 +50,33 @@ Achou uma que muda como a Task devia ser feita (um padrão da casa que o plano i
 5. Commite **só os paths da Task**, por caminho explícito.
 6. **PARE.** Não comece a Task seguinte. Não emende "o Step aditivo que não encosta em nada".
 
-Reporte ao árbitro: hash, saída real dos testes (números, não "passou tudo"),
-`git status --short`, riscos que você conhece do que escreveu.
+Reporte ao árbitro **neste formato, e só ele**:
+
+```
+Task: <N> | Hash: <hash>
+Verificação: <comando> → <últimas ~3 linhas da saída, COLADAS>
+   (uma linha dessas por comando que o plano manda)
+git status --short: <saída colada>
+Irmãos fora da correção: <lista com motivo, ou "nenhum">   ← só em round de correção
+Riscos: <o que você conhece do que escreveu, ou "nenhum">
+```
+
+Saída **colada** é o que separa prova de relato: "passou tudo" e contagem descrita de cabeça
+são exatamente onde reporte inventado nasce. E o template é também um **teto**: nada de log
+inteiro, transcript de subagente, narrativa do que você tentou antes — reporte longo entope a
+fila do árbitro do mesmo jeito que revisão picada. Precisou de mais que isso, escreva num `.md`
+e mande o caminho.
 
 Reporte no passado, sobre o que **aconteceu**: ou "apliquei, hash X", ou "não apliquei,
 esperando Y". Nunca as duas coisas na mesma mensagem.
 
 ## Recebendo uma receita de correção
 
-**A receita chega do revisor, direto.** Ele te manda o caminho do `.md`; o árbitro recebe o
-veredito em paralelo e continua sendo quem abre o portão. Receita chegando por ele também
-acontece — quando há contexto que só ele tem (base trocada, decisão do contrato) ou quando ele
-segurou uma receita que parecia errada.
+**A receita chega do revisor, direto.** Ele te manda o caminho do `.md`; o árbitro **não**
+recebe o REPROVA — fica sabendo pelo teu reporte da correção — e continua sendo quem abre o
+portão. Receita chegando por ele também acontece, num caso só: contexto que só ele tem (base
+trocada, decisão do contrato). Ele não filtra receita: se ela está errada, quem pega é você,
+na reprodução abaixo.
 
 **Reproduza a causa antes de editar.** Rode o passo a passo do campo "Causa reproduzida" e veja
 o defeito acontecer com os seus olhos. É o passo que separa aplicar de obedecer, e é seu:

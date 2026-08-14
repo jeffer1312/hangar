@@ -81,9 +81,14 @@ Primeira linha, pra sessão amnésica se reancorar sozinha:
 > Plano: <caminho>. Branch: <branch>.
 ```
 
-Depois: papéis + motores + conta de cada um, **o que a revisão precisa cobrir**, ordem das
-Tasks, intocáveis, teto de gasto, e o progresso aprovado (Task → hash → veredito). Plano e
-contrato discordando sobre qual Task está liberada = a sessão para e pergunta.
+Depois, o contrato é dono **só do que nasce depois do plano**: papéis + motores + conta de
+cada um (a tabela quem-é-quem), o ferramental de revisão, **o que a revisão precisa cobrir**,
+o teto de gasto, o baseline medido, as barras decididas depois da aprovação, o progresso
+aprovado (Task → hash → veredito → quem corrigiu) e as decisões supervenientes. O que o plano
+possui — ordem das Tasks, Steps, verificação por Task, intocáveis, barras da fase 1 — o
+contrato **aponta** (arquivo e seção), nunca copia: cópia diverge, e divergência é sessão
+parada perguntando. Qual Task está liberada se lê no progresso do contrato; o que a Task
+contém se lê no plano. (Esqueleto completo em `references/planejamento.md`, fase 2.)
 
 **Quem é do grupo sai do contrato, nunca de `cp-send --list`.** Sessão viva no mesmo
 diretório é só uma sessão viva no mesmo diretório — o usuário abre sessões pro que quiser, e
