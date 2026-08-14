@@ -348,15 +348,16 @@ def _palavras_normalizadas(texto: str) -> list[str]:
     return [_CONTRACOES.get(p, p) for p in re.findall(r"[a-z0-9]+", sem_acento)]
 
 
-# Palavras que os estilos tem PERMISSAO de acrescentar: os titulos de seção do briefing. Sao o
-# unico andaime que o prompt autoriza, entao nao podem contar como conteudo inventado — sem esta
-# lista, escolher "briefing" seria escolher ser rejeitado.
+# Palavras que o briefing tem PERMISSAO de acrescentar. Sao EXATAMENTE os titulos que
+# _FECHO_BRIEFING autoriza ("Objetivo, Situação hoje, Restrições, Referência, Critério de pronto,
+# O que eu preciso saber") — nada alem. Cada palavra a mais aqui e um buraco: e uma palavra que o
+# modelo pode usar pra inventar frase sem a trava enxergar.
 _ANDAIME = frozenset("""
-objetivo situacao hoje restricoes restricao referencia criterio pronto preciso saber contexto
+objetivo situacao hoje restricoes referencia criterio pronto preciso saber
 """.split())
 
 
-def _conteudo_novo(cru: str, limpo: str) -> set[str]:
+def _conteudo_novo(cru: str, limpo: str, estilo: str) -> set[str]:
     """Palavras de conteudo que a pessoa NAO falou e que nao sao andaime de seção.
 
     Substitui a contagem crua de palavras novas. O defeito continua o mesmo — o modelo respondendo
@@ -369,8 +370,14 @@ def _conteudo_novo(cru: str, limpo: str) -> set[str]:
       limpeza honesta ................................................ 0
       prosa reorganizando um ditado real do usuario ................... 1  ('estamos')
       briefing estruturando o mesmo ditado ............................ 0
-    Por isso o teto e 2: acima do maior legitimo, abaixo do menor defeito."""
-    return _conteudo(limpo) - _conteudo(cru) - _ANDAIME
+    Por isso o teto e 2: acima do maior legitimo, abaixo do menor defeito.
+
+    O andaime so e perdoado no ESTILO que pode criá-lo. Perdoar sempre era um furo real: com
+    "limpar" — o estilo cujo prompt diz "NÃO acrescente nada" — uma saida que grudava
+    "Contexto: pronto." no fim passava com zero palavras novas, porque as duas estavam na lista.
+    Quem nao pode pôr título nenhum tem que ser cobrado por qualquer palavra que inventar."""
+    novas = _conteudo(limpo) - _conteudo(cru)
+    return novas - _ANDAIME if estilo == "briefing" else novas
 
 
 # As duas travas de tamanho (piso/teto acima) medem TAMANHO; nao pegam TROCA DE SUJEITO — a
@@ -399,9 +406,9 @@ _CONTEUDO_NOVO_PROP = 0.02
 _MULETAS = frozenset("""
 a as o os um uma uns umas de do da dos das em no na nos nas por pra para com sem que se e ou mas
 entao ai la ali aqui isso isto aquilo ele ela eles elas eu voce a gente nos me te lhe meu minha
-seu sua ja tambem so muito mais menos bem tao assim tipo ne cara ta tava to tou e_ he ah eh uh hm
+seu sua ja tambem so muito mais menos bem tao assim tipo ne cara ta tava to tou he ah eh uh hm
 ser sou e sao era eram foi foram ter tem tinha tenho havia haver fazer faz fez estar esta estou
-estava vai vou vamos ir tipo_assim sabe olha entendeu certo enfim bom talvez acho sei nao sim
+estava vai vou vamos ir sabe olha entendeu certo enfim bom talvez acho sei nao sim
 """.split())
 # Palavra curta demais nao distingue conteudo (ex: "py", "id") mas tambem nao sustenta uma
 # afirmacao sozinha; 3 letras e onde jargao real comeca (SSE, PWA, API).
@@ -455,12 +462,19 @@ _TRAVAS_POR_ESTILO = {
 }
 
 
+# Caracteres que ocupam espaco no `len()` e nao desenham NADA. Um modelo que devolve so isto passa
+# por qualquer checagem que pergunte "veio texto?" — inclusive pelo `.strip()` do Python e pelo
+# `.trim()` do JS, que so tiram espaco de verdade. Medido: uma saida com um U+200B chegava ao campo
+# do usuario como "sucesso", vazia e invisivel.
+_INVISIVEIS = str.maketrans("", "", "​‌‍⁠﻿")
+
+
 def _normalizar_saida(bruto: str) -> str:
     """Tira espaco a toa SEM matar a quebra de linha — que nos estilos novos e conteudo (paragrafo,
     item de lista, seção). O achatamento antigo (`" ".join(x.split())`) existia pra proteger um
     `send-keys` que hoje aceita '\\n' (terminal_input.send_prompt), e era ele que impedia qualquer
     saida estruturada de existir."""
-    linhas = [ln.strip() for ln in bruto.strip().splitlines()]
+    linhas = [ln.strip() for ln in bruto.translate(_INVISIVEIS).strip().splitlines()]
     saida: list[str] = []
     for ln in linhas:
         # No maximo UMA linha em branco seguida: modelo gosta de espacar demais entre seções.
@@ -490,13 +504,26 @@ def limpar_ditado(texto: str) -> tuple[str, str | None]:
         # devolver o ditado cru com um motivo do que estourar 500 e a pessoa perder os 40s que falou.
         logger.exception("limpar_ditado: falha inesperada, devolvendo o texto cru")
         return texto, f"erro inesperado na limpeza: {e}"
+    # Saida sem NADA visivel. Antes das travas de proporcao porque nenhuma delas pergunta isto: uma
+    # resposta so de caractere invisivel tem len() > 0, cobertura 1.0 (nao ha conteudo pra perder) e
+    # passava inteira, com erro=None — o ditado da pessoa sumia e o app dizia que deu certo. E o
+    # `.trim()` do front nao salva: ele tambem nao remove U+200B.
+    if not limpo:
+        return texto, "a limpeza devolveu texto vazio — ficou o original"
     if len(limpo) > travas.inflacao_max * len(cru):
         return texto, "a limpeza inflou o texto (resposta em vez de limpeza) — ficou o original"
-    if len(cru) > _LIMIAR_TEXTO_LONGO and len(limpo) < travas.encolhe_min * len(cru):
+    # O piso de encolhimento normalmente so vale em texto longo (em frase curta, encolher muito e o
+    # servico funcionando). MAS quando a fala nao tem palavra de conteudo — "e aí cara, tipo assim,
+    # então, bom" —, `_cobertura` nao tem o que comparar e devolve 1.0 por definicao, e
+    # `_conteudo_novo` fica sozinho olhando so QUANTIDADE. Sem o piso valendo aqui, as quatro travas
+    # juntas nao barram nada nesse caso. Fala so de muleta tende a ser curta, e e justamente a curta
+    # que escapava.
+    sem_conteudo = not _conteudo(cru)
+    if (len(cru) > _LIMIAR_TEXTO_LONGO or sem_conteudo) and len(limpo) < travas.encolhe_min * len(cru):
         return texto, "a limpeza resumiu em vez de limpar — ficou o original"
     if _cobertura(cru, limpo) < travas.cobertura_min:
         return texto, "a limpeza perdeu parte do que você falou — ficou o original"
     limite = max(_CONTEUDO_NOVO_MAX, _CONTEUDO_NOVO_PROP * len(_conteudo(limpo)))
-    if len(_conteudo_novo(cru, limpo)) > limite:
+    if len(_conteudo_novo(cru, limpo, estilo)) > limite:
         return texto, "a limpeza mudou o sentido em vez de so limpar — ficou o original"
     return limpo, None

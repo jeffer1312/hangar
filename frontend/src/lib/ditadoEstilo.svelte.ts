@@ -29,6 +29,16 @@ function ehEstilo(v: unknown): v is EstiloDitado {
 let atual = $state<EstiloDitado>(PADRAO);
 let carregado = false;
 let carregando: Promise<void> | null = null;
+// Contador de ESCRITAS, mesmo padrão de geração do criarConfigServidor. Existe porque GET e PATCH
+// não têm ordem entre si e nada impede dois cliques seguidos:
+//   (1) o GET da montagem responde DEPOIS de uma troca já persistida e pinta o valor velho por
+//       cima — e como `carregado` virou true, nenhuma leitura futura corrige;
+//   (2) de duas trocas sobrepostas, a PRIMEIRA falhando reverteria por cima da SEGUNDA, que deu
+//       certo no servidor.
+// Nos dois casos a tela mostraria um estilo que o servidor não tem, calada. Quem chegou depois
+// manda: leitura só pinta se nenhuma escrita começou no meio, e reversão só vale pra escrita que
+// ainda é a última.
+let escritas = 0;
 
 export const ditadoEstilo = {
   get valor(): EstiloDitado { return atual; },
@@ -43,11 +53,14 @@ export const ditadoEstilo = {
     // testes), e aí o erro escapa do encadeamento de promessas e sobe como exceção não tratada
     // dentro do $effect que roda na montagem do Composer — ou seja, no caminho do microfone, que
     // é justamente o que esta função promete nunca derrubar.
+    const escritasNoInicio = escritas;
     try {
       carregando = getConfig()
         .then((cfg) => {
           const v = cfg.campos?.ditado_estilo?.valor;
-          if (ehEstilo(v)) atual = v;
+          // Só pinta se NENHUMA troca começou enquanto este GET estava em voo: o que ele traz é o
+          // valor de antes dela, e o do usuário é mais novo que o do servidor lido.
+          if (ehEstilo(v) && escritas === escritasNoInicio) atual = v;
           carregado = true;
         })
         // Falha de leitura NAO pode travar o microfone: fica o padrao, e o proximo clique no chip
@@ -65,13 +78,25 @@ export const ditadoEstilo = {
    *  "Briefing" selecionado enquanto o servidor guarda outra coisa e mentira na cara do usuario. */
   async trocar(novo: EstiloDitado): Promise<void> {
     const antes = atual;
+    const minha = ++escritas;
     atual = novo;
     try {
       await patchConfig({ ditado_estilo: novo });
       carregado = true;
     } catch (e) {
-      atual = antes;
+      // Só reverte se esta ainda for a última troca. Se outra começou depois, ela é quem manda —
+      // reverter aqui apagaria da tela um valor que já foi persistido com sucesso.
+      if (escritas === minha) atual = antes;
       throw e;
     }
+  },
+
+  /** Só pros testes: o store é singleton com cache, então sem zerar um caso herda o `carregado` do
+   *  anterior e as corridas ficam impossíveis de montar. */
+  _zerarParaTeste(): void {
+    atual = PADRAO;
+    carregado = false;
+    carregando = null;
+    escritas = 0;
   },
 };

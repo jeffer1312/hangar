@@ -6,6 +6,19 @@ from app import runtime_config, narrar
 from app.narrar import NarrarError
 
 
+@pytest.fixture(autouse=True)
+def _config_isolada(monkeypatch, tmp_path):
+    """Toda a suite le config de um diretorio VAZIO, nunca do ~/.claude da maquina.
+
+    Sem isto, `limpar_ditado` -> `_estilo_efetivo` -> `estilo_ditado` -> `runtime_config.get`
+    abria o runtime-config.json de PRODUCAO desta maquina, e as travas testadas eram as do estilo
+    que estivesse salvo ali. Os testes de guarda passavam porque o valor no disco era `prosa`, igual
+    ao padrao — coincidencia de ambiente, nao algo que a suite fixa: trocando pra `limpar` (que sobe
+    a cobertura de 0.60 pra 0.80), um deles passava a ser rejeitado por OUTRO motivo e a assercao
+    quebrava. Mesmo isolamento que test_runtime_config.py ja fazia."""
+    monkeypatch.setattr(runtime_config, "_backend_config_base", lambda: str(tmp_path))
+
+
 def _com_chave(monkeypatch):
     monkeypatch.setattr(runtime_config, "get", lambda campo: "k" if campo == "groq_api_key" else None)
 
@@ -559,3 +572,61 @@ def test_guarda_tem_folga_proporcional_em_texto_longo(monkeypatch):
     texto, erro = narrar.limpar_ditado(cru)
     assert erro is None
     assert texto == " ".join(limpo.split())
+
+
+# Buraco achado pelo cacador de falha calada em 14/08/2026, reproduzido antes de consertar: um
+# ditado feito SO de muleta ("e ai cara tipo assim entao bom") nao tem palavra de conteudo, entao
+# _cobertura devolve 1.0 por definicao (nao ha o que perder) e _conteudo_novo fica sozinho olhando
+# quantidade. Com o piso de encolhimento valendo so em texto longo, as QUATRO travas passavam e o
+# ditado da pessoa sumia com erro=None — o app reportando sucesso.
+
+def test_saida_so_com_caractere_invisivel_e_rejeitada(monkeypatch):
+    # U+200B tem len() > 0 e sobrevive ao .strip() do Python E ao .trim() do JS: o front nao pega.
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: "​")
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    cru = "e ai cara tipo assim entao bom"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru
+    assert erro is not None and "vazio" in erro
+
+
+def test_ditado_so_de_muleta_ainda_tem_piso_de_encolhimento(monkeypatch):
+    """Sem conteudo pra comparar, cobertura vira 1.0 e so sobra o tamanho. O piso, que normalmente
+    e so pra texto longo, tem que valer aqui — fala so de muleta e curta por natureza."""
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: "ok")
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    cru = "e ai cara tipo assim entao bom"
+    assert not narrar._conteudo(cru), "a amostra precisa ser 100% muleta pra exercitar o caso"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru
+    assert erro is not None
+
+
+def test_texto_curto_com_conteudo_pode_encolher_muito(monkeypatch):
+    """O piso NAO pode passar a valer pra frase curta COM conteudo: cortar muleta ali encolhe muito
+    e e o servico funcionando. So o caso sem conteudo nenhum e que mudou."""
+    monkeypatch.setattr(narrar, "chamar_chat",
+                        lambda *a, **k: "Usa o Postgres pra fila.")
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    cru = "entao é... é o seguinte tipo assim usa o postgres pra fila né cara"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert erro is None, erro
+    assert texto == "Usa o Postgres pra fila."
+    assert len(texto) < 0.5 * len(cru), "a amostra precisa encolher forte pra exercitar o piso"
+
+
+def test_andaime_so_e_perdoado_no_briefing(monkeypatch):
+    """Furo achado na review: `_ANDAIME` era descontado em TODOS os estilos, entao uma saida que
+    inventava frase usando essas palavras passava ate no "limpar", cujo prompt diz "NÃO acrescente
+    nada". Quem nao pode por titulo nenhum tem que ser cobrado por qualquer palavra inventada."""
+    cru = ("roda o teste do modulo de pagamento e depois me avisa se passou direitinho porque a "
+           "fila de deploy hoje esta cheia e eu preciso saber logo do resultado")
+    inventado = cru.capitalize() + " Objetivo: criterio de pronto."
+
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: inventado)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "limpar")
+    _, erro = narrar.limpar_ditado(cru)
+    assert erro is not None and "sentido" in erro, "limpar nao pode ganhar perdao de andaime"
+
+    # No briefing as MESMAS palavras sao titulo legitimo — a trava nao pode matar o que o prompt manda fazer.
+    assert not narrar._conteudo_novo(cru, inventado, "briefing")
