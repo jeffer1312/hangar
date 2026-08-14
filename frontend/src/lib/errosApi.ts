@@ -36,11 +36,12 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_motor_nome_com_dados: () => m.erro_motor_nome_com_dados(),
   erro_motor_nome_ou_dados: () => m.erro_motor_nome_ou_dados(),
 
-  // /api/model-options — catalogo do Pi falhou ou provider desconhecido
+  // /api/model-options e POST /api/sessions — catalogo do Pi falhou ou provider fora de escopo
   erro_pi_list_models: (p) => m.erro_pi_list_models({ erro: String(p.erro) }),
   erro_provider_invalido: () => m.erro_provider_invalido(),
 
   // /api/archive — arquivo inexistente, path invalido, motor errado no resume
+  // (erro_imagem_nao_encontrada tambem e usado por /api/sessions/{name}/transcript-image)
   erro_path_invalido: () => m.erro_path_invalido(),
   erro_projeto_nao_encontrado: () => m.erro_projeto_nao_encontrado(),
   erro_transcript_nao_encontrado: () => m.erro_transcript_nao_encontrado(),
@@ -49,7 +50,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_cwd_ausente: () => m.erro_cwd_ausente(),
   erro_motor_invalido: () => m.erro_motor_invalido(),
 
-  // /api/ask-history — kill-switch desligado
+  // /api/ask-history e /api/sessions/{name}/loop — kill-switch desligado
   erro_automacoes_desligadas: () => m.erro_automacoes_desligadas(),
 
   // /api/tts — texto vazio apos limpar, teto, limite, audio sumido do cache
@@ -72,6 +73,88 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // require_auth / require_loopback — 429 do backoff, 403 do loopback
   erro_so_loopback: () => m.erro_so_loopback(),
+
+  // ===== /api/sessions — Task 11 =====
+
+  // Existencia: sessao/pane/transcript que nao existe (shell, rename, loop, history,
+  // workflows, subagents, events, uploads, plan, file, model/options, engine/model)
+  erro_sessao_inexistente: () => m.erro_sessao_inexistente(),
+  erro_sessao_nao_encontrada_detalhe: (p) => m.erro_sessao_nao_encontrada_detalhe({ detalhe: String(p.detalhe) }),
+  erro_sessao_recado_nao_enfileirado: () => m.erro_sessao_recado_nao_enfileirado(),
+  erro_sessao_opcao_nao_enviada: () => m.erro_sessao_opcao_nao_enviada(),
+  erro_workflow_inexistente: () => m.erro_workflow_inexistente(),
+  erro_agente_inexistente: () => m.erro_agente_inexistente(),
+  erro_subagente_inexistente: () => m.erro_subagente_inexistente(),
+  erro_transcript_ausente: () => m.erro_transcript_ausente(),
+
+  // Conflito: nome em uso, sessao viva, pane ocupado
+  erro_nome_em_uso: () => m.erro_nome_em_uso(),
+  erro_nome_invalido: () => m.erro_nome_invalido(),
+  erro_rename_falhou: () => m.erro_rename_falhou(),
+  erro_encadeamento_proprio: () => m.erro_encadeamento_proprio(),
+  erro_sessao_tmux_em_uso: (p) => m.erro_sessao_tmux_em_uso({ nome: String(p.nome) }),
+  erro_shell_criacao_falhou: () => m.erro_shell_criacao_falhou(),
+  erro_peer_nao_informado: () => m.erro_peer_nao_informado(),
+  erro_autopareamento: () => m.erro_autopareamento(),
+  erro_initiator_invalido: () => m.erro_initiator_invalido(),
+  erro_pareamento_cross_1_1: () => m.erro_pareamento_cross_1_1(),
+  erro_pareamento_server_id_ausente: () => m.erro_pareamento_server_id_ausente(),
+  erro_pareamento_desfeito: (p) => m.erro_pareamento_desfeito({ nomes: String(p.nomes) }),
+  erro_pareamento_nao_confirmado: (p) => m.erro_pareamento_nao_confirmado({ srv: String(p.srv), erro: String(p.erro) }),
+  erro_pareamento_rejeitado: (p) => m.erro_pareamento_rejeitado({ erro: String(p.erro) }),
+  erro_pareamento_aviso_falhou: (p) => m.erro_pareamento_aviso_falhou({ nome: String(p.nome), erro: String(p.erro) }),
+  erro_group_message_slash: () => m.erro_group_message_slash(),
+  erro_sessao_sem_grupo: () => m.erro_sessao_sem_grupo(),
+  erro_sessao_nao_pareada: () => m.erro_sessao_nao_pareada(),
+
+  // Estado errado: terminal aberto, sessao trabalhando, loop ativo
+  erro_terminal_aberto: () => m.erro_terminal_aberto(),
+  erro_terminal_invalido: (p) => m.erro_terminal_invalido({ nome: String(p.nome) }),
+  erro_terminal_ausente: () => m.erro_terminal_ausente(),
+  erro_terminal_abertura_falhou: (p) => m.erro_terminal_abertura_falhou({ erro: String(p.erro) }),
+  erro_terminal_saiu_cedo: (p) => m.erro_terminal_saiu_cedo({ saida: String(p.saida) }),
+  erro_loop_provider_invalido: () => m.erro_loop_provider_invalido(),
+  erro_loop_ja_ativo: () => m.erro_loop_ja_ativo(),
+  erro_loop_branch_invalida: (p) => m.erro_loop_branch_invalida({ br: String(p.br) }),
+  erro_loop_inexistente: () => m.erro_loop_inexistente(),
+  erro_loop_estado_errado: () => m.erro_loop_estado_errado(),
+  erro_sem_confirmacao_resposta: () => m.erro_sem_confirmacao_resposta(),
+  erro_sem_confirmacao_troca: () => m.erro_sem_confirmacao_troca(),
+
+  // Entrada invalida: nome, caminho, modelo, motor
+  erro_config_dir_invalido: () => m.erro_config_dir_invalido(),
+  erro_motor_sem_claude: () => m.erro_motor_sem_claude(),
+  erro_conta_reconciliacao_falhou: (p) => m.erro_conta_reconciliacao_falhou({ nome_conta: String(p.nome_conta), erro: String(p.erro) }),
+  erro_cwd_indisponivel: () => m.erro_cwd_indisponivel(),
+  erro_arquivo_grande: () => m.erro_arquivo_grande(),
+  erro_sem_plano_ativo: () => m.erro_sem_plano_ativo(),
+  erro_sem_pasta_planos: () => m.erro_sem_pasta_planos(),
+  erro_nome_plano_invalido: (p) => m.erro_nome_plano_invalido({ nome: String(p.nome) }),
+  erro_plano_nao_encontrado: (p) => m.erro_plano_nao_encontrado({ nome: String(p.nome) }),
+  erro_gravar_pin: (p) => m.erro_gravar_pin({ erro: String(p.erro) }),
+  erro_editor_falhou: (p) => m.erro_editor_falhou({ binario: String(p.binario), erro: String(p.erro) }),
+  erro_arquivo_nao_citado: () => m.erro_arquivo_nao_citado(),
+  erro_caminho_fora_cwd: () => m.erro_caminho_fora_cwd(),
+  erro_arquivo_nao_encontrado: () => m.erro_arquivo_nao_encontrado(),
+  erro_rota_so_claude: () => m.erro_rota_so_claude(),
+  erro_rota_so_motor: () => m.erro_rota_so_motor(),
+  erro_rota_so_pi: () => m.erro_rota_so_pi(),
+  erro_limits_so_codex: () => m.erro_limits_so_codex(),
+  erro_models_so_codex: () => m.erro_models_so_codex(),
+  erro_model_so_codex: () => m.erro_model_so_codex(),
+  erro_model_effort_faltando: () => m.erro_model_effort_faltando(),
+  erro_motor_ausente: (p) => m.erro_motor_ausente({ nome: String(p.nome) }),
+  erro_provedor_offline: (p) => m.erro_provedor_offline({ nome: String(p.nome), erro: String(p.erro) }),
+  erro_modelo_fora_catalogo: (p) => m.erro_modelo_fora_catalogo({ motor: String(p.motor), modelo: String(p.modelo) }),
+
+  // Capacidade ausente: extensao do Pi, catalogo, resposta que nao veio
+  erro_sem_pergunta_pi: () => m.erro_sem_pergunta_pi(),
+  erro_sem_pergunta_kimi: () => m.erro_sem_pergunta_kimi(),
+  erro_sem_resposta: () => m.erro_sem_resposta(),
+  erro_drive_sem_fallback: (p) => m.erro_drive_sem_fallback({ erro: String(p.erro) }),
+  erro_drive_fallback_falhou: (p) => m.erro_drive_fallback_falhou({ erro: String(p.erro) }),
+  erro_catalogo_pi_indisponivel: () => m.erro_catalogo_pi_indisponivel(),
+  erro_pi_recusou_troca: (p) => m.erro_pi_recusou_troca({ provider: String(p.provider), id: String(p.id), thinking: String(p.thinking) }),
 };
 
 export function mensagemDeErro(code: string, params: Parametros = {}): string | undefined {

@@ -271,7 +271,7 @@ def test_selecionar_opcao_recusa_com_painel_aberto(sessao, monkeypatch):
     r = c.post(f"/api/sessions/{sessao}/select",
                json={"option": 1}, headers={"Authorization": "Bearer secret"})
     assert r.status_code == 409
-    assert "terminal" in r.json()["detail"].lower()
+    assert r.json()["detail"]["code"] == "erro_terminal_aberto"
 
 
 def test_mandar_prompt_continua_funcionando_com_painel_aberto(sessao, monkeypatch):
@@ -422,7 +422,7 @@ def test_open_terminal_sem_emulador_devolve_erro_visivel(sessao, monkeypatch):
     c = _client()
     r = c.post(f"/api/sessions/{sessao}/open-terminal", headers={"Authorization": "Bearer secret"})
     assert r.status_code == 503
-    assert "emulador" in r.json()["detail"].lower()
+    assert r.json()["detail"]["code"] == "erro_terminal_ausente"
 
 
 def test_open_terminal_detecta_emulador_que_morre_logo_apos_abrir(sessao, monkeypatch, tmp_path):
@@ -442,7 +442,9 @@ def test_open_terminal_detecta_emulador_que_morre_logo_apos_abrir(sessao, monkey
     c = _client()
     r = c.post(f"/api/sessions/{sessao}/open-terminal", headers={"Authorization": "Bearer secret"})
     assert r.status_code == 503
-    assert "display" in r.json()["detail"].lower()
+    d = r.json()["detail"]
+    assert d["code"] == "erro_terminal_saiu_cedo"
+    assert "display" in d["params"]["saida"].lower()   # stderr do emulador vai no params
 
 
 def test_open_terminal_aceita_emulador_que_sai_0_logo_apos_abrir(sessao, monkeypatch, tmp_path):

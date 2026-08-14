@@ -610,7 +610,7 @@ def test_select_404_when_session_missing(api_client, monkeypatch):
     with patch("app.api.terminal.select") as sel:
         r = api_client.post("/api/sessions/ghost/select", json={"option": 2}, headers=_h())
     assert r.status_code == 404
-    assert "NÃO enviada" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "erro_sessao_opcao_nao_enviada"
     sel.assert_not_called()
 
 
@@ -1715,7 +1715,7 @@ def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
          patch("app.api._session_config_dir", return_value=None):
         r = api_client.get("/api/sessions/pp/pi/models", headers=_h())
     assert r.status_code == 409
-    assert "install-claude-wrapper" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "erro_catalogo_pi_indisponivel"
 
 
 def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
@@ -1752,8 +1752,9 @@ def test_pi_model_set_recusado_pelo_pi_vira_409(api_client):
         r = api_client.post("/api/sessions/pp/pi/model", headers=_h(),
                             json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
     assert r.status_code == 409
-    assert "recusou" in r.json()["detail"]
-    assert "kimi-coding/k3" in r.json()["detail"]   # diz onde a sessao FICOU
+    d = r.json()["detail"]
+    assert d["code"] == "erro_pi_recusou_troca"
+    assert d["params"]["provider"] == "kimi-coding" and d["params"]["id"] == "k3"  # diz onde a sessao FICOU
 
 
 def test_pi_model_set_sem_republicacao_diz_que_nao_confirmou(api_client):
@@ -1769,7 +1770,7 @@ def test_pi_model_set_sem_republicacao_diz_que_nao_confirmou(api_client):
                             json={"provider": "clinepass", "model": "cline-pass/glm-5.2"})
     assert r.status_code == 409
     d = r.json()["detail"]
-    assert "nao da pra confirmar" in d and "recusou" not in d
+    assert d["code"] == "erro_sem_confirmacao_troca"
 
 
 def test_pi_model_set_rejects_model_outside_catalog(api_client):

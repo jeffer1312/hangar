@@ -242,7 +242,10 @@ def test_falha_na_reconciliacao_devolve_erro_e_nao_cria_sessao(casa, monkeypatch
             "name": "s1", "cwd": str(casa), "config_dir": str(casa / ".claude-conta2"),
             "provider": "claude"}, headers=AUTH)
         assert r.status_code == status
-        assert trecho in r.json()["detail"]
+        # ContaError passa o detail como string; OSError vira o dict {code, params, msg} do
+        # erro_conta_reconciliacao_falhou — as duas formas tem que chegar no usuario.
+        d = r.json()["detail"]
+        assert trecho in (d["msg"] if isinstance(d, dict) else d)
     assert criados == []
 
 

@@ -363,7 +363,7 @@ def abrir_shell(name: str):
     from app import tmux
     info = next((s for s in registry.list() if s.name == name), None)
     if info is None:
-        raise HTTPException(status_code=404, detail="sessao nao existe")
+        raise HTTPException(status_code=404, detail=erro("erro_sessao_inexistente", "sessao nao existe"))
     alvo = f"term-{name}"
     # Achado da revisao (I1, e de novo na rodada 2): `sanitize_session_name` aceita hifen, entao
     # "term-<nome>" pode ja existir como sessao de TERCEIRO (ex: usuario criou "foo" e depois
@@ -379,14 +379,15 @@ def abrir_shell(name: str):
         # timeout, ver tmux.new_hidden_shell) -- e como este gate recusa ANTES de chamar aquela
         # funcao, nada se autocorrige sozinho: quem desempata e o usuario.
         raise HTTPException(status_code=409,
-                            detail=f"ja existe uma sessao tmux chamada {alvo!r} sem a marca do "
-                                   "painel -- pode ser uma sessao sua de mesmo nome, ou o shell "
-                                   "deste painel que perdeu a marca. Encerre ou renomeie essa "
-                                   "sessao antes de abrir o shell")
+                            detail=erro("erro_sessao_tmux_em_uso",
+                                        f"ja existe uma sessao tmux chamada {alvo!r} sem a marca do "
+                                        "painel -- pode ser uma sessao sua de mesmo nome, ou o shell "
+                                        "deste painel que perdeu a marca. Encerre ou renomeie essa "
+                                        "sessao antes de abrir o shell", nome=alvo))
     # O cwd vem do REGISTRY, nunca da query: um `?cwd=/` viraria shell em qualquer lugar do disco.
     novo = tmux.new_hidden_shell(name, info.cwd or str(Path.home()))
     if novo is None:
-        raise HTTPException(status_code=500, detail="tmux recusou criar o shell")
+        raise HTTPException(status_code=500, detail=erro("erro_shell_criacao_falhou", "tmux recusou criar o shell"))
     return {"ok": True, "shell": novo}
 
 
@@ -420,7 +421,7 @@ def abrir_terminal_nativo(name: str):
     """
     from app import tmux
     if not tmux.has_session(name):
-        raise HTTPException(status_code=404, detail="sessao nao existe")
+        raise HTTPException(status_code=404, detail=erro("erro_sessao_inexistente", "sessao nao existe"))
     nome_bin = os.environ.get("CP_TERMINAL")
     if nome_bin:
         # env checada ANTES do PATH: se o usuario apontou um emulador, e ele que vale -- so falha
@@ -428,13 +429,14 @@ def abrir_terminal_nativo(name: str):
         # inventa um `-e` generico pra emulador desconhecido).
         if nome_bin not in _EMULADORES or shutil.which(nome_bin) is None:
             raise HTTPException(status_code=503,
-                                detail=f"CP_TERMINAL={nome_bin!r} nao encontrado no PATH ou nao "
-                                       "suportado")
+                                detail=erro("erro_terminal_invalido",
+                                            f"CP_TERMINAL={nome_bin!r} nao encontrado no PATH ou nao "
+                                            "suportado", nome=nome_bin))
     else:
         nome_bin = next((n for n in _ORDEM_PROBE if shutil.which(n)), None)
         if nome_bin is None:
             raise HTTPException(status_code=503,
-                                detail="nenhum emulador de terminal encontrado no PATH")
+                                detail=erro("erro_terminal_ausente", "nenhum emulador de terminal encontrado no PATH"))
     args = tmux._scope_prefix() + _EMULADORES[nome_bin](f"={name}:")
     env = os.environ.copy()
     wl = tmux._wayland_display()
@@ -458,7 +460,7 @@ def abrir_terminal_nativo(name: str):
                              stdout=subprocess.DEVNULL, stderr=err_file)
     except OSError as e:
         err_file.close()
-        raise HTTPException(status_code=503, detail=f"falha ao abrir o emulador de terminal: {e}")
+        raise HTTPException(status_code=503, detail=erro("erro_terminal_abertura_falhou", f"falha ao abrir o emulador de terminal: {e}", erro=str(e)))
     # Falha aparece, nao some (achado da revisao): o Popen so levanta se o BINARIO nao existe --
     # sem DISPLAY, com o compositor errado, ou qualquer erro pos-exec, o processo sai sozinho em
     # poucos ms e o `except OSError` acima nunca ve nada, devolvendo "ok" pra uma janela que nunca
@@ -472,11 +474,13 @@ def abrir_terminal_nativo(name: str):
     # janela que abriu certo.
     if morreu is not None and morreu != 0:
         err_file.seek(0)
-        erro = err_file.read().decode(errors="replace").strip()
+        saida = err_file.read().decode(errors="replace").strip()
         err_file.close()
         raise HTTPException(status_code=503,
-                            detail=f"emulador de terminal saiu logo apos abrir: "
-                                   f"{erro or f'codigo {morreu}'}")
+                            detail=erro("erro_terminal_saiu_cedo",
+                                        f"emulador de terminal saiu logo apos abrir: "
+                                        f"{saida or f'codigo {morreu}'}",
+                                        saida=saida or f"codigo {morreu}"))
     err_file.close()   # nosso handle; o filho, se ainda vivo, segue escrevendo no fd dele
     # Este `Popen` nunca e colhido explicitamente (sem wait(), sem thread de reaper): a janela vive
     # muito alem deste request e esperar por ela seria travar a rota. Quem colhe e o proprio
@@ -1194,16 +1198,16 @@ async def create_session(body: CreateBody):
     # Validar provider, config_dir e engine ANTES de qualquer efeito no disco: um pedido que vai
     # ser rejeitado aqui não pode ter reconciliado a conta (deriva movida, memória criada) à toa.
     if body.provider not in ("claude", "codex", "pi", "kimi"):
-        raise HTTPException(400, "provider invalido")
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
-        raise HTTPException(400, "config_dir invalido")
+        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
     # Mesma guarda do config_dir. Codex nao usa spawn_command/tmux desse jeito, entao motor + codex e
     # pedido incoerente — 400, nao "ignora e segue".
     if body.engine is not None:
         if body.provider != "claude":
-            raise HTTPException(400, "motor so vale para provider claude")
+            raise HTTPException(400, detail=erro("erro_motor_sem_claude", "motor so vale para provider claude"))
         if body.engine not in await asyncio.to_thread(engines.listar):
-            raise HTTPException(400, "motor invalido")
+            raise HTTPException(400, detail=erro("erro_motor_invalido", "motor invalido"))
     # Mesma regra das linhas acima, pro model/effort: recusa ANTES de qualquer efeito no disco,
     # inclusive pro provedor fora de escopo (codex/kimi) quando alguem pedir escolha — o valor
     # entraria num comando de shell montado por concatenacao.
@@ -1256,8 +1260,10 @@ async def create_session(body: CreateBody):
                         # abertura falhou (ex: Windows sem Modo Desenvolvedor recusando symlink).
                         raise HTTPException(e.status, e.detail) from None
                     except OSError as e:
-                        raise HTTPException(500, f"não consegui reconciliar a conta "
-                                                 f"{nome_conta}: {e}") from None
+                        raise HTTPException(500, detail=erro("erro_conta_reconciliacao_falhou",
+                                             f"não consegui reconciliar a conta "
+                                             f"{nome_conta}: {e}", nome_conta=nome_conta,
+                                             erro=str(e))) from None
                     for aviso in avisos:
                         _log.warning("conta %s: %s", alvo.name, aviso)
                     try:
@@ -1306,15 +1312,15 @@ def rename_session(name: str, body: RenameBody):
     # /proc), entao renomear nao quebra o historico. Migra so o sidecar da fila (keyed por nome).
     new = sanitize_session_name(body.new)
     if not new:
-        raise HTTPException(400, "nome invalido")
+        raise HTTPException(400, detail=erro("erro_nome_invalido", "nome invalido"))
     if not tmux.has_session(name):
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if new == name:
         return {"ok": True, "name": name}
     if tmux.has_session(new):
-        raise HTTPException(409, "ja existe uma sessao com esse nome")
+        raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
     if not tmux.rename_session(name, new):
-        raise HTTPException(500, "falha ao renomear")
+        raise HTTPException(500, detail=erro("erro_rename_falhou", "falha ao renomear"))
     registry.rename(name, new)  # migra o cache name->jsonl (senao serve transcript errado pos-rename)
     from app.pqueue import PromptQueue
     try:
@@ -1338,9 +1344,9 @@ def set_then_link(name: str, body: ThenLinkBody):
     setar de novo so troca alvo/texto, nao encadeia mais niveis."""
     from app import tmux
     if body.target == name:
-        raise HTTPException(400, "sessao nao pode encadear pra si mesma")
+        raise HTTPException(400, detail=erro("erro_encadeamento_proprio", "sessao nao pode encadear pra si mesma"))
     if not tmux.has_session(body.target):
-        raise HTTPException(404, "sessao alvo nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao alvo nao encontrada"))
     ThenLink(name).set(body.target, body.text)
     return {"ok": True}
 
@@ -1404,21 +1410,21 @@ def _loop_ctx(name: str) -> "loop_mod.TickCtx | None":
 def loop_create(name: str, body: LoopCreate):
     info = next((i for i in registry.list() if i.name == name), None)
     if info is None:
-        raise HTTPException(404, "sessão não encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
     if getattr(info, "provider", "claude") != "claude":
         # Codex e outros nao sao tmux: sem hook de transicao, o tick nunca dispara -> loop ficaria
         # running mudo pra sempre. Recusa cedo em vez de criar um loop-zumbi.
-        raise HTTPException(409, "loop runner só suporta sessões claude")
+        raise HTTPException(409, detail=erro("erro_loop_provider_invalido", "loop runner só suporta sessões claude"))
     if not automations_enabled():
-        raise HTTPException(409, "automações desligadas (kill-switch)")
+        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
     with loop_mod._lock:
         link = loop_mod.LoopLink(name)
         cur = link.get()
         if cur and cur["status"] in loop_mod.ACTIVE:
-            raise HTTPException(409, "já existe um loop ativo nesta sessão")
+            raise HTTPException(409, detail=erro("erro_loop_ja_ativo", "já existe um loop ativo nesta sessão"))
         br = branch_of(info.cwd) if info.cwd else None
         if body.require_branch and br in ("main", "master"):
-            raise HTTPException(409, f"sessão está na branch {br} — crie uma branch ou desligue 'exigir branch'")
+            raise HTTPException(409, detail=erro("erro_loop_branch_invalida", f"sessão está na branch {br} — crie uma branch ou desligue 'exigir branch'", br=br))
         d = loop_mod.new_loop(body.goal, body.check_cmd, body.max_iters, body.require_branch)
         entry = PromptQueue(name).append(body.goal, delivered=False)
         d["goal_entry_id"] = entry["id"]
@@ -1440,7 +1446,7 @@ def loop_stop(name: str):
     with loop_mod._lock:
         link = loop_mod.LoopLink(name)
         if link.get() is None:
-            raise HTTPException(404, "nenhum loop nesta sessão")
+            raise HTTPException(404, detail=erro("erro_loop_inexistente", "nenhum loop nesta sessão"))
         d = loop_mod._end(link, name, "stopped", "parado pelo usuário", push.notify_loop)
     return {"loop": d}
 
@@ -1451,7 +1457,7 @@ def loop_refine(name: str, body: LoopRefine):
     sidecar; o {name} da rota so mantem a familia de URLs consistente. Falha do CLI -> 502.
     Sob o kill-switch mestre: refine dispara um agente autonomo, entao respeita automations_enabled."""
     if not automations_enabled():
-        raise HTTPException(409, "automações desligadas (kill-switch)")
+        raise HTTPException(409, detail=erro("erro_automacoes_desligadas", "automações desligadas (kill-switch)"))
     try:
         return {"goal": loop_mod.refine_goal(body.goal, body.check_cmd)}
     except loop_mod.ClaudePError as e:
@@ -1465,7 +1471,7 @@ def loop_resolve(name: str, body: LoopResolve):
         link = loop_mod.LoopLink(name)
         cur = link.get()
         if cur is None or cur["status"] != "done_claimed":
-            raise HTTPException(409, "loop não está aguardando confirmação")
+            raise HTTPException(409, detail=erro("erro_loop_estado_errado", "loop não está aguardando confirmação"))
         if body.accept:
             d = loop_mod._end(link, name, "done", "confirmado pronto", push.notify_loop)
             return {"loop": d}
@@ -1502,7 +1508,7 @@ def resume_session(name: str, body: ResumeBody):
         except ValueError as e:
             raise HTTPException(404, str(e))
         if not candidates:
-            raise HTTPException(404, "nenhum transcript pra retomar neste diretorio")
+            raise HTTPException(404, detail=erro("erro_transcript_ausente", "nenhum transcript pra retomar neste diretorio"))
         if ambiguous and len(candidates) > 1:
             return {"ambiguous": True, "candidates": candidates}
         sid = candidates[0]["session_id"]
@@ -1516,7 +1522,7 @@ def resume_session(name: str, body: ResumeBody):
 async def history(name: str, limit: int | None = None):
     info = await _cached_info(name)
     if not info or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.pqueue import merged_history
     # provider: o rollout do Codex tem um shape DIFERENTE do jsonl do Claude (ver
     # app.adapters.codex.rollout) -- sem isto merged_history tentava o parser do Claude em toda
@@ -1539,7 +1545,7 @@ async def history(name: str, limit: int | None = None):
 async def workflows_list(name: str):
     info = await _cached_info(name)
     if not info or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.workflows import list_workflows
     return await asyncio.to_thread(list_workflows, info.jsonl)
 
@@ -1548,11 +1554,11 @@ async def workflows_list(name: str):
 async def workflow_detail(name: str, run_id: str):
     info = await _cached_info(name)
     if not info or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.workflows import get_workflow
     wf = await asyncio.to_thread(get_workflow, info.jsonl, run_id)
     if wf is None:
-        raise HTTPException(404, "workflow run not found")
+        raise HTTPException(404, detail=erro("erro_workflow_inexistente", "workflow run not found"))
     return wf
 
 
@@ -1560,11 +1566,11 @@ async def workflow_detail(name: str, run_id: str):
 async def workflow_agent_detail(name: str, run_id: str, agent_id: str):
     info = await _cached_info(name)
     if not info or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.workflows import get_agent
     a = await asyncio.to_thread(get_agent, info.jsonl, run_id, agent_id)
     if a is None:
-        raise HTTPException(404, "agent not found")
+        raise HTTPException(404, detail=erro("erro_agente_inexistente", "agent not found"))
     return a
 
 
@@ -1588,7 +1594,7 @@ async def subagents_list(name: str):
     # e é a ÚNICA fonte do que ele está chamando enquanto roda; o jsonl do pai só tem o pedido.
     info = await _cached_info(name)
     if not info or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.subagents import list_subagents
     return await asyncio.to_thread(list_subagents, info.jsonl)
 
@@ -1597,13 +1603,13 @@ async def subagents_list(name: str):
 async def subagent_detail(name: str, agent_id: str, events: int = 0):
     info = await _cached_info(name)
     if not info or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.subagents import get_subagent
     # events=N -> devolve tambem o transcript do subagente nos MESMOS ChatEvent do chat, pra a UI
     # reusar a lista de mensagens em vez de desenhar um formato proprio.
     a = await asyncio.to_thread(get_subagent, info.jsonl, agent_id, 40, events)
     if a is None:
-        raise HTTPException(404, "subagent not found")
+        raise HTTPException(404, detail=erro("erro_subagente_inexistente", "subagent not found"))
     return a
 
 
@@ -1619,7 +1625,7 @@ async def events(name: str, request: Request):
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if not info or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     # Retomada exata: o id que emitimos no transcript e "<stem-do-jsonl>:<offset-em-bytes>". Chega
     # por header (Last-Event-ID, que o browser reenvia sozinho quando o MESMO EventSource reconecta)
     # ou por query param (o app fecha e recria o EventSource no proprio retry, e objeto novo nunca
@@ -1941,7 +1947,7 @@ async def input_prompt(name: str, body: InputBody):
     # git status pendurado + refine (60s, pool do anyio) + check (600s, thread propria) nao seguram
     # o POST /input. Ver _send_thread.
     if not await _send_thread(_session_exists, name):
-        raise HTTPException(404, "sessão não encontrada — recado NÃO enfileirado")
+        raise HTTPException(404, detail=erro("erro_sessao_recado_nao_enfileirado", "sessão não encontrada — recado NÃO enfileirado"))
     if _provider_of(name) == "codex":
         res = await _send_one_codex(name, body.text)
     else:
@@ -2032,23 +2038,25 @@ async def pair_session(name: str, body: PairBody):
     iniciativa própria, dentro do escopo da tarefa. Badge `pair_peers` aparece na lista."""
     others = [p for p in dict.fromkeys(body.peers or ([body.peer] if body.peer else [])) if p]
     if not others:
-        raise HTTPException(400, "informe peer ou peers")
+        raise HTTPException(400, detail=erro("erro_peer_nao_informado", "informe peer ou peers"))
     if name in others:
-        raise HTTPException(400, "não dá pra parear uma sessão com ela mesma")
+        raise HTTPException(400, detail=erro("erro_autopareamento", "não dá pra parear uma sessão com ela mesma"))
     if any(peers.is_remote(o) for o in others):
         # Cross-server é 1:1 puro (um peer remoto, sem misturar grupo local) — grupo cross-server de
         # N fica pra fase 2. ponytail: 1:1 cobre "trabalhar junto entre máquinas"; N quando doer.
         if len(others) != 1:
-            raise HTTPException(400, "pareamento cross-server é 1:1 por enquanto: um peer remoto, "
-                                     "sem misturar com grupo local")
+            raise HTTPException(400, detail=erro("erro_pareamento_cross_1_1",
+                                             "pareamento cross-server é 1:1 por enquanto: um peer remoto, "
+                                             "sem misturar com grupo local"))
         if not settings.server_id:
-            raise HTTPException(400, "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
-                                     "pareamento cross-server (é o endereço de resposta srv::sessao)")
+            raise HTTPException(400, detail=erro("erro_pareamento_server_id_ausente",
+                                             "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
+                                             "pareamento cross-server (é o endereço de resposta srv::sessao)"))
         return await _pair_cross_server(name, others[0], body.task)
     names = {s.name for s in await asyncio.to_thread(registry.list)}
     missing = [p for p in [name, *others] if p not in names]
     if missing:
-        raise HTTPException(404, f"sessão não encontrada: {', '.join(missing)}")
+        raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {', '.join(missing)}", detalhe=", ".join(missing)))
     # join_group: snapshot + join na MESMA seção crítica (em seções separadas, um join concorrente
     # na janela entre elas entrava no grupo fora do snapshot e um rollback posterior não o
     # reverteria). O snapshot volta pra cá pra desfazer se o aviso não chegar em ninguém.
@@ -2067,7 +2075,7 @@ async def pair_session(name: str, body: PairBody):
     if len(errs) == len(members):
         # NINGUÉM foi avisado -> grupo fantasma; restaura o estado anterior e reporta.
         await asyncio.to_thread(pair.restore, snap)
-        raise HTTPException(502, f"pareamento desfeito: falha ao avisar as sessões ({'; '.join(errs)})")
+        raise HTTPException(502, detail=erro("erro_pareamento_desfeito", f"pareamento desfeito: falha ao avisar as sessões ({'; '.join(errs)})", nomes="; ".join(errs)))
     # Falha parcial: grupo vale (AO MENOS 1 membro sabe), e o warning nomeia quem ficou sem aviso
     # — o front mostra em vez de fingir sucesso total.
     return {"ok": True, "members": members,
@@ -2081,7 +2089,7 @@ async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
     do 'grupo fantasma' do pair local). Transporte já provado pelo cp-send cross-server (peers.json)."""
     local_names = {s.name for s in await asyncio.to_thread(registry.list)}
     if name not in local_names:
-        raise HTTPException(404, f"sessão não encontrada: {name}")
+        raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
     srv, sess = peers.split_addr(peer)
     try:
         members, snap = await asyncio.to_thread(pair.join_group, name, [peer], task)
@@ -2106,9 +2114,11 @@ async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
                                         f"/api/sessions/{sess}/unpair-remote", {"peer": initiator})
             except peers.PeerError:
                 pass
-            raise HTTPException(502, f"pareamento NÃO confirmado (falha de rede com '{srv}'): desfeito "
-                                     f"deste lado; se o peer tiver ficado pareado, rode unpair lá. ({e})")
-        raise HTTPException(502, f"pareamento desfeito (peer rejeitou): {e}")
+            raise HTTPException(502, detail=erro("erro_pareamento_nao_confirmado",
+                                             f"pareamento NÃO confirmado (falha de rede com '{srv}'): desfeito "
+                                             f"deste lado; se o peer tiver ficado pareado, rode unpair lá. ({e})",
+                                             srv=srv, erro=str(e)))
+        raise HTTPException(502, detail=erro("erro_pareamento_rejeitado", f"pareamento desfeito (peer rejeitou): {e}", erro=str(e)))
     # Reverso registrado. Injeta o protocolo NESTE lado; se este falhar (sessão morreu na janela), o
     # vínculo já vale dos dois lados — só avisa, não desfaz (o par remoto já sabe).
     warn = None
@@ -2130,10 +2140,10 @@ async def pair_remote(name: str, body: PairRemoteBody):
     registrou o próprio lado — chamar de volta recursaria). Chamado só pelo backend do outro server
     via peers.call, autenticado pelo token do peers.json."""
     if not peers.is_remote(body.initiator):
-        raise HTTPException(400, "initiator precisa ser qualificado (srv::nome)")
+        raise HTTPException(400, detail=erro("erro_initiator_invalido", "initiator precisa ser qualificado (srv::nome)"))
     local_names = {s.name for s in await asyncio.to_thread(registry.list)}
     if name not in local_names:
-        raise HTTPException(404, f"sessão não encontrada: {name}")
+        raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
     try:
         members, snap = await asyncio.to_thread(pair.join_group, name, [body.initiator], body.task)
     except pair.PairMixError as e:
@@ -2142,7 +2152,7 @@ async def pair_remote(name: str, body: PairRemoteBody):
     e = await _deliver(name, _group_text(name, [body.initiator], body.task))
     if e:
         await asyncio.to_thread(pair.restore, snap)
-        raise HTTPException(502, f"pareamento desfeito: falha ao avisar '{name}': {e}")
+        raise HTTPException(502, detail=erro("erro_pareamento_aviso_falhou", f"pareamento desfeito: falha ao avisar '{name}': {e}", nome=name, erro=str(e)))
     return {"ok": True, "members": members}
 
 
@@ -2181,11 +2191,11 @@ async def group_message(name: str, body: GroupMsgBody):
     um [grupo:] com --group) — é o que impede o loop de N sessões se avisando em cascata.
     Slash-command fora (mesmo racional do /broadcast)."""
     if body.text.lstrip().startswith("/"):
-        raise HTTPException(400, "group-message não suporta slash-commands")
+        raise HTTPException(400, detail=erro("erro_group_message_slash", "group-message não suporta slash-commands"))
     link = await asyncio.to_thread(lambda: PairLink(name).get())
     peers = link.get("peers") if link else None
     if not peers:
-        raise HTTPException(404, "sessão não está num grupo")
+        raise HTTPException(404, detail=erro("erro_sessao_sem_grupo", "sessão não está num grupo"))
     text = f"[grupo: {name}] {body.text}"
     results: dict[str, dict] = {}
     for p in peers:
@@ -2207,7 +2217,7 @@ def pair_contract(name: str):
     estável quando membro entra/sai). 404 sem grupo; content vazio se ainda não existe."""
     p = contract_path_for(name)
     if p is None:
-        raise HTTPException(404, "sessão não está pareada")
+        raise HTTPException(404, detail=erro("erro_sessao_nao_pareada", "sessão não está pareada"))
     link = PairLink(name).get() or {}
     try:
         content = p.read_text(encoding="utf-8")
@@ -2327,8 +2337,9 @@ def _recusa_se_painel_aberto(name: str) -> None:
     from app import termsock
     if name in termsock.clientes_ativos():
         raise HTTPException(status_code=409,
-                            detail="Terminal aberto nesta sessao. Feche o painel pra responder "
-                                   "por aqui.")
+                            detail=erro("erro_terminal_aberto",
+                                        "Terminal aberto nesta sessao. Feche o painel pra responder "
+                                        "por aqui."))
 
 
 @app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth)])
@@ -2341,7 +2352,7 @@ def select(name: str, body: SelectBody):
     # TerminalMirror também passam por lá.)
     _recusa_se_painel_aberto(name)
     if not _session_exists(name):
-        raise HTTPException(404, "sessão não encontrada — opção NÃO enviada")
+        raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
     terminal.select(name, body.option)
     return {"ok": True}
 
@@ -2376,7 +2387,7 @@ async def limits(name: str):
     # So Codex tem rate limits expostos pelo app-server (account/rateLimits/read) -- Claude tem o
     # proprio chip de rate-limit (status_line), fora do escopo aqui (regra de ouro: Claude intocado).
     if _provider_of(name) != "codex":
-        raise HTTPException(400, "limits so existe pra sessoes Codex")
+        raise HTTPException(400, detail=erro("erro_limits_so_codex", "limits so existe pra sessoes Codex"))
     snapshot = await get_adapter("codex").read_rate_limits(name)
     if snapshot is None:
         # app-server indisponivel/recusou -- resposta neutra (sem erro), o front so nao mostra nada.
@@ -2398,7 +2409,7 @@ async def codex_models(name: str):
     # Task C: modelo + reasoning effort so pra Codex (via model/list) -- o /model do Claude e o
     # picker interativo dedicado (/model-effort), sem esta rota.
     if _provider_of(name) != "codex":
-        raise HTTPException(400, "models so existe pra sessoes Codex")
+        raise HTTPException(400, detail=erro("erro_models_so_codex", "models so existe pra sessoes Codex"))
     adapter = get_adapter("codex")
     return {"models": await adapter.list_models(name), "current": adapter.current_model(name)}
 
@@ -2407,7 +2418,7 @@ async def codex_models(name: str):
 async def set_codex_model(name: str, body: CodexModelBody):
     # Grava a escolha e reabre/configura a TUI; se ha turno em voo, aplica ao terminar.
     if _provider_of(name) != "codex":
-        raise HTTPException(400, "model so existe pra sessoes Codex")
+        raise HTTPException(400, detail=erro("erro_model_so_codex", "model so existe pra sessoes Codex"))
     await get_adapter("codex").set_model(name, body.model, body.effort)
     return {"ok": True}
 
@@ -2421,7 +2432,7 @@ def pane(name: str, lines: int = 200):
     # cada poll de 450ms.
     from app import tmux
     if not tmux.has_session(name):
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     # `scrollback` diz se pedir mais linhas ADIANTA. Num TUI de tela alternada (Claude Code) vale 0:
     # o tmux nao guarda historico ali, e quem quer subir tem que rolar o PROPRIO TUI (PageUp), nao o
     # tmux. Sem esse dado a UI ofereceria "carregar mais historico" que nunca traria nada.
@@ -2635,12 +2646,12 @@ async def upload(name: str, request: Request):
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if info is None:
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if not info.cwd:
-        raise HTTPException(409, "cwd da sessao indisponivel")
+        raise HTTPException(409, detail=erro("erro_cwd_indisponivel", "cwd da sessao indisponivel"))
     clen = request.headers.get("content-length")
     if clen and clen.isdigit() and int(clen) > 100 * 1024 * 1024:
-        raise HTTPException(413, "arquivo maior que 100 MiB")
+        raise HTTPException(413, detail=erro("erro_arquivo_grande", "arquivo maior que 100 MiB"))
     data = await request.body()
     # Filename do cliente (X-Filename, percent-encoded) ou ?name= -> so a EXTENSAO e usada
     # (o nome final e gerado pelo servidor). Qualquer tipo de arquivo.
@@ -2689,12 +2700,12 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False):
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if info is None:
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if not info.cwd:
-        raise HTTPException(409, "cwd da sessao indisponivel")
+        raise HTTPException(409, detail=erro("erro_cwd_indisponivel", "cwd da sessao indisponivel"))
     clen = request.headers.get("content-length")
     if clen and clen.isdigit() and int(clen) > 100 * 1024 * 1024:
-        raise HTTPException(413, "arquivo maior que 100 MiB")
+        raise HTTPException(413, detail=erro("erro_arquivo_grande", "arquivo maior que 100 MiB"))
     data = await request.body()
     filename = request.headers.get("x-filename") or request.query_params.get("name")
     try:
@@ -2716,7 +2727,7 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False):
 def serve_upload(name: str, filename: str):
     info = next((s for s in registry.list() if s.name == name), None)
     if info is None or not info.cwd:
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     try:
         path = resolve_upload(info.cwd, filename)
     except UploadError as e:
@@ -2731,7 +2742,7 @@ def list_session_uploads(name: str):
     # prune usaria outro.
     info = next((s for s in registry.list() if s.name == name), None)
     if info is None or not info.cwd:
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     return {"files": list_uploads(info.cwd, runtime_config.get("upload_retention_days"))}
 
 
@@ -2760,7 +2771,7 @@ def _session_cwd(name: str) -> str:
     # cwd da sessao tmux (mesmo lookup do upload). 404 se a sessao/cwd nao existe.
     info = next((s for s in registry.list() if s.name == name), None)
     if info is None or not info.cwd:
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     return info.cwd
 
 
@@ -2776,7 +2787,7 @@ async def session_plan(name: str):
     cwd = await asyncio.to_thread(_session_cwd, name)   # ja levanta 404 sem sessao/cwd
     p = await asyncio.to_thread(plan_progress, cwd)
     if p is None:
-        raise HTTPException(404, "sem plano ativo")
+        raise HTTPException(404, detail=erro("erro_sem_plano_ativo", "sem plano ativo"))
     try:
         markdown = await asyncio.to_thread(
             lambda: Path(p.path).read_text(encoding="utf-8", errors="replace"))
@@ -2804,7 +2815,7 @@ async def session_plans(name: str):
     cwd = await asyncio.to_thread(_session_cwd, name)
     r = await asyncio.to_thread(list_plans, cwd)
     if r is None:
-        raise HTTPException(404, "repo sem pasta de planos")
+        raise HTTPException(404, detail=erro("erro_sem_pasta_planos", "repo sem pasta de planos"))
     return r
 
 
@@ -2819,21 +2830,21 @@ async def session_plan_pin(name: str, body: PlanPinBody):
     cwd = await asyncio.to_thread(_session_cwd, name)
     root = await asyncio.to_thread(_plans_dir, cwd)
     if root is None:
-        raise HTTPException(404, "repo sem pasta de planos")
+        raise HTTPException(404, detail=erro("erro_sem_pasta_planos", "repo sem pasta de planos"))
     if body.stem is not None and body.stem != PIN_NONE:
         # So um plano que existe DE VERDADE nesta raiz. Sem isto, o stem viraria nome de arquivo
         # vindo do cliente — e a checagem de traversal do read_pin nao cobriria um nome valido
         # apontando pra plano de outro repo. A guarda de separador vem ANTES do isfile: com um
         # `../..` o proprio isfile ja responderia se existe .md fora da pasta de planos.
         if not is_safe_stem(body.stem):
-            raise HTTPException(400, f"nome de plano invalido: {body.stem}")
+            raise HTTPException(400, detail=erro("erro_nome_plano_invalido", f"nome de plano invalido: {body.stem}", nome=body.stem))
         alvo = os.path.join(root, body.stem + ".md")
         if not await asyncio.to_thread(os.path.isfile, alvo):
-            raise HTTPException(404, f"plano nao encontrado: {body.stem}")
+            raise HTTPException(404, detail=erro("erro_plano_nao_encontrado", f"plano nao encontrado: {body.stem}", nome=body.stem))
     try:
         await asyncio.to_thread(write_pin, root, body.stem)
     except PlanPinError as e:
-        raise HTTPException(500, f"nao deu pra gravar o pin: {e}")
+        raise HTTPException(500, detail=erro("erro_gravar_pin", f"nao deu pra gravar o pin: {e}", erro=str(e)))
     return {"pinned": body.stem}
 
 
@@ -3128,7 +3139,7 @@ def open_editor(name: str):
         subprocess.Popen([binario, cwd],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
-        raise HTTPException(500, f"editor '{binario}' falhou: {e}")
+        raise HTTPException(500, detail=erro("erro_editor_falhou", f"editor '{binario}' falhou: {e}", binario=binario, erro=str(e)))
     return {"ok": True}
 
 
@@ -3137,11 +3148,11 @@ def transcript_image(name: str, uuid: str, idx: int):
     # Serve uma imagem colada no TERMINAL (base64 no .jsonl) sob demanda. Decodifica por uuid+idx.
     jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
     if not jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.transcript import get_transcript_image
     got = get_transcript_image(jsonl, uuid, idx)
     if got is None:
-        raise HTTPException(404, "image not found")
+        raise HTTPException(404, detail=erro("erro_imagem_nao_encontrada", "image not found"))
     raw, media = got
     # immutable: o conteudo de um uuid+idx nunca muda -> cache agressivo no cliente.
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
@@ -3275,22 +3286,22 @@ def serve_file(name: str, path: str):
     # o arquivo), nao o cwd do processo backend; guard extra: o resolvido nao pode ESCAPAR do cwd.
     info = next((s for s in registry.list() if s.name == name), None)
     if info is None or not info.jsonl:
-        raise HTTPException(404, "session or transcript not found")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.transcript import path_in_transcript
     if not path_in_transcript(info.jsonl, path):
-        raise HTTPException(403, "file not referenced in this conversation")
+        raise HTTPException(403, detail=erro("erro_arquivo_nao_citado", "file not referenced in this conversation"))
     expanded = os.path.expanduser(path)
     if os.path.isabs(expanded):
         real = os.path.realpath(expanded)
     else:
         if not info.cwd:
-            raise HTTPException(409, "cwd da sessao indisponivel")
+            raise HTTPException(409, detail=erro("erro_cwd_indisponivel", "cwd da sessao indisponivel"))
         base = os.path.realpath(info.cwd)
         real = os.path.realpath(os.path.join(base, expanded))
         if real != base and not real.startswith(base + os.sep):
-            raise HTTPException(403, "path escapes session cwd")
+            raise HTTPException(403, detail=erro("erro_caminho_fora_cwd", "path escapes session cwd"))
     if not os.path.isfile(real):
-        raise HTTPException(404, "file not found")
+        raise HTTPException(404, detail=erro("erro_arquivo_nao_encontrado", "file not found"))
     media = mimetypes.guess_type(real)[0] or "application/octet-stream"
     return FileResponse(real, media_type=media)
 
@@ -3381,9 +3392,9 @@ def answer(name: str, body: AnswerBody):
         from app.adapters.pi.transcript import read_pending_question
         q = read_pending_question(jsonl) if jsonl else None
         if q is None:
-            raise HTTPException(409, "nenhuma pergunta do Pi pendente (ja respondida no terminal?)")
+            raise HTTPException(409, detail=erro("erro_sem_pergunta_pi", "nenhuma pergunta do Pi pendente (ja respondida no terminal?)"))
         if not answers:
-            raise HTTPException(409, "sem resposta")
+            raise HTTPException(409, detail=erro("erro_sem_resposta", "sem resposta"))
         try:
             terminal_input.answer_question_pi(name, answers[0], q)
         except ValueError as e:
@@ -3394,12 +3405,12 @@ def answer(name: str, body: AnswerBody):
             if not text:
                 # Sem texto de fallback, NAO manda o Escape: picker aberto = usuario ainda responde
                 # no terminal. Fechar e devolver ok sem entregar nada seria a pior saida (silencio).
-                raise HTTPException(409, f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal")
+                raise HTTPException(409, detail=erro("erro_drive_sem_fallback", f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
             terminal.interrupt(name)  # Escape unico: fecha o picker do Pi (sem clear — input vazio)
             _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
-                raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
+                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {res['error']}", erro=str(res['error'])))
             fallback = True
         return {"ok": True, "fallback": fallback}
 
@@ -3413,9 +3424,9 @@ def answer(name: str, body: AnswerBody):
         from app.adapters.kimi.transcript import read_pending_call, resposta_chegou
         pend = read_pending_call(jsonl) if jsonl else None
         if pend is None:
-            raise HTTPException(409, "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)")
+            raise HTTPException(409, detail=erro("erro_sem_pergunta_kimi", "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
         if not answers:
-            raise HTTPException(409, "sem resposta")
+            raise HTTPException(409, detail=erro("erro_sem_resposta", "sem resposta"))
         call_id, args = pend
         perguntas = args.get("questions") if isinstance(args.get("questions"), list) else []
         try:
@@ -3433,8 +3444,9 @@ def answer(name: str, body: AnswerBody):
                 if terminal_input.picker_kimi_aberto(name):
                     raise terminal_input.DriveError(
                         "Submit nao pegou: o picker continua aberto e o tool.result nao apareceu")
-                raise HTTPException(409, "resposta enviada, mas nao deu pra confirmar a tempo — "
-                                         "confira na sessao antes de responder de novo")
+                raise HTTPException(409, detail=erro("erro_sem_confirmacao_resposta",
+                                             "resposta enviada, mas nao deu pra confirmar a tempo — "
+                                             "confira na sessao antes de responder de novo"))
         except ValueError as e:
             raise HTTPException(409, str(e))
         except terminal_input.DriveError as e:
@@ -3443,12 +3455,12 @@ def answer(name: str, body: AnswerBody):
             if not text:
                 # Sem texto de fallback, NAO manda o Escape: picker aberto = o usuario ainda pode
                 # responder no terminal. Fechar e devolver ok sem entregar nada seria a pior saida.
-                raise HTTPException(409, f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal")
+                raise HTTPException(409, detail=erro("erro_drive_sem_fallback", f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
             terminal.interrupt(name)  # Escape unico: fecha o picker do Kimi (sem clear — input vazio)
             _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
-                raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
+                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {res['error']}", erro=str(res['error'])))
             return {"ok": True, "fallback": True}
         return {"ok": True, "fallback": False}
     try:
@@ -3463,7 +3475,7 @@ def answer(name: str, body: AnswerBody):
             _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
             res = _send_one(name, text)
             if not res["ok"]:
-                raise HTTPException(409, f"drive falhou e fallback por texto tambem: {res['error']}")
+                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {res['error']}", erro=str(res['error'])))
         fallback = True
     # Respondido: limpa o sidecar do hook pra um stale nao reabrir o stepper depois. Resolve o jsonl
     # igual aos outros endpoints; se nao resolver, pula a limpeza sem falhar a request.
@@ -3536,12 +3548,12 @@ async def _engine_models(nome: str, fresco: bool = False) -> list[dict]:
         return hit[1]
     cfg = engines.listar().get(nome)
     if not cfg:
-        raise HTTPException(409, f"motor {nome!r} nao esta mais no engines.json")
+        raise HTTPException(409, detail=erro("erro_motor_ausente", f"motor {nome!r} nao esta mais no engines.json", nome=nome))
     try:
         modelos = await asyncio.to_thread(engine_probe.listar_modelos, cfg["base_url"], cfg["api_key"])
     except RuntimeError as e:
         # A mensagem do provedor E a informacao util (key invalida, host fora do ar).
-        raise HTTPException(502, f"o provedor do motor {nome!r} nao respondeu: {e}")
+        raise HTTPException(502, detail=erro("erro_provedor_offline", f"o provedor do motor {nome!r} nao respondeu: {e}", nome=nome, erro=str(e)))
     _engine_models_cache[nome] = (time.monotonic(), modelos)
     return modelos
 
@@ -3551,9 +3563,9 @@ async def model_options(name: str):
     """Modelos que ESTA sessao pode escolher. `kind` diz de onde vieram e como aplicar."""
     info = await _cached_info(name)
     if not info:
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if info.provider not in (None, "claude"):
-        raise HTTPException(400, "esta rota so existe pra sessoes Claude Code")
+        raise HTTPException(400, detail=erro("erro_rota_so_claude", "esta rota so existe pra sessoes Claude Code"))
     if info.engine:
         # Motor: catalogo vem do /v1/models do provedor (HTTP), nao do pane -- nao conta linha,
         # nao depende do tamanho da janela. A guarda so vale pro ramo abaixo (le o picker).
@@ -3623,16 +3635,16 @@ async def engine_model_set(name: str, body: EngineModelBody):
     _recusa_se_painel_aberto(name)
     info = await _cached_info(name)
     if not info:
-        raise HTTPException(404, "sessao nao encontrada")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if not info.engine:
-        raise HTTPException(400, "esta rota so existe pra sessoes que rodam num motor")
+        raise HTTPException(400, detail=erro("erro_rota_so_motor", "esta rota so existe pra sessoes que rodam num motor"))
     # fresco=True: a validacao promete "recusa aqui em vez de deixar a falha aparecer so no proximo
     # turno", e essa promessa nao sobrevive ao cache de 5 min (ver _engine_models).
     modelos = await _engine_models(info.engine, fresco=True)
     if not any(m["id"] == body.model for m in modelos):
         # Recusar aqui em vez de digitar: o CC aceitaria o id, a sessao passaria a mandar request
         # pra um modelo que o provedor nao tem, e a falha apareceria so no proximo turno.
-        raise HTTPException(422, f"modelo fora do catalogo do motor {info.engine!r}: {body.model}")
+        raise HTTPException(422, detail=erro("erro_modelo_fora_catalogo", f"modelo fora do catalogo do motor {info.engine!r}: {body.model}", motor=info.engine, modelo=body.model))
 
     cfg_dir = _session_config_dir(name)  # mesma leitura de /proc que resolve o config dir das outras rotas
     antes = await asyncio.to_thread(default_model.snapshot, cfg_dir)
@@ -3727,16 +3739,17 @@ def _session_config_dir_strict(name: str) -> tuple[Path | None, bool]:
 async def _pi_catalog(name: str) -> tuple[dict, str]:
     info = await _cached_info(name)
     if not info or not info.jsonl:
-        raise HTTPException(404, "sessao ou transcript nao encontrado")
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao ou transcript nao encontrado"))
     if info.provider != "pi":
-        raise HTTPException(400, "esta rota so existe pra sessoes Pi")
+        raise HTTPException(400, detail=erro("erro_rota_so_pi", "esta rota so existe pra sessoes Pi"))
     cat = await asyncio.to_thread(pi_models.read_catalog, info.jsonl, _session_config_dir(name))
     if cat is None:
         # Falha ALTA: sem o sidecar nao ha catalogo real, e inventar um faria o app oferecer
         # modelos que o `/cp-model` nao encontraria. Instrucao junto porque a causa e sempre a
         # mesma (extensao velha/ausente) e o conserto e um comando.
-        raise HTTPException(409, "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh "
-                                 "e reinicie a sessao (extensao cp-state.ts desatualizada)")
+        raise HTTPException(409, detail=erro("erro_catalogo_pi_indisponivel",
+                                             "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh "
+                                             "e reinicie a sessao (extensao cp-state.ts desatualizada)"))
     return cat, info.jsonl
 
 
@@ -3762,7 +3775,7 @@ async def pi_model_set(name: str, body: PiModelBody):
     except pi_models.PiModelError as e:
         raise HTTPException(e.status, e.detail)
     if not cmds:
-        raise HTTPException(422, "informe model (com provider) e/ou effort")
+        raise HTTPException(422, detail=erro("erro_model_effort_faltando", "informe model (com provider) e/ou effort"))
     try:
         await asyncio.to_thread(terminal.send_pi_commands, name, cmds)
     except terminal_input.DriveError as e:
@@ -3781,13 +3794,17 @@ async def pi_model_set(name: str, body: PiModelBody):
     # sidecar ilegivel ou parado no MESMO `ts` = o Pi nem republicou o catalogo (comando pode nao ter
     # chegado) -> indeterminado; `ts` novo com o modelo velho = o Pi processou e RECUSOU.
     if after is None or after.get("ts") == cat.get("ts"):
-        raise HTTPException(409, "comandos digitados, mas o Pi nao republicou o catalogo — nao da "
-                                 "pra confirmar a troca; veja o modelo no proprio terminal")
+        raise HTTPException(409, detail=erro("erro_sem_confirmacao_troca",
+                                             "comandos digitados, mas o Pi nao republicou o catalogo — nao da "
+                                             "pra confirmar a troca; veja o modelo no proprio terminal"))
     cur = after.get("current") or {}
-    raise HTTPException(409, f"o Pi recusou a troca — segue em "
-                             f"{cur.get('provider')}/{cur.get('id')} (raciocinio "
-                             f"{after.get('thinking')}). Causa mais comum: sem chave configurada "
-                             f"pro provedor pedido (o Pi avisa dentro do TUI)")
+    raise HTTPException(409, detail=erro("erro_pi_recusou_troca",
+                                             f"o Pi recusou a troca — segue em "
+                                             f"{cur.get('provider')}/{cur.get('id')} (raciocinio "
+                                             f"{after.get('thinking')}). Causa mais comum: sem chave configurada "
+                                             f"pro provedor pedido (o Pi avisa dentro do TUI)",
+                                             provider=cur.get("provider"), id=cur.get("id"),
+                                             thinking=after.get("thinking")))
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])

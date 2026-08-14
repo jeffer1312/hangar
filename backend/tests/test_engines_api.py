@@ -189,7 +189,7 @@ def test_modelos_recusa_nome_junto_com_api_key_de_terceiro(cli):
 def test_create_sessao_com_motor_desconhecido_e_400(cli):
     r = cli.post("/api/sessions", json={"name": "x", "cwd": "/tmp", "engine": "fantasma"}, headers=AUTH)
     assert r.status_code == 400
-    assert "motor" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "erro_motor_invalido"
 
 
 def test_create_sessao_com_motor_e_provider_codex_e_400(cli):
@@ -197,7 +197,7 @@ def test_create_sessao_com_motor_e_provider_codex_e_400(cli):
     r = cli.post("/api/sessions",
                  json={"name": "x", "cwd": "/tmp", "provider": "codex", "engine": "kimi"}, headers=AUTH)
     assert r.status_code == 400
-    assert "provider" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "erro_motor_sem_claude"
 
 
 def test_create_sessao_com_motor_valido_repassa_a_keyword(cli):

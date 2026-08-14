@@ -289,7 +289,7 @@ def test_confirmacao_atrasada_nao_entrega_duas_vezes(monkeypatch, tmp_path):
     monkeypatch.setattr(api.terminal_input, "picker_kimi_aberto", lambda n: False)
     with pytest.raises(HTTPException) as e:
         api.answer("k", body)
-    assert e.value.status_code == 409 and "confirmar a tempo" in e.value.detail
+    assert e.value.status_code == 409 and e.value.detail["code"] == "erro_sem_confirmacao_resposta"
     assert enviados == [] and escapes == []       # nada duplicado, nenhum turno interrompido
 
     # picker AINDA aberto = prova de que nada pegou: fallback por texto, como sempre
