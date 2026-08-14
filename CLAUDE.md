@@ -340,6 +340,36 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   parser/`sse._status_sig` tem exceção pro rótulo `ctx`, a mesma do Pi) e **não há 💵** (Kimi é
   assinatura de valor fixo, mesmo motivo do Claude em motor). O ⏱ dele é a idade do
   `wire.jsonl` (birthtime), não duração de API como no Claude.
+- **O `wire.jsonl` do Kimi não é um transcript bem-comportado** — duas armadilhas medidas em
+  14/08/2026, as duas em produção, na mesma sessão:
+  - **Nem toda escrita é turno.** O hook grava `idle` no `Stop` e `state.corrige_ocioso_kimi`
+    promovia pra `working` sempre que o arquivo fosse mais novo que o marcador (é o que cobre o
+    prompt ENFILEIRADO na TUI, que não dispara hook nenhum). Só que o Kimi grava `config.update` —
+    o system prompt inteiro, ~90KB — com a sessão parada: turno fechou 08:28, o `config.update` caiu
+    08:40 e a sessão ficou "em execução" com o pane no prompt. Agora o mtime é só o **portão barato**
+    (um `stat` por poll) e quem decide é `_kimi_turno_aberto`, que lê o **fim** do arquivo até a
+    primeira fronteira de turno: `turn.ended`/`turn.cancel` = parada, `turn.prompt`/`turn.steer` =
+    andando (levantado sobre todos os wires da máquina: não há outro `turn.*`). O regex é só filtro
+    barato — quem decide é o `type` de TOPO da linha, via json, senão uma msg CITANDO
+    `"type":"turn.ended"` vira fronteira.
+  - **`tool.result` não tem `uuid`** (só `parentUuid` e `toolCallId`), e o parser mandava `id=""`.
+    O front deduplica evento **por id** (`Chat.svelte`, `idIndex`), então os 205 resultados de uma
+    sessão real disputavam o MESMO slot: cada um apagava o anterior. Dois estragos ao mesmo tempo —
+    todo card de ferramenta preso em "Executando…", e o card do **AskUserQuestion reabrindo depois
+    de respondido** (o front deriva "respondida" da presença do `tool_result`; quando a ferramenta
+    seguinte tomava o slot, a pergunta voltava a parecer pendente). Id agora é `res:<toolCallId>`.
+    O teste antigo não pegou porque fabricava um `uuid` que o Kimi nunca manda: **ao escrever teste
+    de parser, copie o shape do wire real**, não o que a doc sugere.
+- **Furar a fila do Kimi (steer)** (`terminal_input.steer_now` + `POST /api/sessions/{name}/steer` +
+  o chip `⏳ N na fila · mandar agora` no `Composer`): msg enviada com a sessão trabalhando fica na
+  fila da TUI do Kimi ("↑ to edit · ctrl-s to steer immediately"); o `ctrl-s` a injeta no turno em
+  curso — vira `turn.steer` no wire, no MESMO turnId, com o `context.append_message` de user de
+  sempre (por isso o dedup da fila durável não muda nada). Medido: o ctrl-s promove a fila
+  **inteira** de uma vez (duas msgs entraram como um bloco só), e com a sessão parada é no-op. É
+  tecla avulsa, não parâmetro do envio: a decisão "essa não espera" vem DEPOIS de já ter mandado. O
+  número do chip conta as bolhas translúcidas — eco local (`pending`) **mais** os eventos
+  `queued-` da fila durável; só o eco local dava 0 (ele some em ~1s, quando o `queued-` chega) e o
+  chip nunca nascia. 409 fora do Kimi.
 - **Prévia ao vivo: sidecar do agente primeiro, pane depois** (`preview.read_sidecar` +
   `scripts/pi/cp-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
   Pi recebe o bloco do assistente token a token (`message_update`) e publica o **último bloco de

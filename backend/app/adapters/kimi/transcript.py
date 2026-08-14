@@ -103,7 +103,21 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
     if et == "tool.result":
         result = ev.get("result")
         is_error = result.get("isError") if isinstance(result, dict) else None
-        return [ChatEvent(kind="tool_result", id=eid, tool_use_id=ev.get("toolCallId"),
+        # O `tool.result` do Kimi NAO tem `uuid` — so `parentUuid` (o uuid do tool.call) e
+        # `toolCallId`. Medido em 14/08/2026 numa sessao real: 205 dos 205 tool_result saiam com
+        # id="" e o app deduplica eventos POR ID (Chat.svelte, `idIndex`) — logo TODOS ocupavam o
+        # mesmo slot: cada resultado novo SUBSTITUIA o anterior, e a sessao inteira ficava com um
+        # resultado so. Dois estragos visiveis: todo card de ferramenta preso em "Executando…", e a
+        # pergunta do AskUserQuestion REABRINDO depois de respondida (a lista deriva "respondida" da
+        # presenca do tool_result; quando a ferramenta seguinte tomava o slot, a pergunta voltava a
+        # parecer pendente). Prefixo "res:" pra nunca colidir com o uuid do proprio tool.call.
+        cid = ev.get("toolCallId") or ev.get("parentUuid") or eid
+        if not cid:
+            # Terceiro elo vazio = o Kimi mudou o formato. Volta o bug de cima (todos os resultados
+            # no mesmo slot), e sem esta linha ele voltaria CALADO, do mesmo jeito que apareceu.
+            _log.warning("kimi: tool.result sem toolCallId/parentUuid/uuid — id vazio: %.200s", ev)
+        return [ChatEvent(kind="tool_result", id=f"res:{cid}" if cid else "",
+                          tool_use_id=ev.get("toolCallId"),
                           result=_result_text(result), is_error=bool(is_error), ts=_ts(obj))]
 
     return []

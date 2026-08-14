@@ -69,6 +69,23 @@ def test_tool_result_links_by_tool_call_id():
     assert ev[0].is_error is False
 
 
+# 14/08/2026, sessao real: TODO card de ferramenta ficava preso em "Executando…" e a pergunta do
+# AskUserQuestion REABRIA depois de respondida. Causa: o `tool.result` do Kimi nao tem `uuid` (so
+# `parentUuid` + `toolCallId`) e saia daqui com id="" — os 205 resultados da sessao ocupavam o MESMO
+# slot no dedup por id do front (Chat.svelte, `idIndex`), cada um apagando o anterior. O teste acima
+# nao pegou porque fabricava um `uuid` que o Kimi nunca manda.
+def test_tool_result_sem_uuid_ganha_id_unico():
+    def res(cid):
+        return kt.parse_obj(_loop({"type": "tool.result", "parentUuid": f"pai-{cid}",
+                                   "toolCallId": cid, "result": {"output": "ok"}}))[0]
+    a, b = res("tool_1"), res("tool_2")
+    assert a.id and b.id and a.id != b.id
+    # O par (tool_use, tool_result) da MESMA chamada tambem nao pode colidir: a lista guarda os dois.
+    uso = kt.parse_obj(_loop({"type": "tool.call", "uuid": "u9", "toolCallId": "tool_1",
+                              "name": "Read", "args": {}}))[0]
+    assert a.id != uso.id and a.tool_use_id == uso.tool_use_id == "tool_1"
+
+
 def test_non_conversation_lines_are_ignored():
     for t in ({"type": "metadata", "protocol_version": "1.5"},
               {"type": "turn.prompt", "input": [{"type": "text", "text": "dup"}]},
