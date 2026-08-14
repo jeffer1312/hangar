@@ -352,6 +352,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     andando (levantado sobre todos os wires da máquina: não há outro `turn.*`). O regex é só filtro
     barato — quem decide é o `type` de TOPO da linha, via json, senão uma msg CITANDO
     `"type":"turn.ended"` vira fronteira.
+  - **O main fica MUDO quando delega.** Subagente (tool `Agent`/`AgentSwarm`) roda no mesmo
+    processo mas escreve no wire DELE (`<sessão>/agents/agent-N/wire.jsonl`); o
+    `agents/main/wire.jsonl` não recebe uma linha enquanto isso. E quando um subagente termina, o
+    hook `Stop` dispara com o `session_id` da SESSÃO — marcando `idle` no meio do turno do main.
+    Foi essa dupla que fez a mesma sessão aparecer "pronta" com o terminal mostrando
+    `Running 2 agents`, três vezes. Por isso o mtime não decide nada: quem decide é a fronteira de
+    turno do main, e prova de vida (no caminho degradado) é o mtime mais novo entre TODOS os
+    `agents/*/wire.jsonl`. Quem for mexer em estado do Kimi: **o wire do main não é a sessão**.
   - **`tool.result` não tem `uuid`** (só `parentUuid` e `toolCallId`), e o parser mandava `id=""`.
     O front deduplica evento **por id** (`Chat.svelte`, `idIndex`), então os 205 resultados de uma
     sessão real disputavam o MESMO slot: cada um apagava o anterior. Dois estragos ao mesmo tempo —

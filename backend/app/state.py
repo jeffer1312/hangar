@@ -310,6 +310,48 @@ def _kimi_turno_aberto(jsonl: str, teto: int = _KIMI_TETO) -> Optional[bool]:
     return None
 
 
+def _kimi_mtime_da_sessao(jsonl: str) -> Optional[float]:
+    """mtime mais NOVO entre os wires da sessao: `<sessao>/agents/*/wire.jsonl`.
+
+    O main nao e a unica prova de vida. Quando ele delega pra subagentes (tool `Agent`), quem escreve
+    sao os wires `agents/agent-N/` — o main fica calado o turno inteiro. Olhar so pra ele fazia a
+    sessao parecer parada exatamente durante o trabalho mais longo.
+
+    Erro (dir sumiu, permissao) devolve o mtime do proprio `jsonl`, e None se nem ele der.
+
+    So varre quando a pasta avo se chama `agents` — o layout real do Kimi. Sem esse gate, um caminho
+    de outro formato (dublê de teste, transcript de outro provider) faria a varredura cair numa pasta
+    qualquer e adotar o mtime de um `wire.jsonl` que nao e desta sessao.
+    """
+    agents = os.path.dirname(os.path.dirname(jsonl))       # .../agents/main/wire.jsonl -> .../agents
+    if os.path.basename(agents) != "agents":
+        try:
+            return os.path.getmtime(jsonl)
+        except OSError:
+            return None
+    try:
+        novos = []
+        with os.scandir(agents) as it:
+            for e in it:
+                if not e.is_dir():
+                    continue
+                try:
+                    novos.append(os.path.getmtime(os.path.join(e.path, "wire.jsonl")))
+                except OSError:
+                    continue                                # subagente sem wire ainda: ignora
+        if novos:
+            return max(novos)
+    except OSError:
+        # Cair aqui devolve a sessao pro mtime do MAIN, que e exatamente o criterio cego que esta
+        # funcao existe pra corrigir — e sem log isso fica indistinguivel de "nao ha subagente".
+        # Mesma disciplina do `_kimi_turno_aberto`: uma linha por caminho, nao por poll.
+        _avisa_uma_vez(agents, "kimi: nao deu pra varrer %s — mtime da sessao cai no main", agents)
+    try:
+        return os.path.getmtime(jsonl)
+    except OSError:
+        return None
+
+
 def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S):
     """Kimi: marcador 'idle' velho + transcript crescendo = turno ANDANDO, nao sessao parada.
 
@@ -323,14 +365,26 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     proposito: o spinner do Kimi e fase de lua, fora de SPINNER_GLYPHS, e nunca seria detectado la —
     foi por isso que o fallback visual tambem nao salvou.
 
-    So que o mtime SOZINHO mente: nem toda escrita no wire e turno. Medido em 14/08/2026 numa sessao
-    real — turno fechou 08:28:44, as 08:40:46 o Kimi gravou um `config.update` (o system prompt
-    inteiro, ~90KB, com a sessao parada) e o mtime, 12min a frente do marcador, deixou a sessao
-    "em execucao" na lista e "Trabalhando..." no chat com o pane parado no prompt. Por isso o mtime
-    virou so o portao BARATO (um stat por poll): quando ele acusa, `_kimi_turno_aberto` le o rabo do
-    wire e a ultima fronteira de turno decide. `turn.ended` por ultimo = ociosa, por mais novo que
-    seja o arquivo. Isso preserva o caso que criou esta funcao (prompt enfileirado grava
-    `turn.prompt` sem disparar hook nenhum) e continua sem raspar pane.
+    O MTIME NAO DECIDE NADA — quem decide e a ultima FRONTEIRA de turno do wire do main
+    (`_kimi_turno_aberto`): `turn.prompt`/`turn.steer` por ultimo = turno andando; `turn.ended`/
+    `turn.cancel` = parada. Duas medicoes de 14/08/2026 mataram o mtime como criterio, cada uma por
+    um lado:
+
+      - mtime NOVO com a sessao parada: turno fechou 08:28:44 e as 08:40:46 o Kimi gravou um
+        `config.update` (o system prompt inteiro, ~90KB). 12min a frente do marcador -> a lista
+        dizia "em execucao" com o pane no prompt.
+      - mtime PARADO com a sessao trabalhando: o main delegou pra SUBAGENTES (tool `Agent`), que
+        escrevem no wire DELES (`agents/agent-N/wire.jsonl`) e nao no do main. O main ficou calado
+        4 minutos; nesse meio tempo um subagente terminou, o Stop disparou com o session_id da
+        SESSAO (subagente roda no mesmo processo) e o marcador virou `idle` — com o marcador e o
+        mtime no MESMO segundo, o portao antigo nem chegava a olhar a fronteira e a sessao aparecia
+        "pronta" enquanto o terminal mostrava "Running 2 agents".
+
+    O mtime da SESSAO (o mais novo entre `agents/*/wire.jsonl`, main + subagentes) so e lido no
+    caminho degradado, o unico em que ele ainda decide alguma coisa.
+
+    Preserva o caso que criou esta funcao: prompt ENFILEIRADO na TUI grava `turn.prompt` sem
+    disparar hook nenhum, entao a fronteira o pega. E continua sem raspar pane.
 
     So corrige idle -> working. 'awaiting_input' segue seu caminho (a pergunta so existe no pane) e
     'working' ja esta certo.
@@ -345,22 +399,32 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     escrevendo numa sessao viva ele nao ve. Entre os dois, erra-se pro lado visivel.
 
     Limitacao conhecida que isso deixa: Kimi que morre dentro de um pane que continua vivo aparece
-    "em execucao" ate o pane ser fechado. O custo e um `stat()` por poll (+ o rabo do wire so quando
-    o stat acusa) — o reagendamento do api.py e uma cadeia SO (ver _armar_recheca), nao multiplica.
+    "em execucao" ate o pane ser fechado. O custo por poll e UMA leitura do rabo do wire — medida em
+    0.057ms num wire de 5,4MB, porque a busca para na primeira fronteira e o fim do arquivo e onde
+    ela esta. O scandir da pasta de agentes NAO entra nesse custo: ele so roda no caminho degradado.
+    O `folga` tambem so sobrevive la, unico lugar onde o mtime ainda decide.
 
     Recebe o CAMINHO (e nao o mtime ja lido) porque sao tres chamadores — a lista, o monitor do chat
     aberto e o gatilho de automacoes — e a leitura com try/except tem que ser a mesma nos tres."""
     if not marker or marker[0] != "idle":
         return marker
-    try:
-        mtime = os.path.getmtime(jsonl) if jsonl else None
-    except OSError:
-        mtime = None
-    if mtime is None or mtime <= marker[1] + folga:
+    if not jsonl:
         return marker
-    if _kimi_turno_aberto(jsonl) is False:   # None (wire ilegivel/sem turno) segue no mtime
+    aberto = _kimi_turno_aberto(jsonl)
+    if aberto is False:
         return marker
-    return ("working", mtime)
+    if aberto is None:
+        # Degradado (wire ilegivel/sem fronteira): unico caminho em que o mtime ainda decide, e ai
+        # ele e o da SESSAO — o do main sozinho nao ve o subagente trabalhando. Erra pro lado de
+        # "trabalhando"; `_kimi_turno_aberto` ja avisou uma vez no log.
+        mtime = _kimi_mtime_da_sessao(jsonl)
+        if mtime is None or mtime <= marker[1] + folga:
+            return marker
+        return ("working", mtime)
+    # Turno ABERTO: nao ha o que medir — nenhum chamador le o ts deste marcador (todos usam [0], e o
+    # `last_activity` da lista sai de um stat proprio do registry). Calcular o mtime da sessao aqui
+    # seria um scandir por poll, no caminho MAIS quente, pra um valor que ninguem consome.
+    return ("working", marker[1])
 
 
 class StateMonitor:
@@ -444,7 +508,11 @@ class StateMonitor:
             # dono de awaiting_input/overlay (menus NAO disparam hook) e de dead. Marcador
             # "working" preso (claude morto mid-turn) expira via HOOK_WORKING_GRACE.
             if self.sid_get is not None and state in ("working", "idle"):
-                m = self._marcador()
+                # `_marcador` LE disco quando ha transcript (corrige_ocioso_kimi -> rabo do wire +
+                # scandir da pasta de agentes) e este laco e uma corrotina que roda a cada 0.75s por
+                # chat aberto: sincrono aqui, seguraria o event loop do backend inteiro. Mesma regra
+                # do `capture_pane` logo acima e do git status em registry._decorate_git.
+                m = await asyncio.to_thread(self._marcador)
                 if m is not None:
                     if m[0] == "idle" and state == "working":
                         state, label = "idle", None
