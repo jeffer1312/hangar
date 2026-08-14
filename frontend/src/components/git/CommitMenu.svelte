@@ -122,7 +122,7 @@ import { intlLocale } from '../../lib/locale';
       autocapitalize="off" autocorrect="off" spellcheck="false" />
     <div class="cm-row">
       <button class="cm-item primary" disabled={!name.trim() || !!git.busy}
-        onclick={() => run(() => git.createBranch(name.trim(), commit.hash))}>{m.git_criar()}</button>
+        onclick={() => run(() => git.createBranch(name.trim(), commit.hash))}>{m.comum_criar()}</button>
       <button class="cm-item" onclick={() => { mode = 'menu'; name = ''; }}>{m.git_voltar()}</button>
     </div>
   {:else if mode === 'tag'}
@@ -133,7 +133,7 @@ import { intlLocale } from '../../lib/locale';
       autocapitalize="off" autocorrect="off" spellcheck="false" />
     <div class="cm-row">
       <button class="cm-item primary" disabled={!name.trim() || !!git.busy}
-        onclick={() => run(() => git.createTag(name.trim(), commit.hash, tagMsg.trim() || undefined))}>{m.git_criar()}</button>
+        onclick={() => run(() => git.createTag(name.trim(), commit.hash, tagMsg.trim() || undefined))}>{m.comum_criar()}</button>
       <button class="cm-item" onclick={() => { mode = 'menu'; name = ''; tagMsg = ''; }}>{m.git_voltar()}</button>
     </div>
   {:else if mode === 'branches'}

@@ -24,13 +24,13 @@
 
   const FINAL = new Set(['done', 'stopped', 'exhausted', 'failed']);
   const STATUS_LABEL: Record<LoopState['status'], string> = {
-    running: m.loop_estado_rodando(),
+    running: m.atividade_rodando(),
     paused_awaiting: m.loop_estado_aguardando(),
     done_claimed: m.loop_estado_pronto_confirmacao(),
-    done: m.loop_estado_concluido(),
+    done: m.atividade_concluido(),
     stopped: m.loop_estado_parado(),
     exhausted: m.loop_estado_esgotou(),
-    failed: m.loop_estado_falhou(),
+    failed: m.preview_falhou(),
   };
   let loop = $state<LoopState | null>(null);
   let suggestions = $state<string[]>([]);
@@ -49,7 +49,7 @@
   const isPolling = $derived(!!loop && !isFinal);   // running / paused_awaiting / done_claimed
 
   function cleanErr(e: unknown): string {
-    const msg = e instanceof Error ? e.message : m.loop_falhou();
+    const msg = e instanceof Error ? e.message : m.preview_falhou();
     // Erro de rede cru ("Failed to fetch" = backend reiniciando/offline) vira pt-BR acionável.
     if (/failed to fetch|networkerror|load failed|timed? ?out/i.test(msg)) return m.loop_servidor_nao_respondeu();
     return msg.replace(/^\d+:\s*/, '');   // tira o prefixo "409: " do status HTTP
@@ -57,7 +57,7 @@
 
   async function load() {
     const s = activeServer();
-    if (!s) { loadErr = m.loop_servidor_nao_encontrado(); return; }
+    if (!s) { loadErr = m.compare_servidor_nao_encontrado(); return; }
     const g = gen;
     try {
       const r = await getLoopForServer(s, sessionName);
@@ -179,9 +179,9 @@
   });
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.loop_titulo()}>
+<BottomSheet {open} {onClose} ariaLabel={m.chat_loop()}>
   <div class="loop">
-    <h2 class="loop-title">{m.loop_titulo()}</h2>
+    <h2 class="loop-title">{m.chat_loop()}</h2>
 
     {#if loadErr}
       <p class="error-msg" role="alert">
@@ -239,8 +239,8 @@
         <div class="field">
           <span class="field-label">{m.loop_exigir_branch()}</span>
           <div class="provider-toggle" role="group" aria-label={m.loop_exigir_branch()}>
-            <button type="button" class="provider-btn" class:on={requireBranch} onclick={() => (requireBranch = true)}>{m.loop_sim()}</button>
-            <button type="button" class="provider-btn" class:on={!requireBranch} onclick={() => (requireBranch = false)}>{m.loop_nao()}</button>
+            <button type="button" class="provider-btn" class:on={requireBranch} onclick={() => (requireBranch = true)}>{m.comandos_sim()}</button>
+            <button type="button" class="provider-btn" class:on={!requireBranch} onclick={() => (requireBranch = false)}>{m.comandos_nao()}</button>
           </div>
         </div>
       </div>

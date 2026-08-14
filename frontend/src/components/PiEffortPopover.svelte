@@ -73,7 +73,7 @@
   }
 </script>
 
-<Popover {open} {anchor} {onClose} width={180} ariaLabel={m.modelo_nivel_pi()}>
+<Popover {open} {anchor} {onClose} width={180} ariaLabel={m.composer_nivel_raciocinio_pi()}>
   {#if err}
     <p class="err" role="alert">{err}</p>
   {/if}

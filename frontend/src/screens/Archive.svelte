@@ -161,7 +161,7 @@ import { intlLocale } from '../lib/locale';
         <label class="engine-pick">
           <span class="engine-pick-label">{m.comum_motor()}</span>
           <Select ariaLabel={m.comum_motor()} value={engine}
-            opcoes={[{ value: '', label: m.arquivo_claude_conta() },
+            opcoes={[{ value: '', label: m.criar_claude_sua_conta() },
                      ...Object.entries(motores).map(([nome, motor]) => ({
                        value: nome, label: motor.label ?? nome, hint: motor.model }))]}
             onchange={(v) => (engine = v)} />
@@ -171,7 +171,7 @@ import { intlLocale } from '../lib/locale';
         <p class="engine-pick-hint">{m.arquivo_motor_escolha()}</p>
       {/if}
       <button class="resume-btn" onclick={resumeConversation} disabled={resuming}>
-        {resuming ? m.arquivo_retomando() : m.arquivo_retomar()}
+        {resuming ? m.arquivo_retomando() : m.sessao_retomar()}
       </button>
       {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
     </div>

@@ -426,7 +426,7 @@
 
   {#if servers.length > 1}
     <div class="server-select">
-      <span class="server-select-label">{m.comum_servidor()}</span>
+      <span class="server-select-label">{m.lista_agrupar_servidor()}</span>
       <div class="server-chips">
         {#each servers as s (s.id)}
           <button
@@ -531,7 +531,7 @@
             <Select id="cfg-pick" class="field-input" ariaLabel={m.criar_conta_aria()} disabled={contaOcupada}
               value={selectedConfig ?? ''}
               opcoes={configs.map((c) => ({
-                value: c.path, label: c.label, hint: c.active ? m.criar_conta_atual() : undefined, title: c.path }))}
+                value: c.path, label: c.label, hint: c.active ? m.switcher_atual() : undefined, title: c.path }))}
               onchange={(v) => { selectedConfig = v; carregarModelos(); }} />
             <button type="button" class="ghost-btn conta-add" onclick={abrirCampoConta}
               disabled={contaOcupada} aria-busy={contaOcupada}
@@ -564,7 +564,7 @@
                 onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); novaConta(); }
                                     else if (e.key === 'Escape') pedindoNome = false; }} />
               <button type="button" class="ghost-btn conta-add" onclick={novaConta}
-                disabled={contaOcupada || !nomeConta.trim()}>{m.criar_criar()}</button>
+                disabled={contaOcupada || !nomeConta.trim()}>{m.comum_criar()}</button>
               <button type="button" class="ghost-btn conta-add" onclick={() => (pedindoNome = false)}
                 disabled={contaOcupada}>{m.criar_cancelar()}</button>
             </div>
@@ -615,8 +615,8 @@
         </div>
 
         <div class="field">
-          <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.criar_esforco()}</label>
-          <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.criar_esforco()} value={esforco}
+          <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()}</label>
+          <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
             opcoes={[{ value: '', label: m.criar_padrao() },
                      ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
             onchange={(v) => (esforco = v)} />

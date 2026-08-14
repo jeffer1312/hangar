@@ -271,7 +271,7 @@
     >
       {#if canLoadMore}
         <button class="tm-more" onclick={loadMore} disabled={loadingMore}>
-          {loadingMore ? m.term_carregando() : m.term_carregar_mais({ n: paneLines })}
+          {loadingMore ? m.board_carregando() : m.term_carregar_mais({ n: paneLines })}
         </button>
       {/if}
       <pre class="tm-pane" style:font-size={`${fontPx}px`}>{lines.join('\n')}</pre>

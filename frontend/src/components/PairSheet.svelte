@@ -100,7 +100,7 @@
     }
     getSessions()
       .then((all) => { if (my === epoch) sessions = all.filter((s) => s.name !== sessionName && s.state !== 'dead'); })
-      .catch(() => { if (my === epoch) error = m.par_listar_erro(); });
+      .catch(() => { if (my === epoch) error = m.forward_nao_listou(); });
   });
 
   // Candidatas a ENTRAR no grupo: vivas, fora do grupo atual (sessions completa fica pra stateOf).
@@ -302,7 +302,7 @@
 
       <div class="list">
         {#if candidates.length === 0 && !error}
-          <p class="empty">{m.par_vazio_nenhuma()}</p>
+          <p class="empty">{m.forward_nenhuma_viva()}</p>
         {:else}
           {#each candidates as s (s.name)}
             <button class="row" class:row--picked={picked.includes(s.name)}

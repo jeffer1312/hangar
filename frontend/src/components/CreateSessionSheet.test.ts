@@ -227,7 +227,7 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     await escolherPasta();
 
     // Claude: nome acessível "Esforço" (igual ao rótulo visível).
-    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe(m.criar_esforco());
+    expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe(m.composer_esforco());
 
     // Pi: o rótulo visível vira "Raciocínio" e o nome acessível tem que acompanhar (Label in Name).
     [...(document.querySelectorAll('.provider-btn') as unknown as HTMLElement[])]
