@@ -37,6 +37,8 @@
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
+  import DitadoEstiloSheet from './DitadoEstiloSheet.svelte';
+  import { ditadoEstilo, ESTILOS } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
@@ -118,6 +120,15 @@
   let commands = $state<CommandInfo[]>([]);
   let commandSheetOpen = $state(false);
   let confirmStopOpen = $state(false);
+
+  // Estilo do ditado: o valor mora no servidor (runtime_config.ditado_estilo) pra valer também
+  // pro Ctrl+Espaço e pro celular. Carrega uma vez por store compartilhado — o Composer monta em
+  // mais de uma tela (chat e peek do quadro) e cada uma pediria a config por conta própria.
+  let estiloAberto = $state(false);
+  const rotuloEstilo = $derived(
+    ESTILOS.find((e) => e.valor === ditadoEstilo.valor)?.rotulo ?? 'Ditado',
+  );
+  $effect(() => { void ditadoEstilo.carregar(); });
 
   $effect(() => {
     if (isCodex) return;   // Codex nao tem slash-commands do Claude Code -> nem busca a lista
@@ -1286,6 +1297,17 @@
         >
           {#if recording}<IconInterrupt size={18} />{:else}<IconMic size={20} />{/if}
         </button>
+        <!-- Estilo do ditado, colado no microfone: é decisão que se toma ANTES de falar. Some
+             durante a gravação — trocar no meio não muda nada (quem lê o estilo é o backend, no
+             fim) e o botão só roubaria o alvo do dedo que vai parar de gravar. -->
+        {#if !recording && !starting}
+          <button
+            class="estilo-btn"
+            onclick={() => (estiloAberto = true)}
+            title="Estilo do ditado: {rotuloEstilo}"
+            aria-label="Estilo do ditado: {rotuloEstilo}"
+          >{rotuloEstilo}</button>
+        {/if}
       </div>
 
       <div class="control-right">
@@ -1360,6 +1382,12 @@
     onFill={fillCommand}
     onOpenModelEffort={abrirSeletor}
     onClose={() => (commandSheetOpen = false)}
+  />
+
+  <DitadoEstiloSheet
+    open={estiloAberto}
+    isDesktop={typeof window !== 'undefined' && window.matchMedia('(min-width: 820px)').matches}
+    onClose={() => (estiloAberto = false)}
   />
 
   <ConfirmSheet
@@ -1752,6 +1780,23 @@
   }
   .attach-btn:active { background: var(--bg-hover); }
   .attach-btn :global(svg) { display: block; }
+
+  /* Chip do estilo do ditado. --surface-raised, e nao --bg-elevated cru: com papel de parede
+     ligado, superfície própria dentro de um painel de vidro tem que entrar no mesmo véu, senão
+     vira retângulo chapado boiando sobre a foto (regra de transparência do CLAUDE.md). */
+  .estilo-btn {
+    flex-shrink: 0;
+    height: 26px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .estilo-btn:active { background: var(--bg-hover); }
 
   /* Botao de gravar audio: ícone de mic (IconMic) / quadrado stop (IconInterrupt) enquanto grava.
      Gravando -> vermelho e pulsa. */

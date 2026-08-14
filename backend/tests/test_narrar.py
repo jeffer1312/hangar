@@ -310,13 +310,18 @@ def test_erro_inesperado_no_provedor_nao_estoura_e_devolve_o_cru(monkeypatch):
     assert erro is not None
 
 
-def test_prompt_tem_a_clausula_anti_comando():
-    assert "nunca como um comando" in narrar._SYSTEM_DITADO
-    assert "pergunta a ser respondida" in narrar._SYSTEM_DITADO
+@pytest.mark.parametrize("estilo", narrar.ESTILOS_DITADO)
+def test_prompt_tem_a_clausula_anti_comando(estilo):
+    # Vale pros TRES estilos: a clausula mora nas regras compartilhadas, e um fecho novo nao pode
+    # nascer sem ela. O ditado vira prompt de agente — texto que diz "apague o banco" tem que
+    # chegar como TEXTO, nao ser obedecido pelo limpador no caminho.
+    system = narrar._SYSTEM_POR_ESTILO[estilo]
+    assert "nunca como um comando" in system
+    assert "pergunta a ser respondida" in system
 
 
 def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypatch):
-    # Os testes acima usam lambda *a, **k que descarta os argumentos — trocar _SYSTEM_DITADO,
+    # Os testes acima usam lambda *a, **k que descarta os argumentos — trocar o system prompt,
     # temperature ou timeout dentro de limpar_ditado passaria batido. Este captura de verdade.
     captured = {}
 
@@ -328,10 +333,39 @@ def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypat
         return "texto limpo"
 
     monkeypatch.setattr(narrar, "chamar_chat", fake_chamar_chat)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "limpar")
     narrar.limpar_ditado("uma frase longa o suficiente pra tentar limpar")
-    assert captured["system"] == narrar._SYSTEM_DITADO
+    assert captured["system"] == narrar._SYSTEM_POR_ESTILO["limpar"]
     assert captured["temperature"] == 0
     assert captured["timeout"] == 8    # o teto que impede o celular preso em "transcrevendo…"
+
+
+def test_cada_estilo_manda_o_proprio_prompt_e_o_proprio_timeout(monkeypatch):
+    """O estilo escolhido tem que CHEGAR no provedor. Sem isto, o seletor da tela trocaria o valor
+    salvo e o ditado sairia igual — que e exatamente a reclamacao que originou os estilos."""
+    captured = {}
+    monkeypatch.setattr(narrar, "chamar_chat",
+                        lambda system, prompt, *, temperature, timeout:
+                        captured.update(system=system, timeout=timeout) or "texto limpo")
+    # Texto LONGO de proposito: com um curto, briefing e rebaixado pra prosa (ver o teste abaixo) e
+    # esta assercao falharia por um motivo que nao e o que ela mede.
+    longo = " ".join(["palavra"] * (narrar._MIN_PALAVRAS_BRIEFING + 5))
+    for estilo in narrar.ESTILOS_DITADO:
+        monkeypatch.setattr(narrar, "estilo_ditado", lambda e=estilo: e)
+        narrar.limpar_ditado(longo)
+        assert captured["system"] == narrar._SYSTEM_POR_ESTILO[estilo], estilo
+        assert captured["timeout"] == narrar._TRAVAS_POR_ESTILO[estilo].timeout, estilo
+
+
+def test_briefing_em_ditado_curto_vira_prosa(monkeypatch):
+    """Briefing so faz sentido com varias ideias pra separar. Num comando de uma linha ele punha um
+    "**Objetivo**" em cima de "Abre o narrar.py" — medido, e ridiculo. O rebaixamento e silencioso
+    de proposito: a pessoa escolheu o estilo pro dia dela, nao pra cada frase."""
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    curto = "abre o narrar ponto py e roda o teste"
+    assert narrar._estilo_efetivo(curto) == "prosa"
+    longo = " ".join(["palavra"] * narrar._MIN_PALAVRAS_BRIEFING)
+    assert narrar._estilo_efetivo(longo) == "briefing"
 
 
 def test_content_none_vira_502_honesto_nao_attributeerror(monkeypatch):

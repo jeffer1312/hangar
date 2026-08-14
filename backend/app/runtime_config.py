@@ -52,6 +52,9 @@ EDITAVEIS: dict[str, type] = {
     # Palavras que a Whisper tem que grafar direito (nome de projeto, de sessao, jargao do seu
     # dia). Somadas a transcribe.VOCAB_BASE. Ver transcribe.vocabulario.
     "ditado_vocabulario": str,
+    # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
+    # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
+    "ditado_estilo": str,
 }
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você
@@ -123,6 +126,16 @@ def _coagir(campo: str, valor: Any) -> Any:
         # (code, nvim, subl) e impede apontar pra um binario solto tipo /tmp/qualquer.sh.
         if "/" in texto or "\\" in texto or texto.startswith("-") or ".." in texto:
             raise ValueError("editor: use o nome do binario (ex: code), sem caminho")
+    if campo == "ditado_estilo" and texto:
+        # Import local pelo mesmo motivo do vocabulario abaixo (transcribe/narrar importam este
+        # modulo). Recusar aqui e o que impede um estilo inexistente virar "nenhuma limpeza,
+        # calado": narrar cai no padrao quando nao reconhece o valor, entao sem esta trava um typo
+        # na config faria o ditado piorar sem nada na tela dizendo por que.
+        from app.narrar import ESTILOS_DITADO
+        if texto not in ESTILOS_DITADO:
+            raise ValueError(
+                f"ditado_estilo: '{texto}' nao existe. Use um de: {', '.join(ESTILOS_DITADO)}."
+            )
     if campo == "ditado_vocabulario" and texto:
         # Import LOCAL: transcribe importa este modulo, entao um import no topo fecharia o ciclo —
         # mesmo motivo (e mesma solucao) de config.automations_enabled.
