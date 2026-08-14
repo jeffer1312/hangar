@@ -446,7 +446,7 @@ import * as m from '../paraglide/messages';
                reconhecem de longe no canvas; sem par, barra neutra de sempre. -->
           <div class="cv-handle" onpointerdown={(e) => dragStart(e, key)} onpointermove={dragMove}
                onpointerup={dragEnd} onpointercancel={dragEnd}
-               role="button" tabindex="-1" aria-label={`Mover ${row.name}`}
+               role="button" tabindex="-1" aria-label={m.canvas_mover_aria({ name: row.name })}
                style={row.pair_gid ? `background: color-mix(in srgb, ${pairColor(gkeyOf(row)!)} 16%, var(--bg-surface)); color: ${pairColor(gkeyOf(row)!)};` : ''}
                title={m.board_arrastar_mover()}>⋮⋮</div>
           <!-- IRMÃO do handle (não filho): botão real dentro de role="button" é aninhamento

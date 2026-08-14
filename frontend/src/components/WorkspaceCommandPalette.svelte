@@ -86,7 +86,7 @@
 {#if open}
   <ModalDialog
     {open}
-    ariaLabel="Busca e comandos"
+    ariaLabel={m.paleta_titulo_aria()}
     onClose={onClose}
     initialFocus={searchInput}
     className="palette"

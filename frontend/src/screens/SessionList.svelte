@@ -637,7 +637,7 @@ import { intlLocale } from '../lib/locale';
     {/if}
     {#if loading && sessions.length === 0}
       <div class="empty-state">
-        <div class="spinner-large" aria-label="Carregando…">⟳</div>
+        <div class="spinner-large" aria-label={m.comum_carregando()}>⟳</div>
         <p>{m.lista_carregando()}</p>
       </div>
     {:else if error}

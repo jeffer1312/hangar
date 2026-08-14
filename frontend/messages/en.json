@@ -363,5 +363,9 @@
   "paleta_buscar_aria": "Search session or command",
   "paleta_navegar": "navigate",
   "paleta_abrir": "open",
-  "paleta_vazio": "No session or command found."
+  "paleta_vazio": "No session or command found.",
+  "paleta_titulo_aria": "Search and commands",
+  "sessao_branch_git_atual": "current git branch",
+  "comum_carregando": "Loading…",
+  "canvas_mover_aria": "Move {name}"
 }

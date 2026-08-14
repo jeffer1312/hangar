@@ -363,5 +363,9 @@
   "paleta_buscar_aria": "Buscar sessão ou comando",
   "paleta_navegar": "navegar",
   "paleta_abrir": "abrir",
-  "paleta_vazio": "Nenhuma sessão ou comando encontrado."
+  "paleta_vazio": "Nenhuma sessão ou comando encontrado.",
+  "paleta_titulo_aria": "Busca e comandos",
+  "sessao_branch_git_atual": "branch git atual",
+  "comum_carregando": "Carregando…",
+  "canvas_mover_aria": "Mover {name}"
 }

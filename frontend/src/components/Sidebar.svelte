@@ -988,7 +988,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {#if showBranch(s.branch)}<span class="branch-inline">⎇ {s.branch}</span>{/if}
                     </span>
                   {:else if showBranch(s.branch)}
-                    <span class="branch" title="branch git atual">⎇ {s.branch}</span>
+                    <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {s.branch}</span>
                   {/if}
                   {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:

@@ -297,7 +297,7 @@ import * as m from '../paraglide/messages';
             {#if session.branch || showCwd}<span class="meta-sep">·</span>{/if}
           {/if}
           {#if session.branch}
-            <span class="branch" title="branch git atual">⎇ {session.branch}</span>
+            <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {session.branch}</span>
             {#if showCwd}<span class="meta-sep">·</span>{/if}
           {/if}
           {#if showCwd}
