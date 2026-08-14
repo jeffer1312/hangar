@@ -68,11 +68,17 @@ function kimi
     # COMANDO e erro fatal (ver pi.fish, que documenta o caso). Por isso a chamada e duplicada nos
     # dois ramos. `sh -c` + exec mantem a MESMA forma dos outros wrappers. CP_SESSION_NAME: carimbo
     # de identidade pro cp-send de dentro do pane (ver claude.fish).
+    # KIMI_CODE_TUI_FULL_SCREEN=1: fullscreen TUI experimental do Kimi 0.36+ (scroll proprio,
+    # composer fixo). O -e do backend (app/tmux.py) cobre sessoes criadas pelo app; este cobre as
+    # abertas pelo terminal. Caminho "ja dentro de tmux -> raw" nao passa aqui: quem cobre e o
+    # `set -gx` no config.fish.
     if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
         systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            -e "KIMI_CODE_TUI_FULL_SCREEN=1" \
             sh -c 'exec kimi "$@"' _ $argv
     else
         tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \
+            -e "KIMI_CODE_TUI_FULL_SCREEN=1" \
             sh -c 'exec kimi "$@"' _ $argv
     end
 end

@@ -382,6 +382,9 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
         "tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
         "-e", "COLORTERM=truecolor",
         "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1",
+        # Fullscreen TUI experimental do Kimi (0.36+, KIMI_CODE_TUI_FULL_SCREEN): transcript com
+        # scroll proprio e composer fixo. Var KIMI_* — claude/pi/codex ignoram.
+        "-e", "KIMI_CODE_TUI_FULL_SCREEN=1",
         "-e", f"CP_SESSION_NAME={name}",
     ]
     wl = _wayland_display()
