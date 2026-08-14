@@ -47,6 +47,10 @@
     sessionState: State;
     status: StatusFields | null;
     onSend: (text: string) => Promise<void> | void;
+    // ctrl-s avulso: promove o que JÁ está na fila da TUI do Kimi pro turno em curso.
+    onSteer?: () => Promise<void> | void;
+    // Quantas msgs estão esperando o turno atual (as bolhas translúcidas). 0 = sem chip de fila.
+    filaCount?: number;
     onCommand: (cmd: string) => void;
     onInterrupt: () => void;
     // Cache de prompt do ultimo turno: { ts, ttl, read }. null = sem dado medido -> sem chip.
@@ -67,11 +71,12 @@
     provider?: 'claude' | 'codex' | 'pi' | 'kimi';
   }
   let {
-    sessionName, sessionState, status, lastCache = null, onSend, onCommand, onInterrupt, onOpenGit,
+    sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
     onOpenPreview, pairPeers = null, pairedState = null, onOpenPair,
     sendToPair = false, onToggleSendToPair,
     inputText = $bindable(''),
     provider = 'claude',
+    filaCount = 0,
   }: Props = $props();
 
   // ── Prazo do cache de prompt ───────────────────────────────────────────────
@@ -929,6 +934,17 @@
   // Devolve se o envio deu certo -- enviarAutomatico() usa isso pra escolher o bipe (agudo/grave)
   // SO depois do desfecho real, nunca antes. O botao de enviar (onclick={submit}) ignora o retorno,
   // igual sempre ignorou.
+  // ctrl-s sem texto: não passa pelo submit (não há o que digitar nem o que limpar). Erro vai pro
+  // mesmo lugar do erro de envio — falha calada aqui seria um toque que não faz nada.
+  async function steerFila(): Promise<void> {
+    sendError = '';
+    try {
+      await onSteer?.();
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : 'Falha ao mandar agora';
+    }
+  }
+
   async function submit(): Promise<boolean> {
     if (!canSend) return false;
     cancelarContagem();   // envio manual torna a contagem sem sentido
@@ -1050,6 +1066,20 @@
               {#if sendToPair}<span class="repo-name">{pairPeers.length === 1 ? 'pros dois' : 'pro grupo'}</span>{/if}
             </button>
           {/if}
+        {/if}
+        {#if isKimi && isWorking && filaCount > 0 && onSteer}
+          <!-- FILA da TUI do Kimi: msg já mandada, esperando o turno atual acabar. O chip existe pra
+               DIZER que há fila (antes disso a bolha translúcida era a única pista) e dar a saída:
+               tocar manda o `ctrl-s`, que promove a msg pro turno em curso. Não tocar = espera, que
+               é o comportamento de sempre. -->
+          <button class="repo-chip fila-chip" onclick={steerFila}
+                  title="Estas mensagens estão esperando o turno atual terminar. Tocar manda agora (ctrl-s do Kimi)."
+                  aria-label="Mandar agora as mensagens que estão na fila">
+            <span class="repo-glyph" aria-hidden="true">⏳</span>
+            <span class="repo-name">{filaCount} na fila</span>
+            <span class="repo-sep" aria-hidden="true">·</span>
+            <span class="fila-acao">mandar agora</span>
+          </button>
         {/if}
         {#if status?.repo}
           <button class="repo-chip" title="Git: trocar branch / status / pull" onclick={onOpenGit}>
@@ -1269,9 +1299,9 @@
           <button
             class="send-btn"
             class:send-btn--disabled={!canSend}
-            onclick={submit}
+            onclick={() => submit()}
             disabled={!canSend}
-            aria-label="Enviar mensagem"
+            aria-label={isKimi && isWorking ? 'Enviar (entra na fila do Kimi)' : 'Enviar mensagem'}
           >
             <IconSend size={18} />
           </button>
@@ -1641,6 +1671,18 @@
     color: var(--text-muted);
     cursor: default;
   }
+
+  /* Chip da FILA do Kimi. Accent (e nao o cinza dos outros chips da fileira) porque ele nao e
+     informacao de contexto como o repo: e uma acao disponivel AGORA, e some sozinho quando a fila
+     esvazia. Segue a mesma caixa `.repo-chip` — a fileira e uma linha so de chips, nao um lugar
+     onde cada assunto inventa um formato. */
+  .fila-chip {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .fila-chip .repo-name { color: var(--accent); font-weight: 600; }
+  .fila-chip .fila-acao { color: var(--accent); text-decoration: underline; }
+  .fila-chip:active { background: var(--accent-dim); }
 
   /* ── Anexo de imagem ────────────────────────────────────────────────────── */
   .file-input { display: none; }

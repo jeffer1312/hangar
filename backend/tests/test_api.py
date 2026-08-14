@@ -88,6 +88,29 @@ def test_input_eager_send_marks_delivered(api_client):
     ap.assert_called_once_with("oi", delivered=True, ts=ANY)
 
 
+def test_steer_manda_ctrl_s_so_no_kimi(api_client):
+    """A rota do ctrl-s avulso (msg JA na fila da TUI entra no turno em curso). Fora do Kimi recusa
+    com 409 e NAO toca no terminal — a tecla nao significa isso em outra TUI."""
+    with patch("app.api._pane_info", return_value=("kimi", "%1")), \
+         patch("app.api.terminal_input.steer_now") as st:
+        r = api_client.post("/api/sessions/cc/steer", headers=_h())
+    assert r.status_code == 200
+    st.assert_called_once_with("cc")
+
+    with patch("app.api._pane_info", return_value=("claude", "%1")), \
+         patch("app.api.terminal_input.steer_now") as st:
+        r = api_client.post("/api/sessions/cc/steer", headers=_h())
+    assert r.status_code == 409
+    st.assert_not_called()
+
+    # tmux RECUSOU a tecla (pane morto): 502, nunca 200. Um ok aqui apagava o chip da tela afirmando
+    # entrega de um ctrl-s que nao saiu — e a msg segue parada na fila, sem ninguem saber.
+    with patch("app.api._pane_info", return_value=("kimi", "%1")), \
+         patch("app.api.terminal_input.steer_now", return_value=False):
+        r = api_client.post("/api/sessions/cc/steer", headers=_h())
+    assert r.status_code == 502
+
+
 def test_input_defer_on_overlay_marks_pending(api_client):
     with patch("app.api.terminal.send_prompt", return_value="deferred"), \
          patch("app.pqueue.PromptQueue.append") as ap:

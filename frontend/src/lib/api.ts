@@ -614,6 +614,14 @@ export async function sendInput(name: string, text: string): Promise<void> {
   });
 }
 
+// ctrl-s avulso (só Kimi): a msg que JÁ está na fila da TUI entra no turno em curso. É o caso que o
+// botão de enviar-com-steer não cobre — quando o usuário só decide isso depois de ter mandado.
+export async function steerSession(name: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/steer`, {
+    method: 'POST',
+  });
+}
+
 // Pareamento ("trabalhando juntas"): o backend grava o vínculo simétrico e injeta o prompt de
 // pareamento nas DUAS sessões — daí em diante elas se falam via cp-send por iniciativa própria.
 // warning: falha PARCIAL de aviso (algum membro sem o prompt do grupo) — o backend reporta de

@@ -203,6 +203,11 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   LLM** é **obrigatória** (sem fallback pra Groq — a chave da Groq não é reaproveitada pra outro
   host, de propósito). Com o **Endpoint do LLM** vazio (padrão), a **Chave do LLM** não é usada em
   nada — quem vale é a chave da Groq configurada em Anexos e transcrição.
+- **Furar a fila (só Kimi):** mensagem mandada com a sessão trabalhando fica na fila **do Kimi** —
+  ele processa quando o turno atual acabar. Enquanto houver fila, a fileira de cima do composer
+  mostra **⏳ N na fila · mandar agora**; tocar manda o `ctrl-s` do Kimi e a fila **inteira** entra no
+  turno em curso, sem esperar. Não tocar = espera, como sempre. Claude e Codex não têm essa tecla,
+  então lá o chip não aparece.
 - **Slash commands:** `/` abre a lista (`/clear`, `/compact`, …). `/clear` limpa de verdade (zera a fila).
 - **Modelo/esforço:** toque na pill (ex `Opus4.8·1M·high`) → escolhe modelo + esforço (só na sessão).
 - **Pergunta interativa do Claude** (AskUserQuestion/permissão): as opções viram **botões** —

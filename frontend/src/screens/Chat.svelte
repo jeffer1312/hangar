@@ -28,6 +28,7 @@
   import {
     getHistory,
     sendInput,
+    steerSession,
     broadcast,
     selectOption,
     interrupt,
@@ -1141,6 +1142,26 @@
     return (i >= 0 ? text.slice(0, i) : text).trim();
   }
 
+  // Quantas msgs estão ESPERANDO o turno atual — o número do chip de fila do Kimi. São as bolhas
+  // translúcidas, e elas vêm de DUAS fontes: o eco local (`pending`, de quem acabou de mandar deste
+  // aparelho) e o evento sintético "queued-" da fila durável do backend (visível em TODO cliente).
+  // Medido em 14/08/2026: um envio pelo app vira "queued-" em ~1s e o dedup ali embaixo REMOVE o
+  // pending correspondente — contar só o `pending` dava 0 com a bolha na tela e o chip nunca
+  // aparecia. `desistiu` fora: aquela não está na fila, está perdida (a TUI engoliu as teclas).
+  // Duas travas de propósito: (1) só Kimi — é o único provider com o chip, e sem isto TODA sessão
+  // pagava um scan O(n) sobre `events` a cada evento novo do SSE (o arquivo já trocou o
+  // `deriveActivity` por fold incremental pelo mesmo motivo); (2) `kind === 'user_msg'` — o prefixo
+  // "queued-" tem DOIS produtores no backend: a fila durável (`pqueue.py`, user_msg) e o aviso de
+  // subagente que terminou (`transcript.py`, `queued-task:<id>`, tool_result). Sem o kind, um
+  // agente de fundo terminando contaria como mensagem na fila.
+  const filaCount = $derived(
+    sessionProvider !== 'kimi'
+      ? 0
+      : pending.length
+        + events.filter((e) => e.kind === 'user_msg'
+                          && e.id?.startsWith('queued-') && !e.desistiu).length,
+  );
+
   let pendingSeq = 0;
 
   // Toggle "mandar pros dois" (pareada): quando ligado, o prompt vai pra ESTA sessão E pro par
@@ -1527,6 +1548,8 @@
         status={status}
         {lastCache}
         onSend={handleSend}
+        onSteer={sessionProvider === 'kimi' ? () => steerSession(sessionName) : undefined}
+        {filaCount}
         onCommand={handleCommand}
         onInterrupt={handleInterrupt}
         onOpenGit={() => (gitOpen = true)}
