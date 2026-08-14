@@ -52,7 +52,6 @@
   "components/UsageSheet.svelte": 9,
   "components/UserBubble.svelte": 4,
   "components/WorkspaceAttentionStrip.svelte": 3,
-  "components/WorkspaceCommandPalette.svelte": 2,
   "components/git/BranchList.svelte": 1,
   "components/git/CommitBox.svelte": 3,
   "components/git/CommitFiles.svelte": 5,

@@ -144,14 +144,14 @@
               {#if item.kind === 'action' && item.action.id === `view:${view}`}
                 <span class="current">{m.switcher_atual()}</span>
               {:else if item.kind === 'session' && item.session.state === 'awaiting_input'}
-                <span class="attention">aguardando</span>
+                <span class="attention">{m.estado_aguardando()}</span>
               {:else if item.kind === 'action' && item.action.shortcut}
                 <kbd>{item.action.shortcut}</kbd>
               {/if}
             </button>
           {/each}
         {:else}
-          <p class="palette-empty">Nenhuma sessão ou comando encontrado.</p>
+          <p class="palette-empty">{m.paleta_vazio()}</p>
         {/if}
       </div>
 

@@ -362,5 +362,6 @@
   "paleta_placeholder": "Go to a session or view…",
   "paleta_buscar_aria": "Search session or command",
   "paleta_navegar": "navigate",
-  "paleta_abrir": "open"
+  "paleta_abrir": "open",
+  "paleta_vazio": "No session or command found."
 }

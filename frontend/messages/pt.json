@@ -362,5 +362,6 @@
   "paleta_placeholder": "Ir para uma sessão ou visualização…",
   "paleta_buscar_aria": "Buscar sessão ou comando",
   "paleta_navegar": "navegar",
-  "paleta_abrir": "abrir"
+  "paleta_abrir": "abrir",
+  "paleta_vazio": "Nenhuma sessão ou comando encontrado."
 }
