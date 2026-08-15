@@ -15,31 +15,44 @@
   }
   let { path, diff, conteudo, loading, onEscopo, onFechar }: Props = $props();
 
-  // Linhas do diff já destacadas. highlightDiff é assíncrona (import dinâmico do Shiki):
-  // enquanto não volta, `destacando` fica true e o DiffView mostra "carregando".
+  // Linhas do diff já destacadas. highlightDiff é assíncrona (import dinâmico do Shiki).
   // A flag `valida` do $effect descarta resposta velha — escopo trocado, diff novo ou o
   // componente desmontado no meio da busca; sem ela a resposta anterior sobrescreve a nova.
   let rows: DiffRow[] = $state([]);
-  let destacando = $state(false);
+
+  // Qual TEXTO de diff já está em `rows`. Derivar "está destacando" disto (em vez de um $state
+  // ligado dentro do $effect) tira o quadro inicial em que rows=[] e destacando=false — nele o
+  // DiffView desenhava "sem diferenças" para um arquivo que tem diff.
+  let destacadoDe: string | null = $state(null);
+
+  // Diff VAZIO nao e diff: o path_diff responde "" para arquivo sem alteracao no escopo, e nesse
+  // caso quem o usuario quer ver e o arquivo.
+  const temDiff = $derived(diff !== null && diff.diff.trim() !== '');
+
+  const destacando = $derived(temDiff && diff !== null && destacadoDe !== diff.diff);
+
+  // O que está NA TELA é o escopo_usado. Quando ele diverge do pedido, o outro escopo é
+  // impossível (a base não existe) — botão desabilitado, mas com o rótulo do que está sendo
+  // mostrado e o motivo em TEXTO (title de botão desabilitado não é lido por ninguém).
+  const caiu = $derived(diff !== null && diff.escopo_usado !== diff.escopo_pedido);
 
   $effect(() => {
     const d = diff;
     let valida = true;
     if (d === null || d.diff.trim() === '') {
       rows = [];
-      destacando = false;
+      destacadoDe = null;
       return () => { valida = false; };
     }
     rows = [];
-    destacando = true;
     highlightDiff(d.diff, path).then((r) => {
       if (!valida) return;
       rows = r;
-      destacando = false;
+      destacadoDe = d.diff;
     }).catch(() => {
       if (!valida) return;
       rows = [];
-      destacando = false;
+      destacadoDe = d.diff;   // desiste desta versão: não fica preso em "carregando"
     });
     return () => { valida = false; };
   });
@@ -96,13 +109,13 @@
         {@const d = diff}
         <button
           class="escopo"
-          disabled={d.escopo_usado !== d.escopo_pedido}
-          title={d.escopo_usado !== d.escopo_pedido ? d.motivo : null}
-          onclick={() => onEscopo(d.escopo_pedido === 'branch' ? 'nao_commitado' : 'branch')}
+          disabled={caiu}
+          onclick={() => onEscopo(d.escopo_usado === 'branch' ? 'nao_commitado' : 'branch')}
         >
-          {d.escopo_pedido === 'branch' ? m.arq_escopo_branch() : m.arq_escopo_nao_commitado()}
+          {d.escopo_usado === 'branch' ? m.arq_escopo_branch() : m.arq_escopo_nao_commitado()}
           <span class="seta">▾</span>
         </button>
+        {#if caiu && d.motivo}<span class="motivo">{d.motivo}</span>{/if}
       {/if}
       <span class="meta">
         {#if partesDesde}
@@ -118,7 +131,7 @@
   </div>
 
   <div class="corpo">
-    {#if diff}
+    {#if temDiff && diff}
       {@const d = diff}
       {#if d.truncated}
         <p class="aviso">{m.arq_diff_cortado()}</p>
@@ -129,6 +142,11 @@
         <p class="aviso">{m.arq_arquivo_cortado()}</p>
       {/if}
       <pre class="conteudo">{conteudo.text}</pre>
+    {:else if loading}
+      <!-- Busca em voo sem nada ainda: aviso de carga, nunca a afirmação "sem diferenças". -->
+      <p class="aviso">{m.git_diff_carregando()}</p>
+    {:else}
+      <p class="aviso">{m.git_sem_diferencas()}</p>
     {/if}
   </div>
 </div>
@@ -164,6 +182,9 @@
   .escopo .seta { font-size: 8px; }
   .meta { font-size: 12px; color: var(--text-muted); min-width: 0; }
   .meta b { font-weight: 500; color: var(--text-secondary); }
+  /* Motivo do escopo caído: TEXTO ao lado do botão (title em botão desabilitado não é lido).
+     --warning é o token que o DiffView já usa para o aviso de corte — mesma família visual. */
+  .motivo { font-size: 12px; color: var(--warning); min-width: 0; }
   .voltar {
     margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
     background: none; border: 0; color: var(--accent); font: inherit; font-size: 12px;

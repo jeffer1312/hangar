@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount } from 'svelte';
 import FileViewer from './FileViewer.svelte';
+import * as m from '../../paraglide/messages';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 
 // Todos os props obrigatórios entram no base como null/vi.fn() (padrão do BottomSheet.test):
@@ -26,7 +27,7 @@ describe('FileViewer', () => {
     unmount(comp);
   });
 
-  it('escopo que caiu aparece desabilitado com o motivo', () => {
+  it('escopo que caiu aparece desabilitado, com o rotulo certo e o motivo visivel', () => {
     const { el, comp } = montar({
       conteudo: null,
       diff: {
@@ -37,7 +38,8 @@ describe('FileViewer', () => {
     });
     const b = el.querySelector('.escopo') as HTMLButtonElement;
     expect(b.disabled).toBe(true);
-    expect(b.title).toContain('commit');
+    expect(b.textContent).toContain(m.arq_escopo_nao_commitado());   // o que ESTÁ na tela
+    expect(el.textContent).toContain('commit proprio');              // motivo legível, fora do title
     unmount(comp);
   });
 
@@ -50,6 +52,35 @@ describe('FileViewer', () => {
       },
     });
     expect(el.textContent).toContain('200 KB');
+    unmount(comp);
+  });
+
+  it('diff vazio no escopo mostra o CONTEUDO, nao "sem diferencas"', () => {
+    const { el, comp } = montar({
+      diff: { path: 'a.py', diff: '', truncated: false, escopo_pedido: 'branch',
+              escopo_usado: 'branch', base: 'abc1234', motivo: null },
+      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false },
+    });
+    expect(el.textContent).toContain('print(1)');
+    unmount(comp);
+  });
+
+  it('nao pisca "sem diferencas" antes de carregar o diff', () => {
+    const { el, comp } = montar({
+      diff: { path: 'a.py', diff: '@@ -1 +1 @@\n-a\n+b\n', truncated: false,
+              escopo_pedido: 'branch', escopo_usado: 'branch', base: 'abc1234', motivo: null },
+      conteudo: null,
+    });
+    // primeiro quadro, SEM await
+    expect(el.textContent).not.toContain(m.git_sem_diferencas());
+    expect(el.textContent).toContain(m.git_diff_carregando());
+    unmount(comp);
+  });
+
+  it('carregando sem dados ainda mostra a carga, nao "sem diferencas"', () => {
+    const { el, comp } = montar({ loading: true });
+    expect(el.textContent).not.toContain(m.git_sem_diferencas());
+    expect(el.textContent).toContain(m.git_diff_carregando());
     unmount(comp);
   });
 });
