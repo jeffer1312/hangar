@@ -26,6 +26,20 @@ def _within(child: Path, root: Path) -> bool:
     return child == root or root in child.parents
 
 
+def _git_dir(cwd: str) -> Path | None:
+    """O git-dir REAL do repo que contem o cwd (resolve .git FILE, worktree, GIT_DIR).
+    Fora de repo, None. Falha de subprocesso (git ausente/timeout) vira FileError: sem
+    o guard, uma sessao com cwd dentro do git-dir leria o .git/config sem barreira."""
+    from app import git_ops
+    try:
+        p = git_ops._run(cwd, "rev-parse", "--absolute-git-dir")
+    except git_ops.GitError as e:
+        raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
+    if p.returncode != 0:
+        return None
+    return Path(p.stdout.strip())
+
+
 def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
     """Devolve (raiz, alvo) com o alvo provado dentro da raiz."""
     raiz = _real(cwd)
@@ -42,13 +56,19 @@ def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
     if not _within(alvo, raiz):
         raise FileError(400, "erro_arq_fora_da_raiz", "caminho sai da raiz da sessao")
     # Area interna do git fora do alcance: o .git/config carrega o token do remote, e o
-    # reflog e o objects carregam historia. Comparacao por COMPONENTE (nao prefixo de texto):
-    # .gitignore e .github/ continuam legiveis, e o realpath ja resolveu ./x/.git e sub/../.git.
-    # A RAIZ tambem passa pela regua: uma sessao com cwd em /repo/.git leria `config` como
-    # caminho relativo LIMPO — o guard do alvo nunca veria o .git.
-    if ".git" in raiz.parts:
+    # reflog e o objects carregam historia. Duas reguas, as duas sobre o caminho JA resolvido:
+    # (1) o GIT-DIR REAL, que o proprio git identifica (resolve .git FILE e worktree) — e o
+    #     que recusa o cwd DENTRO do git-dir (raiz == gitdir) sem confundir uma PASTA
+    #     ANCESTRAL chamada .git (um repo em /tmp/.git/projeto tem o git-dir em
+    #     /tmp/.git/projeto/.git, e a raiz fica FORA dele — medido no parecer 2ac646c);
+    # (2) por COMPONENTE do alvo relativo a raiz, que continua valendo mesmo com o git
+    #     quebrado (repo corrompido, .git orfao): .gitignore e .github/ ficam legiveis.
+    gitdir = _git_dir(cwd)
+    if gitdir is not None and _within(raiz, gitdir):
         raise FileError(403, "erro_arq_area_do_git", "area interna do git")
     if ".git" in (alvo.relative_to(raiz).parts if alvo != raiz else ()):
+        raise FileError(403, "erro_arq_area_do_git", "area interna do git")
+    if gitdir is not None and _within(alvo, gitdir):
         raise FileError(403, "erro_arq_area_do_git", "area interna do git")
     if not alvo.exists():
         raise FileError(404, "erro_arq_inexistente", "caminho nao existe")
@@ -65,13 +85,20 @@ def _prefixo_no_repo(cwd: str) -> str:
     plano, antes de custar uma Task.
     """
     from app import git_ops
-    p = git_ops._run(cwd, "rev-parse", "--show-prefix")
+    try:
+        p = git_ops._run(cwd, "rev-parse", "--show-prefix")
+    except git_ops.GitError as e:
+        # Falha de subprocesso (git ausente/timeout) NAO e "fora de repo" — e erro.
+        raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
 def _e_repo(cwd: str) -> bool:
     from app import git_ops
-    p = git_ops._run(cwd, "rev-parse", "--is-inside-work-tree")
+    try:
+        p = git_ops._run(cwd, "rev-parse", "--is-inside-work-tree")
+    except git_ops.GitError as e:
+        raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     return p.returncode == 0 and p.stdout.strip() == "true"
 
 
@@ -86,8 +113,9 @@ def _marcas(cwd: str) -> dict[str, str]:
     try:
         brutas = git_ops.changed_files(cwd)
     except git_ops.GitError as e:
-        # O detalhe vai so pro log (via _erro_arq no api); o envelope e traduzivel.
-        raise FileError(500, "erro_arq_lista_falhou", e.detail or "git falhou") from None
+        # Status do git PRESERVADO (504 de timeout chega como 504): 500 fixo comeria o
+        # status que o cliente usa pra decidir retry. O detalhe vai so pro log.
+        raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     fora = {}
     for c in brutas:
         p = c["path"]
@@ -100,12 +128,23 @@ def _marcas(cwd: str) -> dict[str, str]:
 
 
 def _numstat(cwd: str) -> dict[str, tuple[int, int]]:
-    """path RELATIVO AO CWD -> (add, del). UMA chamada pro repo inteiro, nunca uma por arquivo."""
+    """path RELATIVO AO CWD -> (add, del). UMA chamada pro repo inteiro, nunca uma por arquivo.
+    Contagem so sai quando o comando terminou bem: zero por falha seria resposta FALSA
+    (marca M com add=0/del=0 mentirosos, medido no parecer 2ac646c)."""
     from app import git_ops
     pref = _prefixo_no_repo(cwd)
-    p = git_ops._run(cwd, "-c", "core.quotePath=false", "diff", "--numstat", "HEAD")
-    if p.returncode != 0:
+    # Sem HEAD nao ha o que contar: `diff --numstat HEAD` sai 128 com "ambiguous argument".
+    # E o caso legitimo de vazio, nao de falha.
+    tem_head = git_ops._run(cwd, "rev-parse", "--verify", "-q", "HEAD").returncode == 0
+    if not tem_head:
         return {}
+    try:
+        p = git_ops._run(cwd, "-c", "core.quotePath=false", "diff", "--numstat", "HEAD")
+    except git_ops.GitError as e:
+        raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
+    if p.returncode != 0:
+        raise FileError(500, "erro_arq_lista_falhou",
+                        (p.stderr or "git diff --numstat falhou").strip())
     fora = {}
     for linha in p.stdout.splitlines():
         partes = linha.split("\t")

@@ -1,4 +1,7 @@
 """Cobertura do filetree: listar um nivel do repo da sessao e ler arquivo."""
+import os
+import subprocess
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -61,6 +64,34 @@ def test_recusa_caminho_absoluto(tmp_path):
         with pytest.raises(FileError) as e:
             fn(d, str(tmp_path / "base.txt"))
         assert e.value.code == "erro_arq_caminho_invalido"
+
+
+def test_repo_sob_pasta_ancestral_git_lista_e_le(tmp_path):
+    """Pasta ANCESTRAL chamada .git nao e area interna: um repo legitimo em
+    /tmp/.git/projeto tem o git-dir em /tmp/.git/projeto/.git, e a raiz fica FORA dele.
+    (O guard por `raiz.parts` recusava tudo — medido no parecer 2ac646c.)"""
+    (tmp_path / ".git" / "projeto").mkdir(parents=True)
+    d = _repo(tmp_path / ".git" / "projeto")
+    r = filetree.list_dir(d, so_modificados=False)
+    assert any(e["name"] == "base.txt" for e in r["entries"])
+    assert filetree.read_file(d, "base.txt")["text"] == "base\n"
+    # O git-dir REAL continua recusado, via symlink ou por caminho.
+    for ruim in (".git/config", "atalho/config"):
+        if ruim == "atalho/config":
+            os.symlink(".git", tmp_path / ".git" / "projeto" / "atalho")
+        with pytest.raises(FileError) as e:
+            filetree.read_file(d, ruim)
+        assert e.value.code == "erro_arq_area_do_git", ruim
+
+
+def test_repo_sem_commit_lista_sem_numstat(tmp_path):
+    """Sem HEAD, `diff --numstat HEAD` sai 128 — e o caso legitimo de vazio, nao falha.
+    O `_numstat` devolve {} e a lista sai sem somas (nem marca, nem erro)."""
+    d = str(tmp_path)
+    git_ops._run(d, "init", "-q", ".")
+    (tmp_path / "a.txt").write_text("x")
+    r = filetree.list_dir(d, so_modificados=False)
+    assert any(e["name"] == "a.txt" for e in r["entries"])
 
 
 def test_pasta_herda_marca_e_soma_do_neto(tmp_path):
@@ -448,6 +479,72 @@ def test_rota_nao_vaza_detalhe_interno_do_diff(monkeypatch, tmp_path, cliente):
     corpo = r.text
     assert "/home/privado" not in corpo and "valor-secreto" not in corpo
     assert r.json()["detail"]["code"] == "erro_git_diff"
+
+
+# ===== Round 2 de correcao: bloqueadores do parecer 2ac646c =====
+
+
+def test_rota_repo_sob_pasta_ancestral_git_lista_e_le(monkeypatch, tmp_path, cliente):
+    from app import api
+    (tmp_path / ".git" / "projeto").mkdir(parents=True)
+    d = _repo(tmp_path / ".git" / "projeto")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    h = {"Authorization": "Bearer secret"}
+    r = cliente.get("/api/sessions/s/files/list", params={"so_modificados": "false"}, headers=h)
+    assert r.status_code == 200
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "base.txt"}, headers=h)
+    assert r.status_code == 200
+
+
+def test_rota_numstat_falha_vira_envelope(monkeypatch, tmp_path, cliente):
+    """Falha do `git diff --numstat HEAD` NAO pode virar 200 com add=0/del=0 (resposta
+    falsa, medida no parecer): o cliente recebe o envelope erro_arq_lista_falhou."""
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    (tmp_path / "base.txt").write_text("base\nmexido\n")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    orig = git_ops._run
+
+    def quebra_numstat(cwd, *args, **kw):
+        if "--numstat" in args:
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: quebrado")
+        return orig(cwd, *args, **kw)
+
+    monkeypatch.setattr(git_ops, "_run", quebra_numstat)
+    r = cliente.get("/api/sessions/s/files/list", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+
+
+def test_rota_probe_git_falhou_vira_envelope(monkeypatch, tmp_path, cliente):
+    """Falha de subprocesso (git ausente/timeout) no probe NAO e "fora de repo": antes
+    virava 500 sem JSON (GitError cru escapando do _e_repo — traceback no parecer)."""
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+
+    def quebra(cwd, *args, **kw):
+        raise git_ops.GitError(500, "git nao encontrado")
+
+    monkeypatch.setattr(git_ops, "_run", quebra)
+    r = cliente.get("/api/sessions/s/files/list", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+
+
+def test_rota_changed_files_504_preserva_status(monkeypatch, tmp_path, cliente):
+    """504 de timeout do git chega como 504 (o cliente decide retry), nunca 500 fixo."""
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+
+    def quebra(cwd):
+        raise git_ops.GitError(504, "timeout")
+
+    monkeypatch.setattr(git_ops, "changed_files", quebra)
+    r = cliente.get("/api/sessions/s/files/list", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 504
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
 
 
 def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
