@@ -595,6 +595,52 @@ def test_rota_alias_cwd_git_dir_config_malformada(monkeypatch, tmp_path, cliente
     assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
 
 
+def test_rota_git_dir_incompleto_config_malformada(monkeypatch, tmp_path, cliente):
+    """Git-dir INCOMPLETO (refs removido) com config malformada: o rev-parse responde
+    "not a git repository" — a MESMA resposta de fora de repo — e o fallback que exigia
+    os 4 marcadores devolvia None, liberando o config com token (parecer 71d7b190).
+    O fallback por INDICIO (config presente) protege do mesmo jeito."""
+    import shutil
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    git_ops._run(d, "remote", "add", "origin", "https://u:PARTIALTOKEN@github.com/x/y.git")
+    (tmp_path / ".git" / "config").write_text(
+        "[malformado\n[remote \"origin\"]\n\turl = https://u:PARTIALTOKEN@github.com/x/y.git\n")
+    shutil.rmtree(tmp_path / ".git" / "refs")
+    h = {"Authorization": "Bearer secret"}
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / ".git"))
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+    assert "PARTIALTOKEN" not in r.text
+    r = cliente.get("/api/sessions/s/files/list", headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+
+
+def test_rota_bare_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
+    """Bare git-dir (nome termina em .git) com config malformada: o fallback antigo so
+    aceitava componente chamado `.git` — o bare ficava em modo permitido e o config com
+    token vazava (parecer 71d7b190)."""
+    from app import api, git_ops
+    bare = tmp_path / "bare-repository.git"
+    bare.mkdir()
+    d = str(bare)
+    git_ops._run(d, "init", "-q", "--bare")
+    git_ops._run(d, "remote", "add", "origin", "https://u:PARTIALTOKEN@github.com/x/y.git")
+    (bare / "config").write_text(
+        "[malformado\n[remote \"origin\"]\n\turl = https://u:PARTIALTOKEN@github.com/x/y.git\n")
+    h = {"Authorization": "Bearer secret"}
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+    assert "PARTIALTOKEN" not in r.text
+    r = cliente.get("/api/sessions/s/files/list", headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+
+
 def test_rota_head_probe_timeout_vira_envelope(monkeypatch, tmp_path, cliente):
     """A probe de HEAD levantando GitError NAO pode escapar cru (500 text/plain, medido
     no parecer): vira 504 com envelope, status preservado."""

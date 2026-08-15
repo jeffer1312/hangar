@@ -27,19 +27,24 @@ def _within(child: Path, root: Path) -> bool:
 
 
 def _git_dir_por_fs(cwd: str) -> Path | None:
-    """Fallback conservador quando o git nao responde (config malformada, repo quebrado):
-    caminha do cwd RESOLVIDO pra cima e so trata como git-dir um diretorio componente
-    chamado `.git` COM os quatro marcadores administrativos (HEAD, config, objects, refs).
-    Pasta ancestral chamada .git sem os marcadores (ex: /tmp/.git que so contem um projeto)
+    """Fallback conservador quando o git nao responde. Caminha do cwd RESOLVIDO pra cima
+    e trata como git-dir:
+    - diretorio componente chamado `.git` com PELO MENOS UM marcador administrativo
+      (HEAD, config, objects ou refs) — o git-dir INCOMPLETO (refs removido, config com
+      token presente) continua protegido (parecer 71d7b190);
+    - diretorio com nome terminando em `.git` (bare, ex: repo.git) com os marcadores.
+    Pasta ancestral .git SEM marcador nenhum (ex: /tmp/.git que so contem um projeto)
     nao conta. O realpath no comeco e obrigatorio: um cwd que seja SYMLINK DIRETO para o
-    git-dir (git-area-alias -> /repo/.git) nao tem componente .git no caminho lexical, e a
-    caminhada lexical devolvia None — o guard nao rodava e a config vazava (medido no
-    parecer 5ded6dbe)."""
+    git-dir nao tem componente .git no caminho lexical (parecer 5ded6dbe)."""
+
+    def _indicio(p: Path) -> bool:
+        return (p / "HEAD").is_file() or (p / "config").is_file() \
+            or (p / "objects").is_dir() or (p / "refs").is_dir()
+
     atual = Path(os.path.realpath(cwd))
     while True:
         for cand in (atual, atual / ".git"):
-            if cand.name == ".git" and (cand / "HEAD").is_file() and (cand / "config").is_file() \
-                    and (cand / "objects").is_dir() and (cand / "refs").is_dir():
+            if (cand.name == ".git" or cand.name.endswith(".git")) and _indicio(cand):
                 return Path(os.path.realpath(cand))
         if atual == atual.parent:
             return None
@@ -48,18 +53,25 @@ def _git_dir_por_fs(cwd: str) -> Path | None:
 
 def _git_dir(cwd: str) -> Path | None:
     """O git-dir REAL do repo que contem o cwd (resolve .git FILE, worktree, GIT_DIR).
-    Fora de repo, None. Duas vias: o proprio git responde, ou (git quebrado/config
-    malformada — o rev-parse sai 128) a descoberta conservadora por filesystem acima.
-    Sem o fallback, config malformada liberava o cwd /repo/.git e o read lia o proprio
-    .git/config com o token (medido no parecer 72e866e3).
-    Falha de subprocesso (timeout) vira FileError: sem o guard, o git-dir fica exposto."""
+    Fora de repo, None. Quando o git responde, e o caminho oficial. Quando NAO responde
+    (rc != 0), o fallback por filesystem tenta provar o git-dir por indicio; se nao
+    consegue, o stderr decide: "not a git repository" e a resposta NORMAL do git para
+    fora de repo (None e seguro — o filesystem tambem nao mostrou indicio nenhum);
+    qualquer outra falha (config malformada, repo quebrado) FALHA FECHADO com FileError —
+    ausencia de prova nao pode liberar leitura (parecer 71d7b190: .git incompleto e bare
+    vazavam o config com token). LC_ALL=C no _run fixa o ingles do stderr."""
     from app import git_ops
     try:
         p = git_ops._run(cwd, "rev-parse", "--absolute-git-dir")
     except git_ops.GitError as e:
         raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     if p.returncode != 0:
-        return _git_dir_por_fs(cwd)
+        gitdir = _git_dir_por_fs(cwd)
+        if gitdir is not None:
+            return gitdir
+        if "not a git repository" not in p.stderr:
+            raise FileError(500, "erro_arq_lista_falhou", "git-dir nao identificado")
+        return None
     # realpath dos DOIS lados da comparacao: o stdout do git e caminho fisico (getcwd),
     # mas normalizar nao custa nada e garante que o _within casa com raiz/alvo resolvidos.
     return Path(os.path.realpath(p.stdout.strip()))
