@@ -231,18 +231,29 @@ consulta o estado das sessões e termina (te acordando) quando o dono da vez fic
 Use o script que já vem com a skill:
 
 ```bash
-setsid nohup "$SKILL/scripts/vigia.sh" <executor> <revisor> <arbitro> 5 \
+setsid nohup "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> 5 \
   > /tmp/vigia.log 2>&1 < /dev/null &
 ```
 
-Ele consulta a cada 60s e acorda você depois de 5 leituras paradas seguidas. Três coisas nele não
-são detalhe de implementação — são o que faz a vigia funcionar, e cada uma custou uma falha real:
+**O último nome é sempre o árbitro**, e o número no fim são os minutos de silêncio (padrão 5).
+Passe **todas** as sessões do trabalho, não um par: num lote paralelo há vários escritores, e uma
+vigia por par enxerga só o próprio pedaço — ela acordaria você enquanto outro executor ainda
+trabalha. Uma vigia só, com todo mundo dentro:
 
-**1. Ele vigia os TRÊS, incluindo VOCÊ.** Executor, revisor e árbitro. Vigiar só o par deixa de fora
-o modo de falha que ninguém estava olhando: o juiz cair. Medido em 14/08/2026 — o árbitro levou
-`API Error: 529 Overloaded` às 03:36 e ficou morto até 06:09. O executor tinha entregado às 03:32,
-o relato ficou preso na fila, o revisor não tinha o que revisar, e **o time inteiro parou 2h30**.
-Do lado de dentro isso é invisível: o turno seguinte parece continuar de onde o anterior parou.
+```bash
+setsid nohup "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro 10 \
+  > /tmp/vigia.log 2>&1 < /dev/null &
+```
+
+Ela consulta a cada 60s e acorda você depois de N leituras paradas seguidas. Três coisas nela não
+são detalhe de implementação — são o que a faz funcionar, e cada uma custou uma falha real:
+
+**1. Ela vigia TODAS, incluindo VOCÊ.** Cada executor, cada revisor e o árbitro. Vigiar só o par
+deixa de fora o modo de falha que ninguém estava olhando: o juiz cair. Medido em 14/08/2026 — o
+árbitro levou `API Error: 529 Overloaded` às 03:36 e ficou morto até 06:09. O executor tinha
+entregado às 03:32, o relato ficou preso na fila, o revisor não tinha o que revisar, e **o time
+inteiro parou 2h30**. Do lado de dentro isso é invisível: o turno seguinte parece continuar de onde
+o anterior parou.
 
 **2. Ele acorda por `cp-send --tmux`, não por `echo`.** Um `echo` num processo de fundo só vira
 notificação se o turno do árbitro estiver **vivo** — com ele morto, a vigia grita para o vazio, que
@@ -250,10 +261,12 @@ foi exatamente o que aconteceu. Um `cp-send` entra como **prompt** e reanima tur
 `--tmux` é obrigatório: o `cp-send` normal **recusa** falar com sessão Claude da mesma máquina
 (rc=3, "use SendMessage"), e um script de shell não tem `SendMessage`.
 
-**3. Ele só dispara quando os TRÊS estão parados.** Árbitro parado com o par trabalhando é o estado
+**3. Ela só dispara quando TODAS estão paradas.** Árbitro parado com alguém trabalhando é o estado
 **normal** — ele está esperando, e acordá-lo ali é ruído que gasta o token mais caro da mesa. A
 condição só fecha quando ninguém está com a bola. `sumiu` conta como parado: sessão morta também
-não está trabalhando.
+não está trabalhando. Duas exceções avisam na hora, sem esperar o silêncio: sessão **travada** (diz
+`working` mas não produz evento há 10 min) e sessão **sem cota** — as duas são paradas que não se
+desfazem sozinhas.
 
 **Rode com `setsid nohup`.** Sem isso a vigia é filha do teu turno e morre junto com você — e a tua
 morte é justamente o caso que ela existe para cobrir. Confirme depois: `ps -eo pid,ppid,cmd | grep

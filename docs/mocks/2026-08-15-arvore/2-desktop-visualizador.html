@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Mock 2 — o arquivo cobrindo o chat, com a árvore viva</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .tela { display: flex; height: 100vh; }
+
+  .rail {
+    width: 56px; flex: none; border-right: 1px solid var(--border-subtle);
+    background: var(--bg-surface); display: flex; flex-direction: column;
+    align-items: center; padding-top: 12px; gap: 14px;
+  }
+  .rail .pt { width: 26px; height: 26px; border-radius: 8px; background: var(--fill-subtle); }
+
+  /* Cobre SÓ a área da conversa. Sem véu: a árvore da direita continua clicável. */
+  .visor {
+    flex: 1; min-width: 0; display: flex; flex-direction: column;
+    background: var(--bg-surface); border-left: 1px solid var(--border-subtle);
+  }
+
+  .cab { padding: 11px 16px 10px; border-bottom: 1px solid var(--border-subtle); }
+  .cab-l1 { display: flex; align-items: center; gap: 10px; }
+  .caminho { font-family: var(--font-mono); font-size: 13px; }
+  .caminho .dir { color: var(--text-muted); }
+  .stat { font-family: var(--font-mono); font-size: 12px; margin-left: auto; }
+  .fechar {
+    border: 0; background: none; color: var(--text-muted); cursor: pointer;
+    width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center;
+  }
+  .fechar:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .fechar svg { width: 15px; height: 15px; }
+
+  .cab-l2 { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+  .escopo {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
+    border-radius: 8px; padding: 5px 9px; font-size: 12px; color: var(--text-primary);
+    cursor: pointer; font-family: inherit;
+  }
+  .meta { font-size: 12px; color: var(--text-muted); }
+  .meta b { font-weight: 500; color: var(--text-secondary); }
+  /* A saída de volta pra conversa precisa ser óbvia: sem ela, o chat "sumiu". */
+  .voltar {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+    background: none; border: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer;
+  }
+
+  .corpo { padding: 14px 16px 18px; overflow-y: auto; flex: 1; }
+
+  .painel {
+    width: 264px; flex: none; border-left: 1px solid var(--border-subtle);
+    background: var(--glass-panel); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .painel > header {
+    padding: 11px 12px 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .painel header strong { font-size: 13.5px; font-weight: 600; }
+  .chip {
+    font-size: 10.5px; padding: 2px 7px; border-radius: 999px;
+    background: var(--pill-idle-bg); color: var(--pill-idle-fg);
+  }
+</style>
+</head>
+<body>
+<div class="tela">
+  <div class="rail"><div class="pt"></div><div class="pt"></div><div class="pt"></div></div>
+
+  <div class="visor">
+    <div class="cab">
+      <div class="cab-l1">
+        <span class="caminho"><span class="dir">backend/app/</span>git_ops.py</span>
+        <span class="stat"><span class="stat-add">+42</span> <span class="stat-del">−8</span></span>
+        <button class="fechar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="cab-l2">
+        <button class="escopo">Nesta branch <span style="font-size:8px">▾</span></button>
+        <span class="meta"><b>desde</b> 721d1a0 · 12,4 KB · 851 linhas</span>
+        <button class="voltar">← voltar à conversa</button>
+      </div>
+    </div>
+
+    <div class="corpo">
+      <div class="diff">
+        <div class="dl hunk"><span class="dn"></span><span class="dt">@@ -410,6 +410,14 @@ def commit_diff(cwd, sha):</span></div>
+        <div class="dl"><span class="dn">410</span><span class="dt">_DIFF_MAX = 200_000</span></div>
+        <div class="dl"><span class="dn">411</span><span class="dt"></span></div>
+        <div class="dl add"><span class="dn">412</span><span class="dt">+def path_diff(cwd: str, path: str, escopo: str) -> dict:</span></div>
+        <div class="dl add"><span class="dn">413</span><span class="dt">+    """Diff de UM arquivo, com escopo escolhido pela tela.</span></div>
+        <div class="dl add"><span class="dn">414</span><span class="dt">+</span></div>
+        <div class="dl add"><span class="dn">415</span><span class="dt">+    escopo="branch" soma tudo desde onde a branch nasceu. Sem base</span></div>
+        <div class="dl add"><span class="dn">416</span><span class="dt">+    possivel, cai para "nao_commitado" e DIZ isso em escopo_usado.</span></div>
+        <div class="dl add"><span class="dn">417</span><span class="dt">+    """</span></div>
+        <div class="dl add"><span class="dn">418</span><span class="dt">+    base = _base_da_branch(cwd)</span></div>
+        <div class="dl add"><span class="dn">419</span><span class="dt">+    if escopo == "branch" and base and base != _head(cwd):</span></div>
+        <div class="dl add"><span class="dn">420</span><span class="dt">+        args = ["diff", base, "--", path]</span></div>
+        <div class="dl"><span class="dn">421</span><span class="dt">    else:</span></div>
+        <div class="dl hunk"><span class="dn"></span><span class="dt">@@ -338,7 +346,7 @@ def file_diff(cwd, path):</span></div>
+        <div class="dl del"><span class="dn">338</span><span class="dt">-    return {"path": path, "diff": out}</span></div>
+        <div class="dl add"><span class="dn">346</span><span class="dt">+    return {"path": path, **_cap(out)}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <aside class="painel">
+    <header>
+      <strong>hangar</strong>
+      <span class="chip">ocioso</span>
+    </header>
+    <div class="abas">
+      <button class="aba">Contexto</button>
+      <button class="aba sel">Arquivos</button>
+    </div>
+    <div class="barra-ctl">
+      <button class="ordenar">Nome <span style="font-size:8px">▾</span></button>
+      <div class="acoes">
+        <button class="ic ativo" title="Mostrar todos os arquivos">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button class="ic" title="Recarregar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="busca">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input placeholder="Buscar arquivos" readonly>
+    </div>
+    <div class="seg">
+      <button class="sel">Nomes</button>
+      <button>Conteúdo</button>
+    </div>
+    <div class="filtro-aviso"><span>Só os modificados</span><button>mostrar tudo</button></div>
+    <div class="arvore" id="arv"></div>
+  </aside>
+</div>
+<script src="arvore.js"></script>
+<script>montarArvore('#arv');</script>
+</body>
+</html>

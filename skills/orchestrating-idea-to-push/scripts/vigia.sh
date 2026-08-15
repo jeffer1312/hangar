@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Vigia do tubo. Olha os TRÊS papéis vivos — executor, revisor e o próprio árbitro — e acorda o
-# árbitro por mensagem quando NINGUÉM está com a bola.
+# Vigia do tubo. Olha TODAS as sessões vivas do trabalho — cada executor, cada revisor e o próprio
+# árbitro — e acorda o árbitro por mensagem quando NINGUÉM está com a bola.
 #
 # Por que os três, e não só o par: em 14/08/2026 o árbitro levou `API Error: 529 Overloaded` às
 # 03:36 e ficou morto até 06:09. O executor tinha entregado às 03:32; o relato dele ficou preso na
@@ -14,21 +14,41 @@
 #      OBRIGATÓRIO: o `cp-send` normal RECUSA falar com sessão Claude da mesma máquina (rc=3,
 #      "use SendMessage") — e um script de shell não tem SendMessage.
 #
-# A condição de disparo é conservadora de propósito: só quando os TRÊS estão parados. Árbitro
-# parado com o par trabalhando é o estado NORMAL (ele espera), e acordá-lo ali é ruído que gasta o
-# token mais caro da mesa.
+# A condição de disparo é conservadora de propósito: só quando TODAS estão paradas ao mesmo tempo.
+# Árbitro parado com alguém trabalhando é o estado NORMAL (ele espera), e acordá-lo ali é ruído que
+# gasta o token mais caro da mesa. Num lote paralelo isso importa mais ainda: com UMA vigia por par,
+# cada uma enxergava só o seu pedaço e acordava o árbitro enquanto outro executor trabalhava.
 #
 # Rode com `setsid nohup … &`. Sem isso ela é filha do turno do árbitro e morre junto com ele —
 # exatamente o que não pode acontecer, já que a morte dele é o caso que ela existe para cobrir.
 #
-# Uso: vigia.sh <executor> <revisor> <arbitro> [minutos_de_silencio]
+# Uso: vigia.sh <sessao> [sessao...] <arbitro> [minutos_de_silencio]
+#      O ÚLTIMO nome é sempre o árbitro. Ex.:
+#      vigia.sh t1 t2 t3 review review2 arbitro 10
 
 set -u
-EXEC=${1:?uso: vigia.sh <executor> <revisor> <arbitro> [minutos]}
-REV=${2:?uso: vigia.sh <executor> <revisor> <arbitro> [minutos]}
-ARB=${3:?uso: vigia.sh <executor> <revisor> <arbitro> [minutos]}
-LIMITE=${4:-5}
-export EXEC REV ARB
+# Aceita QUANTAS sessões forem: `vigia.sh <s1> <s2> ... <arbitro> [minutos]`. O último nome é
+# sempre o ÁRBITRO — é para ele que os avisos vão, e é ele que a vigia reanima.
+#
+# Por que N e não três: um lote paralelo tem mais de um escritor. Rodar uma vigia por par
+# funcionava, mas cada uma enxergava só o seu pedaço, e o disparo ("ninguém está com a bola") só é
+# verdade quando olha TODO MUNDO — com pares separados, uma vigia acordava o árbitro enquanto outro
+# executor trabalhava. O leitor em Python sempre aceitou N nomes (`sys.argv[1:]`); quem limitava a
+# três era este shell.
+#
+# Compatível com a chamada antiga: `vigia.sh exec rev arb 5` continua valendo, porque o último
+# argumento só é lido como minutos quando é um número.
+LIMITE=5
+ARGS=("$@")
+n=${#ARGS[@]}
+if [ "$n" -ge 2 ] && printf '%s' "${ARGS[$((n-1))]}" | grep -qE '^[0-9]+$'; then
+  LIMITE=${ARGS[$((n-1))]}
+  unset 'ARGS[n-1]'
+fi
+SESSOES=("${ARGS[@]}")
+[ "${#SESSOES[@]}" -ge 2 ] || { echo "uso: vigia.sh <sessao> [sessao...] <arbitro> [minutos]" >&2; exit 2; }
+ARB=${SESSOES[$((${#SESSOES[@]}-1))]}      # o último é o árbitro
+export ARB
 
 BASE=${CP_BASE:-http://127.0.0.1:8765}
 ENVFILE=${CP_ENV:-$(dirname "$(realpath "$(command -v cp-send)")")/../backend/.env}
@@ -92,7 +112,7 @@ INTERVALO=${CP_VIGIA_INTERVALO:-60}
 for i in $(seq 1 1440); do
   sleep "$INTERVALO"
   st=$(curl -s -H "Authorization: Bearer $T" "$BASE/api/sessions" \
-       | python3 "$LEITOR" "$EXEC" "$REV" "$ARB" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
+       | python3 "$LEITOR" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
   if [ -z "$st" ]; then
     # Silêncio da API não pode ser silêncio da vigia: era assim que o furo acima se escondia.
     mudos=$((mudos+1))
@@ -104,7 +124,15 @@ for i in $(seq 1 1440); do
   fi
   mudos=0
 
-  w=${st%%|*}; resto=${st#*|}; r=${resto%%|*}; a=${resto##*|}
+  # Um estado por sessão, na MESMA ordem de SESSOES. `resumo` é o que vai nas mensagens.
+  IFS='|' read -r -a ESTADOS <<< "$st"
+  resumo=""
+  for k in "${!SESSOES[@]}"; do
+    resumo="$resumo${resumo:+ · }${SESSOES[$k]}=${ESTADOS[$k]:-?}"
+  done
+  a=${ESTADOS[$((${#SESSOES[@]}-1))]:-?}          # estado do árbitro
+  # Só o PAR (todos menos o árbitro) conta para travado/sem cota: árbitro parado é o normal.
+  par_estados="${st%|*}"
 
   # "Parado" é tudo que não é trabalho em curso:
   #   idle          — terminou o turno e está esperando
@@ -114,33 +142,33 @@ for i in $(seq 1 1440); do
   #   semcota       — limite da conta estourado; não volta sozinha
   #   travado       — diz `working` mas não produz evento há 10min (picker bloqueando o turno)
   quieto=1
-  for e in "$w" "$r" "$a"; do
+  for e in "${ESTADOS[@]}"; do
     case "$e" in idle|awaiting_input|sumiu|semcota|travado) ;; *) quieto=0 ;; esac
   done
 
   # Sessão TRAVADA no par avisa na hora, sem esperar os três pararem: o árbitro está de bola cheia
   # justamente porque acha que o outro está trabalhando. Foi o caso de 14/08 — 1h17 de fila parada
   # com todo mundo achando que a Task andava.
-  case "$w$r" in
+  case "$par_estados" in
     *travado*)
-      if [ "$avisou_travado" != "$w|$r" ]; then
-        msg="[vigia] Sessao TRAVADA: $EXEC=$w · $REV=$r. Diz 'working' mas nao produz evento ha mais de 10 minutos — o caso classico e um picker/AskUserQuestion bloqueando o turno de quem disparou. Olhe o pane e destrave (POST /api/sessions/<nome>/select com {\"option\": N})."
+      if [ "$avisou_travado" != "$par_estados" ]; then
+        msg="[vigia] Sessao TRAVADA: $resumo. Diz 'working' mas nao produz evento ha mais de 10 minutos — o caso classico e um picker/AskUserQuestion bloqueando o turno de quem disparou. Olhe o pane e destrave (POST /api/sessions/<nome>/select com {\"option\": N})."
         echo "$msg"
         cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
-        avisou_travado="$w|$r"
+        avisou_travado="$par_estados"
       fi
       ;;
   esac
 
   # Cota estourada no par não espera os três pararem nem o limite de minutos: o árbitro precisa
   # trocar a conta da sessão, e cada minuto de espera é minuto de fila parada.
-  case "$w$r" in
+  case "$par_estados" in
     *semcota*)
-      if [ "$avisou_cota" != "$w|$r" ]; then
-        msg="[vigia] Conta sem cota: $EXEC=$w · $REV=$r. A sessao nao volta sozinha — troque o modelo dela para outra conta da tabela do contrato."
+      if [ "$avisou_cota" != "$par_estados" ]; then
+        msg="[vigia] Conta sem cota: $resumo. A sessao nao volta sozinha — abra a substituta numa conta PERMITIDA pelo contrato e mande o mesmo kick-off, com a Task em aberto."
         echo "$msg"
         cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
-        avisou_cota="$w|$r"
+        avisou_cota="$par_estados"
       fi
       ;;
   esac
@@ -148,7 +176,7 @@ for i in $(seq 1 1440); do
   if [ "$quieto" -eq 1 ]; then parados=$((parados+1)); else parados=0; fi
 
   if [ "$parados" -ge "$LIMITE" ]; then
-    msg="[vigia] Ninguem esta com a bola ha ${LIMITE} min: $EXEC=$w · $REV=$r · $ARB=$a (minuto $i). Se voce caiu (erro de API), isto e o que te traz de volta. Cheque se alguem entregou enquanto voce estava fora — relato preso na fila e veredito parado sao os dois jeitos de o tubo travar sem ninguem perceber."
+    msg="[vigia] Ninguem esta com a bola ha ${LIMITE} min: $resumo (minuto $i). Se voce caiu (erro de API), isto e o que te traz de volta. Cheque se alguem entregou enquanto voce estava fora — relato preso na fila e veredito parado sao os dois jeitos de o tubo travar sem ninguem perceber."
     echo "$msg"
     cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
     avisos=$((avisos+1))
@@ -159,4 +187,4 @@ for i in $(seq 1 1440); do
     fi
   fi
 done
-echo "1440min encerrados; ultimo estado: $EXEC=$w · $REV=$r · $ARB=$a"
+echo "1440min encerrados; ultimo estado: $resumo"

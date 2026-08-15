@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Mock 1 — aba Arquivos no painel do desktop</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .tela { display: flex; height: 100vh; }
+
+  .rail {
+    width: 56px; flex: none; border-right: 1px solid var(--border-subtle);
+    background: var(--bg-surface); display: flex; flex-direction: column;
+    align-items: center; padding-top: 12px; gap: 14px;
+  }
+  .rail .pt { width: 26px; height: 26px; border-radius: 8px; background: var(--fill-subtle); }
+
+  .chat { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 18px 26px; gap: 14px; }
+  .bolha { max-width: 62%; border-radius: 14px; padding: 11px 14px; font-size: 13px; line-height: 1.5; }
+  .bolha.u { align-self: flex-end; background: #2b2a2e; color: var(--text-primary); }
+  .bolha.a { align-self: flex-start; color: var(--text-secondary); }
+  .composer {
+    margin-top: auto; border: 1px solid var(--border-subtle); border-radius: 14px;
+    padding: 12px 14px; color: var(--text-muted); font-size: 13px; background: rgb(24 23 28 / 0.94);
+  }
+
+  /* O objeto do mock: o painel docado, na largura REAL de 264px. */
+  .painel {
+    width: 264px; flex: none; border-left: 1px solid var(--border-subtle);
+    background: var(--glass-panel); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .painel > header {
+    padding: 11px 12px 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .painel header strong { font-size: 13.5px; font-weight: 600; }
+  .chip {
+    font-size: 10.5px; padding: 2px 7px; border-radius: 999px;
+    background: var(--pill-idle-bg); color: var(--pill-idle-fg);
+  }
+</style>
+</head>
+<body>
+<div class="tela">
+  <div class="rail"><div class="pt"></div><div class="pt"></div><div class="pt"></div></div>
+
+  <div class="chat">
+    <div class="bolha u">lista os arquivos que mudaram no backend</div>
+    <div class="bolha a">Quatro arquivos mudaram em <code>backend/app/</code>. O maior é o <code>git_ops.py</code>, com 42 linhas novas.</div>
+    <div class="composer">Mande uma mensagem…</div>
+  </div>
+
+  <aside class="painel">
+    <header>
+      <strong>hangar</strong>
+      <span class="chip">ocioso</span>
+    </header>
+
+    <div class="abas">
+      <button class="aba">Contexto</button>
+      <button class="aba sel">Arquivos</button>
+    </div>
+
+    <div class="barra-ctl">
+      <button class="ordenar">Nome <span style="font-size:8px">▾</span></button>
+      <div class="acoes">
+        <button class="ic ativo" title="Mostrar todos os arquivos">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button class="ic" title="Recarregar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="busca">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input value="filetree" readonly>
+    </div>
+    <div class="seg">
+      <button class="sel">Nomes</button>
+      <button>Conteúdo</button>
+    </div>
+
+    <div class="filtro-aviso"><span>Só os modificados</span><button>mostrar tudo</button></div>
+    <div class="arvore" id="arv"></div>
+  </aside>
+</div>
+<script src="arvore.js"></script>
+<script>montarArvore('#arv');</script>
+</body>
+</html>

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Mock 3 — a aba Arquivos no celular</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  /* Fundo: o chat, coberto pela folha. */
+  .fundo { flex: 1; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .bolha { max-width: 78%; border-radius: 14px; padding: 10px 13px; font-size: 13px; line-height: 1.5; }
+  .bolha.u { align-self: flex-end; background: #2b2a2e; }
+  .veu { position: fixed; inset: 0; background: rgba(0,0,0,0.5); }
+
+  /* Folha subindo de baixo — o mesmo BottomSheet do modal de Git no celular. */
+  .folha {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 82vh;
+    background: var(--glass-panel); border-top: 1px solid var(--border-subtle);
+    border-radius: 18px 18px 0 0; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .puxador { width: 36px; height: 4px; border-radius: 999px; background: var(--border-strong); margin: 9px auto 3px; }
+  .folha > header { padding: 4px 14px 9px; display: flex; align-items: center; gap: 8px; }
+  .folha > header strong { font-size: 14.5px; }
+  .folha > header .branch {
+    margin-left: auto; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted);
+  }
+  .abas { padding: 0 6px; }
+  .aba { padding: 10px 11px 9px; font-size: 13px; }
+  .no { padding-top: 7px; padding-bottom: 7px; font-size: 14px; }
+  .busca input, .seg button { font-size: 13px; }
+  .seg button { padding: 7px 0; }
+</style>
+</head>
+<body>
+<div class="fundo">
+  <div class="bolha u">lista os arquivos que mudaram</div>
+</div>
+<div class="veu"></div>
+
+<div class="folha">
+  <div class="puxador"></div>
+  <header>
+    <strong>hangar</strong>
+    <span class="branch">main</span>
+  </header>
+
+  <div class="abas">
+    <button class="aba">Alterações</button>
+    <button class="aba sel">Arquivos</button>
+    <button class="aba">Histórico</button>
+  </div>
+
+  <div class="barra-ctl">
+    <button class="ordenar">Nome <span style="font-size:8px">▾</span></button>
+    <div class="acoes">
+      <button class="ic ativo" title="Mostrar todos os arquivos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+      <button class="ic" title="Recarregar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="busca">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input placeholder="Buscar arquivos" readonly>
+  </div>
+  <div class="seg">
+    <button class="sel">Nomes</button>
+    <button>Conteúdo</button>
+  </div>
+
+  <div class="filtro-aviso"><span>Só os modificados</span><button>mostrar tudo</button></div>
+    <div class="arvore" id="arv"></div>
+  <div hidden>
+    <button class="no pasta" style="padding-left:10px">
+      <span class="chev">▾</span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+      <span class="nome">backend</span><span class="marca m-M">M</span>
+    </button>
+    <button class="no pasta" style="padding-left:26px">
+      <span class="chev">▾</span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+      <span class="nome">app</span><span class="marca m-M">M</span>
+    </button>
+    <button class="no" style="padding-left:42px">
+      <span class="chev"></span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+      <span class="nome">filetree.py</span><span class="marca m-A">A</span>
+    </button>
+    <button class="no" style="padding-left:42px">
+      <span class="chev"></span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+      <span class="nome">git_ops.py</span><span class="marca m-M">M</span>
+    </button>
+    <button class="no" style="padding-left:42px">
+      <span class="chev"></span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+      <span class="nome">kimi_hook_installer.py</span><span class="marca"></span>
+    </button>
+    <button class="no pasta" style="padding-left:26px">
+      <span class="chev">▸</span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+      <span class="nome">tests</span><span class="marca m-M">M</span>
+    </button>
+    <button class="no pasta" style="padding-left:10px">
+      <span class="chev">▾</span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+      <span class="nome">docs</span><span class="marca m-Q">?</span>
+    </button>
+    <button class="no" style="padding-left:26px">
+      <span class="chev"></span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+      <span class="nome">pesquisa-c1-c2-terreno.md</span><span class="marca m-Q">?</span>
+    </button>
+    <button class="no pasta" style="padding-left:10px">
+      <span class="chev">▸</span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+      <span class="nome">frontend</span><span class="marca"></span>
+    </button>
+    <button class="no" style="padding-left:10px">
+      <span class="chev"></span>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></span>
+      <span class="nome">README.md</span><span class="marca"></span>
+    </button>
+  </div>
+</div>
+<script src="arvore.js"></script>
+<script>montarArvore('#arv', { recuo: 16, base: 10 });</script>
+</body>
+</html>
