@@ -1,0 +1,55 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mount, unmount } from 'svelte';
+import FileViewer from './FileViewer.svelte';
+import { overwriteGetLocale } from '../../paraglide/runtime';
+
+// Todos os props obrigatórios entram no base como null/vi.fn() (padrão do BottomSheet.test):
+// o spread de `props` só adiciona, e o svelte-check fecha o merge sem cast.
+const base = { path: 'a.py', diff: null, conteudo: null, loading: false, onEscopo: vi.fn(), onFechar: vi.fn() };
+
+function montar(props: Record<string, unknown>) {
+  const el = document.createElement('div');
+  document.body.appendChild(el);
+  return { el, comp: mount(FileViewer, { target: el, props: { ...base, ...props } }) };
+}
+
+describe('FileViewer', () => {
+  beforeEach(() => overwriteGetLocale(() => 'pt'));
+
+  it('sem mudanca, mostra o conteudo', () => {
+    const { el, comp } = montar({
+      diff: null,
+      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false },
+    });
+    expect(el.textContent).toContain('print(1)');
+    unmount(comp);
+  });
+
+  it('escopo que caiu aparece desabilitado com o motivo', () => {
+    const { el, comp } = montar({
+      conteudo: null,
+      diff: {
+        path: 'a.py', diff: '@@ -1 +1 @@\n-a\n+b\n', truncated: false,
+        escopo_pedido: 'branch', escopo_usado: 'nao_commitado',
+        base: null, motivo: 'esta branch nao tem commit proprio',
+      },
+    });
+    const b = el.querySelector('.escopo') as HTMLButtonElement;
+    expect(b.disabled).toBe(true);
+    expect(b.title).toContain('commit');
+    unmount(comp);
+  });
+
+  it('diff cortado mostra o aviso', () => {
+    const { el, comp } = montar({
+      conteudo: null,
+      diff: {
+        path: 'a.py', diff: '@@ -1 +1 @@\n+x\n', truncated: true,
+        escopo_pedido: 'branch', escopo_usado: 'branch', base: 'abc1234', motivo: null,
+      },
+    });
+    expect(el.textContent).toContain('200 KB');
+    unmount(comp);
+  });
+});

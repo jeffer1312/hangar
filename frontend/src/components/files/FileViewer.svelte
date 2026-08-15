@@ -1,0 +1,194 @@
+<script lang="ts">
+  import * as m from '../../paraglide/messages';
+  import type { PathDiff, FileContent } from '../../lib/types';
+  import { highlightDiff, type DiffRow } from '../../lib/highlight';
+  import { dec } from '../../lib/fmt';
+  import DiffView from '../git/DiffView.svelte';
+
+  interface Props {
+    path: string;
+    diff: PathDiff | null;
+    conteudo: FileContent | null;
+    loading: boolean;
+    onEscopo: (e: 'branch' | 'nao_commitado') => void;
+    onFechar: () => void;
+  }
+  let { path, diff, conteudo, loading, onEscopo, onFechar }: Props = $props();
+
+  // Linhas do diff já destacadas. highlightDiff é assíncrona (import dinâmico do Shiki):
+  // enquanto não volta, `destacando` fica true e o DiffView mostra "carregando".
+  // A flag `valida` do $effect descarta resposta velha — escopo trocado, diff novo ou o
+  // componente desmontado no meio da busca; sem ela a resposta anterior sobrescreve a nova.
+  let rows: DiffRow[] = $state([]);
+  let destacando = $state(false);
+
+  $effect(() => {
+    const d = diff;
+    let valida = true;
+    if (d === null || d.diff.trim() === '') {
+      rows = [];
+      destacando = false;
+      return () => { valida = false; };
+    }
+    rows = [];
+    destacando = true;
+    highlightDiff(d.diff, path).then((r) => {
+      if (!valida) return;
+      rows = r;
+      destacando = false;
+    }).catch(() => {
+      if (!valida) return;
+      rows = [];
+      destacando = false;
+    });
+    return () => { valida = false; };
+  });
+
+  // +N −M contado das linhas destacadas (a mesma conta do cabeçalho interno do DiffView).
+  const estat = $derived({
+    add: rows.filter((r) => r.kind === 'add').length,
+    del: rows.filter((r) => r.kind === 'del').length,
+  });
+
+  // Caminho quebrado em pasta + nome: a pasta sai em --text-muted, o nome no tom normal.
+  // $derived de propósito: trocar de arquivo sem remontar o componente tem que trocar o cabeçalho.
+  const ultimaBarra = $derived(path.lastIndexOf('/'));
+  const nomeArquivo = $derived(ultimaBarra === -1 ? path : path.slice(ultimaBarra + 1));
+  const dirParte = $derived(ultimaBarra === -1 ? '' : path.slice(0, ultimaBarra + 1));
+
+  // "desde 721d1a0" chega inteiro da tradução; a barra mostra o "desde" com peso 500.
+  // Split na primeira palavra cobre pt ("desde") e en ("since").
+  const partesDesde = $derived(
+    diff !== null && diff.base !== null && diff.base.trim() !== ''
+      ? m.arq_escopo_desde({ base: diff.base }).split(/ (.+)/)
+      : null,
+  );
+
+  // Tamanho binário na vírgula do idioma do app (dec usa intlLocale): "12,4 KB" casa com a
+  // barra; abaixo de 1 KB mostra os bytes crus.
+  function tamLegivel(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${dec(n / 1024, 1)} KB`;
+    return `${dec(n / (1024 * 1024), 1)} MB`;
+  }
+
+  function linhasDoTexto(texto: string): number {
+    if (!texto) return 0;
+    return texto.split('\n').length - (texto.endsWith('\n') ? 1 : 0);
+  }
+</script>
+
+<div class="visor">
+  <div class="cab">
+    <div class="cab-l1">
+      <span class="caminho">
+        {#if dirParte}<span class="dir">{dirParte}</span>{/if}{nomeArquivo}
+      </span>
+      {#if diff && !loading && !destacando && (estat.add || estat.del)}
+        <span class="stat"><span class="stat-add">+{estat.add}</span> <span class="stat-del">−{estat.del}</span></span>
+      {/if}
+      <button class="fechar" aria-label={m.arq_fechar()} onclick={onFechar}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="cab-l2">
+      {#if diff}
+        {@const d = diff}
+        <button
+          class="escopo"
+          disabled={d.escopo_usado !== d.escopo_pedido}
+          title={d.escopo_usado !== d.escopo_pedido ? d.motivo : null}
+          onclick={() => onEscopo(d.escopo_pedido === 'branch' ? 'nao_commitado' : 'branch')}
+        >
+          {d.escopo_pedido === 'branch' ? m.arq_escopo_branch() : m.arq_escopo_nao_commitado()}
+          <span class="seta">▾</span>
+        </button>
+      {/if}
+      <span class="meta">
+        {#if partesDesde}
+          <b>{partesDesde[0]}</b> {partesDesde[1]}
+        {/if}
+        {#if partesDesde && conteudo}<span class="sep"> · </span>{/if}
+        {#if conteudo}
+          {m.arq_meta_arquivo({ tam: tamLegivel(conteudo.size), linhas: linhasDoTexto(conteudo.text) })}
+        {/if}
+      </span>
+      <button class="voltar" onclick={onFechar}>← {m.arq_voltar_conversa()}</button>
+    </div>
+  </div>
+
+  <div class="corpo">
+    {#if diff}
+      {@const d = diff}
+      {#if d.truncated}
+        <p class="aviso">{m.arq_diff_cortado()}</p>
+      {/if}
+      <DiffView path={path} rows={rows} loading={loading || destacando} />
+    {:else if conteudo}
+      {#if conteudo.truncated}
+        <p class="aviso">{m.arq_arquivo_cortado()}</p>
+      {/if}
+      <pre class="conteudo">{conteudo.text}</pre>
+    {/if}
+  </div>
+</div>
+
+<style>
+  .visor { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .cab { padding: 11px 16px 10px; border-bottom: 1px solid var(--border-subtle); }
+  .cab-l1 { display: flex; align-items: center; gap: 10px; }
+  .caminho {
+    font-family: var(--font-mono); font-size: 13px;
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .caminho .dir { color: var(--text-muted); }
+  .stat { font-family: var(--font-mono); font-size: 12px; margin-left: auto; flex: none; }
+  .stat .stat-add { color: var(--success); }
+  .stat .stat-del { color: var(--error); }
+  .fechar {
+    border: 0; background: none; color: var(--text-muted); cursor: pointer;
+    width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center;
+    flex: none;
+  }
+  .fechar:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .fechar svg { width: 15px; height: 15px; }
+
+  .cab-l2 { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+  .escopo {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
+    border-radius: 8px; padding: 5px 9px; font-size: 12px; color: var(--text-primary);
+    cursor: pointer; font-family: inherit; flex: none;
+  }
+  .escopo:disabled { cursor: default; opacity: 0.55; }
+  .escopo .seta { font-size: 8px; }
+  .meta { font-size: 12px; color: var(--text-muted); min-width: 0; }
+  .meta b { font-weight: 500; color: var(--text-secondary); }
+  .voltar {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+    background: none; border: 0; color: var(--accent); font: inherit; font-size: 12px;
+    cursor: pointer; flex: none; padding: 0;
+  }
+
+  .corpo { padding: 14px 16px 18px; overflow-y: auto; flex: 1; min-height: 0; }
+
+  /* O cabeçalho de cima (caminho, +N −M, fechar) é DESTE componente. O interno do DiffView
+     (que serve o GitChangesTab intacto) fica escondido aqui, por CSS no escopo do FileViewer —
+     sem tocar no DiffView, que é arquivo compartilhado deste lote. */
+  .corpo :global(.git-diff-head) {
+    display: none;
+  }
+
+  .aviso {
+    margin: 0 0 var(--space-2); padding: 7px 9px; border-radius: 7px;
+    background: var(--fill-subtle); color: var(--text-muted);
+    font-size: 11.5px; line-height: 1.4;
+  }
+
+  .conteudo {
+    margin: 0; padding: var(--space-2); border-radius: var(--radius-md);
+    background: var(--surface-inset); border: 1px solid var(--border-subtle);
+    font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.5;
+    max-height: 62vh; overflow: auto; white-space: pre;
+  }
+</style>
