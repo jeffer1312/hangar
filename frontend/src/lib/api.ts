@@ -27,6 +27,10 @@ import type {
   LoopState,
   UploadFile,
   PlanDetail,
+  TreeListing,
+  FileContent,
+  SearchResult,
+  PathDiff,
 } from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque a tag img
@@ -951,6 +955,31 @@ export function getFileDiff(name: string, path: string): Promise<{ path: string;
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/diff`, {
     method: 'POST',
     body: JSON.stringify({ path }),
+  });
+}
+
+// Arvore de arquivos do repo da sessao (filetree.py): lista, le e busca de arquivos.
+export function listFiles(name: string, path?: string, soModificados = true): Promise<TreeListing> {
+  const q = new URLSearchParams({ so_modificados: String(soModificados) });
+  if (path) q.set('path', path);
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/list?${q}`);
+}
+
+export function readFile(name: string, path: string): Promise<FileContent> {
+  const q = new URLSearchParams({ path });
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/read?${q}`);
+}
+
+export function searchFiles(name: string, q: string, mode: 'names' | 'contents'): Promise<SearchResult> {
+  const qs = new URLSearchParams({ q, mode });
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/search?${qs}`);
+}
+
+// Diff de UM arquivo (git_ops.path_diff), soma desde a base da branch ou so o nao-commitado.
+export function pathDiff(name: string, path: string, escopo: 'branch' | 'nao_commitado'): Promise<PathDiff> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/path-diff`, {
+    method: 'POST',
+    body: JSON.stringify({ path, escopo }),
   });
 }
 

@@ -475,3 +475,38 @@ export interface UploadFile {
   mtime: number;            // epoch em SEGUNDOS
   expires_in_days: number | null;
 }
+
+// Arvore de arquivos do repo da sessao (GET /api/sessions/{name}/files/list).
+// `changed` e a 1a letra do XY do porcelain (git_ops.changed_files, com strip): o backend
+// devolve M/A/D/R/C/U/T/? de verdade — rename, copy, merge e troca de tipo tambem aparecem.
+export interface TreeEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  changed: 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | 'T' | '?' | null;
+  add: number;
+  del: number;
+}
+
+export interface TreeListing { entries: TreeEntry[]; truncated: boolean }
+
+// Conteudo de UM arquivo (GET /api/sessions/{name}/files/read). `truncated` no teto de 512 KB.
+export interface FileContent { path: string; text: string; size: number; truncated: boolean }
+
+// Um achado da busca (GET /api/sessions/{name}/files/search). No modo `names`, line e text vem null.
+export interface SearchHit { path: string; line: number | null; text: string | null }
+
+export interface SearchResult { hits: SearchHit[]; truncated: boolean; mode: 'names' | 'contents' }
+
+// Diff de UM arquivo (POST /api/sessions/{name}/git/path-diff). `escopo_usado` pode divergir do
+// pedido: `branch` cai pra `nao_commitado` quando a base nao da pra achar (base/motivo dizem o porque).
+export interface PathDiff {
+  path: string;
+  diff: string;
+  truncated: boolean;
+  escopo_pedido: 'branch' | 'nao_commitado';
+  escopo_usado: 'branch' | 'nao_commitado';
+  base: string | null;
+  motivo: string | null;
+}
