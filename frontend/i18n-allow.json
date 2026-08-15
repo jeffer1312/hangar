@@ -2,7 +2,9 @@
   {
     "_justificativas": {
       "Workflow": "activity.ts:171 — case de protocolo (tipo de evento do transcript do agente), nao e texto exibido; o rotulo do badge usa m.atividade_workflow()",
-      "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow"
+      "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
+      "/** Diff do arquivo selecionado no escopo atual. */": "filesStore.svelte.ts:18 — comentario JSDoc pego pelo loop de markup (so .svelte limpa <script>/<style>; .ts corre o arquivo inteiro), nao e UI; mesmos casos ja em allow com */",
+      "/** Re-lista o diretorio atual com o filtro `soModificados` de agora. */": "filesStore.svelte.ts:84 — idem, JSDoc com template literal"
     }
   },
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
@@ -165,5 +167,7 @@
   "sync push falhou — server nao subiu pro hub:",
   "text/plain",
   "um provider novo não volta a mentir.",
-  "vem do renderMarkdown como TEXTO ESCAPADO, monocromatico."
+  "vem do renderMarkdown como TEXTO ESCAPADO, monocromatico.",
+  "/** Diff do arquivo selecionado no escopo atual. */",
+  "/** Re-lista o diretorio atual com o filtro `soModificados` de agora. */"
 ]
