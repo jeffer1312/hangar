@@ -116,7 +116,7 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
             tam = 0 if e.is_dir() else e.stat().st_size
         except OSError:                      # symlink quebrado: aparece, sem tamanho
             tam = 0
-        rel = str(filho.relative_to(raiz))
+        rel = os.path.relpath(e.path, raiz)   # caminho LOGICO: o nome do link, nao o do alvo
         # Pasta herda a marca e SOMA o +N -M dos descendentes.
         dentro = [p for p in marcas if p == rel or p.startswith(rel + "/")]
         marca = marcas.get(rel) or (marcas[dentro[0]] if e.is_dir() and dentro else None)

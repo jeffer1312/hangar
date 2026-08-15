@@ -185,3 +185,25 @@ def test_recusa_binario_com_nul_depois_dos_8192(tmp_path):
     with pytest.raises(FileError) as e:
         filetree.read_file(d, "tardio.bin")
     assert e.value.status == 415 and e.value.code == "erro_arq_binario"
+
+
+def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
+    """O `path` tem que ser o do LINK, nao o do alvo: com o do alvo, o link novo some do modo
+    padrao (a marca do git nunca casa) e um link intocado herda o 'M' do vizinho."""
+    import os
+    d = _repo(tmp_path)
+    (tmp_path / "alvo.txt").write_text("um\n")
+    git_ops._run(d, "add", "alvo.txt")
+    git_ops._run(d, "commit", "-q", "-m", "alvo")
+    os.symlink("alvo.txt", tmp_path / "link-novo.txt")
+
+    ent = {e["name"]: e for e in filetree.list_dir(d)["entries"]}
+    assert "link-novo.txt" in ent, "symlink novo sumiu do modo padrao"
+    assert ent["link-novo.txt"]["path"] == "link-novo.txt"
+
+    git_ops._run(d, "add", "link-novo.txt")
+    git_ops._run(d, "commit", "-q", "-m", "link")
+    (tmp_path / "alvo.txt").write_text("um\ndois\n")          # so o ALVO muda
+    ent = {e["name"]: e for e in filetree.list_dir(d)["entries"]}
+    assert "link-novo.txt" not in ent, "link intocado herdou a marca do alvo"
+    assert ent["alvo.txt"]["changed"] == "M"
