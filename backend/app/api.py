@@ -1257,11 +1257,6 @@ async def create_session(body: CreateBody):
             # sessão ainda cria"). A sessão sobe sem a var e o CLI usa o default dele.
             janela = None
 
-    # Classificar o cwd ANTES da sessao nascer: a fonte de verdade da arvore (git-dir ou
-    # pasta comum) e a escolha do usuario na criacao — depois do restart o estado morre e
-    # a pasta comum sem registro viraria ambigua (parecer 47612d58).
-    await asyncio.to_thread(filetree.registrar_estado_git, body.cwd)
-
     # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o
     # config dir (Claude/Pi — codex nem recebe ele no create_codex). Sem o ciclo, um DELETE da
     # conta no meio via a lista de sessões ainda vazia e apagaria a pasta embaixo da sessão que
@@ -1540,10 +1535,6 @@ def resume_session(name: str, body: ResumeBody):
             return {"ambiguous": True, "candidates": candidates}
         sid = candidates[0]["session_id"]
     try:
-        # Reatachamento: reclassifica o cwd (o estado de sessao morre no restart do backend).
-        info = next((s for s in registry.list() if s.name == name), None)
-        if info is not None and info.cwd:
-            filetree.registrar_estado_git(info.cwd)
         return registry.resume(name, sid)
     except ValueError as e:
         raise HTTPException(409, str(e))
@@ -3402,8 +3393,6 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
     while tmux.has_session(name):
         name = f"{base}-{i}"
         i += 1
-    # Reatachamento do arquivo: mesma classificacao da criacao (git-dir ou pasta comum).
-    filetree.registrar_estado_git(cwd)
     try:
         return registry.create(name, cwd, resume_session_id=session_id, engine=body.engine)
     except ValueError as e:

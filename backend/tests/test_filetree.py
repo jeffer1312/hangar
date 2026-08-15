@@ -213,6 +213,9 @@ def test_git_interno_fora_do_alcance(tmp_path):
             assert e.value.code == "erro_arq_area_do_git", (fn.__name__, alvo)
     (tmp_path / ".gitignore").write_text("node_modules\n")
     assert filetree.read_file(d, ".gitignore")["text"] == "node_modules\n"
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "x.yml").write_text("on: push\n")
+    assert filetree.read_file(d, ".github/x.yml")["text"] == "on: push\n"
 
 
 def test_nao_trava_em_fifo_nem_estoura_em_socket(tmp_path):
@@ -347,38 +350,15 @@ def test_rota_path_diff_trata_asterisco_como_literal(monkeypatch, tmp_path, clie
     assert "estrela2" in diff
 
 
-def test_rota_cwd_dentro_do_git_recusado(monkeypatch, tmp_path, cliente):
-    """Cwd da sessao em /repo/.git: `config` e um caminho RELATIVO limpo, e o guard do
-    alvo nunca ve o .git — a RAIZ tem que ser recusada tambem. Symlink pro .git idem
-    (o realpath resolve antes de comparar)."""
-    import os
-    from app import api, git_ops
-    d = _repo(tmp_path)
-    git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
-    gitdir = str(tmp_path / ".git")
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: gitdir)
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403 and r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 403 and r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    os.symlink(".git", tmp_path / "atalho")
-    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / "atalho"))
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403 and r.json()["detail"]["code"] == "erro_arq_area_do_git"
-
-
 def test_rota_pasta_comum_lista_e_le(monkeypatch, tmp_path, cliente):
     """Regra do usuario: a arvore FUNCIONA fora de repo git. Pasta comum lista tudo sem
     marca e sem soma, e le arquivos normalmente; um arquivo comum chamado `config` nao
-    confunde. O registro em registrar_estado_git simula a classificacao da criacao da
-    sessao (o api registra antes da sessao nascer)."""
-    from app import api, filetree
+    confunde (o guard de .git compara por COMPONENTE, nao por nome de arquivo)."""
+    from app import api
     (tmp_path / "leia.txt").write_text("texto fora de git\n")
     (tmp_path / "config").write_text("config comum\n")
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "x.txt").write_text("x\n")
-    filetree.registrar_estado_git(str(tmp_path))
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
     h = {"Authorization": "Bearer secret"}
     r = cliente.get("/api/sessions/s/files/list", params={"so_modificados": "false"}, headers=h)
@@ -396,15 +376,14 @@ def test_rota_pasta_comum_lista_e_le(monkeypatch, tmp_path, cliente):
 
 
 def test_rota_pasta_comum_plausivel_3_marcadores(monkeypatch, tmp_path, cliente):
-    """Pasta comum PLAUSIVEL com config+objects+refs (cache de app, nao git): registrada
-    como pasta comum na criacao, list e read funcionam — a assinatura por nomes NAO pode
-    bloquear (parecer 47612d58, B2)."""
-    from app import api, filetree
+    """Pasta comum PLAUSIVEL com config+objects+refs (cache de app, nao git): list e
+    read funcionam — o guard de .git so olha o componente `.git`, nunca nomes de
+    arquivo, entao nada disso bloqueia (parecer 47612d58, B2)."""
+    from app import api
     (tmp_path / "config").write_text("config comum\n")
     (tmp_path / "objects").mkdir()
     (tmp_path / "refs").mkdir()
     (tmp_path / "README.txt").write_text("comum\n")
-    filetree.registrar_estado_git(str(tmp_path))
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
     h = {"Authorization": "Bearer secret"}
     r = cliente.get("/api/sessions/s/files/read", params={"path": "README.txt"}, headers=h)
@@ -413,32 +392,6 @@ def test_rota_pasta_comum_plausivel_3_marcadores(monkeypatch, tmp_path, cliente)
     r = cliente.get("/api/sessions/s/files/list", params={"so_modificados": "false"}, headers=h)
     assert r.status_code == 200
     assert any(e["name"] == "README.txt" for e in r.json()["entries"])
-
-
-def test_rota_git_dir_ambiguo_nao_libera(monkeypatch, tmp_path, cliente):
-    """Diretorio arbitrario JA corrompido antes da primeira classificacao (bare sem
-    sufixo, so HEAD+config com token): sem resposta do git e SEM estado de sessao, e
-    AMBIGUO — erro estruturado, nunca bytes (parecer 47612d58, B1: n>=3 deixava passar
-    com 2 marcadores)."""
-    import shutil
-    from app import api, git_ops
-    bare = tmp_path / "arbitrary-bare"
-    bare.mkdir()
-    d = str(bare)
-    git_ops._run(d, "init", "-q", "--bare")
-    git_ops._run(d, "remote", "add", "origin", "https://u:TWOMARKERTOKEN@host/x.git")
-    (bare / "HEAD").write_text("not-a-ref\n")
-    shutil.rmtree(bare / "objects")
-    shutil.rmtree(bare / "refs")
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
-    assert "TWOMARKERTOKEN" not in r.text
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
 
 
 def test_rota_busca_fora_de_repo_continua_409(monkeypatch, tmp_path, cliente):
@@ -625,140 +578,6 @@ def test_rota_changed_files_504_preserva_status(monkeypatch, tmp_path, cliente):
 
 
 # ===== Round 3 de correcao: bloqueadores do parecer 72e866e3 =====
-
-
-def test_rota_config_malformada_nao_libera_git_dir(monkeypatch, tmp_path, cliente):
-    """Sessao GIT cuja config quebra DEPOIS da criacao: o gitdir guardado no estado da
-    sessao continua recusando raiz/alvo dentro dele (parecer 47612d58, passo 4)."""
-    from app import api, filetree, git_ops
-    d = _repo(tmp_path)
-    git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
-    filetree.registrar_estado_git(str(tmp_path / ".git"))
-    (tmp_path / ".git" / "config").write_text(
-        "[malformado\n[remote \"origin\"]\n\turl = https://u:TOKEN@github.com/x/y.git\n")
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / ".git"))
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    assert "TOKEN" not in r.text
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-
-
-def test_rota_alias_cwd_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
-    """Symlink DIRETO para o git-dir como cwd: a sessao criada com o cwd ALIAS classifica
-    o alias como git-dir (realpath); config malformada depois nao muda a classificacao."""
-    import os
-    from app import api, filetree, git_ops
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir()
-    d = _repo(repo_dir)
-    git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
-    os.symlink(repo_dir / ".git", tmp_path / "git-area-alias")
-    filetree.registrar_estado_git(str(tmp_path / "git-area-alias"))
-    (repo_dir / ".git" / "config").write_text(
-        "[malformado\n[remote \"origin\"]\n\turl = https://u:TOKEN@github.com/x/y.git\n")
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / "git-area-alias"))
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    assert "TOKEN" not in r.text
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-
-
-def test_rota_git_dir_incompleto_config_malformada(monkeypatch, tmp_path, cliente):
-    """Git-dir INCOMPLETO (refs removido) com config malformada, numa sessao classificada
-    como Git na criacao: o gitdir guardado continua recusando (parecer 71d7b190)."""
-    import shutil
-    from app import api, filetree, git_ops
-    d = _repo(tmp_path)
-    git_ops._run(d, "remote", "add", "origin", "https://u:PARTIALTOKEN@github.com/x/y.git")
-    filetree.registrar_estado_git(str(tmp_path / ".git"))
-    (tmp_path / ".git" / "config").write_text(
-        "[malformado\n[remote \"origin\"]\n\turl = https://u:PARTIALTOKEN@github.com/x/y.git\n")
-    shutil.rmtree(tmp_path / ".git" / "refs")
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / ".git"))
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    assert "PARTIALTOKEN" not in r.text
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-
-
-def test_rota_bare_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
-    """Bare git-dir (nome termina em .git) com config malformada, numa sessao
-    classificada como Git na criacao: o gitdir guardado continua recusando."""
-    from app import api, filetree, git_ops
-    bare = tmp_path / "bare-repository.git"
-    bare.mkdir()
-    d = str(bare)
-    git_ops._run(d, "init", "-q", "--bare")
-    git_ops._run(d, "remote", "add", "origin", "https://u:PARTIALTOKEN@github.com/x/y.git")
-    filetree.registrar_estado_git(d)
-    (bare / "config").write_text(
-        "[malformado\n[remote \"origin\"]\n\turl = https://u:PARTIALTOKEN@github.com/x/y.git\n")
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    assert "PARTIALTOKEN" not in r.text
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-
-
-def test_rota_bare_sem_sufixo_head_quebrado(monkeypatch, tmp_path, cliente):
-    """Bare git-dir SEM sufixo com HEAD corrompido, numa sessao classificada como Git na
-    criacao: o gitdir guardado recusa — o stderr nunca participou da decisao (parecer
-    99916b58)."""
-    from app import api, filetree, git_ops
-    bare = tmp_path / "bare-repository"
-    bare.mkdir()
-    d = str(bare)
-    git_ops._run(d, "init", "-q", "--bare")
-    git_ops._run(d, "remote", "add", "origin", "https://u:BADHEADTOKEN@github.com/x/y.git")
-    filetree.registrar_estado_git(d)
-    (bare / "HEAD").write_text("not-a-ref\n")
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    assert "BADHEADTOKEN" not in r.text
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-
-
-def test_rota_bare_sem_sufixo_head_removido(monkeypatch, tmp_path, cliente):
-    """Mesma classe com HEAD REMOVIDO: a protecao vem do estado da sessao, nao do
-    arquivo HEAD existir nem de nomes (parecer 219a9e09)."""
-    from app import api, filetree, git_ops
-    bare = tmp_path / "bare-repository"
-    bare.mkdir()
-    d = str(bare)
-    git_ops._run(d, "init", "-q", "--bare")
-    git_ops._run(d, "remote", "add", "origin", "https://u:NOHEADTOKEN@github.com/x/y.git")
-    filetree.registrar_estado_git(d)
-    (bare / "HEAD").unlink()
-    h = {"Authorization": "Bearer secret"}
-    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
-    assert "NOHEADTOKEN" not in r.text
-    r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
 
 
 def test_rota_head_probe_timeout_vira_envelope(monkeypatch, tmp_path, cliente):

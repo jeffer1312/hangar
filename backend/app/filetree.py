@@ -26,52 +26,24 @@ def _within(child: Path, root: Path) -> bool:
     return child == root or root in child.parents
 
 
-# Classificacao de git-dir por cwd de sessao, em TRES estados (parecer 47612d58): a
-# heuristica por nomes/tipos NAO distingue pasta comum de git-dir quebrado (as duas podem
-# ter config/objects/refs), entao a fonte de verdade fica FORA do filesystem:
-#   - Path    -> git_dir_conhecido: contencao por realpath contra esse gitdir;
-#   - None    -> pasta_comum: arvore e leitura liberadas, sem marcas e sem soma;
-#   - ausente -> git_estado_ambiguo: so erro estruturado, nunca bytes.
-# O estado nasce na criacao/reatachamento da sessao (registrar_estado_git, chamado pelo
-# api) e e refrescado a cada resposta positiva do proprio git.
-_estado_git: dict[str, Path | None] = {}
-_AMBIGUO = object()
+def _protege_git(raiz: Path, alvo: Path) -> None:
+    """Nenhum caminho que passe por uma pasta chamada `.git` e listado nem lido.
 
-
-def registrar_estado_git(cwd: str) -> None:
-    """Classifica o cwd na criacao/reatachamento da sessao: git respondeu -> git-dir;
-    nao respondeu -> pasta_comum (a escolha do usuario de criar a sessao ali e a fonte
-    de verdade). Falha de subprocesso nao registra nada (fica ambiguo)."""
-    try:
-        g = _git_dir(cwd)
-    except FileError:
+    Comparacao por COMPONENTE sobre o caminho JA RESOLVIDO (realpath): `.gitignore` e
+    `.github/` continuam legiveis, e `atalho -> .git` nao escapa — a regua e do caminho
+    fisico, nao da string que o cliente mandou. Decisao do usuario (15/08): um
+    gerenciador de arquivos NAO descobre onde fica o git-dir — e a pasta de nome `.git`,
+    e so. Consequencias aceitas, documentadas: sessao aberta DENTRO do proprio `.git`
+    le (o terminal da sessao ja alcanca esses arquivos); `.git` quebrada a ponto do
+    proprio git nao se reconhecer fica fora de escopo."""
+    if alvo == raiz:
         return
-    _estado_git[str(_real(cwd))] = g
+    if ".git" in alvo.relative_to(raiz).parts:
+        raise FileError(403, "erro_arq_area_do_git", "area interna do git")
 
 
-def _git_dir(cwd: str) -> Path | None:
-    """A resposta ATUAL do git: Path quando ele identifica o git-dir (resolve .git FILE,
-    worktree, GIT_DIR); None quando nao responde — fora de repo OU quebrado, e o stderr
-    NAO participa ("not a git repository" tambem aparece dentro de git-dir real quebrado,
-    parecer 99916b58). Quem decide o que fazer com o None e o ESTADO DA SESSAO
-    (_resolver), nunca nomes/tipos de arquivo: heuristica por marcadores confundia pasta
-    comum com git-dir quebrado nos dois sentidos (parecer 47612d58). Falha de subprocesso
-    (git ausente/timeout) vira FileError: e falha operacional, nao classificacao."""
-    from app import git_ops
-    try:
-        p = git_ops._run(cwd, "rev-parse", "--absolute-git-dir")
-    except git_ops.GitError as e:
-        raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
-    if p.returncode != 0:
-        return None
-    # realpath dos DOIS lados da comparacao: o stdout do git e caminho fisico (getcwd),
-    # mas normalizar nao custa nada e garante que o _within casa com raiz/alvo resolvidos.
-    return Path(os.path.realpath(p.stdout.strip()))
-
-
-def _resolver(cwd: str, path: str | None) -> tuple[Path, Path, Path | None]:
-    """Devolve (raiz, alvo, gitdir) com o alvo provado dentro da raiz. O gitdir e a
-    classificacao que o list_dir precisa (None = pasta comum: arvore sem marcas)."""
+def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
+    """Devolve (raiz, alvo) com o alvo provado dentro da raiz da sessao."""
     raiz = _real(cwd)
     # Recusado ANTES de virar caminho: um path assim acabaria como flag num comando git.
     if path and path.startswith("-"):
@@ -85,37 +57,10 @@ def _resolver(cwd: str, path: str | None) -> tuple[Path, Path, Path | None]:
     alvo = _real(os.path.join(cwd, path)) if path else raiz
     if not _within(alvo, raiz):
         raise FileError(400, "erro_arq_fora_da_raiz", "caminho sai da raiz da sessao")
-    # Area interna do git fora do alcance: o .git/config carrega o token do remote, e o
-    # reflog e o objects carregam historia. Duas reguas, as duas sobre o caminho JA resolvido:
-    # (1) o GIT-DIR REAL, que o proprio git identifica (resolve .git FILE e worktree) — e o
-    #     que recusa o cwd DENTRO do git-dir (raiz == gitdir) sem confundir uma PASTA
-    #     ANCESTRAL chamada .git (um repo em /tmp/.git/projeto tem o git-dir em
-    #     /tmp/.git/projeto/.git, e a raiz fica FORA dele — medido no parecer 2ac646c);
-    # (2) por COMPONENTE do alvo relativo a raiz, que continua valendo mesmo com o git
-    #     quebrado (repo corrompido, .git orfao): .gitignore e .github/ ficam legiveis.
-    gitdir = _git_dir(cwd)
-    chave = str(raiz)
-    if gitdir is not None:
-        _estado_git[chave] = gitdir      # resposta positiva refresca a classificacao
-    else:
-        # Git nao respondeu agora: a classificacao da SESSAO decide. Guardada como
-        # git_dir_conhecido -> o git quebrou DEPOIS da criacao: usa o gitdir guardado.
-        # Guardada como pasta_comum -> liberado. Nunca vista antes -> AMBIGUO: sem
-        # fonte de verdade fora do filesystem, nomes/tipos nao distinguem pasta comum
-        # de git-dir quebrado (parecer 47612d58) — erro estruturado, nunca bytes.
-        estado = _estado_git.get(chave, _AMBIGUO)
-        if estado is _AMBIGUO:
-            raise FileError(500, "erro_arq_lista_falhou", "estado do git nao classificado")
-        gitdir = estado
-    if gitdir is not None and _within(raiz, gitdir):
-        raise FileError(403, "erro_arq_area_do_git", "area interna do git")
-    if ".git" in (alvo.relative_to(raiz).parts if alvo != raiz else ()):
-        raise FileError(403, "erro_arq_area_do_git", "area interna do git")
-    if gitdir is not None and _within(alvo, gitdir):
-        raise FileError(403, "erro_arq_area_do_git", "area interna do git")
+    _protege_git(raiz, alvo)
     if not alvo.exists():
         raise FileError(404, "erro_arq_inexistente", "caminho nao existe")
-    return raiz, alvo, gitdir
+    return raiz, alvo
 
 
 def _prefixo_no_repo(cwd: str) -> str:
@@ -211,17 +156,16 @@ def _numstat(cwd: str) -> dict[str, tuple[int, int]]:
 
 
 def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> dict:
-    raiz, alvo, gitdir = _resolver(cwd, path)
+    raiz, alvo = _resolver(cwd, path)
     if not alvo.is_dir():
         raise FileError(400, "erro_arq_nao_e_pasta", "nao e uma pasta")
 
-    # Pasta comum (sem git-dir): a arvore FUNCIONA fora de repo git — lista tudo, sem
-    # marca e sem soma (regra do usuario). so_modificados vira falso nesta chamada: sem
-    # marcas nao ha o que filtrar.
-    if gitdir is None:
-        marcas, nums, so_modificados = {}, {}, False
-    else:
+    # Fora de repo git a arvore FUNCIONA: lista tudo, sem marca e sem soma (regra do
+    # usuario). so_modificados vira falso nesta chamada: sem marcas nao ha o que filtrar.
+    if _e_repo(cwd):
         marcas, nums = _marcas(cwd), _numstat(cwd)
+    else:
+        marcas, nums, so_modificados = {}, {}, False
     entradas, cortou = [], False
     try:
         bruto = sorted(os.scandir(alvo), key=lambda e: (not e.is_dir(), e.name.lower()))
@@ -232,11 +176,13 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
     except OSError:
         raise FileError(500, "erro_arq_lista_falhou", "nao deu pra ler a pasta")
     for e in bruto:
-        if e.name == ".git":
-            continue
         filho = _real(e.path)
         if not _within(filho, raiz):        # symlink apontando pra fora
             continue
+        try:
+            _protege_git(raiz, filho)
+        except FileError:
+            continue                        # .git e atalho pra dentro dele nao aparecem
         try:
             tam = 0 if e.is_dir() else e.stat().st_size
         except OSError:                      # symlink quebrado: aparece, sem tamanho
@@ -260,7 +206,7 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
 
 
 def read_file(cwd: str, path: str) -> dict:
-    _raiz, alvo, _gitdir = _resolver(cwd, path)
+    _raiz, alvo = _resolver(cwd, path)
     if alvo.is_dir():
         raise FileError(400, "erro_arq_e_pasta", "isso e uma pasta")
     if not alvo.is_file():
