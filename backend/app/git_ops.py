@@ -407,17 +407,27 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
     return {"path": path, "diff": p.stdout}
 
 
-def _base_da_branch(cwd: str) -> str | None:
-    """Onde esta branch nasceu. None quando nao da pra saber (sem upstream, sem origin/HEAD,
-    repo sem commit, HEAD solto) — o chamador decide o que fazer, e DIZ."""
-    p = _run(cwd, "rev-parse", "--verify", "-q", "HEAD")
-    if p.returncode != 0:                                  # repo sem nenhum commit
-        return None
+def _base_da_branch(cwd: str) -> tuple[str | None, str | None]:
+    """Onde esta branch nasceu, e o PORQUE quando nao da pra saber."""
+    cabeca = _run(cwd, "rev-parse", "--verify", "-q", "HEAD")
+    if cabeca.returncode != 0:
+        return None, "este repositorio ainda nao tem commit"
+    atual = cabeca.stdout.strip()
+    igual_ao_head = False
     for ref in ("@{upstream}", "origin/HEAD"):
         b = _run(cwd, "merge-base", "HEAD", ref)
-        if b.returncode == 0 and b.stdout.strip():
-            return b.stdout.strip()
-    return None
+        if b.returncode != 0 or not b.stdout.strip():
+            continue
+        base = b.stdout.strip()
+        if base == atual:
+            # Branch ja pushada: `@{upstream}` e a COPIA dela, nao a mainline -> merge-base = HEAD.
+            # Nao serve de base; tenta a proxima referencia antes de desistir.
+            igual_ao_head = True
+            continue
+        return base, None
+    if igual_ao_head:
+        return None, "esta branch nao tem commit proprio"
+    return None, "esta branch nao tem base conhecida"
 
 
 def path_diff(cwd: str, path: str, escopo: str) -> dict:
@@ -427,21 +437,32 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
     if path.startswith("-"):
         raise GitError(400, "caminho invalido")
 
+    # Contencao ANTES de qualquer git: o realpath resolve symlink antes de comparar (recusa
+    # `pastaelo/cofre.txt` apontando pra fora) e o isfile recusa pathspec magica (':/', '*', '.')
+    # que o `--` nao desliga. Trade-off declarado: arquivo APAGADO do disco nao tem diff de branch.
+    topo = _run(cwd, "rev-parse", "--show-toplevel")
+    if topo.returncode != 0:
+        raise GitError(409, "nao e um repositorio git")
+    raiz = os.path.realpath(topo.stdout.strip())
+    alvo = os.path.realpath(os.path.join(cwd, path))
+    if alvo != raiz and not alvo.startswith(raiz + os.sep):
+        raise GitError(400, "caminho fora do repositorio")
+    if not os.path.isfile(alvo):
+        raise GitError(404, "arquivo nao encontrado")
+
     usado, base, motivo = escopo, None, None
     if escopo == "branch":
-        base = _base_da_branch(cwd)
-        cabeca = _run(cwd, "rev-parse", "HEAD")
-        atual = cabeca.stdout.strip() if cabeca.returncode == 0 else None
+        base, motivo = _base_da_branch(cwd)
         if base is None:
-            usado, motivo = "nao_commitado", "esta branch nao tem base conhecida"
-        elif base == atual:
-            usado, base, motivo = "nao_commitado", None, "esta branch nao tem commit proprio"
+            usado = "nao_commitado"
 
     # Arquivo ainda nao rastreado nao aparece em `git diff` — e e o caso MAIS comum aqui, porque
     # a sessao acabou de criar o arquivo. Mesmo tratamento que file_diff ja da (git_ops.py:338).
-    untracked = any(c["path"] == path and c["code"] == "??" for c in changed_files(cwd))
-    if untracked:
-        p = _run(cwd, "-c", "core.quotePath=false", "diff", "--no-index", "/dev/null", path)
+    rastreado = _run(cwd, "ls-files", "--error-unmatch", "--", path).returncode == 0
+    if not rastreado:
+        p = _run(cwd, "-c", "core.quotePath=false", "diff", "--no-index", "--", "/dev/null", path)
+        if p.returncode >= 128 or (p.returncode != 0 and not p.stdout):
+            raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
         texto, cortou = _cap(p.stdout)      # --no-index sai com 1 quando ha diferenca: normal
         return {"path": path, "diff": texto, "truncated": cortou,
                 "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}

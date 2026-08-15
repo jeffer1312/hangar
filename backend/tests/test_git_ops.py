@@ -610,7 +610,7 @@ def test_escopo_branch_soma_commits_e_disco(tmp_path):
     f.write_text("um\ndois\ntres\n")                 # nao commitado
     r = git_ops.path_diff(d, "a.txt", "branch")
     assert r["escopo_usado"] == "branch"
-    assert "dois" in r["diff"] and "tres" in r["diff"]
+    assert "+dois" in r["diff"] and "+tres" in r["diff"]
     so_disco = git_ops.path_diff(d, "a.txt", "nao_commitado")
     assert "tres" in so_disco["diff"] and "+dois" not in so_disco["diff"]
 
@@ -655,3 +655,81 @@ def test_file_diff_mantem_o_formato_do_git_changes_tab(tmp_path):
     r = git_ops.file_diff(d, "tracked.txt")
     assert set(r) >= {"path", "diff"}          # o que o front ja lia
     assert r["truncated"] is False             # o campo novo
+
+
+def test_branch_pushada_ainda_tem_base(tmp_path):
+    """Depois de `push -u`, `@{upstream}` e a COPIA da branch — merge-base com ela e o proprio
+    HEAD. Sem cair pro `origin/HEAD`, o escopo `branch` morre e o motivo mente."""
+    origem = tmp_path / "origem"
+    origem.mkdir()
+    o = str(origem)
+    git_ops._run(o, "init", "-q", ".")
+    git_ops._run(o, "config", "user.email", "t@t")
+    git_ops._run(o, "config", "user.name", "t")
+    (origem / "a.txt").write_text("um\n")
+    git_ops._run(o, "add", "a.txt")
+    git_ops._run(o, "commit", "-q", "-m", "um")
+    git_ops._run(str(tmp_path), "clone", "-q", "--bare", "origem", "bare")
+    git_ops._run(str(tmp_path), "clone", "-q", "bare", "trab")
+    d = str(tmp_path / "trab")
+    git_ops._run(d, "config", "user.email", "t@t")
+    git_ops._run(d, "config", "user.name", "t")
+    git_ops._run(d, "checkout", "-q", "-b", "trabalho")
+    (tmp_path / "trab" / "a.txt").write_text("um\ndois\n")
+    git_ops._run(d, "add", "a.txt")
+    git_ops._run(d, "commit", "-q", "-m", "dois")
+    git_ops._run(d, "push", "-q", "-u", "origin", "trabalho")
+    (tmp_path / "trab" / "a.txt").write_text("um\ndois\ntres\n")
+
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_usado"] == "branch", r["motivo"]
+    assert r["base"]
+    assert "+dois" in r["diff"] and "+tres" in r["diff"]
+
+
+def test_untracked_em_pasta_nova_aparece(tmp_path):
+    """`git status --porcelain` COLAPSA a pasta nova (`nova/`), nunca lista `nova/x.txt`."""
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "trab" / "novadir").mkdir()
+    (tmp_path / "trab" / "novadir" / "novo.txt").write_text("linha nova\n")
+    assert "linha nova" in git_ops.path_diff(d, "novadir/novo.txt", "nao_commitado")["diff"]
+
+
+def test_untracked_com_acento_e_com_espaco_aparece(tmp_path):
+    """O porcelain devolve esses dois nomes ENTRE ASPAS e com escape octal."""
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "trab" / "sessão-única.md").write_text("conteudo com acento\n")
+    (tmp_path / "trab" / "com espaco.txt").write_text("conteudo com espaco\n")
+    assert "acento" in git_ops.path_diff(d, "sessão-única.md", "nao_commitado")["diff"]
+    assert "espaco" in git_ops.path_diff(d, "com espaco.txt", "nao_commitado")["diff"]
+
+
+def test_untracked_ilegivel_nao_vira_diff_vazio(tmp_path):
+    d, _f = _repo_com_upstream(tmp_path)
+    alvo = tmp_path / "trab" / "trancado.txt"
+    alvo.write_text("segredo\n")
+    alvo.chmod(0o000)
+    try:
+        with pytest.raises(GitError):
+            git_ops.path_diff(d, "trancado.txt", "nao_commitado")
+    finally:
+        alvo.chmod(0o644)
+
+
+def test_path_fora_do_repo_recusado(tmp_path):
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "segredo.txt").write_text("SENHA\n")
+    (tmp_path / "trab" / "elo").symlink_to(tmp_path / "segredo.txt")
+    for ruim in ("../segredo.txt", "/etc/passwd", "..", "elo"):
+        with pytest.raises(GitError) as e:
+            git_ops.path_diff(d, ruim, "nao_commitado")
+        assert e.value.status == 400, ruim
+
+
+def test_pathspec_magica_nao_vira_diff_do_repo(tmp_path):
+    d, f = _repo_com_upstream(tmp_path)
+    f.write_text("um\nmexido\n")
+    for magico in (":/", ":(top)", ":(glob)**", "*", "."):
+        with pytest.raises(GitError) as e:
+            git_ops.path_diff(d, magico, "nao_commitado")
+        assert e.value.status == 404, magico
