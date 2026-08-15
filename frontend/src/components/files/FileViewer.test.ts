@@ -83,4 +83,26 @@ describe('FileViewer', () => {
     expect(el.textContent).toContain(m.git_diff_carregando());
     unmount(comp);
   });
+
+  it('nao mostra o conteudo do arquivo anterior sob o nome do novo', () => {
+    const { el, comp } = montar({
+      path: 'b.py', loading: true, diff: null,
+      conteudo: { path: 'a.py', text: 'CONTEUDO DE A', size: 13, truncated: false },
+    });
+    expect(el.textContent).not.toContain('CONTEUDO DE A');
+    expect(el.textContent).toContain(m.git_diff_carregando());
+    unmount(comp);
+  });
+
+  it('nao mostra o diff do arquivo anterior sob o nome do novo', () => {
+    const { el, comp } = montar({
+      path: 'b.py', loading: true, conteudo: null,
+      diff: { path: 'a.py', diff: '@@ -1 +1 @@\n-VELHO\n', truncated: false,
+              escopo_pedido: 'branch', escopo_usado: 'branch', base: 'abc1234', motivo: null },
+    });
+    expect(el.textContent).not.toContain('VELHO');
+    expect(el.textContent).not.toContain(m.arq_escopo_branch());
+    expect(el.textContent).toContain(m.git_diff_carregando());
+    unmount(comp);
+  });
 });

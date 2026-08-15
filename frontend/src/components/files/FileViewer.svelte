@@ -25,19 +25,25 @@
   // DiffView desenhava "sem diferenças" para um arquivo que tem diff.
   let destacadoDe: string | null = $state(null);
 
+  // Payload de OUTRO arquivo nao desenha: entre `abrir(b)` e a resposta, o store ainda tem o
+  // conteudo de `a` (ele so troca quando a resposta chega), e a tela mostrava o arquivo errado
+  // sob o nome certo. `path` no FileContent/PathDiff existe exatamente pra isso.
+  const doArquivo = $derived(conteudo !== null && conteudo.path === path ? conteudo : null);
+  const diffDoArquivo = $derived(diff !== null && diff.path === path ? diff : null);
+
   // Diff VAZIO nao e diff: o path_diff responde "" para arquivo sem alteracao no escopo, e nesse
   // caso quem o usuario quer ver e o arquivo.
-  const temDiff = $derived(diff !== null && diff.diff.trim() !== '');
+  const temDiff = $derived(diffDoArquivo !== null && diffDoArquivo.diff.trim() !== '');
 
-  const destacando = $derived(temDiff && diff !== null && destacadoDe !== diff.diff);
+  const destacando = $derived(temDiff && diffDoArquivo !== null && destacadoDe !== diffDoArquivo.diff);
 
   // O que está NA TELA é o escopo_usado. Quando ele diverge do pedido, o outro escopo é
   // impossível (a base não existe) — botão desabilitado, mas com o rótulo do que está sendo
   // mostrado e o motivo em TEXTO (title de botão desabilitado não é lido por ninguém).
-  const caiu = $derived(diff !== null && diff.escopo_usado !== diff.escopo_pedido);
+  const caiu = $derived(diffDoArquivo !== null && diffDoArquivo.escopo_usado !== diffDoArquivo.escopo_pedido);
 
   $effect(() => {
-    const d = diff;
+    const d = diffDoArquivo;
     let valida = true;
     if (d === null || d.diff.trim() === '') {
       rows = [];
@@ -72,8 +78,8 @@
   // "desde 721d1a0" chega inteiro da tradução; a barra mostra o "desde" com peso 500.
   // Split na primeira palavra cobre pt ("desde") e en ("since").
   const partesDesde = $derived(
-    diff !== null && diff.base !== null && diff.base.trim() !== ''
-      ? m.arq_escopo_desde({ base: diff.base }).split(/ (.+)/)
+    diffDoArquivo !== null && diffDoArquivo.base !== null && diffDoArquivo.base.trim() !== ''
+      ? m.arq_escopo_desde({ base: diffDoArquivo.base }).split(/ (.+)/)
       : null,
   );
 
@@ -97,7 +103,7 @@
       <span class="caminho">
         {#if dirParte}<span class="dir">{dirParte}</span>{/if}{nomeArquivo}
       </span>
-      {#if diff && !loading && !destacando && (estat.add || estat.del)}
+      {#if diffDoArquivo && !loading && !destacando && (estat.add || estat.del)}
         <span class="stat"><span class="stat-add">+{estat.add}</span> <span class="stat-del">−{estat.del}</span></span>
       {/if}
       <button class="fechar" aria-label={m.arq_fechar()} onclick={onFechar}>
@@ -105,8 +111,8 @@
       </button>
     </div>
     <div class="cab-l2">
-      {#if diff}
-        {@const d = diff}
+      {#if diffDoArquivo}
+        {@const d = diffDoArquivo}
         <button
           class="escopo"
           disabled={caiu}
@@ -121,9 +127,9 @@
         {#if partesDesde}
           <b>{partesDesde[0]}</b> {partesDesde[1]}
         {/if}
-        {#if partesDesde && conteudo}<span class="sep"> · </span>{/if}
-        {#if conteudo}
-          {m.arq_meta_arquivo({ tam: tamLegivel(conteudo.size), linhas: linhasDoTexto(conteudo.text) })}
+        {#if partesDesde && doArquivo}<span class="sep"> · </span>{/if}
+        {#if doArquivo}
+          {m.arq_meta_arquivo({ tam: tamLegivel(doArquivo.size), linhas: linhasDoTexto(doArquivo.text) })}
         {/if}
       </span>
       <button class="voltar" onclick={onFechar}>← {m.arq_voltar_conversa()}</button>
@@ -131,17 +137,17 @@
   </div>
 
   <div class="corpo">
-    {#if temDiff && diff}
-      {@const d = diff}
+    {#if temDiff && diffDoArquivo}
+      {@const d = diffDoArquivo}
       {#if d.truncated}
         <p class="aviso">{m.arq_diff_cortado()}</p>
       {/if}
       <DiffView path={path} rows={rows} loading={loading || destacando} />
-    {:else if conteudo}
-      {#if conteudo.truncated}
+    {:else if doArquivo}
+      {#if doArquivo.truncated}
         <p class="aviso">{m.arq_arquivo_cortado()}</p>
       {/if}
-      <pre class="conteudo">{conteudo.text}</pre>
+      <pre class="conteudo">{doArquivo.text}</pre>
     {:else if loading}
       <!-- Busca em voo sem nada ainda: aviso de carga, nunca a afirmação "sem diferenças". -->
       <p class="aviso">{m.git_diff_carregando()}</p>
