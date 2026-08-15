@@ -314,10 +314,19 @@ def assign_lanes(commits: list[dict]) -> list[dict]:
     return commits
 
 
+def _desescapa(p: str) -> str:
+    """Desfaz a citacao em C do porcelain. `-c core.quotePath=false` cobre o acento, mas NAO o
+    espaco: `git status --porcelain` devolve `"com espaco.txt"` entre aspas de qualquer jeito."""
+    if not (p.startswith('"') and p.endswith('"') and len(p) >= 2):
+        return p
+    return (p[1:-1].encode("utf-8").decode("unicode_escape")
+            .encode("latin-1").decode("utf-8", "replace"))
+
+
 def changed_files(cwd: str) -> list[dict]:
     """Arquivos com mudanca nao-commitada (git status --porcelain). Cada item: `path`, `code` (os 2
     chars XY do porcelain: ' M', 'M ', '??', 'A '...) e `staged`. So leitura."""
-    p = _run(cwd, "status", "--porcelain")
+    p = _run(cwd, "-c", "core.quotePath=false", "status", "--porcelain")
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "git status falhou").strip() or "git status falhou")
     out = []
@@ -327,7 +336,7 @@ def changed_files(cwd: str) -> list[dict]:
         code, path = line[:2], line[3:]
         if " -> " in path:                      # rename/copy: "old -> new" -> usa o novo path
             path = path.split(" -> ", 1)[1]
-        out.append({"path": path, "code": code, "staged": code[0] not in " ?"})
+        out.append({"path": _desescapa(path), "code": code, "staged": code[0] not in " ?"})
     return out
 
 
@@ -697,10 +706,10 @@ def commit(cwd: str, message: str, paths: list[str], amend: bool = False,
     # status e inclui `old` no pathspec do commit pra manter o rename atômico. (`old` vem do git, nao do
     # usuario -> nao precisa da validacao anti-traversal que os `paths` ja passaram.)
     renames: dict[str, str] = {}
-    for line in _run(cwd, "status", "--porcelain").stdout.splitlines():
+    for line in _run(cwd, "-c", "core.quotePath=false", "status", "--porcelain").stdout.splitlines():
         if line[:1] == "R" and " -> " in line[3:]:
             old, new = line[3:].split(" -> ", 1)
-            renames[new] = old
+            renames[_desescapa(new)] = _desescapa(old)
     extra = [renames[p] for p in paths if p in renames]
     # `add` primeiro: --only sozinho falha em arquivo untracked ("pathspec did not match").
     # `commit --only -- <paths>` grava SO esses paths, mesmo que outros estejam staged no indice.

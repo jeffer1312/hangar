@@ -574,6 +574,38 @@ def test_git_log_corpo_com_separador_nao_trunca(tmp_path):
     assert "antes" in body and "depois" in body
 
 
+def test_changed_files_nao_cita_nome_com_espaco_nem_acento(tmp_path):
+    d = _repo(tmp_path)
+    (tmp_path / "trab").mkdir()
+    (tmp_path / "trab" / "com espaco.txt").write_text("x\n")
+    (tmp_path / "trab" / "sessão.md").write_text("x\n")
+    git_ops._run(d, "add", "-A")
+    git_ops._run(d, "commit", "-q", "-m", "base")
+    (tmp_path / "trab" / "com espaco.txt").write_text("x\nx\n")
+    (tmp_path / "trab" / "sessão.md").write_text("x\nx\n")
+    paths = {c["path"] for c in git_ops.changed_files(d)}
+    assert "trab/com espaco.txt" in paths and "trab/sessão.md" in paths
+    assert not any(p.startswith('"') for p in paths)
+
+
+def test_rename_com_acento_continua_rename_no_commit(tmp_path):
+    """O pareamento de rename e o `changed_files` tem que falar a MESMA lingua; senao o rename
+    vira add e a delecao do nome velho fica orfa e staged."""
+    d = str(tmp_path)
+    git_ops._run(d, "init", "-q", ".")
+    git_ops._run(d, "config", "user.email", "t@t")
+    git_ops._run(d, "config", "user.name", "t")
+    (tmp_path / "sessão-única.md").write_text("c\n")
+    git_ops._run(d, "add", "-A")
+    git_ops._run(d, "commit", "-q", "-m", "base")
+    git_ops._run(d, "mv", "sessão-única.md", "sessão-nova.md")
+    paths = [c["path"] for c in git_ops.changed_files(d)]
+    git_ops.commit(d, "renomeia", paths)
+    gravado = git_ops._run(d, "show", "--name-status", "--format=", "HEAD").stdout
+    assert gravado.startswith("R"), gravado
+    assert not git_ops._run(d, "status", "--porcelain").stdout.strip(), "sobrou delecao orfa"
+
+
 def _repo_com_upstream(tmp_path):
     """Clone de um repo NORMAL que ja tem commit.
 
