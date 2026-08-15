@@ -34,10 +34,20 @@ PADRAO=(
 ALVOS=("$@")
 [ ${#ALVOS[@]} -eq 0 ] && ALVOS=("${PADRAO[@]}")
 
+# Nome de skill so pode ter letra, numero, hifen, underscore e ponto. A validacao NAO e
+# paranoia: sem ela o `-path` do find abaixo recebe o nome como PADRAO DE GLOB, e
+# `checar-skills.sh '*'` responde "ok" pra uma skill que nao existe — qualquer skill instalada
+# satisfaz o padrao. Este script existe justamente pra pegar skill ausente; falhar ABERTO e o
+# unico defeito que ele nao pode ter. De quebra, fecha `../../etc/passwd` nas checagens diretas.
+nome_valido() {
+  printf '%s' "$1" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+}
+
 # Onde uma skill pode morar. A busca e por SKILL.md, nao por diretorio: plugin com
 # installPath quebrado deixa o diretorio "existindo" no registro e vazio no disco.
 achar() {
   local nome="$1" alvo
+  nome_valido "$nome" || return 2
   for alvo in \
     "$CLAUDE_DIR/skills/$nome/SKILL.md" \
     "$HOME/.claude/skills/$nome/SKILL.md" \
@@ -55,12 +65,12 @@ achar() {
 faltando=()
 echo "Conferindo ${#ALVOS[@]} skills…"
 for s in "${ALVOS[@]}"; do
-  if onde=$(achar "$s"); then
-    printf '  ok     %-32s %s\n' "$s" "${onde/#$HOME/\~}"
-  else
-    printf '  FALTA  %s\n' "$s"
-    faltando+=("$s")
-  fi
+  onde=$(achar "$s"); rc=$?
+  case "$rc" in
+    0) printf '  ok     %-32s %s\n' "$s" "${onde/#$HOME/\~}" ;;
+    2) printf '  NOME INVALIDO  %s  (so letra, numero, . _ -)\n' "$s"; faltando+=("$s") ;;
+    *) printf '  FALTA  %s\n' "$s"; faltando+=("$s") ;;
+  esac
 done
 
 # Registro de plugin apontando pra caminho inexistente e o defeito silencioso que originou

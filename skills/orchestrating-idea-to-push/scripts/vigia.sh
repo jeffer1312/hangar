@@ -22,9 +22,10 @@
 # Rode com `setsid nohup … &`. Sem isso ela é filha do turno do árbitro e morre junto com ele —
 # exatamente o que não pode acontecer, já que a morte dele é o caso que ela existe para cobrir.
 #
-# Uso: vigia.sh <sessao> [sessao...] <arbitro> [minutos_de_silencio]
+# Uso: vigia.sh <sessao> [sessao...] <arbitro> [-m <minutos>]
 #      O ÚLTIMO nome é sempre o árbitro. Ex.:
-#      vigia.sh t1 t2 t3 review review2 arbitro 10
+#      vigia.sh t1 t2 t3 review review2 arbitro -m 10
+#      A forma antiga `vigia.sh exec rev arb 5` continua valendo.
 
 set -u
 # Aceita QUANTAS sessões forem: `vigia.sh <s1> <s2> ... <arbitro> [minutos]`. O último nome é
@@ -36,14 +37,24 @@ set -u
 # executor trabalhava. O leitor em Python sempre aceitou N nomes (`sys.argv[1:]`); quem limitava a
 # três era este shell.
 #
-# Compatível com a chamada antiga: `vigia.sh exec rev arb 5` continua valendo, porque o último
-# argumento só é lido como minutos quando é um número.
+# Os minutos vão por FLAG (`-m N` ou `--minutos N`), em qualquer posição. A forma antiga — número
+# solto no fim — continua aceita, mas SÓ na assinatura de três nomes que a documentação ensinava
+# (`vigia.sh exec rev arb 5`). Motivo: com N sessões, "último argumento numérico" é ambíguo — uma
+# sessão chamada `123` seria comida como limite de minutos, e a vigia passaria a olhar uma sessão a
+# menos, calada. Nome de sessão numérico não é hipótese: `sanitize_session_name` os aceita.
 LIMITE=5
-ARGS=("$@")
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m|--minutos) LIMITE=${2:?"-m precisa do numero de minutos"}; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+# Retrocompatibilidade estrita: exatamente 4 posicionais e o último numérico = a chamada antiga.
 n=${#ARGS[@]}
-if [ "$n" -ge 2 ] && printf '%s' "${ARGS[$((n-1))]}" | grep -qE '^[0-9]+$'; then
-  LIMITE=${ARGS[$((n-1))]}
-  unset 'ARGS[n-1]'
+if [ "$n" -eq 4 ] && printf '%s' "${ARGS[3]}" | grep -qE '^[0-9]+$'; then
+  LIMITE=${ARGS[3]}
+  ARGS=("${ARGS[0]}" "${ARGS[1]}" "${ARGS[2]}")
 fi
 SESSOES=("${ARGS[@]}")
 [ "${#SESSOES[@]}" -ge 2 ] || { echo "uso: vigia.sh <sessao> [sessao...] <arbitro> [minutos]" >&2; exit 2; }
@@ -53,6 +64,15 @@ export ARB
 BASE=${CP_BASE:-http://127.0.0.1:8765}
 ENVFILE=${CP_ENV:-$(dirname "$(realpath "$(command -v cp-send)")")/../backend/.env}
 T=$(grep '^CP_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)
+# Token vazio nao pode virar "nao consigo ler a API" cinco minutos depois: a vigia ficaria de pe,
+# com log limpo, sem vigiar nada — o mesmo modo de falha que o leitor em arquivo veio corrigir.
+[ -n "$T" ] || { echo "[vigia] CP_AUTH_TOKEN ausente em $ENVFILE — nao da pra ler /api/sessions" >&2; exit 1; }
+
+# O token vai por ARQUIVO de configuracao do curl, nunca por `-H` na linha de comando: argumento de
+# processo e legivel por qualquer usuario da maquina em `ps aux` / /proc/<pid>/cmdline, e esta
+# chamada acontece uma vez por minuto durante a noite inteira. O mktemp cria com 0600.
+CURLRC=$(mktemp /tmp/vigia-curlrc-XXXXXX)
+printf 'header = "Authorization: Bearer %s"\n' "$T" > "$CURLRC"
 
 parados=0
 avisos=0
@@ -67,7 +87,7 @@ avisou_travado=
 # rodou o tempo todo, com processo vivo e log limpo, sem NUNCA ter olhado uma sessão. Nomes vão por
 # argumento, não por variável de ambiente, para não precisar de aspas dentro do script embutido.
 LEITOR=$(mktemp /tmp/vigia-leitor-XXXXXX.py)
-trap 'rm -f "$LEITOR"' EXIT
+trap 'rm -f "$LEITOR" "$CURLRC"' EXIT
 cat > "$LEITOR" <<'PY'
 import json, sys, time
 
@@ -111,7 +131,7 @@ INTERVALO=${CP_VIGIA_INTERVALO:-60}
 
 for i in $(seq 1 1440); do
   sleep "$INTERVALO"
-  st=$(curl -s -H "Authorization: Bearer $T" "$BASE/api/sessions" \
+  st=$(curl -s --config "$CURLRC" "$BASE/api/sessions" \
        | python3 "$LEITOR" "${SESSOES[@]}" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
   if [ -z "$st" ]; then
     # Silêncio da API não pode ser silêncio da vigia: era assim que o furo acima se escondia.
@@ -130,7 +150,6 @@ for i in $(seq 1 1440); do
   for k in "${!SESSOES[@]}"; do
     resumo="$resumo${resumo:+ · }${SESSOES[$k]}=${ESTADOS[$k]:-?}"
   done
-  a=${ESTADOS[$((${#SESSOES[@]}-1))]:-?}          # estado do árbitro
   # Só o PAR (todos menos o árbitro) conta para travado/sem cota: árbitro parado é o normal.
   par_estados="${st%|*}"
 

@@ -19,6 +19,11 @@ const ICO_FILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 // PADRÃO: só o que mudou. O botão de olho é que mostra a árvore inteira.
 // Decisão do usuário em 15/08/2026 — quem quer navegar tudo pede; quem acabou de
 // trabalhar quer ver o que a sessão mexeu, sem filtrar nada.
+// Nome de arquivo vira HTML por template string, entao precisa de escape: um `&` ou `<` no nome
+// quebraria a marcacao. Aqui os dados sao fixos, mas o executor le este arquivo como referencia —
+// e o componente de verdade recebe nome vindo do disco.
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
 function montarArvore(seletor, { recuo = 14, base = 8, tudo = false } = {}) {
   const alvo = document.querySelector(seletor);
   const lista = tudo ? NOS : NOS.filter(([, , , marca]) => marca !== null);
@@ -28,11 +33,11 @@ function montarArvore(seletor, { recuo = 14, base = 8, tudo = false } = {}) {
     const num = (add || del)
       ? `<span class="num"><span class="stat-add">+${add}</span> <span class="stat-del">−${del}</span></span>`
       : '<span class="num"></span>';
-    const m = marca ? `<span class="marca m-${marca === '?' ? 'Q' : marca}">${marca}</span>` : '<span class="marca"></span>';
+    const m = marca ? `<span class="marca m-${marca === '?' ? 'Q' : marca}">${esc(marca)}</span>` : '<span class="marca"></span>';
     return `<button class="no ${tipo === 'dir' ? 'pasta' : ''} ${sel ? 'sel' : ''}" style="padding-left:${base + nivel * recuo}px">
       <span class="chev">${chev}</span>
       <span class="ico">${tipo === 'dir' ? ICO_DIR : ICO_FILE}</span>
-      <span class="nome">${nome}</span>
+      <span class="nome">${esc(nome)}</span>
       ${num}${m}
     </button>`;
   }).join('');
