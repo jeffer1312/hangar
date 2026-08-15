@@ -445,15 +445,27 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
         raise GitError(400, "escopo invalido")
     if path.startswith("-"):
         raise GitError(400, "caminho invalido")
+    # NUL quebra realpath() e subprocess com ValueError solto — recusar antes dos dois.
+    if "\x00" in path:
+        raise GitError(400, "caminho invalido")
+    # So caminho RELATIVO (mesma regua do filetree._resolver).
+    if os.path.isabs(path):
+        raise GitError(400, "caminho absoluto nao aceito")
 
-    # Contencao ANTES de qualquer git: o realpath resolve symlink antes de comparar (recusa
-    # `pastaelo/cofre.txt` apontando pra fora) e o isfile recusa pathspec magica (':/', '*', '.')
-    # que o `--` nao desliga. Trade-off declarado: arquivo APAGADO do disco nao tem diff de branch.
+    # Contencao contra o CWD DA SESSAO, ANTES da do topo do repo: o topo pode ser o PAI do
+    # cwd, e a sessao aberta em /repo/sub nao pode diff `../segredo.txt` nem ler o que esta
+    # fora dela. O realpath resolve symlink antes de comparar (recusa `pastaelo/cofre.txt`
+    # apontando pra fora) e o isfile recusa pathspec magica (':/', '*', '.') que o `--` nao
+    # desliga. Trade-off declarado: arquivo APAGADO do disco nao tem diff de branch.
+    cwd_real = os.path.realpath(cwd)
+    alvo = os.path.realpath(os.path.join(cwd, path))
+    if alvo != cwd_real and not alvo.startswith(cwd_real + os.sep):
+        raise GitError(400, "caminho fora do cwd da sessao")
+
     topo = _run(cwd, "rev-parse", "--show-toplevel")
     if topo.returncode != 0:
         raise GitError(409, "nao e um repositorio git")
     raiz = os.path.realpath(topo.stdout.strip())
-    alvo = os.path.realpath(os.path.join(cwd, path))
     if alvo != raiz and not alvo.startswith(raiz + os.sep):
         raise GitError(400, "caminho fora do repositorio")
     if not os.path.isfile(alvo):
@@ -473,8 +485,14 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
 
     # Arquivo ainda nao rastreado nao aparece em `git diff` — e e o caso MAIS comum aqui, porque
     # a sessao acabou de criar o arquivo. Mesmo tratamento que file_diff ja da (git_ops.py:338).
-    rastreado = _run(cwd, "ls-files", "--error-unmatch", "--", path).returncode == 0
+    # `--literal-pathspecs` vai como opcao GLOBAL (antes do subcomando): `git diff --literal-`
+    # e usage erro nesta versao, e a config core.literalPathspecs nao existe. Sem ele, um
+    # arquivo real chamado `*` fazia o `--` nao desligar o pathspec e o diff vinha com TODOS
+    # os arquivos modificados (medido no parecer 35a69cd).
+    rastreado = _run(cwd, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", path).returncode == 0
     if not rastreado:
+        # --no-index NAO aceita --literal-pathspecs, e tambem nao precisa: os dois paths
+        # posicionais sao tratados como literais pelo proprio git (medido).
         p = _run(cwd, "-c", "core.quotePath=false", "diff", "--no-index", "--", "/dev/null", path)
         if p.returncode >= 128 or (p.returncode != 0 and not p.stdout):
             raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
@@ -482,7 +500,7 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
         return {"path": path, "diff": texto, "truncated": cortou,
                 "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
 
-    args = ["-c", "core.quotePath=false", "diff"]
+    args = ["-c", "core.quotePath=false", "--literal-pathspecs", "diff"]
     if usado == "branch":
         args.append(base)
     elif _run(cwd, "rev-parse", "--verify", "-q", "HEAD").returncode == 0:

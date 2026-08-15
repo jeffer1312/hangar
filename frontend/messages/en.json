@@ -1572,6 +1572,7 @@
   "erro_arq_fora_da_raiz": "That path is outside the session folder.",
   "erro_arq_area_do_git": "The internal .git area is protected.",
   "erro_arq_inexistente": "That file no longer exists.",
+  "erro_arq_lista_falhou": "Couldn't list the folder.",
   "erro_arq_e_pasta": "That's a folder, not a file.",
   "erro_arq_nao_e_pasta": "That's a file, not a folder.",
   "erro_arq_nao_e_arquivo": "That's not a regular file.",

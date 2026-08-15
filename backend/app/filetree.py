@@ -32,12 +32,22 @@ def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
     # Recusado ANTES de virar caminho: um path assim acabaria como flag num comando git.
     if path and path.startswith("-"):
         raise FileError(400, "erro_arq_caminho_invalido", "caminho invalido")
+    # NUL quebra realpath() e subprocess com ValueError solto — recusar antes dos dois.
+    if path and "\x00" in path:
+        raise FileError(400, "erro_arq_caminho_invalido", "caminho invalido")
+    # So caminho RELATIVO: absoluto dentro do cwd tambem e recusado (o front so manda relativo).
+    if path and os.path.isabs(path):
+        raise FileError(400, "erro_arq_caminho_invalido", "caminho absoluto nao aceito")
     alvo = _real(os.path.join(cwd, path)) if path else raiz
     if not _within(alvo, raiz):
         raise FileError(400, "erro_arq_fora_da_raiz", "caminho sai da raiz da sessao")
     # Area interna do git fora do alcance: o .git/config carrega o token do remote, e o
     # reflog e o objects carregam historia. Comparacao por COMPONENTE (nao prefixo de texto):
     # .gitignore e .github/ continuam legiveis, e o realpath ja resolveu ./x/.git e sub/../.git.
+    # A RAIZ tambem passa pela regua: uma sessao com cwd em /repo/.git leria `config` como
+    # caminho relativo LIMPO — o guard do alvo nunca veria o .git.
+    if ".git" in raiz.parts:
+        raise FileError(403, "erro_arq_area_do_git", "area interna do git")
     if ".git" in (alvo.relative_to(raiz).parts if alvo != raiz else ()):
         raise FileError(403, "erro_arq_area_do_git", "area interna do git")
     if not alvo.exists():
@@ -59,14 +69,25 @@ def _prefixo_no_repo(cwd: str) -> str:
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
-def _marcas(cwd: str) -> dict[str, str]:
-    """path RELATIVO AO CWD -> letra do porcelain. Fora de repo git, vazio."""
+def _e_repo(cwd: str) -> bool:
     from app import git_ops
+    p = git_ops._run(cwd, "rev-parse", "--is-inside-work-tree")
+    return p.returncode == 0 and p.stdout.strip() == "true"
+
+
+def _marcas(cwd: str) -> dict[str, str]:
+    """path RELATIVO AO CWD -> letra do porcelain. Fora de repo git, ERRO no envelope:
+    arvore vazia escondia a falha (antes: except Exception -> {}, e so_modificados
+    devolvia 200 [] como se nada tivesse mudado)."""
+    from app import git_ops
+    if not _e_repo(cwd):
+        raise FileError(409, "erro_arq_nao_e_repo_git", "a arvore precisa de um repositorio git")
     pref = _prefixo_no_repo(cwd)
     try:
         brutas = git_ops.changed_files(cwd)
-    except Exception:
-        return {}
+    except git_ops.GitError as e:
+        # O detalhe vai so pro log (via _erro_arq no api); o envelope e traduzivel.
+        raise FileError(500, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     fora = {}
     for c in brutas:
         p = c["path"]
@@ -106,7 +127,15 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
 
     marcas, nums = _marcas(cwd), _numstat(cwd)
     entradas, cortou = [], False
-    for e in sorted(os.scandir(alvo), key=lambda e: (not e.is_dir(), e.name.lower())):
+    try:
+        bruto = sorted(os.scandir(alvo), key=lambda e: (not e.is_dir(), e.name.lower()))
+    except PermissionError:
+        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de leitura")
+    except FileNotFoundError:
+        raise FileError(404, "erro_arq_inexistente", "a pasta sumiu")
+    except OSError:
+        raise FileError(500, "erro_arq_lista_falhou", "nao deu pra ler a pasta")
+    for e in bruto:
         if e.name == ".git":
             continue
         filho = _real(e.path)

@@ -198,6 +198,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_arq_fora_da_raiz: () => m.erro_arq_fora_da_raiz(),
   erro_arq_area_do_git: () => m.erro_arq_area_do_git(),
   erro_arq_inexistente: () => m.erro_arq_inexistente(),
+  erro_arq_lista_falhou: () => m.erro_arq_lista_falhou(),
   erro_arq_e_pasta: () => m.erro_arq_e_pasta(),
   erro_arq_nao_e_pasta: () => m.erro_arq_nao_e_pasta(),
   erro_arq_nao_e_arquivo: () => m.erro_arq_nao_e_arquivo(),

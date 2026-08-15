@@ -35,6 +35,9 @@ def _e_repo(cwd: str) -> bool:
 def search(cwd: str, q: str, mode: str) -> dict:
     if not q or not q.strip():
         raise SearchError(400, "erro_arq_busca_vazia", "digite algo pra buscar")
+    # NUL quebra subprocess com ValueError solto — recusar antes de chegar no git.
+    if "\x00" in q:
+        raise SearchError(400, "erro_arq_busca_falhou", "termo de busca invalido")
     if mode not in ("names", "contents"):
         raise SearchError(400, "erro_arq_modo_invalido", "modo de busca invalido")
     if not _e_repo(cwd):

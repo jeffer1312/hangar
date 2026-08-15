@@ -1572,6 +1572,7 @@
   "erro_arq_fora_da_raiz": "Esse caminho sai da pasta da sessão.",
   "erro_arq_area_do_git": "A área interna do .git é protegida.",
   "erro_arq_inexistente": "Esse arquivo não existe mais.",
+  "erro_arq_lista_falhou": "Não consegui listar a pasta.",
   "erro_arq_e_pasta": "Isso é uma pasta, não um arquivo.",
   "erro_arq_nao_e_pasta": "Isso é um arquivo, não uma pasta.",
   "erro_arq_nao_e_arquivo": "Isso não é um arquivo comum.",

@@ -47,10 +47,20 @@ def test_esconde_git_mas_mostra_dotfile(tmp_path):
 
 def test_recusa_escapar_da_raiz(tmp_path):
     d = _repo(tmp_path)
-    for ruim in ("..", "../..", "/etc"):
+    for ruim in ("..", "../.."):
         with pytest.raises(FileError) as e:
             filetree.list_dir(d, ruim)
         assert e.value.code == "erro_arq_fora_da_raiz"
+
+
+def test_recusa_caminho_absoluto(tmp_path):
+    """So caminho RELATIVO: absoluto e recusado antes do join, mesmo dentro do cwd.
+    (O "/etc" do teste acima caiu nesta regua: e recusado como invalido, nao como fora.)"""
+    d = _repo(tmp_path)
+    for fn in (filetree.list_dir, filetree.read_file):
+        with pytest.raises(FileError) as e:
+            fn(d, str(tmp_path / "base.txt"))
+        assert e.value.code == "erro_arq_caminho_invalido"
 
 
 def test_pasta_herda_marca_e_soma_do_neto(tmp_path):
@@ -230,6 +240,213 @@ def test_rota_path_diff_fora_de_repo_devolve_envelope(monkeypatch, tmp_path, cli
     r = cliente.post("/api/sessions/s/git/path-diff", json={"path": "x.txt"},
                      headers={"Authorization": "Bearer secret"})
     assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_git_diff"
+
+
+# ===== Round de correcao: bloqueadores do parecer 35a69cd =====
+
+
+def test_rota_path_diff_nao_atravessa_cwd(monkeypatch, tmp_path, cliente):
+    """Sessao aberta em SUBPASTA do repo: ../segredo.txt esta DENTRO do repo git mas FORA
+    do cwd da sessao — o diff tem que recusar, nao ler o arquivo do vizinho."""
+    from app import api
+    d = _repo(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "segredo.txt").write_text("SENHA\n")
+    sub = str(tmp_path / "sub")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: sub)
+    r = cliente.post("/api/sessions/s/git/path-diff",
+                     json={"path": "../segredo.txt", "escopo": "nao_commitado"},
+                     headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_git_diff"
+
+
+def test_rota_recusa_caminho_absoluto(monkeypatch, tmp_path, cliente):
+    from app import api
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    h = {"Authorization": "Bearer secret"}
+    absoluto = str(tmp_path / "base.txt")
+    r = cliente.get("/api/sessions/s/files/list", params={"path": absoluto}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_arq_caminho_invalido"
+    r = cliente.get("/api/sessions/s/files/read", params={"path": absoluto}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_arq_caminho_invalido"
+    r = cliente.post("/api/sessions/s/git/path-diff", json={"path": absoluto}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_git_diff"
+
+
+def test_rota_symlink_que_atravessa_cwd_recusado(monkeypatch, tmp_path, cliente):
+    import os
+    from app import api
+    d = _repo(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "segredo.txt").write_text("SENHA\n")
+    os.symlink("../segredo.txt", tmp_path / "sub" / "elo")
+    sub = str(tmp_path / "sub")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: sub)
+    h = {"Authorization": "Bearer secret"}
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "elo"}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_arq_fora_da_raiz"
+    r = cliente.post("/api/sessions/s/git/path-diff",
+                     json={"path": "elo", "escopo": "nao_commitado"}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_git_diff"
+
+
+def test_rota_path_diff_trata_asterisco_como_literal(monkeypatch, tmp_path, cliente):
+    """Arquivo real chamado `*`: sem --literal-pathspecs o diff devolvia a soma de TODOS
+    os arquivos modificados (medido no parecer). O diff tem que ser so do arquivo `*`."""
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    (tmp_path / "*").write_text("estrela\n")
+    (tmp_path / "a.txt").write_text("um\n")
+    (tmp_path / "b.txt").write_text("dois\n")
+    git_ops._run(d, "add", ".")
+    git_ops._run(d, "commit", "-q", "-m", "base")
+    (tmp_path / "*").write_text("estrela\nestrela2\n")
+    (tmp_path / "a.txt").write_text("um\nAAA\n")
+    (tmp_path / "b.txt").write_text("dois\nBBB\n")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.post("/api/sessions/s/git/path-diff",
+                     json={"path": "*", "escopo": "nao_commitado"},
+                     headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    diff = r.json()["diff"]
+    assert "+AAA" not in diff and "+BBB" not in diff
+    assert "estrela2" in diff
+
+
+def test_rota_cwd_dentro_do_git_recusado(monkeypatch, tmp_path, cliente):
+    """Cwd da sessao em /repo/.git: `config` e um caminho RELATIVO limpo, e o guard do
+    alvo nunca ve o .git — a RAIZ tem que ser recusada tambem. Symlink pro .git idem
+    (o realpath resolve antes de comparar)."""
+    import os
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
+    gitdir = str(tmp_path / ".git")
+    h = {"Authorization": "Bearer secret"}
+    monkeypatch.setattr(api, "_session_cwd", lambda name: gitdir)
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "erro_arq_area_do_git"
+    r = cliente.get("/api/sessions/s/files/list", headers=h)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "erro_arq_area_do_git"
+    os.symlink(".git", tmp_path / "atalho")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / "atalho"))
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "erro_arq_area_do_git"
+
+
+def test_rota_list_fora_de_repo_explica(monkeypatch, tmp_path, cliente):
+    from app import api
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
+    r = cliente.get("/api/sessions/s/files/list", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_arq_nao_e_repo_git"
+
+
+def test_rota_list_falha_do_git_vira_envelope(monkeypatch, tmp_path, cliente):
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+
+    def quebra(cwd):
+        raise git_ops.GitError(500, "git quebrou")
+
+    monkeypatch.setattr(git_ops, "changed_files", quebra)
+    r = cliente.get("/api/sessions/s/files/list", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+
+
+def test_rota_list_pasta_sem_permissao_vira_envelope(monkeypatch, tmp_path, cliente):
+    from app import api
+    d = _repo(tmp_path)
+    (tmp_path / "privada").mkdir()
+    (tmp_path / "privada").chmod(0o000)
+    try:
+        monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+        r = cliente.get("/api/sessions/s/files/list",
+                        params={"path": "privada", "so_modificados": "false"},
+                        headers={"Authorization": "Bearer secret"})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "erro_arq_sem_permissao"
+    finally:
+        (tmp_path / "privada").chmod(0o755)
+
+
+def test_rota_nul_recusado_em_todas_as_rotas(monkeypatch, tmp_path, cliente):
+    from app import api
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    h = {"Authorization": "Bearer secret"}
+    r = cliente.get("/api/sessions/s/files/list", params={"path": "\x00"}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_arq_caminho_invalido"
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "\x00"}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_arq_caminho_invalido"
+    r = cliente.get("/api/sessions/s/files/search", params={"q": "\x00", "mode": "contents"}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_arq_busca_falhou"
+    r = cliente.post("/api/sessions/s/git/path-diff",
+                     json={"path": "\x00", "escopo": "nao_commitado"}, headers=h)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_git_diff"
+
+
+def test_rota_modo_invalido_devolve_envelope(monkeypatch, tmp_path, cliente):
+    from app import api
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.get("/api/sessions/s/files/search", params={"q": "x", "mode": "evil"},
+                    headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_arq_modo_invalido"
+
+
+def test_rota_escopo_invalido_devolve_envelope(monkeypatch, tmp_path, cliente):
+    from app import api
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.post("/api/sessions/s/git/path-diff",
+                     json={"path": "base.txt", "escopo": "evil"},
+                     headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_git_diff"
+
+
+def test_rota_nao_vaza_detalhe_interno_da_busca(monkeypatch, tmp_path, cliente):
+    """O detail de um SearchError pode carregar stderr do git com caminho absoluto —
+    vai pro log, nunca pro corpo da resposta."""
+    from app import api
+    from app.filesearch import SearchError
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+
+    def quebra(cwd, q, mode):
+        raise SearchError(409, "erro_arq_busca_falhou", "/home/privado/arquivo.txt: valor-secreto")
+
+    monkeypatch.setattr(api.filesearch, "search", quebra)
+    r = cliente.get("/api/sessions/s/files/search", params={"q": "x"},
+                    headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 409
+    corpo = r.text
+    assert "/home/privado" not in corpo and "valor-secreto" not in corpo
+    assert r.json()["detail"]["code"] == "erro_arq_busca_falhou"
+
+
+def test_rota_nao_vaza_detalhe_interno_do_diff(monkeypatch, tmp_path, cliente):
+    from app import api
+    from app.git_ops import GitError
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+
+    def quebra(cwd, path, escopo):
+        raise GitError(409, "/home/privado/arquivo.txt: valor-secreto")
+
+    monkeypatch.setattr(api.git_ops, "path_diff", quebra)
+    r = cliente.post("/api/sessions/s/git/path-diff", json={"path": "base.txt"},
+                     headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 409
+    corpo = r.text
+    assert "/home/privado" not in corpo and "valor-secreto" not in corpo
     assert r.json()["detail"]["code"] == "erro_git_diff"
 
 

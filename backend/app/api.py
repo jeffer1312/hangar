@@ -2849,8 +2849,11 @@ class GitPathBody(_StrictBody):
 
 
 class GitPathDiffBody(_StrictBody):
+    # `escopo` e str de proposito, nao Literal: o Literal era validado pelo FastAPI e o
+    # cliente recebia 422 com detail em LISTA — o envelope erro_git_diff nunca chegava a
+    # nascer. Quem rejeita o valor e o git_ops.path_diff, e o erro sai no envelope.
     path: str
-    escopo: Literal["branch", "nao_commitado"] = "branch"
+    escopo: str = "branch"
 
 
 class GitCommitBody(_StrictBody):
@@ -3128,13 +3131,25 @@ def git_commit_branches(name: str, sha: str):
         raise HTTPException(e.status, e.detail)
 
 
+# Textos FIXOS do envelope, por familia de erro: o detalhe interno (e.msg/str(e) do
+# SearchError e do GitError pode carregar caminho absoluto ou stderr do git, e atravessar
+# a API exporia segredo. O detalhe vai SO para o log, passando pelo _scrub (redige
+# userinfo de remote). O front mostra a chave traduzida; o `msg` do envelope e a rede
+# quando o front nao conhece o code — e ele tambem e fixo, por isso.
+_MSG_ARQ = "Nao deu pra acessar esse arquivo ou pasta."
+_MSG_BUSCA = "Nao deu pra completar a busca."
+_MSG_DIFF = "Nao deu pra montar o diff."
+
+
 def _erro_arq(e: FileError | SearchError) -> HTTPException:
-    # O `msg` vai TAMBEM como parametro: as chaves `erro_arq_busca_falhou` e `erro_git_diff`
-    # trazem `{msg}` no texto, e a funcao do paraglide exige o argumento — sem ele o front
-    # renderiza `undefined` ou nem compila. O `erro()` tem `msg` como parametro nomeado, entao
-    # o valor entra no dict de params DEPOIS, por chave.
-    d = erro(e.code, e.msg)
-    d["params"]["msg"] = e.msg
+    # As chaves `erro_arq_busca_falhou` e `erro_git_diff` trazem `{msg}` no texto, e a
+    # funcao do paraglide exige o argumento — sem ele o front renderiza `undefined` ou
+    # nem compila. O `erro()` tem `msg` como parametro nomeado, entao o valor entra no
+    # dict de params DEPOIS, por chave.
+    fixo = _MSG_BUSCA if isinstance(e, SearchError) else _MSG_ARQ
+    _log.warning("files: %s", git_ops._scrub(e.msg))
+    d = erro(e.code, fixo)
+    d["params"]["msg"] = fixo
     return HTTPException(status_code=e.status, detail=d)
 
 
@@ -3155,7 +3170,9 @@ def files_read(name: str, path: str):
 
 
 @app.get("/api/sessions/{name}/files/search", dependencies=[Depends(require_auth)])
-def files_search(name: str, q: str, mode: Literal["names", "contents"] = "names"):
+def files_search(name: str, q: str, mode: str = "names"):
+    # `mode` e str de proposito, nao Literal: o Literal era validado pelo FastAPI e o 422
+    # com detail em LISTA engolia o erro_arq_modo_invalido. Quem rejeita e o filesearch.
     try:
         return filesearch.search(_session_cwd(name), q, mode)
     except SearchError as e:
@@ -3167,8 +3184,9 @@ def git_path_diff(name: str, body: GitPathDiffBody):
     try:
         return git_ops.path_diff(_session_cwd(name), body.path, body.escopo)
     except GitError as e:
-        d = erro("erro_git_diff", str(e))
-        d["params"]["msg"] = str(e)
+        _log.warning("path-diff: %s", git_ops._scrub(str(e)))
+        d = erro("erro_git_diff", _MSG_DIFF)
+        d["params"]["msg"] = _MSG_DIFF
         raise HTTPException(status_code=e.status, detail=d)
 
 
