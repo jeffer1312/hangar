@@ -29,22 +29,26 @@ def _within(child: Path, root: Path) -> bool:
 def _git_dir_por_fs(cwd: str) -> Path | None:
     """Fallback conservador quando o git nao responde. Caminha do cwd RESOLVIDO pra cima
     e trata como git-dir:
-    - diretorio componente chamado `.git` com PELO MENOS UM marcador administrativo
-      (HEAD, config, objects ou refs) — o git-dir INCOMPLETO (refs removido, config com
-      token presente) continua protegido (parecer 71d7b190);
-    - diretorio com nome terminando em `.git` (bare, ex: repo.git) com os marcadores.
-    Pasta ancestral .git SEM marcador nenhum (ex: /tmp/.git que so contem um projeto)
-    nao conta. O realpath no comeco e obrigatorio: um cwd que seja SYMLINK DIRETO para o
-    git-dir nao tem componente .git no caminho lexical (parecer 5ded6dbe)."""
+    - diretorio componente chamado `.git` (ou nome terminando `.git` — bare) com PELO
+      MENOS UM marcador administrativo (HEAD, config, objects ou refs) — o git-dir
+      INCOMPLETO (refs removido) continua protegido (parecer 71d7b190);
+    - QUALQUER candidato com assinatura estrutural forte: pelo menos 3 dos 4 marcadores,
+      independente do nome — fecha o bare SEM o sufixo .git com HEAD quebrado ou removido
+      (pareceres 99916b58 e 219a9e09) sem bloquear pasta comum que so tenha um arquivo
+      chamado config.
+    Pasta ancestral .git sem marcador nenhum (ex: /tmp/.git que so contem um projeto)
+    nao conta. O realpath no comeco e obrigatorio: cwd SYMLINK DIRETO para o git-dir nao
+    tem componente .git no caminho lexical (parecer 5ded6dbe)."""
 
-    def _indicio(p: Path) -> bool:
-        return (p / "HEAD").is_file() or (p / "config").is_file() \
-            or (p / "objects").is_dir() or (p / "refs").is_dir()
+    def _marcadores(p: Path) -> int:
+        return sum(((p / "HEAD").is_file(), (p / "config").is_file(),
+                    (p / "objects").is_dir(), (p / "refs").is_dir()))
 
     atual = Path(os.path.realpath(cwd))
     while True:
         for cand in (atual, atual / ".git"):
-            if (cand.name == ".git" or cand.name.endswith(".git")) and _indicio(cand):
+            n = _marcadores(cand)
+            if n >= 3 or ((cand.name == ".git" or cand.name.endswith(".git")) and n >= 1):
                 return Path(os.path.realpath(cand))
         if atual == atual.parent:
             return None
@@ -53,31 +57,27 @@ def _git_dir_por_fs(cwd: str) -> Path | None:
 
 def _git_dir(cwd: str) -> Path | None:
     """O git-dir REAL do repo que contem o cwd (resolve .git FILE, worktree, GIT_DIR).
-    Fora de repo, None. Quando o git responde, e o caminho oficial. Quando NAO responde
-    (rc != 0), o fallback por filesystem tenta provar o git-dir por indicio; se nao
-    consegue, FALHA FECHADO com FileError — ausencia de prova nunca libera leitura. O
-    stderr NAO participa da decisao: "not a git repository" tambem aparece DENTRO de um
-    git-dir real quebrado (bare sem sufixo com HEAD corrompido vazou o config por essa
-    frase — parecer 99916b58). Preco intencional do desenho: cwd fora de repo (ou git
-    quebrado que o filesystem nao prova) deixa de servir arquivos comuns e devolve
-    envelope estruturado — falso bloqueio e preferivel a vazamento."""
+    Devolve Path quando ha git-dir (via git ou, na falha, pela assinatura do fallback) e
+    None quando e PASTA COMUM — a arvore funciona fora de repo git, sem marcas (regra do
+    usuario). O stderr NAO participa da decisao: "not a git repository" tambem aparece
+    DENTRO de um git-dir real quebrado (bare sem sufixo com HEAD corrompido vazou o
+    config por essa frase — parecer 99916b58). Falha de subprocesso (git ausente/timeout)
+    vira FileError: e falha operacional, nao classificacao."""
     from app import git_ops
     try:
         p = git_ops._run(cwd, "rev-parse", "--absolute-git-dir")
     except git_ops.GitError as e:
         raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     if p.returncode != 0:
-        gitdir = _git_dir_por_fs(cwd)
-        if gitdir is None:
-            raise FileError(500, "erro_arq_lista_falhou", "git-dir nao identificado")
-        return gitdir
+        return _git_dir_por_fs(cwd)
     # realpath dos DOIS lados da comparacao: o stdout do git e caminho fisico (getcwd),
     # mas normalizar nao custa nada e garante que o _within casa com raiz/alvo resolvidos.
     return Path(os.path.realpath(p.stdout.strip()))
 
 
-def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
-    """Devolve (raiz, alvo) com o alvo provado dentro da raiz."""
+def _resolver(cwd: str, path: str | None) -> tuple[Path, Path, Path | None]:
+    """Devolve (raiz, alvo, gitdir) com o alvo provado dentro da raiz. O gitdir e a
+    classificacao que o list_dir precisa (None = pasta comum: arvore sem marcas)."""
     raiz = _real(cwd)
     # Recusado ANTES de virar caminho: um path assim acabaria como flag num comando git.
     if path and path.startswith("-"):
@@ -108,7 +108,7 @@ def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
         raise FileError(403, "erro_arq_area_do_git", "area interna do git")
     if not alvo.exists():
         raise FileError(404, "erro_arq_inexistente", "caminho nao existe")
-    return raiz, alvo
+    return raiz, alvo, gitdir
 
 
 def _prefixo_no_repo(cwd: str) -> str:
@@ -204,11 +204,17 @@ def _numstat(cwd: str) -> dict[str, tuple[int, int]]:
 
 
 def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> dict:
-    raiz, alvo = _resolver(cwd, path)
+    raiz, alvo, gitdir = _resolver(cwd, path)
     if not alvo.is_dir():
         raise FileError(400, "erro_arq_nao_e_pasta", "nao e uma pasta")
 
-    marcas, nums = _marcas(cwd), _numstat(cwd)
+    # Pasta comum (sem git-dir): a arvore FUNCIONA fora de repo git — lista tudo, sem
+    # marca e sem soma (regra do usuario). so_modificados vira falso nesta chamada: sem
+    # marcas nao ha o que filtrar.
+    if gitdir is None:
+        marcas, nums, so_modificados = {}, {}, False
+    else:
+        marcas, nums = _marcas(cwd), _numstat(cwd)
     entradas, cortou = [], False
     try:
         bruto = sorted(os.scandir(alvo), key=lambda e: (not e.is_dir(), e.name.lower()))
@@ -247,7 +253,7 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
 
 
 def read_file(cwd: str, path: str) -> dict:
-    _raiz, alvo = _resolver(cwd, path)
+    _raiz, alvo, _gitdir = _resolver(cwd, path)
     if alvo.is_dir():
         raise FileError(400, "erro_arq_e_pasta", "isso e uma pasta")
     if not alvo.is_file():

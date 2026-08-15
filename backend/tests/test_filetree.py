@@ -368,19 +368,41 @@ def test_rota_cwd_dentro_do_git_recusado(monkeypatch, tmp_path, cliente):
     assert r.status_code == 403 and r.json()["detail"]["code"] == "erro_arq_area_do_git"
 
 
-def test_rota_list_fora_de_repo_explica(monkeypatch, tmp_path, cliente):
-    """Novo contrato (parecer 99916b58): cwd fora de repo NAO libera arquivos comuns —
-    a descoberta inconclusiva falha fechado com envelope. (Antes devolvia 409
-    erro_arq_nao_e_repo_git; o preco e intencional: falso bloqueio > vazamento.)"""
+def test_rota_pasta_comum_lista_e_le(monkeypatch, tmp_path, cliente):
+    """Regra do usuario: a arvore FUNCIONA fora de repo git. Pasta comum lista tudo sem
+    marca e sem soma, e le arquivos normalmente; um arquivo comum chamado `config` nao
+    confunde o guard (assinatura forte exige >=3 marcadores)."""
     from app import api
+    (tmp_path / "leia.txt").write_text("texto fora de git\n")
+    (tmp_path / "config").write_text("config comum\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "x.txt").write_text("x\n")
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
     h = {"Authorization": "Bearer secret"}
+    r = cliente.get("/api/sessions/s/files/list", params={"so_modificados": "false"}, headers=h)
+    assert r.status_code == 200
+    ent = {e["name"]: e for e in r.json()["entries"]}
+    assert "leia.txt" in ent and "config" in ent and "sub" in ent
+    assert all(e["changed"] is None and e["add"] == 0 and e["del"] == 0 for e in ent.values())
+    # so_modificados padrao (true) tambem lista: fora de git nao ha marcas pra filtrar.
     r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
-    r = cliente.get("/api/sessions/s/files/read", params={"path": "qualquer.txt"}, headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+    assert r.status_code == 200
+    assert any(e["name"] == "leia.txt" for e in r.json()["entries"])
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "leia.txt"}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["text"] == "texto fora de git\n"
+
+
+def test_rota_busca_fora_de_repo_continua_409(monkeypatch, tmp_path, cliente):
+    """A busca NAO muda com a regra da pasta comum: fora de repo ela continua exigindo
+    git e explicando com 409 erro_arq_nao_e_repo_git."""
+    from app import api
+    (tmp_path / "x.txt").write_text("agulha\n")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
+    r = cliente.get("/api/sessions/s/files/search", params={"q": "agulha"},
+                    headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_arq_nao_e_repo_git"
 
 
 def test_rota_list_falha_do_git_vira_envelope(monkeypatch, tmp_path, cliente):
@@ -650,9 +672,9 @@ def test_rota_bare_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
 
 def test_rota_bare_sem_sufixo_head_quebrado(monkeypatch, tmp_path, cliente):
     """Bare git-dir SEM o sufixo .git com HEAD corrompido: o rev-parse responde
-    "not a git repository" — a MESMA frase de fora de repo — e o ramo por stderr
-    liberava o config com token (parecer 99916b58). O stderr nao participa da decisao;
-    descoberta inconclusiva falha fechado."""
+    "not a git repository" e o ramo por stderr liberava o config com token (parecer
+    99916b58). A assinatura estrutural forte (>=3 marcadores) reconhece o bare mesmo
+    sem o nome .git e recusa 403."""
     from app import api, git_ops
     bare = tmp_path / "bare-repository"
     bare.mkdir()
@@ -663,17 +685,18 @@ def test_rota_bare_sem_sufixo_head_quebrado(monkeypatch, tmp_path, cliente):
     h = {"Authorization": "Bearer secret"}
     monkeypatch.setattr(api, "_session_cwd", lambda name: d)
     r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
     assert "BADHEADTOKEN" not in r.text
     r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
 
 
 def test_rota_bare_sem_sufixo_head_removido(monkeypatch, tmp_path, cliente):
-    """Mesma classe do anterior com HEAD REMOVIDO: a correcao nao pode depender do texto
-    especifico do erro (parecer 99916b58, passo 4)."""
+    """Mesma classe do anterior com HEAD REMOVIDO (3 marcadores restantes): a assinatura
+    forte continua reconhecendo o bare — a protecao nao depende do texto do erro nem do
+    arquivo HEAD existir (parecer 219a9e09)."""
     from app import api, git_ops
     bare = tmp_path / "bare-repository"
     bare.mkdir()
@@ -684,12 +707,12 @@ def test_rota_bare_sem_sufixo_head_removido(monkeypatch, tmp_path, cliente):
     h = {"Authorization": "Bearer secret"}
     monkeypatch.setattr(api, "_session_cwd", lambda name: d)
     r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
     assert "NOHEADTOKEN" not in r.text
     r = cliente.get("/api/sessions/s/files/list", headers=h)
-    assert r.status_code == 500
-    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
 
 
 def test_rota_head_probe_timeout_vira_envelope(monkeypatch, tmp_path, cliente):
