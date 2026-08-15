@@ -547,6 +547,68 @@ def test_rota_changed_files_504_preserva_status(monkeypatch, tmp_path, cliente):
     assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
 
 
+# ===== Round 3 de correcao: bloqueadores do parecer 72e866e3 =====
+
+
+def test_rota_config_malformada_nao_libera_git_dir(monkeypatch, tmp_path, cliente):
+    """Config malformada derruba o rev-parse --absolute-git-dir (rc 128) e o guard do
+    git-dir caia para None — o cwd /repo/.git lia o proprio config com o token (medido no
+    parecer). O fallback por filesystem tem que recusar do mesmo jeito."""
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
+    (tmp_path / ".git" / "config").write_text(
+        "[malformado\n[remote \"origin\"]\n\turl = https://u:TOKEN@github.com/x/y.git\n")
+    h = {"Authorization": "Bearer secret"}
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / ".git"))
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+    assert "TOKEN" not in r.text
+    r = cliente.get("/api/sessions/s/files/list", headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+
+
+def test_rota_head_probe_timeout_vira_envelope(monkeypatch, tmp_path, cliente):
+    """A probe de HEAD levantando GitError NAO pode escapar cru (500 text/plain, medido
+    no parecer): vira 504 com envelope, status preservado."""
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    orig = git_ops._run
+
+    def quebra(cwd, *args, **kw):
+        if "--verify" in args:
+            raise git_ops.GitError(504, "HEAD probe timeout")
+        return orig(cwd, *args, **kw)
+
+    monkeypatch.setattr(git_ops, "_run", quebra)
+    r = cliente.get("/api/sessions/s/files/list", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 504
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+
+
+def test_rota_head_quebrado_nao_vira_lista_vazia(monkeypatch, tmp_path, cliente):
+    """Probe de HEAD com rc=128 e stderr e FALHA, nao "repo sem commit": lista vazia
+    calada esconderia o HEAD quebrado (medido no parecer)."""
+    import subprocess
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    orig = git_ops._run
+
+    def quebra(cwd, *args, **kw):
+        if "--verify" in args:
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: broken HEAD")
+        return orig(cwd, *args, **kw)
+
+    monkeypatch.setattr(git_ops, "_run", quebra)
+    r = cliente.get("/api/sessions/s/files/list", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+
+
 def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
     """O `path` tem que ser o do LINK, nao o do alvo: com o do alvo, o link novo some do modo
     padrao (a marca do git nunca casa) e um link intocado herda o 'M' do vizinho."""

@@ -26,18 +26,39 @@ def _within(child: Path, root: Path) -> bool:
     return child == root or root in child.parents
 
 
+def _git_dir_por_fs(cwd: str) -> Path | None:
+    """Fallback conservador quando o git nao responde (config malformada, repo quebrado):
+    caminha do cwd pra cima e so trata como git-dir um diretorio componente chamado `.git`
+    COM os quatro marcadores administrativos (HEAD, config, objects, refs). Pasta ancestral
+    chamada .git sem os marcadores (ex: /tmp/.git que so contem um projeto) nao conta."""
+    atual = Path(cwd)
+    while True:
+        for cand in (atual, atual / ".git"):
+            if cand.name == ".git" and (cand / "HEAD").is_file() and (cand / "config").is_file() \
+                    and (cand / "objects").is_dir() and (cand / "refs").is_dir():
+                return Path(os.path.realpath(cand))
+        if atual == atual.parent:
+            return None
+        atual = atual.parent
+
+
 def _git_dir(cwd: str) -> Path | None:
     """O git-dir REAL do repo que contem o cwd (resolve .git FILE, worktree, GIT_DIR).
-    Fora de repo, None. Falha de subprocesso (git ausente/timeout) vira FileError: sem
-    o guard, uma sessao com cwd dentro do git-dir leria o .git/config sem barreira."""
+    Fora de repo, None. Duas vias: o proprio git responde, ou (git quebrado/config
+    malformada — o rev-parse sai 128) a descoberta conservadora por filesystem acima.
+    Sem o fallback, config malformada liberava o cwd /repo/.git e o read lia o proprio
+    .git/config com o token (medido no parecer 72e866e3).
+    Falha de subprocesso (timeout) vira FileError: sem o guard, o git-dir fica exposto."""
     from app import git_ops
     try:
         p = git_ops._run(cwd, "rev-parse", "--absolute-git-dir")
     except git_ops.GitError as e:
         raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     if p.returncode != 0:
-        return None
-    return Path(p.stdout.strip())
+        return _git_dir_por_fs(cwd)
+    # realpath dos DOIS lados da comparacao: o stdout do git e caminho fisico (getcwd),
+    # mas normalizar nao custa nada e garante que o _within casa com raiz/alvo resolvidos.
+    return Path(os.path.realpath(p.stdout.strip()))
 
 
 def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
@@ -133,11 +154,19 @@ def _numstat(cwd: str) -> dict[str, tuple[int, int]]:
     (marca M com add=0/del=0 mentirosos, medido no parecer 2ac646c)."""
     from app import git_ops
     pref = _prefixo_no_repo(cwd)
-    # Sem HEAD nao ha o que contar: `diff --numstat HEAD` sai 128 com "ambiguous argument".
-    # E o caso legitimo de vazio, nao de falha.
-    tem_head = git_ops._run(cwd, "rev-parse", "--verify", "-q", "HEAD").returncode == 0
-    if not tem_head:
+    # Sem HEAD nao ha o que contar. "Sem HEAD" e SO returncode 1 sem stderr (ausencia
+    # normal); 128 com stderr e HEAD quebrado/falha real — virar lista vazia seria
+    # esconder a falha (medido no parecer 72e866e3). GitError do probe escapa do envelope
+    # se ficar fora do try — esta dentro, com o status preservado.
+    try:
+        probe = git_ops._run(cwd, "rev-parse", "--verify", "-q", "HEAD")
+    except git_ops.GitError as e:
+        raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
+    if probe.returncode == 1 and not probe.stderr.strip():
         return {}
+    if probe.returncode != 0:
+        raise FileError(500, "erro_arq_lista_falhou",
+                        (probe.stderr or "rev-parse HEAD falhou").strip())
     try:
         p = git_ops._run(cwd, "-c", "core.quotePath=false", "diff", "--numstat", "HEAD")
     except git_ops.GitError as e:
