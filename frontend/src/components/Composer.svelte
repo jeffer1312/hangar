@@ -38,6 +38,8 @@
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
+  import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
+  import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, type ModelEffortBody } from '../lib/api';
   import type { State } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
@@ -48,6 +50,10 @@
     sessionState: State;
     status: StatusFields | null;
     onSend: (text: string) => Promise<void> | void;
+    // ctrl-s avulso: promove o que JÁ está na fila da TUI do Kimi pro turno em curso.
+    onSteer?: () => Promise<void> | void;
+    // Quantas msgs estão esperando o turno atual (as bolhas translúcidas). 0 = sem chip de fila.
+    filaCount?: number;
     onCommand: (cmd: string) => void;
     onInterrupt: () => void;
     // Cache de prompt do ultimo turno: { ts, ttl, read }. null = sem dado medido -> sem chip.
@@ -68,11 +74,12 @@
     provider?: 'claude' | 'codex' | 'pi' | 'kimi';
   }
   let {
-    sessionName, sessionState, status, lastCache = null, onSend, onCommand, onInterrupt, onOpenGit,
+    sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
     onOpenPreview, pairPeers = null, pairedState = null, onOpenPair,
     sendToPair = false, onToggleSendToPair,
     inputText = $bindable(''),
     provider = 'claude',
+    filaCount = 0,
   }: Props = $props();
 
   // ── Prazo do cache de prompt ───────────────────────────────────────────────
@@ -114,6 +121,16 @@
   let commands = $state<CommandInfo[]>([]);
   let commandSheetOpen = $state(false);
   let confirmStopOpen = $state(false);
+
+  // Estilo do ditado: o valor mora no servidor (runtime_config.ditado_estilo) pra valer também
+  // pro Ctrl+Espaço e pro celular. Carrega uma vez por store compartilhado — o Composer monta em
+  // mais de uma tela (chat e peek do quadro) e cada uma pediria a config por conta própria.
+  let estiloAberto = $state(false);
+  let estiloPillEl = $state<HTMLElement | null>(null);
+  const rotuloEstilo = $derived(
+    estilosDitado().find((e) => e.valor === ditadoEstilo.valor)?.rotulo ?? m.composer_ditado_pill(),
+  );
+  $effect(() => { void ditadoEstilo.carregar(); });
 
   $effect(() => {
     if (isCodex) return;   // Codex nao tem slash-commands do Claude Code -> nem busca a lista
@@ -930,6 +947,17 @@
   // Devolve se o envio deu certo -- enviarAutomatico() usa isso pra escolher o bipe (agudo/grave)
   // SO depois do desfecho real, nunca antes. O botao de enviar (onclick={submit}) ignora o retorno,
   // igual sempre ignorou.
+  // ctrl-s sem texto: não passa pelo submit (não há o que digitar nem o que limpar). Erro vai pro
+  // mesmo lugar do erro de envio — falha calada aqui seria um toque que não faz nada.
+  async function steerFila(): Promise<void> {
+    sendError = '';
+    try {
+      await onSteer?.();
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : m.composer_fila_erro();
+    }
+  }
+
   async function submit(): Promise<boolean> {
     if (!canSend) return false;
     cancelarContagem();   // envio manual torna a contagem sem sentido
@@ -1051,6 +1079,20 @@
               {#if sendToPair}<span class="repo-name">{pairPeers.length === 1 ? m.composer_pros_dois() : m.composer_pro_grupo()}</span>{/if}
             </button>
           {/if}
+        {/if}
+        {#if isKimi && isWorking && filaCount > 0 && onSteer}
+          <!-- FILA da TUI do Kimi: msg já mandada, esperando o turno atual acabar. O chip existe pra
+               DIZER que há fila (antes disso a bolha translúcida era a única pista) e dar a saída:
+               tocar manda o `ctrl-s`, que promove a msg pro turno em curso. Não tocar = espera, que
+               é o comportamento de sempre. -->
+          <button class="repo-chip fila-chip" onclick={steerFila}
+                  title={m.composer_fila_titulo()}
+                  aria-label={m.composer_fila_aria()}>
+            <span class="repo-glyph" aria-hidden="true">⏳</span>
+            <span class="repo-name">{m.composer_fila_contagem({ n: filaCount })}</span>
+            <span class="repo-sep" aria-hidden="true">·</span>
+            <span class="fila-acao">{m.composer_fila_acao()}</span>
+          </button>
         {/if}
         {#if status?.repo}
           <button class="repo-chip" title={m.composer_git_chip()} onclick={onOpenGit}>
@@ -1257,6 +1299,24 @@
         >
           {#if recording}<IconInterrupt size={18} />{:else}<IconMic size={20} />{/if}
         </button>
+        <!-- Estilo do ditado, colado no microfone e na MESMA pill do modelo/esforço: é decisão que
+             se toma ANTES de falar, do mesmo tamanho que escolher o esforço. Some durante a
+             gravação — trocar no meio não muda nada (quem lê o estilo é o backend, no fim) e a
+             pill só roubaria o alvo do dedo que vai parar de gravar. -->
+        {#if !recording && !starting}
+          <button
+            class="model-pill"
+            bind:this={estiloPillEl}
+            onclick={() => (estiloAberto = true)}
+            aria-haspopup="dialog"
+            aria-expanded={estiloAberto}
+            aria-label={m.ditado_estilo_titulo() + ': ' + rotuloEstilo}
+          >
+            <span class="pill-label">
+              <span class="pill-model">{rotuloEstilo}</span>
+            </span>
+          </button>
+        {/if}
       </div>
 
       <div class="control-right">
@@ -1270,9 +1330,9 @@
           <button
             class="send-btn"
             class:send-btn--disabled={!canSend}
-            onclick={submit}
+            onclick={() => submit()}
             disabled={!canSend}
-            aria-label={m.composer_enviar_mensagem()}
+            aria-label={isKimi && isWorking ? m.composer_enviar_fila_kimi() : m.composer_enviar_mensagem()}
           >
             <IconSend size={18} />
           </button>
@@ -1331,6 +1391,12 @@
     onFill={fillCommand}
     onOpenModelEffort={abrirSeletor}
     onClose={() => (commandSheetOpen = false)}
+  />
+
+  <DitadoEstiloPopover
+    open={estiloAberto}
+    anchor={estiloPillEl}
+    onClose={() => (estiloAberto = false)}
   />
 
   <ConfirmSheet
@@ -1643,6 +1709,18 @@
     cursor: default;
   }
 
+  /* Chip da FILA do Kimi. Accent (e nao o cinza dos outros chips da fileira) porque ele nao e
+     informacao de contexto como o repo: e uma acao disponivel AGORA, e some sozinho quando a fila
+     esvazia. Segue a mesma caixa `.repo-chip` — a fileira e uma linha so de chips, nao um lugar
+     onde cada assunto inventa um formato. */
+  .fila-chip {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .fila-chip .repo-name { color: var(--accent); font-weight: 600; }
+  .fila-chip .fila-acao { color: var(--accent); text-decoration: underline; }
+  .fila-chip:active { background: var(--accent-dim); }
+
   /* ── Anexo de imagem ────────────────────────────────────────────────────── */
   .file-input { display: none; }
 
@@ -1711,6 +1789,7 @@
   }
   .attach-btn:active { background: var(--bg-hover); }
   .attach-btn :global(svg) { display: block; }
+
 
   /* Botao de gravar audio: ícone de mic (IconMic) / quadrado stop (IconInterrupt) enquanto grava.
      Gravando -> vermelho e pulsa. */

@@ -117,6 +117,61 @@ _TODO_PANEL_RE = re.compile(r"^\s*[●○]?\s*Todos \(\d+/\d+\)\s*$")
 # Exige a forma da linha (termina em `…` ou em `)`), não só o glifo, pra um bullet de markdown em
 # prosa ("* item") não truncar o texto no meio.
 _ASCII_SPINNER_RE = re.compile(r"^\*\s+\S[^\n]*(…|\))\s*$")
+# ── Raciocinio do Kimi: so a COR separa ────────────────────────────────────────────────────────
+# Medido no pane em 14/08/2026 (Kimi 0.36, K3 high). O raciocinio e a resposta usam o MESMO `●`:
+#     pensamento: ESC[38;2;136;136;136m● ESC[3m17 × 23 = 17 × 20 + 17 × 3 …ESC[0m   (cinza + ITALICO)
+#     resposta:   ESC[38;2;224;224;224m● ESC[39m17 × 23 = 391.                      (claro, sem italico)
+# Em texto puro (o `capture-pane` de sempre, sem `-e`) as duas linhas sao identicas — `● …` — e por
+# isso a previa mostrava o raciocinio como se fosse a mensagem, ate o bloco real commitar. O
+# transcript nunca teve esse problema: la o `part.type == "think"` ja e descartado no parser.
+# "Tem italico na linha" NAO serve como regra, e isso foi MEDIDO depois de a primeira versao errar:
+# a resposta usa o mesmo `[3m` pra enfase de markdown no meio da frase —
+#     ESC[38;2;224;224;224m● ESC[39mO ESC[3mtesteESC[0m ESC[1mpassouESC[0m com sucesso.
+# ou seja, `*teste*` vira italico DENTRO da prosa. Cortar a linha inteira ali apagaria a resposta.
+#
+# A regra e a POSICAO + a COR, os dois: e rascunho quando o italico ABRE o conteudo (antes dele so
+# ha espaco e o bullet `●`) E a linha carrega o cinza do rascunho. Enfase no meio da frase tem texto
+# antes do `[3m`; resposta comecando em italico ainda tem a cor clara no bullet. As linhas de
+# continuacao do rascunho passam nas duas (medido: `   ESC[3mESC[38;2;136;136;136mnever replied…`).
+#
+# Erra-se sempre pro lado de MANTER: vazar rascunho e cosmetico e reversivel; engolir resposta e
+# perda de conteudo, calada. Por isso o RGB entra como condicao E, nao OU — se o tema mudar a cor,
+# o pior caso e o vazamento voltar, nunca a resposta sumir.
+_KIMI_ITALICO = "\x1b[3m"
+_KIMI_CINZA = "38;2;136;136;136"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+# "… (6 more lines, ctrl+o to expand)" — rodape do bloco DOBRADO, cromo do TUI, nunca prosa. Vem em
+# `[2m` (dim), nao em italico, entao nao sai pela regra de cima.
+_KIMI_DOBRADO_RE = re.compile(r"^\s*\.\.\.\s*\(\d+ more lines")
+
+
+def _e_rascunho_kimi(ln: str) -> bool:
+    """A linha e raciocinio do Kimi? (ver o bloco de comentario acima — posicao do italico + cor)."""
+    i = ln.find(_KIMI_ITALICO)
+    if i < 0 or _KIMI_CINZA not in ln:
+        return False
+    # Antes do italico so pode haver espaco e o bullet: e ele ABRINDO o conteudo. Com texto antes,
+    # e enfase no meio da prosa — resposta de verdade.
+    return _ANSI_RE.sub("", ln[:i]).strip(" ●") == ""
+
+
+def sem_pensamento_kimi(pane_colorido: str) -> str:
+    """Tira o bloco de raciocinio do pane COLORIDO do Kimi e devolve texto puro (sem ANSI).
+
+    Recebe o pane com `-e` e devolve sem: quem consome depois (`extract_assistant_text`,
+    `_live_spinner`) casa texto puro, e um `\\x1b[...m` no meio quebraria cada regex.
+    """
+    out = []
+    for ln in pane_colorido.splitlines():
+        if _e_rascunho_kimi(ln):
+            continue
+        limpa = _ANSI_RE.sub("", ln)
+        if _KIMI_DOBRADO_RE.match(limpa):
+            continue
+        out.append(limpa)
+    return "\n".join(out)
+
+
 _PI_TOOL_NAME_RE = re.compile(
     r"^(Bash|Read|Write|Edit|MultiEdit|Grep|Glob|Task|Agent|Skill|WebFetch|WebSearch|"
     r"NotebookEdit|TodoWrite|Multiple Tools|Chrome Devtools)[\s:(]"
@@ -344,10 +399,20 @@ class PreviewBroker:
                 working = bool(text)   # cadencia: rapido enquanto ha texto crescendo
             else:
                 md = False
+                # Kimi: pane COM cor, porque so o italico separa raciocinio de resposta (ver
+                # sem_pensamento_kimi). Os outros seguem no texto puro de sempre — `-e` ali seria
+                # custo e risco por nada.
+                kimi = self.provider == "kimi"
                 try:
-                    pane = await asyncio.to_thread(tmux.capture_pane, self.name)
+                    # A chamada dos OUTROS providers fica byte-identica de proposito (nem o
+                    # argumento `lines` explicito): este e o poll mais quente do backend e ha dublê
+                    # de teste com assinatura de um argumento so.
+                    pane = await (asyncio.to_thread(tmux.capture_pane, self.name, 200, True) if kimi
+                                  else asyncio.to_thread(tmux.capture_pane, self.name))
                 except Exception:
                     pane = ""
+                if kimi:
+                    pane = sem_pensamento_kimi(pane)
                 working = _live_spinner(pane) is not None
                 text = extract_assistant_text(pane, self.provider)
             if text != self.text or md != self.md:

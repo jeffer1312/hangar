@@ -509,3 +509,92 @@ def test_preview_kimi_corta_a_dica_nas_DUAS_formas():
         pane = "● resposta do assistente\n\n" + chrome + "\n ╭───────────╮\n │ >         │\n ╰───────────╯"
         out = extract_assistant_text(pane, "kimi")
         assert out == "resposta do assistente", f"nao cortou: {out!r}"
+
+
+# ── Raciocinio do Kimi vazando na previa (14/08/2026) ─────────────────────────────────────────
+# O usuario viu o RASCUNHO do Kimi aparecer no chat como se fosse a mensagem. O transcript nunca
+# teve isso (o parser descarta `part.type == "think"`); quem vazava era a PREVIA, que pro Kimi le o
+# pane — e la o raciocinio e a resposta usam o MESMO `●`, so mudando a cor. Bytes abaixo copiados de
+# um `capture-pane -e` real (Kimi 0.36, K3 high): cinza 136 + ITALICO no rascunho, claro 224 sem
+# italico na resposta.
+_KIMI_PENSANDO = (
+    " \x1b[38;2;136;136;136m● \x1b[3mCount letter r in \"strawberry raspberry blueberry\".\x1b[0m\n"
+    "   \x1b[2m... (9 more lines, ctrl+o to expand)\x1b[0m\n"
+    "\n"
+    "  \x1b[38;2;136;136;136m⠋ working...\x1b[0m\n"
+)
+_KIMI_RESPONDENDO = (
+    " \x1b[38;2;224;224;224m● \x1b[39mSao 6 letras r no total.\n"
+)
+# Resposta REAL com enfase de markdown no meio (`*teste*` -> italico), capturada do mesmo jeito. A
+# primeira versao do filtro cortava esta linha inteira: ela TEM `\x1b[3m`. Os dois reviewers
+# levantaram a hipotese e a captura confirmou — por isso a regra e posicao do italico + cor, nao "a
+# linha tem italico".
+_KIMI_RESPOSTA_COM_ITALICO = (
+    " \x1b[38;2;224;224;224m● \x1b[39mO \x1b[3mteste\x1b[0m \x1b[1mpassou\x1b[0m com sucesso.\n"
+)
+
+
+def test_kimi_raciocinio_sai_da_previa():
+    from app.preview import sem_pensamento_kimi
+    limpo = sem_pensamento_kimi(_KIMI_PENSANDO)
+    assert "Count letter r" not in limpo          # o rascunho sai
+    assert "more lines, ctrl+o" not in limpo      # e o rodape do bloco dobrado junto
+    assert "\x1b[" not in limpo                   # devolve texto puro (o resto do modulo casa isso)
+    assert extract_assistant_text(limpo, "kimi") == ""
+
+
+def test_kimi_resposta_continua_na_previa():
+    from app.preview import sem_pensamento_kimi
+    limpo = sem_pensamento_kimi(_KIMI_PENSANDO + _KIMI_RESPONDENDO)
+    assert extract_assistant_text(limpo, "kimi") == "Sao 6 letras r no total."
+
+
+def test_kimi_sem_cor_nao_perde_texto():
+    # Pane sem ANSI (dublê de teste, ou `capture-pane` sem `-e` por engano): nada tem italico, entao
+    # nada e descartado — degrada pro comportamento de antes, nunca engole a resposta.
+    from app.preview import sem_pensamento_kimi
+    puro = "● Sao 6 letras r no total.\n"
+    assert sem_pensamento_kimi(puro) == puro.rstrip("\n")
+
+
+def test_kimi_enfase_na_resposta_nao_e_confundida_com_rascunho():
+    from app.preview import sem_pensamento_kimi
+    limpo = sem_pensamento_kimi(_KIMI_PENSANDO + _KIMI_RESPOSTA_COM_ITALICO)
+    assert extract_assistant_text(limpo, "kimi") == "O teste passou com sucesso."
+
+
+def test_kimi_previa_do_broker_ja_vem_sem_rascunho(monkeypatch):
+    """Fiacao fim a fim: provider kimi -> capture_pane(cores=True) -> sem_pensamento_kimi.
+
+    Os testes acima exercitam as pecas soltas; este prova que elas estao LIGADAS. Sem ele, trocar a
+    ordem dos argumentos do capture_pane viraria TypeError dentro do `to_thread`, engolido pelo
+    `except Exception: pane = ""` do _loop — previa muda, indistinguivel de pane vazio.
+    """
+    import asyncio as _aio
+    from app import preview as _prev
+
+    vistos = []
+
+    def falso_capture(name, lines=200, cores=False):
+        vistos.append((name, lines, cores))
+        return _KIMI_PENSANDO + _KIMI_RESPONDENDO
+
+    monkeypatch.setattr(_prev.tmux, "capture_pane", falso_capture)
+    monkeypatch.setattr(_prev, "read_sidecar", lambda stem: None)
+
+    async def roda():
+        b = _prev.PreviewBroker("sessao-kimi", "kimi", lambda: "s-kimi")
+        agen = b.subscribe()
+        try:
+            async def primeiro_nao_vazio():
+                async for t, _md in agen:
+                    if t:
+                        return t
+            return await _aio.wait_for(primeiro_nao_vazio(), 2)
+        finally:
+            await agen.aclose()
+            _prev.PreviewBroker._brokers.pop("sessao-kimi", None)
+
+    assert _aio.run(roda()) == "Sao 6 letras r no total."
+    assert vistos and vistos[0][2] is True      # pediu o pane COM cor

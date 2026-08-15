@@ -10,7 +10,7 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
-const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile } = await import('./api');
+const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer } = await import('./api');
 const { mensagemDeErro, formataErro } = await import('./errosApi');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
@@ -346,5 +346,36 @@ describe('formataErro (Task 11 round 2: envelopes nos helpers de envio e avisos 
   it('não-envelope devolve undefined', () => {
     expect(formataErro(undefined)).toBeUndefined();
     expect(formataErro(42)).toBeUndefined();
+  });
+});
+
+// O mic do card (board/canvas) usa a versao por-servidor e ficou de fora do `limpar` por dois
+// meses: o MESMO botao devolvia texto limpo no chat e cru no card. Este teste existe pra prender
+// as duas na mesma regra — a versao por-servidor tem que aceitar e montar a query igualzinho.
+describe('transcribeFileForServer', () => {
+  it('monta ?limpar=1 igual a versao do servidor ativo', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ path: 'p', text: 't' }), { status: 200 }),
+    );
+    const file = new File(['x'], 'audio.webm');
+
+    await transcribeFileForServer(server, 'sessao', file, { limpar: true });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/sessions/sessao/transcribe?limpar=1');
+
+    await transcribeFileForServer(server, 'sessao', file);
+    expect(fetchMock.mock.calls[1][0]).toBe('https://a.test/api/sessions/sessao/transcribe');
+  });
+
+  it('repassa o aviso de que a limpeza desistiu', async () => {
+    // Sem isto o card mostraria o texto CRU como se fosse o limpo — a falha calada que a regra do
+    // projeto proibe. O texto entra do mesmo jeito; o que nao pode e o motivo sumir.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(
+        JSON.stringify({ path: 'p', text: 'cru', raw: 'cru', aviso: 'provedor 502' }),
+        { status: 200 },
+      ),
+    );
+    const r = await transcribeFileForServer(server, 'sessao', new File(['x'], 'a.webm'), { limpar: true });
+    expect(r.aviso).toBe('provedor 502');
   });
 });

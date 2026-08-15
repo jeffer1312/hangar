@@ -323,6 +323,74 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **Ditado: a transcrição não é o problema, o que vem depois é** (`app/transcribe.py` +
+  `app/narrar.py:limpar_ditado`). Duas etapas, dois modelos: a Whisper (`whisper-large-v3-turbo`)
+  ouve, e um LLM limpa. Tudo aqui foi **medido em 14/08/2026** — 5 ditados reais × 3 execuções ×
+  4 modelos —, e as três coisas que mudaram valem como regra, não como preferência:
+  - **O modelo da limpeza importa mais do que parece, e o critério não é tamanho — é obediência.**
+    O `llama-3.3-70b-versatile`, o padrão até aqui, inventava pasta em caminho ditado
+    ("backend barra app barra narrar ponto py" → `backend/barra/app/barra/narrar.py`, 3/3) e mantinha
+    **as duas versões** quando a pessoa se corrigia falando. Padrão agora é `openai/gpt-oss-120b`
+    (Groq, ~1,2s). O melhor dos quatro foi o `deepseek-v4-flash`, mas ele **raciocina**: 6,4s de
+    mediana e **3 de 15 chamadas estourando o timeout de 8s** da limpeza — o ditado voltava cru. Com
+    `reasoning_effort: "none"` ele cai pra 1,8s e acerta tudo. Daí o campo `llm_reasoning_effort`, que
+    é **opcional de propósito**: vazio = a chave some do payload, porque mandá-la a um provedor que
+    não a conhece é um 400 que derruba a limpeza inteira.
+  - **Regra de prompt só funciona com exemplo de entrada e saída.** A regra "aplique as correções que
+    a pessoa falou" era a razão de ser da limpeza e falhava 0/3 em dois modelos: eles *pontuavam* a
+    correção ("A primeira é o custo do carretel. Não, desculpa. A primeira vai ser…") em vez de apagar
+    a versão errada. Trocar o verbo por **APAGUE** e colar um par entrada/saída levou a 3/3. Mesmo
+    padrão na regra 4 (`barra` → `/`, `traço traço` → `--`): sem o par, o `gpt-oss-120b` deixava a
+    frase literal 3/3. Toda regra nova aqui **nasce com exemplo**, e com um contra-exemplo quando ela
+    pode generalizar demais ("o ponto principal", "a barra de rolagem" não podem virar pontuação).
+  - **Vocabulário vai pra Whisper, não pro LLM.** O `prompt` da API é enviesamento de decodificação,
+    e é onde `cp-send` para de sair "CP send". Consertar depois é impossível por construção: a
+    limpeza tem ordem explícita de **preservar** nome próprio como veio, então o que a Whisper errou
+    chega errado no fim. `VOCAB_BASE` (termos do app, valem pra todo mundo) + `ditado_vocabulario`
+    (o que é de uma pessoa só), truncados em `_VOCAB_MAX` porque a API corta em ~224 tokens **calada**.
+    `language=pt` fixo pelo mesmo motivo: sem ele, frase curta cheia de jargão inglês voltava em inglês.
+  - Cuidado de cota: o prompt novo tem ~940 tokens por chamada (era ~400). No plano gratuito da Groq
+    (8000 tokens/minuto) isso não incomoda um ditado por vez, mas **estoura em teste automatizado** —
+    um 429 lá é cota, não qualidade; separe os dois antes de culpar o modelo.
+  - **Três estilos, escolhidos na pill ao lado do microfone** (`ESTILOS_DITADO`, `ditado_estilo`,
+    `components/DitadoEstiloPopover.svelte`): `limpar` (só tira hesitação e pontua), `prosa`
+    (reorganiza e corta repetição — o padrão) e `briefing` (vira documento com seções). A pill fica na
+    barra do composer, ao lado do microfone, e abre o MESMO popover do esforço — não um modal: é
+    decisão do tamanho de escolher o esforço, e cobrir a tela pra isso é desproporcional. Existem
+    porque a mesma limpeza não serve pros dois usos: ditar "abre o narrar.py" e ditar um pedido de
+    dois minutos. Quem lê o estilo é o backend, então o atalho Ctrl+Espaço já grava no estilo
+    escolhido sem saber que ele existe. **`briefing` é rebaixado pra `prosa` abaixo de
+    `_MIN_PALAVRAS_BRIEFING`** — sem isso ele punha um `**Objetivo**` em cima de uma linha só.
+  - **A trava de honestidade mudou de forma porque a antiga proibia o que o usuário pediu.** Contar
+    palavra nova crua (o guarda antigo) rejeitava qualquer estruturação: `Objetivo:`, `-`, e até
+    escrever "tô" como "estou" contavam como conteúdo inventado — 8 "palavras novas" num ditado
+    real, com 100% do conteúdo preservado. Agora são duas medidas, e as duas foram calibradas
+    contra os mesmos casos: **cobertura** (quanto do conteúdo da pessoa sobreviveu; pega o modelo
+    que resumiu ou respondeu) e **`_conteudo_novo`** (palavra de conteúdo que ela não falou). Medido: defeito 4 palavras novas, limpeza honesta 0, prosa real 1 → teto 2. **Cobertura
+    sozinha não separa** (defeito 79%, prosa legítima 75%), e é por isso que as duas coexistem.
+  - **O `briefing` NÃO paga a trava de invenção** (`_Travas.cobra_invencao`), e isso é decisão do
+    usuário, não descuido: "no briefing minhas palavras vão mudar; se eu estiver em prosa, aí
+    beleza, não mudar minhas palavras". `limpar` e `prosa` não reescrevem — um pontua, o outro
+    reordena —, então ali palavra nova é palavra que a pessoa não disse. O briefing reescreve por
+    definição, e cobrar dele é recusar o serviço pedido: medido, um briefing bom com 98% de
+    cobertura foi rejeitado por 4 "invenções" que eram conjugação. Ele segue protegido pelo teto de
+    tamanho, pelo piso de cobertura e pela recusa de saída vazia.
+  - **Comparação é por RADICAL** (`_radical`), não pela palavra inteira. `clicava`/`clico`/`clicar`
+    caem no mesmo balde. Sem isso a trava punia conjugação — a mesma classe de erro que
+    `_CONTRACOES` resolveu pra `tô`/`estou` e que voltou por outra porta. **Mas a vogal final só cai
+    com prova de verbo no próprio texto** (`_raizes_de_verbo`, alimentado pelos DOIS textos): cortá-la
+    sempre juntava `posto`/`posta` e `conta`/`conto` no mesmo radical — o par que o comentário do piso
+    usava como exemplo do que não podia acontecer —, e aí trocar "a conta do cliente" por "o conto do
+    cliente" passava com 0 palavra nova e 100% de cobertura, calado, justo em `limpar` e `prosa`.
+    Sufixo de verbo (`ava`, `ando`, `ar`, …) e derivação (`mente`, `dade`, …) cortam sempre; plural
+    (`s`) também. Contra-exemplo travado em `test_troca_de_genero_ainda_e_palavra_nova`.
+  - `_CONTRACOES` iguala fala reduzida à forma escrita (`tô`→`estou`, `pra`→`para`) **antes** de
+    qualquer comparação. Sem isso a limpeza melhora o texto e é punida por isso.
+  - **Raciocínio piora e não é questão de calibragem.** Testado com os dois ditados reais: com
+    `reasoning_effort` ligado, 4 de 9 execuções estouraram 25s e a única prosa que voltou levou
+    14,9s, contra 2,3–3,2s desligado. Num teste anterior o modelo pensando ainda comeu o "não o
+    redis" de "usa o postgres não o redis", lendo negação como autocorreção. Pensar sobre um texto
+    vira interpretar o texto, e aqui interpretar é o defeito.
 - **Statusline por sidecar, não pelo pane** (`app/statusline.py` + `scripts/omniroute-statusline.js`
   + `scripts/pi/rich-status-line.ts` + `~/.kimi-code/statusline.js`): a linha que o app mostra
   (modelo, contexto, ⚡5h/📅7d, custo)
@@ -352,6 +420,44 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   parser/`sse._status_sig` tem exceção pro rótulo `ctx`, a mesma do Pi) e **não há 💵** (Kimi é
   assinatura de valor fixo, mesmo motivo do Claude em motor). O ⏱ dele é a idade do
   `wire.jsonl` (birthtime), não duração de API como no Claude.
+- **O `wire.jsonl` do Kimi não é um transcript bem-comportado** — duas armadilhas medidas em
+  14/08/2026, as duas em produção, na mesma sessão:
+  - **Nem toda escrita é turno.** O hook grava `idle` no `Stop` e `state.corrige_ocioso_kimi`
+    promovia pra `working` sempre que o arquivo fosse mais novo que o marcador (é o que cobre o
+    prompt ENFILEIRADO na TUI, que não dispara hook nenhum). Só que o Kimi grava `config.update` —
+    o system prompt inteiro, ~90KB — com a sessão parada: turno fechou 08:28, o `config.update` caiu
+    08:40 e a sessão ficou "em execução" com o pane no prompt. Agora o mtime é só o **portão barato**
+    (um `stat` por poll) e quem decide é `_kimi_turno_aberto`, que lê o **fim** do arquivo até a
+    primeira fronteira de turno: `turn.ended`/`turn.cancel` = parada, `turn.prompt`/`turn.steer` =
+    andando (levantado sobre todos os wires da máquina: não há outro `turn.*`). O regex é só filtro
+    barato — quem decide é o `type` de TOPO da linha, via json, senão uma msg CITANDO
+    `"type":"turn.ended"` vira fronteira.
+  - **O main fica MUDO quando delega.** Subagente (tool `Agent`/`AgentSwarm`) roda no mesmo
+    processo mas escreve no wire DELE (`<sessão>/agents/agent-N/wire.jsonl`); o
+    `agents/main/wire.jsonl` não recebe uma linha enquanto isso. E quando um subagente termina, o
+    hook `Stop` dispara com o `session_id` da SESSÃO — marcando `idle` no meio do turno do main.
+    Foi essa dupla que fez a mesma sessão aparecer "pronta" com o terminal mostrando
+    `Running 2 agents`, três vezes. Por isso o mtime não decide nada: quem decide é a fronteira de
+    turno do main, e prova de vida (no caminho degradado) é o mtime mais novo entre TODOS os
+    `agents/*/wire.jsonl`. Quem for mexer em estado do Kimi: **o wire do main não é a sessão**.
+  - **`tool.result` não tem `uuid`** (só `parentUuid` e `toolCallId`), e o parser mandava `id=""`.
+    O front deduplica evento **por id** (`Chat.svelte`, `idIndex`), então os 205 resultados de uma
+    sessão real disputavam o MESMO slot: cada um apagava o anterior. Dois estragos ao mesmo tempo —
+    todo card de ferramenta preso em "Executando…", e o card do **AskUserQuestion reabrindo depois
+    de respondido** (o front deriva "respondida" da presença do `tool_result`; quando a ferramenta
+    seguinte tomava o slot, a pergunta voltava a parecer pendente). Id agora é `res:<toolCallId>`.
+    O teste antigo não pegou porque fabricava um `uuid` que o Kimi nunca manda: **ao escrever teste
+    de parser, copie o shape do wire real**, não o que a doc sugere.
+- **Furar a fila do Kimi (steer)** (`terminal_input.steer_now` + `POST /api/sessions/{name}/steer` +
+  o chip `⏳ N na fila · mandar agora` no `Composer`): msg enviada com a sessão trabalhando fica na
+  fila da TUI do Kimi ("↑ to edit · ctrl-s to steer immediately"); o `ctrl-s` a injeta no turno em
+  curso — vira `turn.steer` no wire, no MESMO turnId, com o `context.append_message` de user de
+  sempre (por isso o dedup da fila durável não muda nada). Medido: o ctrl-s promove a fila
+  **inteira** de uma vez (duas msgs entraram como um bloco só), e com a sessão parada é no-op. É
+  tecla avulsa, não parâmetro do envio: a decisão "essa não espera" vem DEPOIS de já ter mandado. O
+  número do chip conta as bolhas translúcidas — eco local (`pending`) **mais** os eventos
+  `queued-` da fila durável; só o eco local dava 0 (ele some em ~1s, quando o `queued-` chega) e o
+  chip nunca nascia. 409 fora do Kimi.
 - **Prévia ao vivo: sidecar do agente primeiro, pane depois** (`preview.read_sidecar` +
   `scripts/pi/cp-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
   Pi recebe o bloco do assistente token a token (`message_update`) e publica o **último bloco de

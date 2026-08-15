@@ -1,4 +1,5 @@
 import http.client
+import logging
 import secrets
 import urllib.error
 import urllib.request
@@ -7,11 +8,38 @@ from app.config import settings
 from app import runtime_config
 from app.uploads import _safe_ext
 
+logger = logging.getLogger(__name__)
+
 # Transcricao de audio via Groq (whisper-large-v3-turbo). Groq aceita webm/mp4/m4a/mp3/wav/ogg
 # direto -> sem pre-conversao com ffmpeg. HTTP feito com urllib (stdlib): multipart montado a mao,
 # zero dep nova. A chave vem de settings.groq_api_key (CP_GROQ_API_KEY no .env ou GROQ_API_KEY no env).
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
+
+# O que se dita neste app e prompt pra agente: nome de ferramenta, comando, caminho e sigla. Sao
+# exatamente as palavras que a Whisper mais erra, porque nenhuma delas e portugues ("cp-send" sai
+# "CP send", "Kimi K3" sai "QIMI K3"). O campo `prompt` da Whisper e vocabulario, nao instrucao:
+# ele so enviesa a decodificacao pra grafia certa dessas palavras. Consertar aqui e melhor que
+# consertar depois no LLM — a limpeza tem ordem explicita de PRESERVAR nome proprio como veio,
+# entao o que a Whisper errou chega errado no fim.
+#
+# `language` fixo em pt: o audio deste app e sempre ditado do usuario. Sem ele a Whisper detecta o
+# idioma sozinha e ja trocou frase curta com jargao ingles por transcricao em ingles.
+IDIOMA = "pt"
+# Vocabulario BASE: so termos do proprio app, que valem pra qualquer pessoa que o use. O que e de
+# UMA pessoa (nome de projeto, de sessao, de cliente) entra pela config `ditado_vocabulario` e e
+# somado a este.
+VOCAB_BASE = (
+    "cp-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
+    "frontend, commit, merge request, deploy, endpoint, worktree, prompt, token"
+)
+# A Whisper le no maximo ~224 tokens de prompt e ignora calada o resto — uma lista que cresceu
+# demais perderia justamente os termos do fim, sem aviso. Corta por caractere, com folga.
+_VOCAB_MAX = 700
+# Quanto sobra pro usuario depois da base. DERIVADO, nunca digitado a mao: mexer no VOCAB_BASE sem
+# mexer aqui deixaria a tela aceitar um texto que o corte come depois — o silencio que este teto
+# existe pra matar.
+VOCAB_USUARIO_MAX = _VOCAB_MAX - len(VOCAB_BASE) - 2  # 2 = o ", " que junta as duas partes
 
 
 class TranscribeError(Exception):
@@ -22,13 +50,36 @@ class TranscribeError(Exception):
         self.detail = detail
 
 
-def build_multipart(filename: str, content: bytes) -> tuple[bytes, str]:
-    """Monta um corpo multipart/form-data (model + response_format + file) e devolve (body, boundary).
-    Separado da chamada de rede pra ser testavel sem tocar na Groq."""
+def vocabulario() -> str:
+    """Lista de termos que a Whisper deve grafar direito: a base do app mais o que o usuario
+    acrescentou na tela.
+
+    O teto de verdade e na GRAVACAO (runtime_config._coagir recusa acima de VOCAB_USUARIO_MAX),
+    porque e la que da pra falar com a pessoa: ela ve o erro na hora de salvar, em vez de descobrir
+    meses depois que a Whisper nunca soube dos ultimos nomes que ela cadastrou. O corte aqui e a
+    ULTIMA barreira (config escrita a mao no JSON, VOCAB_BASE que cresceu num upgrade) e por isso
+    grita no log: repetir aqui o corte calado da API seria o mesmo defeito que este codigo evita."""
+    extra = (runtime_config.get("ditado_vocabulario") or "").strip()
+    juntos = f"{VOCAB_BASE}, {extra}" if extra else VOCAB_BASE
+    if len(juntos) > _VOCAB_MAX:
+        logger.warning(
+            "vocabulario do ditado cortado: %d caracteres acima do teto de %d — os %d ultimos "
+            "termos nao chegam na Whisper. Encurte o campo 'Palavras do seu ditado'.",
+            len(juntos) - _VOCAB_MAX, _VOCAB_MAX, len(juntos) - _VOCAB_MAX,
+        )
+    return juntos[:_VOCAB_MAX]
+
+
+def build_multipart(filename: str, content: bytes, vocab: str = "") -> tuple[bytes, str]:
+    """Monta um corpo multipart/form-data (model + response_format + language + prompt + file) e
+    devolve (body, boundary). Separado da chamada de rede pra ser testavel sem tocar na Groq."""
     boundary = "----claudepocket" + secrets.token_hex(16)
     b = boundary.encode()
     parts: list[bytes] = []
-    for name, value in (("model", GROQ_MODEL), ("response_format", "text")):
+    campos = [("model", GROQ_MODEL), ("response_format", "text"), ("language", IDIOMA)]
+    if vocab:
+        campos.append(("prompt", vocab))
+    for name, value in campos:
         parts += [b"--" + b,
                   f'Content-Disposition: form-data; name="{name}"'.encode(),
                   b"", value.encode()]
@@ -51,7 +102,7 @@ def transcribe(content: bytes, filename: str | None) -> str:
     ext = _safe_ext(filename)
     if ext == "bin":
         ext = "webm"
-    body, boundary = build_multipart(f"audio.{ext}", content)
+    body, boundary = build_multipart(f"audio.{ext}", content, vocabulario())
     req = urllib.request.Request(
         GROQ_URL, data=body, method="POST",
         headers={

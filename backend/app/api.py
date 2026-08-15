@@ -1032,6 +1032,12 @@ def push_quiet_hours(body: PushQuietHoursBody):
 
 class InputBody(_StrictBody):
     text: str
+    # ACEITO E IGNORADO. Existiu por ~40min em 14/08/2026 (o steer ia junto do envio; virou uma tecla
+    # avulsa, POST /steer). O corpo e estrito, entao tirar o campo fez a PAGINA ABERTA — que e um PWA
+    # com service worker e pode ficar versoes atras — receber 422 em TODO envio: "Extra inputs are
+    # not permitted". Cliente velho nao pode quebrar por causa de campo que o servidor deixou de
+    # usar; fica aqui como tolerancia, sem efeito nenhum.
+    steer: bool = False
 
 
 class BroadcastBody(_StrictBody):
@@ -1987,6 +1993,29 @@ async def input_prompt(name: str, body: InputBody):
         raise HTTPException(400, res["error"])
     # delivered: True = digitou agora na TUI; False = na fila durável (entrega no próximo idle).
     return {"ok": True, "delivered": res.get("delivered", False)}
+
+
+@app.post("/api/sessions/{name}/steer", dependencies=[Depends(require_auth)])
+async def steer_session(name: str):
+    """`ctrl-s` avulso numa sessao Kimi: a msg que ja esta na fila da TUI entra no turno em curso.
+
+    Rota propria e nao um /input sem texto: aqui NAO se digita nada — e uma tecla so, pra uma msg
+    que o usuario ja mandou. Passa pelo mesmo pool dedicado do envio (é tmux, bloqueante).
+
+    409 (e nao 400) fora do Kimi: a sessao existe e o pedido e valido, so nao ha "steer" naquela TUI
+    — mesmo contrato das rotas que recusam com o painel do terminal aberto. O front nem mostra o
+    botao fora do Kimi; isto e a defesa de quem chama a API na mao."""
+    if not await _send_thread(_session_exists, name):
+        raise HTTPException(404, "sessão não encontrada")
+    provider, _ = await _send_thread(_pane_info, name)
+    if provider != "kimi":
+        raise HTTPException(409, "só sessão Kimi tem steer (ctrl-s)")
+    # `is False` e nao `not ...`: o unico produtor de False e o tmux recusando a tecla; um dublê de
+    # teste que devolve None nao pode virar erro. Sem esta checagem a rota afirmava entrega de um
+    # ctrl-s que nunca saiu (pane morto) — o chip sumia da tela e a msg ficava parada na fila.
+    if await _send_thread(terminal_input.steer_now, name) is False:
+        raise HTTPException(502, "o terminal recusou a tecla — a mensagem continua na fila")
+    return {"ok": True}
 
 
 @app.post("/api/broadcast", dependencies=[Depends(require_auth)])

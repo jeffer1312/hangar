@@ -39,6 +39,8 @@ import { intlLocale } from '../../lib/locale';
   const CAMPOS: Campo[] = [
     { chave: 'groq_api_key', rotulo: m.config_server_groq(), tipo: 'segredo', secao: 'anexos',
       ajuda: m.config_server_groq_ajuda() },
+    { chave: 'ditado_vocabulario', rotulo: m.config_server_vocabulario(), tipo: 'texto', secao: 'anexos',
+      ajuda: m.config_server_vocabulario_ajuda() },
     { chave: 'upload_retention_days', rotulo: m.config_server_guardar_anexos(), tipo: 'numero', sufixo: m.config_server_dias(), secao: 'anexos',
       ajuda: m.config_server_guardar_ajuda() },
     { chave: 'automations', rotulo: m.config_server_automacoes(), tipo: 'liga', secao: 'avancado',
@@ -59,6 +61,8 @@ import { intlLocale } from '../../lib/locale';
       ajuda: m.config_server_chave_llm_ajuda() },
     { chave: 'llm_model', rotulo: m.config_server_modelo_llm(), tipo: 'texto', secao: 'avancado',
       ajuda: m.config_server_modelo_llm_ajuda() },
+    { chave: 'llm_reasoning_effort', rotulo: m.config_server_raciocinio_llm(), tipo: 'texto', secao: 'avancado',
+      ajuda: m.config_server_raciocinio_llm_ajuda() },
     { chave: 'elevenlabs_api_key', rotulo: m.config_server_elevenlabs(), tipo: 'segredo', secao: 'anexos',
       ajuda: m.config_server_elevenlabs_ajuda() },
     { chave: 'tts_max_chars', rotulo: m.config_server_confirmar_leitura(), tipo: 'numero', sufixo: m.config_server_car(), secao: 'anexos',

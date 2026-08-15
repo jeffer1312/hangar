@@ -87,6 +87,11 @@ kimi() {
     fi
     # `sh -c` + exec mantém a MESMA forma dos outros wrappers. CP_SESSION_NAME: carimbo de
     # identidade pro cp-send de dentro do pane (ver claude.posix.sh).
+    # KIMI_CODE_TUI_FULL_SCREEN=1: fullscreen TUI experimental do Kimi 0.36+ (scroll proprio,
+    # composer fixo). O -e do backend (app/tmux.py) cobre sessoes criadas pelo app; este cobre as
+    # abertas pelo terminal. Caminho "ja dentro de tmux -> raw" nao passa aqui: quem cobre e o
+    # export no rc do shell.
     "${run[@]}" tmux new-session -s "$name" -c "$PWD" -e "CP_SESSION_NAME=$name" \
+        -e "KIMI_CODE_TUI_FULL_SCREEN=1" \
         sh -c 'exec kimi "$@"' _ "$@"
 }

@@ -1124,6 +1124,31 @@ def _partial(name: str, motivo: str, texto: str, pastes_antes: set[str] | None =
     return "partial"
 
 
+def steer_now(name: str) -> bool:
+    """`ctrl-s` AVULSO: promove o que JA esta na fila da TUI do Kimi pro turno em curso.
+
+    Medido em 14/08/2026 numa sessao Kimi real: texto+Enter com ele trabalhando deixa a msg na fila
+    DELE ("↑ to edit · ctrl-s to steer immediately" embaixo dela no terminal); o `ctrl-s` a injeta
+    no turno que ja esta rodando — vira `turn.steer` no wire.jsonl, no MESMO turnId, junto com o
+    `context.append_message` de user de sempre (por isso o dedup da fila do app nao muda nada).
+
+    Tecla avulsa, e nao um parametro do envio, DE PROPOSITO: o momento em que o dono decide "essa
+    nao espera" e depois de ja ter mandado — o app mostra a fila e oferece a saida, ele escolhe.
+
+    Dentro do `_send_lock` da sessao: senao esta tecla pode cair no MEIO de um envio digitando
+    (entre o texto e o Enter), e ai ela steera a msg ANTERIOR e deixa a nova pela metade no composer.
+
+    Sem nada na fila e no-op medido (14/08/2026: pane nao muda, teclado segue respondendo) — quem
+    checa se ha o que promover e a TUI, nao o app, porque so ela sabe.
+
+    Devolve o retorno do `send_keys`: False = o tmux RECUSOU a tecla (pane morto, sessao caiu). Sem
+    repassar isso, a rota respondia 200 pra uma tecla que nunca saiu, o chip sumia da tela e a msg
+    ficava parada na fila sem ninguem saber — e a UI nao tem como perceber sozinha, porque o efeito
+    do ctrl-s so aparece dentro da TUI."""
+    with _send_lock(name):
+        return send_keys(name, "C-s") is not False
+
+
 class TerminalInput:
     def send_prompt(self, name: str, text: str, provider: str = "claude",
                     pane_id: str | None = None, msg_id: str | None = None) -> str:

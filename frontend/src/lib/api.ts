@@ -252,8 +252,19 @@ export async function uploadFileForServer(s: Server, name: string, file: File): 
   return res.json() as Promise<{ path: string }>;
 }
 
-export async function transcribeFileForServer(s: Server, name: string, file: File): Promise<{ path: string; text: string }> {
-  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/transcribe`, {
+// `limpar` monta a MESMA query do transcribeFile (?limpar=1), de propósito: é o mesmo botão de
+// microfone, e ditar num card não pode devolver texto pior que ditar no chat. Só o mic manda o
+// flag — áudio anexado (arquivo de até 10min) não paga a limpeza, mesma regra do backend.
+// O `aviso` vem junto porque a limpeza pode desistir e devolver o cru (LLM fora do ar, resposta
+// rejeitada pelas travas): quem chama tem que poder dizer isso, e não fingir que limpou.
+export async function transcribeFileForServer(
+  s: Server,
+  name: string,
+  file: File,
+  opts?: { limpar?: boolean },
+): Promise<{ path: string; text: string; raw?: string; aviso?: string | null }> {
+  const qs = opts?.limpar ? '?limpar=1' : '';
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/transcribe${qs}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${s.token}`,
@@ -264,7 +275,7 @@ export async function transcribeFileForServer(s: Server, name: string, file: Fil
     signal: AbortSignal.timeout(120_000),   // mesmo teto do transcribeFile: sem "transcrevendo…" eterno
   });
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json() as Promise<{ path: string; text: string }>;
+  return res.json() as Promise<{ path: string; text: string; raw?: string; aviso?: string | null }>;
 }
 
 // Envia prompt pra sessão de um servidor específico (input do card do quadro). 404 = sessão morta:
@@ -626,6 +637,14 @@ export async function sendInput(name: string, text: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/input`, {
     method: 'POST',
     body: JSON.stringify({ text }),
+  });
+}
+
+// ctrl-s avulso (só Kimi): a msg que JÁ está na fila da TUI entra no turno em curso. É o caso que o
+// botão de enviar-com-steer não cobre — quando o usuário só decide isso depois de ter mandado.
+export async function steerSession(name: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/steer`, {
+    method: 'POST',
   });
 }
 

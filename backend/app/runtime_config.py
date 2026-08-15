@@ -44,6 +44,17 @@ EDITAVEIS: dict[str, type] = {
     "llm_base_url": str,   # endpoint compativel com OpenAI (vazio = Groq)
     "llm_api_key": str,    # chave do provedor (so usada quando ha base_url proprio)
     "llm_model": str,      # nome do modelo (vazio = o padrao)
+    # reasoning_effort mandado ao provedor. Vazio = campo AUSENTE do payload (o de sempre) — nem
+    # todo provedor conhece a chave, e mandar pra quem nao conhece e 400. Serve pra DESLIGAR o
+    # raciocinio ("none") num modelo que raciocina: a limpeza do ditado tem timeout de 8s e um
+    # modelo pensando estoura isso. Ver narrar._esforco_raciocinio.
+    "llm_reasoning_effort": str,
+    # Palavras que a Whisper tem que grafar direito (nome de projeto, de sessao, jargao do seu
+    # dia). Somadas a transcribe.VOCAB_BASE. Ver transcribe.vocabulario.
+    "ditado_vocabulario": str,
+    # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
+    # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
+    "ditado_estilo": str,
 }
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você
@@ -115,6 +126,32 @@ def _coagir(campo: str, valor: Any) -> Any:
         # (code, nvim, subl) e impede apontar pra um binario solto tipo /tmp/qualquer.sh.
         if "/" in texto or "\\" in texto or texto.startswith("-") or ".." in texto:
             raise ValueError("editor: use o nome do binario (ex: code), sem caminho")
+    if campo == "ditado_estilo" and texto:
+        # Import local pelo mesmo motivo do vocabulario abaixo (transcribe/narrar importam este
+        # modulo). Recusar aqui e o que impede um estilo inexistente virar "nenhuma limpeza,
+        # calado": narrar cai no padrao quando nao reconhece o valor, entao sem esta trava um typo
+        # na config faria o ditado piorar sem nada na tela dizendo por que.
+        from app.narrar import ESTILOS_DITADO
+        if texto not in ESTILOS_DITADO:
+            raise ValueError(
+                f"ditado_estilo: '{texto}' nao existe. Use um de: {', '.join(ESTILOS_DITADO)}."
+            )
+    if campo == "ditado_vocabulario" and texto:
+        # Import LOCAL: transcribe importa este modulo, entao um import no topo fecharia o ciclo —
+        # mesmo motivo (e mesma solucao) de config.automations_enabled.
+        #
+        # O teto vive AQUI, e nao so no corte de transcribe.vocabulario, porque este e o unico
+        # ponto da corrente que consegue falar com a pessoa. Cortando so na leitura, ela cadastra
+        # 40 termos, a tela diz "salvo", e os ultimos simplesmente nunca chegam na Whisper: os
+        # nomes que ela configurou pra parar de sair errado continuam saindo errado, sem nada em
+        # lugar nenhum explicando por que. Recusar na gravacao transforma isso num erro visivel no
+        # segundo em que ela aperta salvar.
+        from app.transcribe import VOCAB_USUARIO_MAX
+        if len(texto) > VOCAB_USUARIO_MAX:
+            raise ValueError(
+                f"ditado_vocabulario: {len(texto)} caracteres, o maximo e {VOCAB_USUARIO_MAX} "
+                "(a Whisper ignora o resto). Tire os termos que voce menos erra."
+            )
     if campo == "llm_base_url" and texto and not (texto.startswith("http://") or texto.startswith("https://")):
         # Mesmo argumento do editor: antes so o dono da maquina escolhia o endpoint (env), agora o
         # celular escreve. Aceita vazio (volta ao padrao) ou uma URL http(s) de verdade.

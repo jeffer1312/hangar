@@ -6,6 +6,19 @@ from app import runtime_config, narrar
 from app.narrar import NarrarError
 
 
+@pytest.fixture(autouse=True)
+def _config_isolada(monkeypatch, tmp_path):
+    """Toda a suite le config de um diretorio VAZIO, nunca do ~/.claude da maquina.
+
+    Sem isto, `limpar_ditado` -> `_estilo_efetivo` -> `estilo_ditado` -> `runtime_config.get`
+    abria o runtime-config.json de PRODUCAO desta maquina, e as travas testadas eram as do estilo
+    que estivesse salvo ali. Os testes de guarda passavam porque o valor no disco era `prosa`, igual
+    ao padrao — coincidencia de ambiente, nao algo que a suite fixa: trocando pra `limpar` (que sobe
+    a cobertura de 0.60 pra 0.80), um deles passava a ser rejeitado por OUTRO motivo e a assercao
+    quebrava. Mesmo isolamento que test_runtime_config.py ja fazia."""
+    monkeypatch.setattr(runtime_config, "_backend_config_base", lambda: str(tmp_path))
+
+
 def _com_chave(monkeypatch):
     monkeypatch.setattr(runtime_config, "get", lambda campo: "k" if campo == "groq_api_key" else None)
 
@@ -209,6 +222,40 @@ def test_base_url_e_modelo_custom_chegam_na_request(monkeypatch):
     assert corpo["model"] == "modelo-custom"
 
 
+def _corpo_enviado(monkeypatch) -> dict:
+    """Dispara uma narracao e devolve o JSON que foi pro provedor."""
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return FakeResp()
+
+    monkeypatch.setattr("app.narrar.urllib.request.urlopen", fake_urlopen)
+    narrar.narrar("texto", [], "explica isso")
+    return json.loads(captured["req"].data)
+
+
+def test_sem_esforco_configurado_o_payload_nao_muda(monkeypatch):
+    # `reasoning_effort` nao e universal: mandar a chave pra um provedor que nao a conhece e um 400
+    # que derruba a limpeza inteira. Vazio (o padrao) tem que sair do payload por completo — nao
+    # basta ir como "" ou null.
+    _config(monkeypatch, {"groq_api_key": "k"})
+    assert "reasoning_effort" not in _corpo_enviado(monkeypatch)
+
+
+def test_esforco_configurado_vai_no_payload(monkeypatch):
+    # "none" e o valor que importa: desliga o raciocinio num modelo que raciocina, e foi o que fez
+    # o deepseek-v4-flash sair de 6,4s (3/15 estourando o timeout de 8s) pra 1,8s sem estouro.
+    _config(monkeypatch, {"groq_api_key": "k", "llm_reasoning_effort": "none"})
+    assert _corpo_enviado(monkeypatch)["reasoning_effort"] == "none"
+
+
 def test_resposta_sem_texto_esperado_levanta_502(monkeypatch):
     _com_chave(monkeypatch)
 
@@ -276,13 +323,18 @@ def test_erro_inesperado_no_provedor_nao_estoura_e_devolve_o_cru(monkeypatch):
     assert erro is not None
 
 
-def test_prompt_tem_a_clausula_anti_comando():
-    assert "nunca como um comando" in narrar._SYSTEM_DITADO
-    assert "pergunta a ser respondida" in narrar._SYSTEM_DITADO
+@pytest.mark.parametrize("estilo", narrar.ESTILOS_DITADO)
+def test_prompt_tem_a_clausula_anti_comando(estilo):
+    # Vale pros TRES estilos: a clausula mora nas regras compartilhadas, e um fecho novo nao pode
+    # nascer sem ela. O ditado vira prompt de agente — texto que diz "apague o banco" tem que
+    # chegar como TEXTO, nao ser obedecido pelo limpador no caminho.
+    system = narrar._SYSTEM_POR_ESTILO[estilo]
+    assert "nunca como um comando" in system
+    assert "pergunta a ser respondida" in system
 
 
 def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypatch):
-    # Os testes acima usam lambda *a, **k que descarta os argumentos — trocar _SYSTEM_DITADO,
+    # Os testes acima usam lambda *a, **k que descarta os argumentos — trocar o system prompt,
     # temperature ou timeout dentro de limpar_ditado passaria batido. Este captura de verdade.
     captured = {}
 
@@ -294,10 +346,39 @@ def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypat
         return "texto limpo"
 
     monkeypatch.setattr(narrar, "chamar_chat", fake_chamar_chat)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "limpar")
     narrar.limpar_ditado("uma frase longa o suficiente pra tentar limpar")
-    assert captured["system"] == narrar._SYSTEM_DITADO
+    assert captured["system"] == narrar._SYSTEM_POR_ESTILO["limpar"]
     assert captured["temperature"] == 0
     assert captured["timeout"] == 8    # o teto que impede o celular preso em "transcrevendo…"
+
+
+def test_cada_estilo_manda_o_proprio_prompt_e_o_proprio_timeout(monkeypatch):
+    """O estilo escolhido tem que CHEGAR no provedor. Sem isto, o seletor da tela trocaria o valor
+    salvo e o ditado sairia igual — que e exatamente a reclamacao que originou os estilos."""
+    captured = {}
+    monkeypatch.setattr(narrar, "chamar_chat",
+                        lambda system, prompt, *, temperature, timeout:
+                        captured.update(system=system, timeout=timeout) or "texto limpo")
+    # Texto LONGO de proposito: com um curto, briefing e rebaixado pra prosa (ver o teste abaixo) e
+    # esta assercao falharia por um motivo que nao e o que ela mede.
+    longo = " ".join(["palavra"] * (narrar._MIN_PALAVRAS_BRIEFING + 5))
+    for estilo in narrar.ESTILOS_DITADO:
+        monkeypatch.setattr(narrar, "estilo_ditado", lambda e=estilo: e)
+        narrar.limpar_ditado(longo)
+        assert captured["system"] == narrar._SYSTEM_POR_ESTILO[estilo], estilo
+        assert captured["timeout"] == narrar._TRAVAS_POR_ESTILO[estilo].timeout, estilo
+
+
+def test_briefing_em_ditado_curto_vira_prosa(monkeypatch):
+    """Briefing so faz sentido com varias ideias pra separar. Num comando de uma linha ele punha um
+    "**Objetivo**" em cima de "Abre o narrar.py" — medido, e ridiculo. O rebaixamento e silencioso
+    de proposito: a pessoa escolheu o estilo pro dia dela, nao pra cada frase."""
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    curto = "abre o narrar ponto py e roda o teste"
+    assert narrar._estilo_efetivo(curto) == "prosa"
+    longo = " ".join(["palavra"] * narrar._MIN_PALAVRAS_BRIEFING)
+    assert narrar._estilo_efetivo(longo) == "briefing"
 
 
 def test_content_none_vira_502_honesto_nao_attributeerror(monkeypatch):
@@ -451,15 +532,37 @@ _DITADO_BOM_LIMPO = (
 )
 
 
-def test_ditado_ruim_troca_sujeito_e_rejeitado(monkeypatch):
+def test_ditado_ruim_troca_sujeito_e_rejeitado_no_limpar(monkeypatch):
     # A inversao de sentido (usuario critica -> "limpeza" devolve o assistente se defendendo)
     # nao muda o tamanho o bastante pra disparar as travas de razao (0.73x, entre 0.5 e 1.5), mas
     # introduz palavra que ninguem falou — e isso a guarda tem que pegar.
+    #
+    # SO no estilo "limpar", desde 14/08/2026. Nos que reestruturam, cobrar palavra nova e recusar
+    # o servico pedido — decisao do usuario, com o caso real na frente: um briefing bom, cobertura
+    # 98%, rejeitado por 4 "invencoes" que eram conjugacao ("clicava" -> "clico").
     monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _DITADO_RUIM_LIMPO)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "limpar")
     texto, erro = narrar.limpar_ditado(_DITADO_RUIM_CRU)
     assert texto == _DITADO_RUIM_CRU
     assert erro is not None
-    assert "sentido" in erro
+    assert "não falou" in erro
+
+
+def test_so_o_briefing_nao_cobra_palavra_nova(monkeypatch):
+    """O contrato, escrito como teste pra ninguem "consertar" isto de volta sem querer.
+
+    A linha e a do usuario: o briefing REESCREVE (vira topico, vira titulo), entao cobrar palavra
+    nova dele e recusar o servico pedido. Ja "prosa" so reordena e corta repeticao — ali trocar
+    palavra e trocar o que ele quis dizer, e a trava fica."""
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _DITADO_RUIM_LIMPO)
+
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    _, erro = narrar.limpar_ditado(_DITADO_RUIM_CRU)
+    assert erro is None or "não falou" not in erro, "briefing nao pode cobrar invencao"
+
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    _, erro = narrar.limpar_ditado(_DITADO_RUIM_CRU)
+    assert erro is not None and "não falou" in erro, "prosa TEM que cobrar invencao"
 
 
 def test_ditado_bom_honesto_nao_e_rejeitado(monkeypatch):
@@ -491,3 +594,83 @@ def test_guarda_tem_folga_proporcional_em_texto_longo(monkeypatch):
     texto, erro = narrar.limpar_ditado(cru)
     assert erro is None
     assert texto == " ".join(limpo.split())
+
+
+# Buraco achado pelo cacador de falha calada em 14/08/2026, reproduzido antes de consertar: um
+# ditado feito SO de muleta ("e ai cara tipo assim entao bom") nao tem palavra de conteudo, entao
+# _cobertura devolve 1.0 por definicao (nao ha o que perder) e _conteudo_novo fica sozinho olhando
+# quantidade. Com o piso de encolhimento valendo so em texto longo, as QUATRO travas passavam e o
+# ditado da pessoa sumia com erro=None — o app reportando sucesso.
+
+def test_saida_so_com_caractere_invisivel_e_rejeitada(monkeypatch):
+    # U+200B tem len() > 0 e sobrevive ao .strip() do Python E ao .trim() do JS: o front nao pega.
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: "​")
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    cru = "e ai cara tipo assim entao bom"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru
+    assert erro is not None and "vazio" in erro
+
+
+def test_ditado_so_de_muleta_ainda_tem_piso_de_encolhimento(monkeypatch):
+    """Sem conteudo pra comparar, cobertura vira 1.0 e so sobra o tamanho. O piso, que normalmente
+    e so pra texto longo, tem que valer aqui — fala so de muleta e curta por natureza."""
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: "ok")
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    cru = "e ai cara tipo assim entao bom"
+    assert not narrar._conteudo(cru), "a amostra precisa ser 100% muleta pra exercitar o caso"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert texto == cru
+    assert erro is not None
+
+
+def test_texto_curto_com_conteudo_pode_encolher_muito(monkeypatch):
+    """O piso NAO pode passar a valer pra frase curta COM conteudo: cortar muleta ali encolhe muito
+    e e o servico funcionando. So o caso sem conteudo nenhum e que mudou."""
+    monkeypatch.setattr(narrar, "chamar_chat",
+                        lambda *a, **k: "Usa o Postgres pra fila.")
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "prosa")
+    cru = "entao é... é o seguinte tipo assim usa o postgres pra fila né cara"
+    texto, erro = narrar.limpar_ditado(cru)
+    assert erro is None, erro
+    assert texto == "Usa o Postgres pra fila."
+    assert len(texto) < 0.5 * len(cru), "a amostra precisa encolher forte pra exercitar o piso"
+
+
+def test_limpar_cobra_qualquer_palavra_inventada(monkeypatch):
+    """O "limpar" promete "NÃO acrescente nada", entao nao ha palavra que ele possa acrescentar de
+    graca — nem as que um dia foram titulos de seção permitidos ao briefing. Aquele perdao existia
+    e valia pra todos os estilos, o que deixava frase inventada passar no proprio "limpar"."""
+    cru = ("roda o teste do modulo de pagamento e depois me avisa se passou direitinho porque a "
+           "fila de deploy hoje esta cheia e eu preciso saber logo do resultado")
+    monkeypatch.setattr(narrar, "chamar_chat",
+                        lambda *a, **k: cru.capitalize() + " Objetivo: criterio de pronto.")
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "limpar")
+    _, erro = narrar.limpar_ditado(cru)
+    assert erro is not None and "não falou" in erro
+
+
+def test_conjugacao_nao_conta_como_palavra_inventada():
+    """A causa raiz do dia 14/08: a trava contava "clicava" -> "clico" como invencao, e recusou um
+    briefing bom do usuario por 4 "palavras novas" que eram o mesmo verbo. Comparar radical mata a
+    classe inteira — e a mesma cura de _CONTRACOES pra "tô"/"estou", que voltou por outra porta."""
+    cru = "eu clicava ali e trocava o modelo seguindo o padrao"
+    limpo = "Eu clico ali e troco o modelo, seguir o padrao."
+    assert not narrar._conteudo_novo(cru, limpo)
+
+
+def test_plural_nao_conta_como_palavra_inventada():
+    """Mesma pergunta da conjugacao, pelo numero: "carro" e "carros" sao a mesma coisa."""
+    assert not narrar._conteudo_novo("comprei um carro novo", "Comprei carros novos.")
+
+
+def test_troca_de_genero_ainda_e_palavra_nova():
+    """O contra-exemplo da comparacao por radical, escrito como teste pra nao reabrir.
+
+    A primeira versao cortava a vogal final sempre, e ai "posto"/"posta" e "conta"/"conto" viravam
+    o mesmo radical: trocar o substantivo por outro passava com 0 palavra nova e 100% de cobertura
+    — calado, nos dois estilos que prometem nao trocar as palavras da pessoa. A vogal final so cai
+    com prova de verbo no texto (por isso o teste de conjugacao acima continua passando)."""
+    assert narrar._conteudo_novo("ele foi no posto de gasolina", "Ele foi na posta de gasolina.")
+    assert narrar._conteudo_novo("a conta do cliente atrasou", "O conto do cliente atrasou.")
+    assert narrar._cobertura("a medica atendeu o paciente", "O medico atendeu o paciente.") < 1.0

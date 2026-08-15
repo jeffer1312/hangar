@@ -382,6 +382,9 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
         "tmux", "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
         "-e", "COLORTERM=truecolor",
         "-e", "CLAUDE_CODE_TMUX_TRUECOLOR=1",
+        # Fullscreen TUI experimental do Kimi (0.36+, KIMI_CODE_TUI_FULL_SCREEN): transcript com
+        # scroll proprio e composer fixo. Var KIMI_* — claude/pi/codex ignoram.
+        "-e", "KIMI_CODE_TUI_FULL_SCREEN=1",
         "-e", f"CP_SESSION_NAME={name}",
     ]
     wl = _wayland_display()
@@ -822,8 +825,16 @@ def pane_scrollback(name: str) -> int:
     return int(out) if out.isdigit() else 0
 
 
-def capture_pane(name: str, lines: int = 200) -> str:
-    cp = _run(["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"])
+def capture_pane(name: str, lines: int = 200, cores: bool = False) -> str:
+    """`cores=True` mantem os codigos ANSI (`-e`). Padrao False: TODO o resto do backend (classify,
+    statusline, gate de envio) casa texto puro, e um `\\x1b[...m` no meio quebraria cada regex.
+
+    So a previa do Kimi liga isso, e por um motivo que o texto puro nao resolve: la o raciocinio e a
+    resposta sao desenhados com o MESMO marcador `●` e so a cor/italico os separa."""
+    alvo = ["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"]
+    if cores:
+        alvo.insert(3, "-e")
+    cp = _run(alvo)
     if cp.returncode != 0:
         # stdout vazio numa falha e indistinguivel de um pane genuinamente vazio -> o /pane devolvia
         # 200 com texto "" e ninguem ficava sabendo que o tmux tinha falhado. Devolve "" (o caller
