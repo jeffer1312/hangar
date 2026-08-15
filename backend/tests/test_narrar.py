@@ -657,3 +657,20 @@ def test_conjugacao_nao_conta_como_palavra_inventada():
     cru = "eu clicava ali e trocava o modelo seguindo o padrao"
     limpo = "Eu clico ali e troco o modelo, seguir o padrao."
     assert not narrar._conteudo_novo(cru, limpo)
+
+
+def test_plural_nao_conta_como_palavra_inventada():
+    """Mesma pergunta da conjugacao, pelo numero: "carro" e "carros" sao a mesma coisa."""
+    assert not narrar._conteudo_novo("comprei um carro novo", "Comprei carros novos.")
+
+
+def test_troca_de_genero_ainda_e_palavra_nova():
+    """O contra-exemplo da comparacao por radical, escrito como teste pra nao reabrir.
+
+    A primeira versao cortava a vogal final sempre, e ai "posto"/"posta" e "conta"/"conto" viravam
+    o mesmo radical: trocar o substantivo por outro passava com 0 palavra nova e 100% de cobertura
+    — calado, nos dois estilos que prometem nao trocar as palavras da pessoa. A vogal final so cai
+    com prova de verbo no texto (por isso o teste de conjugacao acima continua passando)."""
+    assert narrar._conteudo_novo("ele foi no posto de gasolina", "Ele foi na posta de gasolina.")
+    assert narrar._conteudo_novo("a conta do cliente atrasou", "O conto do cliente atrasou.")
+    assert narrar._cobertura("a medica atendeu o paciente", "O medico atendeu o paciente.") < 1.0

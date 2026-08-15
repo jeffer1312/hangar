@@ -361,13 +361,17 @@ def _conteudo_novo(cru: str, limpo: str) -> set[str]:
       limpeza honesta ................................................ 0
       prosa reorganizando um ditado real do usuario ................... 1  ('estamos')
       briefing estruturando o mesmo ditado ............................ 0
-    Por isso o teto e 2: acima do maior legitimo, abaixo do menor defeito.
+    Por isso o teto e 2: acima do maior legitimo, abaixo do menor defeito. As duas ultimas linhas
+    ficam como historico, nao como calibragem: foram medidas antes desta funcao passar a valer so
+    pra "limpar" e "prosa", e antes da comparacao por radical — quem mexer no teto recalibra com
+    esses dois, que sao o caminho que hoje passa por aqui.
 
-    So o estilo "limpar" usa isto (ver _Travas.cobra_invencao), e ele e justamente o que promete
-    "NÃO acrescente nada" — entao nao ha nada a perdoar. A lista de titulos de seção que existia
+    So "limpar" e "prosa" usam isto (ver _Travas.cobra_invencao): um promete "NÃO acrescente nada"
+    e o outro so reordena, entao nos dois nao ha nada a perdoar. A lista de titulos de seção que existia
     aqui saiu junto com a trava do briefing: era perdao pra um caminho que nao passa mais por
     aqui, e codigo inalcancavel envelhece dizendo o contrario do que o sistema faz."""
-    return _conteudo(limpo) - _conteudo(cru)
+    dela, dele = _conteudos(cru, limpo)
+    return dele - dela
 
 
 # As duas travas de tamanho (piso/teto acima) medem TAMANHO; nao pegam TROCA DE SUJEITO — a
@@ -412,29 +416,78 @@ _MIN_LETRAS_CONTEUDO = 3
 # (cobertura 98%), e foi REJEITADO por 4 "palavras inventadas" que eram `clicava`->`clico`,
 # `trocava`->`troco` e `seguindo`->`seguir`. Do ponto de vista dele, a trava recusou exatamente o
 # que ele tinha pedido. Com o radical, as mesmas 4 viram 1.
-# Ordem: sufixo mais longo primeiro, senao "avam" nunca casaria (o "am" pegaria antes).
-_SUFIXOS = tuple(sorted("""
+# O sufixo se divide em dois grupos porque cortar os dois do mesmo jeito abriu um buraco: a
+# primeira versao cortava vogal final solta sempre, e ai "posto" e "posta" viravam os dois "post" —
+# o par que o comentario do piso usava como exemplo do que NAO podia acontecer. Com isso, trocar
+# "a conta do cliente" por "o conto do cliente" passava calado pela trava de invencao (0 palavra
+# nova, 100% de cobertura), justo nos dois estilos que prometem nao trocar as palavras da pessoa.
+#
+# Ordem, dentro de cada grupo: sufixo mais longo primeiro, senao "avam" nunca casaria (o "am"
+# pegaria antes).
+#
+# FORTE = so aparece em verbo conjugado ou em derivacao. Cortar sempre, porque "clicava" e
+# "clicar" nao sao duas palavras diferentes em nenhuma leitura.
+_SUFIXOS_VERBO = tuple(sorted("""
 avamos avam ava avas ando endo indo ada ado adas ados ar er ir amos emos imos aram eram iram
-ou eu iu am em im as es is os us a e i o s mente cao coes dade dades ista istas vel veis
+ou eu iu am em im
 """.split(), key=len, reverse=True))
-# Piso do radical. Abaixo disto o corte junta palavra que nao tem nada a ver ("posto"/"posta").
+_SUFIXOS_DERIV = tuple(sorted("""
+mente cao coes dade dades ista istas vel veis
+""".split(), key=len, reverse=True))
+# AMBIGUA: a vogal final e conjugacao em "clico" e genero em "posto". Sozinha ela nao diz qual —
+# por isso so cai com PROVA de verbo no proprio texto (ver _raizes_de_verbo).
+_VOGAIS_FINAIS = ("a", "e", "i", "o")
+# Piso do radical. Abaixo disto sobra pouca palavra pra distinguir uma coisa da outra.
 _MIN_RADICAL = 4
 
 
-def _radical(palavra: str) -> str:
-    for s in _SUFIXOS:
-        if len(palavra) - len(s) >= _MIN_RADICAL and palavra.endswith(s):
-            return palavra[:-len(s)]
-    return palavra
+def _sem_plural(palavra: str) -> str:
+    return palavra[:-1] if palavra.endswith("s") and len(palavra) - 1 >= _MIN_RADICAL else palavra
 
 
-def _conteudo(texto: str) -> set[str]:
+def _corta(palavra: str, sufixos: tuple[str, ...]) -> str | None:
+    """O radical, ou None se nenhum sufixo casou. Tenta a palavra e o singular dela, nessa ordem:
+    "clicamos" tem que casar "amos" ANTES de perder o "s", senao sobra "clicamo" e nada casa."""
+    for candidato in (palavra, _sem_plural(palavra)):
+        for s in sufixos:
+            if len(candidato) - len(s) >= _MIN_RADICAL and candidato.endswith(s):
+                return candidato[:-len(s)]
+    return None
+
+
+def _raizes_de_verbo(palavras: list[str]) -> frozenset[str]:
+    """Radicais que o proprio texto PROVA serem verbo, por terem aparecido conjugados.
+
+    E o que autoriza cortar a vogal final de "clico": num texto onde a pessoa falou "clicava" ou
+    "clicar", "clic" e verbo. Num texto sem essa prova, "posto" fica "posto"."""
+    return frozenset(r for p in palavras if (r := _corta(p, _SUFIXOS_VERBO)) is not None)
+
+
+def _radical(palavra: str, raizes_verbo: frozenset[str] = frozenset()) -> str:
+    forte = _corta(palavra, _SUFIXOS_VERBO) or _corta(palavra, _SUFIXOS_DERIV)
+    if forte is not None:
+        return forte
+    singular = _sem_plural(palavra)
+    if (singular[-1:] in _VOGAIS_FINAIS and len(singular) - 1 >= _MIN_RADICAL
+            and singular[:-1] in raizes_verbo):
+        return singular[:-1]
+    return singular
+
+
+def _conteudo(texto: str, raizes_verbo: frozenset[str] = frozenset()) -> set[str]:
     """Os RADICAIS das palavras que carregam o que a pessoa disse, sem muleta e sem palavra curta.
 
     Radical, e nao a palavra inteira, porque as duas travas que usam isto perguntam "isto e a mesma
-    coisa que ela falou?" — e conjugar um verbo nao muda a resposta."""
-    return {_radical(p) for p in _palavras_normalizadas(texto)
+    coisa que ela falou?" — e conjugar um verbo nao muda a resposta. `raizes_verbo` vem dos DOIS
+    textos juntos (ver _raizes_de_verbo): a prova de que "clic" e verbo pode estar so no cru."""
+    return {_radical(p, raizes_verbo) for p in _palavras_normalizadas(texto)
             if len(p) >= _MIN_LETRAS_CONTEUDO and p not in _MULETAS}
+
+
+def _conteudos(cru: str, limpo: str) -> tuple[set[str], set[str]]:
+    """O conteudo dos dois textos, comparaveis entre si: mesma prova de verbo dos dois lados."""
+    raizes = _raizes_de_verbo(_palavras_normalizadas(cru) + _palavras_normalizadas(limpo))
+    return _conteudo(cru, raizes), _conteudo(limpo, raizes)
 
 
 def _cobertura(cru: str, limpo: str) -> float:
@@ -446,10 +499,10 @@ def _cobertura(cru: str, limpo: str) -> float:
     do que o usuario pediu. O defeito que importa continua sendo o mesmo — o modelo RESPONDER ou
     reescrever em vez de transformar — e esse defeito aparece melhor pelo avesso: uma resposta do
     modelo nao contem as palavras da pessoa. Cobertura pega isso sem proibir andaime."""
-    dela = _conteudo(cru)
+    dela, dele = _conteudos(cru, limpo)
     if not dela:
         return 1.0
-    return len(dela & _conteudo(limpo)) / len(dela)
+    return len(dela & dele) / len(dela)
 
 
 class _Travas(NamedTuple):

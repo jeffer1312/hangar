@@ -365,7 +365,13 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     tamanho, pelo piso de cobertura e pela recusa de saída vazia.
   - **Comparação é por RADICAL** (`_radical`), não pela palavra inteira. `clicava`/`clico`/`clicar`
     caem no mesmo balde. Sem isso a trava punia conjugação — a mesma classe de erro que
-    `_CONTRACOES` resolveu pra `tô`/`estou` e que voltou por outra porta.
+    `_CONTRACOES` resolveu pra `tô`/`estou` e que voltou por outra porta. **Mas a vogal final só cai
+    com prova de verbo no próprio texto** (`_raizes_de_verbo`, alimentado pelos DOIS textos): cortá-la
+    sempre juntava `posto`/`posta` e `conta`/`conto` no mesmo radical — o par que o comentário do piso
+    usava como exemplo do que não podia acontecer —, e aí trocar "a conta do cliente" por "o conto do
+    cliente" passava com 0 palavra nova e 100% de cobertura, calado, justo em `limpar` e `prosa`.
+    Sufixo de verbo (`ava`, `ando`, `ar`, …) e derivação (`mente`, `dade`, …) cortam sempre; plural
+    (`s`) também. Contra-exemplo travado em `test_troca_de_genero_ainda_e_palavra_nova`.
   - `_CONTRACOES` iguala fala reduzida à forma escrita (`tô`→`estou`, `pra`→`para`) **antes** de
     qualquer comparação. Sem isso a limpeza melhora o texto e é punida por isso.
   - **Raciocínio piora e não é questão de calibragem.** Testado com os dois ditados reais: com
