@@ -55,11 +55,12 @@ def _git_dir(cwd: str) -> Path | None:
     """O git-dir REAL do repo que contem o cwd (resolve .git FILE, worktree, GIT_DIR).
     Fora de repo, None. Quando o git responde, e o caminho oficial. Quando NAO responde
     (rc != 0), o fallback por filesystem tenta provar o git-dir por indicio; se nao
-    consegue, o stderr decide: "not a git repository" e a resposta NORMAL do git para
-    fora de repo (None e seguro — o filesystem tambem nao mostrou indicio nenhum);
-    qualquer outra falha (config malformada, repo quebrado) FALHA FECHADO com FileError —
-    ausencia de prova nao pode liberar leitura (parecer 71d7b190: .git incompleto e bare
-    vazavam o config com token). LC_ALL=C no _run fixa o ingles do stderr."""
+    consegue, FALHA FECHADO com FileError — ausencia de prova nunca libera leitura. O
+    stderr NAO participa da decisao: "not a git repository" tambem aparece DENTRO de um
+    git-dir real quebrado (bare sem sufixo com HEAD corrompido vazou o config por essa
+    frase — parecer 99916b58). Preco intencional do desenho: cwd fora de repo (ou git
+    quebrado que o filesystem nao prova) deixa de servir arquivos comuns e devolve
+    envelope estruturado — falso bloqueio e preferivel a vazamento."""
     from app import git_ops
     try:
         p = git_ops._run(cwd, "rev-parse", "--absolute-git-dir")
@@ -67,11 +68,9 @@ def _git_dir(cwd: str) -> Path | None:
         raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     if p.returncode != 0:
         gitdir = _git_dir_por_fs(cwd)
-        if gitdir is not None:
-            return gitdir
-        if "not a git repository" not in p.stderr:
+        if gitdir is None:
             raise FileError(500, "erro_arq_lista_falhou", "git-dir nao identificado")
-        return None
+        return gitdir
     # realpath dos DOIS lados da comparacao: o stdout do git e caminho fisico (getcwd),
     # mas normalizar nao custa nada e garante que o _within casa com raiz/alvo resolvidos.
     return Path(os.path.realpath(p.stdout.strip()))
