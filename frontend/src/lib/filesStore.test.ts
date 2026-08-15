@@ -118,14 +118,22 @@ describe('FilesStore', () => {
     expect(s.diff?.diff).toBe('nao_commitado');
   });
 
-  // Prova do bloqueador 7: o aviso de corte do backend nao pode morrer no store — uma arvore
-  // cortada em 1000 entradas nao pode parecer completa.
-  it('guarda o aviso de corte que o backend manda', async () => {
-    vi.mocked(listFiles).mockResolvedValue({ entries: [], truncated: true });
+  // Prova do bloqueador 7: o aviso de corte do backend nao pode morrer no store — e o corte e
+  // POR PASTA: `recarregar()` lista a raiz e as abertas em paralelo, entao o aviso da raiz tem
+  // que sobreviver a uma subpasta inteira que responda depois dela.
+  it('o aviso de corte da raiz sobrevive a uma subpasta inteira', async () => {
+    vi.mocked(listFiles).mockImplementation(async (_s, path) =>
+      path === undefined
+        ? { entries: [ent('src', true)], truncated: true } // a RAIZ foi cortada
+        : { entries: [], truncated: false }); // a subpasta, nao
     vi.mocked(searchFiles).mockResolvedValue({ hits: [], truncated: true, mode: 'names' });
     const s = new FilesStore('sessao');
     await s.recarregar();
     expect(s.listaCortada).toBe(true);
+    await s.alternarPasta('src');
+    expect(s.listaCortada).toBe(true); // hoje vira false
+    await s.recarregar();
+    expect(s.listaCortada).toBe(true); // hoje vira false
     await s.buscar('x', 'names');
     expect(s.buscaCortada).toBe(true);
   });

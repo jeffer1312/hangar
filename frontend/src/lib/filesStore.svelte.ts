@@ -26,9 +26,7 @@ export class FilesStore {
   erro = $state<string | null>(null);
   // Listar so arquivos modificados (a arvore inteira quando false).
   soModificados = $state(true);
-  // O backend cortou a listagem em 1000 entradas (filetree.MAX_ENTRADAS).
-  listaCortada = $state(false);
-  // O backend cortou os achados em 200 (filesearch.MAX_HITS).
+  // O backend cortou os achados em 200 (filesearch.MAX_HITS). Uma resposta so, sem paralelismo.
   buscaCortada = $state(false);
 
   // Um contador POR ALVO: `abrir`, `buscar` e `_listar` pintam campos diferentes e nao podem
@@ -43,6 +41,11 @@ export class FilesStore {
   // mesmo tempo (docs/mocks/2026-08-15-arvore/arvore.js), entao um diretorio de cada vez nao
   // serve.
   private porPasta = new SvelteMap<string, TreeEntry[]>();
+
+  // O corte e POR PASTA: `recarregar()` lista a raiz e as abertas em paralelo, e um campo unico
+  // ficava com o valor de quem respondeu por ultimo — a raiz cortada sumia assim que uma
+  // subpasta inteira respondesse depois dela.
+  private cortePorPasta = new SvelteMap<string, boolean>();
 
   private readonly sessao: string;
 
@@ -61,6 +64,15 @@ export class FilesStore {
     };
     empilha('');
     return saida;
+  }
+
+  // Cortou em alguma pasta que o usuario esta vendo? Pasta colapsada nao conta: os filhos dela
+  // nao estao na arvore.
+  get listaCortada(): boolean {
+    for (const [dir, cortou] of this.cortePorPasta) {
+      if (cortou && (dir === '' || this.abertos.has(dir))) return true;
+    }
+    return false;
   }
 
   // Abre um arquivo: pinta conteudo + diff (no escopo atual) quando a resposta voltar.
@@ -132,7 +144,7 @@ export class FilesStore {
       const r = await listFiles(this.sessao, path || undefined, this.soModificados);
       if (g !== this.gLista.get(path)) return;
       this.porPasta.set(path, r.entries);
-      this.listaCortada = r.truncated;
+      this.cortePorPasta.set(path, r.truncated);
     } catch (e) {
       if (g === this.gLista.get(path)) this.erro = cleanErr(e);
     }
