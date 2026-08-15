@@ -1002,7 +1002,25 @@ demais — estreite a busca"**.
 
 # Trilha E — transversal
 
-## E1. Inglês (internacionalização)
+## E1. Inglês (internacionalização) — ✅ FEITO em 15/08/2026
+
+**Entregue** na branch `i18n`, mergeada na `main` em `b251d71f`. O mecanismo é o **Paraglide**
+(`frontend/messages/pt.json` + `en.json`, compilados pra `frontend/src/paraglide/`), a extração
+cobriu os `.svelte`, e a volta atrás é travada por teste: `frontend/src/lib/i18nGuard.test.ts` mede
+cada arquivo contra `frontend/i18n-baseline.json` — arquivo novo tem limite zero, e a linha de base
+só desce. Falso positivo do extrator vai pro `frontend/i18n-allow.json`.
+
+A camada 2 (item abaixo) também foi feita: o backend devolve `code` + `params` e o front traduz
+(commit `ea8c5a89`). O idioma segue o sistema e troca em Configurações → Geral.
+
+O que a pesquisa alertou e virou trava aqui: os cinco estados de sessão do Orca ficaram chumbados em
+inglês mesmo com i18n completo. Por isso o `stateLabels` do `lib/format.ts` virou a função
+`rotuloEstado()`, e o guard vigia especificamente a volta do mapa de rótulo com valor literal.
+
+Continua **não feita** a ideia boa do Orca registrada abaixo: a busca das configurações casar o
+termo no idioma nativo (`Idioma` / `语言` / `언어`), pra achar a opção sem saber o idioma da tela.
+
+O registro do dia 13/08, de quando a tarefa foi decidida, fica abaixo como estava:
 
 **Decidido em 13/08/2026: o app deve ter inglês.** Hoje não tem nada — conferido no
 `frontend/package.json`: as dependências são `@xterm/*`, `qr-scanner`, `shiki` e `uplot`, e mais nada.
@@ -1076,8 +1094,9 @@ Discutido e **descartado por ora**:
 
 # Ordem sugerida, se for tocar sozinho
 
-0. **E1** — o inglês. Antes de A, C e D, senão toda string nova nasce em português cru e é extraída
-   duas vezes. O B1 e o B3 podem andar junto, porque são backend puro.
+0. ~~**E1** — o inglês. Antes de A, C e D, senão toda string nova nasce em português cru e é extraída
+   duas vezes. O B1 e o B3 podem andar junto, porque são backend puro.~~ **FEITO em 15/08/2026**
+   (branch `i18n`, mergeada na `main` em `b251d71f`).
 1. **A1** — última mensagem na linha. Muda o dia a dia na hora.
 2. **D1** — frases de indisponibilidade. Uma tarde, retorno imediato.
 3. **B1** — presença antes do push.
