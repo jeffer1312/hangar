@@ -450,6 +450,12 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
     if not os.path.isfile(alvo):
         raise GitError(404, "arquivo nao encontrado")
 
+    # O ramo --no-index le o arquivo do DISCO, e `.git` esta dentro da raiz: sem isto,
+    # `path_diff(cwd, ".git/config")` devolve o remote com o token embutido, o mesmo que o
+    # _scrub existe pra impedir. Comparacao por COMPONENTE: `.gitignore` continua passando.
+    if ".git" in os.path.relpath(alvo, raiz).split(os.sep):
+        raise GitError(403, "area interna do git")
+
     usado, base, motivo = escopo, None, None
     if escopo == "branch":
         base, motivo = _base_da_branch(cwd)

@@ -733,3 +733,26 @@ def test_pathspec_magica_nao_vira_diff_do_repo(tmp_path):
         with pytest.raises(GitError) as e:
             git_ops.path_diff(d, magico, "nao_commitado")
         assert e.value.status == 404, magico
+
+
+def test_area_interna_do_git_recusada(tmp_path):
+    """`git status` nunca lista dentro de `.git`, entao o gate antigo travava isso por acidente.
+    Com `ls-files`, o ramo --no-index le o arquivo do DISCO — e o `.git/config` carrega o token
+    do remote, que o `_scrub` existe pra nao deixar vazar."""
+    d, _f = _repo_com_upstream(tmp_path)
+    git_ops._run(d, "remote", "set-url", "origin", "https://u:TOKEN@github.com/x/y.git")
+    # symlink pra dentro do .git: o guard olha o ALVO resolvido, nao a string pedida — sem isto,
+    # `atalho/config` leria o `.git/config` inteiro.
+    (tmp_path / "trab" / "atalho").symlink_to(tmp_path / "trab" / ".git")
+    for ruim in (".git/config", ".git/HEAD", ".git/logs/HEAD", "./.git/config", "atalho/config"):
+        with pytest.raises(GitError) as e:
+            git_ops.path_diff(d, ruim, "nao_commitado")
+        assert e.value.status in (403, 404), (ruim, e.value.status)
+        assert "TOKEN" not in e.value.detail
+
+    # o que NAO pode quebrar junto
+    (tmp_path / "trab" / ".gitignore").write_text("node_modules\n")
+    (tmp_path / "trab" / ".github").mkdir()
+    (tmp_path / "trab" / ".github" / "ci.yml").write_text("on: push\n")
+    assert "node_modules" in git_ops.path_diff(d, ".gitignore", "nao_commitado")["diff"]
+    assert "on: push" in git_ops.path_diff(d, ".github/ci.yml", "nao_commitado")["diff"]
