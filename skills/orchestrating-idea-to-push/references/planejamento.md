@@ -261,6 +261,20 @@ uma sessão parada perguntando.
 
 Motor inexistente devolve `400` e a sessão não nasce. Ver os motores: `claude-engine`.
 
+### Nascem DOIS arquivos, e cada um tem um leitor
+
+- **`regras-<gid>.md`** — o que executor e revisor leem. Só o que **ainda vale**. Duas páginas.
+- **`grupo-<gid>.md`** — o registro, que só o árbitro lê. Progresso, histórico, decisões com data.
+
+A fronteira é o tipo do conteúdo: **já aconteceu → registro; ainda vale → regras.** Sem essa
+separação o arquivo que todo mundo lê cresce a cada Task aprovada, e num trabalho de 12 Tasks ele
+chegou a 54 KB — 14k tokens cobrados de cada sessão nova para contar como Tasks encerradas foram
+reprovadas.
+
+O esqueleto do **registro** está abaixo. O de **regras** é a mesma coisa sem o histórico: os
+intocáveis literais, os gates (comando exato, sem depender do cwd), as réguas de julgamento que a
+execução for fixando, a barra por Task, o que a revisão precisa cobrir, teto e contas.
+
 ### O contrato nasce de esqueleto, não de memória
 
 O conteúdo do contrato está descrito em prosa em três arquivos; reconstruir de cabeça é como
@@ -270,7 +284,7 @@ branco). Copie e preencha; campo que não se aplica leva `n/a`, **nunca some** �
 invisível pra quem lê depois:
 
 ````markdown
-> Sessões deste grupo: invoquem a skill `orchestrating-idea-to-push`.
+> Registro do árbitro. Regras do grupo (o que o time lê): <caminho do regras-<gid>.md>.
 > Plano: <caminho>. Branch: <branch>. HEAD de partida: <hash>.
 
 ## Quem é quem

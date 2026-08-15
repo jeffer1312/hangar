@@ -55,11 +55,18 @@ pelo nome. O kick-off é um endereço, não um manual.
 Invoque a skill orchestrating-idea-to-push e leia a página do seu papel.
 Papel: <executor único | revisor | revisão da branch>.
 Repo/branch: <caminho> / <branch>.   HEAD esperado: <hash>.
-Plano: <caminho>.   Contrato: <caminho do grupo-<gid>.md>.
+Regras do grupo: <caminho do regras-<gid>.md>.
+A Task da vez, recortada: <caminho do task-<N>.md>.
 Intocáveis: <paths, um a um — não "os do contrato">.
 Sua vez agora: <Task N | esperar o primeiro hash>.
 Ao terminar, reporte para <sessao-do-arbitro> e PARE.
+
+Leia SÓ esses dois arquivos além da skill. O plano inteiro e o registro do grupo NÃO são seus.
 ```
+
+A última linha é uma **instrução**, não um comentário: sem ela a sessão vai atrás do plano
+completo e do registro por conta própria — foi exatamente o que aconteceu no trabalho de
+14/08/2026 e custou 110k de contexto antes do primeiro commit.
 
 `HEAD esperado` e a lista literal de intocáveis existem porque a sessão nova, sem eles,
 deriva os dois do `git status`/`git log` e pode achar um HEAD que ninguém explicou.
@@ -68,27 +75,41 @@ O mesmo texto, reenviado, recoloca de pé uma sessão que deu `/clear`: ele não
 estado, carrega caminhos. Nenhuma linha dele diz "a Task 2 já passou" — isso é do contrato,
 onde continua verdadeiro amanhã.
 
-## O contrato — quem escreve
+## Dois arquivos, não um: o registro e as regras
 
-`~/.claude/.claude-pocket-pair/grupo-<gid>.md`. **Só o árbitro escreve.** Todo mundo lê.
-Uma sessão que registra ali a própria autorização legitima o próprio desvio, e o árbitro só
-descobre relendo o arquivo.
+**Só o árbitro escreve nos dois.** Uma sessão que registra a própria autorização legitima o
+próprio desvio, e o árbitro só descobre relendo o arquivo.
 
-Primeira linha, pra sessão amnésica se reancorar sozinha:
+| Arquivo | Contém | Quem lê |
+|---|---|---|
+| `grupo-<gid>.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
+| `regras-<gid>.md` — **as regras** | o que **ainda vale**: intocáveis, gates, réguas, barra, o que a revisão cobre, teto e contas | executor e revisor |
+
+A fronteira é o **tipo** do conteúdo, não o assunto: **já aconteceu → registro; ainda vale →
+regras.** Uma decisão nova entra nas regras, e o registro só anota a data e aponta pra lá. Assim
+os dois não divergem, e o arquivo que todo mundo lê **para de crescer**.
+
+Por que separar, medido em 14/08/2026: o registro chegou a 54 KB (~14k tokens) porque toda Task
+aprovada acrescentava um parágrafo e nada saía. Somado ao plano inteiro (~30k), um revisor recém-
+aberto para a Task 10 gastou **110k de contexto antes de receber o primeiro commit** — lendo,
+entre outras coisas, como a Task 4 tinha sido reprovada quatro vezes três semanas antes. O que ele
+precisava sabia-se em duas páginas.
+
+Primeira linha do arquivo de regras, pra sessão amnésica se reancorar sozinha:
 
 ```markdown
-> Sessões deste grupo: invoquem a skill `orchestrating-idea-to-push`.
-> Plano: <caminho>. Branch: <branch>.
+> Sessões deste grupo: invoquem a skill `orchestrating-idea-to-push` e leiam a página do seu papel.
+> Branch: <branch> · Repo: <caminho>
 ```
 
-Depois, o contrato é dono **só do que nasce depois do plano**: papéis + motores + conta de
-cada um (a tabela quem-é-quem), o ferramental de revisão, **o que a revisão precisa cobrir**,
-o teto de gasto, o baseline medido, as barras decididas depois da aprovação, o progresso
-aprovado (Task → hash → veredito → quem corrigiu) e as decisões supervenientes. O que o plano
-possui — ordem das Tasks, Steps, verificação por Task, intocáveis, barras da fase 1 — o
-contrato **aponta** (arquivo e seção), nunca copia: cópia diverge, e divergência é sessão
-parada perguntando. Qual Task está liberada se lê no progresso do contrato; o que a Task
-contém se lê no plano. (Esqueleto completo em `references/planejamento.md`, fase 2.)
+**O que muda a cada Task não vai em arquivo nenhum**: qual Task está liberada, qual é o hash, quem
+é o seu par. Isso vai no kick-off, que é sempre fresco por definição. Arquivo com estado da vez é
+arquivo que envelhece entre a escrita e a leitura.
+
+**A Task da vez vai RECORTADA, não o plano inteiro.** O plano tem todas as Tasks; o executor
+implementa uma e o revisor revisa uma. Recorte a seção daquela Task mais o cabeçalho curto
+(goal/architecture) para `/tmp/<trabalho>-t<N>/task-<N>.md` e mande esse caminho. No mesmo trabalho
+de 14/08: plano inteiro ~30k tokens, Task recortada ~2,9k.
 
 **Quem é do grupo sai do contrato, nunca de `cp-send --list`.** Sessão viva no mesmo
 diretório é só uma sessão viva no mesmo diretório — o usuário abre sessões pro que quiser, e

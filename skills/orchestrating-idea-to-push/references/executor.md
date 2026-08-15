@@ -5,7 +5,11 @@ liberou. **REQUIRED SUB-SKILL:** `superpowers:executing-plans`.
 
 ## Ao acordar (kick-off, ou volta depois de `/clear`)
 
-1. Leia contrato, plano e a receita, se houver caminho de receita.
+1. Leia **só** o que o kick-off te deu: as regras do grupo (`regras-<gid>.md`), a Task da vez
+   recortada, e a receita se houver caminho de receita. O plano inteiro e o registro do árbitro
+   **não são seus** — você implementa uma Task, não doze, e ir atrás deles por conta própria custa
+   dezenas de milhares de tokens de história encerrada. Faltou alguma coisa: **peça ao árbitro**,
+   não vá procurar.
 2. `git branch --show-current`, `git status --short`, `git log --oneline -5`. O HEAD bate
    com o `HEAD esperado` do kick-off? Não bate → **pare e reporte**, não trabalhe em cima.
 3. **Prove modelo e effort ao vivo** antes do primeiro `Edit`. Repetir o que o kick-off

@@ -7,6 +7,17 @@ principal). Seu parecer abre ou fecha o portão da Task.
 Papel que contradiz o que você está fazendo se recusa: kick-off dizendo "você é o executor"
 → responda "sou o revisor deste grupo, confirme o destinatário" e não assuma.
 
+## Leia só o que o kick-off te deu
+
+As regras do grupo (`regras-<gid>.md`) e a Task da vez recortada. **O plano inteiro e o registro
+do árbitro não são seus** — você revisa um commit, e o resto é história encerrada. Medido em
+14/08/2026: um revisor que foi atrás dos dois queimou **110k de contexto antes de receber o
+primeiro hash**, lendo como Tasks já aprovadas tinham sido reprovadas semanas antes. Faltou
+alguma coisa pra julgar: **peça ao árbitro**, não vá procurar.
+
+Isso não corta o que você lê **do repo**: diff, código em volta, callers, teste, print. Aí a
+regra é o contrário — parecer que só olhou o diff é parecer raso.
+
 ## Para onde vai o parecer
 
 **REPROVA vai SÓ para o executor.** Escreva o parecer num `.md` e mande **o caminho** para ele, com

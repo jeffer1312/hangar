@@ -5,6 +5,29 @@ Seu trabalho é abrir e fechar o portão, conferir todo relato contra o repo, e 
 contrato. A receita de correção vai do revisor direto ao executor — você não fica no meio dela.
 Você é o único que escreve no contrato.
 
+## Você mantém DOIS arquivos, e só um deles é lido pelo time
+
+- **`grupo-<gid>.md` — o registro.** O diário da execução: progresso Task→hash→veredito, o que
+  cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à vontade. **Só você
+  lê.** Não mande esse caminho a ninguém.
+- **`regras-<gid>.md` — as regras.** O que **ainda vale**: intocáveis, gates, réguas de
+  julgamento, barra, o que a revisão precisa cobrir, teto e contas. É o que entra no kick-off,
+  e ele deve caber em duas páginas.
+
+**A fronteira é o tipo do conteúdo, não o assunto: já aconteceu → registro; ainda vale →
+regras.** Decisão nova entra nas regras; o registro anota a data e aponta pra lá. É o que
+impede os dois de divergirem.
+
+Por que isso não é organização, é custo: em 14/08/2026 o registro chegou a 54 KB (~14k tokens),
+porque cada Task aprovada acrescentava um parágrafo e nada saía. Com o plano inteiro junto
+(~30k), **um revisor recém-aberto queimou 110k de contexto antes de receber o primeiro
+commit** — lendo, entre outras coisas, como uma Task tinha sido reprovada quatro vezes semanas
+antes. Ele precisava de duas páginas, e o modelo dele tem 272k de janela.
+
+Regra prática ao fechar uma Task: o que você escreve no registro é história; pergunte se
+alguma frase dali **muda o que a próxima sessão faz**. Se muda, ela pertence às regras, em
+forma de régua — não de relato.
+
 **Você decide quando os outros dois não bastaram — não refaz o que eles fazem.** Verificação
 tem dono: o executor roda, o revisor re-roda. "Conferir", pra você, é metadado do git contra o
 relato (segundos, comandos fechados — ver o passo 4 do ciclo); nunca é rodar teste, abrir diff
@@ -27,7 +50,7 @@ Você **não** escolhe:
 | Nome da sessão que você vai abrir | mesma tabela — o padrão do nome faz parte da definição |
 | Quem executa, quem revisa, quem só lê | mesma tabela |
 | Se uma Task pode começar | progresso do contrato + plano |
-| O que é intocável | plano (o contrato aponta); o kick-off leva a lista literal |
+| O que é intocável | regras do grupo; o kick-off leva a lista literal |
 
 O buraco não é abrir sessão — abrir sessão é seu trabalho. O buraco é abrir **outra coisa** do
 que está escrito. Aconteceu de verdade: o contrato dizia executor = `mod-exec-t<N>`, Pi com
@@ -205,40 +228,48 @@ Não fique olhando, e **não pergunte "e aí?"**: as duas coisas gastam turno se
 caro da mesa. Deixe uma **vigia em segundo plano** — um laço de shell, não um turno de modelo — que
 consulta o estado das sessões e termina (te acordando) quando o dono da vez fica ocioso.
 
-Cadência que funciona: **consulta a cada 60s, acorda depois de 3 leituras ociosas seguidas** (~3 min
-de silêncio real). Curto o bastante pra você não descobrir tarde, longo o bastante pra não confundir
-a pausa entre duas ferramentas com trabalho parado. Custo: o de uma notificação.
+Use o script que já vem com a skill:
 
 ```bash
-# vigia do dono da vez — dispara UMA vez, quando ele ficar ocioso de verdade
-E="$(dirname "$(realpath "$(command -v cp-send)")")/../backend/.env"
-T=$(grep '^CP_AUTH_TOKEN=' "$E" | cut -d= -f2-)
-ALVO=mod-exec-t5        # quem deve trabalho agora
-idle=0
-for i in $(seq 1 90); do
-  sleep 60
-  st=$(curl -s -H "Authorization: Bearer $T" http://127.0.0.1:8765/api/sessions \
-       | python3 -c 'import json,sys;print({s["name"]:s["state"] for s in json.load(sys.stdin)}.get("'"$ALVO"'","sumiu"))')
-  case "$st" in idle|sumiu) idle=$((idle+1));; *) idle=0;; esac
-  [ "$idle" -ge 3 ] && { echo "$ALVO parado ($st) apos $i min"; exit 0; }
-done
-echo "90 min sem parar; estado final: $st"
+setsid nohup "$SKILL/scripts/vigia.sh" <executor> <revisor> <arbitro> 5 \
+  > /tmp/vigia.log 2>&1 < /dev/null &
 ```
+
+Ele consulta a cada 60s e acorda você depois de 5 leituras paradas seguidas. Três coisas nele não
+são detalhe de implementação — são o que faz a vigia funcionar, e cada uma custou uma falha real:
+
+**1. Ele vigia os TRÊS, incluindo VOCÊ.** Executor, revisor e árbitro. Vigiar só o par deixa de fora
+o modo de falha que ninguém estava olhando: o juiz cair. Medido em 14/08/2026 — o árbitro levou
+`API Error: 529 Overloaded` às 03:36 e ficou morto até 06:09. O executor tinha entregado às 03:32,
+o relato ficou preso na fila, o revisor não tinha o que revisar, e **o time inteiro parou 2h30**.
+Do lado de dentro isso é invisível: o turno seguinte parece continuar de onde o anterior parou.
+
+**2. Ele acorda por `cp-send --tmux`, não por `echo`.** Um `echo` num processo de fundo só vira
+notificação se o turno do árbitro estiver **vivo** — com ele morto, a vigia grita para o vazio, que
+foi exatamente o que aconteceu. Um `cp-send` entra como **prompt** e reanima turno morto. O
+`--tmux` é obrigatório: o `cp-send` normal **recusa** falar com sessão Claude da mesma máquina
+(rc=3, "use SendMessage"), e um script de shell não tem `SendMessage`.
+
+**3. Ele só dispara quando os TRÊS estão parados.** Árbitro parado com o par trabalhando é o estado
+**normal** — ele está esperando, e acordá-lo ali é ruído que gasta o token mais caro da mesa. A
+condição só fecha quando ninguém está com a bola. `sumiu` conta como parado: sessão morta também
+não está trabalhando.
+
+**Rode com `setsid nohup`.** Sem isso a vigia é filha do teu turno e morre junto com você — e a tua
+morte é justamente o caso que ela existe para cobrir. Confirme depois: `ps -eo pid,ppid,cmd | grep
+vigia.sh` tem que mostrar o processo.
 
 **Vigie o PAR, não um só.** Depois que você manda um commit pro revisor, a bola pode passar dele pro
 executor **sem você ver** — é o desenho: `REPROVA` vai direto, e você só reaparece quando o executor
 reporta a correção. Vigia armada só no revisor dispara assim que ele entrega o parecer ao executor, e
-você acorda pra um alarme falso enquanto o trabalho anda normalmente. Ponha os dois no mesmo laço e
-acorde quando **ambos** estiverem ociosos — aí sim ninguém está com a bola.
+você acorda pra um alarme falso enquanto o trabalho anda normalmente.
 
 Mesma coisa com duas Tasks em paralelo: um laço, todos os alvos, acorda quando todos pararem.
 
 **Rearme a vigia toda vez que passar a bola** — ao liberar Task, ao mandar commit pro revisor. Vigia
-vencida e não rearmada é silêncio que ninguém percebe.
-
-**E mate a vigia antiga ao aposentar uma sessão.** Sessão encerrada por você lê como "sumiu", que a
-vigia trata como parado — e ela te acorda pra um alarme falso, às vezes duas ou três vezes seguidas
-enquanto o trabalho anda normalmente. Uma vigia viva por vez, apontando pro par da vez.
+vencida e não rearmada é silêncio que ninguém percebe. **E mate a vigia antiga ao aposentar uma
+sessão**, senão ela lê "sumiu" como parado e te acorda pra alarme falso. Uma vigia viva por vez,
+apontando pro par da vez.
 
 Recado de sessão chega como prompt e já te acorda sozinho: a vigia é a **rede** pro caso de o recado
 não vir, não o caminho normal.
@@ -281,8 +312,8 @@ saturada continua produzindo rounds cada vez piores. O primeiro relatório factu
 errado já é tarde.
 
 A sessão nova recebe o kick-off completo (skill + papel + HEAD esperado + intocáveis
-literais + contrato + plano + o caminho da receita) e **prova modelo e effort ao vivo antes
-do primeiro `Edit`**.
+literais + regras do grupo + a Task recortada + o caminho da receita) e **prova modelo e
+effort ao vivo antes do primeiro `Edit`**.
 
 Turno interrompido no meio deixa arquivos meio editados: avise a sessão nova de tratar isso
 como rascunho não confiável, com os paths listados.
@@ -304,6 +335,7 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 
 | Desculpa | Realidade |
 |---|---|
+| "Este caso não está na tabela, então eu escolho" | Fora da tabela é **pare e pergunte**, nunca licença. O modelo vem do PAPEL: quem escreve código usa o modelo do executor, quem revisa usa o do revisor — inclusive em worktree de bug, tarefa avulsa e qualquer coisa aberta em paralelo. Errado duas vezes em 14/08/2026, nas duas com este raciocínio. |
 | "Eu planejei, então eu executo" | Quem planejou tem o plano no contexto: é o viés que o portão fura. |
 | "Achado pequeno, entra junto com a próxima Task" | Se entra na próxima, é bloqueador desta. |
 | "Repasso o essencial do parecer" | Paráfrase perde a lista de arquivos, e é a lista que conserta. |
@@ -316,6 +348,8 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 | "Mandei o recado, agora é esperar" | Espere enquanto ele trabalha. **Ocioso sem reportar** → verifica. |
 | "Vou cutucar pra saber como vai" | Ruído. Quem está `working` não se interrompe. |
 | "Confirmo pro executor que o REPROVA é válido" | Ele já tem a receita. Tua confirmação é a rodada que você tirou. |
+| "A vigia me avisa se algo parar" | Só se ela estiver viva, vigiando os três, e acordando por `cp-send --tmux`. Confira as três coisas. |
+| "Eu não parei, meu último turno foi agora" | Do lado de dentro sempre parece isso. Quem tem o relógio é o usuário. |
 | "Confiro o achado do revisor rapidinho" | Conferir achado é revisar de novo: mesmo resultado, pago duas vezes. Revisor fraco se conserta no revisor — forma cobrada, rotação. |
 | "Rodo eu a verificação, é mais rápido que pedir" | Verificação tem dono: executor roda, revisor re-roda. A tua conferência é relato×repo, em metadado. |
 
@@ -328,6 +362,11 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 - Parecer sem `VEREDITO:` ou sem "verificado por mim" sendo repassado assim mesmo.
 - Próxima Task começando com o parecer anterior em aberto.
 - Sessão calada há mais de 15 minutos sem você ter checado.
+- **Trabalho em andamento sem uma vigia viva.** `ps -eo pid,ppid,cmd | grep vigia.sh` vazio, ou
+  apontando pro par aposentado, é o tubo andando sem rede.
+- **Você respondendo "não parei" quando o usuário diz que você parou.** Queda de API é invisível de
+  dentro: teu último turno parece ter acabado agora. Ele está olhando o relógio; você não. Aceite,
+  confira o estado do par, e retome.
 - Executor no mesmo modelo/família do revisor.
 
 ## Antes do time: leia a política de contas da máquina
