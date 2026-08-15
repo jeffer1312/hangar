@@ -125,3 +125,58 @@ def test_recusa_binario(tmp_path):
     with pytest.raises(FileError) as e:
         filetree.read_file(d, "i.png")
     assert e.value.status == 415 and e.value.code == "erro_arq_binario"
+
+
+def test_nome_com_espaco_aparece_na_arvore(tmp_path):
+    """`core.quotePath=false` cobre o acento e NAO o espaco — o porcelain cita os dois."""
+    d = _repo(tmp_path)
+    (tmp_path / "com espaco.txt").write_text("um\n")
+    (tmp_path / "pasta com espaco").mkdir()
+    (tmp_path / "pasta com espaco" / "x.txt").write_text("novo\n")
+    git_ops._run(d, "add", "com espaco.txt")
+    git_ops._run(d, "commit", "-q", "-m", "e")
+    (tmp_path / "com espaco.txt").write_text("um\ndois\n")
+    ent = {e["name"]: e for e in filetree.list_dir(d)["entries"]}
+    assert "com espaco.txt" in ent, "arquivo com espaco sumiu da arvore"
+    assert ent["com espaco.txt"]["changed"] == "M"
+    assert ent["com espaco.txt"]["add"] == 1
+    assert "pasta com espaco" in ent
+
+
+def test_git_interno_fora_do_alcance(tmp_path):
+    """`.git` esconder-se da LISTA nao basta: o cliente manda o caminho que quiser, e o
+    `.git/config` carrega o token do remote (o `_scrub` do git_ops existe por isso)."""
+    d = _repo(tmp_path)
+    git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
+    for alvo in (".git", ".git/config", ".git/logs/HEAD", "./.git/config"):
+        for fn in (filetree.list_dir, filetree.read_file):
+            with pytest.raises(FileError) as e:
+                fn(d, alvo)
+            assert e.value.code == "erro_arq_area_do_git", (fn.__name__, alvo)
+    (tmp_path / ".gitignore").write_text("node_modules\n")
+    assert filetree.read_file(d, ".gitignore")["text"] == "node_modules\n"
+
+
+def test_nao_trava_em_fifo_nem_estoura_em_socket(tmp_path):
+    """FIFO sem escritor bloqueia no open() e come uma thread do pool pra sempre."""
+    import os, socket
+    d = _repo(tmp_path)
+    os.mkfifo(str(tmp_path / "cano"))
+    with pytest.raises(FileError) as e:
+        filetree.read_file(d, "cano")
+    assert e.value.code == "erro_arq_nao_e_arquivo"
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.bind(str(tmp_path / "soq"))
+        with pytest.raises(FileError):
+            filetree.read_file(d, "soq")
+    finally:
+        s.close()
+
+
+def test_recusa_binario_com_nul_depois_dos_8192(tmp_path):
+    d = _repo(tmp_path)
+    (tmp_path / "tardio.bin").write_bytes(b"A" * 8192 + b"\x00" * 16 + b"B" * 100)
+    with pytest.raises(FileError) as e:
+        filetree.read_file(d, "tardio.bin")
+    assert e.value.status == 415 and e.value.code == "erro_arq_binario"

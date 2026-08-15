@@ -35,6 +35,11 @@ def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
     alvo = _real(os.path.join(cwd, path)) if path else raiz
     if not _within(alvo, raiz):
         raise FileError(400, "erro_arq_fora_da_raiz", "caminho sai da raiz da sessao")
+    # Area interna do git fora do alcance: o .git/config carrega o token do remote, e o
+    # reflog e o objects carregam historia. Comparacao por COMPONENTE (nao prefixo de texto):
+    # .gitignore e .github/ continuam legiveis, e o realpath ja resolveu ./x/.git e sub/../.git.
+    if ".git" in (alvo.relative_to(raiz).parts if alvo != raiz else ()):
+        raise FileError(403, "erro_arq_area_do_git", "area interna do git")
     if not alvo.exists():
         raise FileError(404, "erro_arq_inexistente", "caminho nao existe")
     return raiz, alvo
@@ -133,12 +138,16 @@ def read_file(cwd: str, path: str) -> dict:
     _raiz, alvo = _resolver(cwd, path)
     if alvo.is_dir():
         raise FileError(400, "erro_arq_e_pasta", "isso e uma pasta")
+    if not alvo.is_file():
+        raise FileError(400, "erro_arq_nao_e_arquivo", "nao e um arquivo comum")
     try:
         with alvo.open("rb") as fh:
             cabeca = fh.read(8192)
             if b"\x00" in cabeca:
                 raise FileError(415, "erro_arq_binario", "arquivo binario")
             resto = fh.read(MAX_BYTES - len(cabeca) + 1)
+            if b"\x00" in resto:
+                raise FileError(415, "erro_arq_binario", "arquivo binario")
     except PermissionError:
         raise FileError(403, "erro_arq_sem_permissao", "sem permissao de leitura")
     bruto = cabeca + resto
