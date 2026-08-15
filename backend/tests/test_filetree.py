@@ -371,12 +371,14 @@ def test_rota_cwd_dentro_do_git_recusado(monkeypatch, tmp_path, cliente):
 def test_rota_pasta_comum_lista_e_le(monkeypatch, tmp_path, cliente):
     """Regra do usuario: a arvore FUNCIONA fora de repo git. Pasta comum lista tudo sem
     marca e sem soma, e le arquivos normalmente; um arquivo comum chamado `config` nao
-    confunde o guard (assinatura forte exige >=3 marcadores)."""
-    from app import api
+    confunde. O registro em registrar_estado_git simula a classificacao da criacao da
+    sessao (o api registra antes da sessao nascer)."""
+    from app import api, filetree
     (tmp_path / "leia.txt").write_text("texto fora de git\n")
     (tmp_path / "config").write_text("config comum\n")
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "x.txt").write_text("x\n")
+    filetree.registrar_estado_git(str(tmp_path))
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
     h = {"Authorization": "Bearer secret"}
     r = cliente.get("/api/sessions/s/files/list", params={"so_modificados": "false"}, headers=h)
@@ -391,6 +393,52 @@ def test_rota_pasta_comum_lista_e_le(monkeypatch, tmp_path, cliente):
     r = cliente.get("/api/sessions/s/files/read", params={"path": "leia.txt"}, headers=h)
     assert r.status_code == 200
     assert r.json()["text"] == "texto fora de git\n"
+
+
+def test_rota_pasta_comum_plausivel_3_marcadores(monkeypatch, tmp_path, cliente):
+    """Pasta comum PLAUSIVEL com config+objects+refs (cache de app, nao git): registrada
+    como pasta comum na criacao, list e read funcionam — a assinatura por nomes NAO pode
+    bloquear (parecer 47612d58, B2)."""
+    from app import api, filetree
+    (tmp_path / "config").write_text("config comum\n")
+    (tmp_path / "objects").mkdir()
+    (tmp_path / "refs").mkdir()
+    (tmp_path / "README.txt").write_text("comum\n")
+    filetree.registrar_estado_git(str(tmp_path))
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
+    h = {"Authorization": "Bearer secret"}
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "README.txt"}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["text"] == "comum\n"
+    r = cliente.get("/api/sessions/s/files/list", params={"so_modificados": "false"}, headers=h)
+    assert r.status_code == 200
+    assert any(e["name"] == "README.txt" for e in r.json()["entries"])
+
+
+def test_rota_git_dir_ambiguo_nao_libera(monkeypatch, tmp_path, cliente):
+    """Diretorio arbitrario JA corrompido antes da primeira classificacao (bare sem
+    sufixo, so HEAD+config com token): sem resposta do git e SEM estado de sessao, e
+    AMBIGUO — erro estruturado, nunca bytes (parecer 47612d58, B1: n>=3 deixava passar
+    com 2 marcadores)."""
+    import shutil
+    from app import api, git_ops
+    bare = tmp_path / "arbitrary-bare"
+    bare.mkdir()
+    d = str(bare)
+    git_ops._run(d, "init", "-q", "--bare")
+    git_ops._run(d, "remote", "add", "origin", "https://u:TWOMARKERTOKEN@host/x.git")
+    (bare / "HEAD").write_text("not-a-ref\n")
+    shutil.rmtree(bare / "objects")
+    shutil.rmtree(bare / "refs")
+    h = {"Authorization": "Bearer secret"}
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
+    assert "TWOMARKERTOKEN" not in r.text
+    r = cliente.get("/api/sessions/s/files/list", headers=h)
+    assert r.status_code == 500
+    assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
 
 
 def test_rota_busca_fora_de_repo_continua_409(monkeypatch, tmp_path, cliente):
@@ -580,12 +628,12 @@ def test_rota_changed_files_504_preserva_status(monkeypatch, tmp_path, cliente):
 
 
 def test_rota_config_malformada_nao_libera_git_dir(monkeypatch, tmp_path, cliente):
-    """Config malformada derruba o rev-parse --absolute-git-dir (rc 128) e o guard do
-    git-dir caia para None — o cwd /repo/.git lia o proprio config com o token (medido no
-    parecer). O fallback por filesystem tem que recusar do mesmo jeito."""
-    from app import api, git_ops
+    """Sessao GIT cuja config quebra DEPOIS da criacao: o gitdir guardado no estado da
+    sessao continua recusando raiz/alvo dentro dele (parecer 47612d58, passo 4)."""
+    from app import api, filetree, git_ops
     d = _repo(tmp_path)
     git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
+    filetree.registrar_estado_git(str(tmp_path / ".git"))
     (tmp_path / ".git" / "config").write_text(
         "[malformado\n[remote \"origin\"]\n\turl = https://u:TOKEN@github.com/x/y.git\n")
     h = {"Authorization": "Bearer secret"}
@@ -600,19 +648,18 @@ def test_rota_config_malformada_nao_libera_git_dir(monkeypatch, tmp_path, client
 
 
 def test_rota_alias_cwd_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
-    """Symlink DIRETO para o git-dir como cwd: o fallback por filesystem caminhava o cwd
-    LEXICAL, e um alias fora do diretorio do repo nao tem componente .git no caminho — o
-    guard nao rodava e a config com token vazava (medido no parecer 5ded6dbe). A caminhada
-    comeca pelo cwd RESOLVIDO e recusa igual."""
+    """Symlink DIRETO para o git-dir como cwd: a sessao criada com o cwd ALIAS classifica
+    o alias como git-dir (realpath); config malformada depois nao muda a classificacao."""
     import os
-    from app import api, git_ops
+    from app import api, filetree, git_ops
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     d = _repo(repo_dir)
     git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
+    os.symlink(repo_dir / ".git", tmp_path / "git-area-alias")
+    filetree.registrar_estado_git(str(tmp_path / "git-area-alias"))
     (repo_dir / ".git" / "config").write_text(
         "[malformado\n[remote \"origin\"]\n\turl = https://u:TOKEN@github.com/x/y.git\n")
-    os.symlink(repo_dir / ".git", tmp_path / "git-area-alias")
     h = {"Authorization": "Bearer secret"}
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / "git-area-alias"))
     r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
@@ -625,14 +672,13 @@ def test_rota_alias_cwd_git_dir_config_malformada(monkeypatch, tmp_path, cliente
 
 
 def test_rota_git_dir_incompleto_config_malformada(monkeypatch, tmp_path, cliente):
-    """Git-dir INCOMPLETO (refs removido) com config malformada: o rev-parse responde
-    "not a git repository" — a MESMA resposta de fora de repo — e o fallback que exigia
-    os 4 marcadores devolvia None, liberando o config com token (parecer 71d7b190).
-    O fallback por INDICIO (config presente) protege do mesmo jeito."""
+    """Git-dir INCOMPLETO (refs removido) com config malformada, numa sessao classificada
+    como Git na criacao: o gitdir guardado continua recusando (parecer 71d7b190)."""
     import shutil
-    from app import api, git_ops
+    from app import api, filetree, git_ops
     d = _repo(tmp_path)
     git_ops._run(d, "remote", "add", "origin", "https://u:PARTIALTOKEN@github.com/x/y.git")
+    filetree.registrar_estado_git(str(tmp_path / ".git"))
     (tmp_path / ".git" / "config").write_text(
         "[malformado\n[remote \"origin\"]\n\turl = https://u:PARTIALTOKEN@github.com/x/y.git\n")
     shutil.rmtree(tmp_path / ".git" / "refs")
@@ -648,15 +694,15 @@ def test_rota_git_dir_incompleto_config_malformada(monkeypatch, tmp_path, client
 
 
 def test_rota_bare_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
-    """Bare git-dir (nome termina em .git) com config malformada: o fallback antigo so
-    aceitava componente chamado `.git` — o bare ficava em modo permitido e o config com
-    token vazava (parecer 71d7b190)."""
-    from app import api, git_ops
+    """Bare git-dir (nome termina em .git) com config malformada, numa sessao
+    classificada como Git na criacao: o gitdir guardado continua recusando."""
+    from app import api, filetree, git_ops
     bare = tmp_path / "bare-repository.git"
     bare.mkdir()
     d = str(bare)
     git_ops._run(d, "init", "-q", "--bare")
     git_ops._run(d, "remote", "add", "origin", "https://u:PARTIALTOKEN@github.com/x/y.git")
+    filetree.registrar_estado_git(d)
     (bare / "config").write_text(
         "[malformado\n[remote \"origin\"]\n\turl = https://u:PARTIALTOKEN@github.com/x/y.git\n")
     h = {"Authorization": "Bearer secret"}
@@ -671,16 +717,16 @@ def test_rota_bare_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
 
 
 def test_rota_bare_sem_sufixo_head_quebrado(monkeypatch, tmp_path, cliente):
-    """Bare git-dir SEM o sufixo .git com HEAD corrompido: o rev-parse responde
-    "not a git repository" e o ramo por stderr liberava o config com token (parecer
-    99916b58). A assinatura estrutural forte (>=3 marcadores) reconhece o bare mesmo
-    sem o nome .git e recusa 403."""
-    from app import api, git_ops
+    """Bare git-dir SEM sufixo com HEAD corrompido, numa sessao classificada como Git na
+    criacao: o gitdir guardado recusa — o stderr nunca participou da decisao (parecer
+    99916b58)."""
+    from app import api, filetree, git_ops
     bare = tmp_path / "bare-repository"
     bare.mkdir()
     d = str(bare)
     git_ops._run(d, "init", "-q", "--bare")
     git_ops._run(d, "remote", "add", "origin", "https://u:BADHEADTOKEN@github.com/x/y.git")
+    filetree.registrar_estado_git(d)
     (bare / "HEAD").write_text("not-a-ref\n")
     h = {"Authorization": "Bearer secret"}
     monkeypatch.setattr(api, "_session_cwd", lambda name: d)
@@ -694,15 +740,15 @@ def test_rota_bare_sem_sufixo_head_quebrado(monkeypatch, tmp_path, cliente):
 
 
 def test_rota_bare_sem_sufixo_head_removido(monkeypatch, tmp_path, cliente):
-    """Mesma classe do anterior com HEAD REMOVIDO (3 marcadores restantes): a assinatura
-    forte continua reconhecendo o bare — a protecao nao depende do texto do erro nem do
-    arquivo HEAD existir (parecer 219a9e09)."""
-    from app import api, git_ops
+    """Mesma classe com HEAD REMOVIDO: a protecao vem do estado da sessao, nao do
+    arquivo HEAD existir nem de nomes (parecer 219a9e09)."""
+    from app import api, filetree, git_ops
     bare = tmp_path / "bare-repository"
     bare.mkdir()
     d = str(bare)
     git_ops._run(d, "init", "-q", "--bare")
     git_ops._run(d, "remote", "add", "origin", "https://u:NOHEADTOKEN@github.com/x/y.git")
+    filetree.registrar_estado_git(d)
     (bare / "HEAD").unlink()
     h = {"Authorization": "Bearer secret"}
     monkeypatch.setattr(api, "_session_cwd", lambda name: d)

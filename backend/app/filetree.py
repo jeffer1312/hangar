@@ -26,50 +26,44 @@ def _within(child: Path, root: Path) -> bool:
     return child == root or root in child.parents
 
 
-def _git_dir_por_fs(cwd: str) -> Path | None:
-    """Fallback conservador quando o git nao responde. Caminha do cwd RESOLVIDO pra cima
-    e trata como git-dir:
-    - diretorio componente chamado `.git` (ou nome terminando `.git` — bare) com PELO
-      MENOS UM marcador administrativo (HEAD, config, objects ou refs) — o git-dir
-      INCOMPLETO (refs removido) continua protegido (parecer 71d7b190);
-    - QUALQUER candidato com assinatura estrutural forte: pelo menos 3 dos 4 marcadores,
-      independente do nome — fecha o bare SEM o sufixo .git com HEAD quebrado ou removido
-      (pareceres 99916b58 e 219a9e09) sem bloquear pasta comum que so tenha um arquivo
-      chamado config.
-    Pasta ancestral .git sem marcador nenhum (ex: /tmp/.git que so contem um projeto)
-    nao conta. O realpath no comeco e obrigatorio: cwd SYMLINK DIRETO para o git-dir nao
-    tem componente .git no caminho lexical (parecer 5ded6dbe)."""
+# Classificacao de git-dir por cwd de sessao, em TRES estados (parecer 47612d58): a
+# heuristica por nomes/tipos NAO distingue pasta comum de git-dir quebrado (as duas podem
+# ter config/objects/refs), entao a fonte de verdade fica FORA do filesystem:
+#   - Path    -> git_dir_conhecido: contencao por realpath contra esse gitdir;
+#   - None    -> pasta_comum: arvore e leitura liberadas, sem marcas e sem soma;
+#   - ausente -> git_estado_ambiguo: so erro estruturado, nunca bytes.
+# O estado nasce na criacao/reatachamento da sessao (registrar_estado_git, chamado pelo
+# api) e e refrescado a cada resposta positiva do proprio git.
+_estado_git: dict[str, Path | None] = {}
+_AMBIGUO = object()
 
-    def _marcadores(p: Path) -> int:
-        return sum(((p / "HEAD").is_file(), (p / "config").is_file(),
-                    (p / "objects").is_dir(), (p / "refs").is_dir()))
 
-    atual = Path(os.path.realpath(cwd))
-    while True:
-        for cand in (atual, atual / ".git"):
-            n = _marcadores(cand)
-            if n >= 3 or ((cand.name == ".git" or cand.name.endswith(".git")) and n >= 1):
-                return Path(os.path.realpath(cand))
-        if atual == atual.parent:
-            return None
-        atual = atual.parent
+def registrar_estado_git(cwd: str) -> None:
+    """Classifica o cwd na criacao/reatachamento da sessao: git respondeu -> git-dir;
+    nao respondeu -> pasta_comum (a escolha do usuario de criar a sessao ali e a fonte
+    de verdade). Falha de subprocesso nao registra nada (fica ambiguo)."""
+    try:
+        g = _git_dir(cwd)
+    except FileError:
+        return
+    _estado_git[str(_real(cwd))] = g
 
 
 def _git_dir(cwd: str) -> Path | None:
-    """O git-dir REAL do repo que contem o cwd (resolve .git FILE, worktree, GIT_DIR).
-    Devolve Path quando ha git-dir (via git ou, na falha, pela assinatura do fallback) e
-    None quando e PASTA COMUM — a arvore funciona fora de repo git, sem marcas (regra do
-    usuario). O stderr NAO participa da decisao: "not a git repository" tambem aparece
-    DENTRO de um git-dir real quebrado (bare sem sufixo com HEAD corrompido vazou o
-    config por essa frase — parecer 99916b58). Falha de subprocesso (git ausente/timeout)
-    vira FileError: e falha operacional, nao classificacao."""
+    """A resposta ATUAL do git: Path quando ele identifica o git-dir (resolve .git FILE,
+    worktree, GIT_DIR); None quando nao responde — fora de repo OU quebrado, e o stderr
+    NAO participa ("not a git repository" tambem aparece dentro de git-dir real quebrado,
+    parecer 99916b58). Quem decide o que fazer com o None e o ESTADO DA SESSAO
+    (_resolver), nunca nomes/tipos de arquivo: heuristica por marcadores confundia pasta
+    comum com git-dir quebrado nos dois sentidos (parecer 47612d58). Falha de subprocesso
+    (git ausente/timeout) vira FileError: e falha operacional, nao classificacao."""
     from app import git_ops
     try:
         p = git_ops._run(cwd, "rev-parse", "--absolute-git-dir")
     except git_ops.GitError as e:
         raise FileError(e.status, "erro_arq_lista_falhou", e.detail or "git falhou") from None
     if p.returncode != 0:
-        return _git_dir_por_fs(cwd)
+        return None
     # realpath dos DOIS lados da comparacao: o stdout do git e caminho fisico (getcwd),
     # mas normalizar nao custa nada e garante que o _within casa com raiz/alvo resolvidos.
     return Path(os.path.realpath(p.stdout.strip()))
@@ -100,6 +94,19 @@ def _resolver(cwd: str, path: str | None) -> tuple[Path, Path, Path | None]:
     # (2) por COMPONENTE do alvo relativo a raiz, que continua valendo mesmo com o git
     #     quebrado (repo corrompido, .git orfao): .gitignore e .github/ ficam legiveis.
     gitdir = _git_dir(cwd)
+    chave = str(raiz)
+    if gitdir is not None:
+        _estado_git[chave] = gitdir      # resposta positiva refresca a classificacao
+    else:
+        # Git nao respondeu agora: a classificacao da SESSAO decide. Guardada como
+        # git_dir_conhecido -> o git quebrou DEPOIS da criacao: usa o gitdir guardado.
+        # Guardada como pasta_comum -> liberado. Nunca vista antes -> AMBIGUO: sem
+        # fonte de verdade fora do filesystem, nomes/tipos nao distinguem pasta comum
+        # de git-dir quebrado (parecer 47612d58) — erro estruturado, nunca bytes.
+        estado = _estado_git.get(chave, _AMBIGUO)
+        if estado is _AMBIGUO:
+            raise FileError(500, "erro_arq_lista_falhou", "estado do git nao classificado")
+        gitdir = estado
     if gitdir is not None and _within(raiz, gitdir):
         raise FileError(403, "erro_arq_area_do_git", "area interna do git")
     if ".git" in (alvo.relative_to(raiz).parts if alvo != raiz else ()):
