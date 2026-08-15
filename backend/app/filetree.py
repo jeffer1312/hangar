@@ -127,3 +127,25 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
             "changed": marca, "add": add, "del": rem,
         })
     return {"entries": entradas, "truncated": cortou}
+
+
+def read_file(cwd: str, path: str) -> dict:
+    _raiz, alvo = _resolver(cwd, path)
+    if alvo.is_dir():
+        raise FileError(400, "erro_arq_e_pasta", "isso e uma pasta")
+    try:
+        with alvo.open("rb") as fh:
+            cabeca = fh.read(8192)
+            if b"\x00" in cabeca:
+                raise FileError(415, "erro_arq_binario", "arquivo binario")
+            resto = fh.read(MAX_BYTES - len(cabeca) + 1)
+    except PermissionError:
+        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de leitura")
+    bruto = cabeca + resto
+    cortou = len(bruto) > MAX_BYTES
+    return {
+        "path": path,
+        "text": bruto[:MAX_BYTES].decode("utf-8", errors="replace"),
+        "size": alvo.stat().st_size,
+        "truncated": cortou,
+    }

@@ -102,3 +102,26 @@ def test_recusa_path_comecando_com_traco(tmp_path):
         assert e.value.code == "erro_arq_caminho_invalido"
         with pytest.raises(FileError):
             filetree.read_file(d, ruim)
+
+
+def test_le_texto_inteiro(tmp_path):
+    d = _repo(tmp_path)
+    (tmp_path / "a.txt").write_text("linha\n")
+    r = filetree.read_file(d, "a.txt")
+    assert r["text"] == "linha\n" and r["truncated"] is False
+
+
+def test_corta_arquivo_grande(tmp_path):
+    d = _repo(tmp_path)
+    (tmp_path / "g.txt").write_text("x" * (filetree.MAX_BYTES + 5000))
+    r = filetree.read_file(d, "g.txt")
+    assert r["truncated"] is True
+    assert len(r["text"].encode()) <= filetree.MAX_BYTES
+
+
+def test_recusa_binario(tmp_path):
+    d = _repo(tmp_path)
+    (tmp_path / "i.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00binario")
+    with pytest.raises(FileError) as e:
+        filetree.read_file(d, "i.png")
+    assert e.value.status == 415 and e.value.code == "erro_arq_binario"
