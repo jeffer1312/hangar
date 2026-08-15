@@ -317,7 +317,7 @@ def assign_lanes(commits: list[dict]) -> list[dict]:
 def changed_files(cwd: str) -> list[dict]:
     """Arquivos com mudanca nao-commitada (git status --porcelain). Cada item: `path`, `code` (os 2
     chars XY do porcelain: ' M', 'M ', '??', 'A '...) e `staged`. So leitura."""
-    p = _run(cwd, "status", "--porcelain")
+    p = _run(cwd, "-c", "core.quotePath=false", "status", "--porcelain")
     if p.returncode != 0:
         raise GitError(409, (p.stderr or "git status falhou").strip() or "git status falhou")
     out = []
