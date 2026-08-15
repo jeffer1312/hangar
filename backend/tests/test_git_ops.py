@@ -572,3 +572,187 @@ def test_git_log_corpo_com_separador_nao_trunca(tmp_path):
     git_ops._run(d, "commit", "-q", "-m", "assunto", "-m", "antes\x1fdepois")
     body = git_ops.git_log(d)[0]["body"]
     assert "antes" in body and "depois" in body
+
+
+def _repo_com_upstream(tmp_path):
+    """Clone de um repo NORMAL que ja tem commit.
+
+    Medido em 15/08/2026: clonar um `--bare` VAZIO nao serve — nao existe `origin/HEAD` nem
+    `@{upstream}`, e `_base_da_branch` devolveria None, fazendo o escopo cair pra
+    "nao_commitado" e contradizendo o proprio teste. Com um repo de origem que ja tem commit,
+    a branch clonada tem upstream; depois de `checkout -b`, a branch nova NAO tem — e e o
+    fallback `origin/HEAD` que responde, que e justamente o caminho a exercitar.
+    """
+    origem = tmp_path / "origem"
+    origem.mkdir()
+    o = str(origem)
+    git_ops._run(o, "init", "-q", ".")
+    git_ops._run(o, "config", "user.email", "t@t")
+    git_ops._run(o, "config", "user.name", "t")
+    (origem / "a.txt").write_text("um\n")
+    git_ops._run(o, "add", "a.txt")
+    git_ops._run(o, "commit", "-q", "-m", "um")
+
+    git_ops._run(str(tmp_path), "clone", "-q", "origem", "trab")
+    trab = tmp_path / "trab"
+    d = str(trab)
+    git_ops._run(d, "config", "user.email", "t@t")
+    git_ops._run(d, "config", "user.name", "t")
+    return d, trab / "a.txt"
+
+
+def test_escopo_branch_soma_commits_e_disco(tmp_path):
+    d, f = _repo_com_upstream(tmp_path)
+    git_ops._run(d, "checkout", "-q", "-b", "trabalho")
+    f.write_text("um\ndois\n")
+    git_ops._run(d, "add", "a.txt")
+    git_ops._run(d, "commit", "-q", "-m", "dois")
+    f.write_text("um\ndois\ntres\n")                 # nao commitado
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_usado"] == "branch"
+    assert "+dois" in r["diff"] and "+tres" in r["diff"]
+    so_disco = git_ops.path_diff(d, "a.txt", "nao_commitado")
+    assert "tres" in so_disco["diff"] and "+dois" not in so_disco["diff"]
+
+
+def test_branch_sem_commit_proprio_cai_e_diz(tmp_path):
+    d, f = _repo_com_upstream(tmp_path)
+    f.write_text("um\nmexido\n")
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_pedido"] == "branch"
+    assert r["escopo_usado"] == "nao_commitado"
+    assert r["motivo"]
+
+
+def test_repo_sem_commit_nao_estoura(tmp_path):
+    d = str(tmp_path)
+    git_ops._run(d, "init", "-q", ".")
+    (tmp_path / "novo.txt").write_text("x\n")
+    r = git_ops.path_diff(d, "novo.txt", "branch")
+    assert r["escopo_usado"] == "nao_commitado"
+
+
+def test_arquivo_novo_aparece_no_diff(tmp_path):
+    """`git diff` NAO mostra untracked. Sem isto, clicar num arquivo recem-criado pela sessao
+    abre um diff VAZIO — que e o caso mais comum de todos, porque a sessao acabou de criar o
+    arquivo. `file_diff` ja resolve com `--no-index` (git_ops.py:338); `path_diff` precisa do
+    mesmo tratamento."""
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "trab" / "novinho.txt").write_text("linha nova\n")
+    r = git_ops.path_diff(d, "novinho.txt", "nao_commitado")
+    assert "linha nova" in r["diff"]
+
+
+def test_path_com_traco_recusado(tmp_path):
+    d, _f = _repo_com_upstream(tmp_path)
+    with pytest.raises(GitError):
+        git_ops.path_diff(d, "--output=/tmp/x", "nao_commitado")
+
+
+def test_file_diff_mantem_o_formato_do_git_changes_tab(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("linha modificada\n")
+    r = git_ops.file_diff(d, "tracked.txt")
+    assert set(r) >= {"path", "diff"}          # o que o front ja lia
+    assert r["truncated"] is False             # o campo novo
+
+
+def test_branch_pushada_ainda_tem_base(tmp_path):
+    """Depois de `push -u`, `@{upstream}` e a COPIA da branch — merge-base com ela e o proprio
+    HEAD. Sem cair pro `origin/HEAD`, o escopo `branch` morre e o motivo mente."""
+    origem = tmp_path / "origem"
+    origem.mkdir()
+    o = str(origem)
+    git_ops._run(o, "init", "-q", ".")
+    git_ops._run(o, "config", "user.email", "t@t")
+    git_ops._run(o, "config", "user.name", "t")
+    (origem / "a.txt").write_text("um\n")
+    git_ops._run(o, "add", "a.txt")
+    git_ops._run(o, "commit", "-q", "-m", "um")
+    git_ops._run(str(tmp_path), "clone", "-q", "--bare", "origem", "bare")
+    git_ops._run(str(tmp_path), "clone", "-q", "bare", "trab")
+    d = str(tmp_path / "trab")
+    git_ops._run(d, "config", "user.email", "t@t")
+    git_ops._run(d, "config", "user.name", "t")
+    git_ops._run(d, "checkout", "-q", "-b", "trabalho")
+    (tmp_path / "trab" / "a.txt").write_text("um\ndois\n")
+    git_ops._run(d, "add", "a.txt")
+    git_ops._run(d, "commit", "-q", "-m", "dois")
+    git_ops._run(d, "push", "-q", "-u", "origin", "trabalho")
+    (tmp_path / "trab" / "a.txt").write_text("um\ndois\ntres\n")
+
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_usado"] == "branch", r["motivo"]
+    assert r["base"]
+    assert "+dois" in r["diff"] and "+tres" in r["diff"]
+
+
+def test_untracked_em_pasta_nova_aparece(tmp_path):
+    """`git status --porcelain` COLAPSA a pasta nova (`nova/`), nunca lista `nova/x.txt`."""
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "trab" / "novadir").mkdir()
+    (tmp_path / "trab" / "novadir" / "novo.txt").write_text("linha nova\n")
+    assert "linha nova" in git_ops.path_diff(d, "novadir/novo.txt", "nao_commitado")["diff"]
+
+
+def test_untracked_com_acento_e_com_espaco_aparece(tmp_path):
+    """O porcelain devolve esses dois nomes ENTRE ASPAS e com escape octal."""
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "trab" / "sessão-única.md").write_text("conteudo com acento\n")
+    (tmp_path / "trab" / "com espaco.txt").write_text("conteudo com espaco\n")
+    assert "acento" in git_ops.path_diff(d, "sessão-única.md", "nao_commitado")["diff"]
+    assert "espaco" in git_ops.path_diff(d, "com espaco.txt", "nao_commitado")["diff"]
+
+
+def test_untracked_ilegivel_nao_vira_diff_vazio(tmp_path):
+    d, _f = _repo_com_upstream(tmp_path)
+    alvo = tmp_path / "trab" / "trancado.txt"
+    alvo.write_text("segredo\n")
+    alvo.chmod(0o000)
+    try:
+        with pytest.raises(GitError):
+            git_ops.path_diff(d, "trancado.txt", "nao_commitado")
+    finally:
+        alvo.chmod(0o644)
+
+
+def test_path_fora_do_repo_recusado(tmp_path):
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "segredo.txt").write_text("SENHA\n")
+    (tmp_path / "trab" / "elo").symlink_to(tmp_path / "segredo.txt")
+    for ruim in ("../segredo.txt", "/etc/passwd", "..", "elo"):
+        with pytest.raises(GitError) as e:
+            git_ops.path_diff(d, ruim, "nao_commitado")
+        assert e.value.status == 400, ruim
+
+
+def test_pathspec_magica_nao_vira_diff_do_repo(tmp_path):
+    d, f = _repo_com_upstream(tmp_path)
+    f.write_text("um\nmexido\n")
+    for magico in (":/", ":(top)", ":(glob)**", "*", "."):
+        with pytest.raises(GitError) as e:
+            git_ops.path_diff(d, magico, "nao_commitado")
+        assert e.value.status == 404, magico
+
+
+def test_area_interna_do_git_recusada(tmp_path):
+    """`git status` nunca lista dentro de `.git`, entao o gate antigo travava isso por acidente.
+    Com `ls-files`, o ramo --no-index le o arquivo do DISCO — e o `.git/config` carrega o token
+    do remote, que o `_scrub` existe pra nao deixar vazar."""
+    d, _f = _repo_com_upstream(tmp_path)
+    git_ops._run(d, "remote", "set-url", "origin", "https://u:TOKEN@github.com/x/y.git")
+    # symlink pra dentro do .git: o guard olha o ALVO resolvido, nao a string pedida — sem isto,
+    # `atalho/config` leria o `.git/config` inteiro.
+    (tmp_path / "trab" / "atalho").symlink_to(tmp_path / "trab" / ".git")
+    for ruim in (".git/config", ".git/HEAD", ".git/logs/HEAD", "./.git/config", "atalho/config"):
+        with pytest.raises(GitError) as e:
+            git_ops.path_diff(d, ruim, "nao_commitado")
+        assert e.value.status in (403, 404), (ruim, e.value.status)
+        assert "TOKEN" not in e.value.detail
+
+    # o que NAO pode quebrar junto
+    (tmp_path / "trab" / ".gitignore").write_text("node_modules\n")
+    (tmp_path / "trab" / ".github").mkdir()
+    (tmp_path / "trab" / ".github" / "ci.yml").write_text("on: push\n")
+    assert "node_modules" in git_ops.path_diff(d, ".gitignore", "nao_commitado")["diff"]
+    assert "on: push" in git_ops.path_diff(d, ".github/ci.yml", "nao_commitado")["diff"]

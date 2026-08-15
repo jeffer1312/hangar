@@ -348,7 +348,8 @@ def file_diff(cwd: str, path: str) -> dict:
     # git diff sai 1 quando HA diferenca (normal) -> so 128+ e erro real (path invalido, etc)
     if p.returncode >= 128:
         raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
-    return {"path": path, "diff": p.stdout}
+    texto, cortou = _cap(p.stdout)
+    return {"path": path, "diff": texto, "truncated": cortou}
 
 
 def discard_file(cwd: str, path: str) -> dict:
@@ -404,6 +405,87 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
     if p.returncode >= 128:
         raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
     return {"path": path, "diff": p.stdout}
+
+
+def _base_da_branch(cwd: str) -> tuple[str | None, str | None]:
+    """Onde esta branch nasceu, e o PORQUE quando nao da pra saber."""
+    cabeca = _run(cwd, "rev-parse", "--verify", "-q", "HEAD")
+    if cabeca.returncode != 0:
+        return None, "este repositorio ainda nao tem commit"
+    atual = cabeca.stdout.strip()
+    igual_ao_head = False
+    for ref in ("@{upstream}", "origin/HEAD"):
+        b = _run(cwd, "merge-base", "HEAD", ref)
+        if b.returncode != 0 or not b.stdout.strip():
+            continue
+        base = b.stdout.strip()
+        if base == atual:
+            # Branch ja pushada: `@{upstream}` e a COPIA dela, nao a mainline -> merge-base = HEAD.
+            # Nao serve de base; tenta a proxima referencia antes de desistir.
+            igual_ao_head = True
+            continue
+        return base, None
+    if igual_ao_head:
+        return None, "esta branch nao tem commit proprio"
+    return None, "esta branch nao tem base conhecida"
+
+
+def path_diff(cwd: str, path: str, escopo: str) -> dict:
+    """Diff de UM arquivo. escopo="branch" soma desde onde a branch nasceu ate o disco agora."""
+    if escopo not in ("branch", "nao_commitado"):
+        raise GitError(400, "escopo invalido")
+    if path.startswith("-"):
+        raise GitError(400, "caminho invalido")
+
+    # Contencao ANTES de qualquer git: o realpath resolve symlink antes de comparar (recusa
+    # `pastaelo/cofre.txt` apontando pra fora) e o isfile recusa pathspec magica (':/', '*', '.')
+    # que o `--` nao desliga. Trade-off declarado: arquivo APAGADO do disco nao tem diff de branch.
+    topo = _run(cwd, "rev-parse", "--show-toplevel")
+    if topo.returncode != 0:
+        raise GitError(409, "nao e um repositorio git")
+    raiz = os.path.realpath(topo.stdout.strip())
+    alvo = os.path.realpath(os.path.join(cwd, path))
+    if alvo != raiz and not alvo.startswith(raiz + os.sep):
+        raise GitError(400, "caminho fora do repositorio")
+    if not os.path.isfile(alvo):
+        raise GitError(404, "arquivo nao encontrado")
+
+    # O ramo --no-index le o arquivo do DISCO, e `.git` esta dentro da raiz: sem isto,
+    # `path_diff(cwd, ".git/config")` devolve o remote com o token embutido, o mesmo que o
+    # _scrub existe pra impedir. Comparacao por COMPONENTE: `.gitignore` continua passando.
+    if ".git" in os.path.relpath(alvo, raiz).split(os.sep):
+        raise GitError(403, "area interna do git")
+
+    usado, base, motivo = escopo, None, None
+    if escopo == "branch":
+        base, motivo = _base_da_branch(cwd)
+        if base is None:
+            usado = "nao_commitado"
+
+    # Arquivo ainda nao rastreado nao aparece em `git diff` — e e o caso MAIS comum aqui, porque
+    # a sessao acabou de criar o arquivo. Mesmo tratamento que file_diff ja da (git_ops.py:338).
+    rastreado = _run(cwd, "ls-files", "--error-unmatch", "--", path).returncode == 0
+    if not rastreado:
+        p = _run(cwd, "-c", "core.quotePath=false", "diff", "--no-index", "--", "/dev/null", path)
+        if p.returncode >= 128 or (p.returncode != 0 and not p.stdout):
+            raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
+        texto, cortou = _cap(p.stdout)      # --no-index sai com 1 quando ha diferenca: normal
+        return {"path": path, "diff": texto, "truncated": cortou,
+                "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
+
+    args = ["-c", "core.quotePath=false", "diff"]
+    if usado == "branch":
+        args.append(base)
+    elif _run(cwd, "rev-parse", "--verify", "-q", "HEAD").returncode == 0:
+        args.append("HEAD")                                # sem commit nenhum, diff sem ref
+    args += ["--", path]
+
+    p = _run(cwd, *args)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
+    texto, cortou = _cap(p.stdout)
+    return {"path": path, "diff": texto, "truncated": cortou,
+            "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
 
 
 # Teto do diff do commit inteiro. O diff POR ARQUIVO e seguro por construcao; o do commit inteiro
