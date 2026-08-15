@@ -27,6 +27,9 @@ from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
 from app import model_args
+from app import filesearch, filetree, git_ops
+from app.filesearch import SearchError
+from app.filetree import FileError
 from app import pi_catalog
 from app import pi_models
 from app.pi_inbox import INBOX
@@ -2845,6 +2848,11 @@ class GitPathBody(_StrictBody):
     path: str   # validado em git_ops contra a lista real de arquivos alterados (anti-traversal)
 
 
+class GitPathDiffBody(_StrictBody):
+    path: str
+    escopo: Literal["branch", "nao_commitado"] = "branch"
+
+
 class GitCommitBody(_StrictBody):
     message: str = Field(min_length=1)
     paths: list[str] = []        # sem min_length: amend=True aceita [] (reword); git_ops barra [] sem amend
@@ -3118,6 +3126,50 @@ def git_commit_branches(name: str, sha: str):
         return branches_containing(_session_cwd(name), sha)
     except GitError as e:
         raise HTTPException(e.status, e.detail)
+
+
+def _erro_arq(e: FileError | SearchError) -> HTTPException:
+    # O `msg` vai TAMBEM como parametro: as chaves `erro_arq_busca_falhou` e `erro_git_diff`
+    # trazem `{msg}` no texto, e a funcao do paraglide exige o argumento — sem ele o front
+    # renderiza `undefined` ou nem compila. O `erro()` tem `msg` como parametro nomeado, entao
+    # o valor entra no dict de params DEPOIS, por chave.
+    d = erro(e.code, e.msg)
+    d["params"]["msg"] = e.msg
+    return HTTPException(status_code=e.status, detail=d)
+
+
+@app.get("/api/sessions/{name}/files/list", dependencies=[Depends(require_auth)])
+def files_list(name: str, path: str | None = None, so_modificados: bool = True):
+    try:
+        return filetree.list_dir(_session_cwd(name), path, so_modificados)
+    except FileError as e:
+        raise _erro_arq(e)
+
+
+@app.get("/api/sessions/{name}/files/read", dependencies=[Depends(require_auth)])
+def files_read(name: str, path: str):
+    try:
+        return filetree.read_file(_session_cwd(name), path)
+    except FileError as e:
+        raise _erro_arq(e)
+
+
+@app.get("/api/sessions/{name}/files/search", dependencies=[Depends(require_auth)])
+def files_search(name: str, q: str, mode: Literal["names", "contents"] = "names"):
+    try:
+        return filesearch.search(_session_cwd(name), q, mode)
+    except SearchError as e:
+        raise _erro_arq(e)
+
+
+@app.post("/api/sessions/{name}/git/path-diff", dependencies=[Depends(require_auth)])
+def git_path_diff(name: str, body: GitPathDiffBody):
+    try:
+        return git_ops.path_diff(_session_cwd(name), body.path, body.escopo)
+    except GitError as e:
+        d = erro("erro_git_diff", str(e))
+        d["params"]["msg"] = str(e)
+        raise HTTPException(status_code=e.status, detail=d)
 
 
 @app.get("/api/sessions/{name}/runners", dependencies=[Depends(require_auth)],

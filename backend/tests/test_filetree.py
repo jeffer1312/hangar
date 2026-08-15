@@ -1,8 +1,20 @@
 """Cobertura do filetree: listar um nivel do repo da sessao e ler arquivo."""
 import pytest
+from fastapi.testclient import TestClient
 
 from app import filetree, git_ops
 from app.filetree import FileError
+from app.config import settings
+from app.api import app
+
+
+@pytest.fixture
+def cliente():
+    """Mesmo arranjo de test_api.py: sem armar o token, toda rota devolve 401."""
+    anterior = settings.auth_token
+    settings.auth_token = "secret"
+    yield TestClient(app)
+    settings.auth_token = anterior
 
 
 def _repo(tmp_path):
@@ -185,6 +197,40 @@ def test_recusa_binario_com_nul_depois_dos_8192(tmp_path):
     with pytest.raises(FileError) as e:
         filetree.read_file(d, "tardio.bin")
     assert e.value.status == 415 and e.value.code == "erro_arq_binario"
+
+
+def test_rota_list_exige_auth(cliente):
+    assert cliente.get("/api/sessions/x/files/list").status_code == 401
+
+
+def test_rota_binario_devolve_envelope(monkeypatch, tmp_path, cliente):
+    from app import api
+    d = _repo(tmp_path)
+    (tmp_path / "i.png").write_bytes(b"\x89PNG\x00bin")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "i.png"},
+                    headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 415
+    assert r.json()["detail"]["code"] == "erro_arq_binario"     # envelope, nao texto solto
+
+
+def test_rota_busca_vazia_devolve_envelope(monkeypatch, tmp_path, cliente):
+    from app import api
+    d = _repo(tmp_path)
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.get("/api/sessions/s/files/search", params={"q": "   "},
+                    headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_arq_busca_vazia"
+
+
+def test_rota_path_diff_fora_de_repo_devolve_envelope(monkeypatch, tmp_path, cliente):
+    from app import api
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
+    r = cliente.post("/api/sessions/s/git/path-diff", json={"path": "x.txt"},
+                     headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_git_diff"
 
 
 def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
