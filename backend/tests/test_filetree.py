@@ -145,10 +145,15 @@ def test_nome_com_espaco_aparece_na_arvore(tmp_path):
 
 def test_git_interno_fora_do_alcance(tmp_path):
     """`.git` esconder-se da LISTA nao basta: o cliente manda o caminho que quiser, e o
-    `.git/config` carrega o token do remote (o `_scrub` do git_ops existe por isso)."""
+    `.git/config` carrega o token do remote (o `_scrub` do git_ops existe por isso).
+    O symlink `atalho -> .git` cobre a regua "vale pro alvo real depois de resolver
+    symlink": quem escapa de um guard que olha a STRING pedida e justamente o caminho
+    que nao tem `.git` escrito nele."""
+    import os
     d = _repo(tmp_path)
     git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
-    for alvo in (".git", ".git/config", ".git/logs/HEAD", "./.git/config"):
+    os.symlink(".git", tmp_path / "atalho")
+    for alvo in (".git", ".git/config", ".git/logs/HEAD", "./.git/config", "atalho", "atalho/config"):
         for fn in (filetree.list_dir, filetree.read_file):
             with pytest.raises(FileError) as e:
                 fn(d, alvo)
