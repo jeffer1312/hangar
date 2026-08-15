@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as m from '../../paraglide/messages';
   import type { TreeEntry } from '../../lib/types';
 
   interface Props {
@@ -14,7 +15,7 @@
   const RECUO = 14;   // px por nível, como no mock (docs/mocks/2026-08-15-arvore/base.css)
   const BASE = 8;     // recuo da raiz
 
-  // Nível do nó = quantas barras o caminho tem (raiz = 0).
+  // Nível do nó = quantas barras o caminho tem (raiz = 0). O ARIA usa nível 1-based.
   const nivel = (p: string) => p.split('/').length - 1;
 
   // Letra da marca -> classe de cor. Rename/copy/unmerged/type-change não têm cor própria
@@ -22,20 +23,31 @@
   const classeMarca = (c: TreeEntry['changed']) =>
     c === 'A' ? 'm-A' : c === 'D' ? 'm-D' : c === '?' ? 'm-Q' : 'm-M';
 
-  // Navegação por teclado: ↑/↓ andam entre as linhas, →/← abrem/fecham pasta, Enter escolhe.
-  // Sem estado próprio: o foco DOM é a linha ativa (cada .no é um botão focável).
+  // Roving tabindex: a parada de Tab segue a seleção do pai; as setas movem o foco
+  // (e a parada) sem depender do pai — é só foco, não seleção. Se o pai mudar a
+  // seleção (clique em outra linha, troca de sessão), a parada volta a acompanhá-la.
+  let ativa = $state<string | null>(null);
+  $effect(() => { ativa = selecionado; });
+  const linhaAtiva = $derived(
+    entries.some((e) => e.path === ativa) ? ativa : (entries[0]?.path ?? null),
+  );
+
+  // Navegação por teclado: ↑/↓ andam entre as linhas, →/← abrem/fecham pasta, Enter
+  // faz o mesmo que o clique (pasta alterna, arquivo escolhe).
   function teclado(e: KeyboardEvent) {
     const linhas = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('.no')];
     const i = linhas.indexOf(document.activeElement as HTMLButtonElement);
     const atual = linhas[i]?.dataset.path;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      if (i === -1) linhas[0]?.focus();
-      else linhas[Math.min(i + 1, linhas.length - 1)]?.focus();
+      const alvo = linhas[Math.min(Math.max(i, -1) + 1, linhas.length - 1)];
+      ativa = alvo?.dataset.path ?? null;
+      alvo?.focus();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (i === -1) linhas[linhas.length - 1]?.focus();
-      else linhas[Math.max(i - 1, 0)]?.focus();
+      const alvo = linhas[Math.max(i, 0) - 1];
+      ativa = alvo?.dataset.path ?? null;
+      alvo?.focus();
     } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       const ent = entries.find((en) => en.path === atual);
       if (ent?.is_dir) {
@@ -49,27 +61,30 @@
       const ent = entries.find((en) => en.path === atual);
       if (ent) {
         e.preventDefault();
-        onPick(ent.path);
+        if (ent.is_dir) onToggle(ent.path); else onPick(ent.path);
       }
     }
   }
 </script>
 
 <!-- A árvore: uma linha por entrada, já na ordem que o pai mandar. O clique alterna
-     pasta (onToggle) e escolhe arquivo (onPick), como no mock. -->
-<div class="arvore" role="tree" tabindex="-1" onkeydown={teclado}>
+     pasta (onToggle) e escolhe arquivo (onPick), como no mock; Enter faz o mesmo. -->
+<div class="arvore" role="tree" aria-label={m.arq_aba()} tabindex="-1" onkeydown={teclado}>
   {#each entries as ent (ent.path)}
     <button
+      type="button"
       class="no {ent.is_dir ? 'pasta' : ''} {selecionado === ent.path ? 'sel' : ''}"
       style="padding-left: {BASE + nivel(ent.path) * RECUO}px"
       role="treeitem"
+      aria-level={nivel(ent.path) + 1}
       aria-expanded={ent.is_dir ? (abertos.has(ent.path) ? 'true' : 'false') : undefined}
-      aria-selected={selecionado === ent.path ? 'true' : undefined}
+      aria-selected={selecionado === ent.path ? 'true' : 'false'}
+      tabindex={ent.path === linhaAtiva ? 0 : -1}
       data-path={ent.path}
       onclick={() => (ent.is_dir ? onToggle(ent.path) : onPick(ent.path))}
     >
-      <span class="chev">{ent.is_dir ? (abertos.has(ent.path) ? '▾' : '▸') : ''}</span>
-      <span class="ico">
+      <span class="chev" aria-hidden="true">{ent.is_dir ? (abertos.has(ent.path) ? '▾' : '▸') : ''}</span>
+      <span class="ico" aria-hidden="true">
         {#if ent.is_dir}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         {:else}
