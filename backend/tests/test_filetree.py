@@ -570,6 +570,31 @@ def test_rota_config_malformada_nao_libera_git_dir(monkeypatch, tmp_path, client
     assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
 
 
+def test_rota_alias_cwd_git_dir_config_malformada(monkeypatch, tmp_path, cliente):
+    """Symlink DIRETO para o git-dir como cwd: o fallback por filesystem caminhava o cwd
+    LEXICAL, e um alias fora do diretorio do repo nao tem componente .git no caminho — o
+    guard nao rodava e a config com token vazava (medido no parecer 5ded6dbe). A caminhada
+    comeca pelo cwd RESOLVIDO e recusa igual."""
+    import os
+    from app import api, git_ops
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    d = _repo(repo_dir)
+    git_ops._run(d, "remote", "add", "origin", "https://u:TOKEN@github.com/x/y.git")
+    (repo_dir / ".git" / "config").write_text(
+        "[malformado\n[remote \"origin\"]\n\turl = https://u:TOKEN@github.com/x/y.git\n")
+    os.symlink(repo_dir / ".git", tmp_path / "git-area-alias")
+    h = {"Authorization": "Bearer secret"}
+    monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path / "git-area-alias"))
+    r = cliente.get("/api/sessions/s/files/read", params={"path": "config"}, headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+    assert "TOKEN" not in r.text
+    r = cliente.get("/api/sessions/s/files/list", headers=h)
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "erro_arq_area_do_git"
+
+
 def test_rota_head_probe_timeout_vira_envelope(monkeypatch, tmp_path, cliente):
     """A probe de HEAD levantando GitError NAO pode escapar cru (500 text/plain, medido
     no parecer): vira 504 com envelope, status preservado."""

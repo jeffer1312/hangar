@@ -28,10 +28,14 @@ def _within(child: Path, root: Path) -> bool:
 
 def _git_dir_por_fs(cwd: str) -> Path | None:
     """Fallback conservador quando o git nao responde (config malformada, repo quebrado):
-    caminha do cwd pra cima e so trata como git-dir um diretorio componente chamado `.git`
-    COM os quatro marcadores administrativos (HEAD, config, objects, refs). Pasta ancestral
-    chamada .git sem os marcadores (ex: /tmp/.git que so contem um projeto) nao conta."""
-    atual = Path(cwd)
+    caminha do cwd RESOLVIDO pra cima e so trata como git-dir um diretorio componente
+    chamado `.git` COM os quatro marcadores administrativos (HEAD, config, objects, refs).
+    Pasta ancestral chamada .git sem os marcadores (ex: /tmp/.git que so contem um projeto)
+    nao conta. O realpath no comeco e obrigatorio: um cwd que seja SYMLINK DIRETO para o
+    git-dir (git-area-alias -> /repo/.git) nao tem componente .git no caminho lexical, e a
+    caminhada lexical devolvia None — o guard nao rodava e a config vazava (medido no
+    parecer 5ded6dbe)."""
+    atual = Path(os.path.realpath(cwd))
     while True:
         for cand in (atual, atual / ".git"):
             if cand.name == ".git" and (cand / "HEAD").is_file() and (cand / "config").is_file() \
