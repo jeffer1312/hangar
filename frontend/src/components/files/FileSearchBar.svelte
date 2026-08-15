@@ -15,28 +15,51 @@
 
   let { q, mode, onBusca }: Props = $props();
 
-  // O input é controlado pela prop q — o Svelte só reescreve `value` quando q muda de
-  // verdade, então a digitação vive no DOM entre renders. Os handlers leem o evento.
+  // Rascunho do campo: começa em q e acompanha as mudanças externas da prop (troca de
+  // sessão, limpeza). A digitação vive aqui — o clique de aba usa ELE, nunca a prop q,
+  // que pode não ter ecoado o que o usuário ainda está vendo.
+  // A inicialização via onMount (e a guarda no $effect) evita o warning do svelte-check
+  // de "referência captura só o valor inicial" e o reset no primeiro flush.
+  // Rascunho do campo: começa em q e acompanha as mudanças externas da prop (troca de
+  // sessão, limpeza). A digitação vive aqui — o clique de aba usa ELE, nunca a prop q,
+  // que pode não ter ecoado o que o usuário ainda está vendo.
+  // svelte-ignore state_referenced_locally — captura intencional do valor inicial de q;
+  // as mudanças posteriores da prop são sincronizadas pela guarda no $effect abaixo.
+  let texto = $state(q);
+  // svelte-ignore state_referenced_locally — idem: qAnterior guarda a última prop vista.
+  let qAnterior = q;
+  $effect(() => {
+    if (q !== qAnterior) {
+      // q mudou por fora: o debounce pendente é da sessão anterior — cancela e sincroniza.
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      texto = q;
+      qAnterior = q;
+    }
+  });
+
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   function digitar(e: Event) {
-    const v = (e.currentTarget as HTMLInputElement).value;
+    texto = (e.currentTarget as HTMLInputElement).value;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      onBusca(v, mode);
+      onBusca(texto, mode);
     }, 250);
   }
 
   function escolherModo(novo: ModoBusca) {
     if (novo === mode) return;
-    // O clique descarta a digitação pendente e busca já no modo novo, com o termo
-    // oficial (a prop q — o store é o dono do estado de busca).
+    // O clique descarta a digitação pendente e busca já no modo novo, com o termo que o
+    // usuário está vendo (o rascunho), em vez de buscar duas vezes.
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
-    onBusca(q, novo);
+    onBusca(texto, novo);
   }
 
   onDestroy(() => {
@@ -48,17 +71,17 @@
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
   <input
     type="text"
-    value={q}
+    value={texto}
     placeholder={m.arq_buscar()}
     aria-label={m.arq_buscar()}
     oninput={digitar}
   />
 </div>
 <div class="seg" role="group" aria-label={m.arq_buscar()}>
-  <button class:sel={mode === 'names'} aria-pressed={mode === 'names'} onclick={() => escolherModo('names')}>
+  <button type="button" class:sel={mode === 'names'} aria-pressed={mode === 'names'} onclick={() => escolherModo('names')}>
     {m.arq_modo_nomes()}
   </button>
-  <button class:sel={mode === 'contents'} aria-pressed={mode === 'contents'} onclick={() => escolherModo('contents')}>
+  <button type="button" class:sel={mode === 'contents'} aria-pressed={mode === 'contents'} onclick={() => escolherModo('contents')}>
     {m.arq_modo_conteudo()}
   </button>
 </div>
@@ -74,6 +97,10 @@
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
     padding: 6px 8px;
+  }
+  .busca:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-dim);
   }
   .busca svg {
     width: 13px;
@@ -119,5 +146,9 @@
   .seg button.sel {
     background: var(--surface-raised);
     color: var(--text-primary);
+  }
+  .seg button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 </style>
