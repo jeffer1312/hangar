@@ -3,105 +3,138 @@
 // UMA sessao (nome fixo no construtor) — quem mantem a instancia viva (o painel de contexto da
 // sessao) e quem preserva as pastas abertas entre trocas de tela.
 import { listFiles, readFile, searchFiles, pathDiff } from './api';
-import { formataErro } from './errosApi';
+import { cleanErr } from './gitStore.svelte';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import type { FileContent, PathDiff, SearchHit, TreeEntry } from './types';
 
 export class FilesStore {
-  /** Pastas expandidas na arvore (caminho absoluto dentro do repo). */
-  abertos = $state<Set<string>>(new Set());
-  /** Arquivo selecionado na arvore (caminho absoluto). */
+  // Pastas expandidas na arvore (caminho absoluto dentro do repo). SvelteSet, nao Set: `$state`
+  // so faz proxy de objeto simples e array (svelte/internal/client/proxy.js), entao `.add`/
+  // `.delete` num Set cru nao repintariam a arvore.
+  abertos = new SvelteSet<string>();
+  // Arquivo selecionado na arvore (caminho absoluto).
   selecionado = $state<string | null>(null);
-  /** Conteudo do diretorio sendo exibido ('' = raiz). */
-  entries = $state<TreeEntry[]>([]);
-  /** Conteudo do arquivo selecionado (nulo antes da primeira abertura). */
+  // Conteudo do arquivo selecionado (nulo antes da primeira abertura).
   conteudo = $state<FileContent | null>(null);
-  /** Diff do arquivo selecionado no escopo atual. */
+  // Diff do arquivo selecionado no escopo atual (nulo quando o diff falha — fora de repo git).
   diff = $state<PathDiff | null>(null);
-  /** Escopo do diff: desde a base da branch (soma dos turnos) ou so o nao-commitado. */
+  // Escopo do diff: desde a base da branch (soma dos turnos) ou so o nao-commitado.
   escopo = $state<'branch' | 'nao_commitado'>('branch');
-  /** Achados da ultima busca; no modo `names`, line e text vem null. */
+  // Achados da ultima busca; no modo `names`, line e text vem null.
   resultados = $state<SearchHit[]>([]);
-  /** Erro legivel da ultima operacao (nulo quando a operacao foi limpa). */
+  // Erro legivel da ultima operacao (nulo quando a operacao foi limpa).
   erro = $state<string | null>(null);
-  /** Listar so arquivos modificados (a arvore inteira quando false). */
+  // Listar so arquivos modificados (a arvore inteira quando false).
   soModificados = $state(true);
+  // O backend cortou a listagem em 1000 entradas (filetree.MAX_ENTRADAS).
+  listaCortada = $state(false);
+  // O backend cortou os achados em 200 (filesearch.MAX_HITS).
+  buscaCortada = $state(false);
 
-  // Contador de pedido: cada chamada guarda o numero dela e ao voltar so pinta se ainda for a
-  // mais recente. Sem isto, uma resposta atrasada de um alvo abandonado pintaria por cima.
-  private geracao = 0;
-  /** Diretorio listado em `entries` ('' = raiz) — o que `recarregar()` re-lista. */
-  private dirAtual = '';
+  // Um contador POR ALVO: `abrir`, `buscar` e `_listar` pintam campos diferentes e nao podem
+  // cancelar uns aos outros. Contador unico descartava o arquivo que estava abrindo assim que
+  // qualquer outra operacao comecasse. O de lista e POR PASTA: `recarregar()` re-lista varias
+  // pastas em paralelo e uma nao pode cancelar a outra.
+  private gArquivo = 0;
+  private gBusca = 0;
+  private gLista = new Map<string, number>();
+
+  // Conteudo de cada pasta ja listada ('' = raiz). A arvore mostra varias pastas abertas ao
+  // mesmo tempo (docs/mocks/2026-08-15-arvore/arvore.js), entao um diretorio de cada vez nao
+  // serve.
+  private porPasta = new SvelteMap<string, TreeEntry[]>();
+
   private readonly sessao: string;
 
   constructor(sessao: string) {
     this.sessao = sessao;
   }
 
-  /** Abre um arquivo: pinta conteudo + diff (no escopo atual) quando a resposta voltar. */
+  // A arvore achatada: a raiz e, logo depois de cada pasta aberta, os filhos dela.
+  get entries(): TreeEntry[] {
+    const saida: TreeEntry[] = [];
+    const empilha = (dir: string) => {
+      for (const e of this.porPasta.get(dir) ?? []) {
+        saida.push(e);
+        if (e.is_dir && this.abertos.has(e.path)) empilha(e.path);
+      }
+    };
+    empilha('');
+    return saida;
+  }
+
+  // Abre um arquivo: pinta conteudo + diff (no escopo atual) quando a resposta voltar.
   async abrir(path: string) {
     this.selecionado = path;
     this.erro = null;
-    const g = ++this.geracao;
-    try {
-      const [c, d] = await Promise.all([
-        readFile(this.sessao, path),
-        pathDiff(this.sessao, path, this.escopo),
-      ]);
-      if (g !== this.geracao) return; // um pedido mais novo ja tomou o lugar
-      this.conteudo = c;
-      this.diff = d;
-    } catch (e) {
-      if (g === this.geracao) this.erro = formataErro(e) ?? String(e);
+    const g = ++this.gArquivo;
+    // allSettled, nao all: o conteudo MANDA. Fora de repositorio git o path_diff sempre responde
+    // 409 (git_ops.py) e a arvore tem que continuar lendo arquivo (regra do usuario, 15/08).
+    const [c, d] = await Promise.allSettled([
+      readFile(this.sessao, path),
+      pathDiff(this.sessao, path, this.escopo),
+    ]);
+    if (g !== this.gArquivo) return; // uma abertura mais nova ja tomou o lugar
+    if (c.status === 'rejected') {
+      // Falha ao abrir nao pode deixar o conteudo do arquivo anterior na tela sob o nome novo.
+      this.conteudo = null;
+      this.diff = null;
+      this.erro = cleanErr(c.reason);
+      return;
     }
+    this.conteudo = c.value;
+    // Diff que falha NAO derruba a leitura: fora de repositorio git o path_diff responde 409 e
+    // a arvore tem que continuar lendo arquivo. `diff = null` e o estado de "sem alteracao".
+    this.diff = d.status === 'fulfilled' ? d.value : null;
   }
 
-  /** Expande/colapsa uma pasta; ao expandir, lista o conteudo dela no `entries`. */
+  // Expande/colapsa uma pasta; ao expandir, lista o conteudo dela (uma vez so).
   async alternarPasta(path: string) {
     if (this.abertos.has(path)) {
-      this.abertos.delete(path);
-      this.dirAtual = '';
-      await this._listar(''); // colapsou: a arvore volta a mostrar a raiz
+      this.abertos.delete(path); // colapsar nao re-lista nem volta pra raiz
       return;
     }
     this.abertos.add(path);
-    this.dirAtual = path;
-    await this._listar(path);
+    if (!this.porPasta.has(path)) await this._listar(path);
   }
 
-  /** Busca por nome ou conteudo; os achados vao para `resultados`. */
+  // Busca por nome ou conteudo; os achados vao para `resultados`.
   async buscar(q: string, mode: 'names' | 'contents') {
     this.erro = null;
-    const g = ++this.geracao;
+    const g = ++this.gBusca;
     try {
       const r = await searchFiles(this.sessao, q, mode);
-      if (g !== this.geracao) return;
+      if (g !== this.gBusca) return;
       this.resultados = r.hits;
+      this.buscaCortada = r.truncated;
     } catch (e) {
-      if (g === this.geracao) this.erro = formataErro(e) ?? String(e);
+      if (g === this.gBusca) this.erro = cleanErr(e);
     }
   }
 
-  /** Re-lista o diretorio atual com o filtro `soModificados` de agora. */
+  // Re-lista a raiz e todas as pastas abertas, com o filtro `soModificados` de agora.
   async recarregar() {
-    await this._listar(this.dirAtual);
+    await Promise.all(['', ...this.abertos].map((p) => this._listar(p)));
   }
 
-  /** Troca o escopo do diff (select de value 'branch' | 'nao_commitado') e reabre o selecionado. */
-  async trocarEscopo(e: Event) {
-    const v = (e.target as HTMLSelectElement).value;
-    if (v !== 'branch' && v !== 'nao_commitado') return;
-    this.escopo = v;
+  // Troca o escopo do diff e reabre o arquivo selecionado. Quem le o controle da tela e o
+  // componente — o store nao depende de DOM (o seletor da barra e um botao, nao um <select>).
+  async trocarEscopo(escopo: 'branch' | 'nao_commitado') {
+    if (escopo === this.escopo) return;
+    this.escopo = escopo;
     if (this.selecionado) await this.abrir(this.selecionado);
   }
 
   private async _listar(path: string) {
-    const g = ++this.geracao;
+    const g = (this.gLista.get(path) ?? 0) + 1;
+    this.gLista.set(path, g);
     try {
       const r = await listFiles(this.sessao, path || undefined, this.soModificados);
-      if (g !== this.geracao) return;
-      this.entries = r.entries;
+      if (g !== this.gLista.get(path)) return;
+      this.porPasta.set(path, r.entries);
+      this.listaCortada = r.truncated;
     } catch (e) {
-      if (g === this.geracao) this.erro = formataErro(e) ?? String(e);
+      if (g === this.gLista.get(path)) this.erro = cleanErr(e);
     }
   }
 }
