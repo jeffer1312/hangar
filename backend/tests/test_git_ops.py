@@ -572,3 +572,86 @@ def test_git_log_corpo_com_separador_nao_trunca(tmp_path):
     git_ops._run(d, "commit", "-q", "-m", "assunto", "-m", "antes\x1fdepois")
     body = git_ops.git_log(d)[0]["body"]
     assert "antes" in body and "depois" in body
+
+
+def _repo_com_upstream(tmp_path):
+    """Clone de um repo NORMAL que ja tem commit.
+
+    Medido em 15/08/2026: clonar um `--bare` VAZIO nao serve — nao existe `origin/HEAD` nem
+    `@{upstream}`, e `_base_da_branch` devolveria None, fazendo o escopo cair pra
+    "nao_commitado" e contradizendo o proprio teste. Com um repo de origem que ja tem commit,
+    a branch clonada tem upstream; depois de `checkout -b`, a branch nova NAO tem — e e o
+    fallback `origin/HEAD` que responde, que e justamente o caminho a exercitar.
+    """
+    origem = tmp_path / "origem"
+    origem.mkdir()
+    o = str(origem)
+    git_ops._run(o, "init", "-q", ".")
+    git_ops._run(o, "config", "user.email", "t@t")
+    git_ops._run(o, "config", "user.name", "t")
+    (origem / "a.txt").write_text("um\n")
+    git_ops._run(o, "add", "a.txt")
+    git_ops._run(o, "commit", "-q", "-m", "um")
+
+    git_ops._run(str(tmp_path), "clone", "-q", "origem", "trab")
+    trab = tmp_path / "trab"
+    d = str(trab)
+    git_ops._run(d, "config", "user.email", "t@t")
+    git_ops._run(d, "config", "user.name", "t")
+    return d, trab / "a.txt"
+
+
+def test_escopo_branch_soma_commits_e_disco(tmp_path):
+    d, f = _repo_com_upstream(tmp_path)
+    git_ops._run(d, "checkout", "-q", "-b", "trabalho")
+    f.write_text("um\ndois\n")
+    git_ops._run(d, "add", "a.txt")
+    git_ops._run(d, "commit", "-q", "-m", "dois")
+    f.write_text("um\ndois\ntres\n")                 # nao commitado
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_usado"] == "branch"
+    assert "dois" in r["diff"] and "tres" in r["diff"]
+    so_disco = git_ops.path_diff(d, "a.txt", "nao_commitado")
+    assert "tres" in so_disco["diff"] and "+dois" not in so_disco["diff"]
+
+
+def test_branch_sem_commit_proprio_cai_e_diz(tmp_path):
+    d, f = _repo_com_upstream(tmp_path)
+    f.write_text("um\nmexido\n")
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_pedido"] == "branch"
+    assert r["escopo_usado"] == "nao_commitado"
+    assert r["motivo"]
+
+
+def test_repo_sem_commit_nao_estoura(tmp_path):
+    d = str(tmp_path)
+    git_ops._run(d, "init", "-q", ".")
+    (tmp_path / "novo.txt").write_text("x\n")
+    r = git_ops.path_diff(d, "novo.txt", "branch")
+    assert r["escopo_usado"] == "nao_commitado"
+
+
+def test_arquivo_novo_aparece_no_diff(tmp_path):
+    """`git diff` NAO mostra untracked. Sem isto, clicar num arquivo recem-criado pela sessao
+    abre um diff VAZIO — que e o caso mais comum de todos, porque a sessao acabou de criar o
+    arquivo. `file_diff` ja resolve com `--no-index` (git_ops.py:338); `path_diff` precisa do
+    mesmo tratamento."""
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "trab" / "novinho.txt").write_text("linha nova\n")
+    r = git_ops.path_diff(d, "novinho.txt", "nao_commitado")
+    assert "linha nova" in r["diff"]
+
+
+def test_path_com_traco_recusado(tmp_path):
+    d, _f = _repo_com_upstream(tmp_path)
+    with pytest.raises(GitError):
+        git_ops.path_diff(d, "--output=/tmp/x", "nao_commitado")
+
+
+def test_file_diff_mantem_o_formato_do_git_changes_tab(tmp_path):
+    d, f = _repo_with_file(tmp_path)
+    f.write_text("linha modificada\n")
+    r = git_ops.file_diff(d, "tracked.txt")
+    assert set(r) >= {"path", "diff"}          # o que o front ja lia
+    assert r["truncated"] is False             # o campo novo

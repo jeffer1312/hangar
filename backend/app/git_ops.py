@@ -348,7 +348,8 @@ def file_diff(cwd: str, path: str) -> dict:
     # git diff sai 1 quando HA diferenca (normal) -> so 128+ e erro real (path invalido, etc)
     if p.returncode >= 128:
         raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
-    return {"path": path, "diff": p.stdout}
+    texto, cortou = _cap(p.stdout)
+    return {"path": path, "diff": texto, "truncated": cortou}
 
 
 def discard_file(cwd: str, path: str) -> dict:
@@ -404,6 +405,60 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
     if p.returncode >= 128:
         raise GitError(409, (p.stderr or "git show falhou").strip() or "git show falhou")
     return {"path": path, "diff": p.stdout}
+
+
+def _base_da_branch(cwd: str) -> str | None:
+    """Onde esta branch nasceu. None quando nao da pra saber (sem upstream, sem origin/HEAD,
+    repo sem commit, HEAD solto) — o chamador decide o que fazer, e DIZ."""
+    p = _run(cwd, "rev-parse", "--verify", "-q", "HEAD")
+    if p.returncode != 0:                                  # repo sem nenhum commit
+        return None
+    for ref in ("@{upstream}", "origin/HEAD"):
+        b = _run(cwd, "merge-base", "HEAD", ref)
+        if b.returncode == 0 and b.stdout.strip():
+            return b.stdout.strip()
+    return None
+
+
+def path_diff(cwd: str, path: str, escopo: str) -> dict:
+    """Diff de UM arquivo. escopo="branch" soma desde onde a branch nasceu ate o disco agora."""
+    if escopo not in ("branch", "nao_commitado"):
+        raise GitError(400, "escopo invalido")
+    if path.startswith("-"):
+        raise GitError(400, "caminho invalido")
+
+    usado, base, motivo = escopo, None, None
+    if escopo == "branch":
+        base = _base_da_branch(cwd)
+        cabeca = _run(cwd, "rev-parse", "HEAD")
+        atual = cabeca.stdout.strip() if cabeca.returncode == 0 else None
+        if base is None:
+            usado, motivo = "nao_commitado", "esta branch nao tem base conhecida"
+        elif base == atual:
+            usado, base, motivo = "nao_commitado", None, "esta branch nao tem commit proprio"
+
+    # Arquivo ainda nao rastreado nao aparece em `git diff` — e e o caso MAIS comum aqui, porque
+    # a sessao acabou de criar o arquivo. Mesmo tratamento que file_diff ja da (git_ops.py:338).
+    untracked = any(c["path"] == path and c["code"] == "??" for c in changed_files(cwd))
+    if untracked:
+        p = _run(cwd, "-c", "core.quotePath=false", "diff", "--no-index", "/dev/null", path)
+        texto, cortou = _cap(p.stdout)      # --no-index sai com 1 quando ha diferenca: normal
+        return {"path": path, "diff": texto, "truncated": cortou,
+                "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
+
+    args = ["-c", "core.quotePath=false", "diff"]
+    if usado == "branch":
+        args.append(base)
+    elif _run(cwd, "rev-parse", "--verify", "-q", "HEAD").returncode == 0:
+        args.append("HEAD")                                # sem commit nenhum, diff sem ref
+    args += ["--", path]
+
+    p = _run(cwd, *args)
+    if p.returncode != 0:
+        raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
+    texto, cortou = _cap(p.stdout)
+    return {"path": path, "diff": texto, "truncated": cortou,
+            "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
 
 
 # Teto do diff do commit inteiro. O diff POR ARQUIVO e seguro por construcao; o do commit inteiro
