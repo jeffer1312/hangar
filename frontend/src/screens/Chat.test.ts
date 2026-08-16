@@ -12,6 +12,8 @@ import { chamadasFocus } from './ComposerStub.svelte';
 import { filesStores } from '../lib/filesStore.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
+import GitTabs from '../components/git/GitTabs.svelte';
+import { createGitStore } from '../lib/gitStore.svelte';
 
 // Stub de componente Svelte 5: createRawSnippet é o padrão do DesktopShell.test.ts — uma classe
 // com $destroy (padrão Svelte 4) quebra no mount do Svelte 5 com "cannot be invoked without new".
@@ -67,6 +69,17 @@ vi.mock('../lib/api', () => ({
     readyState: 0,
     addEventListener: (tipo: string, h: (e: MessageEvent) => void) => { sseCtl.handlers.set(tipo, h); },
   })),
+  // o teste integrado do B1 (rodada 5) monta o GitTabs real: as funcoes do FilesPanel
+  listFiles: vi.fn(async () => ({
+    entries: [{ name: 'a.txt', path: 'a.txt', is_dir: false, size: 1, changed: null, add: 0, del: 0 }],
+    truncated: false,
+  })),
+  readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false })),
+  searchFiles: vi.fn(async () => ({ hits: [], truncated: false, mode: 'names' })),
+  pathDiff: vi.fn(async () => ({
+    path: 'a.txt', diff: '', truncated: false,
+    escopo_pedido: 'branch', escopo_usado: 'branch', base: null, motivo: null,
+  })),
   getSessions: vi.fn(async () => []),
   getRunners: vi.fn(async () => ({ running: false })),
   getPlan: vi.fn(async () => null),
@@ -120,6 +133,11 @@ beforeEach(() => {
   ctxPanel.recolhido = false;   // vive no módulo e persiste entre testes
   ctxPanel.aba = 'contexto';
   document.body.innerHTML = '';
+  // o registry do FilesStore vive no modulo e persiste entre testes: zera a selecao da chave
+  // usada (o GitTabs e o Chat compartilham serverId::sessionName nos testes integrados)
+  const s = filesStores.retain('srv-test::sess', 'sess');
+  s.selecionado = null;
+  filesStores.release('srv-test::sess');
 });
 
 // Stub do matchMedia com ouvintes controlados na mao (ver nota no describe do visor).
@@ -264,6 +282,49 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     await tick();
     await tick();
     expect(store.selecionado).toBe('a.ts');   // nada limpou no meio
+    unmount(t.comp);
+  });
+
+  // Parecer rodada 5, B1: Git aberto com contexto oculto + resize largo->estreito — o Chat
+  // compartilha o MESMO FilesStore e nao pode roubar a selecao nem o foco do modal (o visor do
+  // Git sobrevive por abridorPath, e o foco tem que ficar DENTRO do .sheet, nao no Composer
+  // atras).
+  it('resize com Git aberto e contexto oculto nao rouba selecao nem foco do modal', async () => {
+    ctxPanel.recolhido = true;   // contexto oculto: filesInContext false, o Git tem a aba
+    const t = montar();          // Chat a 1440 (beforeEach liga o breakpoint largo)
+    await tick();
+    await tick();
+    // GitTabs na MESMA chave do Chat, como a Sidebar (filesInContext=false)
+    const git = createGitStore('sess');
+    const gEl = document.createElement('div');
+    document.body.appendChild(gEl);
+    const gComp = mount(GitTabs, {
+      target: gEl,
+      props: { git, desktop: true, filesInContext: false, onClose: vi.fn() },
+    });
+    await tick();
+    await tick();
+    [...gEl.querySelectorAll('[role=tab]')].find((x) => x.textContent === 'Files')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await tick();
+    await tick();
+    await vi.waitFor(() => expect(gEl.querySelector('.files-panel .arvore .no')).not.toBeNull());
+    (gEl.querySelector('.files-panel .arvore .no') as HTMLElement | null)
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await tick();
+    await tick();
+    await tick();
+    expect(gEl.querySelector('.visor')).not.toBeNull();   // visor do Git aberto
+    // resize para 1024 (transicao largo->estreito)
+    mq.set('(min-width: 1280px)', false);
+    await tick();
+    await tick();
+    await tick();
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    expect(store.selecionado).toBe('a.txt');              // o Chat nao limpou a selecao do Git
+    expect(gEl.querySelector('.visor')).not.toBeNull();   // o visor continua
+    expect(gEl.contains(document.activeElement)).toBe(true);   // foco dentro do modal
+    unmount(gComp as never);
     unmount(t.comp);
   });
 });

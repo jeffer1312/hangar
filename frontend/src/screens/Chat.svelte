@@ -158,8 +158,10 @@
   // ao elemento que abriu — depois do tick, quando o visor já desmontou. O alvo so recebe o
   // foco se AINDA estiver conectado e visivel: no resize para <1280px o abridor (treeitem do
   // painel) esta display:none junto com o painel, e focar elemento oculto devolve o foco pro
-  // body em vez de "devolver" (B5, rodada 4).
+  // body em vez de "devolver" (B5, rodada 4). O visor fechou: a marca de ownership morre (B1,
+  // rodada 5) — uma transicao de resize posterior nao pode limpar nada em nome deste visor.
   function fecharVisor() {
+    chatVisorEsteveAberto = false;
     const alvo = abridorEl;
     filesStore.selecionado = null;
     abridorEl = null;
@@ -173,27 +175,31 @@
   // inerte com o arquivo invisivel. Limpa a selecao (voltar a largo monta o visor so com nova
   // selecao) e devolve o foco a um controle vivo do Chat: o Fechar do visor acabou de ser
   // escondido junto, e o abridor (treeitem do painel, display:none) tambem.
-  // O guard de TRANSICAO (B2, Task 12): este Chat e o GitTabs do desktop estreito compartilham
-  // o MESMO FilesStore — sem ele, abrir um arquivo pelo Git a 1024px era limpo no mesmo flush
-  // por este effect (janela ja estreita, selecao nao-nula). A limpeza so vale quando o visor
-  // do Chat REALMENTE esteve aberto: a janela passou de larga para estreita NESTA montagem
-  // (eraLargo). Montagem ja estreita = qualquer selecao e de outro host — nao limpar.
+  // O guard de OWNERSHIP (B1/B2, Task 12): este Chat e o GitTabs do desktop sem contexto
+  // compartilham o MESMO FilesStore. A limpeza so vale quando o visor era DO CHAT — a marca
+  // chatVisorEsteveAberto e capturada no listener do matchMedia (transicao real, antes do
+  // flush). Montagem ja estreita ou visor do Git: a marca fica false, nada e limpo e o foco
+  // nao sai do modal.
   // O foco so pode ir DEPOIS do flush: o inert do underlay sai junto com a limpeza da selecao
   // acima, e focar sob inert e no-op (bloqueado no navegador e no happy-dom). Sessao morta nao
   // tem Composer (o bottom-dock vira o .dead-footer com o botao voltar) — o alvo cai no botao
   // que o usuario VE (B5, rodada 4).
-  let chatJaEsteveLargo = $state(false);
+  let chatVisorEsteveAberto = $state(false);
   $effect(() => {
-    if (!desktop) return;
-    if (isDesktopLargo) { chatJaEsteveLargo = true; return; }
-    if (!chatJaEsteveLargo) return;   // nunca houve transicao largo->estreito nesta montagem
-    chatJaEsteveLargo = false;        // consome a transicao: limpa UMA vez, nao toda selecao
+    if (!desktop || isDesktopLargo) return;
+    if (!chatVisorEsteveAberto) return;   // o visor nao era do Chat (Git, ou montagem estreita)
+    chatVisorEsteveAberto = false;        // consome a transicao: limpa UMA vez, nao toda selecao
     if (filesStore.selecionado === null) return;
     fecharVisor();
     void tick().then(() => {
       if (composerRef) composerRef.focus();
       else screenEl?.querySelector<HTMLElement>('.dead-footer .back-btn')?.focus();
     });
+  });
+  // O visor do Chat desmontou sem transicao (fechou, ou o contexto recolheu): a marca morre —
+  // declarado DEPOIS do effect de transicao para nao competir com ele no mesmo flush.
+  $effect(() => {
+    if (!visorAberto) chatVisorEsteveAberto = false;
   });
 
   // Cache de prompt: o ULTIMO turno do assistente manda. Usar a cache renova o prazo, entao a
@@ -296,7 +302,15 @@
     const on = () => (isWide = mq.matches);
     mq.addEventListener('change', on);
     const mqLargo = window.matchMedia('(min-width: 1280px)');
-    const onLargo = () => (isDesktopLargo = mqLargo.matches);
+    const onLargo = () => {
+      // Ownership do visor do Chat (B1, rodada 5): o listener roda ANTES do flush do svelte —
+      // o visorAberto ainda e o valor LARGO aqui. O Git do desktop sem contexto compartilha o
+      // MESMO FilesStore; sem a marca, a transicao largo->estreito limparia a selecao do Git e
+      // focaria o Composer atras do modal aberto. So o visor DO CHAT (filesInContext com
+      // selecao) captura a marca.
+      if (!mqLargo.matches && visorAberto) chatVisorEsteveAberto = true;
+      isDesktopLargo = mqLargo.matches;
+    };
     mqLargo.addEventListener('change', onLargo);
     return () => {
       mq.removeEventListener('change', on);
