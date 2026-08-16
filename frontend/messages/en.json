@@ -1,5 +1,6 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
+  "arq_meta_arquivo_um": "{tam} · 1 line",
   "config_geral_titulo": "General",
   "config_geral_linha": "Geral · General",
   "config_idioma_rotulo": "Idioma · Language",
@@ -8,6 +9,7 @@
   "config_idioma_pt": "Português",
   "config_idioma_en": "English",
   "config_idioma_nota_reload": "Switching the language reloads the app.",
+  "ctx_aba_contexto": "Context",
   "tempo_agora": "now",
   "tempo_min_atras": "{n}m ago",
   "tempo_h_atras": "{n}h ago",

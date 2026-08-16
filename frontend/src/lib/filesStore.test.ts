@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SvelteSet } from 'svelte/reactivity';
+import * as m from '../paraglide/messages';
 import { listFiles, readFile, searchFiles, pathDiff } from './api';
 import { FilesStore } from './filesStore.svelte';
 import type { TreeEntry } from './types';
@@ -136,5 +137,69 @@ describe('FilesStore', () => {
     expect(s.listaCortada).toBe(true); // hoje vira false
     await s.buscar('x', 'names');
     expect(s.buscaCortada).toBe(true);
+  });
+
+  // Task 10, poda (medido no parecer): pasta que sumiu do disco deixa o aviso de corte ligado
+  // com a arvore vazia. O 404 do filetree e o sinal — poda abertos/cortePorPasta/porPasta e
+  // nao mostra erro: a pasta sumiu, a arvore correta e a que fica.
+  it('pasta que sumiu do disco e podada da arvore, sem aviso de corte nem erro', async () => {
+    // 1) a pasta abre e o conteudo dela corta: o aviso de corte dela acende
+    vi.mocked(listFiles).mockImplementation(async (_s, path) => {
+      if (path === undefined) return { entries: [ent('src', true)], truncated: false };
+      if (path === 'src') return { entries: [ent('src/x.ts', false)], truncated: true };
+      return { entries: [], truncated: false };
+    });
+    const s = new FilesStore('sessao');
+    await s.recarregar();
+    await s.alternarPasta('src');
+    expect(s.abertos.has('src')).toBe(true);
+    expect(s.listaCortada).toBe(true);
+    // 2) a pasta some do disco: o recarregar re-lista e recebe 404 — poda
+    vi.mocked(listFiles).mockImplementation(async (_s, path) => {
+      if (path === undefined) return { entries: [ent('src', true)], truncated: false };
+      if (path === 'src') throw Object.assign(new Error('404: caminho nao existe'), { status: 404 });
+      return { entries: [], truncated: false };
+    });
+    await s.recarregar();
+    expect(s.abertos.has('src')).toBe(false);
+    expect(s.listaCortada).toBe(false);     // o aviso de corte morreu junto com a pasta
+    expect(s.erro).toBeNull();
+  });
+
+  // 404 na RAIZ nao e pasta sumida — e o cwd da sessao que morreu (ou a sessao encerrou):
+  // vira aviso visivel, nao poda silenciosa.
+  it('404 na raiz vira o aviso de sessao encerrada', async () => {
+    vi.mocked(listFiles).mockRejectedValueOnce(
+      Object.assign(new Error('404: sessao nao encontrada'), { status: 404 }));
+    const s = new FilesStore('sessao');
+    await s.recarregar();
+    expect(s.erro).toBe(m.arq_sessao_encerrada());
+  });
+
+  // Task 10 (medido ao vivo com um binario): abrir que FALHA desmarca o arquivo — com
+  // selecionado marcado e conteudo/diff nulos, o FileViewer cairia no "sem diferencas" sobre
+  // um arquivo que nem abriu (o erro sumia no recarregar e a tela mentia).
+  it('abrir que falha desmarca o arquivo e limpa o loading', async () => {
+    vi.mocked(readFile).mockRejectedValue(
+      Object.assign(new Error('Arquivo binário — não dá pra mostrar aqui.'), { status: 415 }));
+    const s = new FilesStore('sessao');
+    await s.abrir('foto.png');
+    expect(s.selecionado).toBeNull();
+    expect(s.loading).toBe(false);
+    expect(s.erro).toContain('binário');
+  });
+
+  // Task 10, contrato 2: `loading` fica ligado entre o clique e a resposta — sem o sinal, o
+  // FileViewer nao tem como saber que nao pode afirmar "sem diferencas".
+  it('loading fica ligado durante a abertura e desliga no fim', async () => {
+    let libera: (v: unknown) => void = () => {};
+    vi.mocked(readFile).mockImplementationOnce(() => new Promise((r) => (libera = r)) as never);
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'a.txt', diff: '', truncated: false } as never);
+    const s = new FilesStore('sessao');
+    const p = s.abrir('a.txt');
+    expect(s.loading).toBe(true);
+    libera({ path: 'a.txt', text: 'A', size: 1, truncated: false });
+    await p;
+    expect(s.loading).toBe(false);
   });
 });

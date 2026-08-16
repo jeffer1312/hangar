@@ -1,7 +1,12 @@
 // Estado + acoes da aba Arquivos (FileTree/FileViewer/FileSearchBar): lista, le, busca e diff de
 // arquivos do repo da sessao. .svelte.ts permite runes fora de componente. Uma instancia serve
-// UMA sessao (nome fixo no construtor) — quem mantem a instancia viva (o painel de contexto da
-// sessao) e quem preserva as pastas abertas entre trocas de tela.
+// UMA sessao (nome fixo no construtor) — quem mantem a instancia viva e o registry abaixo, que
+// vive no MODULO: o App remonta o Chat por {#key} a cada troca de sessao (App.svelte:462), e um
+// store criado no mount do componente morreria junto com as pastas abertas. O precedente e o
+// sessionsStore (singleton com retain/release); o Git.svelte cria o store no componente e o
+// $effect o RECRIA quando a sessao muda — o padrao contrario, que faz a regua "pasta aberta
+// continua aberta ao voltar" falhar sem erro nenhum.
+import * as m from '../paraglide/messages';
 import { listFiles, readFile, searchFiles, pathDiff } from './api';
 import { cleanErr } from './gitStore.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -28,6 +33,11 @@ export class FilesStore {
   soModificados = $state(true);
   // O backend cortou os achados em 200 (filesearch.MAX_HITS). Uma resposta so, sem paralelismo.
   buscaCortada = $state(false);
+
+  // Abrir em voo (verdadeiro entre o clique e a resposta). O FileViewer precisa saber que NAO
+  // pode afirmar "sem diferencas" enquanto o diff nao chegou — sem o sinal, a janela cai no
+  // {:else} e a tela mente sobre arquivo que tem diff.
+  loading = $state(false);
 
   // Um contador POR ALVO: `abrir`, `buscar` e `_listar` pintam campos diferentes e nao podem
   // cancelar uns aos outros. Contador unico descartava o arquivo que estava abrindo assim que
@@ -79,6 +89,7 @@ export class FilesStore {
   async abrir(path: string) {
     this.selecionado = path;
     this.erro = null;
+    this.loading = true;
     const g = ++this.gArquivo;
     // allSettled, nao all: o conteudo MANDA. Fora de repositorio git o path_diff sempre responde
     // 409 (git_ops.py) e a arvore tem que continuar lendo arquivo (regra do usuario, 15/08).
@@ -87,10 +98,16 @@ export class FilesStore {
       pathDiff(this.sessao, path, this.escopo),
     ]);
     if (g !== this.gArquivo) return; // uma abertura mais nova ja tomou o lugar
+    this.loading = false;
     if (c.status === 'rejected') {
       // Falha ao abrir nao pode deixar o conteudo do arquivo anterior na tela sob o nome novo.
       this.conteudo = null;
       this.diff = null;
+      // Nem o nome do arquivo que falhou: com selecionado marcado e conteudo/diff nulos, o
+      // FileViewer cairia no "sem diferencas" — mentira sobre um arquivo que nem abriu (medido
+      // ao vivo com um binario: o erro sumia no recarregar e a tela afirmava que o png nao tem
+      // diff). Sem selecao, o painel mostra o aviso de erro e a arvore continua navegavel.
+      this.selecionado = null;
       this.erro = cleanErr(c.reason);
       return;
     }
@@ -140,13 +157,56 @@ export class FilesStore {
   private async _listar(path: string) {
     const g = (this.gLista.get(path) ?? 0) + 1;
     this.gLista.set(path, g);
+    if (path === '') this.erro = null;   // a raiz e sempre listada no recarregar: sucesso limpa
     try {
       const r = await listFiles(this.sessao, path || undefined, this.soModificados);
       if (g !== this.gLista.get(path)) return;
       this.porPasta.set(path, r.entries);
       this.cortePorPasta.set(path, r.truncated);
     } catch (e) {
-      if (g === this.gLista.get(path)) this.erro = cleanErr(e);
+      if (g !== this.gLista.get(path)) return;
+      const msg = e instanceof Error ? e.message : '';
+      if (msg.startsWith('404:')) {
+        // Pasta que sumiu do disco (filetree.py responde 404 erro_arq_inexistente): poda a
+        // arvore — a pasta aberta aponta pra lugar que nao existe, e o aviso de corte ficaria
+        // ligado com a arvore vazia. 404 na RAIZ nao e pasta sumida: e o cwd da sessao que
+        // morreu (ou a sessao encerrou) — vira aviso visivel.
+        if (path === '') {
+          this.erro = m.arq_sessao_encerrada();
+        } else {
+          this.abertos.delete(path);
+          this.cortePorPasta.delete(path);
+          this.porPasta.delete(path);
+        }
+        return;
+      }
+      this.erro = cleanErr(e);
     }
   }
 }
+
+// Registry do FilesStore: uma instancia por sessao, vivendo no MODULO. O App remonta o Chat por
+// {#key} a cada troca de sessao, entao um store criado no onMount morreria — e a regua "pasta
+// aberta continua aberta ao voltar" exige que o estado sobreviva ao remount.
+const stores = new Map<string, FilesStore>();
+const refs = new Map<string, number>();
+
+export const filesStores = {
+  retain(sessao: string): FilesStore {
+    let s = stores.get(sessao);
+    if (!s) {
+      s = new FilesStore(sessao);
+      stores.set(sessao, s);
+    }
+    refs.set(sessao, (refs.get(sessao) ?? 0) + 1);
+    return s;
+  },
+  release(sessao: string): void {
+    const n = (refs.get(sessao) ?? 1) - 1;
+    if (n <= 0) refs.delete(sessao);
+    else refs.set(sessao, n);
+    // ponytail: com refs 0 o store continua no map — o estado (pastas abertas) e a regua de
+    // "pasta aberta continua aberta ao voltar", e a memoria por nome de sessao e barata (o app
+    // reusa nomes). Se um dia virar vazamento real, um LRU por antiguedade.
+  },
+};

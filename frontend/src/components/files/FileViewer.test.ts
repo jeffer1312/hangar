@@ -27,6 +27,16 @@ describe('FileViewer', () => {
     unmount(comp);
   });
 
+  it('pluraliza a meta: 1 linha no singular', () => {
+    const { el, comp } = montar({
+      diff: null,
+      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false },
+    });
+    expect(el.textContent).toContain('1 linha');
+    expect(el.textContent).not.toContain('1 linhas');
+    unmount(comp);
+  });
+
   it('escopo que caiu aparece desabilitado, com o rotulo certo e o motivo visivel', () => {
     const { el, comp } = montar({
       conteudo: null,

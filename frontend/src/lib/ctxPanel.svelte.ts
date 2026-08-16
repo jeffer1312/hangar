@@ -17,7 +17,17 @@ function carregar(): boolean {
   }
 }
 
-export const ctxPanel = $state({ recolhido: carregar() });
+export const ctxPanel = $state({
+  recolhido: carregar(),
+  // Aba ativa do painel (Contexto | Arquivos). Vive aqui por fora dos componentes porque o App
+  // remonta o Chat (e o painel) por key a cada troca de sessao — um $state local devolveria
+  // o usuario pra Contexto com a aba Arquivos aberta, e a regua "a aba sobrevive a troca de
+  // sessao" morre sem erro nenhum. Nao persiste em localStorage: reabrir a tela volta pra
+  // Contexto, que e o estado inicial do produto.
+  // (Cuidado: a chave literal de bloco no comentario quebraria a varredura de string crua,
+  // que trata arquivo .ts como markup.)
+  aba: 'contexto' as 'contexto' | 'arquivos',
+});
 
 export function alternarCtxPanel(): void {
   ctxPanel.recolhido = !ctxPanel.recolhido;

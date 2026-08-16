@@ -5,6 +5,7 @@ import * as m from '../paraglide/messages';
   import RateChips from './RateChips.svelte';
   import PlanPanel from './PlanPanel.svelte';
   import PlanRing from './PlanRing.svelte';
+  import FilesPanel from './files/FilesPanel.svelte';
   import type { State, SessionInfo, PlanDetail } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { stateColors, rotuloEstado, ctxWindow, providerName } from '../lib/format';
@@ -149,6 +150,25 @@ import * as m from '../paraglide/messages';
     </div>
   </header>
 
+  <!-- Barra de abas do painel (Contexto | Arquivos), no desenho do mock aprovado. A aba ativa
+       vive no ctxPanel (modulo): o App remonta este painel por {#key} a cada troca de sessao,
+       e um $state local devolveria o usuario pra Contexto com Arquivos aberta. Recolhido, o
+       painel some e a barra some junto — sem porta fantasma. -->
+  <div class="abas" role="tablist" aria-label={m.ctx_painel_titulo()}>
+    <button type="button" id="aba-ctx-contexto" class="aba" class:sel={ctxPanel.aba === 'contexto'}
+            role="tab" aria-selected={ctxPanel.aba === 'contexto'} aria-controls="painel-ctx-contexto"
+            onclick={() => (ctxPanel.aba = 'contexto')}>
+      {m.ctx_aba_contexto()}
+    </button>
+    <button type="button" id="aba-ctx-arquivos" class="aba" class:sel={ctxPanel.aba === 'arquivos'}
+            role="tab" aria-selected={ctxPanel.aba === 'arquivos'} aria-controls="painel-ctx-arquivos"
+            onclick={() => (ctxPanel.aba = 'arquivos')}>
+      {m.arq_aba()}
+    </button>
+  </div>
+
+  {#if ctxPanel.aba === 'contexto'}
+  <div id="painel-ctx-contexto" role="tabpanel" aria-labelledby="aba-ctx-contexto" class="ctx-tab">
   {#if hasActions}
     <div class="ctx-actions">
       {#if onOpenTerminal}
@@ -322,6 +342,12 @@ import * as m from '../paraglide/messages';
     {#if serverLabel}<p>{serverLabel}</p>{/if}
   </section>
   </div>
+  </div>
+  {:else}
+  <div id="painel-ctx-arquivos" role="tabpanel" aria-labelledby="aba-ctx-arquivos" class="ctx-tab">
+    <FilesPanel sessionName={sessionName} desktop={true} />
+  </div>
+  {/if}
   {/if}
 </aside>
 
@@ -395,6 +421,14 @@ import * as m from '../paraglide/messages';
   }
 
   header, .ctx-actions { flex: 0 0 auto; }
+  /* Envoltorio de cada aba: o conteudo de contexto e o FilesPanel ocupam a mesma faixa
+     flexivel abaixo das abas. O ctx-scroll (rolagem do contexto) fica dentro dele. */
+  .ctx-tab {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
   .ctx-scroll {
     flex: 1;
     min-height: 0;
@@ -561,6 +595,35 @@ import * as m from '../paraglide/messages';
     0%   { background-position: -60% 0; }
     100% { background-position: 160% 0; }
   }
+
+  /* Barra de abas Contexto | Arquivos (desenho do mock aprovado). O padding lateral segue o
+     resto do painel (--space-4), nao os 10px do mock — a aba nasce dentro de um card que ja
+     alinha tudo em 16px, e 10px desalinharia com o header e as secoes (divergencia mock-vs-app
+     resolvida a favor do app). */
+  .abas {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 2px;
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .aba {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 12.5px;
+    padding: 9px 10px 8px;
+    cursor: pointer;
+    margin-bottom: -1px;
+  }
+  .aba.sel {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent);
+  }
+  .aba:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
   /* Ritmo: seis secoes com o MESMO padding e uma hairline cada viravam uma escada monotona. As
      medidas (contexto, limites) andam juntas e sem regua entre elas; a regua so aparece onde o

@@ -105,6 +105,16 @@
     if (!texto) return 0;
     return texto.split('\n').length - (texto.endsWith('\n') ? 1 : 0);
   }
+
+  // Plural correto da meta: arq_meta_arquivo diz "N linhas" e o Paraglide deste projeto nao tem
+  // plural ICU — a chave arq_meta_arquivo_um cobre o caso de 1 linha ("1 linhas" nao existe).
+  const metaArquivo = $derived(
+    doArquivo
+      ? linhasDoTexto(doArquivo.text) === 1
+        ? m.arq_meta_arquivo_um({ tam: tamLegivel(doArquivo.size) })
+        : m.arq_meta_arquivo({ tam: tamLegivel(doArquivo.size), linhas: linhasDoTexto(doArquivo.text) })
+      : null,
+  );
 </script>
 
 <div class="visor">
@@ -138,9 +148,7 @@
           <b>{partesDesde[0]}</b> {partesDesde[1]}
         {/if}
         {#if partesDesde && doArquivo}<span class="sep"> · </span>{/if}
-        {#if doArquivo}
-          {m.arq_meta_arquivo({ tam: tamLegivel(doArquivo.size), linhas: linhasDoTexto(doArquivo.text) })}
-        {/if}
+        {#if doArquivo}{metaArquivo}{/if}
       </span>
       <button class="voltar" onclick={onFechar}>← {m.arq_voltar_conversa()}</button>
     </div>
