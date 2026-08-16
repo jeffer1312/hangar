@@ -193,6 +193,27 @@ curto, sem narrar processo.
 Régua pedida por um usuário real em 15/08/2026, no meio de um trabalho de 13 Tasks, com estas
 palavras: *"corte a narração; ele não vai acompanhar pela tela, o trabalho é pra rodar sozinho"*.
 
+## Com QUALQUER revisão aberta, a árvore congela — não só na revisão final
+
+A regra está escrita para a fase 4, e é fácil achar que só vale lá. **Vale para toda revisão em
+andamento**, inclusive a de uma Task no meio do trabalho: o revisor lê o disco, não só o `git show`,
+e os subagentes dele abrem arquivo direto.
+
+Erro medido em 15/08/2026: o árbitro commitou na `main` duas vezes durante a revisão de uma Task —
+os dois commits eram **documentação**, nenhuma linha de código —, e mesmo assim o revisor devolveu
+`DEVOLVIDO: a ponta mudou durante a revisão`. Ele estava certo: de dentro, ele não tem como saber
+que o delta era inofensivo, e revisar sobre uma ponta que anda é revisar sobre nada.
+
+Precisou mesmo commitar? Então **antes**: avise o que vai tocar. **Depois**: mande o hash novo, diga
+o que mudou **e o que não mudou**, e entregue o comando que prova:
+
+```bash
+git diff --stat <hash-que-ele-revisava> <hash-novo> -- <dirs-de-código>
+```
+
+Saída vazia = o trabalho dele continua válido na íntegra, e ele retoma sem refazer nada. É a
+diferença entre uma frase sua ("pode seguir, é só doc") e uma prova que ele roda.
+
 ## Autonomia — gatilhos, não julgamento
 
 Depois do "pode ir", você decide. Estes três são **automáticos**, sem esperar ninguém:
