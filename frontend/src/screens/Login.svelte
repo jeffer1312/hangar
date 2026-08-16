@@ -14,7 +14,18 @@
   }
   let { onLogin, onSyncLogin }: Props = $props();
 
-  let baseUrl = $state(getBaseUrl());
+  let baseUrl = $state(getBaseUrl() || origemDoProprioServidor());
+  // A página é servida pelo PRÓPRIO backend quando a porta é a do uvicorn (8765, default do
+  // settings.port) — o caso do Electron e de abrir pelo navegador na própria máquina. Vite
+  // dev/preview roda em 5173 (strictPort) e proxya /api, mas a origem dele NÃO é o backend:
+  // preencher com ela daria erro de conexão com cara de bug, então fica vazio. Porta custom
+  // (CP_PORT) também não preenche — campo vazio é o comportamento atual, que ninguém chama de
+  // defeito.
+  function origemDoProprioServidor(): string {
+    if (typeof window === 'undefined') return '';
+    return window.location.port === '8765' ? window.location.origin : '';
+  }
+
   let token = $state('');
   let loading = $state(false);
   let error = $state('');

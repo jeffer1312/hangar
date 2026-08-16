@@ -189,3 +189,39 @@ describe('Login — deep-link validado pela URL completa (round 5)', () => {
     unmount(t.comp);
   });
 });
+
+// Task 16: página servida pelo PRÓPRIO backend (Electron, navegador local) nasce com o campo de
+// URL preenchido com a origem — o usuário só digita o token. Sem servidor salvo, a origem vence;
+// com servidor salvo, o salvo vence; origem do Vite (5173) NÃO preenche (o preview proxya /api,
+// mas a origem dele não é o backend — preencher daria erro de conexão com cara de bug).
+describe('Login — origem do próprio servidor preenche o campo (task 16)', () => {
+  async function montarEm(url: string) {
+    (window as unknown as { happyDOM: { setURL: (u: string) => void } }).happyDOM.setURL(url);
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(Login, { target: el, props: { onLogin: vi.fn() } }) as never;
+    await tick();
+    return { el, comp };
+  }
+
+  it('sem servidor salvo e origem do backend: campo nasce preenchido com a origem', async () => {
+    authMock.getBaseUrl.mockReturnValue('');
+    const t = await montarEm('http://127.0.0.1:8765/');
+    expect(t.el.querySelector<HTMLInputElement>('#base-url')!.value).toBe('http://127.0.0.1:8765');
+    unmount(t.comp);
+  });
+
+  it('com servidor salvo: o salvo vence, mesmo com a origem sendo o backend', async () => {
+    authMock.getBaseUrl.mockReturnValue('http://casa:8765');
+    const t = await montarEm('http://127.0.0.1:8765/');
+    expect(t.el.querySelector<HTMLInputElement>('#base-url')!.value).toBe('http://casa:8765');
+    unmount(t.comp);
+  });
+
+  it('origem do Vite (5173): campo fica vazio', async () => {
+    authMock.getBaseUrl.mockReturnValue('');
+    const t = await montarEm('http://127.0.0.1:5173/');
+    expect(t.el.querySelector<HTMLInputElement>('#base-url')!.value).toBe('');
+    unmount(t.comp);
+  });
+});
