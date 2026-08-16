@@ -165,8 +165,11 @@ export class FilesStore {
       this.cortePorPasta.set(path, r.truncated);
     } catch (e) {
       if (g !== this.gLista.get(path)) return;
-      const msg = e instanceof Error ? e.message : '';
-      if (msg.startsWith('404:')) {
+      // O status vem na propriedade, nao no texto: `ensureOk` (api.ts:111) deixa a MENSAGEM
+      // limpa e anexa `.status` — ler o texto quebra calado (api.ts:533 avisa com todas as
+      // letras; medido pelo revisor: o 404 real chega como "Nao deu pra acessar..." + status).
+      const status = (e as Error & { status?: number }).status;
+      if (status === 404) {
         // Pasta que sumiu do disco (filetree.py responde 404 erro_arq_inexistente): poda a
         // arvore — a pasta aberta aponta pra lugar que nao existe, e o aviso de corte ficaria
         // ligado com a arvore vazia. 404 na RAIZ nao e pasta sumida: e o cwd da sessao que

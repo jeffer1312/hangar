@@ -154,10 +154,12 @@ describe('FilesStore', () => {
     await s.alternarPasta('src');
     expect(s.abertos.has('src')).toBe(true);
     expect(s.listaCortada).toBe(true);
-    // 2) a pasta some do disco: o recarregar re-lista e recebe 404 — poda
+    // 2) a pasta some do disco: o recarregar re-lista e recebe 404 — poda. Shape do erro
+    // REAL da API: mensagem limpa (o texto traduzido do envelope) + `.status` na propriedade
+    // (ensureOk, api.ts:111) — nunca "404:" no texto.
     vi.mocked(listFiles).mockImplementation(async (_s, path) => {
       if (path === undefined) return { entries: [ent('src', true)], truncated: false };
-      if (path === 'src') throw Object.assign(new Error('404: caminho nao existe'), { status: 404 });
+      if (path === 'src') throw Object.assign(new Error('Nao deu pra acessar esse arquivo ou pasta.'), { status: 404 });
       return { entries: [], truncated: false };
     });
     await s.recarregar();
@@ -170,7 +172,7 @@ describe('FilesStore', () => {
   // vira aviso visivel, nao poda silenciosa.
   it('404 na raiz vira o aviso de sessao encerrada', async () => {
     vi.mocked(listFiles).mockRejectedValueOnce(
-      Object.assign(new Error('404: sessao nao encontrada'), { status: 404 }));
+      Object.assign(new Error('sessao nao encontrada'), { status: 404 }));
     const s = new FilesStore('sessao');
     await s.recarregar();
     expect(s.erro).toBe(m.arq_sessao_encerrada());

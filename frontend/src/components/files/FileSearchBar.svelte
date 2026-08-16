@@ -142,6 +142,10 @@
     padding: 5px 0;
     border-radius: 6px;
     cursor: pointer;
+    /* Sobrescreve o alvo global de 44px (app.css) — o segmentado e compacto por desenho
+       (mesmo do seletor de esforco do app). */
+    min-height: 0;
+    min-width: 0;
   }
   .seg button.sel {
     background: var(--surface-raised);

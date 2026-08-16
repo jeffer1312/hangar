@@ -618,6 +618,10 @@ import * as m from '../paraglide/messages';
     padding: 9px 10px 8px;
     cursor: pointer;
     margin-bottom: -1px;
+    /* Sobrescreve o alvo global de 44px (app.css) — a barra de abas e compacta por desenho
+       (mock: ~34px de altura). */
+    min-height: 0;
+    min-width: 0;
   }
   .aba.sel {
     color: var(--text-primary);

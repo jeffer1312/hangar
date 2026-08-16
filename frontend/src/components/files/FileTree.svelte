@@ -113,7 +113,10 @@
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 3px 10px 3px 0;
+    /* 4px (nao 3): com o alvo global de 44px sobrescrito abaixo, 3px cairia pra 23,6px —
+       abaixo do minimo de 24px (WCAG 2.5.8 AA). 4px da 25,5px, a densidade da aba irma
+       (linha de Task do plano: ~24,6px) e a do mock (24px). */
+    padding: 4px 10px 4px 0;
     cursor: pointer;
     font-size: 13px;
     line-height: 1.35;
@@ -123,6 +126,10 @@
     width: 100%;
     text-align: left;
     font-family: inherit;
+    /* Sobrescreve o alvo global de 44px (app.css) — a arvore e lista densa por desenho;
+       o Composer.svelte tem o mesmo remedio pro pill compacto. */
+    min-height: 0;
+    min-width: 0;
   }
   .no:hover { background: var(--bg-hover); }
   .no:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }

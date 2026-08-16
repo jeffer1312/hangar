@@ -1,15 +1,15 @@
 <script lang="ts">
-  // Aba Arquivos do painel do desktop: barra de controles, busca, arvore e o visualizador do
-  // arquivo selecionado. Desenho do mock aprovado (docs/mocks/2026-08-15-arvore/1-desktop-painel.html
-  // e base.css), token por token. O store vem do registry do modulo (filesStores.retain) — o App
-  // remonta o Chat por {#key} a cada troca de sessao, e um store criado no mount morreria com as
-  // pastas abertas (a regua "pasta aberta continua aberta ao voltar").
+  // Aba Arquivos do painel do desktop: barra de controles, busca e arvore. Desenho do mock
+  // aprovado (docs/mocks/2026-08-15-arvore/1-desktop-painel.html e base.css), token por token.
+  // O arquivo aberto e desenhado pela Task 11, sobre a area da conversa (mock 2) — aqui o
+  // clique so marca a selecao no store. O store vem do registry do modulo (filesStores.retain)
+  // — o App remonta o Chat por {#key} a cada troca de sessao, e um store criado no mount
+  // morreria com as pastas abertas (a regua "pasta aberta continua aberta ao voltar").
   import * as m from '../../paraglide/messages';
   import { onMount, onDestroy } from 'svelte';
   import { filesStores } from '../../lib/filesStore.svelte';
   import FileSearchBar, { type ModoBusca } from './FileSearchBar.svelte';
   import FileTree from './FileTree.svelte';
-  import FileViewer from './FileViewer.svelte';
 
   interface Props {
     sessionName: string;
@@ -52,31 +52,12 @@
     store.soModificados = !store.soModificados;
     store.recarregar();
   }
-
-  function fechar() {
-    store.selecionado = null;
-  }
 </script>
 
 <div class="files-panel">
   {#if store.erro}<p class="aviso erro">{store.erro}</p>{/if}
 
-  {#if store.selecionado !== null && !store.erro}
-    <!-- Contratos da montagem (regras do grupo): path = o MESMO store.selecionado usado no
-         abrir() — o backend devolve o caminho como veio, e "./a.py" != "a.py" deixaria o
-         viewer em "carregando" para sempre; loading durante a carga, senao a tela afirma
-         "sem diferencas" sobre arquivo que tem diff; e conteudo JUNTO do diff, senao a meta
-         de tamanho e linhas some. -->
-    <FileViewer
-      path={store.selecionado}
-      diff={store.diff}
-      conteudo={store.conteudo}
-      loading={store.loading}
-      onEscopo={(e) => store.trocarEscopo(e)}
-      onFechar={fechar}
-    />
-  {:else}
-    <div class="barra-ctl">
+  <div class="barra-ctl">
       <button type="button" class="ordenar">
         {m.arq_ordenar_nome()}<span class="ord-seta" aria-hidden="true">▾</span>
       </button>
@@ -141,6 +122,12 @@
         {#if store.entries.length === 0 && store.soModificados}
           <p class="aviso">{m.arq_nada_mudou()}</p>
         {:else}
+          <!-- O clique so marca a selecao (o desenho do arquivo aberto e da Task 11, sobre a
+               conversa — mock 2). Contratos da montagem que a Task 11 herda: quem renderizar o
+               FileViewer passa path = o MESMO store.selecionado usado no abrir(), SEM
+               normalizar (o backend devolve o caminho como veio, e "./a.py" != "a.py"
+               deixaria o viewer em "carregando" para sempre), mais loading, conteudo e diff
+               juntos. -->
           <FileTree
             entries={store.entries}
             abertos={store.abertos}
@@ -151,7 +138,6 @@
         {/if}
       {/if}
     </div>
-  {/if}
 </div>
 
 <style>
@@ -185,6 +171,10 @@
     cursor: pointer;
     font-family: inherit;
     border-radius: 6px;
+    /* Sobrescreve o alvo global de 44px (app.css) pra preservar a densidade do painel —
+       mesmo remedio do Composer.svelte. */
+    min-height: 0;
+    min-width: 0;
   }
   .ord-seta { font-size: 8px; }
   .acoes { display: flex; gap: 2px; }
@@ -198,6 +188,10 @@
     background: none;
     color: var(--text-muted);
     cursor: pointer;
+    /* Sobrescreve o alvo global de 44px (app.css) — o desenho do mock e 26x26 e o par
+       olho/recarregar so faz sentido na mesma escala. */
+    min-height: 0;
+    min-width: 0;
   }
   .ic:hover { background: var(--bg-hover); color: var(--text-secondary); }
   .ic svg { width: 15px; height: 15px; }
@@ -218,6 +212,10 @@
   .filtro-aviso button {
     background: none; border: 0; padding: 0; cursor: pointer;
     color: var(--accent); font: inherit; font-size: 11px;
+    /* Link de texto dentro de uma frase (excecao inline da WCAG 2.5.8) — o alvo global de
+       44px faria a linha do aviso dobrar de altura. */
+    min-height: 0;
+    min-width: 0;
   }
 
   .corpo {
@@ -260,6 +258,10 @@
     width: 100%;
     text-align: left;
     font-family: inherit;
+    /* Sobrescreve o alvo global de 44px (app.css) — densidade da arvore, como o mock e a
+       aba irma (linha de Task do plano: ~24,6px). */
+    min-height: 0;
+    min-width: 0;
   }
   .no:hover { background: var(--bg-hover); }
   .no:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
