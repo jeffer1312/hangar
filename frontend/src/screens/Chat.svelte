@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { ctxPanel, LARGURA_ABERTO, LARGURA_TRILHO } from '../lib/ctxPanel.svelte';
+  import { ctxPanel, LARGURA_TRILHO } from '../lib/ctxPanel.svelte';
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
   import Composer from '../components/Composer.svelte';
@@ -1518,7 +1518,7 @@
   class="chat-screen"
   class:desktop
   class:with-context={desktop && showContextPanel}
-  style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : LARGURA_ABERTO}px`}
+  style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.largura}px`}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
 >
@@ -2012,14 +2012,9 @@
     .chat-screen.with-context .chat-error { transform: translateX(calc(var(--ctx-w) / -2)); }
   }
 
-  /* A faixa do painel cresce com a tela: em 264px fixos o "último turno: 420k entrada" e o nome da
-     sessão quebravam em duas linhas numa tela que tinha espaço de sobra. */
-  @media (min-width: 1600px) {
-    .chat-screen.with-context { --ctx-w: 300px; }
-  }
-  @media (min-width: 1900px) {
-    .chat-screen.with-context { --ctx-w: 340px; }
-  }
+  /* A largura do painel agora é arrastável e guardada (ctxPanel.largura, Task 17): os degraus
+     fixos que existiam aqui (300px/340px em telas grandes) foram movidos pro default do store
+     (larguraDefault) — o usuário arrasta por cima e a escolha dele manda. */
   /* Com o painel aberto o teto do texto também sobe por degraus: numa Full HD o 1200 fixo deixava
      ~225px de vazio de cada lado. Medido em 1920: 1440 usa o espaço e ainda sobra respiro. */
   /* Os dois degraus abaixo NASCERAM sem a escala de largura, e sao mais especificos que a regra que a

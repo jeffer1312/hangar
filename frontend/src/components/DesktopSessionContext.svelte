@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
+  import { ctxPanel, alternarCtxPanel, arrastarLargura, salvarLargura } from '../lib/ctxPanel.svelte';
 import * as m from '../paraglide/messages';
   import HangarWorking from './icons/HangarWorking.svelte';
   import RateChips from './RateChips.svelte';
@@ -115,9 +115,37 @@ import * as m from '../paraglide/messages';
   function tokenShort(n: number): string {
     return n < 1000 ? String(Math.round(n)) : ctxWindow(n);
   }
+  // ── Largura redimensionavel (drag na divisória da esquerda), persistida ─────────────
+  // Mesma pegada da Sidebar (cp_sidebar_w): pointer capture no handle, largura clampsa no
+  // store (arrastarLargura), salva no soltar. Sem transicao de width no painel, o arrasto
+  // segue o ponteiro sem lag — a classe resizing fica como trava contra alguém adicionar
+  // transicao depois (mesmo motivo do .sidebar.resizing). O flag `resizing` vive no store
+  // (ctxPanel) porque o componente tem uma prop `state` e o rune `$state` colide com ela.
+  function resizeStart(e: PointerEvent) {
+    ctxPanel.resizing = true;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function resizeMove(e: PointerEvent) {
+    if (ctxPanel.resizing) arrastarLargura(e.clientX);
+  }
+  function resizeEnd() {
+    if (!ctxPanel.resizing) return;
+    ctxPanel.resizing = false;
+    salvarLargura();
+  }
 </script>
 
-<aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} aria-label={m.ctx_painel_titulo()}>
+<aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} class:resizing={ctxPanel.resizing} aria-label={m.ctx_painel_titulo()}>
+  {#if !ctxPanel.recolhido}
+  <!-- Drag na divisória da esquerda pra redimensionar: mesma pegada do resize-handle da Sidebar
+       (lá a borda é a direita, aqui a esquerda — o painel cola na direita). So quando aberto: o
+       trilho recolhido não é largura, é estado. -->
+  <div class="ctx-resize-handle" role="separator" aria-label={m.sessao_redimensionar()}
+    aria-orientation="vertical"
+    onpointerdown={resizeStart} onpointermove={resizeMove}
+    onpointerup={resizeEnd} onpointercancel={resizeEnd}></div>
+  {/if}
   <!-- Botão de recolher: com toggle externo (barra no modo tabs OU rail recolhido) o controle mora lá — aqui fica
        sem botão duplicado. Sem a barra, o botão do topo é a porta acessível dos dois sentidos. -->
   {#if !toggleExterno}
@@ -422,6 +450,18 @@ import * as m from '../paraglide/messages';
     border-left: 1px solid var(--border-default);
     border-radius: 0;
     box-shadow: none;
+  }
+
+  /* Enquanto arrasta: sem transicao (segue o ponteiro sem lag). Hoje o painel nao tem
+     transition de width; a regra trava contra alguem adicionar depois (mesmo motivo do
+     .sidebar.resizing). */
+  .session-context.resizing { transition: none; }
+  .ctx-resize-handle {
+    position: absolute; top: 0; left: 0; width: 6px; height: 100%;
+    cursor: col-resize; z-index: 6; touch-action: none;
+  }
+  @media (hover: hover) {
+    .ctx-resize-handle:hover { background: var(--accent-dim); }
   }
 
   header, .ctx-actions { flex: 0 0 auto; }

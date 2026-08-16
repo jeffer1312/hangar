@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import DesktopSessionContext from './DesktopSessionContext.svelte';
-import { ctxPanel } from '../lib/ctxPanel.svelte';
+import { ctxPanel, LARGURA_MIN, LARGURA_ABERTO } from '../lib/ctxPanel.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 import { listFiles } from '../lib/api';
 
@@ -41,6 +41,7 @@ beforeEach(() => {
   overwriteGetLocale(() => 'pt');   // textos dos painéis são mensagens agora
   ctxPanel.recolhido = false;
   ctxPanel.aba = 'contexto';        // a aba vive no modulo — reset entre testes
+  ctxPanel.largura = LARGURA_ABERTO; // idem: largura vive no modulo
   document.body.innerHTML = '';
 });
 
@@ -102,6 +103,61 @@ describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
     await tick();   // o onMount do FilesPanel -> recarregar -> listFiles
     expect(document.querySelector('.files-panel')).not.toBeNull();
     expect(listFiles).toHaveBeenCalledWith('sess-1', undefined, true);
+    unmount(t.comp);
+  });
+});
+
+// Task 17: divisória redimensionável. O handle existe só com o painel ABERTO (recolhido não é
+// largura), e o arrasto segue o MESMO contrato da Sidebar: pointerdown captura, move atualiza o
+// store, soltar persiste. O happy-dom não implementa setPointerCapture — stub no teste, o
+// comportamento real é do navegador (mesma limitação do teste da Sidebar).
+describe('DesktopSessionContext — divisória redimensionável (task 17)', () => {
+  it('handle presente com painel aberto, ausente com painel recolhido', async () => {
+    const t = montar(false);
+    await tick();
+    const handle = document.querySelector<HTMLElement>('.ctx-resize-handle');
+    expect(handle).not.toBeNull();
+    expect(handle?.getAttribute('role')).toBe('separator');
+    ctxPanel.recolhido = true;
+    await tick();
+    expect(document.querySelector('.ctx-resize-handle')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('arrastar atualiza a largura e soltar persiste', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    const t = montar(false);
+    await tick();
+    const origCapture = HTMLElement.prototype.setPointerCapture;
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    try {
+      const handle = document.querySelector<HTMLElement>('.ctx-resize-handle')!;
+      // janela 1600 -> teto 560; clientX 1200 -> 400, dentro da faixa clampsa
+      handle.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 1200, bubbles: true }));
+      handle.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 1200, bubbles: true }));
+      expect(ctxPanel.largura).toBe(window.innerWidth - 1200);
+      handle.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }));
+      expect(localStorage.getItem('cp_ctx_w')).toBe(String(window.innerWidth - 1200));
+    } finally {
+      HTMLElement.prototype.setPointerCapture = origCapture;
+    }
+    unmount(t.comp);
+  });
+
+  it('arrastar além do mínimo clampa no piso', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    const t = montar(false);
+    await tick();
+    const origCapture = HTMLElement.prototype.setPointerCapture;
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    try {
+      const handle = document.querySelector<HTMLElement>('.ctx-resize-handle')!;
+      handle.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 5000, bubbles: true }));
+      handle.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 5000, bubbles: true }));
+      expect(ctxPanel.largura).toBe(LARGURA_MIN);
+    } finally {
+      HTMLElement.prototype.setPointerCapture = origCapture;
+    }
     unmount(t.comp);
   });
 });

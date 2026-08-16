@@ -8,6 +8,53 @@
 // da esquerda (`loadPin` no Sidebar).
 
 const CHAVE = 'cp_ctx_recolhido';
+const CHAVE_LARGURA = 'cp_ctx_w';
+
+// Largura da faixa reservada pelo Chat. Aberto: vem de `ctxPanel.largura` (arrastável, guardada);
+// LARGURA_ABERTO é o default quando nada foi salvo. Recolhido: só a aba da borda, o que devolve
+// ~230px de leitura ao chat.
+export const LARGURA_ABERTO = 264;
+export const LARGURA_TRILHO = 34;
+
+// Larguras do painel aberto. MIN: abaixo disso a árvore de arquivos e a lista de tarefas ficam
+// ilegíveis (o painel nasceu em 264 e 240 ainda lê caminho e título). MAX: acima disso o visor de
+// arquivo ao lado — que ocupa o resto da janela — fica estreito demais para um diff. RESERVA_VISOR:
+// o mínimo do diff medido (558 legível, 450 espremido). RESERVA_NAV: folga da sidebar da esquerda
+// (default 270; se ela estiver menor/recolhida o teto só fica um pouco conservador, nunca espreme).
+// Aplicadas como teto pela janela na carga E no arrasto, senão quem salvou numa tela grande abre
+// numa menor com o chat espremido.
+export const LARGURA_MIN = 240;
+export const LARGURA_MAX = 560;
+export const RESERVA_VISOR = 560;
+export const RESERVA_NAV = 280;
+
+function tetoLargura(): number {
+  if (typeof window === 'undefined') return LARGURA_MAX;
+  return Math.min(LARGURA_MAX, window.innerWidth - RESERVA_VISOR - RESERVA_NAV);
+}
+
+function clampLargura(w: number): number {
+  return Math.max(LARGURA_MIN, Math.min(tetoLargura(), w));
+}
+
+// Default que cresce com a tela: replica os degraus que o Chat tinha em media query (300px em
+// >=1600, 340px em >=1900) — telas grandes nascem com painel maior; depois o usuário arrasta.
+function larguraDefault(): number {
+  if (typeof window === 'undefined') return LARGURA_ABERTO;
+  if (window.innerWidth >= 1900) return 340;
+  if (window.innerWidth >= 1600) return 300;
+  return LARGURA_ABERTO;
+}
+
+function carregarLargura(): number {
+  try {
+    const salva = Number(localStorage.getItem(CHAVE_LARGURA));
+    if (Number.isFinite(salva) && salva > 0) return clampLargura(salva);
+  } catch {
+    /* sem storage: default */
+  }
+  return clampLargura(larguraDefault());
+}
 
 function carregar(): boolean {
   try {
@@ -19,6 +66,12 @@ function carregar(): boolean {
 
 export const ctxPanel = $state({
   recolhido: carregar(),
+  largura: carregarLargura(),
+  // Arrasto em curso (classe .resizing do painel). Vive aqui — e nao num `let $state` do
+  // DesktopSessionContext — porque o componente tem uma prop chamada `state` e o compilador
+  // do Svelte confunde o rune `$state` com subscricao de store (store_rune_conflict). O
+  // objeto do store e deep-reactive, entao a classe acompanha do mesmo jeito.
+  resizing: false,
   // Aba ativa do painel (Contexto | Arquivos). Vive aqui por fora dos componentes porque o App
   // remonta o Chat (e o painel) por key a cada troca de sessao — um $state local devolveria
   // o usuario pra Contexto com a aba Arquivos aberta, e a regua "a aba sobrevive a troca de
@@ -38,7 +91,18 @@ export function alternarCtxPanel(): void {
   }
 }
 
-// Largura da faixa reservada pelo Chat. Aberto: a mesma de sempre. Recolhido: só a aba da borda,
-// o que devolve ~230px de leitura ao chat.
-export const LARGURA_ABERTO = 264;
-export const LARGURA_TRILHO = 34;
+// Largura aplicada durante o arrasto da divisória (mesma régua da Sidebar, espelhada: lá o painel
+// cola na esquerda e `largura = clientX`; aqui cola na direita e `largura = janela - clientX`).
+// Clampa pelo mesmo teto da carga, então arrastar não espreme o visor ao lado.
+export function arrastarLargura(clientX: number): void {
+  if (typeof window === 'undefined') return;
+  ctxPanel.largura = clampLargura(window.innerWidth - clientX);
+}
+
+export function salvarLargura(): void {
+  try {
+    localStorage.setItem(CHAVE_LARGURA, String(ctxPanel.largura));
+  } catch {
+    /* sem storage: vale só nesta sessão */
+  }
+}
