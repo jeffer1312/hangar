@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SvelteSet } from 'svelte/reactivity';
 import * as m from '../paraglide/messages';
 import { listFiles, readFile, searchFiles, pathDiff } from './api';
-import { FilesStore } from './filesStore.svelte';
+import { FilesStore, filesStores } from './filesStore.svelte';
 import type { TreeEntry } from './types';
 
 // Mock de módulo é `vi.mock`, NUNCA `vi.spyOn` num export: o namespace de um módulo ES é
@@ -215,6 +215,79 @@ describe('FilesStore', () => {
     expect(listFiles).toHaveBeenCalledTimes(2);
   });
 
+  // Parecer Task 11, B1: o 404 ANTIGO nao pode sobrescrever uma abertura nova. A recuperacao
+  // do 404 roda `await recarregar()` no meio; se uma abertura nova comeca antes da recarga
+  // terminar, a continuacao antiga nao pode pintar o erro do arquivo abandonado.
+  it('404 antigo nao sobrescreve abertura nova (corrida na recuperacao)', async () => {
+    // a.txt falha com 404; a LISTAGEM dele fica pendurada (libera manualmente)
+    let liberaLista: (v: unknown) => void = () => {};
+    vi.mocked(readFile).mockRejectedValueOnce(
+      Object.assign(new Error('gone'), { status: 404 }));
+    vi.mocked(listFiles).mockImplementationOnce(
+      () => new Promise((r) => (liberaLista = r)) as never);
+    vi.mocked(listFiles).mockResolvedValue({ entries: [], truncated: false });
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'new.ts', diff: '', truncated: false } as never);
+    const s = new FilesStore('sessao');
+    const antiga = s.abrir('a.txt');       // 404 -> recarregar pendurada
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalled());
+    // abertura NOVA no meio da recarga antiga
+    vi.mocked(readFile).mockResolvedValueOnce({ path: 'new.ts', text: 'N', size: 1, truncated: false });
+    const nova = s.abrir('new.ts');
+    await nova;
+    expect(s.selecionado).toBe('new.ts');
+    expect(s.conteudo?.path).toBe('new.ts');
+    liberaLista({ truncated: false, entries: [] });
+    await antiga;
+    expect(s.erro).toBeNull();            // o 404 do a.txt NAO sobrescreve
+    expect(s.selecionado).toBe('new.ts');
+  });
+
+  // Parecer Task 11, B3: arquivo apagado nao volta ao expandir pasta que estava FECHADA.
+  // O recarregar so cobre raiz e abertas; a pasta colapsada guarda cache velho em porPasta —
+  // o 404 precisa re-listar a pasta PAI mesmo colapsada, senao a linha fantasma reaparece.
+  it('404 re-lista a pasta pai MESMO colapsada (linha apagada nao volta)', async () => {
+    vi.mocked(listFiles).mockImplementation(async (_s, path) => {
+      if (path === undefined) return { truncated: false, entries: [ent('src', true)] };
+      if (path === 'src') return { truncated: false, entries: [ent('src/a.txt', false)] };
+      return { truncated: false, entries: [] };
+    });
+    const s = new FilesStore('sessao');
+    await s.recarregar();
+    await s.alternarPasta('src');       // expande (lista src)
+    expect(s.entries.some((e) => e.path === 'src/a.txt')).toBe(true);
+    await s.alternarPasta('src');       // colapsa (cache de src fica guardado)
+    // arquivo apagado: abrir devolve 404
+    vi.mocked(readFile).mockRejectedValue(
+      Object.assign(new Error('gone'), { status: 404 }));
+    vi.mocked(listFiles).mockImplementation(async (_s, path) => {
+      if (path === undefined) return { truncated: false, entries: [ent('src', true)] };
+      if (path === 'src') return { truncated: false, entries: [] };  // sem a.txt agora
+      return { truncated: false, entries: [] };
+    });
+    await s.abrir('src/a.txt');
+    // a pasta pai colapsada foi re-listada: expandir de novo NAO ressuscita a linha
+    await s.alternarPasta('src');
+    expect(s.entries.some((e) => e.path === 'src/a.txt')).toBe(false);
+  });
+
+  // Parecer Task 11, B4: hit de busca morto sai dos resultados no 404 — senao o botao
+  // continua clicavel para sempre sob a busca ativa.
+  it('404 remove o hit morto dos resultados da busca vigente', async () => {
+    vi.mocked(searchFiles).mockResolvedValue({
+      hits: [{ path: 'a.txt', line: 1, text: 'x' }], truncated: false, mode: 'names',
+    } as never);
+    vi.mocked(readFile).mockRejectedValue(
+      Object.assign(new Error('gone'), { status: 404 }));
+    vi.mocked(listFiles).mockResolvedValue({ entries: [], truncated: false });
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'a.txt', diff: '', truncated: false } as never);
+    const s = new FilesStore('sessao');
+    await s.buscar('a', 'names');
+    expect(s.resultados.length).toBe(1);
+    await s.abrir('a.txt');   // 404: o hit do arquivo apagado sai
+    expect(s.resultados.length).toBe(0);
+    expect(s.erro).toBe(m.erro_arq_inexistente());
+  });
+
   // Task 10, contrato 2: `loading` fica ligado entre o clique e a resposta — sem o sinal, o
   // FileViewer nao tem como saber que nao pode afirmar "sem diferencas".
   it('loading fica ligado durante a abertura e desliga no fim', async () => {
@@ -227,5 +300,39 @@ describe('FilesStore', () => {
     libera({ path: 'a.txt', text: 'A', size: 1, truncated: false });
     await p;
     expect(s.loading).toBe(false);
+  });
+
+  // Parecer Task 11, B2: o registry chaveia por IDENTIDADE (serverId::sessionName), nao por
+  // nome — dois servidores podem ter sessoes homonimas e nao podem compartilhar estado.
+  it('sessoes homonimas de servidores diferentes tem stores distintos', async () => {
+    const a = filesStores.retain('srv-a::api', 'api');
+    const b = filesStores.retain('srv-b::api', 'api');
+    expect(a).not.toBe(b);   // mesma sessao 'api', servidores diferentes -> stores diferentes
+    a.selecionado = 'x.ts';
+    expect(b.selecionado).toBeNull();   // o que A abriu nao vaza pra B
+    // voltar ao A restaura o estado do A (mesma instancia, nao uma copia)
+    const a2 = filesStores.retain('srv-a::api', 'api');
+    expect(a2).toBe(a);
+    expect(a2.selecionado).toBe('x.ts');
+    filesStores.release('srv-a::api');
+    filesStores.release('srv-b::api');
+  });
+
+  // Parecer Task 11, B2: resposta atrasada do servidor A nao pinta no store do B.
+  it('resposta atrasada de uma sessao nao vaza pra homonima de outro servidor', async () => {
+    let libera: (v: unknown) => void = () => {};
+    vi.mocked(readFile).mockImplementationOnce(() => new Promise((r) => (libera = r)) as never);
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'a.ts', diff: '', truncated: false } as never);
+    const a = filesStores.retain('srv-a::api', 'api');
+    const b = filesStores.retain('srv-b::api', 'api');
+    const pendente = a.abrir('a.ts');          // A abre, resposta pendurada
+    vi.mocked(readFile).mockResolvedValue({ path: 'b.ts', text: 'B', size: 1, truncated: false });
+    await b.abrir('b.ts');                      // B abre e completa no meio
+    libera({ path: 'a.ts', text: 'A', size: 1, truncated: false });
+    await pendente;                             // resposta do A chega atrasada
+    expect(b.conteudo?.path).toBe('b.ts');      // o B nao foi tocado pelo A
+    expect(a.conteudo?.path).toBe('a.ts');
+    filesStores.release('srv-a::api');
+    filesStores.release('srv-b::api');
   });
 });

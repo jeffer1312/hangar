@@ -117,7 +117,7 @@
   );
 </script>
 
-<div class="visor">
+<div class="visor" role="region" tabindex="-1" aria-label={path} aria-busy={loading || destacando}>
   <div class="cab">
     <div class="cab-l1">
       <span class="caminho">

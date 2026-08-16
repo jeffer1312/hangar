@@ -13,18 +13,23 @@
 
   interface Props {
     sessionName: string;
+    // Identidade do servidor (parecer Task 11, B2): dois servidores podem ter sessoes com o
+    // MESMO nome, e o registry do FilesStore chaveia por serverId::sessionName — sem o servidor
+    // na chave, o arquivo aberto/arvore do servidor A vazaria pro B. O host desktop passa a
+    // MESMA identidade do Chat (getActiveId), nunca calculada diferente por caller.
+    serverId: string;
     // A assinatura que as Tasks 11 (desktop) e 12 (celular) hospedam — desktop=true e o caso
     // deste painel; o celular decide o layout proprio na Task 12.
     desktop: boolean;
   }
-  let { sessionName, desktop }: Props = $props();
+  let { sessionName, serverId, desktop }: Props = $props();
 
   // svelte-ignore state_referenced_locally — captura intencional: o App remonta este painel
   // por {#key} a cada troca de sessao, entao o store do mount e o store da sessao — se a prop
   // mudasse no meio (nao muda), o FilesStore novo substituiria o velho e a regua de pastas
   // abertas morreria.
-  const store = filesStores.retain(sessionName);
-  onDestroy(() => filesStores.release(sessionName));
+  const store = filesStores.retain(`${serverId}::${sessionName}`, sessionName);
+  onDestroy(() => filesStores.release(`${serverId}::${sessionName}`));
 
   // Termo e modo da busca. O rascunho do campo vive no FileSearchBar; aqui mora o estado que a
   // arvore e os vazios leem. Busca vazia = arvore.

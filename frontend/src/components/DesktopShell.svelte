@@ -290,6 +290,12 @@ import * as m from '../paraglide/messages';
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+      // Visor de arquivo aberto por cima (Task 11, B6): o Esc dele pertence ao Chat
+      // (onGlobalKey fecha so o visor). Sem esta guarda a CAPTURA fechava o overlay do
+      // board/canvas antes de o visor fechar — o arquivo sumia junto com a rota num Esc só.
+      // getClientRects: display:none (desktop estreito) nao conta como visor aberto.
+      const visor = document.querySelector<HTMLElement>('[data-arq-visor]');
+      if (visor && visor.getClientRects().length > 0) return;
       // CAPTURA na window roda ANTES do onkeydown (bolha) do TerminalPanel — sem esta guarda, Esc
       // digitado dentro do xterm (que deve chegar no agente, Task 5/I4) fechava o overlay do board
       // primeiro, ninguem via a tecla.

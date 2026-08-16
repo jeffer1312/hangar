@@ -47,6 +47,16 @@ export class FilesStore {
   private gBusca = 0;
   private gLista = new Map<string, number>();
 
+  // Geracao do DONO do campo `erro` (parecer Task 11, B1): `abrir`, `buscar` e `recarregar`
+  // capturam uma geracao nova ao comecar e so escrevem/limpam `erro` se ainda forem o dono
+  // quando a resposta voltar. Sem isto, a recuperacao do 404 de um arquivo antigo (que roda
+  // `await recarregar()` no meio) sobrescrevia o erro de uma abertura mais nova com o aviso
+  // do arquivo que ja foi abandonado.
+  private gErro = 0;
+  // Geracao da busca que gravou `resultados` — o 404 de abrir so remove o hit morto da lista
+  // se os resultados ainda forem dessa busca (B4); busca nova em voo tem prioridade.
+  private gResultados = -1;
+
   // Conteudo de cada pasta ja listada ('' = raiz). A arvore mostra varias pastas abertas ao
   // mesmo tempo (docs/mocks/2026-08-15-arvore/arvore.js), entao um diretorio de cada vez nao
   // serve.
@@ -91,6 +101,7 @@ export class FilesStore {
     this.erro = null;
     this.loading = true;
     const g = ++this.gArquivo;
+    const ge = ++this.gErro;   // esta abertura e a dona do erro a partir de agora
     // allSettled, nao all: o conteudo MANDA. Fora de repositorio git o path_diff sempre responde
     // 409 (git_ops.py) e a arvore tem que continuar lendo arquivo (regra do usuario, 15/08).
     const [c, d] = await Promise.allSettled([
@@ -115,9 +126,22 @@ export class FilesStore {
       // pode falhar com algo mais grave (sessao encerrada) que nao pode ser sobrescrito.
       const status = (c.reason as Error & { status?: number })?.status;
       if (status === 404) {
-        await this.recarregar();
-        if (!this.erro) this.erro = m.erro_arq_inexistente();
-      } else {
+        // A pasta PAI e re-listada MESMO colapsada (B3): o recarregar so cobre raiz e abertas,
+        // e sem esta passada o cache velho da pasta fechada devolveria a linha apagada na
+        // proxima expansao. Invalida a geracao ANTES (resposta velha da pasta nao repovoa).
+        const pai = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+        this.gLista.set(pai, (this.gLista.get(pai) ?? 0) + 1);
+        await this.recarregar(ge);
+        if (pai !== '' && !this.abertos.has(pai)) await this._listar(pai, ge);
+        // Hit de busca morto (B4): o arquivo apagado sai dos resultados, senao o botao
+        // continua clicavel para sempre. So se os resultados ainda forem da busca vigente.
+        if (this.gBusca === this.gResultados) {
+          this.resultados = this.resultados.filter((h) => h.path !== path);
+        }
+        // B1: so pinta o erro se ESTA abertura ainda for a dona — uma abertura/busca nova
+        // venceu durante a recarga e nao pode ser sobrescrita pelo aviso do arquivo antigo.
+        if (ge === this.gErro && !this.erro) this.erro = m.erro_arq_inexistente();
+      } else if (ge === this.gErro) {
         this.erro = cleanErr(c.reason);
       }
       return;
@@ -135,26 +159,31 @@ export class FilesStore {
       return;
     }
     this.abertos.add(path);
-    if (!this.porPasta.has(path)) await this._listar(path);
+    if (!this.porPasta.has(path)) await this._listar(path, ++this.gErro);
   }
 
   // Busca por nome ou conteudo; os achados vao para `resultados`.
   async buscar(q: string, mode: 'names' | 'contents') {
     this.erro = null;
     const g = ++this.gBusca;
+    const ge = ++this.gErro;   // esta busca e a dona do erro
     try {
       const r = await searchFiles(this.sessao, q, mode);
       if (g !== this.gBusca) return;
       this.resultados = r.hits;
+      this.gResultados = g;
       this.buscaCortada = r.truncated;
     } catch (e) {
-      if (g === this.gBusca) this.erro = cleanErr(e);
+      if (g === this.gBusca && ge === this.gErro) this.erro = cleanErr(e);
     }
   }
 
   // Re-lista a raiz e todas as pastas abertas, com o filtro `soModificados` de agora.
-  async recarregar() {
-    await Promise.all(['', ...this.abertos].map((p) => this._listar(p)));
+  // `ge` e a geracao do dono do erro quando chamada POR uma operacao (a recuperacao do 404
+  // passa a da abertura); chamada pelo botao, captura geracao nova (e o dono).
+  async recarregar(ge?: number) {
+    const dona = ge ?? ++this.gErro;
+    await Promise.all(['', ...this.abertos].map((p) => this._listar(p, dona)));
   }
 
   // Troca o escopo do diff e reabre o arquivo selecionado. Quem le o controle da tela e o
@@ -165,10 +194,13 @@ export class FilesStore {
     if (this.selecionado) await this.abrir(this.selecionado);
   }
 
-  private async _listar(path: string) {
+  private async _listar(path: string, ge: number) {
     const g = (this.gLista.get(path) ?? 0) + 1;
     this.gLista.set(path, g);
-    if (path === '') this.erro = null;   // a raiz e sempre listada no recarregar: sucesso limpa
+    // A raiz e sempre listada no recarregar: sucesso limpa o erro — mas so se quem pediu a
+    // listagem ainda e o dono (B1): uma abertura/busca nova nao pode ter seu erro apagado
+    // pela resposta velha de uma listagem abandonada.
+    if (path === '' && ge === this.gErro) this.erro = null;
     try {
       const r = await listFiles(this.sessao, path || undefined, this.soModificados);
       if (g !== this.gLista.get(path)) return;
@@ -186,7 +218,7 @@ export class FilesStore {
         // ligado com a arvore vazia. 404 na RAIZ nao e pasta sumida: e o cwd da sessao que
         // morreu (ou a sessao encerrou) — vira aviso visivel.
         if (path === '') {
-          this.erro = m.arq_sessao_encerrada();
+          if (ge === this.gErro) this.erro = m.arq_sessao_encerrada();
         } else {
           // A pasta e TODOS os descendentes — abertos OU colapsados: um filho colapsado
           // mantem o cache em porPasta/cortePorPasta, e sem apagar esse cache o arquivo
@@ -206,33 +238,39 @@ export class FilesStore {
         }
         return;
       }
-      this.erro = cleanErr(e);
+      if (ge === this.gErro) this.erro = cleanErr(e);
     }
   }
 }
 
-// Registry do FilesStore: uma instancia por sessao, vivendo no MODULO. O App remonta o Chat por
-// {#key} a cada troca de sessao, entao um store criado no onMount morreria — e a regua "pasta
-// aberta continua aberta ao voltar" exige que o estado sobreviva ao remount.
+// Registry do FilesStore: uma instancia por IDENTIDADE composta (serverId::sessionName), vivendo
+// no MODULO. O App remonta o Chat por {#key} a cada troca de sessao, entao um store criado no
+// onMount morreria — e a regua "pasta aberta continua aberta ao voltar" exige que o estado
+// sobreviva ao remount. A chave leva o serverId porque dois servidores podem ter sessoes com o
+// MESMO nome (parecer Task 11, B2): sem o servidor na chave, abrir um arquivo no servidor A
+// deixava selecionado/conteudo/cache no store que o servidor B recebia ao abrir a homonima.
 const stores = new Map<string, FilesStore>();
 const refs = new Map<string, number>();
 
 export const filesStores = {
-  retain(sessao: string): FilesStore {
-    let s = stores.get(sessao);
+  // `chave` e a identidade composta (serverId::sessionName); `sessao` e o NOME, que e o que as
+  // chamadas de API usam (filesStore.sessao). A identidade vem do mesmo lugar que remonta o
+  // Chat (DesktopShell.workspaceSessionKey), nunca calculada diferente por caller.
+  retain(chave: string, sessao: string): FilesStore {
+    let s = stores.get(chave);
     if (!s) {
       s = new FilesStore(sessao);
-      stores.set(sessao, s);
+      stores.set(chave, s);
     }
-    refs.set(sessao, (refs.get(sessao) ?? 0) + 1);
+    refs.set(chave, (refs.get(chave) ?? 0) + 1);
     return s;
   },
-  release(sessao: string): void {
-    const n = (refs.get(sessao) ?? 1) - 1;
-    if (n <= 0) refs.delete(sessao);
-    else refs.set(sessao, n);
+  release(chave: string): void {
+    const n = (refs.get(chave) ?? 1) - 1;
+    if (n <= 0) refs.delete(chave);
+    else refs.set(chave, n);
     // ponytail: com refs 0 o store continua no map — o estado (pastas abertas) e a regua de
-    // "pasta aberta continua aberta ao voltar", e a memoria por nome de sessao e barata (o app
+    // "pasta aberta continua aberta ao voltar", e a memoria por identidade e barata (o app
     // reusa nomes). Se um dia virar vazamento real, um LRU por antiguedade.
   },
 };

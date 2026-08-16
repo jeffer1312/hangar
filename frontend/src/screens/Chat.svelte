@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { ctxPanel, LARGURA_ABERTO, LARGURA_TRILHO } from '../lib/ctxPanel.svelte';
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
@@ -98,18 +98,22 @@
 
   let events = $state<ChatEvent[]>([]);
 
-  // Store da aba Arquivos — MESMA instância do FilesPanel (registry por sessão). Quem desenha o
-  // arquivo aberto no DESKTOP é este Chat (mock 2: o arquivo cobre a conversa, a árvore fica viva
-  // no painel); o FilesPanel só marca a seleção. No celular quem monta o visor é o próprio
-  // FilesPanel (Task 12) — daí o `desktop` abaixo. retain/release: mesmo padrão do FilesPanel, o
-  // App remonta este Chat por {#key} a cada troca de sessão e um store do mount morreria com o
-  // estado.
+  // Store da aba Arquivos — MESMA instância do FilesPanel (registry por identidade
+  // serverId::sessionName). Quem desenha o arquivo aberto no DESKTOP é este Chat (mock 2: o
+  // arquivo cobre a conversa, a árvore fica viva no painel); o FilesPanel só marca a seleção.
+  // No celular quem monta o visor é o próprio FilesPanel (Task 12) — daí o `desktop` abaixo.
+  // retain/release: mesmo padrão do FilesPanel, o App remonta este Chat por {#key} a cada troca
+  // de sessão e um store do mount morreria com o estado.
   // svelte-ignore state_referenced_locally — captura intencional: o App remonta este Chat por
   // {#key} a cada troca de sessao, entao o store do mount e o store da sessao — se a prop
   // mudasse no meio (nao muda), o FilesStore novo substituiria o velho e a regua de pastas
-  // abertas morreria. Mesmo padrao do FilesPanel.
-  const filesStore = filesStores.retain(sessionName);
-  onDestroy(() => filesStores.release(sessionName));
+  // abertas morreria. Mesmo padrao do FilesPanel. A chave e a MESMA identidade do shell
+  // (serverId::nome) que o FilesPanel usa — nunca calculada diferente por caller.
+  const filesChave = `${getActiveId() ?? ''}::${sessionName}`;
+  // svelte-ignore state_referenced_locally — a linha acima ja tem o ignore no comentario de
+  // bloco; esta referência a sessionName (retain/release) e a mesma captura intencional.
+  const filesStore = filesStores.retain(filesChave, sessionName);
+  onDestroy(() => filesStores.release(filesChave));
 
   // O visor segue o painel de contexto: some quando o painel fecha ou recolhe, e o estado fica no
   // store — reabrir o painel restaura o arquivo (mesma régua de "pasta aberta continua aberta").
@@ -119,6 +123,34 @@
   // Path do arquivo aberto — variável LOCAL de propósito: dentro do {#if visorAberto} o template
   // estreita o tipo pra string (filesStore.selecionado é string | null e o TS não acompanha o if).
   const arquivoAberto = $derived(filesStore.selecionado);
+
+  // Foco do visor (B5): o arquivo cobre a conversa sem véu, então o Tab não pode alcançar os
+  // controles escondidos (MessageList/composer) — o underlay fica `inert` — e o foco tem dono:
+  // captura o treeitem/resultado que abriu, move pro Fechar do visor, e devolve ao fechar
+  // (×, voltar ou Esc). Sem isto o foco morria no elemento destruído ao fechar.
+  let abridorEl: HTMLElement | null = null;
+  let visorFocou = false;
+  $effect(() => {
+    if (!visorAberto) return;
+    // O clique que abriu ainda tem o foco (treeitem/resultado) — captura antes de mover.
+    abridorEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Move o foco pro Fechar DEPOIS do mount do FileViewer (mesmo flush, tick garante).
+    visorFocou = false;
+    void tick().then(() => {
+      if (!visorAberto || visorFocou) return;   // fechou/trocou no meio do tick
+      visorFocou = true;
+      (screenEl?.querySelector<HTMLElement>('.arq-visor .fechar'))?.focus();
+    });
+  });
+
+  // Única saída do visor (×, voltar e Esc passam por aqui): limpa a seleção e devolve o foco
+  // ao elemento que abriu — depois do tick, quando o visor já desmontou.
+  function fecharVisor() {
+    const alvo = abridorEl;
+    filesStore.selecionado = null;
+    abridorEl = null;
+    void tick().then(() => alvo?.focus());
+  }
 
   // Cache de prompt: o ULTIMO turno do assistente manda. Usar a cache renova o prazo, entao a
   // conta corre da hora do turno mais recente, e o TTL vem MEDIDO do transcript (1h ou 5min) —
@@ -387,7 +419,7 @@
     // acima): o Esc fecha o sheet primeiro, o próximo fecha o visor.
     if (e.key === 'Escape' && visorAberto) {
       e.preventDefault();
-      filesStore.selecionado = null;
+      fecharVisor();
       return;
     }
     if (mod && (e.key === 'k' || e.key === 'K')) {
@@ -1433,6 +1465,7 @@
       {pairPeers}
       {serverLabel}
       provider={sessionProvider}
+      serverId={getActiveId() ?? ''}
       {sessionName}
       onOpenTerminal={abrirTerminalReal}
       terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen}
@@ -1465,19 +1498,24 @@
          clicável no painel de 264px ao lado (mock 2, sem véu). Quem monta o FileViewer no
          desktop é este Chat; no celular é o próprio FilesPanel (Task 12). Clicar em outro
          arquivo troca o conteúdo sem fechar: o store muda selecionado e o FileViewer recebe o
-         path novo. -->
-    <div class="arq-visor">
+         path novo. `data-arq-visor` é o marcador ESTÁVEL que o guard de captura do
+         DesktopShell procura no Esc (B6): o overlay do board/canvas só fecha depois do visor. -->
+    <div class="arq-visor" data-arq-visor>
       <FileViewer
         path={arquivoAberto}
         diff={filesStore.diff}
         conteudo={filesStore.conteudo}
         loading={filesStore.loading}
         onEscopo={(e) => filesStore.trocarEscopo(e)}
-        onFechar={() => (filesStore.selecionado = null)}
+        onFechar={fecharVisor}
       />
     </div>
   {/if}
 
+  <!-- Underlay da conversa (B5 do parecer): MessageList, pílulas e dock ficam INERTES com o
+       visor aberto — Tab não alcança controles escondidos sob o arquivo. O painel de contexto
+       (árvore viva) e o próprio visor ficam FORA deste wrapper de propósito. -->
+  <div class="chat-underlay" inert={visorAberto}>
   {#if loading}
     <!-- Entrando na sessao: skeleton shimmer (familia Respiracao) enquanto o /history carrega. -->
     <div class="chat-skeleton" aria-label={m.chat_carregando_historico()} aria-busy="true">
@@ -1615,6 +1653,7 @@
       />
     {/if}
   </div>
+  </div>
 
   <SessionSwitcherSheet
     open={switcherOpen}
@@ -1692,6 +1731,16 @@
 </div>
 
 <style>
+  /* Underlay da conversa (B5): envolve MessageList + pills + dock pra ficar `inert` com o
+     visor aberto. Repete o flex column do pai — sem isto o skeleton/MessageList (flex:1)
+     perderia a altura e a coluna colapsaria. Nenhum estilo proprio: so o percurso de teclado. */
+  .chat-underlay {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   .chat-screen {
     display: flex;
     flex-direction: column;

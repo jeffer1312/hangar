@@ -18,6 +18,10 @@ import * as m from '../paraglide/messages';
     pairPeers?: string[] | null;
     serverLabel?: string;
     provider?: 'claude' | 'codex' | 'pi' | 'kimi';
+    // Identidade do servidor (B2 do parecer): o FilesPanel chaveia o store por
+    // serverId::sessionName; o Chat passa o MESMO getActiveId que ele usa, nunca calculado
+    // diferente por caller.
+    serverId?: string;
     // Nome da sessao aberta: com a NavBar escondida (>=1280px) ele some da tela — e no overlay
     // do board/canvas nem a lista lateral esta a vista. Vai no header do painel.
     sessionName?: string;
@@ -69,7 +73,7 @@ import * as m from '../paraglide/messages';
 
   let {
     state, stateDetail = null, status = null, pairPeers = null,
-    serverLabel = '', provider = 'claude', sessionName = '',
+    serverLabel = '', provider = 'claude', sessionName = '', serverId = '',
     onOpenTerminal = undefined, terminalAlert = false,
     onOpenRun = undefined, runRunning = false,
     onOpenAttachments = undefined,
@@ -345,7 +349,7 @@ import * as m from '../paraglide/messages';
   </div>
   {:else}
   <div id="painel-ctx-arquivos" role="tabpanel" aria-labelledby="aba-ctx-arquivos" class="ctx-tab">
-    <FilesPanel sessionName={sessionName} desktop={true} />
+    <FilesPanel sessionName={sessionName} {serverId} desktop={true} />
   </div>
   {/if}
   {/if}

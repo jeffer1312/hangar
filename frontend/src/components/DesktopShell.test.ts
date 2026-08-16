@@ -200,4 +200,48 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
     expect(document.querySelector<HTMLElement>('.empty-sub')!.textContent).toContain('na barra lateral');
     unmount(t2.comp);
   });
+
+  // Parecer Task 11, B6: com o visor de arquivo aberto DENTRO do overlay (board/canvas), o
+  // primeiro Escape fecha o visor (dono do Esc é o Chat) e NÃO o overlay — o guard de captura
+  // do DesktopShell procura o [data-arq-visor] visível e devolve. O segundo Escape (visão
+  // sem o visor) fecha o overlay.
+  it('Escape com visor aberto dentro do overlay NAO fecha o overlay (B6)', async () => {
+    const onCloseOverlay = vi.fn();
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(DesktopShell, {
+      target: el,
+      props: {
+        currentSession: null,
+        currentKey: null,
+        view: 'chat',
+        overlaySession: { name: 'sess', serverId: 'srv-a' },   // board/canvas aberto
+        onOpenBoardSession: vi.fn(),
+        onOpenCanvasSession: vi.fn(),
+        onCloseOverlay,
+        onToggleBoard: vi.fn(),
+        onToggleCanvas: vi.fn(),
+        onNavigateToChat: vi.fn(),
+        onCompare: vi.fn(),
+      },
+    });
+    await tick();
+    // o visor do arquivo monta DENTRO do Chat do overlay (stubado aqui) — injeta o marcador
+    // real que o guard procura, com caixa visível
+    const visor = document.createElement('div');
+    visor.setAttribute('data-arq-visor', '');
+    visor.style.width = '100px';
+    visor.style.height = '100px';
+    document.body.appendChild(visor);
+    // dispara no body (sobe ate a window na captura): o guard do DesktopShell chama
+    // e.target.closest, e o target de um evento na window crua nao tem closest
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    expect(onCloseOverlay).not.toHaveBeenCalled();   // 1o Esc: fecha o visor, nao o overlay
+    visor.remove();                                   // o visor fechou (Chat limpou selecionado)
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    expect(onCloseOverlay).toHaveBeenCalledTimes(1);  // 2o Esc: fecha o overlay
+    unmount(comp as never);
+  });
 });

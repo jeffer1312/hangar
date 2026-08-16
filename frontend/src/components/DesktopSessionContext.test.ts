@@ -30,6 +30,7 @@ function montar(toggleExterno: boolean) {
     props: {
       state: 'idle',
       sessionName: 'sess-1',
+      serverId: 'srv-test',
       toggleExterno,
     },
   });

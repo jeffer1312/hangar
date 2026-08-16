@@ -165,5 +165,6 @@
   "sync push falhou — server nao subiu pro hub:",
   "text/plain",
   "um provider novo não volta a mentir.",
-  "vem do renderMarkdown como TEXTO ESCAPADO, monocromatico."
+  "vem do renderMarkdown como TEXTO ESCAPADO, monocromatico.",
+  ".arq-visor .fechar"
 ]
