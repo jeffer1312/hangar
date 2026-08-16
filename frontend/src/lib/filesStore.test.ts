@@ -397,6 +397,55 @@ describe('FilesStore', () => {
     expect(s.resultados.map((h) => h.path)).toEqual(['a.txt']);   // hit antigo continua
   });
 
+  // Parecer rodada 5, B4: o clique no hit antigo pode acontecer DEPOIS da busca nova comecar
+  // (o painel mantem os resultados antigos enquanto a resposta nova esta em voo). Nesse caso a
+  // abertura ve gBusca novo e gResultados antigo — o guard da rodada 4 (gb === gBusca &&
+  // gr === gResultados) passava e podava uma lista que a busca em voo ainda nao substituiu.
+  // A poda so vale quando a busca vigente ja pintou os resultados visiveis no momento do clique.
+  it('clique no hit antigo com busca nova em voo nao poda o resultado (busca nova falha)', async () => {
+    let liberaLista: (v: unknown) => void = () => {};
+    vi.mocked(searchFiles)
+      .mockResolvedValueOnce({ hits: [{ path: 'a.txt', line: null, text: null }], truncated: false, mode: 'names' } as never)
+      .mockRejectedValueOnce(Object.assign(new Error('rede'), { status: 500 }));
+    vi.mocked(readFile).mockRejectedValueOnce(Object.assign(new Error('gone'), { status: 404 }));
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'a.txt', diff: '', truncated: false } as never);
+    vi.mocked(listFiles).mockImplementationOnce(() => new Promise((resolve) => { liberaLista = resolve; }) as never);
+    const s = new FilesStore('sessao');
+    await s.buscar('antiga', 'names');
+    const nova = s.buscar('nova', 'names');   // busca nova comeca ANTES do clique
+    const abertura = s.abrir('a.txt');        // clique no hit antigo -> 404
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(1));
+    liberaLista({ truncated: false, entries: [] });
+    await abertura;
+    expect(s.resultados.map((h) => h.path)).toEqual(['a.txt']);   // nada podado
+    await nova;   // a busca nova FALHA: o hit antigo e a unica resposta
+    expect(s.resultados.map((h) => h.path)).toEqual(['a.txt']);
+  });
+
+  // variante: a busca nova CONCLUI — ela vira a dona da lista, mas o hit antigo nao pode
+  // sumir antes disso (a poda da recuperacao velha nao pode correr no intervalo).
+  it('clique no hit antigo com busca nova em voo nao poda o resultado (busca nova conclui)', async () => {
+    let liberaLista: (v: unknown) => void = () => {};
+    let liberaBusca: (v: unknown) => void = () => {};
+    vi.mocked(searchFiles)
+      .mockResolvedValueOnce({ hits: [{ path: 'a.txt', line: null, text: null }], truncated: false, mode: 'names' } as never)
+      .mockImplementationOnce(() => new Promise((resolve) => { liberaBusca = resolve; }) as never);
+    vi.mocked(readFile).mockRejectedValueOnce(Object.assign(new Error('gone'), { status: 404 }));
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'a.txt', diff: '', truncated: false } as never);
+    vi.mocked(listFiles).mockImplementationOnce(() => new Promise((resolve) => { liberaLista = resolve; }) as never);
+    const s = new FilesStore('sessao');
+    await s.buscar('antiga', 'names');
+    const nova = s.buscar('nova', 'names');
+    const abertura = s.abrir('a.txt');
+    await vi.waitFor(() => expect(listFiles).toHaveBeenCalledTimes(1));
+    liberaLista({ truncated: false, entries: [] });
+    await abertura;
+    expect(s.resultados.map((h) => h.path)).toEqual(['a.txt']);   // ainda visivel durante a recuperacao
+    liberaBusca({ hits: [{ path: 'b.txt', line: null, text: null }], truncated: false, mode: 'names' } as never);
+    await nova;
+    expect(s.resultados.map((h) => h.path)).toEqual(['b.txt']);   // a lista nova e a dona
+  });
+
   // Task 10, contrato 2: `loading` fica ligado entre o clique e a resposta — sem o sinal, o
   // FileViewer nao tem como saber que nao pode afirmar "sem diferencas".
   it('loading fica ligado durante a abertura e desliga no fim', async () => {

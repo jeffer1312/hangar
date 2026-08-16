@@ -103,7 +103,12 @@ export class FilesStore {
     const g = ++this.gArquivo;
     const ge = ++this.gErro;   // esta abertura e a dona do erro a partir de agora
     const gr = this.gResultados;   // geracao dos resultados que ESTA abertura pode podar (B4)
-    const gb = this.gBusca;        // ... e a geracao da busca que os produziu (B4, rodada 4)
+    const gb = this.gBusca;        // ... e a geracao da busca vigente no momento do clique
+    // A poda so vale se a busca vigente JA pintou os resultados que esta abertura viu: com uma
+    // busca nova em voo (gBusca avancou, gResultados nao), o painel ainda mostra a lista
+    // antiga e a abertura nao pode poda-la — a busca em voo pode falhar e o hit era a unica
+    // resposta (B4, rodada 5 — o clique no hit antigo depois da busca nova comecar).
+    const podePodar = gb === gr;
     // allSettled, nao all: o conteudo MANDA. Fora de repositorio git o path_diff sempre responde
     // 409 (git_ops.py) e a arvore tem que continuar lendo arquivo (regra do usuario, 15/08).
     const [c, d] = await Promise.allSettled([
@@ -142,11 +147,10 @@ export class FilesStore {
         // geracao mais nova — o _listar abaixo deixa gLista descartar a resposta mais velha.
         if (pai !== '') await this._listar(pai, ge);
         // Hit de busca morto (B4): o arquivo apagado sai dos resultados, senao o botao
-        // continua clicavel para sempre. So se os resultados ainda forem OS MESMOS que esta
-        // abertura viu (gr) E a busca que os produziu ainda for a vigente (gb): uma busca
-        // nova — concluida OU pendente — pode reencontrar o arquivo, e a resposta velha nao
-        // pode poda-la (pendente, gr ainda e o antigo e o gr sozinho nao distingue).
-        if (gb === this.gBusca && gr === this.gResultados) {
+        // continua clicavel para sempre. So se a busca vigente ja tinha pintado os resultados
+        // que esta abertura viu (podePodar) E nada mudou desde o clique (gb/gr iguais aos
+        // capturados): busca nova em voo ou concluida nunca e alterada pela resposta velha.
+        if (podePodar && gb === this.gBusca && gr === this.gResultados) {
           this.resultados = this.resultados.filter((h) => h.path !== path);
         }
         // B1: so pinta o erro se ESTA abertura ainda for a dona — uma abertura/busca nova
