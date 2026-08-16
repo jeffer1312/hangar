@@ -79,9 +79,6 @@
     });
   });
 
-  // Foco do drill-down (B2): ...
-  // (abridorPath/abridorEl declarados acima, junto do store)
-
   // Drill-down da aba Arquivos: o clique no arquivo marca a selecao no store (FilesPanel), e o
   // nivel 0 -> 1 sobe aqui — sem o push, o maxLevel do GIT_TABS nao vale. O nivel 1 nao
   // empurra de volta: fecharArquivo (abaixo) e a unica saida.
@@ -246,9 +243,11 @@
   /* Task 14: no mobile o sheet so tem max-height (sem height) — o height:100% caia em auto e a
      caixa do diff (agora height: fit-content) esticava o modal inteiro. Esta altura e o content
      box do sheet (o max-height menos o padding dele), o que devolve a referencia para o
-     drill-down encolher e a caixa rolar por dentro. */
+     drill-down encolher e a caixa rolar por dentro.
+     Task 15, item 2: o sheet tem o .drag-handle como irmao do .gt (4px + margin-bottom de
+     --space-4 = 20px) — sem descontar, o .gt nascia em y=68 e terminava 20px alem da tela. */
   .gt:not(.gt-desktop) {
-    height: calc(100dvh - var(--space-8) - var(--space-4) - var(--space-5) - env(safe-area-inset-bottom, 0px));
+    height: calc(100dvh - var(--space-8) - var(--space-4) - var(--space-5) - var(--space-5) - env(safe-area-inset-bottom, 0px));
   }
   .gt-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-shrink: 0; }
   .gt-id { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }

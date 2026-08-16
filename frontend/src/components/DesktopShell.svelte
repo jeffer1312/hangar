@@ -372,7 +372,7 @@ import * as m from '../paraglide/messages';
              onWorkspaceActionsChange={handleSidebarActionsChange}
              {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)}
              onCollapsedChange={(v) => (barraRecolhida = v)}
-             {ctxDisponivel} />
+             {ctxDisponivel} {overlaySession} />
   </div>
 
   <div class="desktop-com-terminal" bind:this={navEl}>

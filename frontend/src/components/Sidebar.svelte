@@ -78,11 +78,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     // Painel de contexto montado (= sessão aberta sem split, ou overlay). Sem ele o toggle do
     // rodapé do trilho desabilita — mesmo contrato que a SessionTabs (DesktopShell entrega).
     ctxDisponivel?: boolean;
+    // Overlay do Quadro/Canvas aberto (rota #/board|#/canvas/<server>/<nome>): o Chat do overlay
+    // recebe showContextPanel=true, então ele HOSPEDA o visor de arquivo — a Sidebar precisa
+    // saber qual sessão está no overlay pra acertar o filesInContext do Git do trilho (Task 15).
+    overlaySession?: { name: string; serverId: string } | null;
   }
   let {
     currentSession, onSelect, onCompare, boardActive, canvasActive,
     onWorkspaceActionsChange, view, onSelectView, onOpenCommand, onCollapsedChange,
-    ctxDisponivel = true,
+    ctxDisponivel = true, overlaySession = null,
   }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
@@ -473,15 +477,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     gitSheet = { name };
     closeMenu();
   }
-  // filesInContext de VERDADE (Task 14, achado do revisor na Task 12): o Git aberto pelo menu da
-  // Sidebar e da sessao X — se X e a sessao ATIVA no Chat (currentSession) com o painel de
-  // contexto visivel (desktop largo + ctxDisponivel + nao recolhido) e sem board/canvas por cima,
-  // o Chat DESENHARIA o visor ao clicar num arquivo pelo Git — a aba Arquivos aqui abriria o
-  // visor fantasma por tras do modal e deixaria a conversa inert. Mesma expressao do Chat.svelte,
-  // com as props que a Sidebar tem (ctxDisponivel e o mesmo contrato do showContextPanel).
+  // filesInContext de VERDADE (Task 14, achado do revisor na Task 12; Task 15, item 1): o Git
+  // aberto pelo menu da Sidebar e da sessao X — se um Chat da sessao X esta HOSPEDANDO o visor
+  // (painel de contexto visivel: desktop largo + ctxDisponivel + nao recolhido), o clique num
+  // arquivo pelo Git desenharia o visor fantasma por tras do modal e deixaria a conversa inert.
+  // O host pode ser o Chat normal (sem board/canvas e X = currentSession) OU o Chat do overlay
+  // do Quadro/Canvas na MESMA sessao (o overlay recebe showContextPanel=true sempre). Sem o
+  // overlaySession, boardActive zerava a expressao inteira e o overlay nao era reconhecido como
+  // host — o mesmo defeito que a Task 14 impediu, entrando pelo Quadro.
   const filesInContext = $derived(
-    isDesktopLargo && ctxDisponivel && !ctxPanel.recolhido && !boardActive && !canvasActive
-      && gitSheet !== null && gitSheet.name === currentSession,
+    isDesktopLargo && ctxDisponivel && !ctxPanel.recolhido && gitSheet !== null
+      && ((overlaySession !== null && overlaySession.name === gitSheet.name)
+        || (!boardActive && !canvasActive && gitSheet.name === currentSession)),
   );
 
   function closeGitSheet() {

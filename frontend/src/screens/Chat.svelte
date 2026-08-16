@@ -309,9 +309,11 @@
     mq.addEventListener('change', on);
     const mqLargo = window.matchMedia('(min-width: 1280px)');
     const onLargo = () => {
-      // Ownership do visor do Chat (B1, rodada 5): o listener roda ANTES do flush do svelte —
-      // o visorAberto ainda e o valor LARGO aqui. O Git do desktop sem contexto compartilha o
-      // MESMO FilesStore; sem a marca, a transicao largo->estreito limparia a selecao do Git e
+      // Ownership do visor do Chat (B1, rodada 5): quem garante a marca e a ORDEM destas duas
+      // linhas — a de cima le visorAberto (derivada do isDesktopLargo ANTERIOR) e so a de
+      // baixo escreve o valor novo. Invertidas, a derivada recalcularia no mesmo flush e a
+      // marca nunca seria capturada: o Git do desktop sem contexto compartilha o MESMO
+      // FilesStore, e sem a marca a transicao largo->estreito limparia a selecao do Git e
       // focaria o Composer atras do modal aberto. So o visor DO CHAT (filesInContext com
       // selecao) captura a marca.
       if (!mqLargo.matches && visorAberto) chatVisorEsteveAberto = true;

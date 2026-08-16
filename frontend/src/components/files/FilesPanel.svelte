@@ -181,9 +181,6 @@
   .files-panel.mobile :global(.busca input),
   .files-panel.mobile :global(.seg button) {
     font-size: 13px;
-  }
-  .files-panel.mobile :global(.busca input),
-  .files-panel.mobile :global(.seg button) {
     min-height: 44px;
   }
   /* O aviso de filtro e a MESMA linha, mas o botao "mostrar tudo" precisa de alvo de toque no

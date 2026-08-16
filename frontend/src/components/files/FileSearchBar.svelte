@@ -20,9 +20,6 @@
   // que pode não ter ecoado o que o usuário ainda está vendo.
   // A inicialização via onMount (e a guarda no $effect) evita o warning do svelte-check
   // de "referência captura só o valor inicial" e o reset no primeiro flush.
-  // Rascunho do campo: começa em q e acompanha as mudanças externas da prop (troca de
-  // sessão, limpeza). A digitação vive aqui — o clique de aba usa ELE, nunca a prop q,
-  // que pode não ter ecoado o que o usuário ainda está vendo.
   // svelte-ignore state_referenced_locally — captura intencional do valor inicial de q;
   // as mudanças posteriores da prop são sincronizadas pela guarda no $effect abaixo.
   let texto = $state(q);

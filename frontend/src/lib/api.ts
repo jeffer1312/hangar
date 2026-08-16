@@ -951,7 +951,7 @@ export function getChangedFiles(name: string): Promise<{ files: ChangedFile[]; s
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/files`);
 }
 
-export function getFileDiff(name: string, path: string): Promise<{ path: string; diff: string }> {
+export function getFileDiff(name: string, path: string): Promise<{ path: string; diff: string; truncated: boolean }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/git/diff`, {
     method: 'POST',
     body: JSON.stringify({ path }),

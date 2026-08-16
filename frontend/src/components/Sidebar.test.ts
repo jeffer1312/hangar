@@ -30,8 +30,19 @@ vi.mock('../lib/api', () => ({
   broadcast: vi.fn(), getHistoryTailForServer: vi.fn(async () => []),
   // Imports do SessionContextMenu REAL (não stubado): o onMount chama getPushSettings.
   getPushSettings: vi.fn(async () => ({ muted: [] })),
-  setSessionMute: vi.fn(), getBranches: vi.fn(), openEditor: vi.fn(),
+  setSessionMute: vi.fn(), openEditor: vi.fn(),
   setThenLink: vi.fn(), clearThenLink: vi.fn(),
+  // Git REAL montado nos testes de filesInContext (abaixo): o store faz refresh no load.
+  getBranches: vi.fn(async () => ({ branches: [], current: null, remotes: [], dirty: false })),
+  getChangedFiles: vi.fn(async () => ({ files: [], sequencer: null })),
+  getGitLog: vi.fn(async () => ({ commits: [], truncated: false })),
+  listFiles: vi.fn(async () => ({ entries: [], truncated: false })),
+  readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false })),
+  searchFiles: vi.fn(async () => ({ hits: [], truncated: false, mode: 'names' })),
+  pathDiff: vi.fn(async () => ({
+    path: 'a.txt', diff: '', truncated: false,
+    escopo_pedido: 'branch', escopo_usado: 'branch', base: null, motivo: null,
+  })),
 }));
 vi.mock('../lib/auth', () => ({
   getActiveId: vi.fn(() => null),
@@ -70,7 +81,14 @@ vi.mock('./CreateSessionSheet.svelte', stubDe);
 // SessionContextMenu NÃO é stubado: o teste clica no botão Renomear REAL do menu (mesmo caminho
 // que as abas usam — bridge -> openMenu -> Rename). Stub de raw snippet não repassava o clique
 // pro listener do setup no happy-dom (o nó é substituído no flush do Svelte).
-vi.mock('./Git.svelte', stubDe);
+// Git REAL (não stubado) nos testes de filesInContext: o alvo é a fileira .gt-tab que o GitTabs
+// renderiza a partir da prop filesInContext da Sidebar. As abas irmãs viram stub (mesmo padrão
+// do GitTabs.test.ts); FilesPanel/FileViewer reais, com a API mockada acima.
+vi.mock('./git/GitChangesTab.svelte', stubDe);
+vi.mock('./git/GitHistoryTab.svelte', stubDe);
+vi.mock('./git/GitBranchesTab.svelte', stubDe);
+vi.mock('./git/GitStatusBar.svelte', stubDe);
+vi.mock('./git/RepoMenu.svelte', stubDe);
 vi.mock('./LoopSheet.svelte', stubDe);
 vi.mock('./SessionSwitcherSheet.svelte', stubDe);
 vi.mock('./HoverPreview.svelte', stubDe);
@@ -586,6 +604,142 @@ describe('Sidebar — trilho original no modo rail', () => {
     const t = montar({ ctxDisponivel: false });
     await tick();
     expect(document.querySelector('.rail-ctx')!.hasAttribute('disabled')).toBe(true);
+    unmount(t.comp);
+  });
+});
+
+// Task 15, item 1 + REGISTRADO 1 do parecer da Task 14 (arv-review19): das TRÊS expressões de
+// filesInContext (Chat, Sidebar, SessionList), a da Sidebar era a única sem teste — e é onde o
+// visor fantasma do Quadro nasceu. A fileira .gt-tab é o contrato do GitTabs (coberto lá com 7
+// casos); aqui o alvo é a DERIVADA da Sidebar alimentando o Git REAL (que monta o GitTabs real).
+// O visor só existe em desktop largo e com o painel de contexto visível.
+function stubMatchMedia() {
+  const estados = new Map<string, boolean>();
+  const ouvintes: Array<{ query: string; on: () => void }> = [];
+  window.matchMedia = ((query: string) => ({
+    get matches() {
+      return estados.get(query) ?? false;
+    },
+    addEventListener: (_tipo: string, on: () => void) => ouvintes.push({ query, on }),
+    removeEventListener: () => {},
+  })) as never;
+  return {
+    set(query: string, valor: boolean) {
+      estados.set(query, valor);
+      for (const o of ouvintes) if (o.query === query) o.on();
+    },
+  };
+}
+
+describe('Sidebar — filesInContext (Task 14/15): o Git do menu e a sessão hospedeira do visor', () => {
+  let mq: ReturnType<typeof stubMatchMedia>;
+  beforeEach(() => {
+    mq = stubMatchMedia();
+    mq.set('(min-width: 820px)', true);
+    mq.set('(min-width: 1280px)', true);   // o visor só existe em desktop largo
+  });
+
+  function comSessao() {
+    // Mock do store é plain: os deriveds leem as arrays uma vez, no mount (mesmo padrão
+    // do comUmaSessao do describe de renomear — comStore/sess são escopados ao describe deles).
+    // cwd presente de propósito: o item Git do SessionContextMenu só renderiza com `{#if cwd}`.
+    storeState.servers.length = 0;
+    storeState.servers.push({ id: 'srv-a', label: 'Servidor A', baseUrl: 'http://a', token: 'x' });
+    storeState.byServer.length = 0;
+    storeState.byServer.push({
+      server: { id: 'srv-a', label: 'Servidor A' },
+      sessions: [{ name: 'sess-1', serverId: 'srv-a', state: 'idle', cwd: '/repo/x' }],
+      error: null, loaded: true,
+    });
+  }
+  function montarCom(over: Record<string, unknown>) {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(Sidebar, {
+      target: el,
+      props: {
+        currentSession: null,
+        onSelect: vi.fn(),
+        onCompare: vi.fn(),
+        boardActive: false,
+        canvasActive: false,
+        view: 'chat',
+        onSelectView: vi.fn(),
+        onOpenCommand: vi.fn(),
+        onCollapsedChange: vi.fn(),
+        ctxDisponivel: true,
+        overlaySession: null,
+        ...over,
+      },
+    });
+    return { el, comp: comp as never };
+  }
+  async function abrirGitDaSessao() {
+    sidebarBridge.openSessionMenu(
+      new MouseEvent('contextmenu', { clientX: 5, clientY: 5 }),
+      { name: 'sess-1', serverId: 'srv-a', cwd: '/repo/x' } as unknown as AggSession,
+      'srv-a',
+    );
+    await tick();
+    const gitBtn = [...document.querySelectorAll<HTMLButtonElement>('.ctx-menu button')]
+      .find((b) => b.textContent?.trim().startsWith('Git') && !b.textContent?.includes('pull'));
+    expect(gitBtn).not.toBeNull();
+    gitBtn!.click();
+    for (let i = 0; i < 5; i++) await tick();   // monta BottomSheet + GitTabs + load do store
+  }
+  // GIT_TABS avalia as labels no import do módulo (locale default do happy-dom = en), antes do
+  // overwriteGetLocale — por isso o rótulo sai 'Files' e não 'Arquivos'. Mesmo padrão do
+  // GitTabs.test.ts, que compara com 'Files'. O alvo aqui é a DERIVADA (presença da aba), não a
+  // tradução — a paridade pt/en das mensagens é coberta pelos testes de i18n.
+  const abas = () => [...document.querySelectorAll<HTMLElement>('.gt-tab')].map((b) => b.textContent?.trim() ?? '');
+  const temArquivos = () => abas().includes('Files');
+  it('painel de contexto aberto: o Git da MESMA sessão NÃO oferece a aba Arquivos', async () => {
+    comSessao();
+    const t = montarCom({ currentSession: 'sess-1' });
+    await tick();
+    await abrirGitDaSessao();
+    expect(temArquivos()).toBe(false);
+    expect(abas()).toEqual(expect.not.arrayContaining([expect.stringContaining('Arquivos')]));
+    unmount(t.comp);
+  });
+
+  it('painel recolhido: a aba Arquivos VOLTA (o Chat não hospeda o visor)', async () => {
+    comSessao();
+    const t = montarCom({ currentSession: 'sess-1' });
+    await tick();
+    ctxPanel.recolhido = true;
+    await tick();
+    await abrirGitDaSessao();
+    expect(temArquivos()).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('Git de OUTRA sessão (currentSession diferente): a aba Arquivos aparece', async () => {
+    comSessao();
+    const t = montarCom({ currentSession: 'outra' });
+    await tick();
+    await abrirGitDaSessao();
+    expect(temArquivos()).toBe(true);
+    unmount(t.comp);
+  });
+
+  it('QUADRO com overlay da MESMA sessão: sem a aba (o Chat do overlay hospeda o visor)', async () => {
+    comSessao();
+    const t = montarCom({ boardActive: true, canvasActive: false, view: 'board',
+      overlaySession: { name: 'sess-1', serverId: 'srv-a' } });
+    await tick();
+    await abrirGitDaSessao();
+    expect(temArquivos()).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('QUADRO com overlay de OUTRA sessão: com a aba (o overlay não hospeda esta sessão)', async () => {
+    comSessao();
+    const t = montarCom({ boardActive: true, canvasActive: false, view: 'board',
+      overlaySession: { name: 'outra', serverId: 'srv-a' } });
+    await tick();
+    await abrirGitDaSessao();
+    expect(temArquivos()).toBe(true);
     unmount(t.comp);
   });
 });
