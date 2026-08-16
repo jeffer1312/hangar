@@ -172,9 +172,10 @@
     font-family: inherit;
     border-radius: 6px;
     /* Sobrescreve o alvo global de 44px (app.css) pra preservar a densidade do painel —
-       mesmo remedio do Composer.svelte. */
-    min-height: 0;
-    min-width: 0;
+       mesmo remedio do Composer.svelte. O piso de 24px e o minimo de alvo standalone
+       (WCAG 2.5.8 AA): o "Nome" e botao independente, nao texto inline. */
+    min-height: 24px;
+    min-width: 24px;
   }
   .ord-seta { font-size: 8px; }
   .acoes { display: flex; gap: 2px; }

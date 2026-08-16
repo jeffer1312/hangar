@@ -177,9 +177,18 @@ export class FilesStore {
         if (path === '') {
           this.erro = m.arq_sessao_encerrada();
         } else {
-          this.abertos.delete(path);
-          this.cortePorPasta.delete(path);
-          this.porPasta.delete(path);
+          // A pasta e TODOS os descendentes abertos (src/lib sob src): um filho aberto aponta
+          // pra lugar que nao existe mais. Antes de apagar cada estado, incrementa o contador
+          // dele em gLista — invalida resposta em voo de uma subpasta (a resposta atrasada
+          // nao pode repor estado obsoleto na arvore; medido pelo revisor).
+          for (const p of [...this.abertos]) {
+            if (p === path || p.startsWith(path + '/')) {
+              this.gLista.set(p, (this.gLista.get(p) ?? 0) + 1);
+              this.abertos.delete(p);
+              this.cortePorPasta.delete(p);
+              this.porPasta.delete(p);
+            }
+          }
         }
         return;
       }

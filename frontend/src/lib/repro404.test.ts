@@ -1,7 +1,8 @@
 // Reproducao do revisor (arv-review9), Task 10: o 404 do listFiles NAO chega com "404:" no texto.
 // O erro real vem de api.ts:ensureOk -> new Error(await errorDetail(res)) com .status = 404, e a
-// MENSAGEM e limpa (o comentario de api.ts:533 diz isso com todas as letras). O teste do commit
-// fabrica `new Error('404: ...')`, um shape que o app nunca produz.
+// MENSAGEM e limpa (o comentario de api.ts:533 diz isso com todas as letras). O commit original
+// fabricava `new Error('404: ...')`, um shape que o app nunca produz — o codigo corrigido le o
+// `.status`; este arquivo trava o shape real do erro para nao regredir.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { FilesStore } from './filesStore.svelte';
 import { listFiles, readFile, searchFiles, pathDiff } from './api';
@@ -27,7 +28,7 @@ const ent = (path: string, is_dir: boolean) => ({
 const erro404 = () =>
   Object.assign(new Error('Nao deu pra acessar esse arquivo ou pasta.'), { status: 404 });
 
-describe('404 real (mensagem limpa + .status) — o commit le o TEXTO', () => {
+describe('404 real (mensagem limpa + .status)', () => {
   // Padrao dos testes de texto deste projeto (recorte da Task 10): sem isto o paraglide
   // responde no idioma base (en) e a assercao literal em pt falha.
   beforeEach(() => {
