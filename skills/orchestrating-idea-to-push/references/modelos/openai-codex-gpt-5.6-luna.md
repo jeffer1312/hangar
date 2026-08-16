@@ -20,10 +20,12 @@ contexto.
 **Consequência para o plano: ele revisa 2 a 3 Tasks por sessão, e nenhuma de tela sem folga larga.**
 Um trabalho de 12 Tasks precisa prever 4 ou 5 sessões dele. Preveja no plano em vez de descobrir.
 
-## Enxerga imagem: sim, mas é o recurso caro dele
+## Enxerga imagem: sim, e o custo mudou de lugar
 
-Comparação cega de print é a coisa que mais consome. Se o trabalho tem várias Tasks de tela, vale
-pôr um revisor de janela larga nelas e deixar as de código para ele.
+A parte cara **era** refazer a comparação cega; a skill não pede mais isso ao revisor
+(`revisor.md`). O que sobra e ainda consome é ler os prints por estado e medir ao vivo — numa Task
+de tela, ~96k por rodada mais ~85k de leitura inicial a cada troca de sessão. Se o trabalho tem
+várias Tasks de tela, **vale** pôr um revisor de janela larga nelas e deixar as de código para ele.
 
 ## Como ele falha
 

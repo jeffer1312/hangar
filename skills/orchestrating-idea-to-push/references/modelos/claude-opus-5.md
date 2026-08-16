@@ -22,8 +22,11 @@ revisor (três sessões, rotacionadas por contexto e por cota).
 
 ## Enxerga imagem: sim, nativamente
 
-Lê o print direto, sem ferramenta externa. É o que o torna o revisor certo para **Task de tela** —
-e o único que refaz comparação cega sem custo de tradução.
+Lê o print direto, sem ferramenta externa. É o que o torna o revisor certo para **Task de tela**:
+a passada final sobre o print e a barra sai sem custo de tradução, e ele enxerga o conjunto de
+estados de uma vez. **Refazer o protocolo cego do executor não é mais trabalho do revisor**
+(`revisor.md`, "Você NÃO refaz o protocolo cego") — foi essa mudança que tirou a comparação cega da
+conta dele.
 
 ## Onde ele é bom
 
