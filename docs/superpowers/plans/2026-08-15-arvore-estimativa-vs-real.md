@@ -39,11 +39,11 @@ cabeça.
 
 | Bloco | Início | Fim | Real | Estimado | Diferença |
 |---|---|---|---|---|---|
-| Worktrees | | | | 30–60 min | |
-| Lote A | | | | 1h30 – 2h30 | |
-| Costura 1 | | | | 40 min – 1h10 | |
-| Costura 2 | | | | 30 – 55 min | |
-| Lote B | | | | 1h – 1h45 | |
+| Worktrees | 14:11 | 14:20 | 9 min | 30–60 min | −21 a −51 min |
+| Lote A | 14:20 | 15:36 | 1h16 | 1h30 – 2h30 | −14 min a −1h14 |
+| Costura 1 | 15:40 | 19:38 | **3h58** | 40 min – 1h10 | **+2h48 a +3h18** |
+| Costura 2 | 19:40 | 19:58 | **18 min** | 30 – 55 min | −12 a −37 min |
+| Lote B | 20:05 | 21:02 | **57 min** | 1h – 1h45 | −3 min a −48 min |
 | Montagem | | | | 3h – 6h | |
 | Revisão final | | | | 30 – 60 min | |
 | **Total** | | | | **8h – 14h** | |
@@ -55,7 +55,10 @@ esta.
 
 | Quando | O que aconteceu | Custo |
 |---|---|---|
-| | | |
+| 15/08 15:2x | **O merge da Task 1 conflitou** em `backend/tests/test_git_ops.py`. O lote A nunca foi disjunto: `git_ops.py`/`test_git_ops.py` estavam na Task 3 por desenho e na Task 1 porque o Step 8 do plano mandava mexer em `changed_files`. O `self-review` do plano (item 5) declarava o lote disjunto. Devolvido ao executor como Task nova serial (merge da `main` na branch dele), revisado e mergeado. | ~35 min |
+| 15/08 15:40–19:38 | **A Costura 1 levou 3h58 contra 1h estimada, em 10 rodadas.** Nove REPROVA na mesma família (impedir leitura de dentro da `.git`), cada rodada fechando o caso que o parecer anterior nomeou e a seguinte achando outro, com a solução crescendo até virar estado de sessão em memória no `api.py`. O usuário parou a espiral com a pergunta certa — *"não é um gerenciador de arquivos? Por que o git virou o centro?"* — e a simplificação (−283/+37, guard de 3 linhas por componente do caminho resolvido) foi **aprovada de primeira**. A estimativa não previa isto porque ela conta rodadas de revisão, não **espiral de escopo dentro de uma Task**: o que faltou não foi tempo de execução, foi um juízo de "esse caso vale o desenho?" no portão. | **+3h** |
+| 15/08, o dia todo | **Dois arquivos de teste caem sob carga** (`test_termsock.py`, `test_shell_scripts.py`): subprocess/PTY sensível a tempo, com a máquina acima de 4 de load por causa do próprio paralelo. Custou 3 rodadas de suíte de um revisor sem nunca ver verde. Resolvido com portão de dois passos (`--ignore` + os dois isolados no relato). | ~25 min somados |
+| 15/08 14:34 | Os três executores nasceram como **sessão Claude com motor `deepseek-direto`** (o que a tabela do plano diz literalmente) em vez de **sessão Pi com `opencode-go/deepseek-v4-flash`**. A linha de status é idêntica nas duas formas, então a prova de modelo não pegou — só o `pane_start_command` distingue. Worktrees ainda limpas: nenhum trabalho perdido. | ~14 min |
 
 ### Contagem de rodadas visuais
 
