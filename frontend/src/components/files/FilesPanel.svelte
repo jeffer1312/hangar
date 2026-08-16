@@ -59,7 +59,7 @@
   }
 </script>
 
-<div class="files-panel">
+<div class="files-panel" class:mobile={!desktop}>
   {#if store.erro}<p class="aviso erro">{store.erro}</p>{/if}
 
   <div class="barra-ctl">
@@ -155,6 +155,36 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  /* Celular (Task 12): o mock 3 foi desenhado com mouse, e a regua de toque manda — linha da
+     arvore E resultado de busca com no minimo 44px de altura (WCAG 2.5.8 / HIG; o desktop
+     preserva a densidade aprovada de ~25px). Fonte 14px como o mock do celular (13px no
+     desktop). A altura vem do min-height, nao do padding: a fonte pode crescer sem perder o
+     alvo. A aba irma (GitChangesTab no celular) tem a MESMA regra de area de toque nas linhas
+     (medido: .git-file 44px, .git-mini 44px). */
+  .files-panel.mobile :global(.no) {
+    min-height: 44px;
+    font-size: 14px;
+  }
+  /* Os botoes de controle seguem a irma (git-mini 44px) — o mock de 26px era para mouse. O
+     icone dentro continua 15px; quem cresce e o alvo. */
+  .files-panel.mobile :global(.ic) {
+    width: 44px;
+    height: 44px;
+  }
+  .files-panel.mobile :global(.ordenar) {
+    min-height: 44px;
+  }
+  /* Busca e segmentado: o mock do celular pede 13px (12.5/12 no desktop) e mais area de toque
+     vertical — o campo e o segmentado com 44px de altura, mesmo padrao do alvo da arvore. */
+  .files-panel.mobile :global(.busca input),
+  .files-panel.mobile :global(.seg button) {
+    font-size: 13px;
+  }
+  .files-panel.mobile :global(.busca input),
+  .files-panel.mobile :global(.seg button) {
+    min-height: 44px;
   }
 
   .barra-ctl {

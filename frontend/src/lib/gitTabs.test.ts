@@ -33,6 +33,22 @@ describe('gitTabs', () => {
     let b = selectTab(initialNav(), 'branches');
     for (let i = 0; i < 9; i++) b = pushLevel(b);
     expect(currentLevel(b)).toBe(0);                       // branches: so a lista
+
+    let f = selectTab(initialNav(), 'files');
+    for (let i = 0; i < 9; i++) f = pushLevel(f);
+    expect(currentLevel(f)).toBe(1);                       // files: arvore -> arquivo
+  });
+
+  it('a aba files existe entre Mudanças e Histórico, com teto de árvore → arquivo', () => {
+    const ids = GIT_TABS.map((t) => t.id);
+    expect(ids.indexOf('files')).toBe(1);                  // mock 3: entre Alterações e Histórico
+    expect(ids.indexOf('changes')).toBeLessThan(ids.indexOf('files'));
+    expect(ids.indexOf('files')).toBeLessThan(ids.indexOf('history'));
+    const f = GIT_TABS.find((t) => t.id === 'files');
+    expect(f?.label).toBe('Files');   // sem overwriteGetLocale, o arquivo sai no locale do teste (ingles, como o 'Branches' do teste acima)
+    expect(f?.maxLevel).toBe(1);                           // cravado: arvore (0) -> arquivo (1)
+    // a ordem nao muda a aba inicial (regra do initialNav fixar 'changes')
+    expect(initialNav().tab).toBe('changes');
   });
 
   it('não desce abaixo de zero', () => {

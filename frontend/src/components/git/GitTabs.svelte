@@ -10,8 +10,13 @@
   import GitBranchesTab from './GitBranchesTab.svelte';
   import GitStatusBar from './GitStatusBar.svelte';
   import RepoMenu from './RepoMenu.svelte';
+  import FilesPanel from '../files/FilesPanel.svelte';
+  import FileViewer from '../files/FileViewer.svelte';
+  import { filesStores } from '../../lib/filesStore.svelte';
+  import { getActiveId } from '../../lib/auth';
   import type { GitCommit } from '../../lib/api';
   import type { GitStore } from '../../lib/gitStore.svelte';
+  import { onDestroy } from 'svelte';
 
   interface Props { git: GitStore; desktop: boolean; onClose: () => void }
   let { git, desktop, onClose }: Props = $props();
@@ -22,6 +27,33 @@
   // O commit escolhido mora aqui pelo mesmo motivo que o nivel: trocar de aba destroi o componente
   // da aba, e uma selecao que morresse deixaria o nivel apontando pra uma tela que nao existe mais.
   let commitSel = $state<GitCommit | null>(null);
+
+  // Store da aba Arquivos (Task 12): a MESMA instancia do FilesPanel (registry por identidade
+  // serverId::sessionName) — o clique na arvore marca a selecao, e quem sobe o nivel do
+  // drill-down e este componente observando o store. O retain aqui mantem o store vivo quando o
+  // nivel 1 desmonta o FilesPanel (que solta o dele). Mesma captura do FilesPanel/Chat.
+  // svelte-ignore state_referenced_locally — captura intencional (padrao do FilesPanel).
+  const filesStore = filesStores.retain(`${getActiveId() ?? ''}::${git.sessionName}`, git.sessionName);
+  onDestroy(() => filesStores.release(`${getActiveId() ?? ''}::${git.sessionName}`));
+  // Path do arquivo aberto — variavel LOCAL de proposito: dentro do {#if} o template estreita o
+  // tipo pra string (filesStore.selecionado e string | null e o TS nao acompanha o if).
+  const arquivoAberto = $derived(filesStore.selecionado);
+
+  // Drill-down da aba Arquivos no celular: o clique no arquivo marca a selecao no store
+  // (FilesPanel), e o nivel 0 -> 1 sobe aqui — sem o push, o maxLevel do GIT_TABS nao vale.
+  // O nivel 1 nao empurra de volta: fecharArquivo (abaixo) e a unica saida.
+  $effect(() => {
+    if (nav.tab !== 'files' || filesStore.selecionado === null) return;
+    if (currentLevel(nav) === 0) nav = pushLevel(nav);
+  });
+
+  // Unica saida do arquivo aberto no celular (× e "voltar" do FileViewer passam por aqui):
+  // limpa a selecao no store e desce o nivel — o FilesPanel volta com a arvore do jeito que
+  // estava (o estado da arvore e do store, nao do componente).
+  function fecharArquivo() {
+    filesStore.selecionado = null;
+    nav = popLevel(nav);
+  }
 
   // Contagem no rotulo: `branches` conta locais + remotas porque o BranchList mostra as duas —
   // contar so as locais daria um numero que nao bate com a lista.
@@ -37,8 +69,14 @@
   // O diff aberto e do STORE, um so pro modal inteiro (Task 3). Sem fechar na troca, a aba Historico
   // herdava o diff aberto na aba Mudancas — trocar de aba mostrava o arquivo da outra, com um
   // "‹ historico" que nao levava a lugar nenhum. Some o diff E o degrau que ele ocupava.
+  // O arquivo da aba Arquivos e a mesma regra: sem limpar, a aba volta com o arquivo aberto
+  // herdado (Task 12).
   function trocarAba(id: GitTabId) {
     if (git.diffPath) { git.closeDiff(); nav = popLevel(nav); }
+    if (nav.tab === 'files' && filesStore.selecionado !== null) {
+      filesStore.selecionado = null;
+      nav = popLevel(nav);
+    }
     nav = selectTab(nav, id);
   }
 </script>
@@ -78,6 +116,28 @@
       {:else if nav.tab === 'changes'}
         <GitChangesTab {git} {desktop} level={currentLevel(nav)}
           onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))} />
+      {:else if nav.tab === 'files'}
+        <!-- Task 12: a aba Arquivos no celular. Nivel 0 = o FilesPanel (arvore/busca); o clique
+             sobe o nivel pelo store (effect acima) e o nivel 1 mostra o arquivo — o MESMO
+             FileViewer do desktop, agora como degrau do drill-down dentro do modal, sem cobrir
+             a conversa (que nao existe ao lado no celular). O × e o "voltar" do proprio
+             FileViewer chamam fecharArquivo. -->
+        {#if currentLevel(nav) >= 1 && arquivoAberto}
+          <FileViewer
+            path={arquivoAberto}
+            diff={filesStore.diff}
+            conteudo={filesStore.conteudo}
+            loading={filesStore.loading}
+            onEscopo={(e) => filesStore.trocarEscopo(e)}
+            onFechar={fecharArquivo}
+          />
+        {:else}
+          <FilesPanel
+            sessionName={git.sessionName}
+            serverId={getActiveId() ?? ''}
+            desktop={false}
+          />
+        {/if}
       {:else if nav.tab === 'history'}
         <GitHistoryTab {git} {desktop} level={currentLevel(nav)}
           onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))}
