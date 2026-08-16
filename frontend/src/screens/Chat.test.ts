@@ -327,4 +327,44 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     unmount(gComp as never);
     unmount(t.comp);
   });
+
+  // Parecer rodada 6, B1: visor do Chat + Git aberto POR CIMA + resize — a limpeza da selecao
+  // continua (o visor do Chat fica sob display:none e precisa sair), mas o foco NAO pode viajar
+  // para o Composer atras do modal aberto (role=dialog do BottomSheet). O Git e o REAL via
+  // vi.importActual — o mock do arquivo e um stub sem o BottomSheet.
+  it('resize com modal aberto por cima nao joga o foco para o Composer atras', async () => {
+    const { default: GitReal } = await vi.importActual<typeof import('../components/Git.svelte')>('../components/Git.svelte');
+    const t = montar();   // Chat a 1440, contexto visivel (beforeEach)
+    await tick();
+    await tick();
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    store.selecionado = 'a.ts';   // o visor do Chat abre
+    await tick();
+    await tick();
+    expect(t.el.querySelector('.arq-visor')).not.toBeNull();
+    // o Git real (que traz o BottomSheet com role=dialog) aberto por cima
+    const git = createGitStore('sess');
+    const gEl = document.createElement('div');
+    document.body.appendChild(gEl);
+    const gComp = mount(GitReal, {
+      target: gEl,
+      props: { open: true, sessionName: 'sess', desktop: true, filesInContext: true, onClose: vi.fn() },
+    });
+    await tick();
+    await tick();
+    expect(document.querySelector('[role="dialog"]:not(.board-overlay)')).not.toBeNull();
+    // resize para 1024: a limpeza do visor do Chat roda, mas o foco nao sai para o composer
+    mq.set('(min-width: 1280px)', false);
+    await tick();
+    await tick();
+    await tick();
+    expect(store.selecionado).toBeNull();                        // a limpeza continua
+    expect(t.el.querySelector('.arq-visor')).toBeNull();         // o visor do Chat desmontou
+    const underlay = t.el.querySelector<HTMLElement>('.chat-underlay');
+    expect(underlay?.hasAttribute('inert')).toBe(false);         // o inert saiu
+    expect(document.querySelector('[role="dialog"]:not(.board-overlay)')).not.toBeNull();
+    expect(document.activeElement).not.toBe(t.el.querySelector('.composer-stub'));   // foco nao viajou
+    unmount(gComp as never);
+    unmount(t.comp);
+  });
 });

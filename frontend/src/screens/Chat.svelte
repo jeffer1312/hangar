@@ -192,6 +192,12 @@
     if (filesStore.selecionado === null) return;
     fecharVisor();
     void tick().then(() => {
+      // Modal aberto por cima (o Git do desktop e um BottomSheet role=dialog): o foco e DELE —
+      // mover para o Composer atras do veu deixaria o usuario digitando invisivel (mesmo guard
+      // do Composer.svelte e do DesktopShell, com o :not(.board-overlay) junto). A limpeza da
+      // selecao acima ja aconteceu; so o foco nao viaja. O role=dialog so existe no DOM com a
+      // folha aberta, por isso a leitura e aqui, apos o flush.
+      if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
       if (composerRef) composerRef.focus();
       else screenEl?.querySelector<HTMLElement>('.dead-footer .back-btn')?.focus();
     });
@@ -511,7 +517,12 @@
     const el = e.target as HTMLElement | null;
     const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
     if (typing) return;   // "/" foca o composer so quando NAO ja digitando num campo
-    if (e.key === '/') { e.preventDefault(); composerRef?.focus(); }
+    if (e.key === '/') {
+      // Modal aberto (BottomSheet role=dialog): o foco e dele — mesmo guard do Composer/DesktopShell.
+      if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+      e.preventDefault();
+      composerRef?.focus();
+    }
   }
 
   // Atalho "ouvir a resposta" (desktop, Ctrl/Cmd+Shift+Espaco): toca a ultima bolha de assistente
