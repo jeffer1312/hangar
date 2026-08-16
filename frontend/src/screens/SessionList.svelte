@@ -1009,7 +1009,7 @@ import { intlLocale } from '../lib/locale';
 
   <!-- Gerenciador git aberto pelo botao git do card (repo da sessao, sem abrir o chat). -->
   {#if gitSheet}
-    <Git open={true} sessionName={gitSheet.name} desktop={false} onClose={closeGitSheet} />
+    <Git open={true} sessionName={gitSheet.name} desktop={false} filesInContext={false} onClose={closeGitSheet} />
   {/if}
 
   <!-- Loop runner aberto pelo botao 🔁 do card (repo da sessao, sem abrir o chat). -->

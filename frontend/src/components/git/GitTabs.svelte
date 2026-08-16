@@ -19,8 +19,8 @@
   import type { GitStore } from '../../lib/gitStore.svelte';
   import { tick } from 'svelte';
 
-  interface Props { git: GitStore; desktop: boolean; onClose: () => void }
-  let { git, desktop, onClose }: Props = $props();
+  interface Props { git: GitStore; desktop: boolean; filesInContext: boolean; onClose: () => void }
+  let { git, desktop, filesInContext, onClose }: Props = $props();
 
   let nav = $state<GitNav>(initialNav());
   let repoMenu = $state(false);
@@ -31,46 +31,59 @@
 
   // Store da aba Arquivos (Task 12): a MESMA instancia do FilesPanel (registry por identidade
   // serverId::sessionName) — o clique na arvore marca a selecao, e quem sobe o nivel do
-  // drill-down e este componente observando o store. O retain e CONDICIONAL a hospedagem
-  // mobile (B1): no desktop o Git nao tem a aba Arquivos (o painel de contexto ja a hospeda),
-  // e reter um store que o modal desktop nao usa seguraria estado a toa. O $effect tambem
-  // re-retem quando a sessao muda (release da chave antiga) — mesmo padrao do Git.svelte.
+  // drill-down e este componente observando o store. O retain e CONDICIONAL ao host que nao
+  // tem painel de contexto (B1): com filesInContext=true o Git nao oferece a aba (o
+  // DesktopSessionContext visivel ja a hospeda) e reter um store que o modal nao usa seguraria
+  // estado a toa. O $effect tambem re-retem quando a sessao muda (release da chave antiga) —
+  // mesmo padrao do Git.svelte.
   let filesStore = $state<FilesStore | null>(null);
   $effect(() => {
-    if (desktop) return;
+    if (filesInContext) return;
     const chave = `${getActiveId() ?? ''}::${git.sessionName}`;
     const s = filesStores.retain(chave, git.sessionName);
     filesStore = s;
     return () => filesStores.release(chave);
   });
+  // Foco do drill-down (B2): o usuario de teclado que abre um arquivo na arvore precisa entrar
+  // no visor e voltar para a MESMA linha. Guarda o path e a LINHA que abriu ANTES do push — so
+  // linha de arquivo conta (arvore OU resultado de busca); toque/AT deixam o foco no body e a
+  // restauracao nao pode devolver o foco pra ele.
+  let abridorPath: string | null = null;
+  let abridorEl: HTMLElement | null = null;
   // Path do arquivo aberto — variavel LOCAL de proposito: dentro do {#if} o template estreita o
-  // tipo pra string (filesStore.selecionado e string | null e o TS nao acompanha o if).
-  const arquivoAberto = $derived(filesStore?.selecionado ?? null);
+  // tipo pra string (filesStore.selecionado e string | null e o TS nao acompanha o if). Quando a
+  // LEITURA falha, o store limpa selecionado e grava erro — o abridorPath mantem o visor montado
+  // com o arquivo que falhou (B3), em vez de voltar para uma arvore silenciosamente normal.
+  const arquivoAberto = $derived(filesStore?.selecionado ?? abridorPath);
 
-  // No DESKTOP o Git nao oferece a aba Arquivos: o painel de contexto ja e a casa dela, e o
-  // modal desktop montaria o FilesPanel mobile por engano (B1). A fileira e filtrada, e se o
-  // `desktop` mudar com o componente montado (resize), a aba volta para Mudancas e o arquivo
-  // aberto e limpo — o nivel da aba files fica no nav, inerte, ate um proximo mobile.
-  const abasVisiveis = $derived(desktop ? GIT_TABS.filter((t) => t.id !== 'files') : GIT_TABS);
+  // No host com painel de contexto visivel o Git nao oferece a aba Arquivos (B1): o
+  // DesktopSessionContext ja e a casa dela, e o modal montaria o FilesPanel mobile por engano.
+  // A fileira e filtrada, e se o `filesInContext` mudar com o componente montado (resize entre
+  // 820 e 1279px), a aba volta para Mudancas e o arquivo aberto e limpo — o nivel da aba files
+  // fica no nav, inerte, ate um proximo host sem contexto.
+  const abasVisiveis = $derived(filesInContext ? GIT_TABS.filter((t) => t.id !== 'files') : GIT_TABS);
   $effect(() => {
-    if (!desktop || nav.tab !== 'files') return;
+    if (!filesInContext || nav.tab !== 'files') return;
     if (filesStore?.selecionado) filesStore.selecionado = null;
+    abridorPath = null;
+    abridorEl = null;
     nav = selectTab(nav, 'changes');
   });
 
-  // Foco do drill-down (B2): o usuario de teclado que abre um arquivo na arvore precisa entrar
-  // no visor e voltar para a MESMA linha. Guarda o path e o elemento ativo ANTES do push.
-  let abridorPath: string | null = null;
-  let abridorEl: HTMLElement | null = null;
+  // Foco do drill-down (B2): ...
+  // (abridorPath/abridorEl declarados acima, junto do store)
 
-  // Drill-down da aba Arquivos no celular: o clique no arquivo marca a selecao no store
-  // (FilesPanel), e o nivel 0 -> 1 sobe aqui — sem o push, o maxLevel do GIT_TABS nao vale.
-  // O nivel 1 nao empurra de volta: fecharArquivo (abaixo) e a unica saida.
+  // Drill-down da aba Arquivos: o clique no arquivo marca a selecao no store (FilesPanel), e o
+  // nivel 0 -> 1 sobe aqui — sem o push, o maxLevel do GIT_TABS nao vale. O nivel 1 nao
+  // empurra de volta: fecharArquivo (abaixo) e a unica saida.
   $effect(() => {
     if (nav.tab !== 'files' || !filesStore || filesStore.selecionado === null) return;
     if (currentLevel(nav) === 0) {
       abridorPath = filesStore.selecionado;
-      abridorEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const ativo = document.activeElement;
+      abridorEl = ativo instanceof HTMLElement
+        && (ativo.matches('.files-panel .arvore .no') || ativo.matches('.files-panel .resultados .no'))
+        ? ativo : null;
       nav = pushLevel(nav);
       // O foco so pode ir depois do flush (o visor monta no mesmo flush); o Fechar do
       // FileViewer e o primeiro controle do conteudo novo — fallback o proprio visor.
@@ -81,11 +94,11 @@
     }
   });
 
-  // Unica saida do arquivo aberto no celular (× e "voltar" do FileViewer passam por aqui):
-  // limpa a selecao no store e desce o nivel — o FilesPanel volta com a arvore do jeito que
-  // estava (o estado da arvore e do store, nao do componente). O foco volta para a linha que
-  // abriu (B2); se ela nao estiver mais visivel (filtro/recarga mudaram a arvore), cai na aba
-  // Arquivos e, por ultimo, na primeira linha.
+  // Unica saida do arquivo aberto (× e "voltar" do FileViewer passam por aqui): limpa a
+  // selecao no store e desce o nivel — o FilesPanel volta com a arvore do jeito que estava (o
+  // estado da arvore e do store, nao do componente). O foco volta para a linha que abriu (B2);
+  // se ela nao estiver mais visivel (filtro/recarga mudaram a arvore), cai na aba Arquivos e,
+  // por ultimo, na primeira linha.
   function fecharArquivo() {
     if (!filesStore) return;
     const path = abridorPath;
@@ -95,10 +108,13 @@
     abridorEl = null;
     nav = popLevel(nav);
     void tick().then(() => {
-      if (origem?.isConnected && origem.getClientRects().length > 0) { origem.focus(); return; }
+      const linhaValida = (el: HTMLElement | null | undefined): el is HTMLElement => !!el
+        && el !== document.body && el.isConnected && el.getClientRects().length > 0
+        && (el.matches('.files-panel .arvore .no') || el.matches('.files-panel .resultados .no'));
+      if (linhaValida(origem)) { origem.focus(); return; }
       const linha = [...document.querySelectorAll<HTMLElement>('.files-panel .arvore .no')]
         .find((n) => n.dataset.path === path);
-      if (linha?.isConnected && linha.getClientRects().length > 0) { linha.focus(); return; }
+      if (linhaValida(linha)) { linha.focus(); return; }
       const aba = document.querySelector<HTMLElement>('[role=tab][aria-selected="true"]');
       if (aba?.isConnected && aba.getClientRects().length > 0) { aba.focus(); return; }
       const primeira = document.querySelector<HTMLElement>('.files-panel .arvore .no');
@@ -124,8 +140,10 @@
   // herdado (Task 12).
   function trocarAba(id: GitTabId) {
     if (git.diffPath) { git.closeDiff(); nav = popLevel(nav); }
-    if (nav.tab === 'files' && filesStore?.selecionado !== null) {
-      filesStore!.selecionado = null;
+    if (nav.tab === 'files' && ((filesStore?.selecionado ?? null) !== null || abridorPath !== null)) {
+      if (filesStore) filesStore.selecionado = null;
+      abridorPath = null;
+      abridorEl = null;
       nav = popLevel(nav);
     }
     nav = selectTab(nav, id);
@@ -167,19 +185,22 @@
       {:else if nav.tab === 'changes'}
         <GitChangesTab {git} {desktop} level={currentLevel(nav)}
           onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))} />
-      {:else if nav.tab === 'files' && !desktop}
-        <!-- Task 12: a aba Arquivos no celular (o desktop nao a oferece — B1). Nivel 0 = o
-             FilesPanel (arvore/busca); o clique sobe o nivel pelo store (effect acima) e o
-             nivel 1 mostra o arquivo — o MESMO FileViewer do desktop, agora como degrau do
-             drill-down dentro do modal, sem cobrir a conversa (que nao existe ao lado no
-             celular). O × e o "voltar" do proprio FileViewer chamam fecharArquivo; o rotulo
-             do voltar e m.comum_voltar — nao ha conversa atras no modal (B4). -->
+      {:else if nav.tab === 'files' && !filesInContext}
+        <!-- Task 12: a aba Arquivos quando NAO ha painel de contexto visivel (celular, desktop
+             estreito 820-1279px, Sidebar e split — B1). Nivel 0 = o FilesPanel (arvore/busca);
+             o clique sobe o nivel pelo store (effect acima) e o nivel 1 mostra o arquivo — o
+             MESMO FileViewer do desktop, agora como degrau do drill-down dentro do modal. O ×
+             e o "voltar" do proprio FileViewer chamam fecharArquivo; o rotulo do voltar e
+             m.comum_voltar — nao ha conversa atras no modal (B4). O `erro` do store aparece no
+             visor (B3): leitura que falha (binario, 404) nao desmonta o visor nem volta para
+             uma arvore silenciosamente normal — o usuario ve qual arquivo falhou e fecha. -->
         {#if currentLevel(nav) >= 1 && arquivoAberto}
           <FileViewer
             path={arquivoAberto}
             diff={filesStore?.diff ?? null}
             conteudo={filesStore?.conteudo ?? null}
             loading={filesStore?.loading ?? false}
+            erro={filesStore?.erro ?? null}
             onEscopo={(e) => filesStore?.trocarEscopo(e)}
             onFechar={fecharArquivo}
             rotuloVoltar={m.comum_voltar()}

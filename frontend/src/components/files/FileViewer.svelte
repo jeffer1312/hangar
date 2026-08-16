@@ -17,8 +17,12 @@
     // diz exatamente isso; no modal Git do celular nao ha conversa atras — o hospedeiro passa
     // um rotulo que descreve a tela real (m.comum_voltar).
     rotuloVoltar?: string;
+    // Erro da abertura (B3, Task 12): quando a leitura falha (binario, 404), o store grava o
+    // aviso aqui e o visor o mostra com role="alert" em vez de desmontar. Opcional de
+    // proposito: o host desktop do Chat nao passa (o fluxo de erro dele e outro).
+    erro?: string | null;
   }
-  let { path, diff, conteudo, loading, onEscopo, onFechar, rotuloVoltar = m.arq_voltar_conversa() }: Props = $props();
+  let { path, diff, conteudo, loading, onEscopo, onFechar, rotuloVoltar = m.arq_voltar_conversa(), erro = null }: Props = $props();
 
   // Linhas do diff já destacadas. highlightDiff é assíncrona (import dinâmico do Shiki).
   // A flag `valida` do $effect descarta resposta velha — escopo trocado, diff novo ou o
@@ -159,6 +163,12 @@
   </div>
 
   <div class="corpo">
+    {#if erro}
+      <!-- O erro da abertura fica NA TELA e e anunciado (B3): sem isto o visor desmontava e a
+           arvore voltava "normal" depois de uma leitura que falhou — o usuario nunca sabia
+           que o arquivo nao abriu. role="alert" anuncia a chegada ao leitor de tela. -->
+      <p class="aviso erro" role="alert">{erro}</p>
+    {/if}
     {#if temDiff && diffDoArquivo}
       {@const d = diffDoArquivo}
       {#if d.truncated}
@@ -233,6 +243,8 @@
     background: var(--fill-subtle); color: var(--text-muted);
     font-size: 11.5px; line-height: 1.4;
   }
+  /* Erro da abertura (B3): mesma cor de erro do resto do app (FilesPanel usa .aviso.erro). */
+  .aviso.erro { color: var(--error); }
 
   .conteudo {
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);

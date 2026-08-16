@@ -168,5 +168,6 @@
   "vem do renderMarkdown como TEXTO ESCAPADO, monocromatico.",
   ".arq-visor .fechar",
   ".gt-body .visor .fechar",
-  ".files-panel .arvore .no"
+  ".files-panel .arvore .no",
+  ".files-panel .resultados .no"
 ]

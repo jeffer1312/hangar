@@ -8,8 +8,11 @@
 
   // `desktop` por PROP, nao matchMedia proprio: o GitSheet era a terceira copia da mesma media
   // query (App.svelte, BottomSheet.svelte) e a primeira pintura saia mobile.
-  interface Props { open: boolean; sessionName: string; desktop: boolean; onClose: () => void }
-  let { open, sessionName, desktop, onClose }: Props = $props();
+  // `filesInContext` (B1, rodada 3): um DesktopSessionContext VISIVEL ja hospeda Arquivos —
+  // quem informa e o host (Chat/Sidebar/SessionList), nunca derivado de `desktop`: entre 820 e
+  // 1279px o painel de contexto e display:none e a aba do Git e a unica casa possivel.
+  interface Props { open: boolean; sessionName: string; desktop: boolean; filesInContext: boolean; onClose: () => void }
+  let { open, sessionName, desktop, filesInContext, onClose }: Props = $props();
 
   // Dono do store — era do GitSheet, COM o guard que evita recriar a cada render. Sem ele, trocar de
   // sessao com o modal aberto mostraria o git da anterior.
@@ -25,5 +28,5 @@
      o modal de Configuracoes usa. Nao usar ModalDialog: a folha fica em z 100, e o 110/120 do CommitMenu
      segue correto. -->
 <BottomSheet {open} {onClose} ariaLabel="Git" wide={desktop} centered={desktop}>
-  <GitTabs {git} {desktop} {onClose} />
+  <GitTabs {git} {desktop} {filesInContext} {onClose} />
 </BottomSheet>

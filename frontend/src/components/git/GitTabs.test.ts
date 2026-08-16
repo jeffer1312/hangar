@@ -9,6 +9,7 @@ import { createRawSnippet } from 'svelte';
 import GitTabs from './GitTabs.svelte';
 import { createGitStore } from '../../lib/gitStore.svelte';
 import { filesStores } from '../../lib/filesStore.svelte';
+import { readFile } from '../../lib/api';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 
 vi.mock('../../lib/api', () => ({
@@ -37,11 +38,11 @@ vi.mock('./GitBranchesTab.svelte', stubDe);
 vi.mock('./GitStatusBar.svelte', stubDe);
 vi.mock('./RepoMenu.svelte', stubDe);
 
-function montar(desktop = false) {
+function montar(desktop = false, filesInContext = false) {
   const git = createGitStore('sess');
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const comp = mount(GitTabs, { target: el, props: { git, desktop, onClose: vi.fn() } });
+  const comp = mount(GitTabs, { target: el, props: { git, desktop, filesInContext, onClose: vi.fn() } });
   return { el, comp: comp as never };
 }
 
@@ -126,50 +127,62 @@ describe('GitTabs — aba Arquivos no celular (Task 12)', () => {
     unmount(comp);
   });
 
-  // Parecer rodada 2, B1: no DESKTOP o Git nao oferece a aba Arquivos (o painel de contexto ja
-  // e a casa dela) — a fileira e filtrada e o FilesPanel mobile nunca monta no modal desktop.
-  it('desktop: sem a aba Arquivos e sem o FilesPanel mobile', async () => {
-    const { el, comp } = montar(true);
+  // Parecer rodada 2, B1: com um painel de contexto VISIVEL o Git desktop nao oferece a aba
+  // Arquivos (o DesktopSessionContext ja a hospeda) — a fileira e filtrada e o FilesPanel
+  // mobile nunca monta no modal.
+  it('desktop com contexto visivel: sem a aba Arquivos e sem o FilesPanel', async () => {
+    const { el, comp } = montar(true, true);
     await tick();
     await tick();
     const abas = [...el.querySelectorAll('[role=tab]')].map((t) => t.textContent);
     expect(abas.some((t) => t === 'Files')).toBe(false);
     expect(abas).toHaveLength(3);
     expect(el.querySelector('.files-panel')).toBeNull();
-    expect(el.querySelector('.files-panel.mobile')).toBeNull();
     unmount(comp);
   });
 
-  // Parecer rodada 2, B2: o usuario de teclado que abre um arquivo entra no visor (foco no
-  // Fechar) e, ao fechar, volta para a MESMA linha da arvore — nunca cai no body.
-  it('abrir arquivo move o foco ao visor; fechar devolve a linha que abriu', async () => {
+  // Parecer rodada 3, B1: SEM painel de contexto visivel (Sidebar, split, desktop estreito
+  // 820-1279px) o Git desktop PRECISA oferecer a aba — e o unico host possivel.
+  it('desktop sem contexto visivel: a aba Arquivos existe e monta o painel', async () => {
+    const { el, comp } = montar(true, false);
+    await tick();
+    await tick();
+    const abas = [...el.querySelectorAll('[role=tab]')].map((t) => t.textContent);
+    expect(abas.some((t) => t === 'Files')).toBe(true);
+    expect(abas).toHaveLength(4);
+    clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
+    await tick();
+    await tick();
+    expect(el.querySelector('.files-panel')).not.toBeNull();
+    unmount(comp);
+  });
+
+  // Parecer rodada 3, B2: ativacao por toque/AT deixa o foco no body — o abridor so conta se
+  // for linha de arquivo; o fechamento devolve o foco a linha por data-path e nunca ao body.
+  it('abrir com o foco no body e fechar devolve a linha que abriu', async () => {
     const { el, comp } = montar();
     await tick();
     await tick();
     clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
     await tick();
     await tick();
+    document.body.focus();   // toque/AT: o DOM focado no body, nao na linha
+    expect(document.activeElement).toBe(document.body);
     const linha = el.querySelector<HTMLElement>('.files-panel .arvore .no');
-    linha?.focus();   // o clique real deixa o foco na linha
-    expect(document.activeElement).toBe(linha);
-    clica(linha);
+    clica(linha);   // ativa a linha (Enter/toque) com o body focado
     await tick();
     await tick();
     await tick();
-    const fechar = el.querySelector<HTMLElement>('.gt-body .visor .fechar');
-    expect(fechar).not.toBeNull();
-    expect(document.activeElement).toBe(fechar);   // foco entrou no visor
-    clica(fechar);   // fecha pelo ×
+    expect(el.querySelector('.visor')).not.toBeNull();
+    expect(document.activeElement).not.toBe(document.body);   // foco entrou no visor
+    clica(el.querySelector('.visor .fechar'));
     await tick();
     await tick();
     await tick();
     expect(el.querySelector('.files-panel')).not.toBeNull();
-    // o FilesPanel remonta no nivel 0: a linha original foi desmontada junto, e a restauracao
-    // foca a linha NOVA com o mesmo path (data-path)
     const linhaVolta = [...el.querySelectorAll<HTMLElement>('.files-panel .arvore .no')]
       .find((n) => n.dataset.path === 'a.txt');
-    expect(linhaVolta).not.toBeNull();
-    expect(document.activeElement).toBe(linhaVolta);   // foco voltou pra quem abriu
+    expect(document.activeElement).toBe(linhaVolta);   // linha restaurada, nunca o body
     unmount(comp);
   });
 
@@ -189,6 +202,56 @@ describe('GitTabs — aba Arquivos no celular (Task 12)', () => {
     const texto = el.querySelector('.visor .voltar')?.textContent ?? '';
     expect(/conversa|conversation/i.test(texto)).toBe(false);
     expect(texto).toContain('Voltar');   // m.comum_voltar em pt (overwriteGetLocale)
+    unmount(comp);
+  });
+
+  // Parecer rodada 3, B3: leitura que falha (binario 415) NAO desmonta o visor para a arvore
+  // silenciosamente normal — o erro do store aparece no visor, anunciado, e o usuario pode
+  // fechar sabendo qual arquivo falhou.
+  it('readFile rejeitado (415) mantem o visor com o erro anunciado', async () => {
+    const { el, comp } = montar();
+    await tick();
+    await tick();
+    clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
+    await tick();
+    await tick();
+    vi.mocked(readFile).mockRejectedValueOnce(
+      Object.assign(new Error('arquivo binario'), { status: 415 }));
+    clica(el.querySelector('.files-panel .arvore .no'));
+    await tick();
+    await tick();
+    await tick();
+    const visor = el.querySelector('.visor');
+    expect(visor).not.toBeNull();   // o visor fica com o arquivo que falhou
+    const alerta = visor?.querySelector('[role="alert"]');
+    expect(alerta).not.toBeNull();
+    expect(alerta?.textContent).toContain('arquivo binario');
+    clica(visor?.querySelector('.fechar'));
+    await tick();
+    await tick();
+    await tick();
+    expect(el.querySelector('.files-panel')).not.toBeNull();
+    expect(el.querySelector('.visor')).toBeNull();
+    unmount(comp);
+  });
+
+  // variante 404 (linha fantasma): o mesmo contrato — erro visivel e saida possivel.
+  it('readFile rejeitado (404) mantem o visor com o erro anunciado', async () => {
+    const { el, comp } = montar();
+    await tick();
+    await tick();
+    clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
+    await tick();
+    await tick();
+    vi.mocked(readFile).mockRejectedValueOnce(
+      Object.assign(new Error('sumiu'), { status: 404 }));
+    clica(el.querySelector('.files-panel .arvore .no'));
+    for (let i = 0; i < 6; i++) await tick();   // o ramo 404 roda recarregar + _listar antes do erro
+    const visor = el.querySelector('.visor');
+    expect(visor).not.toBeNull();
+    const alerta = visor?.querySelector('[role="alert"]');
+    expect(alerta).not.toBeNull();
+    expect(alerta?.textContent).toContain('não existe mais');   // m.erro_arq_inexistente em pt
     unmount(comp);
   });
 

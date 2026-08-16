@@ -1303,7 +1303,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
 <!-- Gerenciador git aberto pelo menu de contexto (repo da sessao, sem abrir o chat). -->
 {#if gitSheet}
-  <Git open={true} sessionName={gitSheet.name} desktop={true} onClose={closeGitSheet} />
+  <Git open={true} sessionName={gitSheet.name} desktop={true} filesInContext={false} onClose={closeGitSheet} />
 {/if}
 
 <!-- Loop runner aberto pelo menu de contexto / botao da linha (repo da sessao, sem abrir o chat). -->

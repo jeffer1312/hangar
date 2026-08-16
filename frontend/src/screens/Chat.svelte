@@ -122,12 +122,15 @@
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches,
   );
 
+  // O painel de contexto esta VISIVEL? (B1, Task 12): o Git desktop so esconde a aba Arquivos
+  // quando este host existe — a MESMA condicao do visorAberto (incluindo a faixa de 1280px em
+  // que o painel e display:none). Derivada aqui e passada ao Git, nunca recalculada no modal.
+  const filesInContext = $derived(desktop && isDesktopLargo && showContextPanel && !ctxPanel.recolhido);
+
   // O visor segue o painel de contexto: some quando o painel fecha ou recolhe — e abaixo de
   // 1280px, largura em que os dois sao display:none — e o estado fica no store; reabrir o
   // painel restaura o arquivo (mesma regua de "pasta aberta continua aberta").
-  const visorAberto = $derived(
-    desktop && isDesktopLargo && showContextPanel && !ctxPanel.recolhido && filesStore.selecionado !== null,
-  );
+  const visorAberto = $derived(filesInContext && filesStore.selecionado !== null);
   // Path do arquivo aberto — variável LOCAL de propósito: dentro do {#if visorAberto} o template
   // estreita o tipo pra string (filesStore.selecionado é string | null e o TS não acompanha o if).
   const arquivoAberto = $derived(filesStore.selecionado);
@@ -1738,7 +1741,7 @@
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
-  <Git open={gitOpen} {sessionName} {desktop} onClose={() => (gitOpen = false)} />
+  <Git open={gitOpen} {sessionName} {desktop} {filesInContext} onClose={() => (gitOpen = false)} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}
