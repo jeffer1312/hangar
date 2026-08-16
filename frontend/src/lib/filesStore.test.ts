@@ -191,6 +191,30 @@ describe('FilesStore', () => {
     expect(s.erro).toContain('binário');
   });
 
+  // Task 11, Step 3 (linha fantasma): arquivo apagado entre listar e abrir devolve 404 — o
+  // store mostra o erro certo E re-lista, senao a linha continua clicavel para sempre
+  // apontando pra nada. A recarga e a prova: listFiles roda de novo e a arvore volta sem o
+  // arquivo.
+  it('404 ao abrir mostra erro_arq_inexistente e recarrega a arvore', async () => {
+    vi.mocked(readFile).mockRejectedValue(
+      Object.assign(new Error('Esse arquivo não existe mais.'), { status: 404 }));
+    // Primeira listagem tem o arquivo; depois que ele "sumiu do disco", a recarga nao o acha.
+    let lista = [ent('a.txt', false)];
+    vi.mocked(listFiles).mockImplementation(async (_s, path) => ({
+      truncated: false,
+      entries: path === undefined ? lista : [],
+    }));
+    const s = new FilesStore('sessao');
+    await s.recarregar();
+    expect(s.entries.length).toBe(1);
+    lista = [];   // o arquivo apagado entre listar e abrir
+    await s.abrir('a.txt');
+    expect(s.selecionado).toBeNull();
+    expect(s.erro).toBe(m.erro_arq_inexistente());
+    expect(s.entries.length).toBe(0);   // a linha fantasma saiu da arvore
+    expect(listFiles).toHaveBeenCalledTimes(2);
+  });
+
   // Task 10, contrato 2: `loading` fica ligado entre o clique e a resposta — sem o sinal, o
   // FileViewer nao tem como saber que nao pode afirmar "sem diferencas".
   it('loading fica ligado durante a abertura e desliga no fim', async () => {

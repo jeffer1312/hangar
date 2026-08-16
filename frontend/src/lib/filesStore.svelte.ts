@@ -108,7 +108,18 @@ export class FilesStore {
       // ao vivo com um binario: o erro sumia no recarregar e a tela afirmava que o png nao tem
       // diff). Sem selecao, o painel mostra o aviso de erro e a arvore continua navegavel.
       this.selecionado = null;
-      this.erro = cleanErr(c.reason);
+      // Linha fantasma (Task 11): arquivo apagado entre listar e abrir. Alem do erro certo,
+      // RE-LISTA — sem a recarga, a linha continua clicavel para sempre apontando pra nada
+      // (o 404 do readFile e o sinal; o status vem na propriedade, como no _listar). O erro
+      // so e pintado depois da recarga: a raiz limpa this.erro no sucesso, e o recarregar
+      // pode falhar com algo mais grave (sessao encerrada) que nao pode ser sobrescrito.
+      const status = (c.reason as Error & { status?: number })?.status;
+      if (status === 404) {
+        await this.recarregar();
+        if (!this.erro) this.erro = m.erro_arq_inexistente();
+      } else {
+        this.erro = cleanErr(c.reason);
+      }
       return;
     }
     this.conteudo = c.value;

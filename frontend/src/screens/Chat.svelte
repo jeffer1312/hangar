@@ -24,6 +24,8 @@
   import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
+  import FileViewer from '../components/files/FileViewer.svelte';
+  import { filesStores } from '../lib/filesStore.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
     getHistory,
@@ -95,6 +97,28 @@
   }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
+
+  // Store da aba Arquivos — MESMA instância do FilesPanel (registry por sessão). Quem desenha o
+  // arquivo aberto no DESKTOP é este Chat (mock 2: o arquivo cobre a conversa, a árvore fica viva
+  // no painel); o FilesPanel só marca a seleção. No celular quem monta o visor é o próprio
+  // FilesPanel (Task 12) — daí o `desktop` abaixo. retain/release: mesmo padrão do FilesPanel, o
+  // App remonta este Chat por {#key} a cada troca de sessão e um store do mount morreria com o
+  // estado.
+  // svelte-ignore state_referenced_locally — captura intencional: o App remonta este Chat por
+  // {#key} a cada troca de sessao, entao o store do mount e o store da sessao — se a prop
+  // mudasse no meio (nao muda), o FilesStore novo substituiria o velho e a regua de pastas
+  // abertas morreria. Mesmo padrao do FilesPanel.
+  const filesStore = filesStores.retain(sessionName);
+  onDestroy(() => filesStores.release(sessionName));
+
+  // O visor segue o painel de contexto: some quando o painel fecha ou recolhe, e o estado fica no
+  // store — reabrir o painel restaura o arquivo (mesma régua de "pasta aberta continua aberta").
+  const visorAberto = $derived(
+    desktop && showContextPanel && !ctxPanel.recolhido && filesStore.selecionado !== null,
+  );
+  // Path do arquivo aberto — variável LOCAL de propósito: dentro do {#if visorAberto} o template
+  // estreita o tipo pra string (filesStore.selecionado é string | null e o TS não acompanha o if).
+  const arquivoAberto = $derived(filesStore.selecionado);
 
   // Cache de prompt: o ULTIMO turno do assistente manda. Usar a cache renova o prazo, entao a
   // conta corre da hora do turno mais recente, e o TTL vem MEDIDO do transcript (1h ou 5min) —
@@ -356,6 +380,14 @@
       if (e.defaultPrevented) return;
       e.preventDefault();
       closeOverlays();
+      return;
+    }
+    // O visor do arquivo (Task 11) fecha com Esc, como um sheet — sem véu, é a saída de teclado
+    // que espelha o × e o "voltar à conversa". Overlay aberto por cima tem prioridade (bloco
+    // acima): o Esc fecha o sheet primeiro, o próximo fecha o visor.
+    if (e.key === 'Escape' && visorAberto) {
+      e.preventDefault();
+      filesStore.selecionado = null;
       return;
     }
     if (mod && (e.key === 'k' || e.key === 'K')) {
@@ -1428,6 +1460,24 @@
     />
   {/if}
 
+  {#if visorAberto && arquivoAberto}
+    <!-- O arquivo aberto (Task 11): cobre SÓ a área da conversa — a árvore continua viva e
+         clicável no painel de 264px ao lado (mock 2, sem véu). Quem monta o FileViewer no
+         desktop é este Chat; no celular é o próprio FilesPanel (Task 12). Clicar em outro
+         arquivo troca o conteúdo sem fechar: o store muda selecionado e o FileViewer recebe o
+         path novo. -->
+    <div class="arq-visor">
+      <FileViewer
+        path={arquivoAberto}
+        diff={filesStore.diff}
+        conteudo={filesStore.conteudo}
+        loading={filesStore.loading}
+        onEscopo={(e) => filesStore.trocarEscopo(e)}
+        onFechar={() => (filesStore.selecionado = null)}
+      />
+    </div>
+  {/if}
+
   {#if loading}
     <!-- Entrando na sessao: skeleton shimmer (familia Respiracao) enquanto o /history carrega. -->
     <div class="chat-skeleton" aria-label={m.chat_carregando_historico()} aria-busy="true">
@@ -1934,6 +1984,32 @@
     -webkit-tap-highlight-color: transparent;
   }
   .hist-pill:active { background: var(--bg-hover); }
+
+  /* O arquivo aberto (Task 11): cobre SÓ a área da conversa — da navbar ao rodapé, do começo
+     do chat até o painel de contexto (--ctx-w). A árvore do painel continua viva e clicável ao
+     lado (mock 2, sem véu). left: 0 de propósito: o .chat-screen JÁ começa depois da sidebar
+     (quem reserva a faixa dela é o DesktopShell), então var(--nav-w) empurraria o visor 282px
+     para dentro e espremeria o diff (medido ao vivo: 612px em vez de ~894px). --surface-card:
+     caixa de leitura (mesmo token do board/plano), que entra no véu do papel de parede em vez
+     de virar retângulo chapado — o visor é superfície grande sobre a foto. z 30: acima do dock
+     (20) e das pills (21-22), abaixo dos sheets (100). Sem border-left: a sidebar já tem
+     border-right (mesma régua do DesktopShell). */
+  .arq-visor {
+    position: absolute;
+    top: var(--nav-h, 0px);
+    bottom: 0;
+    left: 0;
+    right: var(--ctx-w, 264px);
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-card);
+  }
+  /* O painel de contexto é display:none abaixo de 1280px — o visor some junto (mesma régua),
+     senao o arquivo ficaria cobrindo a navbar num desktop estreito. */
+  @media (max-width: 1279px) {
+    .arq-visor { display: none; }
+  }
 
   /* Recusa ao responder (opção ou pergunta): mesma família das pílulas acima, centrada como o tui-pill (é
      sobre o toque que acabou de acontecer) e em tom de aviso. `--surface-raised` e não
