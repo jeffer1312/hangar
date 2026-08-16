@@ -168,17 +168,26 @@
     });
   }
 
-  // Resize para desktop estreito (B5): abaixo de 1280px o visor e o painel sao display:none e o
-  // visorAberto desliga — sem limpar a selecao, a conversa inteira ficaria inerte com o arquivo
-  // invisivel (reproduzido ao vivo pelo revisor, rodada 3). Limpa a selecao (voltar a largo
-  // monta o visor so com nova selecao) e devolve o foco a um controle vivo do Chat: o Fechar do
-  // visor acabou de ser escondido junto, e o abridor (treeitem do painel, display:none) tambem.
+  // Resize para desktop estreito (B5, Task 11): abaixo de 1280px o visor e o painel sao
+  // display:none e o visorAberto desliga — sem limpar a selecao, a conversa inteira ficaria
+  // inerte com o arquivo invisivel. Limpa a selecao (voltar a largo monta o visor so com nova
+  // selecao) e devolve o foco a um controle vivo do Chat: o Fechar do visor acabou de ser
+  // escondido junto, e o abridor (treeitem do painel, display:none) tambem.
+  // O guard de TRANSICAO (B2, Task 12): este Chat e o GitTabs do desktop estreito compartilham
+  // o MESMO FilesStore — sem ele, abrir um arquivo pelo Git a 1024px era limpo no mesmo flush
+  // por este effect (janela ja estreita, selecao nao-nula). A limpeza so vale quando o visor
+  // do Chat REALMENTE esteve aberto: a janela passou de larga para estreita NESTA montagem
+  // (eraLargo). Montagem ja estreita = qualquer selecao e de outro host — nao limpar.
   // O foco so pode ir DEPOIS do flush: o inert do underlay sai junto com a limpeza da selecao
   // acima, e focar sob inert e no-op (bloqueado no navegador e no happy-dom). Sessao morta nao
   // tem Composer (o bottom-dock vira o .dead-footer com o botao voltar) — o alvo cai no botao
   // que o usuario VE (B5, rodada 4).
+  let chatJaEsteveLargo = $state(false);
   $effect(() => {
-    if (!desktop || isDesktopLargo) return;
+    if (!desktop) return;
+    if (isDesktopLargo) { chatJaEsteveLargo = true; return; }
+    if (!chatJaEsteveLargo) return;   // nunca houve transicao largo->estreito nesta montagem
+    chatJaEsteveLargo = false;        // consome a transicao: limpa UMA vez, nao toda selecao
     if (filesStore.selecionado === null) return;
     fecharVisor();
     void tick().then(() => {

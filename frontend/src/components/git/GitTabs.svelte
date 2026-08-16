@@ -67,7 +67,16 @@
     if (filesStore?.selecionado) filesStore.selecionado = null;
     abridorPath = null;
     abridorEl = null;
-    nav = selectTab(nav, 'changes');
+    // O nivel da aba files volta a 0 EXPLICITAMENTE (B3, rodada 4): selectTab copia levels
+    // inteiro, e um nivel fantasma (1 sem arquivo) faria o proximo drill-down pular o push ao
+    // voltar a estreito — e uma leitura que falhasse sem abridorPath desmontaria o visor.
+    nav = { tab: 'changes', levels: { ...nav.levels, files: 0 } };
+    // O visor desmontou por esta troca: foco para um controle visivel do modal (a primeira aba
+    // da fileira). O tick().then do push antigo (foco no .fechar) vira no-op — o visor nao
+    // existe mais e o querySelector devolve null.
+    void tick().then(() => {
+      document.querySelector<HTMLElement>('.gt [role=tab]')?.focus();
+    });
   });
 
   // Foco do drill-down (B2): ...

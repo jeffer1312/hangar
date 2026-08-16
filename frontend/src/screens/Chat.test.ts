@@ -250,4 +250,20 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     expect(document.activeElement).toBe(voltar);   // foco no botao vivo, nao no body
     unmount(t.comp);
   });
+
+  // Parecer rodada 4, B2: janela JA estreita (1024px) — a selecao escrita por OUTRO host (o
+  // Git do desktop estreito compartilha o MESMO FilesStore) nao pode ser limpa pelo guard de
+  // resize do Chat: sem o guard de transicao, o drill-down do Git morreria no mesmo flush.
+  it('janela ja estreita: selecao escrita por outro host nao e limpa', async () => {
+    mq.set('(min-width: 1280px)', false);   // monta direto em desktop estreito
+    const t = montar();
+    await tick();
+    await tick();
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    store.selecionado = 'a.ts';   // escrito pelo GitTabs (mesma chave serverId::sessionName)
+    await tick();
+    await tick();
+    expect(store.selecionado).toBe('a.ts');   // nada limpou no meio
+    unmount(t.comp);
+  });
 });

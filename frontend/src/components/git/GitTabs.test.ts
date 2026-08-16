@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import { createRawSnippet } from 'svelte';
 import GitTabs from './GitTabs.svelte';
+import GitTabsHarness from './GitTabsHarness.svelte';
 import { createGitStore } from '../../lib/gitStore.svelte';
 import { filesStores } from '../../lib/filesStore.svelte';
 import { readFile } from '../../lib/api';
@@ -155,6 +156,73 @@ describe('GitTabs — aba Arquivos no celular (Task 12)', () => {
     await tick();
     expect(el.querySelector('.files-panel')).not.toBeNull();
     unmount(comp);
+  });
+
+  // Parecer rodada 4, B2: a 1024px (desktop estreito sem contexto) o Git e o UNICO host — abrir
+  // um arquivo por ele tem que manter o viewer e a selecao no store compartilhado (nada pode
+  // limpar no meio, nem o guard de resize do Chat que divide a mesma chave).
+  it('desktop sem contexto: abrir arquivo pelo Git mantem o viewer e a selecao', async () => {
+    const { el, comp } = montar(true, false);
+    await tick();
+    await tick();
+    clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
+    await tick();
+    await tick();
+    clica(el.querySelector('.files-panel .arvore .no'));
+    await tick();
+    await tick();
+    await tick();
+    expect(el.querySelector('.visor')).not.toBeNull();
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    expect(store.selecionado).toBe('a.txt');   // selecao viva, drill-down aberto
+    unmount(comp);
+  });
+
+  // Parecer rodada 4, B3: o ciclo false->true->false de filesInContext com arquivo aberto nao
+  // pode deixar nivel fantasma (levels.files=1 sem arquivo) — o proximo drill-down do nivel 0
+  // tem que funcionar, e a troca tem que devolver o foco a um controle visivel do modal.
+  it('ciclo filesInContext com arquivo aberto nao deixa nivel fantasma', async () => {
+    const git = createGitStore('sess');
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    // o harness expoe setFilesInContext: o $set do Svelte 4 nao existe no 5
+    const comp = mount(GitTabsHarness, {
+      target: el,
+      props: { git, desktop: true, onClose: vi.fn() },
+    }) as unknown as { setFilesInContext: (v: boolean) => void };
+    await tick();
+    await tick();
+    clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
+    await tick();
+    await tick();
+    clica(el.querySelector('.files-panel .arvore .no'));
+    await tick();
+    await tick();
+    await tick();
+    expect(el.querySelector('.visor')).not.toBeNull();
+
+    comp.setFilesInContext(true);   // resize 1279 -> 1280 com o modal aberto
+    await tick();
+    await tick();
+    await tick();
+    expect(el.querySelector('.files-panel')).toBeNull();
+    const abas = [...el.querySelectorAll('[role=tab]')].map((t) => t.textContent);
+    expect(abas.some((t) => t === 'Files')).toBe(false);
+    expect(el.contains(document.activeElement)).toBe(true);   // foco dentro do modal
+
+    comp.setFilesInContext(false);   // volta a estreito
+    await tick();
+    await tick();
+    clica([...el.querySelectorAll('[role=tab]')].find((t) => t.textContent === 'Files'));
+    await tick();
+    await tick();
+    expect(el.querySelector('.files-panel')).not.toBeNull();   // nivel 0, arvore
+    clica(el.querySelector('.files-panel .arvore .no'));
+    await tick();
+    await tick();
+    await tick();
+    expect(el.querySelector('.visor')).not.toBeNull();   // drill-down do nivel 0 funcionou
+    unmount(comp as never);
   });
 
   // Parecer rodada 3, B2: ativacao por toque/AT deixa o foco no body — o abridor so conta se

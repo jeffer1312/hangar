@@ -164,12 +164,13 @@
 
   <div class="corpo">
     {#if erro}
-      <!-- O erro da abertura fica NA TELA e e anunciado (B3): sem isto o visor desmontava e a
-           arvore voltava "normal" depois de uma leitura que falhou — o usuario nunca sabia
-           que o arquivo nao abriu. role="alert" anuncia a chegada ao leitor de tela. -->
+      <!-- O erro da abertura fica NA TELA e e anunciado (B3 r2): sem isto o visor desmontava e a
+           arvore voltava "normal" depois de uma leitura que falhou. role="alert" anuncia a
+           chegada ao leitor de tela. O erro e EXCLUSIVO (B1 r4): com ele, nada da cadeia abaixo
+           roda — senao o usuario veria "sem diferenças" junto de "arquivo binario", duas
+           afirmacoes que se contradizem. -->
       <p class="aviso erro" role="alert">{erro}</p>
-    {/if}
-    {#if temDiff && diffDoArquivo}
+    {:else if temDiff && diffDoArquivo}
       {@const d = diffDoArquivo}
       {#if d.truncated}
         <p class="aviso">{m.arq_diff_cortado()}</p>
