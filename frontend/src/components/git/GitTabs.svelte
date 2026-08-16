@@ -14,9 +14,10 @@
   import FileViewer from '../files/FileViewer.svelte';
   import { filesStores } from '../../lib/filesStore.svelte';
   import { getActiveId } from '../../lib/auth';
+  import type { FilesStore } from '../../lib/filesStore.svelte';
   import type { GitCommit } from '../../lib/api';
   import type { GitStore } from '../../lib/gitStore.svelte';
-  import { onDestroy } from 'svelte';
+  import { tick } from 'svelte';
 
   interface Props { git: GitStore; desktop: boolean; onClose: () => void }
   let { git, desktop, onClose }: Props = $props();
@@ -30,29 +31,79 @@
 
   // Store da aba Arquivos (Task 12): a MESMA instancia do FilesPanel (registry por identidade
   // serverId::sessionName) — o clique na arvore marca a selecao, e quem sobe o nivel do
-  // drill-down e este componente observando o store. O retain aqui mantem o store vivo quando o
-  // nivel 1 desmonta o FilesPanel (que solta o dele). Mesma captura do FilesPanel/Chat.
-  // svelte-ignore state_referenced_locally — captura intencional (padrao do FilesPanel).
-  const filesStore = filesStores.retain(`${getActiveId() ?? ''}::${git.sessionName}`, git.sessionName);
-  onDestroy(() => filesStores.release(`${getActiveId() ?? ''}::${git.sessionName}`));
+  // drill-down e este componente observando o store. O retain e CONDICIONAL a hospedagem
+  // mobile (B1): no desktop o Git nao tem a aba Arquivos (o painel de contexto ja a hospeda),
+  // e reter um store que o modal desktop nao usa seguraria estado a toa. O $effect tambem
+  // re-retem quando a sessao muda (release da chave antiga) — mesmo padrao do Git.svelte.
+  let filesStore = $state<FilesStore | null>(null);
+  $effect(() => {
+    if (desktop) return;
+    const chave = `${getActiveId() ?? ''}::${git.sessionName}`;
+    const s = filesStores.retain(chave, git.sessionName);
+    filesStore = s;
+    return () => filesStores.release(chave);
+  });
   // Path do arquivo aberto — variavel LOCAL de proposito: dentro do {#if} o template estreita o
   // tipo pra string (filesStore.selecionado e string | null e o TS nao acompanha o if).
-  const arquivoAberto = $derived(filesStore.selecionado);
+  const arquivoAberto = $derived(filesStore?.selecionado ?? null);
+
+  // No DESKTOP o Git nao oferece a aba Arquivos: o painel de contexto ja e a casa dela, e o
+  // modal desktop montaria o FilesPanel mobile por engano (B1). A fileira e filtrada, e se o
+  // `desktop` mudar com o componente montado (resize), a aba volta para Mudancas e o arquivo
+  // aberto e limpo — o nivel da aba files fica no nav, inerte, ate um proximo mobile.
+  const abasVisiveis = $derived(desktop ? GIT_TABS.filter((t) => t.id !== 'files') : GIT_TABS);
+  $effect(() => {
+    if (!desktop || nav.tab !== 'files') return;
+    if (filesStore?.selecionado) filesStore.selecionado = null;
+    nav = selectTab(nav, 'changes');
+  });
+
+  // Foco do drill-down (B2): o usuario de teclado que abre um arquivo na arvore precisa entrar
+  // no visor e voltar para a MESMA linha. Guarda o path e o elemento ativo ANTES do push.
+  let abridorPath: string | null = null;
+  let abridorEl: HTMLElement | null = null;
 
   // Drill-down da aba Arquivos no celular: o clique no arquivo marca a selecao no store
   // (FilesPanel), e o nivel 0 -> 1 sobe aqui — sem o push, o maxLevel do GIT_TABS nao vale.
   // O nivel 1 nao empurra de volta: fecharArquivo (abaixo) e a unica saida.
   $effect(() => {
-    if (nav.tab !== 'files' || filesStore.selecionado === null) return;
-    if (currentLevel(nav) === 0) nav = pushLevel(nav);
+    if (nav.tab !== 'files' || !filesStore || filesStore.selecionado === null) return;
+    if (currentLevel(nav) === 0) {
+      abridorPath = filesStore.selecionado;
+      abridorEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      nav = pushLevel(nav);
+      // O foco so pode ir depois do flush (o visor monta no mesmo flush); o Fechar do
+      // FileViewer e o primeiro controle do conteudo novo — fallback o proprio visor.
+      void tick().then(() => {
+        (document.querySelector<HTMLElement>('.gt-body .visor .fechar')
+          ?? document.querySelector<HTMLElement>('.gt-body .visor'))?.focus();
+      });
+    }
   });
 
   // Unica saida do arquivo aberto no celular (× e "voltar" do FileViewer passam por aqui):
   // limpa a selecao no store e desce o nivel — o FilesPanel volta com a arvore do jeito que
-  // estava (o estado da arvore e do store, nao do componente).
+  // estava (o estado da arvore e do store, nao do componente). O foco volta para a linha que
+  // abriu (B2); se ela nao estiver mais visivel (filtro/recarga mudaram a arvore), cai na aba
+  // Arquivos e, por ultimo, na primeira linha.
   function fecharArquivo() {
+    if (!filesStore) return;
+    const path = abridorPath;
+    const origem = abridorEl;
     filesStore.selecionado = null;
+    abridorPath = null;
+    abridorEl = null;
     nav = popLevel(nav);
+    void tick().then(() => {
+      if (origem?.isConnected && origem.getClientRects().length > 0) { origem.focus(); return; }
+      const linha = [...document.querySelectorAll<HTMLElement>('.files-panel .arvore .no')]
+        .find((n) => n.dataset.path === path);
+      if (linha?.isConnected && linha.getClientRects().length > 0) { linha.focus(); return; }
+      const aba = document.querySelector<HTMLElement>('[role=tab][aria-selected="true"]');
+      if (aba?.isConnected && aba.getClientRects().length > 0) { aba.focus(); return; }
+      const primeira = document.querySelector<HTMLElement>('.files-panel .arvore .no');
+      if (primeira?.isConnected) primeira.focus();
+    });
   }
 
   // Contagem no rotulo: `branches` conta locais + remotas porque o BranchList mostra as duas —
@@ -73,8 +124,8 @@
   // herdado (Task 12).
   function trocarAba(id: GitTabId) {
     if (git.diffPath) { git.closeDiff(); nav = popLevel(nav); }
-    if (nav.tab === 'files' && filesStore.selecionado !== null) {
-      filesStore.selecionado = null;
+    if (nav.tab === 'files' && filesStore?.selecionado !== null) {
+      filesStore!.selecionado = null;
       nav = popLevel(nav);
     }
     nav = selectTab(nav, id);
@@ -101,7 +152,7 @@
     </header>
 
     <div class="gt-tabs" role="tablist">
-      {#each GIT_TABS as t (t.id)}
+      {#each abasVisiveis as t (t.id)}
         {@const n = contagem(t.id)}
         <button class="gt-tab" class:sel={nav.tab === t.id} role="tab" aria-selected={nav.tab === t.id}
           onclick={() => trocarAba(t.id)}>
@@ -116,20 +167,22 @@
       {:else if nav.tab === 'changes'}
         <GitChangesTab {git} {desktop} level={currentLevel(nav)}
           onPush={() => (nav = pushLevel(nav))} onPop={() => (nav = popLevel(nav))} />
-      {:else if nav.tab === 'files'}
-        <!-- Task 12: a aba Arquivos no celular. Nivel 0 = o FilesPanel (arvore/busca); o clique
-             sobe o nivel pelo store (effect acima) e o nivel 1 mostra o arquivo — o MESMO
-             FileViewer do desktop, agora como degrau do drill-down dentro do modal, sem cobrir
-             a conversa (que nao existe ao lado no celular). O × e o "voltar" do proprio
-             FileViewer chamam fecharArquivo. -->
+      {:else if nav.tab === 'files' && !desktop}
+        <!-- Task 12: a aba Arquivos no celular (o desktop nao a oferece — B1). Nivel 0 = o
+             FilesPanel (arvore/busca); o clique sobe o nivel pelo store (effect acima) e o
+             nivel 1 mostra o arquivo — o MESMO FileViewer do desktop, agora como degrau do
+             drill-down dentro do modal, sem cobrir a conversa (que nao existe ao lado no
+             celular). O × e o "voltar" do proprio FileViewer chamam fecharArquivo; o rotulo
+             do voltar e m.comum_voltar — nao ha conversa atras no modal (B4). -->
         {#if currentLevel(nav) >= 1 && arquivoAberto}
           <FileViewer
             path={arquivoAberto}
-            diff={filesStore.diff}
-            conteudo={filesStore.conteudo}
-            loading={filesStore.loading}
-            onEscopo={(e) => filesStore.trocarEscopo(e)}
+            diff={filesStore?.diff ?? null}
+            conteudo={filesStore?.conteudo ?? null}
+            loading={filesStore?.loading ?? false}
+            onEscopo={(e) => filesStore?.trocarEscopo(e)}
             onFechar={fecharArquivo}
+            rotuloVoltar={m.comum_voltar()}
           />
         {:else}
           <FilesPanel

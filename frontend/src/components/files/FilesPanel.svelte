@@ -186,6 +186,18 @@
   .files-panel.mobile :global(.seg button) {
     min-height: 44px;
   }
+  /* O aviso de filtro e a MESMA linha, mas o botao "mostrar tudo" precisa de alvo de toque no
+     celular (B3): a regra compartilhada abaixo (compacta, do mock) manda min-height:0 — o
+     override vem DEPOIS e vence por especificidade. O desktop preserva a densidade do mock. */
+  .files-panel.mobile .filtro-aviso {
+    align-items: center;
+    min-height: 44px;
+  }
+  .files-panel.mobile .filtro-aviso button {
+    min-height: 44px;
+    min-width: 44px;
+    padding-inline: 8px;
+  }
 
   .barra-ctl {
     display: flex;

@@ -166,5 +166,7 @@
   "text/plain",
   "um provider novo não volta a mentir.",
   "vem do renderMarkdown como TEXTO ESCAPADO, monocromatico.",
-  ".arq-visor .fechar"
+  ".arq-visor .fechar",
+  ".gt-body .visor .fechar",
+  ".files-panel .arvore .no"
 ]

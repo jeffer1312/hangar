@@ -13,8 +13,12 @@
     loading: boolean;
     onEscopo: (e: 'branch' | 'nao_commitado') => void;
     onFechar: () => void;
+    // Rotulo do link de saida (B4, Task 12): no desktop o arquivo cobre a conversa e o default
+    // diz exatamente isso; no modal Git do celular nao ha conversa atras — o hospedeiro passa
+    // um rotulo que descreve a tela real (m.comum_voltar).
+    rotuloVoltar?: string;
   }
-  let { path, diff, conteudo, loading, onEscopo, onFechar }: Props = $props();
+  let { path, diff, conteudo, loading, onEscopo, onFechar, rotuloVoltar = m.arq_voltar_conversa() }: Props = $props();
 
   // Linhas do diff já destacadas. highlightDiff é assíncrona (import dinâmico do Shiki).
   // A flag `valida` do $effect descarta resposta velha — escopo trocado, diff novo ou o
@@ -150,7 +154,7 @@
         {#if partesDesde && doArquivo}<span class="sep"> · </span>{/if}
         {#if doArquivo}{metaArquivo}{/if}
       </span>
-      <button class="voltar" onclick={onFechar}>← {m.arq_voltar_conversa()}</button>
+      <button class="voltar" onclick={onFechar}>← {rotuloVoltar}</button>
     </div>
   </div>
 
