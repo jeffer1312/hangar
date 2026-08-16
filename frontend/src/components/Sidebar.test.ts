@@ -130,6 +130,7 @@ function montar(over: { ctxDisponivel?: boolean } = {}) {
       onSelectView: vi.fn(),
       onOpenCommand: vi.fn(),
       onCollapsedChange: vi.fn(),
+      overlaySession: null,
       ...(over.ctxDisponivel !== undefined ? { ctxDisponivel: over.ctxDisponivel } : {}),
     },
   });

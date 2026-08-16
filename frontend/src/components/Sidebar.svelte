@@ -81,12 +81,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     // Overlay do Quadro/Canvas aberto (rota #/board|#/canvas/<server>/<nome>): o Chat do overlay
     // recebe showContextPanel=true, então ele HOSPEDA o visor de arquivo — a Sidebar precisa
     // saber qual sessão está no overlay pra acertar o filesInContext do Git do trilho (Task 15).
-    overlaySession?: { name: string; serverId: string } | null;
+    overlaySession: { name: string; serverId: string } | null;
   }
   let {
     currentSession, onSelect, onCompare, boardActive, canvasActive,
     onWorkspaceActionsChange, view, onSelectView, onOpenCommand, onCollapsedChange,
-    ctxDisponivel = true, overlaySession = null,
+    ctxDisponivel = true, overlaySession,
   }: Props = $props();
 
   // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
