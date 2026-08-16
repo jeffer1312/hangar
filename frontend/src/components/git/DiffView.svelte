@@ -67,7 +67,16 @@
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);
     background: var(--surface-inset); border: 1px solid var(--border-subtle);
     font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.5;
-    max-height: 62vh; overflow: auto; white-space: pre;
+    /* Task 14: a caixa ocupa a ALTURA DISPONIVEL do contenedor (o visor do computador deixava
+       ~165px vazios ate o rodape). height: fit-content mantem a caixa do diff CURTO no tamanho
+       do conteudo; max-height: 100% limita o diff grande ao espaco e o overflow rola dentro da
+       caixa (quem rola continua sendo ela, nao a pagina nem o corpo). */
+    height: fit-content;
+    max-height: 100%;
+    overflow: auto;
+    white-space: pre;
+    flex-shrink: 1;
+    min-height: 0;
   }
   /* So os filhos DIRETOS sao linhas (block); os tokens do Shiki dentro delas ficam inline. */
   .git-diff > span { display: block; }

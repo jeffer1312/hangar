@@ -193,8 +193,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   // Agregação SSE multi-servidor vive no store compartilhado (1 EventSource por servidor pros 3
   // consumidores — Sidebar/SessionList/Board). Aqui só seguramos 1 retain e derivamos os grupos.
+  // Breakpoint do painel de contexto (Task 14): o mesmo matchMedia do Chat — abaixo de 1280px o
+  // DesktopSessionContext e display:none, e o Git da Sidebar volta a ser a unica casa de Arquivos.
+  let isDesktopLargo = $state(
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches,
+  );
   onMount(() => {
     sessionsStore.retain();
+    const mqLargo = window.matchMedia('(min-width: 1280px)');
+    const onLargo = () => (isDesktopLargo = mqLargo.matches);
+    mqLargo.addEventListener('change', onLargo);
     // Bridge pro SessionTabs (Task 6): as abas vivem FORA da <aside> recolhida, mas os workflows
     // continuam aqui — criar sessao, menu de contexto e kebab sao delegados por ela.
     const unregisterBridge = sidebarBridge.register({
@@ -204,6 +212,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     });
     return () => {
       unregisterBridge();
+      mqLargo.removeEventListener('change', onLargo);
       sessionsStore.release();
       clearTimeout(hpTimer);   // espiada pendente nao sobrevive ao unmount (fetch orfao + setState)
     };
@@ -464,6 +473,17 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     gitSheet = { name };
     closeMenu();
   }
+  // filesInContext de VERDADE (Task 14, achado do revisor na Task 12): o Git aberto pelo menu da
+  // Sidebar e da sessao X — se X e a sessao ATIVA no Chat (currentSession) com o painel de
+  // contexto visivel (desktop largo + ctxDisponivel + nao recolhido) e sem board/canvas por cima,
+  // o Chat DESENHARIA o visor ao clicar num arquivo pelo Git — a aba Arquivos aqui abriria o
+  // visor fantasma por tras do modal e deixaria a conversa inert. Mesma expressao do Chat.svelte,
+  // com as props que a Sidebar tem (ctxDisponivel e o mesmo contrato do showContextPanel).
+  const filesInContext = $derived(
+    isDesktopLargo && ctxDisponivel && !ctxPanel.recolhido && !boardActive && !canvasActive
+      && gitSheet !== null && gitSheet.name === currentSession,
+  );
+
   function closeGitSheet() {
     gitSheet = null;
     if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
@@ -1303,7 +1323,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
 <!-- Gerenciador git aberto pelo menu de contexto (repo da sessao, sem abrir o chat). -->
 {#if gitSheet}
-  <Git open={true} sessionName={gitSheet.name} desktop={true} filesInContext={false} onClose={closeGitSheet} />
+  <Git open={true} sessionName={gitSheet.name} desktop={true} {filesInContext} onClose={closeGitSheet} />
 {/if}
 
 <!-- Loop runner aberto pelo menu de contexto / botao da linha (repo da sessao, sem abrir o chat). -->

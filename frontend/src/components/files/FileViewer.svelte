@@ -230,7 +230,18 @@
     cursor: pointer; flex: none; padding: 0;
   }
 
-  .corpo { padding: 14px 16px 18px; overflow-y: auto; flex: 1; min-height: 0; }
+  .corpo {
+    padding: 14px 16px 18px;
+    /* Task 14: o corpo NAO rola — quem rola e a caixa do diff/conteudo (height: fit-content +
+       max-height: 100% no .git-diff e no .conteudo). Flex column para a caixa ocupar a altura
+       disponivel depois do cabecalho fixo. */
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    overflow: hidden;
+    flex: 1;
+    min-height: 0;
+  }
 
   /* O cabeçalho de cima (caminho, +N −M, fechar) é DESTE componente. O interno do DiffView
      (que serve o GitChangesTab intacto) fica escondido aqui, por CSS no escopo do FileViewer —
@@ -251,6 +262,13 @@
     margin: 0; padding: var(--space-2); border-radius: var(--radius-md);
     background: var(--surface-inset); border: 1px solid var(--border-subtle);
     font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.5;
-    max-height: 62vh; overflow: auto; white-space: pre;
+    /* Task 14: mesma regra da caixa do diff — altura disponivel para arquivo grande, tamanho
+       do conteudo para arquivo curto, rolagem dentro da caixa. */
+    height: fit-content;
+    max-height: 100%;
+    overflow: auto;
+    white-space: pre;
+    flex-shrink: 1;
+    min-height: 0;
   }
 </style>

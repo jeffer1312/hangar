@@ -243,6 +243,13 @@
      propria aqui, os paineis com `flex: N 1 0` das abas colapsam pra ZERO (a aba Historico abria com
      a lista de commits invisivel), e o modal ainda pulava de tamanho a cada troca de aba. */
   .gt-desktop { height: min(72vh, 720px); }
+  /* Task 14: no mobile o sheet so tem max-height (sem height) — o height:100% caia em auto e a
+     caixa do diff (agora height: fit-content) esticava o modal inteiro. Esta altura e o content
+     box do sheet (o max-height menos o padding dele), o que devolve a referencia para o
+     drill-down encolher e a caixa rolar por dentro. */
+  .gt:not(.gt-desktop) {
+    height: calc(100dvh - var(--space-8) - var(--space-4) - var(--space-5) - env(safe-area-inset-bottom, 0px));
+  }
   .gt-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); flex-shrink: 0; }
   .gt-id { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
   .gt-repo { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
