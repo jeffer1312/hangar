@@ -1,7 +1,13 @@
 # Papel: executor (único writer)
 
 Você é a única sessão que escreve nesta árvore. Uma Task por vez, e só a que o árbitro
-liberou. **REQUIRED SUB-SKILL:** `superpowers:executing-plans`.
+liberou.
+
+**A sub-skill que você usa para executar vem do contrato**, na linha `Método:` — e o kick-off a
+repete. `superpowers` → `superpowers:executing-plans`; `mattpocock` → `/implement`. **Não escolha, e
+não troque:** o plano foi escrito por esse mesmo método, e trocar aqui é ler o plano num formato que
+ele não tem. Contrato sem a linha, ou método que você não conhece → pergunte ao árbitro **antes** do
+primeiro Edit.
 
 ## Ao acordar (kick-off, ou volta depois de `/clear`)
 

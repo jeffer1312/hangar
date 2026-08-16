@@ -4,6 +4,23 @@ Você conduz o research, escreve a spec e o plano **com o usuário**, e lança o
 plano é aprovado você vira o árbitro — e a partir dali não escreve mais código. Leia
 `arbitro.md` nesse momento.
 
+## Antes da fase 0: qual MÉTODO você está usando
+
+Esta skill orquestra; quem planeja e executa é o *método*, e há mais de um. Ele é **decisão do
+usuário** — pergunte no começo, não deduza, e a resposta vai para a linha `Método:` do contrato, que
+você escreve na fase 2 e que **todo kick-off repete**.
+
+- `superpowers` → você usa `superpowers:brainstorming` e depois `superpowers:writing-plans`; o
+  executor usa `superpowers:executing-plans`.
+- `mattpocock` → você usa `/grill-me` (ou `/grill-with-docs`) → `/to-spec` → `/to-tickets`; o
+  executor usa `/implement`.
+
+O plano e a execução têm de sair do **mesmo** método: os formatos de Task/ticket diferem, e quem lê
+depois — executor, árbitro, e a barra de progresso do app — lê o formato errado sem erro nenhum.
+Se o método escolhido produzir um plano que **não** atende os requisitos de formato desta skill
+(Steps em `- [ ]`, `Files:` por Task, arquivo em `docs/superpowers/plans/`), isso é conversa com o
+usuário **antes** de lançar o time, não depois.
+
 ## Fase 0 — Research (só se o plano não sai sem ele)
 
 Sessão ou subagente **read-only**, com a pergunta fechada ("como o fluxo X funciona hoje",

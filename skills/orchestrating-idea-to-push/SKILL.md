@@ -48,9 +48,39 @@ fazendo.** Kick-off dizendo "você é revisor read-only" chegando numa sessão q
 de uma Task: responda *"sou o executor da Task N, confirme o destinatário"* e **não** assuma.
 Confirmar um papel que não é o seu troca o dono do trabalho no meio, em silêncio.
 
-**REQUIRED SUB-SKILLS:** o planejador usa `superpowers:brainstorming` e depois
-`superpowers:writing-plans`; o executor usa `superpowers:executing-plans`. Trabalho
-multi-repo com uma sessão por repo é outra skill: `orquestrar`.
+Trabalho multi-repo com uma sessão por repo é outra skill: `orquestrar`.
+
+## O MÉTODO não é escolha sua — vem do contrato
+
+Esta skill orquestra: papéis, portão, revisão independente, rotação, retrospectiva. **Ela não
+planeja e não executa** — isso é de outra família de skills, o *método*, e existe mais de um.
+
+> **Método ≠ motor.** *Motor* nesta skill é o provedor do modelo (`--engine`, `engines.json`:
+> DeepSeek, Kimi…). *Método* é qual família de skills planeja e executa. Uma sessão tem os dois, e
+> eles são decididos separadamente.
+
+**O método é declarado no contrato do grupo** (`regras-<gid>.md`), numa linha, e vale do research ao
+último commit:
+
+```markdown
+Método: superpowers    # planejador: brainstorming → writing-plans · executor: executing-plans
+Método: mattpocock     # planejador: /grill-me → /to-spec → /to-tickets · executor: /implement
+```
+
+Nenhum papel escolhe método, e **nenhum troca de método no meio**. Plano nascido num método e
+executado noutro é o defeito que esta seção existe para impedir: os dois escrevem o trabalho em formatos
+diferentes (Task com Steps em `- [ ]` de um lado, ticket do outro), e quem lê depois — o executor, o
+árbitro que recorta a Task, a barra de progresso do app — passa a ler uma coisa que não existe.
+
+Três regras, e as três são do árbitro:
+
+1. **A linha `Método:` é obrigatória** no contrato, escrita no lançamento, antes da primeira sessão.
+2. **Todo kick-off repete o método**, porque contrato se lê uma vez e kick-off chega fresco.
+3. **Contrato sem a linha** → o método é `superpowers`, que é o padrão histórico desta skill — e o
+   árbitro **escreve a linha** antes de seguir, em vez de deixar implícito.
+
+Método que você não conhece, ou pedido de trocar no meio: **pare e pergunte ao usuário**. É decisão
+dele, como modelo e conta.
 
 ## Kick-off — a mensagem aponta, não copia
 
@@ -60,6 +90,7 @@ pelo nome. O kick-off é um endereço, não um manual.
 ```
 Invoque a skill orchestrating-idea-to-push e leia a página do seu papel.
 Papel: <executor único | revisor | revisão da branch>.
+Método: <superpowers | mattpocock>.
 Repo/branch: <caminho> / <branch>.   HEAD esperado: <hash>.
 Regras do grupo: <caminho do regras-<gid>.md>.
 A Task da vez, recortada: <caminho do task-<N>.md>.
@@ -125,8 +156,11 @@ Primeira linha do arquivo de regras, pra sessão amnésica se reancorar sozinha:
 
 ```markdown
 > Sessões deste grupo: invoquem a skill `orchestrating-idea-to-push` e leiam a página do seu papel.
-> Branch: <branch> · Repo: <caminho>
+> Branch: <branch> · Repo: <caminho> · Método: <superpowers | mattpocock>
 ```
+
+A linha `Método:` é obrigatória (ver "O MÉTODO não é escolha sua", acima) e nunca muda no meio do
+trabalho.
 
 **O que muda a cada Task não vai em arquivo nenhum**: qual Task está liberada, qual é o hash, quem
 é o seu par. Isso vai no kick-off, que é sempre fresco por definição. Arquivo com estado da vez é
