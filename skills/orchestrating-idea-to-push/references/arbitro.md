@@ -46,6 +46,27 @@ Duas obrigações vêm junto, e sem elas isso vira o problema que veio resolver:
   **pergunta ao usuário** se o caminho vale o custo, com o que já foi gasto na mão. Foi o que
   destravou a espiral de nove rodadas de 15/08, e quem perguntou foi ele, não o árbitro.
 
+**O usuário não está disponível e a espiral já começou?** Você não para o trabalho nem inventa
+mudança de desenho: você **aperta o critério, por escrito, no kick-off do próximo revisor**.
+
+> Bloqueador é o que um **usuário real alcança**, e o parecer escreve **como se chega lá**. Caso que
+> só existe fabricando a corrida no teste vira **NOTA**, não `REPROVA`. Continuam bloqueador cheio:
+> tela que não monta, foco preso ou perdido pra fora do modal, contrato morto, texto errado na tela,
+> regressão de portão, intocável no commit.
+
+E declare, na mesma mensagem, o **limite da família**: "outra variação deste mesmo defeito é nota".
+Medido em 16/08/2026, duas vezes: nas duas a Task fechou na rodada seguinte. A alternativa medida —
+deixar o portão cobrar cada caso novo — custou 9 rodadas e 3h58 numa Task estimada em 1h.
+
+Isso é decisão sua e vai no registro com a data. **Não** afrouxa nada do que continua bloqueador
+cheio, e não se aplica antes da terceira rodada.
+
+**Régua nova que muda ONDE uma coisa mora vai no KICK-OFF, não só nas regras.** Sessão nova lê o
+kick-off inteiro e as regras por alto: régua enterrada na página 5 de um arquivo de 200 linhas não
+alcança quem nasceu depois dela. Medido em 16/08/2026 com a régua "parecer não mora em `/tmp`",
+decidida de manhã: **duas** das três sessões abertas depois dela salvaram prova em `/tmp` assim
+mesmo, e você teve de copiar os arquivos à mão.
+
 **Você decide quando os outros dois não bastaram — não refaz o que eles fazem.** Verificação
 tem dono: o executor roda, o revisor re-roda. "Conferir", pra você, é metadado do git contra o
 relato (segundos, comandos fechados — ver o passo 4 do ciclo); nunca é rodar teste, abrir diff
@@ -163,7 +184,7 @@ inteira porque "necessários" não é uma lista — o parecer original nomeava
 `ServidoresSettings.svelte:131-132` e `App.svelte:370-375`, e o que ficou de fora (`Sidebar`,
 `SessionList`) voltou como o mesmo bloqueador na round seguinte.
 
-**Forma você cobra; mérito nunca.** O executor reporta receita sem os cinco campos ou sem o
+**Forma você cobra; mérito nunca.** O executor reporta receita sem os seis campos ou sem o
 inventário de callers ("recebi diagnóstico, não receita") → devolve ao revisor pedindo os
 campos e avisa o executor pra esperar. Cobrar campo faltando é olhar o formulário, não o
 código — é a única inspeção de parecer que é sua. Se a receita está tecnicamente certa, quem
@@ -222,8 +243,23 @@ Depois do "pode ir", você decide. Estes três são **automáticos**, sem espera
 |---|---|
 | Sessão sem reportar há 15 min | `cp-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca |
 | **Sessão do time sumiu e não foi você que fechou** | **abre outra e continua.** Não investigue. |
-| Executor acima de ~500k de contexto | propõe rotação no próximo marco |
+| Escritor acima de **50% da própria janela** (500k numa de 1M) | propõe rotação no próximo marco |
+| **Revisor acima de 85% da própria janela** | abre a substituta **antes** de a correção chegar |
 | Mesma causa reprovada 2× | pede ao revisor receita com abordagem nova — ou rotaciona o revisor. Você não desenha receita. |
+
+**O gatilho é fração, não número absoluto.** O teto de 500k nasceu do escritor de janela de 1M e não
+serve pra revisor de janela curta: 209k de 272k é muito mais perto do fim que 403k de 1M. Medido em
+15/08/2026, e o preço de ignorar isso são sessões que **compactam no meio do julgamento** — duas
+fecharam acima da própria janela (310k e 309k de 272k), e a segunda já não conseguia nem reportar o
+próprio `ctx`.
+
+**Task de tela com revisor de janela curta: conte um revisor por rodada.** Medido em 16/08/2026:
+8 sessões pra 9 rodadas, cada troca repagando ~85k de leitura inicial. Se a máquina do usuário tiver
+um modelo de **janela larga**, ele numa Task de tela desde a **rodada 1** é a escolha que os números
+sustentam — 3 sessões cobriram as 4 Tasks e 8 pareceres da outra metade do mesmo trabalho, sem
+nenhuma compactação. Isso é **sugestão pro plano**, e quem escolhe é o usuário: janela larga pode
+não existir na conta dele, e **nenhuma régua deste tubo depende de ela existir** — sem ela, vale o
+gatilho de 85% acima, que é o que faz a rotação acontecer a tempo.
 
 E a linha entre decidir e acordar o usuário:
 
@@ -381,7 +417,8 @@ Uma sessão por Task: aposentada no marco aprovado, com o contexto ainda limpo.
 Trocar **no meio do portão** é permitido — e obrigatório — em dois casos:
 
 - **falha repetida na mesma causa** (a mesma classe de defeito voltando round após round), ou
-- **contexto acima de ~500k**.
+- **contexto acima de metade da própria janela** (~500k numa de 1M — a fração é que manda, ver
+  "Autonomia — gatilhos").
 
 Não existe "espero o portão fechar pra trocar": o portão pode não fechar, e aí a sessão
 saturada continua produzindo rounds cada vez piores. O primeiro relatório factualmente
@@ -393,6 +430,16 @@ effort ao vivo antes do primeiro `Edit`**.
 
 Turno interrompido no meio deixa arquivos meio editados: avise a sessão nova de tratar isso
 como rascunho não confiável, com os paths listados.
+
+### Árbitro que cede o lugar entrega uma LISTA, não só o registro
+
+O que está aberto e **quem carrega cada coisa**. No mínimo: os itens de encerramento (revisão da
+branch, retrospectiva), a tabela estimado×real, as barras já decididas, e as sessões vivas com o
+`ctx` de cada uma.
+
+Medido em 16/08/2026: o árbitro foi trocado às 00:0x e a tabela estimado×real parou no bloco
+anterior. O bloco mais caro do trabalho, o total e a contagem de rodadas visuais ficaram **em
+branco** — a fase 5 teve de reconstruir tudo por `git log --format='%ad'`.
 
 ## Autorização vinda de fora
 
@@ -416,7 +463,7 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 | "Achado pequeno, entra junto com a próxima Task" | Se entra na próxima, é bloqueador desta. |
 | "Repasso o essencial do parecer" | Paráfrase perde a lista de arquivos, e é a lista que conserta. |
 | "O executor disse que commitou" | `git log` custa 2 segundos e já pegou drift. |
-| "Não troco de executor com o portão aberto" | O portão pode não fechar. Falha repetida ou 500k autorizam trocar agora. |
+| "Não troco de executor com o portão aberto" | O portão pode não fechar. Falha repetida ou meia janela autorizam trocar agora. |
 | "O próximo Step é aditivo, não encosta no que está sob revisão" | Aditivo hoje, alvo apagado amanhã. |
 | "Isso o usuário não fechou, melhor acordar" | Só se duas leituras dão trabalhos diferentes. |
 | "Paro agora que a cota apertou" (no meio da Task) | Pare no fim da Task. Meia Task é bagunça. |
@@ -554,6 +601,17 @@ no meio deles.
 
    Não leia `/proc/<pid>/cmdline` esperando as flags: o Pi reescreve o próprio argv e o cmdline
    mostra só `pi`. Isso já pareceu, por um minuto, uma sessão criada sem modelo nenhum.
+
+   **E prova de modelo prova o modelo, não o HARNESS.** Uma sessão Claude Code com motor apontando
+   pro provedor X e uma sessão Pi rodando o modelo X mostram **a mesma linha de status**. Quem
+   distingue é o `pane_start_command` (`claude` × `pi`) e o `provider` que a API devolve — confira os
+   dois. Medido em 15/08/2026: três executores nasceram na forma errada e mesmo assim provaram
+   modelo e esforço corretamente antes do primeiro `Edit`; custo zero só porque as worktrees ainda
+   estavam limpas.
+
+   Junto: **prova por sidecar de status tem que casar o `session-id` com o da sessão viva** — o
+   diretório guarda um arquivo por id e não os apaga quando a sessão morre. Dois daqueles três
+   leram o sidecar da sessão morta que ocupava o pane antes, e o valor saiu certo por coincidência.
 3. **Escrever o pedido num arquivo** e entregar com `cp-send <nome> "$(cat <arquivo>)"`.
    Pedido longo digitado direto na linha quebra: `|`, `$`, crase e `|` de "SIM | NÃO" viram
    comando, e a mensagem sai mutilada ou não sai.
@@ -579,9 +637,25 @@ sessão, no dia em que o usuário definir o papel — não no fim, de memória.
 ## Encerramento — itens próprios, escritos no LANÇAMENTO
 
 - [ ] **Revisão da branch** — gatilho: todas as Tasks de código aprovadas. Sessão nova, `<base>..ponta`.
-- [ ] **Retrospectiva (fase 5)** — gatilho: branch aprovada. Sessão nova, `references/retrospectiva.md`.
-      Produto: patch proposto para a skill, em `~/.claude/orq-retros/<data>-<gid>.md`.
+- [ ] **Retrospectiva (fase 5)** — gatilho: a branch está na mão do usuário e **nada mais em voo**.
+      Sessão nova, `references/retrospectiva.md`. Produto: patch proposto para a skill, em
+      `~/.claude/orq-retros/<data>-<gid>.md`.
 ```
+
+**O gatilho da fase 5 não é a primeira aprovação da revisão final.** Branch aprovada abre a porta
+pra achado virar Task, e é comum entrarem mais algumas. Lançar a fase 5 mais cedo é legítimo (o
+produto dela é sobre processo e não precisa da árvore parada) — mas então **registre no mesmo
+momento que ela vai precisar de adendo**, com o gatilho do adendo escrito junto:
+
+```markdown
+- [ ] **Adendo da retrospectiva** — gatilho: nada mais em voo. Escopo: as Tasks que entraram
+      depois de `<hash da 1ª aprovação>`. Sessão nova, numeração continuando do último P.
+```
+
+Medido em 16/08/2026: a fase 5 rodou às 09:xx em paralelo com uma Task e ficou obsoleta em sete
+horas — quatro Tasks e duas revisões de conjunto depois. O adendo custou uma sessão inteira e só
+existiu porque o árbitro lembrou dele. Sem o item escrito, a metade mais recente do trabalho —
+justamente a que rodou com o time e as réguas já ajustados — não teria sido destilada por ninguém.
 
 Escreva os dois **antes de abrir a primeira sessão do time**. No fim você estará saturado, e branch
 aprovada *parece* o fim do trabalho — é por isso que o revisor final também tem ordem de te lembrar
@@ -643,3 +717,37 @@ assumir, dar o hash novo e congelar — nunca "pode seguir que é só ajuste".
 com escopos vizinhos (uma com o revisor de acessibilidade, outra com o de tipos, por exemplo)
 podem consertar o mesmo ponto em direções diferentes. Segure o que se sobrepõe até as duas
 entregarem, e diga a cada uma que está segurando — silêncio parece descaso pelo achado.
+
+## A branch reabriu depois de aprovada
+
+Vai acontecer, e é legítimo: a revisão final acha coisa, e o usuário instala o app e usa. Duas
+regras, e nenhuma delas é "pare".
+
+**1. O que custa não é a Task — é o conjunto.** Commits que entram depois da aprovação passam por
+portão individual e **nunca foram olhados juntos**. Quando dois ou mais deles tocam o mesmo espaço,
+abra uma **revisão de conjunto do delta**: sessão nova, escopo declarado (só o delta, não a branch
+antiga), o mesmo formato da revisão final.
+
+Medido em 16/08/2026: cinco commits pós-aprovação, 18 arquivos, +672 −277, três deles mexendo nos
+mesmos quatro arquivos em rodadas seguidas. A revisão de conjunto achou **dois defeitos novos** e
+confirmou um terceiro — nenhum visto pelos portões individuais, que estavam todos verdes. Virou uma
+Task a mais. Custo: uma sessão de 240k e ~30 min.
+
+**2. Achado da revisão entra; pedido novo do usuário é trabalho novo — e você diz o preço antes de
+aceitar.** Achado da própria branch, com receita fechada e defeito objetivo, é o tubo funcionando:
+vira Task e roda o portão. Pedido que nasce do usuário usando o app é outra coisa — **essa fila não
+acaba sozinha**. Não recuse e não decida: responda uma frase, e ela tem o preço dentro.
+
+> "Entra, e o custo é mais uma revisão de conjunto antes do push — ou fica pra depois do push, numa
+> branch própria."
+
+Quem escolhe é ele; o push é dele. O que **você** não faz é aceitar sem dizer o preço, porque o
+preço não aparece: a Task parece pequena e a revisão de conjunto que ela obriga, não.
+
+E o preço é menor do que a impressão de relógio sugere. Medido em 16/08/2026, quatro Tasks
+pós-aprovação custaram **~2h30 de trabalho** (18 min + ~15 min + ~1h + ~20 min), dentro de ~7h de
+relógio que incluíam **3h40 sem ninguém trabalhando**, com o usuário testando o app. **Task pequena
+pós-aprovação é barata; o que custa é a revisão de conjunto que ela obriga no fim** (uma sessão,
+~30 min) — esse é o preço a dizer em voz alta, não um número inflado por espera. As quatro fecharam
+defeito real e a série convergiu: a última não gerou achado novo. **O erro não é abrir; é dizer o
+preço errado.**

@@ -30,7 +30,12 @@ Rode a suíte completa e o type gate **você mesmo**, na ponta da branch.
 
 O mesmo do revisor por Task: `VEREDITO` primeiro, `Verificado por mim` com os comandos que
 você rodou, e todo bloqueador com receita fechada — causa reproduzida, onde, **todos os
-callers**, passos, comportamento final, prova. Detalhe em `revisor.md`.
+callers**, **prova da receita**, passos, comportamento final, prova. Detalhe em `revisor.md`.
+
+**Você pode ser chamado pro DELTA, não pela branch inteira.** Quando entram commits depois de uma
+primeira aprovação, o árbitro abre uma revisão de conjunto só deles. O escopo vem declarado no
+kick-off (`<hash da 1ª aprovação>..<ponta>`): revise **esse** range e nada além — a branch antiga já
+passou. O resto desta página vale igual.
 
 Achado seu volta pro ciclo normal: o árbitro repassa, o executor aplica, e você revê.
 

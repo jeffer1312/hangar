@@ -33,7 +33,7 @@ disso a integração vira o gargalo e você perdeu o ganho de qualquer jeito.
   Task. Pra ele muda menos que no serial: a ponta dele não anda debaixo dele.
 - **O árbitro continua read-only no código.** Merge limpo é mecânico e é dele. Conflito não
   é — ver abaixo.
-- Intocáveis, stage por caminho explícito, sem `--amend`, receita de cinco campos: tudo igual.
+- Intocáveis, stage por caminho explícito, sem `--amend`, receita de seis campos: tudo igual.
 
 ## A receita
 

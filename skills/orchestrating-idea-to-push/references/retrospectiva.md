@@ -5,6 +5,13 @@ proposto para esta skill**, com a evidência do trabalho que acabou de rodar.
 
 Read-only em tudo. Você não commita, não conserta, não opina sobre o produto.
 
+**O gatilho é "a branch está na mão do usuário e não há nada em voo"** — não a primeira aprovação da
+revisão final. Branch aprovada abre a porta pra achado virar Task, e é comum entrarem mais algumas.
+Chamado antes disso, o teu relatório envelhece: medido em 16/08/2026, um deles ficou obsoleto em
+sete horas, com quatro Tasks e duas revisões de conjunto entrando depois. Se for o caso, diga ao
+árbitro que vai faltar um **adendo** — sessão nova, escopo só do que entrou depois, numeração
+continuando do último P.
+
 ## Por que sessão nova
 
 Quem executou tem o viés de quem executou, e no fim é quem está mais saturado. Duas vezes num
@@ -20,6 +27,9 @@ cat <config>/.claude-pocket-pair/grupo-<gid>.md
 
 # 2. estimado × real, se o plano tiver esse arquivo
 cat docs/superpowers/plans/<data>-*-estimativa-vs-real.md
+
+# 2b. ele costuma estar PELA METADE (troca de árbitro leva o item embora) — reconstrua:
+git log --format='%h %ad %s' --date=format:'%d/%m %H:%M' <base>..<ponta>
 
 # 3. a branch: quantos commits por Task, quantas rodadas de correção
 git log --oneline <base>..<ponta>
@@ -39,6 +49,11 @@ avisar as sessões, a decisão não estava aqui.
 
 Bloco a bloco: estimado, real, diferença. Depois **uma** frase sobre o maior desvio: o que aconteceu,
 não quem errou. Se um bloco estourou 300%, a pergunta é o que a skill não previu.
+
+Os timestamps de commit são dado duro e dão o começo e o fim de cada Task — use-os quando o arquivo
+vier incompleto. E **separe relógio de trabalho**: espera do usuário testando o app é relógio, não
+desperdício, e contá-la infla o número que vai virar régua. Medido em 16/08/2026: "~7h, +37%" viraram
+~2h30 de trabalho depois de tirar 3h40 de espera.
 
 ### 2. Desperdício agrupado
 

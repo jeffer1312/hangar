@@ -32,16 +32,10 @@ esperando repasse.
 **APROVA e DEVOLVIDO vão SÓ para o árbitro** — é o veredito que abre ou mantém fechado o portão, e
 aprovar direto pra quem escreveu o código é o autor fechando o próprio portão.
 
-O árbitro fica sabendo do REPROVA pelo relatório do executor, e é ele quem te chama de volta pra
-julgar o commit de correção. Se o executor **discordar** da tua receita, a discordância vai pro
-árbitro — não pra você.
-
 **A seta é de mão única.** O executor **não** te responde: se ele discordar da receita, a
-discordância vai pro árbitro, com evidência, e o árbitro decide. Não negocie achado com quem
-escreveu o código — é o portão deixando de existir. Se ele te procurar, mande ele pro árbitro.
-
-**APROVA e DEVOLVIDO vão só pro árbitro**, nunca ao executor: aprovar direto pra quem escreveu
-é o autor fechando o próprio portão.
+discordância vai pro árbitro, com evidência, e o árbitro decide — é ele quem te chama de volta pra
+julgar o commit de correção. Não negocie achado com quem escreveu o código: é o portão deixando de
+existir. Se ele te procurar, mande ele pro árbitro.
 
 ## Uma síntese, uma mensagem
 
@@ -56,6 +50,13 @@ Mensagem longa vai por heredoc de aspas simples (`<<'EOF'`) — com aspas duplas
 crase e `$`, e um bloqueador que chega mutilado vira round perdida.
 
 ## Formato do parecer
+
+**O parecer e os prints não moram em `/tmp`.** O lançamento decide um caminho durável — o padrão é
+`~/.claude/orq-retros/<data>-<gid>/{pareceres,tasks,kickoffs,visual}/` — e é lá que você salva. `/tmp` some
+no reboot, e a fase 5 lê **exatamente** os pareceres: a linha de desperdício de cada rodada é a
+matéria-prima dela. Medido em 16/08/2026: a régua foi decidida de manhã e **duas** das três sessões
+de revisor abertas depois dela salvaram prova em `/tmp` assim mesmo; o árbitro teve de copiar os
+prints à mão, e os arquivos só sobreviveram porque a máquina não reiniciou.
 
 ```
 VEREDITO: APROVA | REPROVA | DEVOLVIDO
@@ -105,7 +106,7 @@ conserta o critério em vez do código — e nenhuma das nove rodadas acima teri
   intocáveis), nunca código. Verificação que você não rodou não existe no portão — teu APROVA
   é a última linha antes da Task seguinte.
 
-## A receita — cinco campos, mais o inventário
+## A receita — seis campos, mais o inventário
 
 Bloqueador sem receita não é entrega.
 
@@ -113,6 +114,7 @@ Bloqueador sem receita não é entrega.
 Causa reproduzida: <passo a passo que faz acontecer + o que se observa>
 Onde: <arquivo:linha, função/símbolo exatos>
 Todos os callers: <git grep do símbolo — a LISTA completa, não "e outros">
+Prova da receita: <o que EU medi que sustenta o passo 1 — não o defeito, o MECANISMO que estou propondo>
 Passos:
   1. <alteração concreta>
   2. <...>
@@ -131,6 +133,75 @@ Sem "considere", sem alternativas em aberto, sem "talvez fosse melhor refatorar"
 **um** desenho e descreva ele. Não fechou a receita? O achado não está entendido: investigue
 mais, ou rebaixe para REGISTRADO dizendo o que falta.
 
+### O inventário do símbolo não fecha a classe sozinho — duas perguntas a mais
+
+**1. Quando o defeito é uma AÇÃO global — mover foco, rolar, escrever num store compartilhado — o
+inventário não é dos donos do estado: é dos PONTOS QUE EXECUTAM A AÇÃO.** `git grep` do verbo
+(`.focus(`, `.scrollTo(`, a atribuição do store), a lista inteira, e a receita conserta todos de uma
+vez.
+
+Medido em 16/08/2026, e custou uma rodada inteira: a receita nomeou a entrada — *"a seleção veio do
+`GitTabs`"* — e o executor cumpriu ao pé da letra. A rodada seguinte reabriu o defeito pelo caminho
+gêmeo. A causa era uma frase: *"o Chat move o foco sem perguntar se existe um modal aberto"*, e o
+`git grep composerRef` mostrava **dois** pontos que movem foco. Consertados os dois, a Task fechou
+com 2 arquivos, +52 −1.
+
+Teste de si mesmo antes de mandar: **se a sua receita nomeia um estado ou um componente de origem,
+ela provavelmente descreve a entrada.** Escreva a causa como uma frase sobre o que o código faz de
+errado, sem citar de onde o gatilho veio.
+
+**2. Quando o defeito é um ESTADO que fica preso ou errado, pergunte por quantas PORTAS se chega
+nessa condição.** O inventário responde "quem chama isto?"; há portas que não passam por símbolo
+nenhum — um `{#if}` de media query que desmonta o componente, uma troca de rota, um pai que sai do
+ar. Achado o ponto que causa, pergunte-se uma vez: **este é o único caminho?** Se a resposta exigir
+procurar, procure — e prefira a correção que fecha a **condição** (limpar na desmontagem, garantir
+na saída) à que fecha cada porta.
+
+Medido em 16/08/2026: o inventário de `alternarCtxPanel` estava completo e correto — três botões,
+todos listados. E havia um segundo caminho por fora dele: encolher a janela abaixo de 820px durante
+o arrasto desmonta o painel inteiro, o `pointerup` fica sem destino e o flag trava. **O sintoma
+desse caminho era pior, e ninguém o teria diagnosticado:** com o flag preso, cada passada do cursor
+pela divisória encolhia o painel 4px (`380 → 376 → 372 → 368`), derivando sozinho até o piso. A
+receita que fechou a condição cobriu quatro caminhos de uma vez.
+
+### A sua receita é hipótese sua, e paga a prova que você cobra
+
+Você cobra prova do executor. A receita é uma hipótese, e ela paga a mesma conta — **antes** de
+sair, porque depois que ela sai o executor a cumpre e a rodada já foi.
+
+Dois formatos de receita mentem com mais frequência que os outros:
+
+**1. Receita que propõe MECANISMO do framework** (cleanup, ciclo de vida, desmontagem, reatividade,
+ordem de flush). Prove o *mecanismo*, não o defeito. E cuidado com a ferramenta: `!!querySelector`
+**não distingue** "o nó reapareceu" de "o nó nunca saiu". O que distingue é carimbar a instância
+viva antes de agir e conferir o carimbo depois:
+
+```js
+document.querySelector('.alvo').dataset.marcaDoRevisor = 'eu-marquei-esta-instancia';
+// ... a ação que você acha que desmonta ...
+// mesma marca de volta = MESMA instância = não desmontou = seu cleanup nunca roda ali
+```
+
+Medido em 16/08/2026: o revisor receitou um cleanup de `$effect` "pra fechar a classe", afirmando
+que recolher o painel desmontava o componente. O executor mediu, discordou e desviou; o revisor foi
+conferir com o carimbo — **mesma instância** — e escreveu no parecer *"o executor está CERTO e eu
+estava ERRADO; minha receita fechava metade, e a metade que ficava aberta era justamente o caso que
+eu nomeei primeiro."* O repo já dizia isso num comentário desde antes, e a prova levou **duas**
+chamadas.
+
+**2. Receita que escolhe um NÚMERO para conter um sintoma** (um teto, uma reserva, um limite de
+layout). Antes de escolher o número, meça **por que o elemento tem o tamanho que tem**. Número que
+contém sintoma é receita de sintoma, e você acabou de gastar a rodada do executor com ela.
+
+Medido em 16/08/2026: o revisor prescreveu uma reserva de 620px pro botão de enviar parar de cobrir
+a pílula do composer; custou **dois commits** e ele mesmo retirou a régua na rodada seguinte, depois
+de medir que zerar o recuo lateral levava o cartão de **376px para 534px** e a sobreposição sumia
+com 91px de folga. A caixa que provava isso já estava na medição dele da rodada anterior.
+
+As duas receitas erradas foram pegas antes do estrago — uma pela consciência do próprio revisor,
+outra por um executor que resolveu medir. Nenhuma das duas é processo, e é por isso que o campo
+existe.
+
 ## O que o parecer precisa cobrir
 
 `check`/build/testes passando é o **piso**, não o parecer. Além disso:
@@ -143,6 +214,73 @@ mais, ou rebaixe para REGISTRADO dizendo o que falta.
 O contrato do grupo diz o que este trabalho exige a mais (skills de revisão por tipo de
 Task, verificação visual, harness de carga). Leia antes do primeiro parecer.
 
+### O teste prova o cenário, ou prova a si mesmo?
+
+A pergunta não se responde lendo o teste. Responde-se **quebrando o código de propósito e vendo o
+teste cair**:
+
+1. Copie o subprojeto para fora do repo (o repo fica intocado — mutação por regex na árvore de
+   trabalho já apagou `role`/`aria-live` numa execução, ver `executor.md`).
+2. Remova **a linha da correção**, uma de cada vez, e rode a suíte.
+3. Caiu só o teste novo → ele prova o cenário. Nada caiu → **aquele ponto não tem teste**, e isso é
+   achado (`REGISTRADO` de lacuna, não bloqueador).
+
+Medido em 16/08/2026: tirando o guard do resize, `PASS(6) FAIL(1)` — caiu exatamente a asserção de
+foco do teste novo. Tirando o guard do atalho irmão, `PASS(7) FAIL(0)` — suíte inteira verde, e
+aquele ponto virou nota de lacuna. Na segunda metade do mesmo trabalho a técnica foi usada em quatro
+dos sete pareceres, e uma das mutações devolveu **880 testes verdes com o defeito de volta inteiro**.
+Não é sugestão: é a única coisa que separa teste que prova o cenário de teste decorativo.
+
+**A outra metade: receita que instala TRAVA exige prova invertida.** A mutação responde "o teste
+prova o cenário?"; a prova invertida responde "a trava trava?". Toda receita cujo objetivo é impedir
+regressão futura — tornar prop obrigatória, apertar um tipo, acrescentar um lint — só vale entregue
+com a verificação **vermelha sem a correção** e verde com ela. Peça as duas ao executor, em disco, e
+leia as duas. Sem isso, ou a trava nasce vermelha pra sempre e alguém a desliga, ou ela passa por
+trava sem travar nada.
+
+Medido em 16/08/2026: a trava eram 2 linhas mais a prova invertida exigida pelo árbitro; ligada, ela
+devolveu **"2 errors"**, revelando um **segundo** ponto sem a prop que a receita não previa. Que é a
+contrapartida da mesma rodada: a receita dizia "2 linhas" e eram **3**. **Ao receitar uma trava,
+rode a verificação com a mudança aplicada ANTES de escrever o número de passos** — contar os pontos
+que você já conhece não é contar os pontos.
+
+### Prova ao vivo mede o que está SERVIDO, não o que está commitado
+
+**Buildar não é prova. Prova é casar o identificador do artefato que você acabou de construir com o
+que a página realmente carregou** — o hash do bundle, a data do arquivo, o que a plataforma tiver.
+Buildar é o primeiro passo; o segundo é conferir, e é ele que vale. Descubra antes o que a porta
+serve (`systemctl --user cat <serviço>`, o `ExecStart`): porta de desenvolvimento servindo *build*
+estático mostra o commit anterior sem avisar ninguém.
+
+Medido em 16/08/2026, o mesmo defeito por dois mecanismos: primeiro uma porta rodando `npm run
+preview` serviu um bundle de 40 minutos antes do commit — custou **três** medições refeitas e uma
+prova de parecer anterior que teve de ser retirada; depois, já com o `build` feito antes, um service
+worker instalado serviu o `index.html` do próprio cache — e portanto o JS anterior. Nas quatro
+rodadas seguintes todo parecer trouxe o par conferido (`dist/index.html` → `index-C752Y9Ah.js`; a
+página → o mesmo) e nenhuma medição precisou ser refeita. A receita concreta de como conferir é **do
+repositório**, não desta skill: ela vive no arquivo de regras do grupo, com o comando daquele projeto.
+
+**Antes de abrir o navegador, compare as expressões lado a lado.** Na revisão de uma branch, duas
+medições foram gastas caçando um defeito pelo caminho errado; as três expressões da mesma derivada,
+postas termo a termo, mostravam o lugar em minutos.
+
+### Meça nos dois hosts e nos dois estados, e diga em qual
+
+Tela que existe em dois hosts (celular e computador, painel e modal) mede-se **nos dois** — e o
+parecer diz em qual largura cada número foi tirado. Três rodadas de uma execução caíram por medição
+num breakpoint só: a aba nova aparecendo no desktop quando a Task era do celular, e a mesma aba
+sumindo dos dois lugares na faixa de 820–1279px.
+
+O eixo não é só a largura: é **qualquer estado da região vizinha**. Duas outras rodadas caíram por
+medir no estado errado — o `overflow` conferido numa aba que rola por ter 29 arquivos, quando o
+número original viera de outra; e o teto de um painel calibrado só com o visor **aberto**, quando o
+estado normal do vizinho é fechado. Regra curta: **meça sempre no mesmo estado em que o número
+original foi levantado, e anote o estado junto do número.**
+
+**Prova de comportamento vai até o desfecho.** "Conectou", "salvou", "abriu" — não o estado
+imediatamente anterior a ele. Print de botão habilitado não é prova de que o clique funciona; medido
+em 16/08/2026, a evidência parou no botão desabilitado e o portão teve de rodar o fim do fluxo.
+
 ### Use o ferramental de revisão que a máquina tiver
 
 Antes do primeiro parecer, veja o que existe **na sua sessão**: subagentes de revisão por linguagem e
@@ -151,7 +289,7 @@ por dimensão (`typescript-reviewer`, `python-reviewer`, `silent-failure-hunter`
 **em paralelo** os que casam com o que a Task tocou. Regras que valem mais que a lista:
 
 - **Você sintetiza; parecer não é colagem de saída de subagente.** Achado deles só vira bloqueador
-  depois de **você** reproduzir e fechar a receita de cinco campos com o inventário de callers.
+  depois de **você** reproduzir e fechar a receita de seis campos com o inventário de callers.
 - **Priorize a dimensão que você NÃO olharia sozinho.** É onde o subagente se paga. Medido numa
   execução real: o revisor achou o bug de corrida por leitura própria (os subagentes de linguagem e
   de falha silenciosa chegaram nele depois, como confirmação), mas os dois bloqueadores de
@@ -250,8 +388,10 @@ estado e na mesma largura. O reporte do executor tem que trazer, por rodada: que
 **qual letra era o trabalho dele**, o maior buraco apontado e o que ele consertou. Reporte que
 diz só "comparei e ficou bom" é o mesmo "está bom?" com outra roupa — bloqueia.
 
-Você refaz a comparação por conta própria, uma vez, no fim: abra o print final e a barra lado
-a lado e escolha. Duas coisas que essa passada procura e que a do executor não pega:
+**Você NÃO refaz o protocolo cego do executor.** Ele já rodou, com subagente fresco e teto de
+rodadas; refazê-lo é pagar de novo a parte mais cara da sua janela por uma resposta que você já tem.
+O que é seu é **uma passada**, no fim, sobre o print final e a barra, procurando as duas coisas que
+a dele não pega:
 
 - **Barra trocada no meio** — ele comparou com um estado diferente, outra largura, ou uma
   versão da tela de referência que já mudou. Comparação contra a barra errada é evidência
@@ -260,10 +400,28 @@ a lado e escolha. Duas coisas que essa passada procura e que a do executor não 
   comparação cega não perdoa retângulo opaco sobre o papel de parede, texto cortado, nem
   estado que ninguém capturou.
 
-Perdeu as duas rodadas e ele commitou mesmo assim (é o que `executor.md` manda fazer, com o
-risco declarado): isso **não** é bloqueador automático. Você julga o buraco que sobrou —
-tela quebrada é bloqueador com receita; acabamento aquém da barra, sem defeito funcional, é
-`REGISTRADO`.
+Medido em 16/08/2026: comparações cegas refeitas pelo revisor em 6 rodadas produziram 6 divergências
+e **zero** bloqueadores; os 24 bloqueadores da mesma execução vieram todos do código.
+
+**Barra é "está fiel ao mock?"; defeito de tela é "está quebrado?".** É a pergunta que separa as
+duas coisas antes de você escrever o achado, e cada uma tem um fim diferente:
+
+- **Cumprido o teto de rodadas, a barra ENCERRA** — e encerrada quer dizer que ninguém a refaz, nem
+  você. Divergência estética que sobrar vira `REGISTRADO`. Perdeu as duas rodadas e ele commitou
+  mesmo assim (é o que `executor.md` manda fazer, com o risco declarado): **não** é bloqueador
+  automático — você julga o buraco que sobrou.
+- **Defeito de tela não tem teto**: sobreposição, texto ilegível, aviso que não aparece, alvo de
+  toque pequeno, largura errada, foco preso ou perdido pra fora do modal. Continuam bloqueador cheio
+  até fechar, e **não gastam o teto da barra**, porque não são sobre fidelidade. Sem essa separação
+  a Task estoura o teto com a tela quebrada, que é o oposto do que o teto existe pra evitar.
+
+Medido em 15–16/08/2026: numa Task de tela a barra foi encerrada na rodada 2 por decisão do árbitro
+e as rodadas 3 a 5 ainda acharam **5 bloqueadores**, nenhum de fidelidade; outra fechou em 4
+rodadas, **só a primeira de barra**.
+
+**Rodada que não toca pixel não paga barra de novo.** Commit de correção que só mexe em store, teste
+ou backend não refaz comparação nenhuma — o `git show --stat` prova, e a tua janela vai toda pro
+código.
 
 **Task que mexe em pixel e não tem barra nenhuma no contrato: `DEVOLVIDO`.** Não é bloqueador
 de código — é decisão da fase 1 que ninguém tomou, e problema de processo não vira achado
@@ -287,12 +445,9 @@ sua, no fim, sobre o conjunto — não uma leitura tua por imagem.
 
 O que essa passada final procura: print que não prova o que a legenda diz, estado capturado no
 momento errado (antes da correção, com a tela em transição), e principalmente **estado que ninguém
-capturou**. Descrição de quem capturou é insumo; a conclusão é sua, e a única forma de ela valer é
-você ter olhado o conjunto.
-
-Você também olha por conta própria — os prints que ele entregou, e os estados que ele **não**
-capturou e deviam estar ali. Estado faltando é achado. Se **você** também não enxerga imagem
-e a Task é visual, diga ao árbitro: revisor cego julgando tela é o portão não existindo.
+capturou** — estado faltando é achado. Descrição de quem capturou é insumo; a conclusão é sua, e a
+única forma de ela valer é você ter olhado o conjunto. Se **você** também não enxerga imagem e a
+Task é visual, diga ao árbitro: revisor cego julgando tela é o portão não existindo.
 
 A revisão é adversarial: você tenta **quebrar** o estado final, não confirmar que o plano foi
 seguido. Parecer que só confirma plano, tipos e build é o portão não existindo.

@@ -287,9 +287,16 @@ motivo (console, rede, o handler) antes de reportar.
 
 ### 3. Capture
 
-Um print por estado, em **caminho absoluto** e diretório próprio
-(ex.: `/tmp/<trab>-visual/01-<estado>.png`). Corrigiu alguma coisa depois? **Recapture.**
-Print velho prova o bug, nunca a correção.
+Um print por estado, em **caminho absoluto** e num diretório **durável** — o que o lançamento
+decidiu (o padrão é `~/.claude/orq-retros/<data>-<gid>/visual/`), nunca `/tmp`, que some no reboot e
+leva junto a matéria-prima da retrospectiva. Corrigiu alguma coisa depois? **Recapture.** Print velho
+prova o bug, nunca a correção.
+
+**A prova de uma Task de comportamento termina no desfecho que o usuário pediu** — "conectou",
+"salvou", "abriu" —, não no estado imediatamente anterior a ele. Print do botão habilitado não é
+prova de que o clique funciona. Medido em 16/08/2026: a evidência parou no botão desabilitado e o
+portão teve de rodar o fim do fluxo pra descobrir que o desfecho funcionava — uma rodada de revisão
+gasta com o que a prova devia ter mostrado.
 
 ### 4. Olhe o print. Só delegue se você não conseguir
 
@@ -346,7 +353,7 @@ O plano dá uma **barra** pra toda Task que mexe em pixel: uma tela nomeada, que
 e capturar, no mesmo estado e na mesma largura do seu print. Capture os dois lados e ponha um
 **subagente fresco** pra escolher — sem dizer qual é qual:
 
-> Duas imagens: `/tmp/<trab>-visual/A.png` e `/tmp/<trab>-visual/B.png`. Mesma tela, dois
+> Duas imagens: `<dir-durável>/visual/A.png` e `<dir-durável>/visual/B.png`. Mesma tela, dois
 > desenhos. **Qual das duas parece mais acabada?** Responda `A` ou `B`, depois o **maior
 > buraco** da que perdeu, em uma frase concreta (o que está desalinhado, cortado, sem
 > contraste, com altura diferente dos irmãos).
@@ -365,6 +372,16 @@ você commita com o resultado no reporte, mesmo perdendo. O teto não é pregui�
 fronteira de gasto é o modo de falha medido dessa técnica lá fora — gente torrando centenas
 de dólares e jogando fora 95% do que saiu. Perdeu as duas rodadas → isso vai no reporte como
 risco conhecido, e quem decide é o árbitro.
+
+**O teto conta rodada de BARRA. Defeito de código não conta.** Rodada reprovada porque a tela está
+quebrada — largura errada, foco preso, alvo de toque abaixo de 44px — não é sobre fidelidade e não
+gasta o teto. Sem essa separação a Task estoura o teto com a tela quebrada, que é o oposto do que o
+teto existe pra evitar. Medido em 15–16/08/2026: uma Task fechou em 4 rodadas, **só a primeira de
+barra**; e uma rodada reprovou por `left: var(--nav-w)` empurrando o visor 282px (612px em vez de
+894px), que é bug de largura real, não acabamento.
+
+**E rodada que não toca pixel não paga barra de novo.** Commit de correção que só mexe em store,
+teste ou backend não refaz comparação nenhuma — o `git show --stat` prova.
 
 Você não enxerga imagem? O passo continua sendo seu — é o mesmo protocolo do passo 4: o
 subagente de visão (ou o `see`) é quem olha, você é quem manda e quem lê a resposta.

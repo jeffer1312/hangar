@@ -11,8 +11,11 @@ contexto.
 - **Consumo por tipo de Task revisada**, medido:
   - Task de texto/teste: ~20 a 30k
   - Task de módulo (código + medição + leitura em volta): ~60 a 130k
-  - **Task de tela: não medido, e ele mesmo recusou** — comparação cega gasta contexto de imagem de
-    um jeito que ele não conseguiu estimar antes de ver quantos estados eram.
+  - **Task de tela: ~96k por rodada, mais ~85k de leitura inicial a cada troca de sessão.** Medido
+    em 16/08/2026: 8 sessões dele pra 9 rodadas em duas Tasks. Duas fecharam **acima da própria
+    janela** (310k e 309k de 272k), isto é, compactaram no meio do julgamento — e a segunda já não
+    conseguia reportar o próprio `ctx`. **Numa Task de tela, conte um revisor por rodada, e abra a
+    substituta ANTES de a correção chegar.**
 
 **Consequência para o plano: ele revisa 2 a 3 Tasks por sessão, e nenhuma de tela sem folga larga.**
 Um trabalho de 12 Tasks precisa prever 4 ou 5 sessões dele. Preveja no plano em vez de descobrir.
@@ -24,10 +27,12 @@ pôr um revisor de janela larga nelas e deixar as de código para ele.
 
 ## Como ele falha
 
-- **Receita que fecha o caso nomeado, não a família.** Três rodadas seguidas num trabalho: cada
-  parecer fechava o caminho que o anterior citara, e a solução crescia. Ele **assumiu** o próprio
-  furo nas duas vezes em que aconteceu, com medição junto — mas quem tem que cortar isso é o
-  árbitro, pela linha de desperdício.
+- **A receita nomeia a ENTRADA, não o ponto que causa** — e por isso fecha o caso nomeado, não a
+  família. Confirmado, não é mais "visto uma vez": 8 rodadas em duas Tasks (16/08/2026), cada
+  parecer fechando o vizinho do caso anterior, e a solução crescendo. Não é falta de rigor: é o que
+  sobra de janela depois de ler a tela. Ele **assume** o próprio furo, com medição junto — mas quem
+  corta isso é o árbitro, pela linha de desperdício. Ver `revisor.md`, "O inventário do símbolo não
+  fecha a classe sozinho".
 - **Enumera a lista incompleta na receita.** "Trocar nos usos X, Y, Z" quando eram seis — o executor
   fez os seis e avisou; se tivesse feito os três, o bug voltava.
 

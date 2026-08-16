@@ -31,6 +31,11 @@ mesmo (tela montada), o kick-off diz qual comando usar.
   real do hospedeiro), um não. **O kick-off precisa dizer o que NÃO é desta Task**, não só o que é.
 - **Fecha o caso nomeado, não a família** — como todo executor sob receita. Quem tem que atacar a
   família é o parecer.
+- **Aplica a receita ao pé da letra quando ela não contradiz o que ele mediu** (confirmado 8× em
+  16/08/2026). Isso não é defeito dele: **transfere o gargalo pra qualidade da receita** — com uma
+  receita que aponta a causa, ele fecha em 1 rodada com o menor diff da Task. **Quando contradiz,
+  ele para e traz a medição:** desviou de um cleanup receitado, provou o desvio e o revisor lhe deu
+  razão (1× em 16/08/2026). Ele não é cego à receita errada; só não a procura.
 
 ## O que o kick-off precisa dizer por causa dele
 
@@ -48,3 +53,16 @@ detalhe do Step: com passo a passo bom, a taxa de acerto é alta.
 
 Achou sozinho um erro de tipo do plano que ninguém tinha visto (o `changed` do git devolve
 `R`/`C`/`U`/`T` além de `M`/`A`/`D`/`?`) *(visto uma vez)*.
+
+Mais três coisas medidas em 16/08/2026:
+
+- **Aguenta um bloco inteiro numa sessão só:** três Tasks de tela (11 rodadas somadas) fechando em
+  **440k/1M**. O antecessor queimou 548k em 2 rodadas por ter chegado carregado — o kick-off que
+  manda **esperar sem abrir código** antes do commit é o que faz a diferença.
+- **Reproduz o defeito ANTES de editar quando o kick-off manda**, e a reprodução vale como registro
+  do "antes" (dois visores medidos com coordenadas, `inert` ligado, prints numerados). Poupou o
+  revisor de refazer a prova do estado anterior.
+- **Acha defeito de CSS sutil e declara o risco por escrito:** mediu que `height: 100%` não
+  funcionava porque o pai só tinha `max-height` (3676px antes, 652px depois), corrigiu com `calc`
+  dos tokens e deixou comentado que o `calc` precisa acompanhar o padding. Task de conserto
+  multi-arquivo (12 arquivos, +303 −199) em **uma rodada**, fechando em 92k.

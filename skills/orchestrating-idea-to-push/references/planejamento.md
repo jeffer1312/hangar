@@ -29,7 +29,7 @@ O que a ficha muda no plano, com exemplo medido em 15/08/2026:
 |---|---|
 | executor **não enxerga imagem** | protocolo de visão explícito nas Tasks de tela (`see <caminho>`), e barra em **código** (HTML/CSS do mock) sempre que possível, não só em print |
 | executor **decide por argumento quando o critério não é numérico** | toda régua visual vira **número**: "linha de 24px, medida com `getBoundingClientRect` contra a aba irmã", nunca "densidade parecida com a do app" |
-| revisor tem **janela de 272k** | Tasks de tela (que custam ~170k) não cabem duas na mesma sessão — o plano já prevê rotação, em vez de descobrir no meio |
+| revisor tem **janela curta** (272k) | Task de tela não cabe duas na mesma sessão — e, medido, custa **um revisor por rodada**: o plano já prevê a rotação em vez de descobrir no meio |
 | executor **aplica receita literal muito bem** | vale investir no detalhe do Step; o mesmo plano num modelo que improvisa pediria menos passo a passo e mais critério |
 
 Sem isso o plano é escrito para um executor genérico que não existe, e cada característica real do
@@ -66,6 +66,28 @@ Além do que o `writing-plans` já pede, o plano carrega:
 - **Decisões em aberto**: o que ainda não foi decidido e quem decide. Lista vazia é a meta.
 - **Teto**: quanto de custo/cota o usuário aceita gastar sozinho, e o que faz parar.
 - **O time**, com motor e conta de cada papel.
+
+### Antes de fechar a decomposição, procure o ESTADO compartilhado
+
+Duas Tasks que montam hosts do mesmo store, singleton ou registry **não são independentes**, por
+mais disjuntos que sejam os arquivos — e a colisão não aparece no merge: aparece em rodadas de
+revisão.
+
+Medido em 16/08/2026: um store era singleton de módulo retido por três componentes com a mesma
+chave, nascidos em três Tasks diferentes que o plano tratou como independentes. **8 das 11 rodadas**
+das duas últimas foram um host escrevendo no estado que o outro limpa, lê ou apaga.
+
+Achou um? O plano escreve o **contrato de posse** antes da primeira das duas Tasks: quem escreve,
+quem limpa, o que acontece quando um host desmonta, e o que acontece no resize. Duas linhas no
+plano; sem elas, seis rodadas.
+
+**É a mesma causa que faz a estimativa de Task de tela errar, e por isso Task de tela se estima pelo
+ESTADO que ela mexe, não pelo pixel.** Tela que monta um host de um store que já existe custa 4 a 6
+rodadas; tela que desenha componente novo sobre estado próprio custa 1 a 2. Não estime pela
+comparação cega: das 11 rodadas medidas, **nenhuma** foi reprovada por divergência com o mock —
+houve 6 divergências e as 6 viraram registro. O que reprovou foram **24 bloqueadores de código**, e
+três telas estimadas em 3h–6h levaram 10h50. Decompor por tela é ótimo pra dividir trabalho e
+péssimo pra prever risco.
 
 ### O rigor da revisão entra no contrato antes da Task 1
 
@@ -257,6 +279,15 @@ O que você não conseguir rodar entra marcado: `<!-- NÃO VERIFICADO: … -->`.
 como descrição, não como receita — e é infinitamente melhor que ele descobrir sozinho no meio da
 Task.
 
+**A mesma régua vale pra afirmação factual** — no plano, no recorte da Task e no kick-off. O
+executor e o revisor leem o recorte como dado, não como opinião de quem o escreveu; uma frase errada
+ali vira comentário errado no código, e comentário que afirma coisa falsa é semente de bug futuro.
+Se você não mediu, escreva "suponho que", ou não escreva. Medido em 16/08/2026: o recorte afirmava
+que preencher um campo com a origem do servidor de desenvolvimento "daria erro de conexão com cara
+de bug"; o revisor mediu e **conecta**, porque o `vite.config.ts` proxya `/api` pro backend também
+naquele modo. A frase virou comentário no código, e a correção dele teve de ser carregada pra Task
+seguinte.
+
 ## Fase 2 — Lançamento (o único "pode ir" do usuário)
 
 ### Pré-voo, antes de criar sessão
@@ -334,6 +365,17 @@ Motor inexistente devolve `400` e a sessão não nasce. Ver os motores: `claude-
 
 - **`regras-<gid>.md`** — o que executor e revisor leem. Só o que **ainda vale**. Duas páginas.
 - **`grupo-<gid>.md`** — o registro, que só o árbitro lê. Progresso, histórico, decisões com data.
+
+E um **diretório durável pros artefatos do trabalho**, decidido agora e escrito nas regras e no
+primeiro kick-off de cada sessão:
+
+```
+~/.claude/orq-retros/<data>-<gid>/{pareceres,tasks,kickoffs,visual}/
+```
+
+Pareceres, recortes de Task, kick-offs e prints moram ali, **nunca em `/tmp`**, que some no reboot.
+A fase 5 lê exatamente os pareceres — a linha de desperdício de cada rodada é a matéria-prima dela.
+Decidir isso no meio do trabalho custa mover arquivo à mão, medido em 16/08/2026.
 
 A fronteira é o tipo do conteúdo: **já aconteceu → registro; ainda vale → regras.** Sem essa
 separação o arquivo que todo mundo lê cresce a cada Task aprovada, e num trabalho de 12 Tasks ele

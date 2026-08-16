@@ -134,7 +134,8 @@ arquivo que envelhece entre a escrita e a leitura.
 
 **A Task da vez vai RECORTADA, não o plano inteiro.** O plano tem todas as Tasks; o executor
 implementa uma e o revisor revisa uma. Recorte a seção daquela Task mais o cabeçalho curto
-(goal/architecture) para `/tmp/<trabalho>-t<N>/task-<N>.md` e mande esse caminho. No mesmo trabalho
+(goal/architecture) para `~/.claude/orq-retros/<data>-<gid>/tasks/task-<N>.md` — caminho durável, não
+`/tmp`, que some no reboot — e mande esse caminho. No mesmo trabalho
 de 14/08: plano inteiro ~30k tokens, Task recortada ~2,9k.
 
 **Quem é do grupo sai do contrato, nunca de `cp-send --list`.** Sessão viva no mesmo
