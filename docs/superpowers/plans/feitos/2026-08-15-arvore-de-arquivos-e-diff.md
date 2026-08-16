@@ -1,5 +1,22 @@
 # Árvore de arquivos e diff por arquivo — Implementation Plan
 
+> ## ✅ CONCLUÍDO em 16/08/2026 — pushado, nada pendente
+>
+> As **12 Tasks do plano** foram executadas e aprovadas, mais **4 fora dele** (13, 14, 15 e a
+> blindagem) nascidas de achados de revisão e de pedidos do usuário testando o app instalado. Os
+> **85 Steps** estão marcados.
+>
+> - **Ponta do trabalho:** `01af0f18` · `origin/main` · 66 commits, 56 arquivos, +6502 −117
+> - **Portão:** um executor e um revisor independentes por commit, de famílias de modelo diferentes;
+>   **duas revisões de conjunto** por sessões que não participaram (a segunda achou 2 defeitos que os
+>   portões individuais não pegaram).
+> - **Retrospectiva (fase 5):** `~/.claude/orq-retros/2026-08-15-arv.md` — 21 propostas, todas
+>   aplicadas na skill `orchestrating-idea-to-push` (commits `6ffc077b` e `12be968d`).
+> - **Registro da execução:** `~/.claude/.claude-pocket-pair/grupo-arv.md`.
+>
+> Arquivado em `docs/superpowers/plans/feitos/` — o app só lista os planos soltos em `plans/`, então
+> daqui ele não aparece mais como pendente no seletor.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > Este plano roda sob a skill `orchestrating-idea-to-push`, em **lote paralelo com uma worktree por
@@ -308,7 +325,7 @@ custa mais que um parâmetro.
   - `read_file(cwd: str, path: str) -> dict` → `{"path","text","size","truncated"}`
   - `MAX_ENTRADAS = 1000`, `MAX_BYTES = 512 * 1024`
 
-- [ ] **Step 1: Escrever o teste que falha (listar)**
+- [x] **Step 1: Escrever o teste que falha (listar)**
 
 Criar `backend/tests/test_filetree.py`:
 
@@ -355,12 +372,12 @@ def test_recusa_escapar_da_raiz(tmp_path):
         assert e.value.code == "erro_arq_fora_da_raiz"
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py -v`
 Expected: FAIL com `ModuleNotFoundError: No module named 'app.filetree'`.
 
-- [ ] **Step 3: Implementar o esqueleto e a contenção**
+- [x] **Step 3: Implementar o esqueleto e a contenção**
 
 Criar `backend/app/filetree.py`:
 
@@ -407,12 +424,12 @@ def _resolver(cwd: str, path: str | None) -> tuple[Path, Path]:
     return raiz, alvo
 ```
 
-- [ ] **Step 4: Rodar — os dois primeiros ainda falham, o terceiro passa**
+- [x] **Step 4: Rodar — os dois primeiros ainda falham, o terceiro passa**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py -v`
 Expected: `test_recusa_escapar_da_raiz` PASS; os outros dois FAIL com `AttributeError: list_dir`.
 
-- [ ] **Step 5: Implementar `list_dir`**
+- [x] **Step 5: Implementar `list_dir`**
 
 Acrescentar a `filetree.py`:
 
@@ -506,12 +523,12 @@ def list_dir(cwd: str, path: str | None = None, so_modificados: bool = True) -> 
     return {"entries": entradas, "truncated": cortou}
 ```
 
-- [ ] **Step 6: Rodar e ver passar**
+- [x] **Step 6: Rodar e ver passar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py -v`
 Expected: 3 PASS.
 
-- [ ] **Step 7: Teste da marca herdada, da soma e do acento**
+- [x] **Step 7: Teste da marca herdada, da soma e do acento**
 
 Acrescentar a `test_filetree.py`:
 
@@ -579,21 +596,21 @@ def test_recusa_path_comecando_com_traco(tmp_path):
             filetree.read_file(d, ruim)
 ```
 
-- [ ] **Step 8: Rodar, corrigir se falhar**
+- [x] **Step 8: Rodar, corrigir se falhar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py -v`
 Expected: 6 PASS. Se o teste do acento falhar, falta `-c core.quotePath=false` — mas note que ele
 vem de `changed_files` (`git_ops.py:320`), que **não** passa a opção hoje: acrescente lá, e rode
 `pytest tests/test_git_ops.py -v` para provar que não quebrou nada.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add backend/app/filetree.py backend/tests/test_filetree.py backend/app/git_ops.py
 git commit -m "feat(arquivos): lista um nivel do repo da sessao com marca e contador de git"
 ```
 
-- [ ] **Step 10: Teste que falha (ler arquivo)**
+- [x] **Step 10: Teste que falha (ler arquivo)**
 
 Acrescentar a `test_filetree.py`:
 
@@ -621,12 +638,12 @@ def test_recusa_binario(tmp_path):
     assert e.value.status == 415 and e.value.code == "erro_arq_binario"
 ```
 
-- [ ] **Step 11: Rodar e ver falhar**
+- [x] **Step 11: Rodar e ver falhar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py -k read -v`
 Expected: FAIL com `AttributeError: module 'app.filetree' has no attribute 'read_file'`.
 
-- [ ] **Step 12: Implementar `read_file`**
+- [x] **Step 12: Implementar `read_file`**
 
 ```python
 def read_file(cwd: str, path: str) -> dict:
@@ -651,12 +668,12 @@ def read_file(cwd: str, path: str) -> dict:
     }
 ```
 
-- [ ] **Step 13: Rodar e ver passar**
+- [x] **Step 13: Rodar e ver passar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py -v`
 Expected: 9 PASS.
 
-- [ ] **Step 14: Commit**
+- [x] **Step 14: Commit**
 
 ```bash
 git add backend/app/filetree.py backend/tests/test_filetree.py
@@ -682,7 +699,7 @@ git commit -m "feat(arquivos): le o conteudo de um arquivo com teto e recusa de 
     → `{"hits": [{"path", "line": int | None, "text": str | None}], "truncated": bool, "mode": str}`
   - `MAX_HITS = 200`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Criar `backend/tests/test_filesearch.py`:
 
@@ -752,12 +769,12 @@ def test_q_vazio_recusado(tmp_path):
     assert e.value.code == "erro_arq_busca_vazia"
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filesearch.py -v`
 Expected: FAIL com `ModuleNotFoundError: No module named 'app.filesearch'`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Criar `backend/app/filesearch.py`:
 
@@ -824,12 +841,12 @@ def _por_conteudo(cwd: str, q: str) -> list[dict]:
     return fora
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filesearch.py -v`
 Expected: 7 PASS.
 
-- [ ] **Step 5: Teste do teto e do acento**
+- [x] **Step 5: Teste do teto e do acento**
 
 ```python
 def test_corta_em_200(tmp_path):
@@ -847,12 +864,12 @@ def test_acento_no_nome_nao_volta_escapado(tmp_path):
     assert "sessão-única.md" in paths
 ```
 
-- [ ] **Step 6: Rodar e ver passar**
+- [x] **Step 6: Rodar e ver passar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filesearch.py -v`
 Expected: 9 PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/app/filesearch.py backend/tests/test_filesearch.py
@@ -889,7 +906,7 @@ segundo:
 Nos quatro, `escopo_usado` volta `"nao_commitado"` com `motivo`, e é disso que a tela vive para
 desabilitar a opção. **Nunca** devolver só `base: null` e deixar o front adivinhar.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 Acrescentar ao fim de `backend/tests/test_git_ops.py`:
 
@@ -969,12 +986,12 @@ def test_path_com_traco_recusado(tmp_path):
         git_ops.path_diff(d, "--output=/tmp/x", "nao_commitado")
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_git_ops.py -k path_diff -v`
 Expected: FAIL com `AttributeError: module 'app.git_ops' has no attribute 'path_diff'`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Acrescentar a `backend/app/git_ops.py`, depois de `commit_file_diff`:
 
@@ -1033,12 +1050,12 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
             "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_git_ops.py -k path_diff -v`
 Expected: 4 PASS.
 
-- [ ] **Step 5: Pôr `_cap` no `file_diff`, que hoje não tem teto**
+- [x] **Step 5: Pôr `_cap` no `file_diff`, que hoje não tem teto**
 
 O retorno atual é `return {"path": path, "diff": p.stdout}` (`git_ops.py:351`) — **a variável se
 chama `p`, não `out`**. Trocar por, mantendo a chave `diff` que o `GitChangesTab` já consome:
@@ -1051,7 +1068,7 @@ chama `p`, não `out`**. Trocar por, mantendo a chave `diff` que o `GitChangesTa
 **Leia a função inteira antes de editar**: se o nome da variável tiver mudado, é ele que manda, não
 este plano.
 
-- [ ] **Step 6: Teste que prova que o caller irmão não quebrou**
+- [x] **Step 6: Teste que prova que o caller irmão não quebrou**
 
 ```python
 def test_file_diff_mantem_o_formato_do_git_changes_tab(tmp_path):
@@ -1062,12 +1079,12 @@ def test_file_diff_mantem_o_formato_do_git_changes_tab(tmp_path):
     assert r["truncated"] is False             # o campo novo
 ```
 
-- [ ] **Step 7: Rodar a suíte inteira do backend**
+- [x] **Step 7: Rodar a suíte inteira do backend**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest -v`
 Expected: tudo verde, sem aviso novo.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/app/git_ops.py backend/tests/test_git_ops.py
@@ -1103,7 +1120,7 @@ para manter em dois lugares.
   - `GET /api/sessions/{name}/files/search?q=&mode=`
   - `POST /api/sessions/{name}/git/path-diff` (body `{path, escopo}`)
 
-- [ ] **Step 1: Escrever o teste de rota que falha**
+- [x] **Step 1: Escrever o teste de rota que falha**
 
 Acrescentar a `backend/tests/test_filetree.py`:
 
@@ -1142,12 +1159,12 @@ def test_rota_binario_devolve_envelope(monkeypatch, tmp_path, cliente):
     assert r.json()["detail"]["code"] == "erro_arq_binario"     # envelope, nao texto solto
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py -k rota -v`
 Expected: FAIL 404 (a rota ainda não existe).
 
-- [ ] **Step 3: Implementar as quatro rotas**
+- [x] **Step 3: Implementar as quatro rotas**
 
 Acrescentar a `backend/app/api.py`, depois da última rota de git:
 
@@ -1206,12 +1223,12 @@ def git_path_diff(name: str, body: GitPathDiffBody):
         raise HTTPException(status_code=e.status, detail=erro("erro_git_diff", str(e)))
 ```
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `uv run --directory /home/jefferson/pessoal/hangar/backend pytest tests/test_filetree.py tests/test_filesearch.py -v`
 Expected: tudo verde.
 
-- [ ] **Step 5: As chaves de erro nas duas línguas**
+- [x] **Step 5: As chaves de erro nas duas línguas**
 
 Acrescentar a `frontend/messages/pt.json` e `frontend/messages/en.json` (as mesmas chaves nos dois):
 
@@ -1249,13 +1266,13 @@ Inglês correspondente (`en.json`), mesma ordem:
 }
 ```
 
-- [ ] **Step 6: Reconhecer os códigos no `errosApi.ts`**
+- [x] **Step 6: Reconhecer os códigos no `errosApi.ts`**
 
 Seguir o padrão que já está em `frontend/src/lib/errosApi.ts:216` (`mensagemDeErro`), acrescentando
 os códigos novos ao mapa que ele consulta. **Ler a função antes de editar** — o formato do mapa é o
 que manda, não este plano.
 
-- [ ] **Step 7: Rodar os três portões**
+- [x] **Step 7: Rodar os três portões**
 
 ```bash
 uv run --directory /home/jefferson/pessoal/hangar/backend pytest -v
@@ -1264,7 +1281,7 @@ npm --prefix /home/jefferson/pessoal/hangar/frontend run test
 ```
 Expected: tudo verde. Chave faltando em `en.json` aparece aqui.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add backend/app/api.py backend/tests/test_filetree.py \
@@ -1289,7 +1306,7 @@ git commit -m "feat(arquivos): expoe listar, ler, buscar e diff por caminho nas 
 - Produces: `listFiles`, `readFile`, `searchFiles`, `pathDiff`; tipos `TreeEntry`, `TreeListing`,
   `FileContent`, `SearchHit`, `SearchResult`, `PathDiff`; chaves `arq_*`.
 
-- [ ] **Step 1: Os tipos**
+- [x] **Step 1: Os tipos**
 
 Acrescentar a `frontend/src/lib/types.ts`:
 
@@ -1316,7 +1333,7 @@ export interface PathDiff {
 }
 ```
 
-- [ ] **Step 2: Os clientes**
+- [x] **Step 2: Os clientes**
 
 Acrescentar a `frontend/src/lib/api.ts`, seguindo o formato dos vizinhos (`getFileDiff`, linha ~935
 — **ler antes de escrever**, o helper de fetch e o tratamento de erro são de lá):
@@ -1350,7 +1367,7 @@ export function pathDiff(name: string, path: string, escopo: 'branch' | 'nao_com
 }
 ```
 
-- [ ] **Step 3: As chaves da tela, nas duas línguas**
+- [x] **Step 3: As chaves da tela, nas duas línguas**
 
 `pt.json` / `en.json`:
 
@@ -1412,7 +1429,7 @@ export function pathDiff(name: string, path: string, escopo: 'branch' | 'nao_com
 }
 ```
 
-- [ ] **Step 4: Rodar os portões do front**
+- [x] **Step 4: Rodar os portões do front**
 
 ```bash
 npm --prefix /home/jefferson/pessoal/hangar/frontend run check
@@ -1420,7 +1437,7 @@ npm --prefix /home/jefferson/pessoal/hangar/frontend run test
 ```
 Expected: verde. As chaves viram funções tipadas em `src/paraglide/messages`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/lib/api.ts frontend/src/lib/types.ts \
@@ -1483,7 +1500,7 @@ Asserções são sobre o DOM cru: `el.querySelectorAll('.no').length`, `.getAttr
   `{ entries: TreeEntry[]; abertos: Set<string>; selecionado: string | null; onToggle: (p: string) => void; onPick: (p: string) => void }`.
   **Apresentacional puro**, como o `DiffView` — não busca nada.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```ts
 // @vitest-environment happy-dom
@@ -1542,12 +1559,12 @@ describe('FileTree', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- FileTree`
 Expected: FAIL — o componente não existe.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Criar `frontend/src/components/files/FileTree.svelte`. Regras do desenho, todas visíveis no mock
 (`docs/mocks/2026-08-15-arvore/1-desktop-painel.html` e `base.css` — **ler os dois**):
@@ -1562,12 +1579,12 @@ Criar `frontend/src/components/files/FileTree.svelte`. Regras do desenho, todas 
 - teclado: `↑`/`↓` andam, `→` abre, `←` fecha, `Enter` escolhe
 - todo `aria-label`/`title` sai de `m.arq_*`
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- FileTree`
 Expected: 3 PASS.
 
-- [ ] **Step 5: Rodar o `check` e commitar**
+- [x] **Step 5: Rodar o `check` e commitar**
 
 ```bash
 npm --prefix /home/jefferson/pessoal/hangar/frontend run check
@@ -1613,7 +1630,7 @@ o conteúdo quando não há.
    texto e chama `highlightDiff` num `$effect`, guardando as linhas em estado — enquanto não voltam,
    passa `loading` ao `DiffView`. Sem isso, o componente não desenha nada e não dá erro.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```ts
 // @vitest-environment happy-dom
@@ -1671,12 +1688,12 @@ describe('FileViewer', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- FileViewer`
 Expected: FAIL — o componente não existe.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Criar `frontend/src/components/files/FileViewer.svelte`, seguindo
 `docs/mocks/2026-08-15-arvore/2-desktop-visualizador.html`:
@@ -1689,12 +1706,12 @@ Criar `frontend/src/components/files/FileViewer.svelte`, seguindo
 - `escopo_usado !== escopo_pedido` → botão do escopo pedido desabilitado, `title` = `motivo`.
 - `truncated` → `m.arq_diff_cortado()` ou `m.arq_arquivo_cortado()`.
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- FileViewer`
 Expected: 3 PASS.
 
-- [ ] **Step 5: `check` e commit**
+- [x] **Step 5: `check` e commit**
 
 ```bash
 npm --prefix /home/jefferson/pessoal/hangar/frontend run check
@@ -1719,7 +1736,7 @@ Sem comparação cega aqui — ela acontece na Task 11, contra `prints/2-desktop
   `{ q: string; mode: 'names' | 'contents'; onBusca: (q: string, mode: 'names' | 'contents') => void }`.
   O atraso de digitação (250ms) mora **aqui**; quem chama a rede é o store.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```ts
 // @vitest-environment happy-dom
@@ -1765,23 +1782,23 @@ describe('FileSearchBar', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- FileSearchBar`
 Expected: FAIL — o componente não existe.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Seguir o mock (`base.css`, classes `.busca` e `.seg`): campo com lupa em `--surface-inset`, e logo
 abaixo o segmentado de duas colunas com `--fill-subtle` de trilho e `--surface-raised` na escolhida.
 Rótulos: `m.arq_buscar()`, `m.arq_modo_nomes()`, `m.arq_modo_conteudo()`.
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- FileSearchBar`
 Expected: 2 PASS.
 
-- [ ] **Step 5: `check` e commit**
+- [x] **Step 5: `check` e commit**
 
 ```bash
 npm --prefix /home/jefferson/pessoal/hangar/frontend run check
@@ -1807,7 +1824,7 @@ o segmentado é julgado dentro da tela montada, na Task 10.
   `soModificados: boolean`, e os métodos
   `abrir(path)`, `alternarPasta(path)`, `buscar(q, mode)`, `recarregar()`, `trocarEscopo(e)`.
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 `vi.spyOn(api, 'readFile')` **não funciona** aqui: o namespace de um módulo ES é somente leitura e
 o spy estoura `Cannot redefine property`. O padrão do projeto é `vi.mock` do módulo inteiro
@@ -1860,23 +1877,23 @@ describe('FilesStore', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [x] **Step 2: Rodar e ver falhar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- filesStore`
 Expected: FAIL — o módulo não existe.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 A corrida se resolve com um contador de pedido: cada chamada guarda o número dela, e ao voltar só
 pinta se ainda for a mais recente. Erro passa por `formataErro` (`frontend/src/lib/errosApi.ts:45`),
 que já sabe ler o envelope `{code, params, msg}`. O estado é guardado por nome de sessão.
 
-- [ ] **Step 4: Rodar e ver passar**
+- [x] **Step 4: Rodar e ver passar**
 
 Run: `npm --prefix /home/jefferson/pessoal/hangar/frontend run test -- filesStore`
 Expected: 3 PASS.
 
-- [ ] **Step 5: `check` e commit**
+- [x] **Step 5: `check` e commit**
 
 ```bash
 npm --prefix /home/jefferson/pessoal/hangar/frontend run check
@@ -1918,35 +1935,35 @@ git commit -m "feat(arquivos): estado por sessao, com descarte de resposta atras
    `.ctx-fold`, recolhido some, porta acessível no topo preservada. Ou o desenho os respeita, ou o
    teste é atualizado **com justificativa no commit**.
 
-- [ ] **Step 1: `FilesPanel.svelte`** — junta `FileSearchBar`, `FileTree`, o `filesStore` e a barra
+- [x] **Step 1: `FilesPanel.svelte`** — junta `FileSearchBar`, `FileTree`, o `filesStore` e a barra
   de controles do mock: `m.arq_ordenar_nome()` à esquerda; à direita o botão de filtro (ativo por
   padrão, `--accent-dim` + `--accent`, rótulo `m.arq_mostrar_tudo()`) e o de recarregar
   (`m.arq_recarregar()`). Abaixo do segmentado, a linha `m.arq_so_modificados()` +
   `m.arq_mostrar_tudo()`, que existe porque o filtro vem ligado e "cadê o README" não pode virar
   dúvida.
-- [ ] **Step 2: Os vazios, um por causa** — `m.arq_sem_nome()`, `m.arq_sem_conteudo()`,
+- [x] **Step 2: Os vazios, um por causa** — `m.arq_sem_nome()`, `m.arq_sem_conteudo()`,
   `m.arq_primeiros_200()`, `m.arq_pasta_grande()`, `m.arq_nada_mudou()` (filtro ligado e nada
   mudou), `m.arq_sessao_encerrada()` (404 do `_session_cwd`).
-- [ ] **Step 3: A barra de abas** no `DesktopSessionContext` — `m.ctx_aba_contexto()` e
+- [x] **Step 3: A barra de abas** no `DesktopSessionContext` — `m.ctx_aba_contexto()` e
   `m.arq_aba()`. A aba Contexto mantém tudo que já mostra, sem mudança.
   **`ctx_aba_contexto` NÃO existe** em `frontend/messages/pt.json` (conferido em 15/08/2026) — crie
   nos dois arquivos, junto com as chaves desta Task: `"ctx_aba_contexto": "Contexto"` /
   `"ctx_aba_contexto": "Context"`. Chave que não existe vira erro de tipo no `check`, então isto
   aparece cedo — mas descobrir no meio da Task custa uma ida ao `messages/` que o plano podia ter
   evitado.
-- [ ] **Step 4: Rodar os três portões e ABRIR A TELA.** O Vite às vezes serve componente vazio
+- [x] **Step 4: Rodar os três portões e ABRIR A TELA.** O Vite às vezes serve componente vazio
   depois de editar: se a aba montar em branco, `systemctl --user restart hangar-frontend.service` e
   recarregar ignorando cache.
-- [ ] **Step 5: Conferir o que o mock não cobre** — ligar o **papel de parede** e mover o slider de
+- [x] **Step 5: Conferir o que o mock não cobre** — ligar o **papel de parede** e mover o slider de
   Transparência de ponta a ponta; trocar para o **tema claro**; percorrer com **Tab** e setas; e
   esticar a janela até o painel ir para 300 e 340px. Qualquer superfície que não deixe a foto
   atravessar enquanto o painel em volta deixa é bug, não estilo.
-- [ ] **Step 6: Comparação cega 1 — fidelidade** contra
+- [x] **Step 6: Comparação cega 1 — fidelidade** contra
   `docs/mocks/2026-08-15-arvore/prints/1-desktop-painel.png`, 1440px.
-- [ ] **Step 7: Comparação cega 2 — integração.** Capturar a aba **Contexto** do mesmo painel, no
+- [x] **Step 7: Comparação cega 2 — integração.** Capturar a aba **Contexto** do mesmo painel, no
   mesmo momento e largura, e perguntar a um subagente novo se as duas telas são do mesmo app.
   Divergência resolvida a favor do app entra como comentário no commit.
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 **Barra:** `1-desktop-painel.png` (fidelidade) **+** a aba Contexto do próprio painel (integração).
 
@@ -1972,21 +1989,21 @@ git commit -m "feat(arquivos): estado por sessao, com descarte de resposta atras
 Orca fazem (prints `10-aba-arquivos.png` e `11-arquivos-visualizador.png`), e é o que permite
 percorrer vários arquivos sem abrir e fechar a cada um.
 
-- [ ] **Step 1: O visor** — clicar num arquivo monta o `FileViewer` no lugar da conversa. Clicar em
+- [x] **Step 1: O visor** — clicar num arquivo monta o `FileViewer` no lugar da conversa. Clicar em
   outro arquivo **troca o conteúdo**, sem fechar nada.
-- [ ] **Step 2: Duas saídas** — o `×` no cabeçalho e o link `m.arq_voltar_conversa()`. Os dois
+- [x] **Step 2: Duas saídas** — o `×` no cabeçalho e o link `m.arq_voltar_conversa()`. Os dois
   existem porque, sem véu, não fica claro que a conversa continua viva atrás.
-- [ ] **Step 3: Linha fantasma** — arquivo apagado entre listar e abrir devolve 404: mostra
+- [x] **Step 3: Linha fantasma** — arquivo apagado entre listar e abrir devolve 404: mostra
   `m.erro_arq_inexistente()` **e recarrega a árvore**, em vez de deixar a linha clicável para sempre.
-- [ ] **Step 4: Rodar os três portões** e abrir de verdade um arquivo mudado, um intocado, um
+- [x] **Step 4: Rodar os três portões** e abrir de verdade um arquivo mudado, um intocado, um
   binário e um grande.
-- [ ] **Step 5: Conferir o que o mock não cobre** — papel de parede com a Transparência nos extremos
+- [x] **Step 5: Conferir o que o mock não cobre** — papel de parede com a Transparência nos extremos
   (o visor cobre a conversa, então ele é uma superfície grande sobre a foto e é onde um
   `--bg-base` cru mais aparece), tema claro, e teclado: `Esc` fecha o visor.
-- [ ] **Step 6: Comparação cega 1 — fidelidade** contra `prints/2-desktop-visualizador.png`.
-- [ ] **Step 7: Comparação cega 2 — integração** contra o **`GitChangesTab`** no modal de Git com um
+- [x] **Step 6: Comparação cega 1 — fidelidade** contra `prints/2-desktop-visualizador.png`.
+- [x] **Step 7: Comparação cega 2 — integração** contra o **`GitChangesTab`** no modal de Git com um
   arquivo selecionado, mesma largura. É o vizinho mais próximo: mesma função, mesmo `DiffView`.
-- [ ] **Step 8: Commit.**
+- [x] **Step 8: Commit.**
 
 **Barra:** `2-desktop-visualizador.png` (fidelidade) **+** o `GitChangesTab` (integração).
 
@@ -2018,19 +2035,19 @@ percorrer vários arquivos sem abrir e fechar a cada um.
 Onde a aba nova entra na ordem é decisão de desenho: no mock ela fica **entre** Alterações e
 Histórico. Mexer na ordem de `GIT_TABS` muda a aba inicial? Não — `initialNav()` fixa `'changes'`.
 
-- [ ] **Step 1: A aba** em `GIT_TABS`, com `maxLevel` que comporte árvore → arquivo, e o teste
+- [x] **Step 1: A aba** em `GIT_TABS`, com `maxLevel` que comporte árvore → arquivo, e o teste
   correspondente em `gitTabs.test.ts`.
-- [ ] **Step 2: Hospedar o `FilesPanel`** — o mesmo componente, largura do celular. Aqui o arquivo
+- [x] **Step 2: Hospedar o `FilesPanel`** — o mesmo componente, largura do celular. Aqui o arquivo
   abre como **nível do drill-down**, não cobrindo tela: no celular não há conversa ao lado para
   preservar.
-- [ ] **Step 3: Rodar os três portões** e percorrer a 390px: árvore → arquivo → diff → voltar.
-- [ ] **Step 4: Conferir o que o mock não cobre** — papel de parede e tema claro a 390px, e a área
+- [x] **Step 3: Rodar os três portões** e percorrer a 390px: árvore → arquivo → diff → voltar.
+- [x] **Step 4: Conferir o que o mock não cobre** — papel de parede e tema claro a 390px, e a área
   de toque: alvo menor que 44px na árvore é erro, e o mock foi desenhado com mouse.
-- [ ] **Step 5: Comparação cega 1 — fidelidade** contra `prints/3-celular.png`.
-- [ ] **Step 6: Comparação cega 2 — integração** contra as abas **Alterações** e **Histórico** do
+- [x] **Step 5: Comparação cega 1 — fidelidade** contra `prints/3-celular.png`.
+- [x] **Step 6: Comparação cega 2 — integração** contra as abas **Alterações** e **Histórico** do
   mesmo modal, no celular. São as vizinhas de porta: se a aba nova tiver outra densidade ou outro
   peso de rótulo, aparece na hora.
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 **Barra:** `3-celular.png` (fidelidade) **+** as outras abas do mesmo modal (integração).
 

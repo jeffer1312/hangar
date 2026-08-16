@@ -1,5 +1,21 @@
 # Pesquisa de referências do Hangar — 13/08/2026
 
+> ## ✅ O primeiro item deste backlog JÁ FOI FEITO — 16/08/2026
+>
+> A **árvore de arquivos com diff por arquivo** (o padrão que a parte 3 mostrou repetido em 3+
+> produtos, e que o Orca e o Paseo desenham do mesmo jeito) saiu do papel: virou plano, foi
+> executada em 16 Tasks e está na `origin/main` desde 16/08/2026, ponta `01af0f18`.
+>
+> O que ficou no app: painel de arquivos com marca `M` e `+N −M` por arquivo e por pasta, busca por
+> **nome** e por **conteúdo**, visualizador que cobre a área da conversa no computador (com a árvore
+> viva ao lado) e vira nível do drill-down no celular, escopo de diff selecionável, e a aba
+> **Arquivos** no modal de Git do celular.
+>
+> Plano arquivado em `docs/superpowers/plans/feitos/2026-08-15-arvore-de-arquivos-e-diff.md`;
+> retrospectiva em `~/.claude/orq-retros/2026-08-15-arv.md`.
+>
+> **O resto do backlog continua valendo** — leia o que vem abaixo como pendente, menos este item.
+
 **Arquivo único, de propósito.** Tudo o que a pesquisa produziu está aqui: a análise, o backlog
 pronto pra virar plano, e o apêndice com as decisões que já foram tomadas e não devem ser
 relitigadas. Se algo desta pesquisa não estiver neste arquivo, se perdeu.
