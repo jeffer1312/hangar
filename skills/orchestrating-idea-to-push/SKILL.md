@@ -17,6 +17,11 @@ plano não fechou.
 | 2. Lançamento | a mesma da fase 1 → vira **árbitra** | **não, nunca mais** | time criado, contrato escrito, um "pode ir" |
 | 3. Execução | executor + revisor, modelos diferentes | só o executor | todas as Tasks com `APROVA` |
 | 4. Revisão da branch | sessão nova, que não participou | não | conjunto aprovado |
+| 5. Retrospectiva | sessão nova, que não participou | não | patch proposto para **esta skill**, na mão do usuário |
+
+**O trabalho não acaba na fase 4.** Branch aprovada é código pronto; a fase 5 é o que faz a próxima
+execução ser melhor que esta. Ela é curta (uma sessão, três arquivos de entrada) e é a única fase
+cujo produto não é código — é `references/retrospectiva.md`.
 
 Push e MR são sempre do usuário.
 
@@ -32,6 +37,7 @@ sessão acaba confirmando que é revisora enquanto está no meio de um commit.
 | **executor** | `references/executor.md` | o kick-off diz `Papel: executor único` |
 | **revisor** | `references/revisor.md` | o kick-off diz `Papel: revisor` |
 | **revisão final** | `references/revisao-final.md` | o kick-off diz `Papel: revisão da branch` |
+| **retrospectiva** | `references/retrospectiva.md` | o kick-off diz `Papel: retrospectiva` |
 
 Uma página que não é papel: `references/paralelo-worktree.md`, a **exceção** de rodar Tasks
 em paralelo com uma worktree cada. O padrão é serial; leia só se o plano declarou um lote
@@ -94,6 +100,26 @@ aprovada acrescentava um parágrafo e nada saía. Somado ao plano inteiro (~30k)
 aberto para a Task 10 gastou **110k de contexto antes de receber o primeiro commit** — lendo,
 entre outras coisas, como a Task 4 tinha sido reprovada quatro vezes três semanas antes. O que ele
 precisava sabia-se em duas páginas.
+
+### O arquivo de regras tem TETO, e ele se mede
+
+"Duas páginas" não é limite: ninguém mede, e o arquivo cresce mesmo assim — cada régua nova entra e
+nada sai. Medido em 15/08/2026, num trabalho de 13 Tasks: o arquivo de regras chegou a **316 linhas
+/ 18 KB** e o registro a 22 KB, com o árbitro escrevendo uma régua a cada achado, o dia todo, sem
+nunca tirar nada.
+
+**Teto: 200 linhas.** Antes de mandar cada kick-off, o árbitro mede:
+
+```bash
+wc -l <config>/.claude-pocket-pair/regras-<gid>.md
+```
+
+Passou → **compacta antes de enviar**. Compactar não é resumir: é tirar o que **deixou de valer** —
+régua de um lote já fechado, exceção de um arquivo que já mergeou, decisão que virou código. O que
+saiu vira uma linha no registro (com a data), que é onde história mora.
+
+Vale para o registro também, com teto mais largo (**500 linhas**): ele só o árbitro lê, mas é ele
+que o árbitro relê inteiro toda vez que precisa lembrar de algo.
 
 Primeira linha do arquivo de regras, pra sessão amnésica se reancorar sozinha:
 

@@ -312,6 +312,28 @@ descrever o print "pelo contexto", pelo nome do arquivo ou pelo que a conversa s
 falso — consegue, por delegação. As duas saídas estão fechadas: ou você olha, ou alguém olha
 por você.
 
+### Tamanho não se olha: mede-se no DOM
+
+Print responde **o que existe, onde, em que ordem**. Ele **não** responde tamanho, espaçamento nem
+alinhamento — e é aí que quem julga por imagem erra com confiança.
+
+Medido em 15/08/2026, numa Task de tela: o executor comparou o resultado com o mock por print,
+recebeu de volta "a densidade está diferente", decidiu por argumento que o app real mandava, e
+commitou. O revisor mediu `getBoundingClientRect` — mock **24px**, aba irmã do mesmo painel
+**24,6px**, entrega **44px**, em **sete** elementos. Não era o app real ganhando: era um
+`button { min-height: 44px }` global comendo o CSS do componente, sem ninguém sobrescrever. O print
+mostrava a diferença; só o número dizia de quem era a culpa.
+
+Antes de decidir qualquer divergência de layout:
+
+```js
+// no navegador, com a tela aberta
+[...document.querySelectorAll('.sua-classe')].map(e => e.getBoundingClientRect().height)
+```
+
+E meça **o vizinho real** — a aba irmã, a lista ao lado, o componente que já existe. "O app real
+ganha" é uma regra sobre o app **medido**, não sobre o app imaginado.
+
 Pergunta **específica**, nunca "está bom?" — vale tanto pra você olhando quanto pra quem
 olha por você. Boas: *"o botão à direita do seletor tem moldura e a mesma altura dele, ou é
 texto solto?"*, *"o item ativo se distingue dos outros?"*, *"algum retângulo opaco cobre o

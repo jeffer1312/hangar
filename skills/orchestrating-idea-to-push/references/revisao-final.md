@@ -35,3 +35,16 @@ callers**, passos, comportamento final, prova. Detalhe em `revisor.md`.
 Achado seu volta pro ciclo normal: o árbitro repassa, o executor aplica, e você revê.
 
 Uma síntese, uma mensagem, para o árbitro. Push e MR são decisão do usuário — nunca sua.
+
+## A última linha do seu `APROVA` não é sobre o código
+
+Ao aprovar a branch, termine a mensagem ao árbitro com:
+
+> **Falta a fase 5 (retrospectiva)** — sessão nova, `references/retrospectiva.md`.
+
+Isso não é formalidade: é o único disparo que funciona. O árbitro chega no fim de um trabalho de
+muitas Tasks saturado e com a sensação de que acabou — branch aprovada **parece** o fim. Você está
+fresco e é o último a falar com ele. Quem lembra é quem tem contexto para lembrar.
+
+Se o árbitro tiver esquecido de registrar a retrospectiva como item do contrato lá no lançamento,
+esta linha é a única rede que sobra.

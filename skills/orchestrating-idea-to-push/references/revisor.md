@@ -66,7 +66,30 @@ BLOQUEADOR 1: <uma linha>
   [receita fechada — ver abaixo]
 
 REGISTRADO 1: <uma linha> — não corrige agora porque <motivo>; fica no contrato.
+
+DESPERDÍCIO desta rodada: <o que o executor fez que não virou nada> — teria evitado: <a instrução>.
 ```
+
+### A última linha é obrigatória, inclusive no APROVA
+
+Ela não julga o executor: ela mede a **rodada**. É o que deixa o árbitro enxergar espiral enquanto
+ela acontece, em vez de depois.
+
+O caso que a criou, medido em 15/08/2026: uma Task de rotas levou **nove REPROVA seguidos, todos da
+mesma família** — impedir que a leitura de arquivo alcançasse o `.git`. Cada parecer fechava o
+caminho que o anterior nomeava, a solução crescia (`rev-parse` → adivinhação por marcadores no disco
+→ estado de sessão em memória dentro do `api.py`), e cada rodada isolada parecia justificada. Gastou
+**3h58 numa Task estimada em 1h**. Quem cortou foi o usuário, de fora, perguntando por que o git
+tinha virado o centro de um gerenciador de arquivos; a resposta foi um guard de três linhas, aprovado
+de primeira, com −283/+37.
+
+Rodada cujo desperdício é *"fechou só o caso que o parecer anterior nomeou"* duas vezes seguidas é o
+sinal. O `teria evitado` é o que vira **régua nova nas regras do grupo** — e é assim que o arquivo de
+regras melhora sem ninguém reescrever o critério de aceite no meio do caminho.
+
+**O revisor não reescreve o pedido, e isso não muda.** Ele diz qual instrução teria evitado; quem
+decide se ela vira régua é o árbitro. Loop em que quem julga também reescreve a tarefa é loop que
+conserta o critério em vez do código — e nenhuma das nove rodadas acima teria sido barrada por ele.
 
 - **REPROVA** com ≥1 bloqueador. **APROVA** só com zero bloqueadores.
 - **DEVOLVIDO** = não dá pra julgar: o hash pedido não é a ponta, a árvore andou debaixo de

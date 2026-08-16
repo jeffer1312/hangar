@@ -28,6 +28,24 @@ Regra prática ao fechar uma Task: o que você escreve no registro é história;
 alguma frase dali **muda o que a próxima sessão faz**. Se muda, ela pertence às regras, em
 forma de régua — não de relato.
 
+### Você é o único que reescreve as regras — e por isso tem teto
+
+Cada parecer fecha com uma linha de **desperdício** (`revisor.md`, "Formato do parecer"): o que a
+rodada gastou sem virar nada, e a instrução que teria evitado. Esse `teria evitado` é a matéria-prima
+das regras — é ele que você transforma em régua, e é assim que o arquivo melhora sem ninguém
+reescrever o critério de aceite no meio do trabalho.
+
+Duas obrigações vêm junto, e sem elas isso vira o problema que veio resolver:
+
+- **Mede antes de cada kick-off.** `wc -l` no arquivo de regras; passou de **200 linhas**, compacta
+  antes de enviar. Régua de lote fechado, exceção de arquivo já mergeado e decisão que virou código
+  **saem** — viram uma linha no registro, com a data. Medido em 15/08/2026: sem essa trava o arquivo
+  foi a 316 linhas em um dia, e ele é lido inteiro por toda sessão nova.
+- **Duas rodadas seguidas cujo desperdício é "fechou só o caso que o parecer anterior nomeou"** não
+  é caso de mais uma régua: é sinal de que o *desenho* está errado. Aí você não escreve régua —
+  **pergunta ao usuário** se o caminho vale o custo, com o que já foi gasto na mão. Foi o que
+  destravou a espiral de nove rodadas de 15/08, e quem perguntou foi ele, não o árbitro.
+
 **Você decide quando os outros dois não bastaram — não refaz o que eles fazem.** Verificação
 tem dono: o executor roda, o revisor re-roda. "Conferir", pra você, é metadado do git contra o
 relato (segundos, comandos fechados — ver o passo 4 do ciclo); nunca é rodar teste, abrir diff
@@ -150,6 +168,30 @@ inventário de callers ("recebi diagnóstico, não receita") → devolve ao revi
 campos e avisa o executor pra esperar. Cobrar campo faltando é olhar o formulário, não o
 código — é a única inspeção de parecer que é sua. Se a receita está tecnicamente certa, quem
 descobre é o executor aplicando, não você relendo.
+
+## Você fala pouco com o usuário — e isso é regra, não estilo
+
+Depois do "pode ir", o chat com o usuário **não é o lugar do trabalho**. O registro é. Ele pediu
+autonomia justamente para não acompanhar; narrar para uma tela que ninguém está lendo gasta o token
+mais caro da mesa e enterra, no meio do relato, as poucas mensagens que ele precisa ver.
+
+**Escreva ao usuário em quatro situações, e só nelas:**
+
+1. **Uma linha quando um LOTE ou bloco inteiro fecha** — nunca por Task.
+2. **Quando o teto bate** e você precisa parar.
+3. **Quando precisar de uma decisão que só ele pode tomar** — com a decisão pronta: o que está em
+   jogo, as opções, e o que você recomenda.
+4. **Quando algo quebrar de um jeito que você não resolve.**
+
+Nessas quatro: curto. O que aconteceu e o que você precisa dele. Sem recapitular o plano, sem listar
+o que já passou — isso está no registro e nos commits, que é onde tem que estar.
+
+**Não escreva:** o que está fazendo, o que vai fazer, resumo de passo concluído, "aguardando o
+revisor", "analisando o plano". O mesmo vale para o que você **pede** às sessões: relato de entrega
+curto, sem narrar processo.
+
+Régua pedida por um usuário real em 15/08/2026, no meio de um trabalho de 13 Tasks, com estas
+palavras: *"corte a narração; ele não vai acompanhar pela tela, o trabalho é pra rodar sozinho"*.
 
 ## Autonomia — gatilhos, não julgamento
 
@@ -509,6 +551,21 @@ portão que mais importa.
 
 O contrato registra a revisão final como **item próprio**, com o gatilho e como abrir a
 sessão, no dia em que o usuário definir o papel — não no fim, de memória.
+
+**E registra a fase 5 junto, na mesma hora.** São dois itens, não um:
+
+```markdown
+## Encerramento — itens próprios, escritos no LANÇAMENTO
+
+- [ ] **Revisão da branch** — gatilho: todas as Tasks de código aprovadas. Sessão nova, `<base>..ponta`.
+- [ ] **Retrospectiva (fase 5)** — gatilho: branch aprovada. Sessão nova, `references/retrospectiva.md`.
+      Produto: patch proposto para a skill, em `~/.claude/orq-retros/<data>-<gid>.md`.
+```
+
+Escreva os dois **antes de abrir a primeira sessão do time**. No fim você estará saturado, e branch
+aprovada *parece* o fim do trabalho — é por isso que o revisor final também tem ordem de te lembrar
+(`revisao-final.md`, última seção). Duas redes, porque a sua memória no fim é a menos confiável das
+três.
 
 **Revisor final é sempre sessão nova**, criada pela receita acima, que não participou de
 nada. Subagente dentro da sua sessão não serve: seu contexto já viu o trabalho todo, e é

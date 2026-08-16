@@ -13,8 +13,40 @@ isso? Pule.
 
 ## Fase 1 — Spec e plano
 
-É aqui que as decisões se fecham; cada uma que ficar aberta é uma chance de acordar o
-usuário às 3h da manhã. Além do que o `writing-plans` já pede, o plano carrega:
+### O TIME se decide ANTES de escrever o plano, não no fim dele
+
+Ordem que parece detalhe e não é. Quem vai executar muda **o que o plano precisa dizer** — e o plano
+é o único documento que o executor lê inteiro.
+
+Pergunte o time logo depois de fechar a spec, e **antes** da primeira Task. Depois leia a ficha de
+cada modelo em `references/modelos/` (uma por modelo, só coisa medida) e escreva o plano com aquilo
+em mente. Não há ficha para o modelo escolhido? Escreva o plano de forma conservadora e **crie a
+ficha no fim**, na retrospectiva — é assim que ela nasce.
+
+O que a ficha muda no plano, com exemplo medido em 15/08/2026:
+
+| A ficha diz | O plano faz diferente |
+|---|---|
+| executor **não enxerga imagem** | protocolo de visão explícito nas Tasks de tela (`see <caminho>`), e barra em **código** (HTML/CSS do mock) sempre que possível, não só em print |
+| executor **decide por argumento quando o critério não é numérico** | toda régua visual vira **número**: "linha de 24px, medida com `getBoundingClientRect` contra a aba irmã", nunca "densidade parecida com a do app" |
+| revisor tem **janela de 272k** | Tasks de tela (que custam ~170k) não cabem duas na mesma sessão — o plano já prevê rotação, em vez de descobrir no meio |
+| executor **aplica receita literal muito bem** | vale investir no detalhe do Step; o mesmo plano num modelo que improvisa pediria menos passo a passo e mais critério |
+
+Sem isso o plano é escrito para um executor genérico que não existe, e cada característica real do
+modelo vira uma rodada de correção.
+
+**Modelo do time que ainda não tem ficha:** antes de escrever o plano, faça uma varredura curta em
+**duas** fontes — o guia do fabricante e, principalmente, **a comunidade** (skill `last30days`:
+Reddit, HN, X, YouTube dos últimos 30 dias; depois vá fundo no que aparecer repetido). A comunidade
+reporta a limitação **e** o contorno juntos, que é o que muda o plano; o fabricante diz o que o
+modelo deveria fazer.
+
+Escreva a ficha inicial com isso, marcado como **hipótese**, em seção separada do que for medido
+depois (`modelos/README.md`). É barato, acontece uma vez por modelo, e evita o plano nascer cego. O
+que a varredura **não** faz é virar régua de kick-off: nada não testado aqui vira régua até uma
+execução confirmar.
+
+Além do que o `writing-plans` já pede, o plano carrega:
 
 - **Ordem das Tasks** e quais não paralelizam, com o motivo. O padrão é **serial**: uma Task
   por vez, portão fechando cada uma. Trabalho grande com Tasks de verdade independentes pode
@@ -187,6 +219,43 @@ Ofereça o pass — não o rode sozinho, e não o pule por achar que já conferi
 você não tem como ver: na mesma data, achou 20 problemas num plano revisado, sendo 5 que faziam
 Task fechar em vermelho — inclusive três arquivos citados que **não existiam** e a regex do próprio
 guard do plano, que passaria a casar o mapa errado depois da Task que a consertava.
+
+## Código que entra no plano é código que VOCÊ rodou
+
+Regra medida em 15/08/2026, num plano bem escrito e auditado, de 12 Tasks. Seis defeitos dele
+chegaram na execução, e os seis tinham a **mesma** causa: o plano descrevia código que quem escreveu
+nunca executou.
+
+| O que o plano dizia | O que acontecia de verdade |
+|---|---|
+| fixture com `__import__("app.main").app` | esse atributo não existe no projeto |
+| `raise HTTPException(..., erro(e.code, e.msg, msg=e.msg))` | `TypeError` — o parâmetro já é nomeado |
+| `pytest tests/test_git_ops.py -k path_diff` | **zero** testes selecionados: nenhum teste que o próprio plano escreveu tem `path_diff` no nome |
+| "Expected: 6 PASS" | eram 8, e no Step seguinte 9 contra 11 reais |
+| "Lote A: nenhum arquivo em comum" | `git_ops.py` estava na Task 3 por desenho **e** na Task 1 por um Step — conflito de merge |
+| barra com coluna de número de linha | o componente que o próprio plano manda reusar não numera |
+
+Nenhum deles é erro de raciocínio: são coisas que **um comando teria respondido em segundos**.
+
+Antes de fechar o plano:
+
+- **Rode o que dá pra rodar.** Todo comando de verificação que você escreveu (`pytest -k …`,
+  `npm run …`) roda **agora**, no repo, e você cola a saída real — inclusive `0 selected`, que é a
+  resposta que denuncia o `-k` errado.
+- **Toda função, atributo e fixture que o plano cita, confira que existe** — `grep` no repo. O
+  auditor adversarial de 13/08 achou três arquivos citados que não existiam; o mesmo tipo de furo
+  passou em 15/08 em nível de atributo.
+- **Contagem de teste: conte, não estime.** "Expected: N PASS" errado faz o executor achar que
+  quebrou algo e ir procurar defeito onde não há.
+- **Disjunção de lote se confere no texto dos STEPS, não no bloco "Files".** Foi exatamente ali que a
+  colisão de 15/08 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py`; o Step 8 dela mandava
+  editá-lo.
+- **A barra tem que ser possível com o código que o plano manda reusar.** Mock desenhando o que o
+  componente existente não faz é divergência garantida — decida no plano, não na Task.
+
+O que você não conseguir rodar entra marcado: `<!-- NÃO VERIFICADO: … -->`. O executor trata isso
+como descrição, não como receita — e é infinitamente melhor que ele descobrir sozinho no meio da
+Task.
 
 ## Fase 2 — Lançamento (o único "pode ir" do usuário)
 
