@@ -59,6 +59,17 @@ describe('FileViewer', () => {
     unmount(comp);
   });
 
+  it('o motivo de base desconhecida tambem vira texto', () => {
+    const { el, comp } = montar({
+      conteudo: null,
+      diff: { path: 'a.py', diff: '@@ -1 +1 @@\n-a\n+b\n', truncated: false,
+              escopo_pedido: 'branch', escopo_usado: 'nao_commitado',
+              base: null, motivo: 'arq_motivo_sem_base_conhecida' },
+    });
+    expect(el.textContent).toContain(m.arq_motivo_sem_base_conhecida());
+    unmount(comp);
+  });
+
   it('diff cortado mostra o aviso', () => {
     const { el, comp } = montar({
       conteudo: null,

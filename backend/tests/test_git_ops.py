@@ -666,6 +666,23 @@ def test_repo_sem_commit_nao_estoura(tmp_path):
     assert r["motivo"] == "arq_motivo_sem_commit"
 
 
+def test_repo_sem_remote_cai_e_diz_que_nao_ha_base(tmp_path):
+    """Repo local com commit e SEM remote: nao ha @{upstream} nem origin/HEAD, entao o escopo
+    `branch` cai e o motivo e o codigo da base desconhecida. E o caso mais comum dos tres."""
+    d = str(tmp_path)
+    git_ops._run(d, "init", "-q", ".")
+    git_ops._run(d, "config", "user.email", "x@y.z")
+    git_ops._run(d, "config", "user.name", "x")
+    (tmp_path / "a.txt").write_text("um\n")
+    git_ops._run(d, "add", "a.txt")
+    git_ops._run(d, "commit", "-qm", "c1")
+    (tmp_path / "a.txt").write_text("um\ndois\n")
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_pedido"] == "branch"
+    assert r["escopo_usado"] == "nao_commitado"
+    assert r["motivo"] == "arq_motivo_sem_base_conhecida"
+
+
 def test_arquivo_novo_aparece_no_diff(tmp_path):
     """`git diff` NAO mostra untracked. Sem isto, clicar num arquivo recem-criado pela sessao
     abre um diff VAZIO — que e o caso mais comum de todos, porque a sessao acabou de criar o
