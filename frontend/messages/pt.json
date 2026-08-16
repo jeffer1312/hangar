@@ -285,6 +285,7 @@
   "board_carregando": "carregando…",
   "ctx_expandir_contexto": "Expandir contexto",
   "ctx_recolher_contexto": "Recolher contexto",
+  "ctx_redimensionar": "Redimensionar painel de contexto",
   "ctx_aria_loop": "Loop da sessão: {n}",
   "ctx_rodando_abrir": "Rodando (abrir)",
   "ctx_rodar_projeto": "Rodar projeto",

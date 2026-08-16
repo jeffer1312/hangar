@@ -86,6 +86,15 @@ describe('ctxPanel — largura redimensionável (task 17)', () => {
     expect(mod.ctxPanel.largura).toBe(Number(salvo));
   });
 
+  it('reclamparLargura sem escolha salva acompanha a tela (degraus reativos)', async () => {
+    fixarJanela(1366); // nasce pequena: default de tela menor (LARGURA_ABERTO)
+    const mod = await importarFresco();
+    expect(mod.ctxPanel.largura).toBe(264);
+    fixarJanela(1920); // cresceu SEM recarregar — o degrau tem que subir junto
+    mod.reclamparLargura();
+    expect(mod.ctxPanel.largura).toBe(340);
+  });
+
   it('recolher/expandir continua indo e voltando sem tocar na largura', async () => {
     const mod = await importarFresco();
     mod.arrastarLargura(1100); // 500

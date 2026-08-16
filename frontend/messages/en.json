@@ -285,6 +285,7 @@
   "board_carregando": "loading…",
   "ctx_expandir_contexto": "Expand context",
   "ctx_recolher_contexto": "Collapse context",
+  "ctx_redimensionar": "Resize context panel",
   "ctx_aria_loop": "Session loop: {n}",
   "ctx_rodando_abrir": "Running (open)",
   "ctx_rodar_projeto": "Run project",

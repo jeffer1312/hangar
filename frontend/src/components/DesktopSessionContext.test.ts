@@ -118,6 +118,7 @@ describe('DesktopSessionContext — divisória redimensionável (task 17)', () =
     const handle = document.querySelector<HTMLElement>('.ctx-resize-handle');
     expect(handle).not.toBeNull();
     expect(handle?.getAttribute('role')).toBe('separator');
+    expect(handle?.getAttribute('aria-label')).toBe('Redimensionar painel de contexto');
     ctxPanel.recolhido = true;
     await tick();
     expect(document.querySelector('.ctx-resize-handle')).toBeNull();
@@ -158,6 +159,29 @@ describe('DesktopSessionContext — divisória redimensionável (task 17)', () =
     } finally {
       HTMLElement.prototype.setPointerCapture = origCapture;
     }
+    unmount(t.comp);
+  });
+
+  // A alca pode sair do DOM no meio do arrasto (recolher, cruzar os 820px, trocar de sessao) — o
+  // pointerup fica sem destino e o flag do store (singleton) ficaria preso, fazendo a divisoria
+  // redimensionar so com o cursor por cima. Recolher NAO desmonta o componente (a alca some por
+  // {#if} interno) — o zero vem do $effect reagindo ao recolhido; os outros caminhos desmontam o
+  // componente inteiro e o cleanup cobre.
+  it('desmontar no meio do arrasto zera o resizing', async () => {
+    const t = montar(false);
+    await tick();
+    ctxPanel.resizing = true;   // arrasto em curso
+    unmount(t.comp);            // alca sai do DOM sem pointerup
+    expect(ctxPanel.resizing).toBe(false);
+  });
+
+  it('recolher no meio do arrasto zera o resizing (a alca some por {#if}, sem desmontar)', async () => {
+    const t = montar(false);
+    await tick();
+    ctxPanel.resizing = true;   // arrasto em curso
+    ctxPanel.recolhido = true;  // recolheu: a alca sai do DOM, o componente fica montado
+    await tick();
+    expect(ctxPanel.resizing).toBe(false);
     unmount(t.comp);
   });
 });

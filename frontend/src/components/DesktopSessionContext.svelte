@@ -134,6 +134,16 @@ import * as m from '../paraglide/messages';
     ctxPanel.resizing = false;
     salvarLargura();
   }
+  // O flag vive no store (singleton de modulo) e sobrevive à desmontagem. Se a alca sair do DOM
+  // no meio do arrasto — recolher, cruzar os 820px, trocar de sessao — o pointerup nao tem
+  // destino e o resizing ficaria preso, fazendo a divisoria redimensionar so com o cursor por cima.
+  // Dois bracos, porque sao dois mecanismos de saida: recolher NAO desmonta o componente (a alca
+  // some por {#if} interno) — o flag zera quando recolhido vira true; os outros caminhos
+  // (820px, troca de sessao) desmontam o componente inteiro — o cleanup zera na desmontagem.
+  $effect(() => {
+    if (ctxPanel.recolhido) ctxPanel.resizing = false;
+    return () => { ctxPanel.resizing = false; };
+  });
 </script>
 
 <aside class="session-context" class:recolhido={ctxPanel.recolhido} class:toggle-externo={toggleExterno} class:resizing={ctxPanel.resizing} aria-label={m.ctx_painel_titulo()}>
@@ -141,7 +151,7 @@ import * as m from '../paraglide/messages';
   <!-- Drag na divisória da esquerda pra redimensionar: mesma pegada do resize-handle da Sidebar
        (lá a borda é a direita, aqui a esquerda — o painel cola na direita). So quando aberto: o
        trilho recolhido não é largura, é estado. -->
-  <div class="ctx-resize-handle" role="separator" aria-label={m.sessao_redimensionar()}
+  <div class="ctx-resize-handle" role="separator" aria-label={m.ctx_redimensionar()}
     aria-orientation="vertical"
     onpointerdown={resizeStart} onpointermove={resizeMove}
     onpointerup={resizeEnd} onpointercancel={resizeEnd}></div>

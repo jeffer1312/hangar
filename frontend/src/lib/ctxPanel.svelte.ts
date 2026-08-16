@@ -110,11 +110,14 @@ export function salvarLargura(): void {
   }
 }
 
-// Reaplica o teto quando a JANELA muda de tamanho: o teto é função da largura da janela, então
-// encolher a janela invalida uma largura que era legítima. Relê o `cp_ctx_w` salvo e clampa pela
-// janela atual — o MESMO comportamento da carga: encolher reduz na hora, crescer de volta
-// restaura a escolha grande (veio do localStorage, que não foi tocado). NÃO salva: a escolha da
-// pessoa fica intacta pra voltar inteira no monitor grande.
+// Reaplica a largura quando a JANELA muda de tamanho: o teto é função da largura da janela, então
+// encolher a janela invalida uma largura que era legítima. Com escolha salva, relê o `cp_ctx_w` e
+// clampa pela janela atual — o MESMO comportamento da carga: encolher reduz na hora, crescer de
+// volta restaura a escolha grande (veio do localStorage, que não foi tocado). SEM escolha salva,
+// o default acompanha a tela — era o que a media query do Chat fazia (300 em >=1600, 340 em
+// >=1900), que valia sempre; o `larguraDefault` do módulo só roda na carga, então sem esta queda
+// o degrau ficava congelado na largura do primeiro carregamento. NÃO salva: a escolha da pessoa
+// fica intacta.
 export function reclamparLargura(): void {
   let salva: number | null = null;
   try {
@@ -123,5 +126,5 @@ export function reclamparLargura(): void {
   } catch {
     /* sem storage: usa o valor atual */
   }
-  ctxPanel.largura = clampLargura(salva ?? ctxPanel.largura);
+  ctxPanel.largura = clampLargura(salva ?? larguraDefault());
 }
