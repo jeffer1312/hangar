@@ -69,6 +69,23 @@ describe('ctxPanel — largura redimensionável (task 17)', () => {
     expect(fresco.ctxPanel.largura).toBe(1280 - RESERVA_VISOR - RESERVA_NAV);
   });
 
+  it('reclamparLargura reaplica o teto quando a janela muda, sem tocar no salvo (bloqueador 2)', async () => {
+    const mod = await importarFresco();
+    fixarJanela(1600);
+    mod.arrastarLargura(0); // teto de 1600
+    mod.salvarLargura();
+    const salvo = localStorage.getItem('cp_ctx_w');
+
+    fixarJanela(1280); // encolheu a janela SEM recarregar
+    mod.reclamparLargura();
+    expect(mod.ctxPanel.largura).toBe(1280 - RESERVA_VISOR - RESERVA_NAV);
+    expect(localStorage.getItem('cp_ctx_w')).toBe(salvo); // escolha grande preservada
+
+    fixarJanela(1600); // monitor grande voltou: a escolha restaura do salvo
+    mod.reclamparLargura();
+    expect(mod.ctxPanel.largura).toBe(Number(salvo));
+  });
+
   it('recolher/expandir continua indo e voltando sem tocar na largura', async () => {
     const mod = await importarFresco();
     mod.arrastarLargura(1100); // 500

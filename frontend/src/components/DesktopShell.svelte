@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount } from 'svelte';
 import * as m from '../paraglide/messages';
   import HangarMark from './icons/HangarMark.svelte';
   import Sidebar from './Sidebar.svelte';
@@ -306,50 +306,14 @@ import * as m from '../paraglide/messages';
     return () => window.removeEventListener('keydown', onKey, true);
   });
 
-  // Largura REAL da faixa da esquerda, publicada em --cp-nav-w pro chat manter a coluna de leitura
-  // no mesmo lugar quando os painéis abrem e fecham (é o que OpenCode e Claude fazem: o centro do
-  // texto não se mexe). Tem de ser MEDIDA, não constante: são quatro estados diferentes — expandida
-  // (270px de base, mas o usuário arrasta a borda e muda isso), trilho de 56px, escondida com o
-  // terminal maximizado, e ZERO no modo abas, onde a Sidebar nem chega a existir no DOM.
-  // ResizeObserver e não $effect sobre o estado: o arrasto da borda muda a largura sem passar por
-  // nenhuma prop daqui.
-  //
-  // MEDE A BORDA ESQUERDA DO CONTEÚDO, não a largura da sidebar — e a diferença não é estilo, é o
-  // que funciona. A `.sidebar-wrap` é `display: contents`: ela não gera caixa nenhuma, então um
-  // ResizeObserver nela devolve 0 mesmo com o trilho de 56px desenhado na tela (medido aqui:
-  // navW=0px com `.sidebar` real de 56px). E observar `.sidebar` direto traria outro problema — ela
-  // some do DOM no modo abas, e aí não há elemento pra observar.
-  // O `.desktop-com-terminal` existe SEMPRE e é irmão flex da sidebar, então o `left` dele é, por
-  // construção, exatamente o quanto a faixa da esquerda ocupa: 0 no modo abas, 56 no trilho, a
-  // largura arrastada quando expandida. Uma medida só, sem casos especiais.
-  let navEl: HTMLElement | undefined = $state();
-  let navW = $state(0);
-  $effect(() => {
-    if (!navEl) { navW = 0; return; }
-    const medir = () => {
-      if (!navEl) return;
-      const l = Math.round(navEl.getBoundingClientRect().left);
-      if (Math.abs(l - navW) > 1) navW = l;
-    };
-    // `untrack`: `medir` LÊ `navW` pra comparar, e o corpo do $effect roda rastreado — sem isto o
-    // effect vira dependente do valor que ele mesmo escreve e se reinvalida, desconectando e
-    // recriando o ResizeObserver a cada passo do arrasto da borda. O guard de 1px impede o loop
-    // infinito, não o churn. Os medidores do Chat (--dock-h, --nav-h) não têm o problema porque só
-    // leem/escrevem DENTRO do callback do observer, que já roda fora do rastreio.
-    untrack(medir);
-    const ro = new ResizeObserver(medir);
-    ro.observe(navEl);
-    // A sidebar encolher/expandir muda o `left` daqui sem mudar o TAMANHO deste elemento em alguns
-    // casos (janela fixa, flex redistribuindo) — o observer do irmão cobre isso.
-    const pai = navEl.parentElement;
-    if (pai) ro.observe(pai);
-    return () => ro.disconnect();
-  });
+  // (O medidor da largura da sidebar — --cp-nav-w + ResizeObserver — saiu aqui junto com o
+  // centro-fixo da Task 17: o único consumidor era o --recuo-esq do Chat, que virou zero com o
+  // item A. Medidor morto = observer rodando à toa a cada sessão.)
 </script>
 
 <svelte:window onkeydown={onShellKey} />
 
-<div class="desktop-shell" style:--cp-nav-w={`${navW}px`}>
+<div class="desktop-shell">
   {#if barraDeAbas}
     <!-- PRIMEIRA faixa da janela, fora da linha sidebar|conteúdo: ela atravessa a tela inteira,
          inclusive por cima do trilho. Enquanto morava dentro da coluna do conteúdo, começava onde a
@@ -375,7 +339,7 @@ import * as m from '../paraglide/messages';
              {ctxDisponivel} {overlaySession} />
   </div>
 
-  <div class="desktop-com-terminal" bind:this={navEl}>
+  <div class="desktop-com-terminal">
   <main class="desktop-main" class:split={splitSessions.length > 0} class:has-attention={hasAttention}
         class:tp-max-hide={terminalMaximizado}>
     {#if hasAttention}

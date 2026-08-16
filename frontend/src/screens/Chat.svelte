@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
-  import { ctxPanel, LARGURA_TRILHO } from '../lib/ctxPanel.svelte';
+  import { ctxPanel, LARGURA_TRILHO, reclamparLargura } from '../lib/ctxPanel.svelte';
   import NavBar from '../components/NavBar.svelte';
   import MessageList from '../components/MessageList.svelte';
   import Composer from '../components/Composer.svelte';
@@ -320,9 +320,15 @@
       isDesktopLargo = mqLargo.matches;
     };
     mqLargo.addEventListener('change', onLargo);
+    // O teto do painel é função da largura da janela: encolher a janela invalida uma largura que
+    // era legítima — reaplica o clamp na hora (sem salvar: a escolha grande volta no monitor
+    // grande). Mesma régua da carga em tela menor.
+    const onResize = () => reclamparLargura();
+    window.addEventListener('resize', onResize);
     return () => {
       mq.removeEventListener('change', on);
       mqLargo.removeEventListener('change', onLargo);
+      window.removeEventListener('resize', onResize);
     };
   });
   let allSessions = $state<SessionInfo[]>([]);
@@ -1970,23 +1976,25 @@
     /* a largura vem do estado do painel (ctxPanel), via style inline no elemento */
     .chat-screen.with-context { --ctx-w: var(--cp-ctx-w, 264px); }
 
-    /* CENTRO FIXO. Antes, só a direita era reservada (padding-right = faixa do painel de contexto)
-       e a esquerda vinha da largura REAL da sidebar. Como as duas mudam sozinhas — sidebar
-       expandida/trilho/ausente no modo abas, painel aberto/recolhido/fechado —, o texto pulava de
-       lugar a cada toggle: no modo abas ele ficava colado na borda esquerda com a faixa do painel
-       vazia à direita (medido 10/08/2026: coluna em 0→1016 numa janela de 1280).
-       A regra agora é a que OpenCode e Claude usam: as duas faixas laterais podem existir ou não,
-       mas o CENTRO da coluna não se mexe. Para isso o recuo total de cada lado tem de ser igual —
-       à esquerda já existe a sidebar (--cp-nav-w, medida no DesktopShell), à direita existe o
-       painel (--ctx-w). O padding compensa a diferença:
-         esquerda = nav + padL   direita = padR   ->   padL = ctx - nav,  padR = max(ctx, nav)
-       O `max` na direita garante que o texto nunca passe POR BAIXO do painel, que é o motivo de
-       a reserva existir; o `max(0px, …)` na esquerda cobre o caso da sidebar mais larga que o
-       painel (ela é arrastável), onde quem compensa é o outro lado. */
+    /* A coluna vive no ESPAÇO LIVRE entre a sidebar e o painel de contexto — começa onde a
+       sidebar termina (o .chat-screen JÁ começa depois dela, quem reserva a faixa é o
+       DesktopShell) e termina onde o painel começa. O centro dela é o centro desse espaço, e
+       ELE SE MOVE quando o painel redimensiona: o recuo-esq é zero de propósito, o texto
+       acompanha a divisória em vez de flutuar num vão (decisão do usuário, 16/08/2026 — a
+       Task 17 tornou o painel arrastável e o centro-fixo-na-janela gastava ctx-nav px de vão
+       à esquerda).
+       O CENTRO FIXO NA JANELA morreu aqui. Ele existia porque, com o painel FIXO, o texto
+       pulava de lugar a cada toggle de sidebar/painel (medido 10/08/2026: coluna em 0→1016
+       numa janela de 1280, texto colado na borda esquerda com a faixa do painel vazia à
+       direita). A regra nova aceita o deslocamento do texto quando a faixa muda — o preço é
+       o usuário escolheu — mas NÃO pode trazer aquele caso de volta: com a sidebar em trilho
+       e recuo-esq zero, a coluna enche a faixa e encosta na borda (folga 0) quando a faixa é
+       menor que o max-width — é a MESMA forma do incidente. O max-width + margin auto dão a
+       simetria quando há folga; sem folga, a coluna ocupa o que tem (simetria cede antes da
+       legibilidade, decisão do usuário). */
     .chat-screen.desktop {
-      --nav-w: var(--cp-nav-w, 0px);
-      --recuo-esq: max(0px, calc(var(--ctx-w, 0px) - var(--nav-w)));
-      --recuo-dir: max(var(--ctx-w, 0px), var(--nav-w));
+      --recuo-esq: 0px;
+      --recuo-dir: var(--ctx-w, 0px);
     }
     .chat-screen.desktop :global(.message-list) {
       box-sizing: border-box;
@@ -2109,8 +2117,9 @@
   /* O arquivo aberto (Task 11): cobre SÓ a área da conversa — da navbar ao rodapé, do começo
      do chat até o painel de contexto (--ctx-w). A árvore do painel continua viva e clicável ao
      lado (mock 2, sem véu). left: 0 de propósito: o .chat-screen JÁ começa depois da sidebar
-     (quem reserva a faixa dela é o DesktopShell), então var(--nav-w) empurraria o visor 282px
-     para dentro e espremeria o diff (medido ao vivo: 612px em vez de ~894px). --surface-card:
+     (quem reserva a faixa dela é o DesktopShell), então reservar de novo a faixa da esquerda
+     empurraria o visor 282px para dentro e espremeria o diff (medido ao vivo: 612px em vez de
+     ~894px). --surface-card:
      caixa de leitura (mesmo token do board/plano), que entra no véu do papel de parede em vez
      de virar retângulo chapado — o visor é superfície grande sobre a foto. z 30: acima do dock
      (20) e das pills (21-22), abaixo dos sheets (100). Sem border-left: a sidebar já tem

@@ -18,11 +18,14 @@ export const LARGURA_TRILHO = 34;
 
 // Larguras do painel aberto. MIN: abaixo disso a árvore de arquivos e a lista de tarefas ficam
 // ilegíveis (o painel nasceu em 264 e 240 ainda lê caminho e título). MAX: acima disso o visor de
-// arquivo ao lado — que ocupa o resto da janela — fica estreito demais para um diff. RESERVA_VISOR:
-// o mínimo do diff medido (558 legível, 450 espremido). RESERVA_NAV: folga da sidebar da esquerda
-// (default 270; se ela estiver menor/recolhida o teto só fica um pouco conservador, nunca espreme).
-// Aplicadas como teto pela janela na carga E no arrasto, senão quem salvou numa tela grande abre
-// numa menor com o chat espremido.
+// arquivo ao lado fica estreito demais para um diff. RESERVA_VISOR: o mínimo do diff medido (558
+// legível, 450 espremido). RESERVA_NAV: folga da sidebar da esquerda (default 270; se ela estiver
+// menor/recolhida o teto só fica um pouco conservador, nunca espreme). Aplicadas como teto pela
+// janela na carga E no arrasto, senão quem salvou numa tela grande abre numa menor com o chat
+// espremido.
+// (Sem RESERVA_CHAT de propósito: a sobreposição do composer não é o teto ser largo demais — é o
+// --recuo-esq do Chat roubando largura do cartão; o item A (recuo zero) resolveu e o teto de 440
+// em 1280 passou a caber com folga. Medido na rodada 2.)
 export const LARGURA_MIN = 240;
 export const LARGURA_MAX = 560;
 export const RESERVA_VISOR = 560;
@@ -105,4 +108,20 @@ export function salvarLargura(): void {
   } catch {
     /* sem storage: vale só nesta sessão */
   }
+}
+
+// Reaplica o teto quando a JANELA muda de tamanho: o teto é função da largura da janela, então
+// encolher a janela invalida uma largura que era legítima. Relê o `cp_ctx_w` salvo e clampa pela
+// janela atual — o MESMO comportamento da carga: encolher reduz na hora, crescer de volta
+// restaura a escolha grande (veio do localStorage, que não foi tocado). NÃO salva: a escolha da
+// pessoa fica intacta pra voltar inteira no monitor grande.
+export function reclamparLargura(): void {
+  let salva: number | null = null;
+  try {
+    const raw = Number(localStorage.getItem(CHAVE_LARGURA));
+    if (Number.isFinite(raw) && raw > 0) salva = raw;
+  } catch {
+    /* sem storage: usa o valor atual */
+  }
+  ctxPanel.largura = clampLargura(salva ?? ctxPanel.largura);
 }
