@@ -1653,6 +1653,9 @@
   "arq_escopo_nao_commitado": "Uncommitted",
   "arq_escopo_desde": "since {base}",
   "arq_meta_arquivo": "{tam} · {linhas} lines",
+  "arq_motivo_sem_commit": "This repository has no commits yet.",
+  "arq_motivo_sem_commit_proprio": "This branch has no commits of its own.",
+  "arq_motivo_sem_base_conhecida": "This branch has no known base.",
   "arq_diff_cortado": "Diff truncated at 200 KB.",
   "arq_arquivo_cortado": "File truncated at 512 KB.",
   "arq_sem_mudanca": "This file hasn't changed — showing its contents."

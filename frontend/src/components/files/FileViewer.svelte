@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
+  import { mensagemDeErro } from '../../lib/errosApi';
   import type { PathDiff, FileContent } from '../../lib/types';
   import { highlightDiff, type DiffRow } from '../../lib/highlight';
   import { dec } from '../../lib/fmt';
@@ -41,6 +42,15 @@
   // impossível (a base não existe) — botão desabilitado, mas com o rótulo do que está sendo
   // mostrado e o motivo em TEXTO (title de botão desabilitado não é lido por ninguém).
   const caiu = $derived(diffDoArquivo !== null && diffDoArquivo.escopo_usado !== diffDoArquivo.escopo_pedido);
+
+  // Motivo do escopo caido chega do backend como CODIGO (chave `arq_*`) e vira texto pela MESMA
+  // via dos erros (mensagemDeErro). Codigo desconhecido devolve undefined e a tela nao desenha
+  // nada — nem quebra nem mostra o codigo cru. Sem isto o motivo vinha em portugues no app em ingles.
+  const motivoVisivel = $derived(
+    caiu && diffDoArquivo !== null && diffDoArquivo.motivo !== null
+      ? (mensagemDeErro(diffDoArquivo.motivo) ?? null)
+      : null,
+  );
 
   $effect(() => {
     const d = diffDoArquivo;
@@ -121,7 +131,7 @@
           {d.escopo_usado === 'branch' ? m.arq_escopo_branch() : m.arq_escopo_nao_commitado()}
           <span class="seta">▾</span>
         </button>
-        {#if caiu && d.motivo}<span class="motivo">{d.motivo}</span>{/if}
+        {#if motivoVisivel}<span class="motivo">{motivoVisivel}</span>{/if}
       {/if}
       <span class="meta">
         {#if partesDesde}

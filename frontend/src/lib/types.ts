@@ -501,6 +501,8 @@ export interface SearchResult { hits: SearchHit[]; truncated: boolean; mode: 'na
 
 // Diff de UM arquivo (POST /api/sessions/{name}/git/path-diff). `escopo_usado` pode divergir do
 // pedido: `branch` cai pra `nao_commitado` quando a base nao da pra achar (base/motivo dizem o porque).
+// `motivo` e um CODIGO (chave `arq_*`) que o front traduz via errosApi — nunca frase; codigo
+// desconhecido simplesmente nao desenha (FileViewer).
 export interface PathDiff {
   path: string;
   diff: string;

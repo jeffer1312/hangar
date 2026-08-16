@@ -417,10 +417,13 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
 
 
 def _base_da_branch(cwd: str) -> tuple[str | None, str | None]:
-    """Onde esta branch nasceu, e o PORQUE quando nao da pra saber."""
+    """Onde esta branch nasceu, e o PORQUE quando nao da pra saber.
+
+    O segundo elemento e um CODIGO (chave de i18n do front, prefixo `arq_`), nunca frase:
+    o front traduz, mesmo desenho do envelope de erro (frontend/src/lib/errosApi.ts)."""
     cabeca = _run(cwd, "rev-parse", "--verify", "-q", "HEAD")
     if cabeca.returncode != 0:
-        return None, "este repositorio ainda nao tem commit"
+        return None, "arq_motivo_sem_commit"
     atual = cabeca.stdout.strip()
     igual_ao_head = False
     for ref in ("@{upstream}", "origin/HEAD"):
@@ -435,8 +438,8 @@ def _base_da_branch(cwd: str) -> tuple[str | None, str | None]:
             continue
         return base, None
     if igual_ao_head:
-        return None, "esta branch nao tem commit proprio"
-    return None, "esta branch nao tem base conhecida"
+        return None, "arq_motivo_sem_commit_proprio"
+    return None, "arq_motivo_sem_base_conhecida"
 
 
 def path_diff(cwd: str, path: str, escopo: str) -> dict:

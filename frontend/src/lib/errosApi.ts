@@ -209,6 +209,13 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_arq_busca_falhou: (p) => m.erro_arq_busca_falhou({ msg: String(p.msg) }),
   erro_arq_modo_invalido: () => m.erro_arq_modo_invalido(),
   erro_git_diff: (p) => m.erro_git_diff({ msg: String(p.msg) }),
+
+  // path-diff — motivo do escopo caido (PathDiff.motivo): o backend manda CODIGO (chave arq_*),
+  // e a traducao e a mesma via do envelope; codigo desconhecido devolve undefined e a tela nao
+  // desenha nada (FileViewer). Sem isto o motivo aparecia em portugues no app em ingles.
+  arq_motivo_sem_commit: () => m.arq_motivo_sem_commit(),
+  arq_motivo_sem_commit_proprio: () => m.arq_motivo_sem_commit_proprio(),
+  arq_motivo_sem_base_conhecida: () => m.arq_motivo_sem_base_conhecida(),
   erro_rota_so_claude: () => m.erro_rota_so_claude(),
   erro_rota_so_motor: () => m.erro_rota_so_motor(),
   erro_rota_so_pi: () => m.erro_rota_so_pi(),

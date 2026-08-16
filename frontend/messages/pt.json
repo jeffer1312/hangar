@@ -1653,6 +1653,9 @@
   "arq_escopo_nao_commitado": "Não commitado",
   "arq_escopo_desde": "desde {base}",
   "arq_meta_arquivo": "{tam} · {linhas} linhas",
+  "arq_motivo_sem_commit": "Este repositório ainda não tem commit.",
+  "arq_motivo_sem_commit_proprio": "Esta branch não tem commit próprio.",
+  "arq_motivo_sem_base_conhecida": "Esta branch não tem base conhecida.",
   "arq_diff_cortado": "Diff cortado em 200 KB.",
   "arq_arquivo_cortado": "Arquivo cortado em 512 KB.",
   "arq_sem_mudanca": "Este arquivo não mudou — mostrando o conteúdo."

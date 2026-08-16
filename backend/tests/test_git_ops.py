@@ -653,7 +653,8 @@ def test_branch_sem_commit_proprio_cai_e_diz(tmp_path):
     r = git_ops.path_diff(d, "a.txt", "branch")
     assert r["escopo_pedido"] == "branch"
     assert r["escopo_usado"] == "nao_commitado"
-    assert r["motivo"]
+    # O motivo e CODIGO (chave de i18n do front), nunca frase — o front traduz.
+    assert r["motivo"] == "arq_motivo_sem_commit_proprio"
 
 
 def test_repo_sem_commit_nao_estoura(tmp_path):
@@ -662,6 +663,7 @@ def test_repo_sem_commit_nao_estoura(tmp_path):
     (tmp_path / "novo.txt").write_text("x\n")
     r = git_ops.path_diff(d, "novo.txt", "branch")
     assert r["escopo_usado"] == "nao_commitado"
+    assert r["motivo"] == "arq_motivo_sem_commit"
 
 
 def test_arquivo_novo_aparece_no_diff(tmp_path):

@@ -33,13 +33,29 @@ describe('FileViewer', () => {
       diff: {
         path: 'a.py', diff: '@@ -1 +1 @@\n-a\n+b\n', truncated: false,
         escopo_pedido: 'branch', escopo_usado: 'nao_commitado',
-        base: null, motivo: 'esta branch nao tem commit proprio',
+        base: null, motivo: 'arq_motivo_sem_commit_proprio',
       },
     });
     const b = el.querySelector('.escopo') as HTMLButtonElement;
     expect(b.disabled).toBe(true);
     expect(b.textContent).toContain(m.arq_escopo_nao_commitado());   // o que ESTÁ na tela
-    expect(el.textContent).toContain('commit proprio');              // motivo legível, fora do title
+    // motivo legível, fora do title — o código chega do backend e vira texto pela via dos erros
+    expect(el.textContent).toContain(m.arq_motivo_sem_commit_proprio());
+    unmount(comp);
+  });
+
+  it('motivo desconhecido nao mostra o codigo cru nem quebra', () => {
+    const { el, comp } = montar({
+      conteudo: null,
+      diff: {
+        path: 'a.py', diff: '@@ -1 +1 @@\n-a\n+b\n', truncated: false,
+        escopo_pedido: 'branch', escopo_usado: 'nao_commitado',
+        base: null, motivo: 'arq_motivo_que_nao_existe_ainda',
+      },
+    });
+    expect((el.querySelector('.escopo') as HTMLButtonElement).disabled).toBe(true);
+    expect(el.textContent).not.toContain('arq_motivo_que_nao_existe_ainda');
+    expect(el.querySelector('.motivo')).toBeNull();
     unmount(comp);
   });
 
