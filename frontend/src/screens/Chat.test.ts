@@ -45,13 +45,27 @@ vi.mock('../components/LoopSheet.svelte', stubDe);
 vi.mock('../components/DesktopSessionContext.svelte', stubDe);
 vi.mock('../components/files/FileViewer.svelte', stubVisor);
 
+// Controle do SSE mockado: o Chat conecta via openEventStream().addEventListener('state', ...)
+// — para montar uma sessao morta (B5 rodada 4) o teste precisa disparar o evento na mao.
+const sseCtl = vi.hoisted(() => {
+  const handlers = new Map<string, (e: MessageEvent) => void>();
+  return {
+    handlers,
+    state: (dados: unknown) => {
+      const h = handlers.get('state');
+      if (h) h({ data: JSON.stringify(dados) } as MessageEvent);
+    },
+  };
+});
+
 // API: só o que o mount do Chat toca precisa responder; o resto nunca chega a ser chamado
 // com os filhos stubados.
 vi.mock('../lib/api', () => ({
   getHistory: vi.fn(async () => ({ events: [], total: 0 })),
   openEventStream: vi.fn(() => ({
     onmessage: () => {}, onerror: () => {}, close: () => {},
-    readyState: 0, addEventListener: () => {},
+    readyState: 0,
+    addEventListener: (tipo: string, h: (e: MessageEvent) => void) => { sseCtl.handlers.set(tipo, h); },
   })),
   getSessions: vi.fn(async () => []),
   getRunners: vi.fn(async () => ({ running: false })),
@@ -202,12 +216,38 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     expect(store.selecionado).toBeNull();                  // selecao limpa
     expect(underlay?.hasAttribute('inert')).toBe(false);   // conversa volta operavel
     expect(t.el.querySelector('.arq-visor')).toBeNull();   // visor desmontado
-    // foco devolvido a um controle vivo do Chat: o focus do Composer foi chamado
-    expect(chamadasFocus).toBeGreaterThan(0);
+    // foco devolvido ao Composer (o stub foca o proprio botao, que representa o textarea)
+    expect(document.activeElement).toBe(t.el.querySelector('.composer-stub'));
     mq.set('(min-width: 1280px)', true);   // volta a largo
     await tick();
     await tick();
     expect(t.el.querySelector('.arq-visor')).toBeNull();   // so monta com nova selecao
+    unmount(t.comp);
+  });
+
+  // Parecer rodada 4, B5: sessao morta nao tem Composer (o bottom-dock vira o .dead-footer com
+  // o botao voltar) — o resize tem que devolver o foco a um controle que o usuario VE.
+  it('resize com sessao morta devolve o foco ao botao voltar', async () => {
+    const t = montar();
+    await tick();
+    await tick();
+    await import('../lib/api');   // estabiliza o mock do SSE: sem o import explicito, o registro
+    // dos handlers pode nao estar visivel ao sseCtl na suite completa (medido: falha intermitente).
+    sseCtl.state({ state: 'dead' });   // a sessao encerrou
+    await tick();
+    await tick();
+    const voltar = t.el.querySelector<HTMLElement>('.dead-footer .back-btn');
+    expect(voltar).not.toBeNull();     // footer morto no lugar do composer
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    store.selecionado = 'a.ts';
+    await tick();
+    await tick();
+    expect(t.el.querySelector('.arq-visor')).not.toBeNull();   // visor abre mesmo assim
+    mq.set('(min-width: 1280px)', false);   // encolheu p/ desktop estreito
+    await tick();
+    await tick();
+    expect(store.selecionado).toBeNull();
+    expect(document.activeElement).toBe(voltar);   // foco no botao vivo, nao no body
     unmount(t.comp);
   });
 });

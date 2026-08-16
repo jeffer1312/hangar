@@ -103,6 +103,7 @@ export class FilesStore {
     const g = ++this.gArquivo;
     const ge = ++this.gErro;   // esta abertura e a dona do erro a partir de agora
     const gr = this.gResultados;   // geracao dos resultados que ESTA abertura pode podar (B4)
+    const gb = this.gBusca;        // ... e a geracao da busca que os produziu (B4, rodada 4)
     // allSettled, nao all: o conteudo MANDA. Fora de repositorio git o path_diff sempre responde
     // 409 (git_ops.py) e a arvore tem que continuar lendo arquivo (regra do usuario, 15/08).
     const [c, d] = await Promise.allSettled([
@@ -142,9 +143,10 @@ export class FilesStore {
         if (pai !== '') await this._listar(pai, ge);
         // Hit de busca morto (B4): o arquivo apagado sai dos resultados, senao o botao
         // continua clicavel para sempre. So se os resultados ainda forem OS MESMOS que esta
-        // abertura viu (gr): uma busca nova que terminou durante a recuperacao pode ter
-        // reencontrado o arquivo, e a resposta velha nao pode poda-la.
-        if (gr === this.gResultados) {
+        // abertura viu (gr) E a busca que os produziu ainda for a vigente (gb): uma busca
+        // nova — concluida OU pendente — pode reencontrar o arquivo, e a resposta velha nao
+        // pode poda-la (pendente, gr ainda e o antigo e o gr sozinho nao distingue).
+        if (gb === this.gBusca && gr === this.gResultados) {
           this.resultados = this.resultados.filter((h) => h.path !== path);
         }
         // B1: so pinta o erro se ESTA abertura ainda for a dona — uma abertura/busca nova

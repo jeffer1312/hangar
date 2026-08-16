@@ -152,12 +152,17 @@
   });
 
   // Única saída do visor (×, voltar e Esc passam por aqui): limpa a seleção e devolve o foco
-  // ao elemento que abriu — depois do tick, quando o visor já desmontou.
+  // ao elemento que abriu — depois do tick, quando o visor já desmontou. O alvo so recebe o
+  // foco se AINDA estiver conectado e visivel: no resize para <1280px o abridor (treeitem do
+  // painel) esta display:none junto com o painel, e focar elemento oculto devolve o foco pro
+  // body em vez de "devolver" (B5, rodada 4).
   function fecharVisor() {
     const alvo = abridorEl;
     filesStore.selecionado = null;
     abridorEl = null;
-    void tick().then(() => alvo?.focus());
+    void tick().then(() => {
+      if (alvo?.isConnected && alvo.getClientRects().length > 0) alvo.focus();
+    });
   }
 
   // Resize para desktop estreito (B5): abaixo de 1280px o visor e o painel sao display:none e o
@@ -165,11 +170,18 @@
   // invisivel (reproduzido ao vivo pelo revisor, rodada 3). Limpa a selecao (voltar a largo
   // monta o visor so com nova selecao) e devolve o foco a um controle vivo do Chat: o Fechar do
   // visor acabou de ser escondido junto, e o abridor (treeitem do painel, display:none) tambem.
+  // O foco so pode ir DEPOIS do flush: o inert do underlay sai junto com a limpeza da selecao
+  // acima, e focar sob inert e no-op (bloqueado no navegador e no happy-dom). Sessao morta nao
+  // tem Composer (o bottom-dock vira o .dead-footer com o botao voltar) — o alvo cai no botao
+  // que o usuario VE (B5, rodada 4).
   $effect(() => {
     if (!desktop || isDesktopLargo) return;
     if (filesStore.selecionado === null) return;
     fecharVisor();
-    composerRef?.focus();
+    void tick().then(() => {
+      if (composerRef) composerRef.focus();
+      else screenEl?.querySelector<HTMLElement>('.dead-footer .back-btn')?.focus();
+    });
   });
 
   // Cache de prompt: o ULTIMO turno do assistente manda. Usar a cache renova o prazo, entao a
