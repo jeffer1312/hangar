@@ -85,11 +85,32 @@ Você **não** escolhe:
 
 | Não escolha | Onde está a resposta |
 |---|---|
-| Motor, modelo, conta de qualquer sessão do time | tabela "Quem é quem", no contrato |
+| Motor, modelo, conta de qualquer sessão do time | tabela "Quem é quem", no contrato — **e Task fora do plano não tem linha lá: pergunte** (abaixo) |
 | Nome da sessão que você vai abrir | mesma tabela — o padrão do nome faz parte da definição |
 | Quem executa, quem revisa, quem só lê | mesma tabela |
 | Se uma Task pode começar | progresso do contrato + plano |
 | O que é intocável | regras do grupo; o kick-off leva a lista literal |
+
+**A tabela vale para as Tasks do PLANO. Task que nasce fora dele não tem linha na tabela — e você
+não herda a que estava lá.** Achado de revisão promovido a trabalho, pedido novo do usuário com o
+app na mão, conserto de acabamento: nada disso passou pelo planejamento, então **o time volta a ser
+pergunta**, do jeito que era na fase 1 (`planejamento.md`, "você PROPÕE, ele escolhe").
+
+Herdar parece inofensivo e não é: a Task nova costuma ser de **outra natureza**. Medido em
+16/08/2026 — quatro Tasks fora do plano, e na última, que era editar a própria skill (prosa, não
+código), o árbitro abriu o executor do contrato por reflexo. O usuário vetou na hora: *"a skill você
+mesmo podia ter rodado, não precisa mandar no DeepSeek"*. A tabela estava certa para o trabalho que
+ela descrevia, e errada para aquele.
+
+Como perguntar sem gastar o tempo dele: **uma pergunta, com proposta e o porquê medido**. Você tem o
+histórico — as fichas em `references/modelos/` e o registro do próprio trabalho dizem quem se saiu
+bem em quê e a que custo. Chegue com isso pronto:
+
+> "Task nova: <o que é, e de que natureza>. Proponho <papel: sessão/modelo/conta>, porque
+> <o que o histórico mostra, com número>. Mantenho o time do plano, ou troca?"
+
+E registre a resposta na tabela, com a data — Task fora do plano vira linha própria, não emenda na
+linha antiga.
 
 O buraco não é abrir sessão — abrir sessão é seu trabalho. O buraco é abrir **outra coisa** do
 que está escrito. Aconteceu de verdade: o contrato dizia executor = `mod-exec-t<N>`, Pi com
