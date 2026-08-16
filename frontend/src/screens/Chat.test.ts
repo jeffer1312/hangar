@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import { createRawSnippet } from 'svelte';
 import Chat from './Chat.svelte';
+import { chamadasFocus } from './ComposerStub.svelte';
 import { filesStores } from '../lib/filesStore.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
@@ -22,7 +23,9 @@ function stubVisor() {
 
 vi.mock('../components/NavBar.svelte', stubDe);
 vi.mock('../components/MessageList.svelte', stubDe);
-vi.mock('../components/Composer.svelte', stubDe);
+vi.mock('../components/Composer.svelte', async () => ({
+  default: (await import('./ComposerStub.svelte')).default,
+}));
 vi.mock('../components/SessionSwitcherSheet.svelte', stubDe);
 vi.mock('../components/CreateSessionSheet.svelte', stubDe);
 vi.mock('../components/UsageSheet.svelte', stubDe);
@@ -105,7 +108,36 @@ beforeEach(() => {
   document.body.innerHTML = '';
 });
 
+// Stub do matchMedia com ouvintes controlados na mao (ver nota no describe do visor).
+function stubMatchMedia() {
+  const estados = new Map<string, boolean>();
+  const ouvintes: Array<{ query: string; on: () => void }> = [];
+  window.matchMedia = ((query: string) => ({
+    get matches() {
+      return estados.get(query) ?? false;
+    },
+    addEventListener: (_tipo: string, on: () => void) => ouvintes.push({ query, on }),
+    removeEventListener: () => {},
+  })) as never;
+  return {
+    set(query: string, valor: boolean) {
+      estados.set(query, valor);
+      for (const o of ouvintes) if (o.query === query) o.on();
+    },
+  };
+}
+
 describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
+  // O happy-dom 20 NAO notifica listeners de matchMedia criados depois do primeiro setViewport
+  // (medido 16/08/2026: o change nao dispara nesse fluxo) — o resize do B5 precisa de um stub
+  // que dispare os ouvintes na mao. No navegador real o evento existe; a prova viva cobre.
+  let mq: ReturnType<typeof stubMatchMedia>;
+  beforeEach(() => {
+    mq = stubMatchMedia();
+    mq.set('(min-width: 768px)', true);
+    mq.set('(min-width: 1280px)', true);   // o visor so existe em desktop largo (B5)
+  });
+
   it('underlay da conversa fica inert com o visor aberto e volta sem ele', async () => {
     const t = montar();
     await tick();
@@ -148,6 +180,34 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     await tick();
     await tick();
     expect(document.activeElement).toBe(origem);   // foco voltou pra quem abriu
+    unmount(t.comp);
+  });
+
+  // Parecer rodada 3, B5: encolher para <1280px com o visor aberto nao pode deixar a conversa
+  // inerte com o arquivo invisivel — a selecao e limpa, o inert sai e o foco volta a um
+  // controle vivo. Voltar a 1440px NAO remonta o visor sozinho.
+  it('resize para desktop estreito limpa o visor e libera a conversa', async () => {
+    const t = montar();
+    await tick();
+    await tick();
+    const store = filesStores.retain('srv-test::sess', 'sess');
+    store.selecionado = 'a.ts';
+    await tick();
+    await tick();
+    const underlay = t.el.querySelector<HTMLElement>('.chat-underlay');
+    expect(underlay?.hasAttribute('inert')).toBe(true);   // largo: visor abre e inerta a conversa
+    mq.set('(min-width: 1280px)', false);   // encolheu p/ desktop estreito
+    await tick();
+    await tick();
+    expect(store.selecionado).toBeNull();                  // selecao limpa
+    expect(underlay?.hasAttribute('inert')).toBe(false);   // conversa volta operavel
+    expect(t.el.querySelector('.arq-visor')).toBeNull();   // visor desmontado
+    // foco devolvido a um controle vivo do Chat: o focus do Composer foi chamado
+    expect(chamadasFocus).toBeGreaterThan(0);
+    mq.set('(min-width: 1280px)', true);   // volta a largo
+    await tick();
+    await tick();
+    expect(t.el.querySelector('.arq-visor')).toBeNull();   // so monta com nova selecao
     unmount(t.comp);
   });
 });

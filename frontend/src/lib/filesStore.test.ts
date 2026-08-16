@@ -288,6 +288,67 @@ describe('FilesStore', () => {
     expect(s.erro).toBe(m.erro_arq_inexistente());
   });
 
+  // Parecer rodada 3, B3: expandir a pasta ENQUANTO a recuperacao do 404 esta em voo nao pode
+  // devolver a linha apagada. O cache colapsado e invalidado antes de qualquer await, senao o
+  // alternarPasta acha a listagem velha e pula a rede, e o recarregar (so raiz + abertas no
+  // inicio) tambem nao cobre a pasta que so abriu depois.
+  it('expandir a pasta durante a recuperacao do 404 nao ressuscita o arquivo apagado', async () => {
+    let liberaRaiz: (v: unknown) => void = () => {};
+    const raizPendente = new Promise((resolve) => { liberaRaiz = resolve; });
+    let chamada = 0;
+    vi.mocked(listFiles).mockImplementation(async (_s, path) => {
+      chamada += 1;
+      if (chamada === 1) return { truncated: false, entries: [ent('src', true)] };
+      if (chamada === 2) return { truncated: false, entries: [ent('src/a.txt', false)] };
+      if (chamada === 3) return raizPendente as never;
+      return { truncated: false, entries: [] };
+    });
+    vi.mocked(readFile).mockRejectedValue(Object.assign(new Error('gone'), { status: 404 }));
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'src/a.txt', diff: '', truncated: false } as never);
+    const s = new FilesStore('sessao');
+    await s.recarregar();
+    await s.alternarPasta('src');        // expande (lista src)
+    await s.alternarPasta('src');        // colapsa (cache de src fica guardado)
+    expect(s.entries.some((e) => e.path === 'src/a.txt')).toBe(false);
+    const recuperacao = s.abrir('src/a.txt');   // 404 -> recarregar com a raiz pendente
+    await vi.waitFor(() => expect(chamada).toBe(3));
+    await s.alternarPasta('src');        // expande DURANTE a recuperacao
+    expect(s.entries.some((e) => e.path === 'src/a.txt')).toBe(false);
+    liberaRaiz({ truncated: false, entries: [ent('src', true)] });
+    await recuperacao;
+    expect(s.abertos.has('src')).toBe(true);
+    expect(s.entries.some((e) => e.path === 'src/a.txt')).toBe(false);
+  });
+
+  // Parecer rodada 3, B4: a recuperacao do 404 so pode podar o hit morto dos resultados QUE
+  // ELA VIU. Uma busca nova que terminou durante a recuperacao pode ter reencontrado o
+  // arquivo — comparar gBusca com gResultados no fim nao distingue a busca velha da nova.
+  it('404 antigo nao remove hit de uma busca nova', async () => {
+    let liberaRaiz: (v: unknown) => void = () => {};
+    const raizPendente = new Promise((resolve) => { liberaRaiz = resolve; });
+    vi.mocked(searchFiles)
+      .mockResolvedValueOnce({ hits: [{ path: 'a.txt', line: null, text: null }], truncated: false, mode: 'names' } as never)
+      .mockResolvedValueOnce({ hits: [{ path: 'a.txt', line: null, text: null }, { path: 'b.txt', line: null, text: null }], truncated: false, mode: 'names' } as never);
+    let chamada = 0;
+    vi.mocked(listFiles).mockImplementation(async () => {
+      chamada += 1;
+      if (chamada === 1) return raizPendente as never;
+      return { truncated: false, entries: [] };
+    });
+    vi.mocked(readFile).mockRejectedValue(Object.assign(new Error('gone'), { status: 404 }));
+    vi.mocked(pathDiff).mockResolvedValue({ path: 'a.txt', diff: '', truncated: false } as never);
+    const s = new FilesStore('sessao');
+    await s.buscar('a', 'names');
+    expect(s.resultados.map((h) => h.path)).toEqual(['a.txt']);
+    const abertura = s.abrir('a.txt');   // 404 -> recuperacao com a raiz pendente
+    await vi.waitFor(() => expect(chamada).toBe(1));
+    await s.buscar('novo', 'names');     // busca NOVA termina durante a recuperacao
+    expect(s.resultados.map((h) => h.path)).toEqual(['a.txt', 'b.txt']);
+    liberaRaiz({ truncated: false, entries: [] });
+    await abertura;
+    expect(s.resultados.map((h) => h.path)).toEqual(['a.txt', 'b.txt']);  // nada podado
+  });
+
   // Task 10, contrato 2: `loading` fica ligado entre o clique e a resposta — sem o sinal, o
   // FileViewer nao tem como saber que nao pode afirmar "sem diferencas".
   it('loading fica ligado durante a abertura e desliga no fim', async () => {

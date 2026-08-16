@@ -115,10 +115,18 @@
   const filesStore = filesStores.retain(filesChave, sessionName);
   onDestroy(() => filesStores.release(filesChave));
 
-  // O visor segue o painel de contexto: some quando o painel fecha ou recolhe, e o estado fica no
-  // store — reabrir o painel restaura o arquivo (mesma régua de "pasta aberta continua aberta").
+  // Breakpoint do visor de arquivo e do painel de contexto: abaixo de 1280px os dois sao
+  // display:none (CSS, mesma regua do DesktopSessionContext), entao um visor "aberto" nessa
+  // largura seria conversa inerte com arquivo invisivel (B5, rodada 3). Mesmo padrao do isWide.
+  let isDesktopLargo = $state(
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches,
+  );
+
+  // O visor segue o painel de contexto: some quando o painel fecha ou recolhe — e abaixo de
+  // 1280px, largura em que os dois sao display:none — e o estado fica no store; reabrir o
+  // painel restaura o arquivo (mesma regua de "pasta aberta continua aberta").
   const visorAberto = $derived(
-    desktop && showContextPanel && !ctxPanel.recolhido && filesStore.selecionado !== null,
+    desktop && isDesktopLargo && showContextPanel && !ctxPanel.recolhido && filesStore.selecionado !== null,
   );
   // Path do arquivo aberto — variável LOCAL de propósito: dentro do {#if visorAberto} o template
   // estreita o tipo pra string (filesStore.selecionado é string | null e o TS não acompanha o if).
@@ -151,6 +159,18 @@
     abridorEl = null;
     void tick().then(() => alvo?.focus());
   }
+
+  // Resize para desktop estreito (B5): abaixo de 1280px o visor e o painel sao display:none e o
+  // visorAberto desliga — sem limpar a selecao, a conversa inteira ficaria inerte com o arquivo
+  // invisivel (reproduzido ao vivo pelo revisor, rodada 3). Limpa a selecao (voltar a largo
+  // monta o visor so com nova selecao) e devolve o foco a um controle vivo do Chat: o Fechar do
+  // visor acabou de ser escondido junto, e o abridor (treeitem do painel, display:none) tambem.
+  $effect(() => {
+    if (!desktop || isDesktopLargo) return;
+    if (filesStore.selecionado === null) return;
+    fecharVisor();
+    composerRef?.focus();
+  });
 
   // Cache de prompt: o ULTIMO turno do assistente manda. Usar a cache renova o prazo, entao a
   // conta corre da hora do turno mais recente, e o TTL vem MEDIDO do transcript (1h ou 5min) —
@@ -251,7 +271,13 @@
     const mq = window.matchMedia('(min-width: 768px)');
     const on = () => (isWide = mq.matches);
     mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
+    const mqLargo = window.matchMedia('(min-width: 1280px)');
+    const onLargo = () => (isDesktopLargo = mqLargo.matches);
+    mqLargo.addEventListener('change', onLargo);
+    return () => {
+      mq.removeEventListener('change', on);
+      mqLargo.removeEventListener('change', onLargo);
+    };
   });
   let allSessions = $state<SessionInfo[]>([]);
   // Detalhe do plano (Task 5b): NÃO usa o sessionsStore (mesmo motivo do loopChip acima — reter o

@@ -102,6 +102,7 @@ export class FilesStore {
     this.loading = true;
     const g = ++this.gArquivo;
     const ge = ++this.gErro;   // esta abertura e a dona do erro a partir de agora
+    const gr = this.gResultados;   // geracao dos resultados que ESTA abertura pode podar (B4)
     // allSettled, nao all: o conteudo MANDA. Fora de repositorio git o path_diff sempre responde
     // 409 (git_ops.py) e a arvore tem que continuar lendo arquivo (regra do usuario, 15/08).
     const [c, d] = await Promise.allSettled([
@@ -130,12 +131,20 @@ export class FilesStore {
         // e sem esta passada o cache velho da pasta fechada devolveria a linha apagada na
         // proxima expansao. Invalida a geracao ANTES (resposta velha da pasta nao repovoa).
         const pai = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
-        this.gLista.set(pai, (this.gLista.get(pai) ?? 0) + 1);
+        // Invalida o cache do pai e descendentes ANTES de qualquer await (B3, rodada 3): se o
+        // usuario expandir a pasta enquanto a recuperacao esta em voo, o alternarPasta nao
+        // pode achar a listagem velha (com o arquivo apagado) e pular a rede.
+        this._invalidarSubarvore(pai);
         await this.recarregar(ge);
-        if (pai !== '' && !this.abertos.has(pai)) await this._listar(pai, ge);
+        // Forca a listagem do pai SEM condicionar em abertos.has(pai): o recarregar so cobre
+        // raiz e pastas abertas, e a expansao durante a recuperacao pode ja ter listado com
+        // geracao mais nova — o _listar abaixo deixa gLista descartar a resposta mais velha.
+        if (pai !== '') await this._listar(pai, ge);
         // Hit de busca morto (B4): o arquivo apagado sai dos resultados, senao o botao
-        // continua clicavel para sempre. So se os resultados ainda forem da busca vigente.
-        if (this.gBusca === this.gResultados) {
+        // continua clicavel para sempre. So se os resultados ainda forem OS MESMOS que esta
+        // abertura viu (gr): uma busca nova que terminou durante a recuperacao pode ter
+        // reencontrado o arquivo, e a resposta velha nao pode poda-la.
+        if (gr === this.gResultados) {
           this.resultados = this.resultados.filter((h) => h.path !== path);
         }
         // B1: so pinta o erro se ESTA abertura ainda for a dona — uma abertura/busca nova
@@ -192,6 +201,21 @@ export class FilesStore {
     if (escopo === this.escopo) return;
     this.escopo = escopo;
     if (this.selecionado) await this.abrir(this.selecionado);
+  }
+
+  // Invalida o cache de uma subarvore (a pasta e todos os descendentes): incrementa a
+  // geracao de cada pasta — resposta em voo nao pode repovoa-la — e remove o conteudo de
+  // porPasta/cortePorPasta. NAO mexe em `abertos`: a pasta continua aberta, so o conteudo e
+  // re-listado. E o caminho do 404 de arquivo (B3); a poda do _listar, que remove `abertos`
+  // porque a PASTA sumiu do disco, e outra (e por isso nao reusa esta).
+  private _invalidarSubarvore(path: string) {
+    for (const p of [...this.porPasta.keys(), ...this.cortePorPasta.keys()]) {
+      if (p === path || (path !== '' && p.startsWith(path + '/'))) {
+        this.gLista.set(p, (this.gLista.get(p) ?? 0) + 1);
+        this.cortePorPasta.delete(p);
+        this.porPasta.delete(p);
+      }
+    }
   }
 
   private async _listar(path: string, ge: number) {
