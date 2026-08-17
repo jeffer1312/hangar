@@ -8,6 +8,7 @@ import * as m from '../paraglide/messages';
   import WorkspaceCommandPalette from './WorkspaceCommandPalette.svelte';
   import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
   import TerminalPanel from './TerminalPanel.svelte';
+  import QuotaStrip from './QuotaStrip.svelte';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
@@ -445,6 +446,16 @@ import * as m from '../paraglide/messages';
                  onMaximizar={(v) => (terminalMaximizado = v)} />
   </div>
   </div><!-- /.shell-linha -->
+
+  <!-- Faixa de cota (Task 9): irmã de .shell-linha dentro de .desktop-shell — base absoluta
+       da janela, ABAIXO do painel de terminal. Só existe com >=2 contas legíveis (decisão
+       dentro do componente). Leva à aba Contas por rota, nunca importando o componente da aba
+       (contrato de posse do lote). serverKey = currentKey do App ("<serverId>::<nome>"): a
+       troca de sessão/servidor no shell re-busca o estado; o endpoint é do servidor ATIVO. -->
+  <QuotaStrip
+    serverKey={currentKey ?? ''}
+    onIrParaContas={() => abrirConfig('contas', getActiveId())}
+  />
 
   <WorkspaceCommandPalette
     open={commandOpen}
