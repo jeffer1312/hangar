@@ -65,6 +65,17 @@ def test_lista_estado_por_endereco_e_sinal_de_loopback(cli, monkeypatch):
 # BACKEND (decisão de plano: o front só tem qr-scanner, que lê e não gera).
 
 
+@pytest.fixture(autouse=True)
+def _sem_rede(monkeypatch):
+    """NENHUM teste de pareamento toca rede nem processo real (régua do grupo).
+    `levantar_estados` chama `_bater` para cada endereço e `_nome_tailscale` para o
+    candidato Tailscale — as duas são funções privadas de I/O, trocadas aqui.
+    Instrumentado (rodada 1): os 4 testes disparavam 9 urlopen e 3 subprocessos
+    `tailscale status`, incluindo o IP da LAN e o host Tailscale reais."""
+    monkeypatch.setattr(alcance, "_bater", lambda url: 5.0)
+    monkeypatch.setattr(alcance, "_nome_tailscale", lambda: "hangar.tail0000.ts.net")
+
+
 def test_pareamento_sem_credencial_e_401(cli):
     # Régua da casa: rota nova traz o caso de 401 sem credencial (mesmo padrão do
     # test_sem_credencial_e_401 da listagem).
@@ -90,6 +101,26 @@ def test_pareamento_devolve_url_com_token_e_qr_svg(cli, monkeypatch):
     # (lib/auth.ts:368-405) exige: exatamente um token=.
     assert dados["url"] == "http://192.168.0.42:5173/?token=9f4c2ae1b73d08e5"
     assert "<svg" in dados["qr_svg"]
+
+
+def test_pareamento_tailscale_usa_o_endereco_do_candidato(cli, monkeypatch):
+    """TRAVA do conserto do endereço escolhido (rodada 1, bloqueador 6): com
+    public_url vazio, pedir ?endereco=tailscale devolve o URL do candidato
+    Tailscale — e NÃO o pairing_url genérico (que cairia no IP da LAN).
+    Reintroduzir `url = pairing_url(settings)` tem de deixar este teste VERMELHO."""
+    monkeypatch.setattr(alcance, "_detectar_lan", lambda: "192.168.0.42")
+    monkeypatch.setattr(config, "detect_lan_ip", lambda: "192.168.0.42")
+    monkeypatch.setattr(settings, "lan_bind_ip", "127.0.0.1")
+    monkeypatch.setattr(settings, "public_url", "")
+    monkeypatch.setattr(settings, "front_port", 5173)
+    monkeypatch.setattr(settings, "auth_token", "9f4c2ae1b73d08e5")
+    r = cli.get(
+        "/api/alcance/pareamento?endereco=tailscale",
+        headers={"Authorization": "Bearer 9f4c2ae1b73d08e5"},
+    )
+    assert r.status_code == 200
+    dados = r.json()
+    assert dados["url"] == "https://hangar.tail0000.ts.net/?token=9f4c2ae1b73d08e5"
 
 
 def test_pareamento_endereco_desconhecido_recusado(cli):

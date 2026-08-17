@@ -1695,6 +1695,7 @@
   "acesso_esconder": "Hide",
   "acesso_selecionar_endereco": "Address in the QR",
   "acesso_par_trocar_aviso": "The QR embeds the chosen address. To pair from outside home, choose Tailscale.",
+  "acesso_par_sem_candidato": "No address responded — can't pair by QR right now. Check the list above and open up one of the addresses.",
   "erro_alcance_endereco_desconhecido": "Unknown pairing address.",
   "erro_alcance_sem_credencial": "Pairing credential not configured — set CP_AUTH_TOKEN to enable the QR.",
   "contas_secao_lista": "Claude accounts on this server",

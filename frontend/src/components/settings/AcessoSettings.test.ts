@@ -130,4 +130,136 @@ describe('AcessoSettings — pareamento', () => {
     expect(svg!.innerHTML).toContain('B');
     unmount(t.comp);
   });
+
+  // ── Rodada 2 (bloqueadores 2-5) ───────────────────────────────────────────────
+
+  it('B2: sem nenhum candidato ok, mostra estado nomeado e NENHUM botão de revelar', async () => {
+    alcanceMock.alcanceDoServidor.mockResolvedValue({
+      loopback: true,
+      bind: '127.0.0.1',
+      enderecos: [
+        { tipo: 'nesta_maquina', url: 'http://127.0.0.1:5173', estado: 'ok', tempo_ms: 1 },
+        { tipo: 'rede_local', url: 'http://192.168.15.117:5173', estado: 'falhou', tempo_ms: 1 },
+        { tipo: 'publico', url: '', estado: 'nao_configurado', tempo_ms: null },
+      ] as never,
+    });
+    const t = montar();
+    await tick(); await tick();
+    expect(t.el.textContent).toContain(m.acesso_par_sem_candidato());
+    expect(t.el.querySelector('.ac-btn.primaria')).toBeNull();
+    expect(t.el.querySelector('.ac-par')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('B3: padrão é o candidato de MENOR tempo; a frase "mais rápido" some na escolha manual', async () => {
+    // Tempos invertidos: tailscale 5 ms (mais rápido), rede_local 40 ms.
+    alcanceMock.alcanceDoServidor.mockResolvedValue({
+      loopback: false,
+      bind: '192.168.0.42',
+      enderecos: [
+        { tipo: 'rede_local', url: 'http://192.168.0.42:5173', estado: 'ok', tempo_ms: 40 },
+        { tipo: 'tailscale', url: 'https://hangar.tail9c2f.ts.net', estado: 'ok', tempo_ms: 5 },
+        { tipo: 'publico', url: '', estado: 'nao_configurado', tempo_ms: null },
+      ] as never,
+    });
+    alcanceMock.pareamentoDoServidor.mockResolvedValue({
+      url: 'https://hangar.tail9c2f.ts.net/?token=abc',
+      qr_svg: '<svg>QR</svg>',
+    });
+    const t = montar();
+    await tick(); await tick(); await tick();
+    // O padrão nasce no TAILSCALE (5 ms), não no primeiro da ordem do backend.
+    const select = t.el.querySelector<HTMLSelectElement>('.ac-par select');
+    expect(select).toBeNull(); // ainda escondido
+    (t.el.querySelector('.ac-btn.primaria') as HTMLButtonElement).click();
+    await tick(); await tick();
+    const sel = t.el.querySelector<HTMLSelectElement>('.ac-par select')!;
+    expect(sel.value).toBe('tailscale');
+    expect(alcanceMock.pareamentoDoServidor).toHaveBeenLastCalledWith(SRV, 'tailscale');
+    // A frase "respondeu mais rápido" aparece (a escolha é a automática).
+    expect(t.el.textContent).toContain(m.acesso_par_escolhido({ rede: m.acesso_tailscale() }));
+    // Escolha manual → rede_local: a frase SOME (mentiria).
+    sel.value = 'rede_local';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick(); await tick();
+    expect(t.el.textContent).not.toContain(m.acesso_par_escolhido({ rede: m.acesso_rede_local() }));
+    unmount(t.comp);
+  });
+
+  it('B4: erro de transporte mostra só a frase da casa, sem o quadrado do QR, e com Esconder', async () => {
+    // Timeout de transporte: DOMException TimeoutError (o mesmo do AbortSignal.timeout).
+    alcanceMock.pareamentoDoServidor.mockRejectedValue(
+      new DOMException('signal timed out', 'TimeoutError'),
+    );
+    const t = montar();
+    await tick(); await tick();
+    (t.el.querySelector('.ac-btn.primaria') as HTMLButtonElement).click();
+    await tick(); await tick();
+    // Só a frase da casa, sem o "signal timed out" cru em inglês.
+    expect(t.el.textContent).toContain(m.falha_conexao());
+    expect(t.el.textContent).not.toContain('signal timed out');
+    // Sem o retângulo branco do QR no erro.
+    expect(t.el.querySelector('.ac-qr')).toBeNull();
+    // Com botão Esconder (não é beco sem saída).
+    const esconder = [...t.el.querySelectorAll('button')].find((b) => b.textContent === m.acesso_esconder());
+    expect(esconder).toBeTruthy();
+    unmount(t.comp);
+  });
+
+  it('B4: erro de API (400 traduzido) mostra o detalhe traduzido, com Esconder', async () => {
+    alcanceMock.pareamentoDoServidor.mockRejectedValue(
+      new Error('400: Credencial de pareamento não configurada — defina CP_AUTH_TOKEN para liberar o QR.'),
+    );
+    const t = montar();
+    await tick(); await tick();
+    (t.el.querySelector('.ac-btn.primaria') as HTMLButtonElement).click();
+    await tick(); await tick();
+    expect(t.el.textContent).toContain('Credencial de pareamento não configurada');
+    expect(t.el.querySelector('.ac-qr')).toBeNull();
+    const esconder = [...t.el.querySelectorAll('button')].find((b) => b.textContent === m.acesso_esconder());
+    expect(esconder).toBeTruthy();
+    unmount(t.comp);
+  });
+
+  it('B5: revelar leva o foco ao seletor; esconder devolve ao botão que abriu', async () => {
+    alcanceMock.pareamentoDoServidor.mockResolvedValue({
+      url: 'http://192.168.0.42:5173/?token=abc',
+      qr_svg: '<svg>QR</svg>',
+    });
+    const t = montar();
+    await tick(); await tick();
+    const botao = t.el.querySelector<HTMLButtonElement>('.ac-btn.primaria')!;
+    botao.focus();
+    botao.click();
+    await tick(); await tick(); await tick();
+    // Foco foi para o seletor (não caiu no body).
+    expect(document.activeElement?.classList.contains('ac-select')).toBe(true);
+    // Esconder devolve o foco ao botão que abriu (o nó é recriado no DOM — compara
+    // com o botão ATUAL, não com a referência antiga que foi desmontada).
+    const esconder = [...t.el.querySelectorAll('button')].find((b) => b.textContent === m.acesso_esconder())!;
+    esconder.click();
+    await tick(); await tick(); await tick();
+    const botaoAtual = t.el.querySelector<HTMLButtonElement>('.ac-btn.primaria')!;
+    expect(botaoAtual).not.toBeNull();
+    expect(document.activeElement).toBe(botaoAtual);
+    unmount(t.comp);
+  });
+
+  it('B5: o nome acessível do seletor é só "Endereço no QR", sem a frase de aviso', async () => {
+    alcanceMock.pareamentoDoServidor.mockResolvedValue({
+      url: 'http://192.168.0.42:5173/?token=abc',
+      qr_svg: '<svg>QR</svg>',
+    });
+    const t = montar();
+    await tick(); await tick();
+    (t.el.querySelector('.ac-btn.primaria') as HTMLButtonElement).click();
+    await tick(); await tick();
+    const sel = t.el.querySelector<HTMLSelectElement>('.ac-par select')!;
+    const nome = sel.labels?.[0]?.textContent ?? '';
+    // O label rotula o seletor com o texto próprio; o que NÃO pode é o aviso inteiro
+    // ("O QR embute o endereço escolhido…") ter virado parte do nome.
+    expect(nome).toContain(m.acesso_selecionar_endereco());
+    expect(nome).not.toContain(m.acesso_par_trocar_aviso());
+    unmount(t.comp);
+  });
 });

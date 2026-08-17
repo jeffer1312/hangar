@@ -1695,6 +1695,7 @@
   "acesso_esconder": "Esconder",
   "acesso_selecionar_endereco": "Endereço no QR",
   "acesso_par_trocar_aviso": "O QR embute o endereço escolhido. Para parear de fora de casa, escolha o Tailscale.",
+  "acesso_par_sem_candidato": "Nenhum endereço respondeu — não dá para parear por QR agora. Confira a lista acima e libere um dos endereços.",
   "erro_alcance_endereco_desconhecido": "Endereço de pareamento desconhecido.",
   "erro_alcance_sem_credencial": "Credencial de pareamento não configurada — defina CP_AUTH_TOKEN para liberar o QR.",
   "contas_secao_lista": "Contas do Claude neste servidor",

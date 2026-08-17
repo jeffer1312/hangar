@@ -1,7 +1,9 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
+  import { tick } from 'svelte';
   import { getActiveId, listServers, type Server } from '../../lib/auth';
   import { parseConfig } from '../../lib/configRoute';
+  import { isTimeoutError } from '../../lib/api';
   import { alcanceDoServidor, fraseDeEstado, pareamentoDoServidor, type EnderecoAlcance, type EstadoEndereco, type TipoEndereco } from '../../lib/alcance';
   import { copyText } from '../../lib/clipboard';
 
@@ -77,13 +79,14 @@
 
   // ── Pareamento (Task 6) ────────────────────────────────────────────────────────
   // Estado nomeado: `escondido` antes do toque; `carregando` enquanto a rota responde;
-  // `revelado` com o par (url + qr_svg); `erro` quando a rota recusa. Trocar o
-  // endereço escolhido recarrega o QR — a escolha vem da lista testada lá em cima.
-  let parEstado = $state<'escondido' | 'carregando' | 'revelado' | 'erro'>('escondido');
+  // `revelado` com o par (url + qr_svg); `erro` quando a rota recusa; `sem_candidato`
+  // quando nenhum endereço respondeu (aí não há o que revelar — bloqueador 2).
+  let parEstado = $state<'escondido' | 'carregando' | 'revelado' | 'erro' | 'sem_candidato'>('escondido');
   let parUrl = $state('');
   let parQr = $state('');
   let parErro = $state('');
-  let parTipo = $state<TipoEndereco>('rede_local');
+  // Vazio quando não há candidato: sem candidato não se chama a rota (bloqueador 2).
+  let parTipo = $state<TipoEndereco | ''>('');
   let parGeracao = 0;
 
   // Endereços que podem ser EMBUTIDOS no QR: só os que responderam (estado ok) e não
@@ -92,33 +95,58 @@
   let parCandidatos = $derived(
     enderecos.filter((e) => e.estado === 'ok' && e.tipo !== 'nesta_maquina'),
   );
-  // O padrão é o PRIMEIRO candidato que respondeu, não "rede_local" fixo — numa
-  // máquina onde a rede local falhou e só o Tailscale respondeu, o QR já nasce
-  // apontando para o endereço que funciona.
+  // Padrão: o candidato de MENOR tempo medido (empate → ordem da lista), não o primeiro
+  // da ordem do backend — a frase "respondeu mais rápido" descreve a escolha AUTOMÁTICA,
+  // e ela tem de ser verdade (bloqueador 3).
+  let parPadrao = $derived<TipoEndereco | ''>(
+    [...parCandidatos].sort((a, b) => (a.tempo_ms ?? 0) - (b.tempo_ms ?? 0))[0]?.tipo ?? '',
+  );
   $effect(() => {
     const escolhidoValido = parCandidatos.some((e) => e.tipo === parTipo);
-    if (!escolhidoValido) {
-      parTipo = parCandidatos[0]?.tipo ?? 'rede_local';
+    if (!escolhidoValido && parCandidatos.length > 0) {
+      // Troca o padrão (mais rápido) ou, na falta de escolha manual, o primeiro.
+      const novo = parTipo === '' ? parPadrao : parCandidatos[0]!.tipo;
+      parTipo = novo;
+      // Se o QR já estava revelado, recarrega com o novo endereço — senão o seletor
+      // diria um endereço e o QR mostraria outro (mesma família do bloqueador 3).
+      if (parEstado === 'revelado') revelarPar();
     }
+    // Sem candidato: estado nomeado, sem botão (bloqueador 2).
+    parEstado = parCandidatos.length === 0 ? 'sem_candidato' : parEstado === 'sem_candidato' ? 'escondido' : parEstado;
   });
+
+  // Falha de transporte (teto estourado, fetch caído) não tem texto traduzível — mostra
+  // só a frase da casa. Erro DA API já chega traduzido pelo errorDetail e pode aparecer
+  // inteiro (bloqueador 4: "signal timed out" cru em inglês numa tela em português).
+  function frasePorFalha(e: unknown): string {
+    const cru = isTimeoutError(e) || e instanceof TypeError || !(e instanceof Error);
+    return cru ? m.falha_conexao() : `${m.falha_conexao()}: ${e.message}`;
+  }
+
+  // Referências para o foco (bloqueador 5): revelar leva o foco ao seletor; esconder
+  // devolve ao botão que abriu. Depois de `await tick()`, porque o nó de destino ainda
+  // não existe no DOM no momento da transição.
+  let parRef = $state<HTMLElement | null>(null);
+  let mostrarRef = $state<HTMLButtonElement | null>(null);
 
   async function revelarPar() {
     const s = servidorAlvo();
-    if (!s) return;
-    const tipo = parTipo || 'rede_local';
+    if (!s || parTipo === '') return; // sem candidato não se chama a rota (bloqueador 2)
     parEstado = 'carregando';
     const geracao = ++parGeracao;
     try {
-      const r = await pareamentoDoServidor(s, tipo);
+      const r = await pareamentoDoServidor(s, parTipo);
       if (geracao !== parGeracao) return; // uma troca de endereço veio no meio
       parUrl = r.url;
       parQr = r.qr_svg;
       parErro = '';
       parEstado = 'revelado';
+      await tick();
+      parRef?.focus(); // foco no primeiro controle do bloco revelado (bloqueador 5)
     } catch (e) {
       if (geracao !== parGeracao) return;
       // Estado NOMEADO de falha; o detalhe é dado do servidor/rede (não vira chave).
-      parErro = `${m.falha_conexao()}: ${e instanceof Error ? e.message : m.erro_desconhecido()}`;
+      parErro = frasePorFalha(e);
       parEstado = 'erro';
     }
   }
@@ -131,11 +159,13 @@
     }
   }
 
-  function esconderPar() {
+  async function esconderPar() {
     parEstado = 'escondido';
     parUrl = '';
     parQr = '';
     parErro = '';
+    await tick();
+    mostrarRef?.focus(); // devolve o foco ao botão que abriu (bloqueador 5)
   }
 
   // Copiar só faz sentido num endereço que RESPONDEU (o mock nunca mostra o botão
@@ -161,21 +191,31 @@
 {/snippet}
 
 {#snippet blocoPar()}
-  {#if parEstado === 'escondido'}
+  {#if parEstado === 'sem_candidato'}
+    <!-- Sem nenhum endereço que respondeu: estado NOMEADO, sem botão — não há o que
+         revelar (bloqueador 2). A lista acima é onde se conserta. -->
+    <div class="ac-oculto">
+      <p>{m.acesso_par_sem_candidato()}</p>
+    </div>
+  {:else if parEstado === 'escondido'}
     <div class="ac-oculto">
       <p>{m.acesso_oculto_aviso()}</p>
-      <button class="ac-btn primaria" onclick={() => revelarPar()}>{m.acesso_mostrar_codigo()}</button>
+      <button class="ac-btn primaria" bind:this={mostrarRef} onclick={() => revelarPar()}>{m.acesso_mostrar_codigo()}</button>
     </div>
   {:else}
     <div class="ac-par">
-      <div class="ac-qr" aria-hidden="true">
-        {#if parQr}
-          <!-- O QR é SVG pronto do backend (decisão de plano: o front só tem qr-scanner, que lê e não gera). -->
-          {@html parQr}
-        {:else}
-          <span class="ac-qr-vazio">{m.acesso_testando()}</span>
-        {/if}
-      </div>
+      {#if parEstado !== 'erro'}
+        <!-- No erro o quadrado branco do QR não é desenhado (bloqueador 4: retângulo
+             opaco de 176×176 com "Testando…" para sempre, sem saída). -->
+        <div class="ac-qr" aria-hidden="true">
+          {#if parQr}
+            <!-- O QR é SVG pronto do backend (decisão de plano: o front só tem qr-scanner, que lê e não gera). -->
+            {@html parQr}
+          {:else}
+            <span class="ac-qr-vazio">{m.acesso_testando()}</span>
+          {/if}
+        </div>
+      {/if}
       <div class="ac-par-col">
         <div>
           <p class="ac-cod-rot">{m.acesso_codigo_rotulo()}</p>
@@ -186,66 +226,87 @@
         {:else if parEstado === 'erro'}
           <p class="ac-par-copy aviso-erro" role="alert">{parErro}</p>
         {:else}
-          <label class="ac-par-escolha">
-            <span class="ac-cod-rot">{m.acesso_selecionar_endereco()}</span>
-            <select
-              class="ac-select"
-              value={parTipo}
-              onchange={(e) => trocarParTipo((e.currentTarget as HTMLSelectElement).value as TipoEndereco)}
-            >
-              {#each parCandidatos as c (c.tipo)}
-                <option value={c.tipo}>{nomeDoTipo(c.tipo)}</option>
-              {/each}
-            </select>
+          <div class="ac-par-escolha">
+            <label class="ac-par-label">
+              <span class="ac-cod-rot">{m.acesso_selecionar_endereco()}</span>
+              <select
+                class="ac-select"
+                bind:this={parRef}
+                value={parTipo}
+                onchange={(e) => trocarParTipo((e.currentTarget as HTMLSelectElement).value as TipoEndereco)}
+              >
+                {#each parCandidatos as c (c.tipo)}
+                  <option value={c.tipo}>{nomeDoTipo(c.tipo)}</option>
+                {/each}
+              </select>
+            </label>
+            <!-- Fora do <label>: o nome acessível do seletor volta a ser só "Endereço
+                 no QR", sem a frase de aviso inteira (bloqueador 5). -->
             <span class="ac-par-aviso">{m.acesso_par_trocar_aviso()}</span>
-          </label>
-          <p class="ac-par-copy">{m.acesso_par_escolhido({ rede: nomeDoTipo(parTipo) })}</p>
-          <div class="ac-acoes">
-            <button class="ac-btn" onclick={() => copyText(parUrl)}>{m.acesso_copiar_endereco()}</button>
-            <button class="ac-btn" onclick={() => esconderPar()}>{m.acesso_esconder()}</button>
           </div>
+          {#if parTipo !== '' && parTipo === parPadrao}
+            <!-- Só quando a escolha é a AUTOMÁTICA (mais rápido): com escolha manual,
+                 a frase "respondeu mais rápido" mentiria (bloqueador 3). -->
+            <p class="ac-par-copy">{m.acesso_par_escolhido({ rede: nomeDoTipo(parTipo) })}</p>
+          {/if}
         {/if}
+        <!-- Esconder nos TRÊS estados revelados (carregando/erro/revelado): o erro não
+             pode ser beco sem saída (bloqueador 4). Copiar endereço só no revelado. -->
+        <div class="ac-acoes">
+          {#if parEstado === 'revelado'}
+            <button class="ac-btn" onclick={() => copyText(parUrl)}>{m.acesso_copiar_endereco()}</button>
+          {/if}
+          <button class="ac-btn" onclick={() => esconderPar()}>{m.acesso_esconder()}</button>
+        </div>
       </div>
     </div>
   {/if}
 {/snippet}
 
-{#if loopback}
-  <div class="ac-alerta">
-    <span class="ac-farol nao" aria-hidden="true">▲</span>
-    <span class="ac-alerta-txt">
-      <b>{m.acesso_alerta_loopback_1({ endereco: bind })}</b><br>
-      {m.acesso_alerta_loopback_2({ variavel: 'CP_LAN_BIND_IP', valor: 'auto' })}
-    </span>
-  </div>
-{/if}
-
-<p class="ac-secao">{m.acesso_secao_enderecos()}</p>
-<p class="ac-legenda">{m.acesso_legenda_enderecos()}</p>
-
-<ul class="ac-cartao">
-  {#if carregando}
-    {#each LINHAS_EM_VOO as e (e.tipo)}
-      {@render linha(e)}
-    {/each}
-  {:else if erro}
-    <li class="ac-linha aviso-erro" role="alert">{erro}</li>
-  {:else}
-    {#each enderecos as e (e.tipo)}
-      {@render linha(e)}
-    {/each}
+<div class="ac">
+  {#if loopback}
+    <div class="ac-alerta">
+      <span class="ac-farol nao" aria-hidden="true">▲</span>
+      <span class="ac-alerta-txt">
+        <b>{m.acesso_alerta_loopback_1({ endereco: bind })}</b><br>
+        {m.acesso_alerta_loopback_2({ variavel: 'CP_LAN_BIND_IP', valor: 'auto' })}
+      </span>
+    </div>
   {/if}
-</ul>
 
-<hr class="ac-sep">
+  <p class="ac-secao">{m.acesso_secao_enderecos()}</p>
+  <p class="ac-legenda">{m.acesso_legenda_enderecos()}</p>
 
-<p class="ac-secao">{m.acesso_parear_titulo()}</p>
-<p class="ac-legenda">{m.acesso_legenda_qr()}</p>
+  <ul class="ac-cartao">
+    {#if carregando}
+      {#each LINHAS_EM_VOO as e (e.tipo)}
+        {@render linha(e)}
+      {/each}
+    {:else if erro}
+      <li class="ac-linha aviso-erro" role="alert">{erro}</li>
+    {:else}
+      {#each enderecos as e (e.tipo)}
+        {@render linha(e)}
+      {/each}
+    {/if}
+  </ul>
 
-{@render blocoPar()}
+  <hr class="ac-sep">
 
+  <p class="ac-secao">{m.acesso_parear_titulo()}</p>
+  <p class="ac-legenda">{m.acesso_legenda_qr()}</p>
+
+  {@render blocoPar()}
+</div>
 
 <style>
+  /* Envelope da tela inteira (precedente: ContasSettings .ct-superficie): é ELE que
+     é contêiner de consulta — sem isto o @container (max-width:620px) lá embaixo
+     não tinha ancestral container acima do bloco de pareamento (o .ac-cartao era o
+     único container do arquivo, e o pareamento é irmão dele). */
+  .ac {
+    container-type: inline-size;
+  }
   .ac-secao {
     margin: 0 0 var(--space-1);
     color: var(--text-muted);
@@ -260,7 +321,6 @@
     line-height: 1.4;
   }
   .ac-cartao {
-    container-type: inline-size;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -401,6 +461,11 @@
     color: var(--error);
   }
   .ac-par-escolha {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .ac-par-label {
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
