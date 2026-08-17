@@ -123,12 +123,19 @@ describe('SettingsModal — GET config por tela', () => {
     unmount(t.comp);
   });
 
-  it('aba Acesso ainda abre em construção (Task 3 liga nesta árvore — até lá é o placeholder do prefactor)', async () => {
+  it('acesso virou tela real: a seção de endereços aparece e o stub sai', async () => {
+    // A Task 3 substitui o stub de Acesso pela tela de endereços. O que prova que a
+    // substituição aconteceu é o marcador da tela REAL (a seção de endereços) e a
+    // AUSÊNCIA do stub — não a tela inteira, que depende do fetch do alvo (pendente
+    // no happy-dom, que aborta o fetch no teardown).
     stubDesktop();
     const t = montar('acesso');
     await tick();
-    expect(document.body.textContent).toContain(m.comum_em_construcao());
+    expect(document.body.textContent).toContain(m.acesso_secao_enderecos());
+    expect(document.body.textContent).not.toContain(m.comum_em_construcao());
     unmount(t.comp);
+    // Contas também virou tela real — a Task 4 mergeou e a prova dela é o teste
+    // 'aba Contas mostra a lista da fonte única' logo abaixo.
   });
 
   it('aba Contas mostra a lista da fonte única (Task 4 ligou a tela)', async () => {
