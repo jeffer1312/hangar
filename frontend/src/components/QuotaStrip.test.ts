@@ -17,8 +17,6 @@ vi.mock('../lib/contaEstado', async (importOriginal) => {
 
 const estadoMock = vi.mocked(contaEstadoLib);
 
-const ALEATORIO = 60 + Math.floor(Math.random() * 39); // % arbitrária abaixo de 100
-
 // Conta 'lida' com a linha crua da statusline (mesmo shape do mock da Task: ⚡5h/📅7d).
 function lida(label: string, linha: string, ts = Date.now() / 1000, idade_s = 5): ContaEstado {
   return {
@@ -143,5 +141,46 @@ describe('QuotaStrip — o link para a aba Contas', () => {
     link.click();
     expect(onIrParaContas).toHaveBeenCalledTimes(1);
     unmount(t.comp);
+  });
+});
+
+describe('QuotaStrip — trilho rolável e falha de rede (rodada 2)', () => {
+  it('as contas vivem num trilho rolável (o nome não encolhe até sumir em janela estreita)', async () => {
+    const t = montar([
+      COM_JANELAS('jefferson', '64', '83'),
+      COM_JANELAS('claude-200-1', '5', '58'),
+    ]);
+    await tick(); await tick();
+    const faixa = t.el.querySelector('.quota-faixa')!;
+    const trilho = faixa.querySelector('.quota-trilho')!;
+    expect(trilho).not.toBeNull();
+    // O trilho contém as contas; o link fica FORA dele, fixo à direita.
+    expect(trilho.querySelectorAll('.quota-conta')).toHaveLength(2);
+    expect(trilho.querySelector('.quota-link')).toBeNull();
+    const fim = faixa.querySelector('.quota-fim')!;
+    expect(fim.querySelector('.quota-link')).not.toBeNull();
+    unmount(t.comp);
+  });
+
+  it('falha de rede no refetch não apaga a faixa — o dado bom continua (dado velho parece velho)', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = montar([
+        COM_JANELAS('jefferson', '64', '83'),
+        COM_JANELAS('claude-200-1', '5', '58'),
+      ]);
+      await tick(); await tick();
+      expect(t.el.querySelector('.quota-faixa')).not.toBeNull();
+      // O refetch de 60 s falha (rede caiu / 500): a faixa NÃO pode sumir.
+      estadoMock.listarEstadosDeConta.mockRejectedValueOnce(new Error('rede caiu'));
+      vi.advanceTimersByTime(60_000);
+      await tick(); await tick();
+      const faixa = t.el.querySelector('.quota-faixa')!;
+      expect(faixa).not.toBeNull();
+      expect(faixa.querySelectorAll('.quota-conta')).toHaveLength(2);
+      unmount(t.comp);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

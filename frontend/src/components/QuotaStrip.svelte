@@ -49,8 +49,9 @@
       if (g !== geracao) return;
       contas = lista;
     } catch {
-      if (g !== geracao) return;
-      contas = [];
+      // Falha de rede não apaga leitura boa: o dado que já está na tela envelhece sozinho
+      // (o `agora` sobe a cada minuto e a conta vira `velha` com a idade ao lado).
+      // Zerar aqui fazia a faixa inteira desaparecer num 500 de um segundo.
     }
   }
 
@@ -72,29 +73,31 @@
 
 {#if linha}
   <div class="quota-faixa">
-    {#each linha as c, i (c.label)}
-      {#if i > 0}<span class="quota-sep" aria-hidden="true"></span>{/if}
-      <span class="quota-conta" class:velha={c.velha}>
-        <span class="quota-nome">{c.label}</span>
-        {#if c.cincoH}
-          <span class="quota-par">
-            <span class="quota-rot">{c.cincoH.rotulo}</span>
-            <span class="quota-barra" aria-hidden="true"><i class={c.cincoH.nivel} style="width:{c.cincoH.pct}%"></i></span>
-            <span class="quota-num {c.cincoH.nivel}">{c.cincoH.pct}%</span>
-          </span>
-        {/if}
-        {#if c.seteD}
-          <span class="quota-par">
-            <span class="quota-rot">{c.seteD.rotulo}</span>
-            <span class="quota-barra" aria-hidden="true"><i class={c.seteD.nivel} style="width:{c.seteD.pct}%"></i></span>
-            <span class="quota-num {c.seteD.nivel}">{c.seteD.pct}%</span>
-          </span>
-        {/if}
-        {#if c.velha && c.idade_s != null}
-          <span class="quota-idade">{m.cota_idade({ n: formatarIntervalo(c.idade_s) })}</span>
-        {/if}
-      </span>
-    {/each}
+    <div class="quota-trilho">
+      {#each linha as c, i (c.label)}
+        {#if i > 0}<span class="quota-sep" aria-hidden="true"></span>{/if}
+        <span class="quota-conta" class:velha={c.velha}>
+          <span class="quota-nome">{c.label}</span>
+          {#if c.cincoH}
+            <span class="quota-par">
+              <span class="quota-rot">{c.cincoH.rotulo}</span>
+              <span class="quota-barra" aria-hidden="true"><i class={c.cincoH.nivel} style="width:{c.cincoH.pct}%"></i></span>
+              <span class="quota-num {c.cincoH.nivel}">{c.cincoH.pct}%</span>
+            </span>
+          {/if}
+          {#if c.seteD}
+            <span class="quota-par">
+              <span class="quota-rot">{c.seteD.rotulo}</span>
+              <span class="quota-barra" aria-hidden="true"><i class={c.seteD.nivel} style="width:{c.seteD.pct}%"></i></span>
+              <span class="quota-num {c.seteD.nivel}">{c.seteD.pct}%</span>
+            </span>
+          {/if}
+          {#if c.velha && c.idade_s != null}
+            <span class="quota-idade">{m.cota_idade({ n: formatarIntervalo(c.idade_s) })}</span>
+          {/if}
+        </span>
+      {/each}
+    </div>
     <span class="quota-fim">
       <button type="button" class="quota-link" onclick={onIrParaContas}>{m.contas_titulo()}</button>
     </span>
@@ -119,7 +122,19 @@
     color: var(--text-muted);
     overflow: hidden;
   }
-  .quota-conta { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+  /* Trilho rolável, mesmo desenho da .tabs-strip do SessionTabs: em janela estreita as contas
+     saem de vista por rolagem, em vez de encolherem até o nome desaparecer. */
+  .quota-trilho {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .quota-trilho::-webkit-scrollbar { display: none; }
+  .quota-conta { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
   .quota-nome {
     color: var(--text-secondary);
     max-width: 12ch;
@@ -147,13 +162,17 @@
   .quota-num { font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
   .quota-num.alerta { color: var(--warning); }
   .quota-num.cheio { color: var(--error); }
-  /* Dado velho parece velho, e nunca vira zero nem espaço em branco: a conta velha fica
-     esmaecida com a idade ao lado. */
-  .quota-conta.velha { opacity: 0.5; }
-  .quota-idade { opacity: 0.75; }
+  /* Dado velho parece velho SEM apagar o texto: quem esmaece é a barrinha (decorativa,
+     aria-hidden) e a cor de alerta cai para o tom neutro — a pista textual é a idade ao lado,
+     que fica em contraste cheio. opacity no texto não serve: nem 0,90 chega aos 4,5:1 neste fundo. */
+  .quota-conta.velha .quota-barra { opacity: 0.45; }
+  .quota-conta.velha .quota-num { color: var(--text-muted); }
+  .quota-idade { color: var(--text-muted); }
   .quota-sep { width: 1px; height: 12px; background: var(--border-subtle); flex-shrink: 0; }
-  .quota-fim { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); }
+  .quota-fim { flex-shrink: 0; margin-left: var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
   .quota-link {
+    min-height: 20px;
+    min-width: 0;
     color: var(--text-muted);
     border: none;
     border-bottom: 1px dotted var(--border-strong);
