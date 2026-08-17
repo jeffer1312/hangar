@@ -119,10 +119,12 @@
       if (parEstado === 'revelado') revelarPar();
     }
     // Sem candidato: estado nomeado, sem botão (bloqueador 2). Mas só depois de
-    // MEDIR: enquanto a lista está em voo (ou falhou), `enderecos` é [] e "lista
-    // vazia" e "lista ainda não chegou" seriam o mesmo valor — concluir agora é
-    // afirmar que nada respondeu antes de testar (bloqueador da rodada 2).
-    if (listaMedida) {
+    // MEDIR: enquanto a lista está em voo, `enderecos` é [] e "lista vazia" e
+    // "lista ainda não chegou" seriam o mesmo valor — concluir agora é afirmar que
+    // nada respondeu antes de testar (bloqueador da rodada 2). E lista que FALHOU
+    // também não mediu endereço nenhum: quem não respondeu foi o servidor, não há
+    // endereço a liberar (bloqueador da rodada 3).
+    if (listaMedida && !erro) {
       parEstado = parCandidatos.length === 0 ? 'sem_candidato' : parEstado === 'sem_candidato' ? 'escondido' : parEstado;
     }
   });

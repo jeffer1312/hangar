@@ -131,6 +131,27 @@ describe('AcessoSettings — pareamento', () => {
     unmount(t.comp);
   });
 
+  // ── Rodada 4 (bloqueador: ramo de ERRO concluía sem_candidato) ────────────────
+
+  it('R4: lista que FALHOU não conclui sem_candidato — botão presente, desabilitado, frase de falha', async () => {
+    // O servidor não respondeu: NENHUM endereço foi testado. A tela não pode dizer
+    // "Nenhum endereço respondeu… Confira a lista e libere um endereço" — quem falhou
+    // foi o servidor, não há endereço a liberar (bloqueador da rodada 3).
+    alcanceMock.alcanceDoServidor.mockRejectedValue(
+      new DOMException('signal timed out', 'TimeoutError'),
+    );
+    const t = montar();
+    await tick(); await tick(); await tick();
+    // A lista mostra a linha de falha.
+    expect(t.el.textContent).toContain(m.falha_conexao());
+    // O bloco NÃO afirma sem candidato; mostra o aviso de sempre com o botão DESABILITADO.
+    expect(t.el.textContent).not.toContain(m.acesso_par_sem_candidato());
+    const botao = t.el.querySelector<HTMLButtonElement>('.ac-btn.primaria');
+    expect(botao).not.toBeNull();
+    expect(botao!.disabled).toBe(true);
+    unmount(t.comp);
+  });
+
   // ── Rodada 3 (bloqueador único: conclusão antes de medir) ─────────────────────
 
   it('R3: enquanto a lista está em voo, NÃO afirma sem candidato e o botão fica desabilitado', async () => {
