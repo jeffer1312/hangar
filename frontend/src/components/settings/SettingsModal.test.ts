@@ -134,11 +134,8 @@ describe('SettingsModal — GET config por tela', () => {
     expect(document.body.textContent).toContain(m.acesso_secao_enderecos());
     expect(document.body.textContent).not.toContain(m.comum_em_construcao());
     unmount(t.comp);
-    // Contas continua com o stub — é a Task 4 quem preenche.
-    const t2 = montar('contas');
-    await tick();
-    expect(document.body.textContent).toContain(m.comum_em_construcao());
-    unmount(t2.comp);
+    // Contas também virou tela real — a Task 4 mergeou e a prova dela é o teste
+    // 'aba Contas mostra a lista da fonte única' logo abaixo.
   });
 
   it('aba Contas mostra a lista da fonte única (Task 4 ligou a tela)', async () => {
