@@ -203,39 +203,54 @@
   let peersCarregando = $state(false);
   let peersErro = $state('');
 
+  // Geração da carga em voo: a resposta de um alvo que a aba já não mostra não escreve na
+  // tela. Sem isto, trocar de servidor com uma chamada pendente deixa o dado do anterior
+  // na tela e a remoção clicada nele sai para a máquina errada.
+  let geracao = 0;
+
   $effect(() => {
-    // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção lia
-    // o servidor ATIVO com a aba dizendo que o escolhido não existe.
+    const meu = ++geracao;
+    // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
+    // pertencem à máquina que saiu da tela.
+    idErro = ''; peersErro = ''; mostrandoRegistro = false; removerPeerId = null;
     if (!resolvedServer) {
-      peers = []; identificador = ''; idOriginal = ''; idCarregado = true;
+      // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
+      // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
+      peers = []; identificador = ''; idOriginal = '';
+      peersCarregando = false; idCarregado = true;
       return;
     }
-    void carregarIdentificador();
-    void carregarPeers();
+    void carregarIdentificador(meu);
+    void carregarPeers(meu);
   });
 
-  async function carregarIdentificador() {
+  async function carregarIdentificador(meu: number) {
     idErro = '';
     try {
       const r = await getIdentificador(apiTarget);
+      if (meu !== geracao) return;
       identificador = r.identificador;
       idOriginal = r.identificador;
     } catch (e) {
+      if (meu !== geracao) return;
       idErro = msgErro(e);
     } finally {
-      idCarregado = true;
+      if (meu === geracao) idCarregado = true;
     }
   }
 
-  async function carregarPeers() {
+  async function carregarPeers(meu: number) {
     peersCarregando = true;
     peersErro = '';
     try {
-      peers = await listarPeers(apiTarget);
+      const lista = await listarPeers(apiTarget);
+      if (meu !== geracao) return;
+      peers = lista;
     } catch (e) {
+      if (meu !== geracao) return;
       peersErro = msgErro(e);
     } finally {
-      peersCarregando = false;
+      if (meu === geracao) peersCarregando = false;
     }
   }
 
@@ -250,10 +265,11 @@
     }
     idSalvando = true;
     idErro = '';
+    const meu = geracao;
     void setIdentificador(apiTarget, valor)
-      .then((r) => { identificador = r.identificador; idOriginal = r.identificador; })
-      .catch((e) => { idErro = msgErro(e); })
-      .finally(() => { idSalvando = false; });
+      .then((r) => { if (meu !== geracao) return; identificador = r.identificador; idOriginal = r.identificador; })
+      .catch((e) => { if (meu !== geracao) return; idErro = msgErro(e); })
+      .finally(() => { if (meu === geracao) idSalvando = false; });
   }
 
   // Registrar um peer: id + endereço + token. A legenda do mock promete "as duas pontas" — o
@@ -279,13 +295,16 @@
     if (!/^https?:\/\//.test(url)) { regErro = m.url_invalida(); return; }
     regSalvando = true;
     regErro = '';
+    const meu = geracao;
     try {
-      peers = await gravarPeer(apiTarget, { id, base_url: url, token });
-      mostrandoRegistro = false;
+      const lista = await gravarPeer(apiTarget, { id, base_url: url, token });
+      if (meu !== geracao) return;
+      peers = lista; mostrandoRegistro = false;
     } catch (e) {
+      if (meu !== geracao) return;
       regErro = msgErro(e);
     } finally {
-      regSalvando = false;
+      if (meu === geracao) regSalvando = false;
     }
   }
 
@@ -294,10 +313,14 @@
     const id = removerPeerId;
     removerPeerId = null;
     if (!id) return;
+    const meu = geracao;
     peersErro = '';
     try {
-      peers = await removerPeer(apiTarget, id);
+      const lista = await removerPeer(apiTarget, id);
+      if (meu !== geracao) return;
+      peers = lista;
     } catch (e) {
+      if (meu !== geracao) return;
       peersErro = msgErro(e);
     }
   }
