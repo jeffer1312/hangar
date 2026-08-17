@@ -7,10 +7,14 @@ Layout medido no Kimi 0.34.0 (e documentado em kimi.com/code/docs):
     ~/.kimi-code/workspace-trust/<workDirKey>   {"root","trustedAt"} — sem ele a TUI trava no
                                                 "Trust this folder?" (medido num boot real)
 
-workDirKey = "wd_" + basename(cwd) + "_" + sha256(cwd)[:12] — hash confirmado por calculo
+workDirKey = "wd_" + slug(basename(cwd)) + "_" + sha256(cwd)[:12] — hash confirmado por calculo
 (/tmp/kimi-acp-probe -> 15ca61fc9ec9, /home/jefferson/Projetos/hangar -> 5112ff7a84e0).
-O slug mantem hifen intacto (kimi-acp-probe); o que ele faz com espaco/acento ainda nao foi medido
-— por isso a resolucao primaria e o INDICE (autoritativo) e a chave computada e so o fallback.
+O slug e o `slugifyWorkDirName` do proprio CLI (agent-core/src/utils/workdir-slug.ts, lido no
+binario 0.36.1): minusculas, tudo fora de [a-z0-9._-] vira "-", hifen das pontas cai, corta em 40
+chars e o hifen das pontas cai DE NOVO (o corte pode deixar um "-" no fim — sao dois strips no CLI),
+e vazio/"."/".." viram "workspace". Sem o minusculas, uma pasta com maiuscula no nome
+gerava `wd_MinhaPasta_...` enquanto o CLI procurava `wd_minhapasta_...`: o pre-trust nao era achado
+e a TUI nascia no "Trust this folder?" — a primeira mensagem do app respondia o picker e o Kimi saia.
 
 Duas diferencas pro layout do Claude que dirigem o desenho do adapter:
   1. O session-id NAO e escolhido pelo caller (nao existe --session-id; -S so resume). Quem liga
@@ -20,9 +24,13 @@ Duas diferencas pro layout do Claude que dirigem o desenho do adapter:
 """
 import hashlib
 import json
+import logging
 import os
+import re
 import time
 from pathlib import Path
+
+_log = logging.getLogger("claude_pocket.kimi.sessions")
 
 
 def kimi_home() -> Path:
@@ -31,12 +39,19 @@ def kimi_home() -> Path:
     return Path(env) if env else Path.home() / ".kimi-code"
 
 
+_MAX_SLUG = 40  # MAX_WORKDIR_SLUG_LENGTH do CLI
+
+
+def _slugify(name: str) -> str:
+    """Porte byte-a-byte do `slugifyWorkDirName` do Kimi (ver docstring do modulo)."""
+    slug = re.sub(r"[^a-z0-9._-]+", "-", name.lower()).strip("-")[:_MAX_SLUG].strip("-")
+    return "workspace" if slug in ("", ".", "..") else slug
+
+
 def workdir_key(cwd: str) -> str:
     resolved = os.path.abspath(os.path.expanduser(cwd))
-    # ponytail: calibration knob — slug com espaco/acento nao medido; o indice cobre o desvio.
-    slug = os.path.basename(resolved) or "root"
     h = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:12]
-    return f"wd_{slug}_{h}"
+    return f"wd_{_slugify(os.path.basename(resolved))}_{h}"
 
 
 def _wire_of(session_dir: str) -> str:
@@ -97,5 +112,8 @@ def pretrust_cwd(cwd: str) -> None:
         tmp.write_text(json.dumps({"root": resolved, "trustedAt": int(time.time() * 1000)}),
                        encoding="utf-8")
         os.replace(tmp, f)  # atomico, mesmo padrao dos marcadores
-    except OSError:
-        pass
+    except OSError as e:
+        # Best-effort NAO e mudo: o unico sintoma de um pre-trust que nao foi gravado e a TUI
+        # parada no "Trust this folder?", e sem esta linha nao ha nada no log ligando uma coisa a
+        # outra. Mesmo aviso do irmao do lado Claude (registry._pretrust_cwd).
+        _log.warning("pretrust do kimi falhou pra %s: %r", cwd, e)
