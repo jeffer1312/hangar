@@ -41,6 +41,18 @@ _TOOL_VERBS = (
 )
 _TOOL_BLOCK_RE = re.compile(rf"^([A-Z][\w-]*\(|({_TOOL_VERBS})\b)")
 
+# Chrome novo do Claude Code (medido no pane em 17/08/2026, claude 2.1.233) — DOIS desenhos que as
+# regras acima nao conheciam, e que sao a transicao ate toda sessao nascer com o preview_hook (o
+# sidecar torna este arquivo inteiro plano B):
+#   ● Agent "react-reviewer no diff" finished · 9s     <- aviso de subagente em background que acabou
+#     Searched for 2 patterns, read 1 file, ran 2 shell commands   <- resumo de atividade, sem ●
+# O aviso usa o MESMO ● da prosa (bullet verde no ANSI, mas aqui e texto puro), entao era ELEITO
+# como bloco em voo e a previa virava ele + o resumo — o print do usuario, reproduzido. O resumo
+# tambem aparece SOZINHO no fim de um bloco de prosa ("Pushed to minha-branch, ran 3 shell commands").
+# Ancora do resumo = a forma medida (termina em "ran N shell command(s)"), nunca vocabulario solto.
+_AGENT_FINISHED_RE = re.compile(r'^Agent "[^"]*" finished\b')
+_ACTIVITY_SUMMARY_RE = re.compile(r"\bran \d+ shell commands?\s*$")
+
 # Status das ferramentas MCP: "Calling chrome-devtools…". Sem cortar aqui, a linha entrava no preview
 # como prosa e — porque aparece e some a cada chamada — o bloco crescia e encolhia sozinho (o "pulo"
 # na tela). Fora da lista de verbos DE PROPOSITO: la o verbo casa solto no comeco da linha, e
@@ -250,6 +262,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
         corpo = s[1:].lstrip()
         if (s[:1] == _ASSISTANT_GLYPH and not _TOOL_BLOCK_RE.match(corpo)
                 and not _MCP_CALL_RE.match(corpo)
+                and not _AGENT_FINISHED_RE.match(corpo)
                 and not _TODO_PANEL_RE.match(ln)
                 and not _painel_de_subagente(lines, i, corpo)
                 and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
@@ -268,7 +281,8 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
         s = ln.lstrip()
         if (_RULE_RE.match(ln) or _is_boundary(ln) or _USER_PROMPT_RE.match(ln)
                 or _TOOL_BLOCK_RE.match(s) or _MCP_CALL_RE.match(s)
-                or _TODO_PANEL_RE.match(ln) or _ASCII_SPINNER_RE.match(s)):
+                or _TODO_PANEL_RE.match(ln) or _ASCII_SPINNER_RE.match(s)
+                or _ACTIVITY_SUMMARY_RE.search(s)):
             break
         if any(r.match(ln) for r in stops):
             break

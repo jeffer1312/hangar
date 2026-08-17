@@ -194,6 +194,36 @@ def ensure_state_hooks_installed() -> list[str]:
     return touched
 
 
+PREVIEW_HOOK = str((Path(__file__).parent.parent / "hooks" / "preview_hook.py").resolve())
+_PREVIEW_COMMAND = f'"{sys.executable}" "{PREVIEW_HOOK}"'  # mesma razao do _COMMAND acima
+# MessageDisplay = os deltas do texto em voo (Claude Code >= 2.1.152); Stop = zera a previa no fim
+# do turno ("" e resposta, nao ausencia — ver o contrato em app/preview.py).
+_PREVIEW_EVENTS = ["MessageDisplay", "Stop"]
+
+
+def ensure_preview_hook_installed() -> list[str]:
+    """Instala (idempotente) o publicador de previa do Claude nos 2 eventos, em cada config dir.
+    Fail-soft por arquivo, como os demais. Retorna os dirs onde gravou (so pra log)."""
+    try:
+        dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+    except Exception:
+        return []
+    touched: list[str] = []
+    for d in dirs:
+        try:
+            if not d.is_dir():
+                continue
+            changed = False
+            for ev in _PREVIEW_EVENTS:
+                if _ensure_event_hook(d / "settings.json", ev, _PREVIEW_COMMAND, por_nome=True):
+                    changed = True
+            if changed:
+                touched.append(str(d))
+        except Exception:
+            continue
+    return touched
+
+
 GUARD_HOOK = str((Path(__file__).parent.parent / "hooks" / "guard_tmux.py").resolve())
 
 

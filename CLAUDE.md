@@ -473,8 +473,15 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   (3) a extensão coalesce em 150ms e `unref()` o timer, porque `message_update` dispara por token e
   um timer pendente não pode segurar o processo do Pi vivo; (4) teto de idade de 10min, pro caso da
   extensão morrer no meio do turno — aí o pane volta a mandar em vez de congelar a última frase.
-  Vale o mesmo aviso da statusline: **sessão Pi já aberta só publica depois de `/reload`**. Claude
-  Code não tem essa API de extensão e segue no pane; Codex nunca raspou pane (app-server).
+  Vale o mesmo aviso da statusline: **sessão Pi já aberta só publica depois de `/reload`**. O
+  **Claude Code também publica** desde 17/08/2026: `hooks/preview_hook.py` (instalado pelo
+  `hook_installer.ensure_preview_hook_installed` no startup) escuta o evento `MessageDisplay`
+  (Claude Code ≥ 2.1.152 — deltas INCREMENTAIS do texto em exibição, medido: 5 parágrafos = 6
+  eventos com `index` crescente e `final` no último, markdown cru) e grava o mesmo sidecar; o
+  `Stop` zera. O acúmulo entre eventos vive no próprio sidecar (`message_id` gravado junto), e
+  texto com `agent_id` (subagente) nunca é publicado. Sessão Claude já aberta não relê hooks →
+  segue no pane até reiniciar; a raspagem inteira do `extract_assistant_text` vira plano B, não
+  código morto. Codex nunca raspou pane (app-server).
 - **Process info lives in `app/procinfo.py` — the only OS-bound layer.** Nine functions
   (`_proc_children_map`, `_descendant_pids`, `_open_jsonl`, `_cmdline`, `_config_dir_of`,
   `_proc_start_time`, `_engine_of`, + the two `_proc_*_path` test seams) hold **every** `/proc`

@@ -598,3 +598,41 @@ def test_kimi_previa_do_broker_ja_vem_sem_rascunho(monkeypatch):
 
     assert _aio.run(roda()) == "Sao 6 letras r no total."
     assert vistos and vistos[0][2] is True      # pediu o pane COM cor
+
+
+# ── Chrome novo do Claude Code: aviso de subagente concluido + resumo de atividade ────────────────
+# Desenho copiado do pane REAL (17/08/2026, claude 2.1.233) — o print do usuario, reproduzido:
+# o aviso "Agent ... finished" usa o MESMO ● da prosa e era eleito bloco em voo; o resumo
+# ("Searched for N patterns, ..., ran N shell commands") entrava como continuacao da prosa.
+
+PANE_AGENT_FINISHED = """● Os dois reviewers voltaram OK, repetindo o push agora.
+
+✻ Waiting for 1 background agent to finish
+
+● Agent "react-reviewer no diff" finished · 9s
+
+  Searched for 2 patterns, read 1 file, listed 1 directory, ran 2 shell commands
+"""
+
+
+def test_aviso_de_agente_concluido_nao_e_eleito_previa():
+    out = extract_assistant_text(PANE_AGENT_FINISHED)
+    assert out == "Os dois reviewers voltaram OK, repetindo o push agora."
+
+
+def test_resumo_de_atividade_nao_gruda_na_prosa():
+    pane = "\n".join([
+        "● Repetindo o comando identico agora:",
+        "",
+        "  Pushed to minha-branch, ran 3 shell commands ",
+    ])
+    assert extract_assistant_text(pane) == "Repetindo o comando identico agora:"
+
+
+def test_prosa_citando_shell_commands_no_meio_continua_inteira():
+    # a ancora exige a FORMA no fim da linha — mencao no meio da frase e prosa
+    pane = "\n".join([
+        "● O hook ran 3 shell commands antes de travar, e o quarto",
+        "  ficou pendente na fila.",
+    ])
+    assert extract_assistant_text(pane).endswith("ficou pendente na fila.")
