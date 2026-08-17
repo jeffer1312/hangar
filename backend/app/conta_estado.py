@@ -115,11 +115,16 @@ def _estado_login(bruto: dict | None) -> EstadoLogin:
     """Decisão de estado em volta do dict da CLI (lógica pura, teste direto)."""
     if bruto is None:
         return EstadoLogin(estado="indisponivel", motivo="cli-indisponivel")
+    logado = bruto.get("loggedIn")
+    # Campo ausente ou do tipo errado NÃO é "deslogada": é formato que não dá pra confiar.
+    # Afirmar "nunca entrou" sem prova é o mesmo defeito do front (ver parecer 17/08).
+    if not isinstance(logado, bool):
+        return EstadoLogin(estado="indisponivel", motivo="formato-desconhecido")
     email = bruto.get("email")
     plano = bruto.get("subscriptionType")
     return EstadoLogin(
         estado="ok",
-        loggedIn=bool(bruto.get("loggedIn")),
+        loggedIn=logado,
         email=email if isinstance(email, str) else None,
         plano=plano if isinstance(plano, str) else None,
     )

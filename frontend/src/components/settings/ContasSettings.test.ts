@@ -67,6 +67,36 @@ describe('ContasSettings — a lista', () => {
     unmount(t.comp);
   });
 
+  it('conta logada por chave de API (sem e-mail) NAO pode dizer que nao esta conectada', async () => {
+    // Shape REAL medido em 17/08 na máquina do usuário, conta before-merge-20260418-185405:
+    // `claude auth status --json` -> {loggedIn:true, authMethod:"api_key"} SEM email.
+    const API_KEY: ContaEstado = {
+      path: '/home/u/.claude-before-merge', label: 'before-merge', active: false,
+      login: { estado: 'ok', loggedIn: true, email: null, plano: null },
+      limite: { estado: 'sem_leitura' },
+    };
+    const t = montar([API_KEY]);
+    await tick(); await tick();
+    const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
+    expect(linha.textContent).not.toContain(m.contas_nao_conectada());
+    expect(linha.querySelector('.ct-acao.primaria')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('estado indisponivel nao pode ser confundido com deslogada', async () => {
+    const INDISP: ContaEstado = {
+      path: '/home/u/.claude-x', label: 'x', active: false,
+      login: { estado: 'indisponivel', motivo: 'cli-indisponivel' },
+      limite: { estado: 'sem_leitura' },
+    };
+    const t = montar([INDISP]);
+    await tick(); await tick();
+    const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
+    expect(linha.textContent).not.toContain(m.contas_nao_conectada());
+    expect(linha.querySelector('.ct-acao.primaria')).toBeNull();
+    unmount(t.comp);
+  });
+
   it('limite velho aparece com a idade e sem parecer fresco', async () => {
     const t = montar([{ ...LOGADA, active: false, limite: { estado: 'lido', linha: 'x', ts: 1, idade_s: 7200 } }]);
     await tick(); await tick();

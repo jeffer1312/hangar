@@ -32,6 +32,14 @@ def test_deslogada_e_estado_ok_sem_email():
     assert login.plano is None
 
 
+def test_formato_desconhecido_nao_vira_deslogada():
+    # Sem o campo `loggedIn` não se afirma "deslogada": vira estado nomeado.
+    login = conta_estado._estado_login({"authMethod": "api_key"})
+    assert login.estado == "indisponivel"
+    assert login.motivo == "formato-desconhecido"
+    assert login.loggedIn is None
+
+
 def test_cli_falhou_vira_estado_nomeado():
     login = conta_estado._estado_login(None)
     assert login.estado == "indisponivel"

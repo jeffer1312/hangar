@@ -114,7 +114,7 @@
                    um mapa inventaria o multiplicador. Só o e-mail, que vem da fonte. Task de
                    ajuste serial troca a frase quando o Lote A mergear. -->
               <span class="ct-sub">{conta.login.email}</span>
-            {:else if conta.login.estado === 'ok'}
+            {:else if conta.login.estado === 'ok' && !conta.login.loggedIn}
               <span class="ct-sub fraco">{m.contas_nao_conectada()}</span>
             {/if}
             <span class="ct-dir">{conta.path}</span>
