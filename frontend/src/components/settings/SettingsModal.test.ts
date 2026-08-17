@@ -19,7 +19,15 @@ vi.mock('../../lib/api', () => ({
   getPushSettingsForServer: vi.fn(),
   setQuietHours: vi.fn(),
   setQuietHoursForServer: vi.fn(),
+  criarConta: vi.fn(async () => ({ path: '/x', label: 'x', active: false })),
+  apagarConta: vi.fn(async () => {}),
 }));
+// A aba Contas (Task 4) buscou a fonte única /api/conta-estado — sem este mock, montar a aba
+// faria fetch real no teste. formatarIntervalo segue real (puro; mantido via importOriginal).
+vi.mock('../../lib/contaEstado', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../lib/contaEstado')>();
+  return { ...real, listarEstadosDeConta: vi.fn(async () => []) };
+});
 vi.mock('../../lib/auth', () => ({
   serverColor: () => '#fff',
   listServers: vi.fn(),
@@ -115,16 +123,29 @@ describe('SettingsModal — GET config por tela', () => {
     unmount(t.comp);
   });
 
-  it('cada aba nova abre uma tela em construção', async () => {
+  it('aba Acesso ainda abre em construção (Task 3 liga nesta árvore — até lá é o placeholder do prefactor)', async () => {
     stubDesktop();
     const t = montar('acesso');
     await tick();
     expect(document.body.textContent).toContain(m.comum_em_construcao());
     unmount(t.comp);
-    const t2 = montar('contas');
-    await tick();
-    expect(document.body.textContent).toContain(m.comum_em_construcao());
-    unmount(t2.comp);
+  });
+
+  it('aba Contas mostra a lista da fonte única (Task 4 ligou a tela)', async () => {
+    stubDesktop();
+    const lista = [{
+      path: '/home/u/.claude-a', label: 'a', active: true,
+      login: { estado: 'ok', loggedIn: true, email: 'a@example.com', plano: 'max' },
+      limite: { estado: 'sem_leitura' },
+    }];
+    const contaEstado = await import('../../lib/contaEstado');
+    vi.mocked(contaEstado.listarEstadosDeConta).mockResolvedValue(lista as never);
+    const t = montar('contas');
+    await tick(); await tick();
+    expect(document.body.textContent).toContain(m.contas_secao_lista());
+    expect(document.body.textContent).toContain(m.contas_em_uso());
+    expect(document.body.textContent).toContain('a@example.com');
+    unmount(t.comp);
   });
 
   it('identidade composta chega ao store: mesmo id com identidade diferente dispara o próprio GET', async () => {
