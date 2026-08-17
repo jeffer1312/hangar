@@ -604,3 +604,26 @@ environment before `claude` starts (settings.json env is unreliable here). The i
 sessions. Only a `command claude` outside the wrapper still needs the exports in the shell rc. Full
 explanation, reference config, and verify steps: [`docs/tmux-truecolor-setup.md`](docs/tmux-truecolor-setup.md)
 and [`docs/tmux.conf.example`](docs/tmux.conf.example).
+
+## Agent skills
+
+### Issue tracker
+
+Markdown versionado, não GitHub Issues: spec em `docs/superpowers/specs/`, tickets como Tasks de um
+plano em `docs/superpowers/plans/` — que é de onde `backend/app/planprog.py` lê a barra de progresso
+e de onde `skills/orchestrating-idea-to-push` recorta a Task do executor. O formato de `### Task N:`
+e `- [ ] **Step N: …**` é casado por regex e não é livre. Ver
+[`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Os cinco papéis canônicos (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`,
+`wontfix`), escritos como linha `Status:` no corpo da Task — não há sistema de labels aqui. Ver
+[`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Contexto único, mas **sem** `CONTEXT.md` e **sem** `docs/adr/`: o vocabulário e as decisões medidas
+vivem neste `CLAUDE.md`, e decisão nova entra aqui, no mesmo formato. Inclui o glossário dos quatro
+termos que se confundem (servidor · peer · conta · motor). Ver
+[`docs/agents/domain.md`](docs/agents/domain.md).
