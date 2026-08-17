@@ -131,6 +131,48 @@ describe('AcessoSettings — pareamento', () => {
     unmount(t.comp);
   });
 
+  // ── Rodada 3 (bloqueador único: conclusão antes de medir) ─────────────────────
+
+  it('R3: enquanto a lista está em voo, NÃO afirma sem candidato e o botão fica desabilitado', async () => {
+    // Promessa SEGURADA: a lista nunca resolve durante a primeira metade do teste —
+    // é a janela em que o bloco de pareamento se contradizia ("Nenhum endereço
+    // respondeu" com a lista acima em "Testando…").
+    let resolver!: (v: never) => void;
+    alcanceMock.alcanceDoServidor.mockReturnValue(new Promise((r) => { resolver = r; }) as never);
+    const t = montar();
+    await tick(); await tick();
+    // Durante a carga: o botão de revelar existe mas está DESABILITADO (parTipo é ''),
+    // e a frase de sem-candidato NÃO apareceu — conclusão só depois de medir.
+    const botao = t.el.querySelector<HTMLButtonElement>('.ac-btn.primaria');
+    expect(botao).not.toBeNull();
+    expect(botao!.disabled).toBe(true);
+    expect(t.el.textContent).not.toContain(m.acesso_par_sem_candidato());
+    // Resolve a lista sem candidato: agora sim a tela conclui e o bloco troca.
+    resolver({ loopback: false, bind: '192.168.0.42', enderecos: [] } as never);
+    await tick(); await tick();
+    expect(t.el.textContent).toContain(m.acesso_par_sem_candidato());
+    expect(t.el.querySelector('.ac-btn.primaria')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('R3: lista em voo que resolve COM candidato acende o botão (fica habilitado)', async () => {
+    let resolver!: (v: never) => void;
+    alcanceMock.alcanceDoServidor.mockReturnValue(new Promise((r) => { resolver = r; }) as never);
+    const t = montar();
+    await tick(); await tick();
+    const botao = t.el.querySelector<HTMLButtonElement>('.ac-btn.primaria');
+    expect(botao).not.toBeNull();
+    expect(botao!.disabled).toBe(true);
+    // Resolve COM candidato: o botão acende e o bloco permanece no aviso inicial.
+    resolver({ loopback: false, bind: '192.168.0.42', enderecos: enderecosBasico() } as never);
+    await tick(); await tick(); await tick();
+    const botao2 = t.el.querySelector<HTMLButtonElement>('.ac-btn.primaria');
+    expect(botao2).not.toBeNull();
+    expect(botao2!.disabled).toBe(false);
+    expect(t.el.textContent).not.toContain(m.acesso_par_sem_candidato());
+    unmount(t.comp);
+  });
+
   // ── Rodada 2 (bloqueadores 2-5) ───────────────────────────────────────────────
 
   it('B2: sem nenhum candidato ok, mostra estado nomeado e NENHUM botão de revelar', async () => {

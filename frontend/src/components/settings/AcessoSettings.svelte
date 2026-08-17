@@ -21,12 +21,17 @@
   let loopback = $state(false);
   let bind = $state('');
   let enderecos = $state<EnderecoAlcance[]>([]);
+  // Sinal de que a lista JÁ foi medida (resolveu ou falhou). É o que o bloco de
+  // pareamento espera para poder concluir: enquanto em voo, `enderecos` é [] e
+  // "lista vazia" e "lista ainda não chegou" seriam o mesmo valor (rodada 2).
+  let listaMedida = $state(false);
 
   $effect(() => {
     const s = servidorAlvo();
     if (!s) return;
     let vivo = true;
     carregando = true;
+    listaMedida = false;
     alcanceDoServidor(s)
       .then((r) => {
         if (!vivo) return;
@@ -34,11 +39,13 @@
         bind = r.bind;
         enderecos = r.enderecos;
         erro = '';
+        listaMedida = true;
       })
       .catch((e) => {
         if (!vivo) return;
         // Estado NOMEADO de falha; o detalhe é dado do servidor/rede (não vira chave).
         erro = `${m.falha_conexao()}: ${e instanceof Error ? e.message : m.erro_desconhecido()}`;
+        listaMedida = true;
       })
       .finally(() => {
         if (vivo) carregando = false;
@@ -111,8 +118,13 @@
       // diria um endereço e o QR mostraria outro (mesma família do bloqueador 3).
       if (parEstado === 'revelado') revelarPar();
     }
-    // Sem candidato: estado nomeado, sem botão (bloqueador 2).
-    parEstado = parCandidatos.length === 0 ? 'sem_candidato' : parEstado === 'sem_candidato' ? 'escondido' : parEstado;
+    // Sem candidato: estado nomeado, sem botão (bloqueador 2). Mas só depois de
+    // MEDIR: enquanto a lista está em voo (ou falhou), `enderecos` é [] e "lista
+    // vazia" e "lista ainda não chegou" seriam o mesmo valor — concluir agora é
+    // afirmar que nada respondeu antes de testar (bloqueador da rodada 2).
+    if (listaMedida) {
+      parEstado = parCandidatos.length === 0 ? 'sem_candidato' : parEstado === 'sem_candidato' ? 'escondido' : parEstado;
+    }
   });
 
   // Falha de transporte (teto estourado, fetch caído) não tem texto traduzível — mostra
@@ -200,7 +212,7 @@
   {:else if parEstado === 'escondido'}
     <div class="ac-oculto">
       <p>{m.acesso_oculto_aviso()}</p>
-      <button class="ac-btn primaria" bind:this={mostrarRef} onclick={() => revelarPar()}>{m.acesso_mostrar_codigo()}</button>
+      <button class="ac-btn primaria" bind:this={mostrarRef} onclick={() => revelarPar()} disabled={parTipo === ''}>{m.acesso_mostrar_codigo()}</button>
     </div>
   {:else}
     <div class="ac-par">
@@ -508,6 +520,10 @@
     background: var(--accent);
     border-color: var(--accent);
     color: #fff;
+  }
+  .ac-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 
   /* Estado escondido: o QR atrás de um toque (mock estado 1) */
