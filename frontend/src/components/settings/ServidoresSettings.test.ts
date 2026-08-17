@@ -404,6 +404,9 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     await esperarCarga();
     t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
     await tick();
+    // rótulo curto no botão primário do diálogo: "Confirmar" cabe em uma linha (bloq 3)
+    expect(document.querySelector('.confirm-card .c-primary')?.textContent?.trim())
+      .toBe(m.comum_confirmar());
     const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
     inputs[0].value = 'notebook';
     inputs[0].dispatchEvent(new Event('input'));
@@ -435,6 +438,81 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     document.querySelector<HTMLButtonElement>('.confirm-card .c-danger')!.click();
     await tick();
     expect(peersMock.removerPeer).toHaveBeenCalledWith('notebook');
+    unmount(t.comp);
+  });
+
+  it('peer existente aparece mesmo sem identificador, e a tela não diz "nenhuma"', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.listarPeers.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: '••••reto' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.querySelector('.pr-nome')?.textContent).toBe('notebook');
+    expect(t.el.textContent).not.toContain(m.peers_vazio());
+    expect(t.el.querySelector('.pr-btn.primaria')).toBeNull();   // sem identificador, sem registrar
+    unmount(t.comp);
+  });
+
+  it('identificador definido e lista vazia: legenda explica o registro, não manda definir o id', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.textContent).not.toContain(m.peers_vazio());
+    expect(t.el.textContent).toContain(m.peers_legenda_alcance());
+    expect(t.el.querySelector('.pr-btn.primaria')).not.toBeNull();
+    unmount(t.comp);
+  });
+
+  it('enquanto a listagem não volta, a tela não afirma que não há nenhum', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockReturnValueOnce(new Promise(() => {}));   // nunca resolve
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.textContent).not.toContain(m.peers_vazio());
+    expect(t.el.textContent).toContain(m.comum_carregando());
+    unmount(t.comp);
+  });
+
+  it('Enter não dispara dois PUT: o blur causado pelo disabled é ignorado', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    let resolver!: (v: { identificador: string }) => void;
+    peersMock.setIdentificador.mockReturnValueOnce(new Promise((r) => { resolver = r; }));
+    const t = montar();
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    campo.dispatchEvent(new Event('blur'));      // o blur que o disabled provoca no navegador
+    await tick();
+    expect(peersMock.setIdentificador).toHaveBeenCalledTimes(1);
+    resolver({ identificador: 'casa' });
+    await tick(); await tick();
+    expect(peersMock.setIdentificador).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('o campo não é desabilitado durante a gravação (o foco não sai dele)', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    let resolver!: (v: { identificador: string }) => void;
+    peersMock.setIdentificador.mockReturnValueOnce(new Promise((r) => { resolver = r; }));
+    const t = montar();
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(campo.disabled).toBe(false);     // disabled tiraria o foco do campo
+    expect(campo.readOnly).toBe(true);      // e readonly impede a edição sem tirar
+    resolver({ identificador: 'casa' });
+    await tick(); await tick();
+    expect(campo.readOnly).toBe(false);
     unmount(t.comp);
   });
 });

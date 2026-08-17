@@ -7,6 +7,10 @@ backend/.venv/
 # Secrets / local env
 .env
 backend/.env
+# Sidecars da gravação do CP_SERVER_ID no .env (peers_api._escrever_id_env): o .tmp é uma
+# cópia INTEIRA do .env — CP_AUTH_TOKEN e chaves VAPID — enquanto existe. Nunca commitado.
+backend/.env.lock
+backend/.env.*.tmp
 # peers de outros servidores (cp-send cross-server) — contém tokens
 backend/peers.json
 # launcher de projetos do painel — caminhos locais desta máquina (molde: projects.json.example)

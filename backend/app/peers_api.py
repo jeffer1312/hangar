@@ -7,9 +7,15 @@ aqui dentro, sem tocar em api.py.
 Nome do módulo: `peers_api` de propósito — `app/peers.py` já é a lógica de pareamento
 cross-server, e o módulo de rota não pode ocupar o nome dela.
 """
+import logging
 import os
 import tempfile
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:      # Windows: sem flock, a trava vira no-op (mesmo padrão de peers.py)
+    fcntl = None
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -19,6 +25,8 @@ from app.config import settings
 from app.mensagens import erro
 
 peers_router = APIRouter(prefix="/api/peers")
+
+_log = logging.getLogger("claude_pocket")
 
 # .env do backend (o MESMO que o cp-send e o .env_file do Settings leem): é o único arquivo que
 # os dois enxergam — o identificador gravado aqui vale pro script e pra próxima subida do serviço.
@@ -100,41 +108,54 @@ def _escrever_id_env(valor: str) -> None:
     Seam de I/O trocado no teste (régua da casa: uma função privada de I/O por módulo). Escrita
     atômica (tmp + os.replace) com o PID no nome do temporário — o mesmo formato do peers.json;
     ​​o .env nasce 0600 e permanece (guarda CP_AUTH_TOKEN e as chaves VAPID)."""
-    linhas: list[str] = []
-    try:
-        linhas = _ENV_ARQUIVO.read_text(encoding="utf-8").splitlines(keepends=True)
-    except FileNotFoundError:
-        pass
-    chave = "CP_SERVER_ID"
-    achou = False
-    novas: list[str] = []
-    for linha in linhas:
-        if linha.startswith(chave + "="):
-            achou = True
-            if valor:
-                novas.append(f"{chave}={valor}\n")
-            # vazio: a linha some — pydantic lê campo ausente como "" (pareamento desligado)
-        else:
-            novas.append(linha)
-    if not achou and valor:
-        if novas and not novas[-1].endswith("\n"):
-            novas[-1] += "\n"
-        novas.append(f"{chave}={valor}\n")
+    # Lock sidecar cobrindo LEITURA e escrita (mesmo desenho de peers._mutar): a tela não é o
+    # único escritor do .env (instalador, editor do usuário); sem flock, duas gravações
+    # concorrentes liam o mesmo estado e a última apagava a mudança da outra, calado.
+    lock_path = _ENV_ARQUIVO.with_name(_ENV_ARQUIVO.name + ".lock")
     _ENV_ARQUIVO.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(_ENV_ARQUIVO.parent),
-        prefix=f"{_ENV_ARQUIVO.name}.{os.getpid()}.",
-        suffix=".tmp")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.writelines(novas)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, _ENV_ARQUIVO)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    with open(lock_path, "w", encoding="utf-8") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        linhas: list[str] = []
+        try:
+            linhas = _ENV_ARQUIVO.read_text(encoding="utf-8").splitlines(keepends=True)
+        except FileNotFoundError:
+            pass
+        chave = "CP_SERVER_ID"
+        achou = False
+        novas: list[str] = []
+        for linha in linhas:
+            if linha.startswith(chave + "="):
+                achou = True
+                if valor:
+                    novas.append(f"{chave}={valor}\n")
+                # vazio: a linha some — pydantic lê campo ausente como "" (pareamento desligado)
+            else:
+                novas.append(linha)
+        if not achou and valor:
+            if novas and not novas[-1].endswith("\n"):
+                novas[-1] += "\n"
+            novas.append(f"{chave}={valor}\n")
+        # Órfão de processo morto entre o write e o replace (kill -9/OOM não roda except): contém
+        # a malha INTEIRA do .env — CP_AUTH_TOKEN e chaves VAPID — não pode apodrecer no disco
+        # esperando a próxima gravação. Dentro do lock: a limpeza de um processo não apaga o
+        # temporário vivo de outro.
+        for stale in _ENV_ARQUIVO.parent.glob(_ENV_ARQUIVO.name + ".*.tmp"):
+            stale.unlink(missing_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(_ENV_ARQUIVO.parent),
+            prefix=f"{_ENV_ARQUIVO.name}.{os.getpid()}.",
+            suffix=".tmp")
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.writelines(novas)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, _ENV_ARQUIVO)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     try:
         os.chmod(_ENV_ARQUIVO, 0o600)
-    except OSError:
-        pass
+    except OSError as e:
+        _log.warning("não consegui garantir 0600 em %s: %r", _ENV_ARQUIVO, e)

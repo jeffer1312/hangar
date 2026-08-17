@@ -124,6 +124,18 @@ def test_apagar_sem_credencial_e_401(cli):
     assert cli.delete("/api/peers/x").status_code == 401
 
 
+@pytest.mark.parametrize("corpo", [
+    {"id": 123, "base_url": "http://x:8765", "token": "t"},
+    {"id": [1], "base_url": "http://x:8765", "token": "t"},
+    {"id": "ok", "base_url": "http://x:8765", "token": "t", "web_url": 7},
+])
+def test_gravar_campo_nao_texto_e_400_nomeado_sem_escrever(arquivo_peers, cli, corpo):
+    """Tipo errado é recusa nomeada (400), não 500: o front só sabe traduzir o 400."""
+    r = cli.post("/api/peers", headers=AUTH, json=corpo)
+    assert r.status_code == 400
+    assert not arquivo_peers.exists()
+
+
 # ── Identificador desta máquina: deixou de ser somente-leitura ─────────────────────
 
 
@@ -141,6 +153,10 @@ def test_identificador_leitura(env_tmp, cli):
     r = cli.get("/api/peers/identificador", headers=AUTH)
     assert r.status_code == 200
     assert r.json() == {"identificador": ""}
+
+
+def test_identificador_leitura_sem_credencial_e_401(cli):
+    assert cli.get("/api/peers/identificador").status_code == 401
 
 
 def test_gravar_identificador(env_tmp, cli):
@@ -178,3 +194,23 @@ def test_gravar_identificador_preserva_o_resto_do_env(env_tmp, cli):
     cli.put("/api/peers/identificador", headers=AUTH, json={"identificador": "casa"})
     assert env_tmp.read_text(encoding="utf-8") == (
         "CP_AUTH_TOKEN=abc\n# comentário do dono\nCP_VAPID_PUBLIC=x\nCP_SERVER_ID=casa\n")
+
+
+@pytest.mark.parametrize("valor", [1, {"a": 1}, [2]])
+def test_identificador_nao_texto_e_400_nomeado(env_tmp, cli, valor):
+    """Tipo errado é recusa nomeada (400), não 500: o front só sabe traduzir o 400."""
+    r = cli.put("/api/peers/identificador", headers=AUTH, json={"identificador": valor})
+    assert r.status_code == 400
+    assert not env_tmp.exists()
+    assert settings.server_id == ""
+
+
+def test_gravar_identificador_nao_deixa_tmp_para_tras(env_tmp, cli):
+    """O tmp é cópia integral do .env (CP_AUTH_TOKEN, VAPID). Órfão de um processo morto não
+    pode ficar no disco — nem esperando a próxima gravação."""
+    env_tmp.write_text("CP_AUTH_TOKEN=abc\n", encoding="utf-8")
+    orfao = env_tmp.with_name(env_tmp.name + ".999.tmp")
+    orfao.write_text("CP_AUTH_TOKEN=abc\n", encoding="utf-8")
+    cli.put("/api/peers/identificador", headers=AUTH, json={"identificador": "casa"})
+    assert not orfao.exists()
+    assert list(env_tmp.parent.glob(env_tmp.name + ".*.tmp")) == []

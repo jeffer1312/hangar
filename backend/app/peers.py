@@ -77,7 +77,7 @@ def validar_id(nome: str) -> None:
     arquivo nascia com controle de linha no nome (precedente contas.py:79). O nome vira chave do
     peers.json e prefixo de endereço `srv::sessao` — os dois não aceitam espaço nem maiúscula.
     """
-    if not _ID_OK.fullmatch(nome or ""):
+    if not isinstance(nome, str) or not _ID_OK.fullmatch(nome):
         raise ValueError("identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)")
 
 
@@ -138,8 +138,8 @@ def _mutar(fn):
     # do tmp, que é 0600; este chmod é a rede se algo alargar o modo entre replace e aqui).
     try:
         os.chmod(_PEERS_FILE, 0o600)
-    except OSError:
-        pass
+    except OSError as e:
+        _log.warning("não consegui garantir 0600 em %s: %r", _PEERS_FILE, e)
     return resultado
 
 
@@ -155,6 +155,8 @@ def gravar_peer(server_id: str, base_url: str, token: str, web_url: str | None =
     validar_id(server_id)
     if not isinstance(base_url, str) or not isinstance(token, str):
         raise ValueError("endereço e token precisam ser texto")
+    if web_url is not None and not isinstance(web_url, str):
+        raise ValueError("web_url precisa ser texto")
     base = base_url.strip()
     tok = token.strip()
     if not (base.startswith("http://") or base.startswith("https://")) or not tok:
@@ -165,6 +167,10 @@ def gravar_peer(server_id: str, base_url: str, token: str, web_url: str | None =
         dados[server_id] = {"base_url": base.rstrip("/"), "token": tok}
         if isinstance(antigo, dict) and antigo.get("enabled") is not None:
             dados[server_id]["enabled"] = antigo["enabled"]
+        # web_url é do painel (cp_panel_common/cp-panel-data), não deste formulário: quem regrava
+        # sem informá-lo não está pedindo pra apagá-lo. Mesmo racional do enabled.
+        if isinstance(antigo, dict) and antigo.get("web_url"):
+            dados[server_id]["web_url"] = antigo["web_url"]
         if web_url:
             w = web_url.strip()
             if w:

@@ -43,6 +43,17 @@ def test_gravar_preserva_enabled_do_painel(arquivo):
     assert peers.listar_peers()["pc"]["enabled"] is False
 
 
+def test_gravar_preserva_web_url_do_painel(arquivo):
+    """web_url é o link que o painel usa pra abrir a máquina remota; o formulário do app não
+    tem esse campo, então regravar pela tela não pode apagá-lo."""
+    peers.gravar_peer("pc", "http://pc:8765", "t", "https://pc.ts.net")
+    peers.gravar_peer("pc", "http://pc:8765", "t2")          # sem web_url, como a tela manda
+    assert peers.listar_peers()["pc"]["web_url"] == "https://pc.ts.net"
+    assert peers.listar_peers()["pc"]["token"] == "t2"
+    peers.gravar_peer("pc", "http://pc:8765", "t2", "https://novo.ts.net")
+    assert peers.listar_peers()["pc"]["web_url"] == "https://novo.ts.net"   # informado, sobrescreve
+
+
 def test_arquivo_corrompido_recusa_escrever_por_cima(arquivo):
     """Corrompido à mão: recusar é certo, mas apagar o que sobrou seria perder os tokens de vez
     — o usuário ainda consegue recuperar editando o arquivo (mesmo racional do cp_panel)."""

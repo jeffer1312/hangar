@@ -228,6 +228,7 @@
 
   // Enter salva; blur salva SÓ se mudou (sair do campo sem tocar não re-PUTa o mesmo valor).
   function salvarIdentificador() {
+    if (idSalvando) return;   // gravação em voo: Enter e blur não abrem uma segunda (linha 82)
     const valor = identificador.trim();
     if (valor === idOriginal) return;
     if (valor && !ID_OK.test(valor)) {
@@ -355,7 +356,8 @@
          placeholder={m.peers_identificador_placeholder()}
          aria-label={m.peers_identificador()}
          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
-         disabled={idSalvando || !idCarregado}
+         disabled={!idCarregado}
+         readonly={idSalvando}
          onkeydown={(e) => { idErro = ''; if (e.key === 'Enter' && !idSalvando) salvarIdentificador(); }}
          onblur={salvarIdentificador} />
 </div>
@@ -365,9 +367,7 @@
 <!-- Máquinas que este servidor alcança (Task 5): a lista do peers.json. O estado das duas pontas
      (testar/liga) é da Task 8 — aqui se mostra e se edita o vínculo local. -->
 <p class="ss-secao">{m.peers_secao_alcance()}</p>
-{#if !identificador}
-  <p class="ss-legenda">{m.peers_vazio()}</p>
-{:else if peers.length}
+{#if peers.length}
   <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
   <div class="pr-cartao">
     {#each peers as peer (peer.id)}
@@ -380,11 +380,14 @@
       </div>
     {/each}
   </div>
-  <div class="pr-acoes">
-    <button class="pr-btn primaria" onclick={abrirRegistro}>{m.peers_registrar()}</button>
-  </div>
+{:else if peersCarregando}
+  <p class="ss-legenda">{m.comum_carregando()}</p>
+{:else if identificador}
+  <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
 {:else}
   <p class="ss-legenda">{m.peers_vazio()}</p>
+{/if}
+{#if identificador}
   <div class="pr-acoes">
     <button class="pr-btn primaria" onclick={abrirRegistro}>{m.peers_registrar()}</button>
   </div>
@@ -425,7 +428,7 @@
     onClose={() => (mostrandoRegistro = false)}
     actions={[
       { label: m.comum_cancelar(), onClick: () => (mostrandoRegistro = false) },
-      { label: m.peers_registrar(), kind: 'primary',
+      { label: m.comum_confirmar(), kind: 'primary',
         disabled: regSalvando || !regId.trim() || !regUrl.trim() || !regToken.trim(),
         onClick: registrarPeer },
     ]}>
@@ -548,6 +551,7 @@
   .id-campo.vazio { border-color: var(--warning); }
   .id-campo:focus { border-color: var(--accent); }
   .id-campo:disabled { opacity: 0.6; }
+  .id-campo:read-only { opacity: 0.6; }
   .id-aviso { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--warning); }
   .id-erro { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--error); }
 
