@@ -15,6 +15,7 @@ I/O trocadas no teste (precedente: `engine_probe._buscar`). O resto é puro.
 """
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import time
@@ -22,12 +23,19 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, Depends
+import qrcode
+import qrcode.image.svg
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import require_auth
-from app.config import Settings, detect_lan_ip, resolve_bind_ip, settings
+from app.config import Settings, detect_lan_ip, pairing_url, resolve_bind_ip, settings
+from app.mensagens import erro
 
 alcance_router = APIRouter(prefix="/api/alcance")
+
+# Credencial de pareamento NAO configurada (o token de fábrica não protege nada —
+# a Task 3 e o main.py já recusam publicar ele; aqui ele também não vira QR).
+_CREDENCIAL_DE_FABRICA = "change-me"
 
 # Teto de espera de TODA chamada externa destas duas responsabilidades. Um só número
 # no módulo: quem reusa (Task 8) herda o mesmo teto sem precisar conhecer.
@@ -154,3 +162,51 @@ def levantar_estados(s: Settings) -> dict:
 def listar_alcance() -> dict:
     """Endereços candidatos testados + sinal de bind loopback (aba Acesso)."""
     return levantar_estados(settings)
+
+
+# ── Pareamento (Task 6, Lote B) ────────────────────────────────────────────────
+# O QR é desenhado AQUI, no backend — decisão de plano (17/08): o front só tem
+# qr-scanner, que lê e não gera; o backend já tem qrcode>=8.2 e já o usa no QR ASCII
+# do boot (main.py). A rota devolve a imagem pronta (SVG).
+
+
+def _qr_pareamento(url: str) -> str:
+    """SVG do QR para o endereço+token de pareamento. Função privada de propósito:
+    o teste troca ela quando quer um QR curto sem custo de geração."""
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(url)
+    qr.make(fit=True)
+    buf = io.BytesIO()
+    qr.make_image(image_factory=qrcode.image.svg.SvgPathImage).save(buf)
+    return buf.getvalue().decode("utf-8")
+
+
+@alcance_router.get("/pareamento", dependencies=[Depends(require_auth)])
+def pareamento(endereco: str) -> dict:
+    """Endereço + credencial para o candidato pedido, com o QR pronto (SVG).
+
+    `endereco` é o TIPO da linha da aba Acesso (nesta_maquina | rede_local |
+    tailscale | publico) — o mesmo que a listagem devolve, pra tela embutir o que
+    o usuário escolheu. Candidato desconhecido é recusado; sem credencial
+    configurada, erro nomeado (token de fábrica não vira QR).
+    """
+    conhecidos = {e["tipo"]: e for e in levantar_estados(settings)["enderecos"]}
+    if endereco not in conhecidos:
+        raise HTTPException(
+            404, detail=erro("alcance_endereco_desconhecido", "candidato de pareamento desconhecido", endereco=endereco)
+        )
+    if settings.auth_token == _CREDENCIAL_DE_FABRICA:
+        raise HTTPException(
+            400, detail=erro("alcance_sem_credencial", "credencial de pareamento nao configurada")
+        )
+    # O QR embute o endereço do CANDIDATO ESCOLHIDO — o mesmo URL que a listagem
+    # testou (o mock: "troque para o endereço do Tailscale acima"). O pairing_url
+    # genérico só vale quando o candidato não tem URL própria (ex.: público sem
+    # public_url) — mas aí ele não é oferecido na tela.
+    candidato = conhecidos[endereco]
+    if candidato["url"]:
+        base = candidato["url"].rstrip("/")
+        url = f"{base}/?token={settings.auth_token}"
+    else:
+        url = pairing_url(settings)
+    return {"url": url, "qr_svg": _qr_pareamento(url)}

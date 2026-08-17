@@ -114,6 +114,10 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_payload_invalido: () => m.erro_payload_invalido(),
   erro_deploy_falhou: () => m.erro_deploy_falhou(),
 
+  // /api/alcance/pareamento (Task 6) — candidato desconhecido, credencial de fábrica
+  alcance_endereco_desconhecido: () => m.erro_alcance_endereco_desconhecido(),
+  alcance_sem_credencial: () => m.erro_alcance_sem_credencial(),
+
   // require_auth / require_loopback — 429 do backoff, 403 do loopback
   erro_so_loopback: () => m.erro_so_loopback(),
 
