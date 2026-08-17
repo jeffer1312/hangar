@@ -4,8 +4,9 @@
   // login, plano e a idade do último limite; a Task 7 liga o botão Entrar e a Task 9 desenha a
   // faixa de cota na coluna do limite (a partir de `limite.linha`, que o lib/statusline.ts já
   // sabe parsear).
-  import { criarConta, apagarConta } from '../../lib/api';
+  import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib/api';
   import { listarEstadosDeConta, formatarIntervalo, type ContaEstado } from '../../lib/contaEstado';
+  import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
   import { initials } from '../../lib/format';
   import * as m from '../../paraglide/messages';
 
@@ -86,6 +87,107 @@
       apagando = false;
     }
   }
+
+  // ----------------------------------------------------------- login remoto (Task 7)
+  // Estado da tentativa em voo: `loginDe` é o LABEL da conta (o nome ~/.claude-<nome>, a
+  // chave estável do fluxo). Uma tentativa por conta; o botão Entrar de outra conta fica
+  // desabilitado enquanto uma está em voo (uma janela escondida por vez).
+  let loginDe = $state<string | null>(null);
+  let loginPasso = $state<PassoLogin>({ etapa: 'idle' });
+  let loginCodigo = $state('');
+  let loginEnviando = $state(false);
+  let loginErro = $state('');
+  let loginPoll: ReturnType<typeof setInterval> | null = null;
+  let loginIniciando = $state(false);
+  let loginParado = $state(false);
+
+  async function iniciarEntrar(conta: ContaEstado) {
+    if (loginDe || loginIniciando) return;
+    loginIniciando = true;
+    loginErro = '';
+    loginCodigo = '';
+    loginPasso = { etapa: 'idle' };
+    try {
+      await iniciarLogin(conta.label);
+      loginDe = conta.label;
+      // Primeira leitura do passo logo de cara (a URL pode já estar no pane), depois o poll.
+      // O poll só começa depois do login confirmado no servidor: um 409/404 no iniciar NÃO
+      // deixa intervalo órfão rodando.
+      try {
+        loginPasso = await passoLogin(conta.label);
+      } catch {
+        // Poll silencioso: o erro de rede aparece na ação (confirmar/cancelar), não no loop.
+      }
+      loginPoll = setInterval(async () => {
+        if (loginDe) {
+          try {
+            loginPasso = await passoLogin(loginDe);
+          } catch {
+            // Silencioso: o erro aparece nas ações, não no loop.
+          }
+        }
+      }, 2000);
+    } catch (e) {
+      // O que chega: 401 com token (sessao_expirada), o texto do envelope do backend
+      // traduzido (mensagemDeErro) ou erro de rede. 'Failed to fetch' cru (fetch abortado,
+      // sem resposta) NAO vai pra tela — vira falha de conexao generica. Erro com status
+      // (409/404/504) carrega a mensagem traduzida do servidor; o resto e rede.
+      const comStatus = e instanceof Error && typeof (e as { status?: unknown }).status === 'number';
+      loginErro = comStatus && e instanceof Error && e.message
+        ? e.message
+        : m.falha_conexao();
+    } finally {
+      loginIniciando = false;
+    }
+  }
+
+  function pararPoll() {
+    if (loginPoll) {
+      clearInterval(loginPoll);
+      loginPoll = null;
+    }
+  }
+
+  async function confirmarEntrar() {
+    const conta = loginDe;
+    if (!conta || loginEnviando) return;
+    loginEnviando = true;
+    loginErro = '';
+    try {
+      const r = await confirmarLogin(conta, loginCodigo);
+      pararPoll();
+      loginDe = null;
+      loginCodigo = '';
+      loginPasso = { etapa: 'idle' };
+      // Aviso de sucesso: o e-mail e o plano que o servidor RELÊU da conta (a confirmação
+      // por releitura, não pela aparência da tela).
+      aviso = m.contas_login_ok({ email: r.email ?? '', plano: r.plano ?? '' });
+      avisoErro = false;
+      await carregar();
+    } catch (e) {
+      loginErro = e instanceof Error && e.message ? e.message : m.falha_conexao();
+    } finally {
+      loginEnviando = false;
+    }
+  }
+
+  async function cancelarEntrar() {
+    const conta = loginDe;
+    if (!conta) return;
+    loginParado = true;
+    loginErro = '';
+    try {
+      await cancelarLogin(conta);
+    } catch {
+      // O servidor pode não ter janela pra matar (já morreu); a tentativa local morre igual.
+    } finally {
+      pararPoll();
+      loginDe = null;
+      loginCodigo = '';
+      loginPasso = { etapa: 'idle' };
+      loginParado = false;
+    }
+  }
 </script>
 
 <div class="ct-superficie">
@@ -138,7 +240,9 @@
             <!-- Inerte de propósito nesta Task: o fluxo de Entrar é a Task 7, montada por cima
                  deste mesmo estado. Presente para a tela dizer o que uma conta deslogada é. -->
             <button type="button" class="ct-acao primaria"
-              aria-label={m.contas_entrar_titulo({ nome: conta.label })}>{m.contas_entrar()}</button>
+              aria-label={m.contas_entrar_titulo({ nome: conta.label })}
+              disabled={!!loginDe || loginIniciando}
+              onclick={() => iniciarEntrar(conta)}>{m.contas_entrar()}</button>
           {/if}
 
           <button type="button" class="ct-kebab" aria-haspopup="true" aria-expanded={menuDe === conta.path}
@@ -188,6 +292,59 @@
 
   {#if aviso}
     <p class="ct-aviso" class:erro={avisoErro} role={avisoErro ? 'alert' : 'status'} aria-live="polite">{aviso}</p>
+  {/if}
+
+  {#if loginDe}
+    <!-- Passo a passo do login remoto (mock estado 2): o link de autorização, o campo do
+         código e a confirmação por RELEITURA do estado da conta (o passo 4 não se completa
+         pela aparência — só quando o servidor relê logada e devolve e-mail e plano). -->
+    <div class="ct-login">
+      <p class="st-secao ct-topo">{m.contas_entrar_titulo({ nome: loginDe })}</p>
+
+      <div class="ct-passo feito">
+        <span class="ct-num" aria-hidden="true">✓</span>
+        <span class="ct-passo-txt">{m.contas_passo1()}</span>
+      </div>
+
+      <div class="ct-passo" class:espera={!loginPasso.url}>
+        <span class="ct-num" aria-hidden="true">2</span>
+        <span class="ct-passo-txt">
+          <b>{m.contas_passo2()}</b>
+          {#if loginPasso.url}
+            <a class="ct-link" href={loginPasso.url} target="_blank" rel="noopener noreferrer">{loginPasso.url}</a>
+          {/if}
+        </span>
+      </div>
+
+      <div class="ct-passo">
+        <span class="ct-num" aria-hidden="true">3</span>
+        <span class="ct-passo-txt">
+          <b>{m.contas_passo3()}</b>
+          <input class="ct-campo" type="text" autocomplete="one-time-code"
+            placeholder={m.contas_codigo_placeholder()} aria-label={m.contas_codigo_placeholder()}
+            bind:value={loginCodigo} disabled={loginEnviando}
+            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmarEntrar(); } }} />
+        </span>
+      </div>
+
+      <div class="ct-passo espera">
+        <span class="ct-num" aria-hidden="true">4</span>
+        <span class="ct-passo-txt">{m.contas_passo4()}</span>
+      </div>
+    </div>
+
+    <div class="ct-rodape">
+      <button type="button" class="ct-btn" onclick={cancelarEntrar}
+        disabled={loginParado}>{loginParado ? '…' : m.comum_cancelar()}</button>
+      <button type="button" class="ct-btn primario" onclick={confirmarEntrar}
+        disabled={loginEnviando || !loginCodigo.trim()}>{loginEnviando ? '…' : m.contas_confirmar_codigo()}</button>
+    </div>
+  {/if}
+
+  {#if loginErro}
+    <!-- Fora do {#if loginDe} de proposito: quando o INICIO falha (409/404), o loginDe
+         nunca é setado e o aviso de erro não poderia aparecer dentro do bloco. -->
+    <p class="ct-aviso erro" role="alert">{loginErro}</p>
   {/if}
 
   <div class="ct-sep"></div>
@@ -287,11 +444,33 @@
                 line-height: 1.45; }
   .ct-herda p:last-child { margin-bottom: 0; }
 
+  /* Passo a passo do login remoto (mock estado 2) — mesmas medidas do mock, tokens reais. */
+  .ct-login { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4);
+              background: var(--surface-card); border: 1px solid var(--border-subtle);
+              border-radius: var(--radius-md); }
+  .ct-passo { display: flex; gap: var(--space-3); align-items: flex-start; }
+  .ct-num { flex-shrink: 0; width: 20px; height: 20px; border-radius: var(--radius-full);
+            background: var(--accent-dim); color: var(--accent); font-size: 11px; font-weight: 600;
+            display: grid; place-items: center; margin-top: 1px; }
+  .ct-passo.feito .ct-num { background: rgba(52, 199, 89, 0.16); color: var(--success); }
+  .ct-passo.espera .ct-num { background: var(--bg-elevated); color: var(--text-muted); }
+  .ct-passo-txt { font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.5;
+                  min-width: 0; }
+  .ct-passo-txt b { color: var(--text-primary); font-weight: 600; }
+  .ct-link { display: inline-block; margin-top: var(--space-1); font-family: var(--font-mono);
+             font-size: 11px; color: var(--accent); word-break: break-all; }
+  .ct-campo { width: 100%; height: 38px; margin-top: var(--space-2); padding: 0 var(--space-3);
+              background: var(--surface-inset); border: 1px solid var(--border-default);
+              border-radius: var(--radius-sm); color: var(--text-primary);
+              font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
+  .ct-btn.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
+
   /* Tangível no celular: target de toque >= 44px quando o painel aperta (o mock é desktop 1440px,
      onde 30px é confortável em mouse). O resto do layout quebra para a coluna do limite embaixo. */
   @container (max-width: 620px) {
     .ct-cota, .ct-semleitura { width: auto; flex-basis: 100%; }
     .ct-acao, .ct-kebab, .ct-menu-item, .ct-confirma-btn { height: 44px; min-height: 44px; }
     .ct-kebab { width: 44px; }
+    .ct-btn { height: 44px; }
   }
 </style>
