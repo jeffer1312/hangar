@@ -538,7 +538,7 @@
              sessao inexistente era "desconectado" mudo (Task 2, Step 6). role="alert" (WCAG
              4.1.3): a mensagem nasce DEPOIS de uma busca assincrona, e sem anúncio o leitor de
              tela nao e avisado (achado da revisao). -->
-        <div class="tp-screen tp-status" class:hidden={abaAtiva !== 'attach'} role="alert">
+        <div class="tp-screen tp-status tp-sobreposto" class:hidden={abaAtiva !== 'attach'} role="alert">
           <p class="tp-erro">{anexoErro}</p>
         </div>
       {/if}
@@ -633,6 +633,11 @@
      durante composicao de IME, entao nao cobre a tela normalmente). */
   .tp-screen :global(.xterm-viewport) { background-color: transparent; }
   .tp-status { display: flex; align-items: center; justify-content: center; }
+  /* Overlay POR CIMA do host, que ja pinta o vidro do painel: repintar --glass-panel aqui empilha
+     dois veus e o papel de parede e cortado so neste retangulo (medido: canal verde 69,7 -> 104,0
+     com Transparencia no maximo). Quem carrega o material e o host embaixo. .tp-status NAO pode
+     virar transparent: nos ramos do shell ela e a unica camada da tela. */
+  .tp-sobreposto { background: transparent; }
   .tp-msg { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
   .tp-erro { margin: 0; padding: 0 var(--space-4); font-size: var(--text-sm); color: var(--error); text-align: center; }
   /* Flutua fora do painel (que pode estar fechado quando isto aparece) -- superficie propria porque
