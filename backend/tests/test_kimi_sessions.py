@@ -10,6 +10,22 @@ def test_workdir_key_matches_measured_layout():
     assert ks.workdir_key("/tmp/kimi-acp-probe") == "wd_kimi-acp-probe_15ca61fc9ec9"
 
 
+def _slug(cwd: str) -> str:
+    return ks.workdir_key(cwd).split("_")[1]
+
+
+def test_workdir_key_slug_segue_o_slugify_do_cli():
+    # Regra lida do binario do CLI 0.36.1 (slugifyWorkDirName) e conferida contra as chaves que ele
+    # mesmo escreveu em ~/.kimi-code/workspace-trust: minusculas, tudo fora de [a-z0-9._-] vira "-",
+    # hifen das pontas cai. Sem o minusculas, pasta com maiuscula no nome ganhava um pre-trust que o
+    # CLI nunca achava e a TUI abria no "Trust this folder?".
+    assert _slug("/tmp/MinhaPasta") == "minhapasta"
+    assert _slug("/tmp/Área de trabalho") == "rea-de-trabalho"
+    # Casos de borda: vazio vira "workspace", e corta em 40 chars.
+    assert _slug("/@@@") == "workspace"
+    assert _slug("/" + "a" * 60) == "a" * 40
+
+
 def test_transcript_path_via_session_index(tmp_path, monkeypatch):
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path))
     sdir = tmp_path / "sessions" / "wd_x_abcd" / "session_11111111-2222-3333-4444-555555555555"

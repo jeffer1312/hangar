@@ -7,10 +7,13 @@ Layout medido no Kimi 0.34.0 (e documentado em kimi.com/code/docs):
     ~/.kimi-code/workspace-trust/<workDirKey>   {"root","trustedAt"} — sem ele a TUI trava no
                                                 "Trust this folder?" (medido num boot real)
 
-workDirKey = "wd_" + basename(cwd) + "_" + sha256(cwd)[:12] — hash confirmado por calculo
+workDirKey = "wd_" + slug(basename(cwd)) + "_" + sha256(cwd)[:12] — hash confirmado por calculo
 (/tmp/kimi-acp-probe -> 15ca61fc9ec9, /home/jefferson/Projetos/hangar -> 5112ff7a84e0).
-O slug mantem hifen intacto (kimi-acp-probe); o que ele faz com espaco/acento ainda nao foi medido
-— por isso a resolucao primaria e o INDICE (autoritativo) e a chave computada e so o fallback.
+O slug e o `slugifyWorkDirName` do proprio CLI (agent-core/src/utils/workdir-slug.ts, lido no
+binario 0.36.1): minusculas, tudo fora de [a-z0-9._-] vira "-", hifen das pontas cai, corta em 40
+chars, e vazio/"."/".." viram "workspace". Sem o minusculas, uma pasta com maiuscula no nome
+gerava `wd_MinhaPasta_...` enquanto o CLI procurava `wd_minhapasta_...`: o pre-trust nao era achado
+e a TUI nascia no "Trust this folder?" — a primeira mensagem do app respondia o picker e o Kimi saia.
 
 Duas diferencas pro layout do Claude que dirigem o desenho do adapter:
   1. O session-id NAO e escolhido pelo caller (nao existe --session-id; -S so resume). Quem liga
@@ -21,6 +24,7 @@ Duas diferencas pro layout do Claude que dirigem o desenho do adapter:
 import hashlib
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -31,12 +35,19 @@ def kimi_home() -> Path:
     return Path(env) if env else Path.home() / ".kimi-code"
 
 
+_MAX_SLUG = 40  # MAX_WORKDIR_SLUG_LENGTH do CLI
+
+
+def _slugify(name: str) -> str:
+    """Porte byte-a-byte do `slugifyWorkDirName` do Kimi (ver docstring do modulo)."""
+    slug = re.sub(r"[^a-z0-9._-]+", "-", name.lower()).strip("-")[:_MAX_SLUG].strip("-")
+    return "workspace" if slug in ("", ".", "..") else slug
+
+
 def workdir_key(cwd: str) -> str:
     resolved = os.path.abspath(os.path.expanduser(cwd))
-    # ponytail: calibration knob — slug com espaco/acento nao medido; o indice cobre o desvio.
-    slug = os.path.basename(resolved) or "root"
     h = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:12]
-    return f"wd_{slug}_{h}"
+    return f"wd_{_slugify(os.path.basename(resolved))}_{h}"
 
 
 def _wire_of(session_dir: str) -> str:
