@@ -2,7 +2,8 @@
   {
     "_justificativas": {
       "Workflow": "activity.ts:171 — case de protocolo (tipo de evento do transcript do agente), nao e texto exibido; o rotulo do badge usa m.atividade_workflow()",
-      "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow"
+      "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
+      "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo"
     }
   },
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
@@ -169,5 +170,12 @@
   ".arq-visor .fechar",
   ".gt-body .visor .fechar",
   ".files-panel .arvore .no",
-  ".files-panel .resultados .no"
+  ".files-panel .resultados .no",
+  "* Regras, na ordem em que importam:",
+  "* \"digitar de novo\" um texto que a pessoa já leu é pior que o pulo que se quer esconder.",
+  "* e não fica eternamente atrás numa resposta longa.",
+  "* inteira, e 60×/s disso no celular é custo sem ganho visível.",
+  "/** Texto atualmente revelado — o que a bolha renderiza. */",
+  "/** Um passo da animação. Público só pra teste — em produção quem chama é o rAF. */",
+  "/** Desmontagem da bolha: nenhum frame pendente pode sobreviver ao componente. */"
 ]

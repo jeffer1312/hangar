@@ -11,6 +11,7 @@
   import { highlightCodeBlocks } from '../lib/highlight';
   import { enhanceTables } from '../lib/tableChartMount';
   import { tableChartPref } from '../lib/tableChartPref.svelte';
+  import { Typewriter } from '../lib/typewriter.svelte';
 
   interface Props {
     text: string;
@@ -61,7 +62,19 @@
   });
   // Vazio MOMENTÂNEO mantém o que já estava; o texto certo chega no quadro seguinte e, no fim do
   // turno, a bolha real substitui tudo.
-  const textoPrevia = $derived(preview && !text.trim() ? ultimoNaoVazio : text);
+  const textoPreviaBruto = $derived(preview && !text.trim() ? ultimoNaoVazio : text);
+
+  // Máquina de escrever (lib/typewriter.svelte.ts): revela o texto num ritmo constante em vez de
+  // pular por parágrafo — o hook do Claude entrega blocos de ~300 chars/s e a bolha "digita" por
+  // cima. Texto que NÃO estende o anterior (pane oscilando, mensagem nova) faz snap lá dentro,
+  // então o caminho raspado fica como sempre foi.
+  const tw = new Typewriter();
+  // Gate pelo preview: bolha de HISTORICO (preview=false) nunca le tw.texto, e alimentar a
+  // maquina mesmo assim acordava um rAF por bolha — ate 120 de uma vez ao abrir conversa longa
+  // (achado da review).
+  $effect(() => { if (preview) tw.set(textoPreviaBruto); else tw.parar(); });
+  $effect(() => () => tw.parar());
+  const textoPrevia = $derived(preview ? tw.texto : textoPreviaBruto);
 
   const previewHtml = $derived(preview && md ? comCaret(renderMarkdown(textoPrevia)) : '');
   const html = $derived(preview ? '' : renderMarkdown(text));
