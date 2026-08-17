@@ -1,6 +1,7 @@
 // Cliente de peers: as chamadas certas (método/caminho/corpo) e o self-heal de 401. O conteúdo
 // mascarado em si é contrato do backend (test_peers_api.py) — aqui se prova a borda do cliente.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Server } from './auth';
 
 const store = new Map<string, string>();
 (globalThis as any).localStorage = {
@@ -88,5 +89,29 @@ describe('cliente de peers', () => {
     expect(reload).toHaveBeenCalledTimes(1);
     expect(listServers()).toEqual([]);
     expect(getActiveId()).toBeNull();
+  });
+
+  it('alvo explicito fala com a baseUrl e o token DAQUELE servidor', async () => {
+    const OUTRO = { id: 'srv-b', label: 'B', baseUrl: 'https://b.test', token: 'token-b' } as Server;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify([]), { status: 200 }),
+    );
+    await listarPeers(OUTRO);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://b.test/api/peers');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer token-b');
+  });
+
+  it('401 do alvo explicito NAO derruba a credencial ativa (sem self-heal)', async () => {
+    const OUTRO = { id: 'srv-b', label: 'B', baseUrl: 'https://b.test', token: 'token-b' } as Server;
+    const reload = vi.fn();
+    (globalThis as any).window.location.reload = reload;
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"detail":"nao autorizado"}', { status: 401 }),
+    );
+    await expect(listarPeers(OUTRO)).rejects.toThrow();
+    expect(reload).not.toHaveBeenCalled();
+    expect(listServers()).toHaveLength(1);
+    expect(getActiveId()).not.toBeNull();
   });
 });

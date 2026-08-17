@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import ServidoresSettings from './ServidoresSettings.svelte';
+import { criarProps } from './props-reativas.svelte';
 import * as m from '../../paraglide/messages';
 import * as auth from '../../lib/auth';
 import * as api from '../../lib/api';
@@ -555,5 +556,173 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     await tick(); await tick();
     expect(campo.readOnly).toBe(false);
     unmount(t.comp);
+  });
+
+  it('resposta atrasada do alvo anterior nao sobrescreve a tela do alvo atual', async () => {
+    const A = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
+    const B = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
+    authMock.listServers.mockReturnValue([A, B]);
+    authMock.getActiveId.mockReturnValue('srv-a');
+    apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
+    apiMock.getPushSettingsForServer.mockReturnValue(new Promise(() => {}));
+    const adiado = <T,>() => { let r!: (v: T) => void; const p = new Promise<T>((x) => (r = x)); return { p, r }; };
+    const idA = adiado<{ identificador: string }>(), peersA = adiado<unknown[]>();
+    const idB = adiado<{ identificador: string }>(), peersB = adiado<unknown[]>();
+    peersMock.getIdentificador.mockImplementation((alvo: Server | null) =>
+      (alvo?.id === 'srv-b' ? idB.p : idA.p) as never);
+    peersMock.listarPeers.mockImplementation((alvo: Server | null) =>
+      (alvo?.id === 'srv-b' ? peersB.p : peersA.p) as never);
+
+    const props = criarProps({ resolvedServer: A as Server | null, apiTarget: A as Server | null,
+                               onPickTarget: vi.fn(), onLogout: vi.fn() });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServidoresSettings, { target: el, props });
+    const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
+    await passos();
+
+    props.resolvedServer = B; props.apiTarget = B;       // clique na linha do servidor B
+    await passos();
+    idB.r({ identificador: 'bbb' });
+    peersB.r([{ id: 'peer-de-B', base_url: 'http://b-peer', token: '***' }]);
+    await passos();
+
+    idA.r({ identificador: 'aaa' });                      // A chega ATRASADO
+    peersA.r([{ id: 'peer-de-A', base_url: 'http://a-peer', token: '***' }]);
+    await passos();
+
+    expect(el.querySelector<HTMLInputElement>('.id-campo')!.value).toBe('bbb');
+    expect(el.textContent).toContain('peer-de-B');
+    expect(el.textContent).not.toContain('peer-de-A');
+    unmount(comp as never);
+  });
+
+  it('falha ao LER o identificador aparece com nome', async () => {
+    peersMock.getIdentificador.mockRejectedValueOnce(new Error('Failed to fetch'));
+    peersMock.listarPeers.mockResolvedValue([]);
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.querySelector('.id-erro[role="alert"]')?.textContent).toContain(m.falha_conexao());
+    unmount(t.comp);
+  });
+
+  it('falha ao GRAVAR o identificador aparece com nome', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.setIdentificador.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const t = montar();
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa'; campo.dispatchEvent(new Event('input')); await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await esperarCarga();
+    expect(t.el.querySelector('.id-erro[role="alert"]')?.textContent).toContain(m.falha_conexao());
+    unmount(t.comp);
+  });
+
+  it('falha ao registrar um peer aparece com nome no dialogo', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    peersMock.gravarPeer.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const t = montar();
+    await esperarCarga();
+    t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
+    await tick();
+    const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
+    inputs[0].value = 'notebook'; inputs[0].dispatchEvent(new Event('input'));
+    inputs[1].value = 'http://192.168.0.77:8765'; inputs[1].dispatchEvent(new Event('input'));
+    inputs[2].value = 'segredo'; inputs[2].dispatchEvent(new Event('input'));
+    await tick();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    await esperarCarga();
+    expect(document.querySelector('.pr-form-erro')?.textContent).toContain(m.falha_conexao());
+    unmount(t.comp);
+  });
+
+  it('o campo do identificador volta a aceitar edicao no alvo novo', async () => {
+    const A = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
+    const B = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
+    authMock.listServers.mockReturnValue([A, B]);
+    authMock.getActiveId.mockReturnValue('srv-a');
+    apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
+    apiMock.getPushSettingsForServer.mockReturnValue(new Promise(() => {}));
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    peersMock.setIdentificador.mockReturnValue(new Promise(() => {}) as never);  // PUT que pendura (VPN)
+
+    const props = criarProps({ resolvedServer: A as Server | null, apiTarget: A as Server | null,
+                               onPickTarget: vi.fn(), onLogout: vi.fn() });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServidoresSettings, { target: el, props });
+    const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
+    await passos();
+
+    // grava o identificador em A; o PUT nunca responde
+    const campo = el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa'; campo.dispatchEvent(new Event('input')); await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await passos();
+
+    // o usuario desiste e clica no servidor B
+    props.resolvedServer = B; props.apiTarget = B;
+    await passos();
+
+    const campoB = el.querySelector<HTMLInputElement>('.id-campo')!;
+    const readOnlyEmB = campoB.readOnly;   // medido ANTES da segunda tentativa
+
+    // tenta gravar no servidor B
+    campoB.value = 'trabalho'; campoB.dispatchEvent(new Event('input')); await tick();
+    campoB.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await passos();
+
+    expect(readOnlyEmB).toBe(false);
+    expect(peersMock.setIdentificador.mock.calls.length).toBe(2);
+    unmount(comp as never);
+  });
+
+  it('o dialogo de registrar volta a funcionar no alvo novo', async () => {
+    const A = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' } as Server;
+    const B = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
+    authMock.listServers.mockReturnValue([A, B]);
+    authMock.getActiveId.mockReturnValue('srv-a');
+    apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
+    apiMock.getPushSettingsForServer.mockReturnValue(new Promise(() => {}));
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    peersMock.gravarPeer.mockReturnValue(new Promise(() => {}) as never);   // POST que pendura
+
+    const props = criarProps({ resolvedServer: A as Server | null, apiTarget: A as Server | null,
+                               onPickTarget: vi.fn(), onLogout: vi.fn() });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServidoresSettings, { target: el, props });
+    const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
+    await passos();
+
+    const abrirEPreencher = async () => {
+      el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
+      await tick();
+      const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
+      inputs[0].value = 'notebook'; inputs[0].dispatchEvent(new Event('input'));
+      inputs[1].value = 'http://x:8765'; inputs[1].dispatchEvent(new Event('input'));
+      inputs[2].value = 'seg'; inputs[2].dispatchEvent(new Event('input'));
+      await tick();
+    };
+    await abrirEPreencher();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    await passos();
+
+    props.resolvedServer = B; props.apiTarget = B;   // desiste e troca de servidor
+    await passos();
+
+    await abrirEPreencher();
+    const confirmar = document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!;
+    const disabledAoReabrir = confirmar.disabled;   // medido ANTES do clique
+    confirmar.click();
+    await passos();
+
+    expect(disabledAoReabrir).toBe(false);
+    expect(peersMock.gravarPeer.mock.calls.length).toBe(2);
+    unmount(comp as never);
   });
 });
