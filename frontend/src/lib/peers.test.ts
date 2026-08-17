@@ -28,7 +28,7 @@ describe('cliente de peers', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify([{ id: 'notebook', base_url: 'http://n:8765', token: '••••reto' }]), { status: 200 }),
     );
-    const r = await listarPeers();
+    const r = await listarPeers(null);
     expect(r[0].id).toBe('notebook');
     expect(fetchMock).toHaveBeenCalledWith('https://a.test/api/peers', expect.objectContaining({
       headers: expect.objectContaining({ Authorization: 'Bearer token-a' }),
@@ -40,7 +40,7 @@ describe('cliente de peers', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify([payload]), { status: 200 }),
     );
-    const r = await gravarPeer(payload);
+    const r = await gravarPeer(null, payload);
     expect(r).toHaveLength(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://a.test/api/peers');
@@ -52,7 +52,7 @@ describe('cliente de peers', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify([]), { status: 200 }),
     );
-    await removerPeer('notebook');
+    await removerPeer(null, 'notebook');
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://a.test/api/peers/notebook');
     expect(init.method).toBe('DELETE');
@@ -62,9 +62,9 @@ describe('cliente de peers', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ identificador: 'casa' }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ identificador: '' }), { status: 200 }));
-    const r = await setIdentificador('casa');
+    const r = await setIdentificador(null, 'casa');
     expect(r).toEqual({ identificador: 'casa' });
-    expect(await getIdentificador()).toEqual({ identificador: '' });
+    expect(await getIdentificador(null)).toEqual({ identificador: '' });
     const call = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(call[0]).toBe('https://a.test/api/peers/identificador');
     expect(call[1].method).toBe('PUT');
@@ -75,7 +75,7 @@ describe('cliente de peers', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ detail: 'identificador: use minúsculas…' }), { status: 400 }),
     );
-    await expect(setIdentificador('Casa')).rejects.toThrow('identificador: use minúsculas…');
+    await expect(setIdentificador(null, 'Casa')).rejects.toThrow('identificador: use minúsculas…');
   });
 
   it('401 com token salvo limpa a credencial e recarrega (self-heal do apiFetch)', async () => {
@@ -84,7 +84,7 @@ describe('cliente de peers', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ detail: 'token inválido' }), { status: 401 }),
     );
-    await expect(listarPeers()).rejects.toThrow();
+    await expect(listarPeers(null)).rejects.toThrow();
     expect(reload).toHaveBeenCalledTimes(1);
     expect(listServers()).toEqual([]);
     expect(getActiveId()).toBeNull();

@@ -335,6 +335,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     peersMock.listarPeers.mockResolvedValue([]);
     const t = montar();
     await esperarCarga();
+    expect(peersMock.getIdentificador).toHaveBeenCalledWith(null);  // alvo null = servidor ativo
     // Esta máquina: rótulo + legenda + aviso, campo com borda de aviso e placeholder
     expect(t.el.textContent).toContain(m.peers_esta_maquina());
     expect(t.el.textContent).toContain(m.peers_legenda_identificador());
@@ -382,7 +383,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     await tick();
     campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await tick();
-    expect(peersMock.setIdentificador).toHaveBeenCalledWith('casa');
+    expect(peersMock.setIdentificador).toHaveBeenCalledWith(null, 'casa');
     expect(t.el.querySelector('.id-aviso')).toBeNull();          // virou definido
     // inválido (maiúscula): a dica É a regra, e nada vai pro backend
     campo.value = 'Casa';
@@ -417,7 +418,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     await tick();
     document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
     await tick(); await tick();
-    expect(peersMock.gravarPeer).toHaveBeenCalledWith({
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(null, {
       id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo',
     });
     expect(document.querySelector('.confirm-card')).toBeNull();  // fechou no sucesso
@@ -437,8 +438,48 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     expect(document.querySelector('.confirm-card')).not.toBeNull();
     document.querySelector<HTMLButtonElement>('.confirm-card .c-danger')!.click();
     await tick();
-    expect(peersMock.removerPeer).toHaveBeenCalledWith('notebook');
+    expect(peersMock.removerPeer).toHaveBeenCalledWith(null, 'notebook');
     unmount(t.comp);
+  });
+
+  it('fala com o servidor ESCOLHIDO na aba, não com o ativo', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const outro = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServidoresSettings, { target: el, props: {
+      resolvedServer: outro, apiTarget: outro, onPickTarget: vi.fn(), onLogout: vi.fn() } });
+    await esperarCarga();
+    expect(peersMock.getIdentificador).toHaveBeenCalledWith(outro);
+    expect(peersMock.listarPeers).toHaveBeenCalledWith(outro);
+    unmount(comp as never);
+  });
+
+  it('servidor indisponível não carrega nada', async () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServidoresSettings, { target: el, props: {
+      resolvedServer: null, apiTarget: null, onPickTarget: vi.fn(), onLogout: vi.fn() } });
+    await esperarCarga();
+    expect(peersMock.getIdentificador).not.toHaveBeenCalled();
+    expect(peersMock.listarPeers).not.toHaveBeenCalled();
+    unmount(comp as never);
+  });
+
+  it('falha ao listar peers aparece com nome, e não some quando não é Error', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.querySelector('.id-erro')?.textContent).toContain(m.falha_conexao());
+    unmount(t.comp);
+
+    peersMock.listarPeers.mockRejectedValueOnce('caiu');   // rejeição que NÃO é Error
+    const t2 = montar();
+    await esperarCarga();
+    expect(t2.el.querySelector('.id-erro')?.textContent).toContain(m.erro_desconhecido());
+    unmount(t2.comp);
   });
 
   it('peer existente aparece mesmo sem identificador, e a tela não diz "nenhuma"', async () => {

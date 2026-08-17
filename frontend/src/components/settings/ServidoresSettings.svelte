@@ -186,6 +186,13 @@
   const ID_OK = /^[a-z0-9][a-z0-9_-]{0,31}$/;   // espelho da regra do backend (fullmatch)
   const ID_DICA = () => m.peers_identificador_dica({ exemplos: 'casa, notebook' });
 
+  // Erro de rede/servidor com nome, no idioma da tela: mensagem crua ("Failed to fetch") é o
+  // erro genérico que a régua do projeto proíbe, e `''` fazia a falha sumir da tela.
+  // Mesmo formato das linhas 96 e 120, que são o precedente desta própria aba.
+  function msgErro(e: unknown): string {
+    return e instanceof Error ? `${m.falha_conexao()}: ${e.message}` : m.erro_desconhecido();
+  }
+
   let identificador = $state('');
   let idOriginal = $state('');          // último valor commitado: blur sem mudança não re-PUTa
   let idCarregado = $state(false);
@@ -197,6 +204,12 @@
   let peersErro = $state('');
 
   $effect(() => {
+    // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção lia
+    // o servidor ATIVO com a aba dizendo que o escolhido não existe.
+    if (!resolvedServer) {
+      peers = []; identificador = ''; idOriginal = ''; idCarregado = true;
+      return;
+    }
     void carregarIdentificador();
     void carregarPeers();
   });
@@ -204,11 +217,11 @@
   async function carregarIdentificador() {
     idErro = '';
     try {
-      const r = await getIdentificador();
+      const r = await getIdentificador(apiTarget);
       identificador = r.identificador;
       idOriginal = r.identificador;
     } catch (e) {
-      idErro = e instanceof Error ? e.message : '';
+      idErro = msgErro(e);
     } finally {
       idCarregado = true;
     }
@@ -218,9 +231,9 @@
     peersCarregando = true;
     peersErro = '';
     try {
-      peers = await listarPeers();
+      peers = await listarPeers(apiTarget);
     } catch (e) {
-      peersErro = e instanceof Error ? e.message : '';
+      peersErro = msgErro(e);
     } finally {
       peersCarregando = false;
     }
@@ -237,9 +250,9 @@
     }
     idSalvando = true;
     idErro = '';
-    void setIdentificador(valor)
+    void setIdentificador(apiTarget, valor)
       .then((r) => { identificador = r.identificador; idOriginal = r.identificador; })
-      .catch((e) => { idErro = e instanceof Error ? e.message : ''; })
+      .catch((e) => { idErro = msgErro(e); })
       .finally(() => { idSalvando = false; });
   }
 
@@ -267,10 +280,10 @@
     regSalvando = true;
     regErro = '';
     try {
-      peers = await gravarPeer({ id, base_url: url, token });
+      peers = await gravarPeer(apiTarget, { id, base_url: url, token });
       mostrandoRegistro = false;
     } catch (e) {
-      regErro = e instanceof Error ? e.message : '';
+      regErro = msgErro(e);
     } finally {
       regSalvando = false;
     }
@@ -283,9 +296,9 @@
     if (!id) return;
     peersErro = '';
     try {
-      peers = await removerPeer(id);
+      peers = await removerPeer(apiTarget, id);
     } catch (e) {
-      peersErro = e instanceof Error ? e.message : '';
+      peersErro = msgErro(e);
     }
   }
 </script>
