@@ -23,11 +23,13 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
+from app import login_conta
 from app.auth import require_auth
 from app.config import list_config_dirs
+from app.mensagens import erro
 
 _log = logging.getLogger("claude_pocket.conta_estado")
 
@@ -105,10 +107,16 @@ def _auth_status(dir_conta: Path) -> dict | None:
         # FileNotFoundError (claude fora do PATH) é subclasse de OSError: cai aqui junto.
         _log.debug("auth status falhou para %s: %r", dir_conta, e)
         return None
-    if r.returncode != 0:
+    # rc != 0 NAO e ausencia de resposta: o `claude auth status --json` sai com rc=1 numa
+    # conta VIRGEM (deslogada de verdade) e imprime o JSON do mesmo jeito — medido em 17/08
+    # contra a CLI real. Descartar por rc fazia a conta recém-criada (o buraco que a Task 7
+    # existe pra fechar) virar `indisponivel` e o botão Entrar nunca aparecer. A confiança
+    # vem do PARSE: JSON válido de dict é resposta, qualquer que seja o rc; só cai em None
+    # quando o parse falha (CLI ausente ou formato novo, que aí sim é `indisponivel`).
+    bruto = _parse_auth_status(r.stdout)
+    if bruto is None:
         _log.debug("auth status rc=%s para %s: %s", r.returncode, dir_conta, r.stderr[:200])
-        return None
-    return _parse_auth_status(r.stdout)
+    return bruto
 
 
 def _estado_login(bruto: dict | None) -> EstadoLogin:
@@ -194,3 +202,70 @@ def listar_contas() -> list[ContaEstado]:
         )
         for c in list_config_dirs()
     ]
+
+
+# ----------------------------------------------------------------------- login remoto (Task 7)
+#
+# O fluxo de Entrar numa conta pelo app (sem terminal): `iniciar` abre a janela escondida e
+# digita o comando de login; `passo` devolve o link de autorização; `confirmar` digita o código
+# e confirma relendo o estado da conta; `cancelar` mata a janela. A confirmação NUNCA vem da
+# aparência da tela (requisito do Step 1) e a janela nunca sobrevive ao fim do fluxo.
+
+class LoginBody(BaseModel):
+    """O código colado pelo usuário, para a confirmação."""
+    codigo: str = Field(min_length=1, max_length=4096)
+
+
+class PassoLogin(BaseModel):
+    """Etapa atual do fluxo, lida do pane: `url` presente quando o CLI já imprimiu o
+    endereço de autorização (o link tocável da tela)."""
+    etapa: str
+    url: str | None = None
+
+
+def _conta_por_label(label: str):
+    """A conta da lista por rótulo, ou None. O label é o NOME da conta (~/.claude-<nome>)."""
+    for c in list_config_dirs():
+        if c.label == label:
+            return c
+    return None
+
+
+@conta_estado_router.post("/{label}/login", dependencies=[Depends(require_auth)])
+def iniciar_login(label: str) -> dict:
+    """Começa o login na conta: janela escondida + comando na CLI. 404 se a conta não existe."""
+    conta = _conta_por_label(label)
+    if conta is None:
+        raise HTTPException(404, detail=erro("erro_conta_inexistente",
+                                             f"conta {label} não existe", nome=label))
+    try:
+        return login_conta.iniciar(label, conta.path)
+    except RuntimeError as e:
+        # Já há tentativa em voo, ou a janela falhou: 409 com o motivo.
+        raise HTTPException(409, detail=erro("erro_login_ja_em_curso", str(e))) from None
+
+
+@conta_estado_router.post("/{label}/login/codigo", dependencies=[Depends(require_auth)])
+def confirmar_login(label: str, body: LoginBody) -> dict:
+    """Digita o código colado e espera a conta reler logada. Devolve e-mail e plano."""
+    try:
+        return login_conta.confirmar(label, body.codigo)
+    except RuntimeError as e:
+        # Sem tentativa em voo, ou a releitura falhou: 409 com o motivo.
+        raise HTTPException(409, detail=erro("erro_login_sem_tentativa", str(e))) from None
+    except TimeoutError as e:
+        raise HTTPException(504, detail=erro("erro_login_timeout", str(e))) from None
+
+
+@conta_estado_router.get("/{label}/login/passo", dependencies=[Depends(require_auth)],
+                         response_model=PassoLogin)
+def passo_login(label: str) -> PassoLogin:
+    """A etapa atual do fluxo: o link de autorização quando já apareceu no pane."""
+    p = login_conta.passo(label)
+    return PassoLogin(etapa=p.get("etapa", "idle"), url=p.get("url"))
+
+
+@conta_estado_router.post("/{label}/login/cancelar", dependencies=[Depends(require_auth)])
+def cancelar_login(label: str) -> dict:
+    """Cancela a tentativa em voo e mata a janela escondida. No-op sem tentativa."""
+    return login_conta.cancelar(label)

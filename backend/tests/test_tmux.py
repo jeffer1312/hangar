@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -126,6 +127,22 @@ def test_capture_pane_targets_exact_session():
     with patch.object(tmux, "RUN", return_value=MagicMock(stdout="", returncode=0)) as run:
         tmux.capture_pane("0")
     assert "=0:" in run.call_args[0][0]
+
+
+def test_capture_pane_juntar_insere_J_so_quando_pedido():
+    # B2 — `juntar=True` poe `-J` na linha de comando; sem o parametro NAO poe (mesmo
+    # precedente do `-e` do cores). O resto do backend le desenho de TUI linha a linha e
+    # juntar linhas quebradas la estragaria a leitura — o padrao e False.
+    with patch.object(tmux, "RUN", return_value=MagicMock(stdout="", returncode=0)) as run:
+        tmux.capture_pane("cc", juntar=True)
+        tmux.capture_pane("cc")
+    # O _pane_target resolve via agentpane (1 list-panes antes de cada capture) — filtra
+    # os args de capture-pane antes de comparar.
+    capturas = [c.args[0] for c in run.call_args_list
+                if c.args[0][:2] == ["tmux", "capture-pane"]]
+    com_j, sem_j = capturas[0], capturas[1]
+    assert "-J" in com_j and com_j.index("-J") < com_j.index("-S")
+    assert "-J" not in sem_j
 
 
 def test_pane_pid_targets_exact_session():
@@ -678,3 +695,26 @@ def test_paste_text_falha_no_load_buffer_nao_cola_nada():
          patch("app.tmux._paste_linha_a_linha", return_value=True) as plinha:
         assert tmux.paste_text("cc", "linha 1\nlinha 2") is True
     assert plinha.called
+
+
+# ---------------------------------------------------------------- Task 7 — fonte real (B4)
+#
+# A régua do contrato: commit que muda módulo de backend exercita esse módulo contra a fonte
+# REAL. O `config_dir` novo do `new_hidden_shell` é exercitado aqui contra o tmux de verdade —
+# criando a janela, lendo `/proc/<pane_pid>/environ` (o CLAUDE_CONFIG_DIR de quem roda no pane)
+# e matando a janela no fim. O valor afirmado é exatamente o passado, nunca o do servidor tmux.
+
+
+def test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane():
+    cfg = "/tmp/zz-config-dir-prova"
+    alvo = tmux.new_hidden_shell(f"prova-cfg-{uuid.uuid4().hex[:6]}", "/tmp", config_dir=cfg)
+    assert alvo is not None
+    try:
+        pane_pid = tmux._run(["tmux", "display-message", "-p", "-t", f"={alvo}:",
+                              "#{pane_pid}"]).stdout.strip()
+        assert pane_pid.isdigit()
+        env = Path(f"/proc/{pane_pid}/environ").read_bytes()
+        env = env.replace(b"\0", b"\n").decode("utf-8", "replace")
+        assert f"CLAUDE_CONFIG_DIR={cfg}" in env
+    finally:
+        tmux.kill_session(alvo)

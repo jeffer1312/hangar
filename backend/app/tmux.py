@@ -413,13 +413,19 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     return ok
 
 
-def new_hidden_shell(name: str, cwd: str) -> str | None:
+def new_hidden_shell(name: str, cwd: str, config_dir: str | None = None) -> str | None:
     """Cria (ou reata) a sessao de shell ESCONDIDA do botao "+" do painel de terminal (Task 6).
 
     Sessao SEPARADA, nao janela dentro da sessao do agente: sessao separada tem JANELA PROPRIA,
     entao o painel e o terminal nativo do usuario param de disputar qual janela esta na frente,
     qual e o tamanho, e qual e o alvo do attach -- o atrito que a versao anterior desta task (uma
     `new-window` na sessao do agente) tinha.
+
+    `config_dir` opcional: quando presente, vai como `-e CLAUDE_CONFIG_DIR=<config_dir>` no
+    new-session (a MESMA forma do new_session) — quem cria a janela PARA um `claude auth login`
+    (login_conta) precisa que a credencial grave no config dir da conta, nao no ambiente do
+    servidor tmux (B4). O caller de hoje (api.py, a aba Shell) chama SEM o parametro e o
+    comportamento nao muda: o pane nasce sem a variavel, como sempre.
 
     Devolve o nome da sessao (criada ou ja existente), ou None se o tmux recusou.
     """
@@ -472,7 +478,10 @@ def new_hidden_shell(name: str, cwd: str) -> str | None:
                              "antigo %r", alvo, antigo)
                 return None
     if not has_session(alvo):
-        cp = _run([*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd])
+        args = [*_scope_prefix(), "tmux", "new-session", "-d", "-s", alvo, "-c", cwd]
+        if config_dir:
+            args += ["-e", f"CLAUDE_CONFIG_DIR={config_dir}"]
+        cp = _run(args)
         if cp.returncode != 0:
             return alvo if has_session(alvo) else None
         criou_agora = True
@@ -825,15 +834,21 @@ def pane_scrollback(name: str) -> int:
     return int(out) if out.isdigit() else 0
 
 
-def capture_pane(name: str, lines: int = 200, cores: bool = False) -> str:
-    """`cores=True` mantem os codigos ANSI (`-e`). Padrao False: TODO o resto do backend (classify,
-    statusline, gate de envio) casa texto puro, e um `\\x1b[...m` no meio quebraria cada regex.
+def capture_pane(name: str, lines: int = 200, cores: bool = False, juntar: bool = False) -> str:
+    """`cores=True` mantem os codigos ANSI (`-e`); `juntar=True` junta linhas quebradas (`-J`).
+    Padrao False nos dois: TODO o resto do backend (classify, statusline, gate de envio) casa
+    texto puro linha a linha, e um `\\x1b[...m` no meio quebraria cada regex (cores) assim
+    como uma linha quebrada virada linha unica mudaria a leitura de desenho de TUI (juntar).
 
-    So a previa do Kimi liga isso, e por um motivo que o texto puro nao resolve: la o raciocinio e a
-    resposta sao desenhados com o MESMO marcador `●` e so a cor/italico os separa."""
+    So a previa do Kimi liga cores, por um motivo que o texto puro nao resolve: la o raciocinio
+    e a resposta sao desenhados com o MESMO marcador `●` e so a cor/italico os separa. So o
+    `_shell_ler` do login_conta liga juntar: a URL OAuth passa de 80 colunas e o CLI a quebra
+    na margem; sem o `-J` o link tocavel da tela chega truncado (B2)."""
     alvo = ["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"]
     if cores:
         alvo.insert(3, "-e")
+    if juntar:
+        alvo.insert(3, "-J")
     cp = _run(alvo)
     if cp.returncode != 0:
         # stdout vazio numa falha e indistinguivel de um pane genuinamente vazio -> o /pane devolvia

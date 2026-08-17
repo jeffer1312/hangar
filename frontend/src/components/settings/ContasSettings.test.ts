@@ -1,12 +1,18 @@
 // @vitest-environment happy-dom
 // Aba Contas: a lista lê a fonte única (/api/conta-estado via lib/contaEstado), criar/apagar
 // reusam as rotas de sempre (lib/api), conta deslogada NUNCA some da lista.
+// (B6) Os 7 casos abaixo foram RESTAURADOS do pai f3189f6b (os dois describe da Task 4),
+// e os 6 casos do login (Task 7) ficam AO LADO num terceiro describe — estender, não
+// substituir. Regressão de uma Task aprovada e mergeada: o código que eles cobriam
+// (novaConta/apagar/lista) continua vivo e ligado aos botões.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import ContasSettings from './ContasSettings.svelte';
 import * as m from '../../paraglide/messages';
 import * as contaEstadoLib from '../../lib/contaEstado';
 import * as apiLib from '../../lib/api';
+import * as loginLib from '../../lib/loginConta';
+import { mensagemDeErro } from '../../lib/errosApi';
 import type { ContaEstado } from '../../lib/contaEstado';
 
 vi.mock('../../lib/contaEstado', async (importOriginal) => {
@@ -17,9 +23,16 @@ vi.mock('../../lib/api', () => ({
   criarConta: vi.fn(async () => ({ path: '/x', label: 'x', active: false })),
   apagarConta: vi.fn(async () => {}),
 }));
+vi.mock('../../lib/loginConta', () => ({
+  iniciarLogin: vi.fn(async () => ({ ok: true })),
+  passoLogin: vi.fn(async () => ({ etapa: 'aguardando', url: 'https://claude.com/cai/oauth/authorize' })),
+  confirmarLogin: vi.fn(async () => ({ ok: true, email: 'u@example.com', plano: 'max' })),
+  cancelarLogin: vi.fn(async () => ({ ok: true })),
+}));
 
 const estadoMock = vi.mocked(contaEstadoLib);
 const apiMock = vi.mocked(apiLib);
+const loginMock = vi.mocked(loginLib);
 
 const LOGADA: ContaEstado = {
   path: '/home/u/.claude-jefferson', label: 'jefferson', active: true,
@@ -136,6 +149,150 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     await tick(); await tick();
     expect(apiMock.apagarConta).toHaveBeenCalledWith('jefferson');
     expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(2);
+    unmount(t.comp);
+  });
+});
+
+describe('ContasSettings — o botão Entrar (Task 7)', () => {
+  it('mostra os quatro passos do mock estado 2 quando começa o login', async () => {
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(loginMock.iniciarLogin).toHaveBeenCalledWith('testes');
+    expect(t.el.querySelector('.ct-login')).not.toBeNull();
+    const passos = [...t.el.querySelectorAll<HTMLElement>('.ct-passo')];
+    expect(passos.length).toBe(4);
+    expect(passos[0].textContent).toContain(m.contas_passo1());
+    expect(passos[1].textContent).toContain(m.contas_passo2());
+    expect(passos[2].textContent).toContain(m.contas_passo3());
+    expect(passos[3].textContent).toContain(m.contas_passo4());
+    // O link de autorização (quando o poll devolve a URL) é um <a> de verdade.
+    const link = t.el.querySelector<HTMLAnchorElement>('.ct-link')!;
+    expect(link).not.toBeNull();
+    expect(link.getAttribute('href')).toContain('https://claude.com/cai/oauth/authorize');
+    unmount(t.comp);
+  });
+
+  it('confirmar o código chama confirmarLogin e recarrega a lista', async () => {
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
+    input.value = 'CODE-123';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    // O botão Confirmar código fica no SEGUNDO .ct-rodape (o primeiro é o da lista).
+    const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
+    await tick(); await tick();
+    expect(loginMock.confirmarLogin).toHaveBeenCalledWith('testes', 'CODE-123');
+    // O pós-login recarrega a lista (o poll do passo não a recarrega — só o /passo).
+    expect(estadoMock.listarEstadosDeConta.mock.calls.length).toBe(2);
+    unmount(t.comp);
+  });
+
+  it('desmontar durante o login cancela a tentativa e para o poll (B8)', async () => {
+    // B8 — desmontar por QUALQUER porta (trocar de aba, fechar o modal, janela cruzar
+    // 820px) não pode deixar o poll órfão nem a tentativa presa no servidor: o próximo
+    // Entrar começaria do zero, sem 409.
+    vi.useFakeTimers();
+    try {
+      const t = montar([DESLOGADA]);
+      await tick(); await tick();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      await tick(); await tick(); await tick(); await tick();
+      expect(loginMock.iniciarLogin).toHaveBeenCalledWith('testes');
+      unmount(t.comp);
+      expect(loginMock.cancelarLogin).toHaveBeenCalledWith('testes');
+      const passosAntes = loginMock.passoLogin.mock.calls.length;
+      // Depois do unmount o poll não pode mais bater em /login/passo.
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(loginMock.passoLogin.mock.calls.length).toBe(passosAntes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('desmontar ENQUANTO o iniciarLogin esta em voo cancela e nao arma poll (B4)', async () => {
+    // B8 fechou a porta "desmontar com o painel jah aberto"; esta e a porta que o
+    // onDestroy nao via: desmontar ENTRE o clique e a resposta do servidor. O loginDe so
+    // e escrito depois do await — sem a flag `destruido`, o onDestroy nao cancela nada e
+    // o setInterval fica orfao batendo em /login/passo (e a tentativa presa no servidor).
+    vi.useFakeTimers();
+    try {
+      let resolver!: () => void;
+      loginMock.iniciarLogin.mockReturnValue(
+        new Promise<void>((r) => { resolver = r; }) as never);
+      const t = montar([DESLOGADA]);
+      await tick(); await tick();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      await tick(); await tick(); await tick(); await tick();
+      expect(loginMock.iniciarLogin).toHaveBeenCalledWith('testes');
+      unmount(t.comp);      // desmonta ANTES de o iniciarLogin resolver
+      resolver();           // a resposta chega num componente morto
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      await tick();
+      expect(loginMock.cancelarLogin).toHaveBeenCalledWith('testes');
+      const passosAntes = loginMock.passoLogin.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(loginMock.passoLogin.mock.calls.length).toBe(passosAntes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('confirmar com campo vazio não chama a API', async () => {
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    const confirmar = t.el.querySelector<HTMLButtonElement>('.ct-rodape .ct-btn.primario')!;
+    expect(confirmar.disabled).toBe(true);
+    expect(loginMock.confirmarLogin).not.toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('cancelar chama cancelarLogin, limpa o painel e reabilita o Entrar', async () => {
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    // O rodapé do login é o SEGUNDO .ct-rodape (o primeiro é o rodapé da lista, "+ Nova conta").
+    const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    rodapeLogin.querySelector<HTMLButtonElement>('button:not(.primario)')!.click();
+    await tick(); await tick();
+    expect(loginMock.cancelarLogin).toHaveBeenCalledWith('testes');
+    expect(t.el.querySelector('.ct-login')).toBeNull();
+    expect(t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.disabled).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('erro do servidor (409 envelope) vira mensagem traduzida no aviso', async () => {
+    // O backend manda {code, params, msg} (mensagens.py); o cliente deve devolver a MENSAGEM
+    // traduzida pelo id, nunca o texto cru do servidor.
+    loginMock.iniciarLogin.mockRejectedValueOnce(
+      Object.assign(new Error(mensagemDeErro('erro_login_ja_em_curso')!), { status: 409 }));
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(t.el.querySelector('.ct-login')).toBeNull();
+    expect(t.el.querySelector<HTMLElement>('.ct-aviso.erro')!.textContent)
+      .toContain(m.erro_login_ja_em_curso());
+    unmount(t.comp);
+  });
+
+  it('erro de rede nao aparece como Failed to fetch cru', async () => {
+    loginMock.iniciarLogin.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    const aviso = t.el.querySelector<HTMLElement>('.ct-aviso.erro')!;
+    expect(aviso.textContent).toContain(m.falha_conexao());
+    expect(aviso.textContent).not.toContain('Failed to fetch');
     unmount(t.comp);
   });
 });
