@@ -206,8 +206,8 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `DesktopSessionContext` — o painel de contexto **daquela sessão** (estado, plano, grupo, repo).
   Ele é dado do que está aberto na tela, então acompanha a conversa. Todo o resto — Aparência,
   Configurações do servidor, Motores, Git, e o que for adicionado — abre como **modal centrado**:
-  `BottomSheet` com `wide={isDesktop} centered={isDesktop}` (o mesmo par que `EnginesSheet.svelte` e
-  `Git.svelte` já usam; no celular continua folha subindo de baixo).
+  `BottomSheet` com `wide={isDesktop} centered={isDesktop}` (o mesmo par que o próprio
+  `SettingsModal.svelte` usa; no celular continua folha subindo de baixo).
   O porquê é medido, não gosto: no dock de ~530px, rótulo + descrição à esquerda e um segmentado à
   direita brigam pela linha, e como o rótulo tem `min-width: 0` ele cede tudo — a descrição quebrava
   em **uma palavra por linha**. Tela de configuração é rótulo-e-controle repetido dezenas de vezes;
@@ -215,10 +215,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   Ao mexer em qualquer tela dessas, use **container query** (`container-type: inline-size` no
   wrapper + `@container`), nunca media query: quem aperta a linha é a largura do PAINEL, não a da
   janela — num monitor de 1440px o dock tem 530px e uma media query de 560px nunca dispara ali.
-  **Direção acordada com o usuário, ainda não implementada:** juntar todas as configs num modal
-  único de "Configurações" com abas (Aparência · Geral · o que vier), em vez de uma folha por
-  assunto. Quem for fazer: o `lib/gitTabs.ts` + `GitTabs.svelte` já são o precedente de navegação
-  por abas dentro de um modal, incluindo nível por aba no celular.
+  **Config e opção num modal único — implementado (2026-08-16).** A direção acordada de juntar as
+  configs num só modal (antes marcada "ainda não implementada") existe: `SettingsModal.svelte` abre
+  todas as telas num `BottomSheet` de navegação por seções (Aplicativo · Servidor) com onze linhas —
+  Geral, Aparência, Ditado, Sobre, Acesso, Contas, Servidores, Notificações, Anexos, Avançado,
+  Motores. Quem for adicionar aba: registra no `LINHAS` do `SettingsModal.svelte` e no
+  `lib/configRoute.ts` (`TelaConfig`/`TELAS_DE_SERVIDOR`), com chave de idioma nos dois
+  `messages/*.json` no mesmo commit. O `lib/gitTabs.ts` + `GitTabs.svelte` continuam sendo o
+  precedente de navegação por abas DENTRO de uma tela (incluindo nível por aba no celular).
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and
@@ -258,7 +262,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   branch≠main, kill-switch `automations_enabled`, anti-estagnação (mesma cauda 2×). Loop ativo
   **suprime o chain** da sessão. Campos `loop_status/loop_iter/loop_max` fluem no `/api/sessions`
   e no `sig` do SSE (badge 🔁 nas 2 views). Spec/decisões: docs/superpowers/specs/2026-07-22-*.md.
-- **Model engines** (`app/engines.py` + `app/engine_probe.py` + `components/EnginesSheet.svelte`):
+- **Model engines** (`app/engines.py` + `app/engine_probe.py` + `components/settings/EnginesSettings.svelte`):
   a session can run on a non-Anthropic provider — only env vars change inside that session's process,
   `~/.claude` (skills, hooks, transcript) stays the SAME. Single source of truth at
   `~/.claude/engines.json` (0600). Four invariants: (1) `engines.py` is **stdlib-only** — an
@@ -279,7 +283,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   effort chip (`(high✦)`) is untouched, it's not faked.
 - **Modelo de uma sessão Claude Code: a lista NUNCA é constante** (`app/model_picker.py` +
   `terminal_input.list_model_options` / `set_engine_model` + `app/default_model.py` +
-  `components/ModelEffortSheet.svelte`). Duas fontes, escolhidas pelo que a sessão é — medido em
+  `components/ClaudeModelPopover.svelte` + `components/ClaudeEffortPopover.svelte`). Duas fontes, escolhidas pelo que a sessão é — medido em
   31/07/2026, claude 2.1.220:
   - **Conta Anthropic** → as linhas do próprio picker do `/model`, lidas ao vivo (abre, parseia,
     Esc). A lista `['default','opus','sonnet','haiku']` chumbada no front envelheceu: o picker real
@@ -308,7 +312,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   digitar agora?" usa **duas capturas**, não uma: um pane parado não distingue spinner vivo de
   marcador de turno concluído (está na docstring do `state.classify`), e uma captura só recusava,
   com "está trabalhando", uma sessão que tinha acabado de terminar.
-- **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/cp-state.ts` + `components/PiModelSheet.svelte`):
+- **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/cp-state.ts` + `components/PiModelPopover.svelte` + `components/PiEffortPopover.svelte`):
   the third mechanism, next to Claude's TUI picker and Codex's app-server, and it does **not** scrape
   the pane. Measured on pi 0.82.1: `/model` is a fuzzy-**search** list of ~300 entries (footer
   `(1/301)`, 10 rows visible) — not enumerable from the pane and not navigable by counting `Down`;

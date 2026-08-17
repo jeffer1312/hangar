@@ -3,12 +3,12 @@
 // escolhendo a tela de tras (chat, quadro, lista), e a query diz qual tela do painel esta por cima.
 // Assim o painel abre sobre QUALQUER rota sem que nenhuma delas precise saber que ele existe.
 
-export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'ditado' | 'notificacoes' | 'anexos' | 'avancado' | 'motores' | 'sobre' | 'servidores';
+export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'ditado' | 'notificacoes' | 'anexos' | 'avancado' | 'motores' | 'sobre' | 'servidores' | 'acesso' | 'contas';
 
-const TELAS: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'ditado', 'notificacoes', 'anexos', 'avancado', 'motores', 'sobre', 'servidores'];
+const TELAS: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'ditado', 'notificacoes', 'anexos', 'avancado', 'motores', 'sobre', 'servidores', 'acesso', 'contas'];
 
 /** Telas que mexem NUM servidor — sem alvo resolvido elas nao podem abrir (ver App.svelte). */
-export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['notificacoes', 'anexos', 'avancado', 'motores'];
+export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['acesso', 'contas', 'notificacoes', 'anexos', 'avancado', 'motores'];
 
 export interface RotaConfig {
   tela: TelaConfig;

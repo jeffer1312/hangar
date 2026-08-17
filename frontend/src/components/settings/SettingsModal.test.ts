@@ -2,10 +2,11 @@
 // Round 1 da 4b: a tela Servidores NÃO chama store.carregar (zero GET /api/config) — o controller
 // da tela é o ServidoresSettings; as outras telas seguem carregando o config do alvo.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mount, unmount } from 'svelte';
+import { mount, unmount, tick } from 'svelte';
 import SettingsModal from './SettingsModal.svelte';
 import * as api from '../../lib/api';
 import * as auth from '../../lib/auth';
+import * as m from '../../paraglide/messages';
 import type { Server } from '../../lib/auth';
 import type { TelaConfig } from '../../lib/configRoute';
 
@@ -51,14 +52,25 @@ function montar(tela: TelaConfig, alvo: Server | null = null, identidade = alvo 
   apiMock.getPushSettings.mockReturnValue(new Promise(() => {}));
   const el = document.createElement('div');
   document.body.appendChild(el);
+  const onIrPara = vi.fn();
   const comp = mount(SettingsModal, {
     target: el,
     props: {
       tela, alvo, identidade, nomeAlvo: null, semServidor: !alvo,
-      onIrPara: vi.fn(), onVoltar: vi.fn(), onFechar: vi.fn(),
+      onIrPara, onVoltar: vi.fn(), onFechar: vi.fn(),
     },
   });
-  return { el, comp: comp as never };
+  return { el, comp: comp as never, onIrPara };
+}
+
+// Desktop: o modal vira o split com a navegação lateral (.st-nav). O happy-dom não sabe o que é
+// viewport — o stub responde true para o corte de 820px e o componente monta o lado desktop.
+function stubDesktop() {
+  window.matchMedia = ((query: string) => ({
+    get matches() { return true; },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  })) as never;
 }
 
 describe('SettingsModal — GET config por tela', () => {
@@ -75,6 +87,44 @@ describe('SettingsModal — GET config por tela', () => {
     await Promise.resolve();
     expect(apiMock.getConfigForServer).toHaveBeenCalledTimes(1);
     unmount(t.comp);
+  });
+
+  it('desktop: Acesso e Contas aparecem na navegação do grupo do servidor, e clicar em cada uma troca a tela', async () => {
+    stubDesktop();
+    // Com alvo: semServidor=false — é o estado do mock, com as abas do servidor habilitadas.
+    const t = montar('servidores', SRV);
+    await tick();
+    // O BottomSheet teleporta pro <body> (use:portal) — o conteúdo não fica dentro de t.el.
+    const itens = [...document.querySelectorAll<HTMLButtonElement>('.st-nav-item')];
+    // textContent traz ícone + rótulo juntos ('📶Access'); o rótulo do paraglide resolve para o
+    // baseLocale 'en' no teste (sem setLocale), então o esperado vem de m.*(), nunca literal.
+    const rotulos = itens.map((b) => b.textContent?.trim() ?? '');
+    const acha = (rot: string) => rotulos.findIndex((r) => r.includes(rot));
+    expect(acha(m.acesso_titulo())).toBeGreaterThanOrEqual(0);
+    expect(acha(m.contas_titulo())).toBeGreaterThanOrEqual(0);
+    // Grupo do servidor: Acesso e Contas vêm ANTES de Servidores (que já era a primeira do grupo).
+    const servidores = acha(m.config_modal_servidores());
+    expect(servidores).toBeGreaterThanOrEqual(0);
+    expect(acha(m.acesso_titulo())).toBeLessThan(servidores);
+    expect(acha(m.contas_titulo())).toBeLessThan(servidores);
+    // Clicar em cada uma troca a tela (o dono da rota é o App, que recebe o id via onIrPara).
+    itens[acha(m.acesso_titulo())].click();
+    expect(t.onIrPara).toHaveBeenCalledWith('acesso');
+    itens[acha(m.contas_titulo())].click();
+    expect(t.onIrPara).toHaveBeenCalledWith('contas');
+    unmount(t.comp);
+  });
+
+  it('cada aba nova abre uma tela em construção', async () => {
+    stubDesktop();
+    const t = montar('acesso');
+    await tick();
+    expect(document.body.textContent).toContain(m.comum_em_construcao());
+    unmount(t.comp);
+    const t2 = montar('contas');
+    await tick();
+    expect(document.body.textContent).toContain(m.comum_em_construcao());
+    unmount(t2.comp);
   });
 
   it('identidade composta chega ao store: mesmo id com identidade diferente dispara o próprio GET', async () => {

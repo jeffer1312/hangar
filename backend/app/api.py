@@ -71,6 +71,7 @@ from app.search import SearchHit, search, extract_terms, search_terms, build_ask
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import pair
 from app import peers
+from app import alcance, conta_estado, peers_api
 from app.pair import PairLink, contract_path_for
 from app.hook_state import hook_state
 from app import push
@@ -226,6 +227,11 @@ app.add_middleware(
 if settings.sync:
     app.include_router(sync_router)
 app.include_router(deploy_router)
+# Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
+# só no módulo dela. Última edição de api.py deste plano.
+app.include_router(alcance.alcance_router)
+app.include_router(conta_estado.conta_estado_router)
+app.include_router(peers_api.peers_router)
 registry = SessionRegistry()
 terminal = TerminalInput()
 

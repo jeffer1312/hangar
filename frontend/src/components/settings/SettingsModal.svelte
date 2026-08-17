@@ -8,6 +8,8 @@
   import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
   import ServidoresSettings from './ServidoresSettings.svelte';
+  import AcessoSettings from './AcessoSettings.svelte';
+  import ContasSettings from './ContasSettings.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
   import * as m from '../../paraglide/messages';
@@ -64,6 +66,8 @@
     ditado: m.config_modal_ditado(),
     sobre: m.config_modal_sobre(),
     servidores: m.config_modal_servidores(),
+    acesso: m.acesso_titulo(),
+    contas: m.contas_titulo(),
     notificacoes: m.config_modal_notificacoes(),
     anexos: m.config_modal_anexos(),
     avancado: m.config_modal_avancado(),
@@ -81,6 +85,10 @@
       descricao: m.config_modal_desc_ditado(), servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'ℹ️',
       descricao: m.config_modal_desc_sobre(), servidor: false },
+    { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: '📶',
+      descricao: m.acesso_descricao(), servidor: true },
+    { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: '👤',
+      descricao: m.contas_descricao(), servidor: true },
     { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: '🖥️',
       descricao: m.config_modal_desc_servidores(), servidor: false },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: '🔔',
@@ -285,6 +293,10 @@
     <ServidoresSettings resolvedServer={resolvedServer} apiTarget={alvo}
       fallbackFocus={fecharEl}
       onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
+  {:else if telaAtual === 'acesso'}
+    <AcessoSettings />
+  {:else if telaAtual === 'contas'}
+    <ContasSettings />
   {:else}
     <ServerSettings {store} secao={telaAtual} />
   {/if}
