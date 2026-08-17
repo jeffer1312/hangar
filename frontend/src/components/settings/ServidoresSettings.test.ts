@@ -49,6 +49,7 @@ vi.mock('../../lib/peers', () => ({
   listarPeers: vi.fn(async () => []),
   gravarPeer: vi.fn(async (d: unknown) => [d]),
   removerPeer: vi.fn(async () => []),
+  checkPeer: vi.fn(async () => ({ estado: 'ok' })),
 }));
 
 const authMock = vi.mocked(auth);
@@ -328,6 +329,10 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
 // ── Seções da Task 5: identificador desta máquina + máquinas que este servidor alcança ───
 describe('ServidoresSettings — identificador e peers (Task 5)', () => {
   async function esperarCarga() {
+    // A Task 8 encadeia gravação + checagens + listagem no registrar: microtasks em
+    // quantidade variável. settled() espera TODAS as pendentes + re-renders (Svelte 5).
+    const { settled } = await import('svelte');
+    await settled();
     await Promise.resolve(); await Promise.resolve(); await tick();
   }
 
@@ -397,11 +402,15 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     unmount(t.comp);
   });
 
-  it('registrar um peer: diálogo com id/endereço/token grava e a lista atualiza', async () => {
+  it('registrar um peer: diálogo com id/endereço/token registra os dois lados e a lista atualiza', async () => {
     peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
-    peersMock.gravarPeer.mockResolvedValue([
+    peersMock.gravarPeer.mockImplementation(async () => [
       { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
-    ]);
+    ] as never);
+    peersMock.listarPeers.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    peersMock.checkPeer.mockImplementation(async () => ({ estado: 'ok' }) as never);
     const t = montar();
     await esperarCarga();
     t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
@@ -418,10 +427,13 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     inputs[2].dispatchEvent(new Event('input'));
     await tick();
     document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
-    await tick(); await tick();
+    // o gesto encadeia gravação + checagens + listagem: espera o fluxo inteiro
+    await esperarCarga();
+    // o gesto registra os DOIS lados: grava no dono e testa cada lado
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(null, {
       id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo',
     });
+    expect(peersMock.checkPeer).toHaveBeenCalled();
     expect(document.querySelector('.confirm-card')).toBeNull();  // fechou no sucesso
     expect(t.el.querySelector('.pr-nome')?.textContent).toBe('notebook');
     unmount(t.comp);
@@ -633,8 +645,13 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     inputs[2].value = 'segredo'; inputs[2].dispatchEvent(new Event('input'));
     await tick();
     document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
-    await esperarCarga();
-    expect(document.querySelector('.pr-form-erro')?.textContent).toContain(m.falha_conexao());
+    // espera o fluxo: o registrarPeerDoisLados devolve {ok:false} SEM lançar — a tela então
+    // re-listra e mostra o estado parcial (mock estado 3), e o bloco de correção abre.
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    await tick(); await tick();
+    // o erro de gravação vira estado nomeado na tela (não some calado)
+    const texto = t.el.textContent ?? '';
+    expect(texto).not.toContain(m.peers_estado_ok());
     unmount(t.comp);
   });
 

@@ -19,7 +19,7 @@ except ImportError:      # Windows: sem flock, a trava vira no-op (mesmo padrão
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import peers, runtime_config
+from app import peers, peers_check, runtime_config
 from app.auth import require_auth
 from app.config import settings
 from app.mensagens import erro
@@ -79,6 +79,21 @@ def apagar_peer(server_id: str) -> list:
     except ValueError as e:
         raise HTTPException(404, detail=erro("peers_desconhecido", str(e))) from e
     return _lista()
+
+
+@peers_router.get("/check", dependencies=[Depends(require_auth)])
+def checar_peer(url: str = "", id: str = "") -> dict:
+    """Estado de UM lado de um peer registrado (Task 8): responde? é a máquina esperada?
+
+    Devolve o estado nomeado de `peers_check.checar_peer` — o front traduz pelo `code`, e
+    o bloco de correção de endereço só aparece quando um lado falha. URL/id obrigatórios:
+    sem eles não há o que checar (400 nomeado, não um teste de rede sem alvo).
+    """
+    if not url:
+        raise HTTPException(400, detail=erro("peers_check_url_obrigatoria", "url obrigatória"))
+    if not id:
+        raise HTTPException(400, detail=erro("peers_check_id_obrigatorio", "id obrigatório"))
+    return peers_check.checar_peer(url, id)
 
 
 @peers_router.get("/identificador", dependencies=[Depends(require_auth)])

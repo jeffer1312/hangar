@@ -79,3 +79,18 @@ export function setIdentificador(alvo: Server | null, identificador: string): Pr
     body: JSON.stringify({ identificador }),
   });
 }
+
+/** Estado de UM lado de um peer (Task 8): o backend devolve o estado nomeado. */
+export function checkPeer(alvo: Server | null, url: string, id: string): Promise<{
+  estado: 'ok' | 'estranho' | 'falhou' | 'recusou' | 'nao_configurado';
+  identificador?: string;
+  motivo?: string;
+  tempo_ms?: number | null;
+}> {
+  return em<{
+    estado: 'ok' | 'estranho' | 'falhou' | 'recusou' | 'nao_configurado';
+    identificador?: string;
+    motivo?: string;
+    tempo_ms?: number | null;
+  }>(alvo, `/api/peers/check?url=${encodeURIComponent(url)}&id=${encodeURIComponent(id)}`);
+}

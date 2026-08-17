@@ -2,8 +2,9 @@
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { getSessions } from '../../lib/api';
-  import { getIdentificador, setIdentificador, listarPeers, gravarPeer, removerPeer,
+  import { getIdentificador, setIdentificador, listarPeers, removerPeer,
            type PeerView } from '../../lib/peers';
+  import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
   import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
@@ -213,9 +214,12 @@
     // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
     // pertencem à máquina que saiu da tela.
     idErro = ''; peersErro = ''; mostrandoRegistro = false; removerPeerId = null;
+    corrigeId = null;
     // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
     idSalvando = false; regSalvando = false;
+    // Estados de checagem pertencem ao alvo que saiu da tela (Task 8).
+    estados = {};
     if (!resolvedServer) {
       // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
       // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
@@ -275,14 +279,19 @@
       .finally(() => { if (meu === geracao) idSalvando = false; });
   }
 
-  // Registrar um peer: id + endereço + token. A legenda do mock promete "as duas pontas" — o
-  // lado remoto (testar/ligar) é da Task 8; aqui se grava o vínculo local, que é a fundação.
+  // Registrar um peer (Task 5 → 8): o gesto único agora registra os DOIS lados de uma vez
+  // (A em B e B em A, com a credencial que o celular já guarda de cada um) e testa cada lado
+  // com a primitiva da Task 3. A tela mostra o estado de cada lado e, quando um falha, abre o
+  // bloco de correção de endereço (mock estado 3).
   let mostrandoRegistro = $state(false);
   let regId = $state('');
   let regUrl = $state('');
   let regToken = $state('');
   let regErro = $state('');
   let regSalvando = $state(false);
+  // Estados de checagem por peer: id -> {lados, ok, endereco_alternativo} (Task 8).
+  let estados = $state<Record<string, { lados: LadoState[]; ok: boolean; endereco_alternativo?: string }>>({});
+  let corrigeId = $state<string | null>(null);
 
   function abrirRegistro() {
     mostrandoRegistro = true;
@@ -300,15 +309,28 @@
     regErro = '';
     const meu = geracao;
     try {
-      const lista = await gravarPeer(apiTarget, { id, base_url: url, token });
+      // Task 8: um gesto registra os dois lados e testa os dois — a lista volta do backend.
+      const r = await registrarPeerDoisLados(apiTarget, { id, base_url: url, token });
       if (meu !== geracao) return;
-      peers = lista; mostrandoRegistro = false;
+      // A lista nova vem da gravação no DONO (o backend devolve a lista atualizada).
+      const lista = await listarPeers(apiTarget);
+      if (meu !== geracao) return;
+      peers = lista;
+      // O estado dos dois lados fica na tela (mock estados 2 e 3).
+      estados = { ...estados, [id]: { lados: r.lados, ok: r.ok, endereco_alternativo: r.endereco_alternativo } };
+      if (!r.ok) corrigeId = id;
+      mostrandoRegistro = false;
     } catch (e) {
       if (meu !== geracao) return;
       regErro = msgErro(e);
     } finally {
       if (meu === geracao) regSalvando = false;
     }
+  }
+
+  // Fecha o bloco de correção (o usuário escolheu "deixar só de ida" ou "testar de novo").
+  function fecharCorrige() {
+    corrigeId = null;
   }
 
   let removerPeerId = $state<string | null>(null);
@@ -410,13 +432,49 @@
   <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
   <div class="pr-cartao">
     {#each peers as peer (peer.id)}
+      {@const st = estados[peer.id]}
+      {@const ida = st?.lados.find((l) => l.lado === 'ida')}
+      {@const volta = st?.lados.find((l) => l.lado === 'volta')}
+      {@const ok = ida?.estado === 'ok' && volta?.estado === 'ok'}
+      {@const meio = st && !ok}
       <div class="pr-linha">
+        <span class="pr-farol" class:ok class:nao={meio} class:test={!st}>
+          {st ? (ok ? '●' : '◌') : '◌'}
+        </span>
         <span class="pr-txt">
           <span class="pr-nome">{peer.id}</span>
           <span class="pr-url">{peer.base_url}</span>
+          {#if st}
+            {#if ok}
+              <span class="pr-estado ok">{m.peers_estado_ok()}</span>
+            {:else}
+              <span class="pr-estado nao">{m.peers_estado_parcial()}</span>
+            {/if}
+          {:else}
+            <span class="pr-estado neutro">{m.peers_estado_testando()}</span>
+          {/if}
         </span>
+        {#if st}
+          <span class="pr-lados">
+            <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>✓ {m.peers_lado_ida()}</span>
+            <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>✗ {m.peers_lado_volta()}</span>
+          </span>
+        {/if}
         <button class="pr-btn min" onclick={() => (removerPeerId = peer.id)}>{m.peers_remover()}</button>
       </div>
+      {#if st && !ok && corrigeId === peer.id}
+        <div class="corrige">
+          <p>
+            {m.peers_corrige_1({ nome: peer.id, endereco: peer.base_url })}
+          </p>
+          <p><b>{m.peers_corrige_pergunta({ nome: peer.id })}</b></p>
+          <input class="corrige-input" value={peer.base_url} aria-label={m.peers_corrige_pergunta({ nome: peer.id })} />
+          <div class="acoes">
+            <button class="btn primaria" onclick={() => fecharCorrige()}>{m.peers_testar_novamente()}</button>
+            <button class="btn" onclick={() => fecharCorrige()}>{m.peers_so_ida()}</button>
+          </div>
+        </div>
+      {/if}
     {/each}
   </div>
 {:else if peersCarregando}
@@ -598,17 +656,40 @@
                border-radius: var(--radius-md); overflow: hidden; }
   .pr-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); }
   .pr-linha + .pr-linha { border-top: 1px solid var(--border-subtle); }
+  .pr-farol { flex-shrink: 0; width: 1.2em; text-align: center; font-size: 14px; }
+  .pr-farol.ok { color: var(--success); }
+  .pr-farol.nao { color: var(--error); }
+  .pr-farol.test { color: var(--text-muted); }
   .pr-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
   .pr-nome { font-size: var(--text-sm); color: var(--text-primary); }
   .pr-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
             word-break: break-all; }
+  .pr-estado { font-size: var(--text-xs); line-height: 1.35; }
+  .pr-estado.ok { color: var(--success); }
+  .pr-estado.nao { color: var(--warning); }
+  .pr-estado.neutro { color: var(--text-muted); }
+  .pr-lados { display: flex; gap: var(--space-2); flex-shrink: 0; }
+  .pr-lado { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted);
+             padding: 2px var(--space-2); border-radius: var(--radius-full);
+             background: var(--surface-raised); border: 1px solid var(--border-subtle); }
+  .pr-lado.ok { color: var(--success); }
+  .pr-lado.nao { color: var(--error); }
+  .corrige { margin-top: var(--space-3); padding: var(--space-3); background: var(--surface-card);
+             border: 1px solid var(--border-default); border-left: 3px solid var(--warning);
+             border-radius: var(--radius-md); }
+  .corrige p { margin: 0 0 var(--space-2); font-size: var(--text-xs); color: var(--text-secondary);
+               line-height: 1.45; }
+  .corrige b { color: var(--text-primary); font-weight: 600; }
+  .corrige input { width: 100%; height: 34px; padding: 0 var(--space-3);
+                   background: var(--surface-inset); border: 1px solid var(--border-default);
+                   border-radius: var(--radius-sm); color: var(--text-primary);
+                   font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
+  .acoes { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+  .btn { height: 36px; min-height: 0; padding: 0 var(--space-4); border-radius: var(--radius-sm);
+         border: 1px solid var(--border-subtle); background: var(--surface-raised);
+         color: var(--text-primary); font-size: var(--text-sm); font-family: inherit; }
+  .btn.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
   .pr-acoes { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
-  .pr-btn {
-    height: 36px; min-height: 0; padding: 0 var(--space-4); border-radius: var(--radius-sm);
-    border: 1px solid var(--border-subtle); background: var(--surface-raised);
-    color: var(--text-primary); font-size: var(--text-sm); font-family: inherit;
-  }
-  .pr-btn.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
   .pr-btn.min { height: 30px; padding: 0 var(--space-3); font-size: var(--text-xs); }
   .pr-btn:disabled { opacity: 0.45; }
 
