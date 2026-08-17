@@ -26,6 +26,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from app import conta_estado, tmux
 
@@ -80,8 +81,14 @@ def _shell_submeter(nome: str, texto: str) -> None:
 
 
 def _shell_ler(nome: str) -> str:
-    """I/O: lê o pane da janela escondida (tmux.capture_pane)."""
-    return tmux.capture_pane(nome)
+    """I/O: lê o pane da janela escondida (tmux.capture_pane), JUNTANDO linhas quebradas.
+
+    `juntar=True`: o CLI quebra a URL OAuth na margem de 80 colunas da janela escondida e
+    o capture cru devolveria a quebra como \n — o link tocável da tela morreria no meio
+    (B2). O padrão da primitiva continua False: TODO o resto do backend lê desenho de TUI
+    linha a linha.
+    """
+    return tmux.capture_pane(nome, juntar=True)
 
 
 def _shell_matar(nome: str) -> None:
@@ -90,13 +97,15 @@ def _shell_matar(nome: str) -> None:
 
 
 # A tentativa em voo por conta: identidade (id que so cresce) + alvo REAL da janela (o
-# retorno de `new_hidden_shell`, que e `term-<chave>` e NAO a chave pedida — B2) + relógio.
-# Nao é persistido de propósito: um backend reiniciado não deixa janela pendurada (a
-# limpeza é por processo).
+# retorno de `new_hidden_shell`, que e `term-<chave>` e NAO a chave pedida — B2) +
+# diretório da conta (`conta.path`, o MESMO que vai pro `-e CLAUDE_CONFIG_DIR`) + relógio.
+# Nao é persistido de propósito: a janela VIVE no servidor do tmux quando o backend morre
+# — quem a limpa é a tentativa seguinte (o `iniciar` mata a sobra, B3) ou o `cancelar`.
 @dataclass
 class Tentativa:
     id: int
     alvo: str
+    dir_conta: str
     inicio: float
 
 _tentativas: dict[str, Tentativa] = {}
@@ -138,12 +147,19 @@ def iniciar(conta: str, cwd: str) -> dict:
     if _em_curso(conta):
         raise RuntimeError(f"login já em andamento para a conta {conta}")
     chave = _chave_janela(conta)
+    # B3 — um backend que caiu no meio de uma tentativa deixa a janela VIVA no servidor
+    # do tmux (a sessao sobrevive ao processo; o comentario antigo do módulo prometia o
+    # contrario). Reatar traria um `claude auth login` parado no prompt do codigo; a
+    # tentativa nova comeca numa janela NOVA. Idempotente por contrato: sobra que nao
+    # existe, nada a matar (kill_session de sessao ausente e sucesso).
+    _shell_matar(f"term-{chave}")
     alvo = _shell_criar(chave, cwd, config_dir=cwd)
     if alvo is None:
         raise RuntimeError(f"não consegui abrir a janela escondida para {conta}")
     # Registra ANTES de digitar: um erro de digitação cai no caminho de erro e a limpeza
     # sabe qual janela matar.
-    tentativa = Tentativa(id=next(_proximo_id), alvo=alvo, inicio=time.monotonic())
+    tentativa = Tentativa(id=next(_proximo_id), alvo=alvo, dir_conta=cwd,
+                          inicio=time.monotonic())
     _tentativas[conta] = tentativa
     try:
         _shell_submeter(alvo, "claude auth login --claudeai")
@@ -190,11 +206,15 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
         raise
 
     ler_estado = estado_fake or (lambda d: conta_estado._estado_login(
-        conta_estado._auth_status(d)))
+        conta_estado._auth_status(Path(d))))
     inicio = time.monotonic()
     try:
         while True:
-            estado = ler_estado(conta)
+            # B1 — o CAMINHO da conta (dir_conta), nunca o rótulo: com um caminho relativo
+            # a CLI criava backend/<rotulo>/ dentro da árvore do repo e a releitura nunca
+            # via a conta logada (medido). O path absoluto é o mesmo que o `iniciar` já
+            # usou no `-e CLAUDE_CONFIG_DIR`.
+            estado = ler_estado(tentativa.dir_conta)
             if estado.estado == "ok" and estado.loggedIn:
                 return {
                     "ok": True,

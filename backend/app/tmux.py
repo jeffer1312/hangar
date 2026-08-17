@@ -834,15 +834,21 @@ def pane_scrollback(name: str) -> int:
     return int(out) if out.isdigit() else 0
 
 
-def capture_pane(name: str, lines: int = 200, cores: bool = False) -> str:
-    """`cores=True` mantem os codigos ANSI (`-e`). Padrao False: TODO o resto do backend (classify,
-    statusline, gate de envio) casa texto puro, e um `\\x1b[...m` no meio quebraria cada regex.
+def capture_pane(name: str, lines: int = 200, cores: bool = False, juntar: bool = False) -> str:
+    """`cores=True` mantem os codigos ANSI (`-e`); `juntar=True` junta linhas quebradas (`-J`).
+    Padrao False nos dois: TODO o resto do backend (classify, statusline, gate de envio) casa
+    texto puro linha a linha, e um `\\x1b[...m` no meio quebraria cada regex (cores) assim
+    como uma linha quebrada virada linha unica mudaria a leitura de desenho de TUI (juntar).
 
-    So a previa do Kimi liga isso, e por um motivo que o texto puro nao resolve: la o raciocinio e a
-    resposta sao desenhados com o MESMO marcador `●` e so a cor/italico os separa."""
+    So a previa do Kimi liga cores, por um motivo que o texto puro nao resolve: la o raciocinio
+    e a resposta sao desenhados com o MESMO marcador `●` e so a cor/italico os separa. So o
+    `_shell_ler` do login_conta liga juntar: a URL OAuth passa de 80 colunas e o CLI a quebra
+    na margem; sem o `-J` o link tocavel da tela chega truncado (B2)."""
     alvo = ["tmux", "capture-pane", "-p", "-t", _pane_target(name), "-S", f"-{lines}"]
     if cores:
         alvo.insert(3, "-e")
+    if juntar:
+        alvo.insert(3, "-J")
     cp = _run(alvo)
     if cp.returncode != 0:
         # stdout vazio numa falha e indistinguivel de um pane genuinamente vazio -> o /pane devolvia

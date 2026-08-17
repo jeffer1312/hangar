@@ -129,6 +129,22 @@ def test_capture_pane_targets_exact_session():
     assert "=0:" in run.call_args[0][0]
 
 
+def test_capture_pane_juntar_insere_J_so_quando_pedido():
+    # B2 — `juntar=True` poe `-J` na linha de comando; sem o parametro NAO poe (mesmo
+    # precedente do `-e` do cores). O resto do backend le desenho de TUI linha a linha e
+    # juntar linhas quebradas la estragaria a leitura — o padrao e False.
+    with patch.object(tmux, "RUN", return_value=MagicMock(stdout="", returncode=0)) as run:
+        tmux.capture_pane("cc", juntar=True)
+        tmux.capture_pane("cc")
+    # O _pane_target resolve via agentpane (1 list-panes antes de cada capture) — filtra
+    # os args de capture-pane antes de comparar.
+    capturas = [c.args[0] for c in run.call_args_list
+                if c.args[0][:2] == ["tmux", "capture-pane"]]
+    com_j, sem_j = capturas[0], capturas[1]
+    assert "-J" in com_j and com_j.index("-J") < com_j.index("-S")
+    assert "-J" not in sem_j
+
+
 def test_pane_pid_targets_exact_session():
     with patch.object(tmux, "RUN", return_value=MagicMock(stdout="540144\n", returncode=0)) as run:
         assert tmux.pane_pid("0") == 540144

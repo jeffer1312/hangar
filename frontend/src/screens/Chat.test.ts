@@ -92,7 +92,6 @@ vi.mock('../lib/api', () => ({
   createSession: vi.fn(),
   answerQuestions: vi.fn(),
   isAbortError: vi.fn(() => false),
-  isTimeoutError: vi.fn(() => false),
 }));
 vi.mock('../lib/auth', () => ({
   listServers: vi.fn(() => [{ id: 'srv-test', label: 'T', baseUrl: 'http://x', token: 't' }]),

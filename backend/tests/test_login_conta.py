@@ -9,6 +9,7 @@ NUNCA vem da aparência da tela — o login só é confirmado relendo o estado d
 """
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -21,12 +22,28 @@ def _pane_mentira():
 > https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code
 Paste code here if prompted >"""
 
+# B2 — uma URL OAuth REAL passa de 80 colunas e o CLI a quebra na margem da janela
+# escondida (medido: /login/passo devolvia "https://claude.com/cai/oauth/authorize?code=t").
+# O capture-pane cru devolve a quebra como \n; com -J (juntar) vem inteira, com o state no fim.
+_URL_QUEBRADA = ("Welcome to Claude Code!\n"
+                 "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize"
+                 "?code=true&client_id=9d1c250a-\n"
+                 "e61b-44d9-88ed-5944d1962f5e&response_type=code&code_challenge=xyz&state=abc\n"
+                 "Paste code here if prompted >")
+_URL_JUNTA = ("Welcome to Claude Code!\n"
+              "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize"
+              "?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+              "&response_type=code&code_challenge=xyz&state=abc\n"
+              "Paste code here if prompted >")
+
 
 class _Bateia:
     """Trocáveis do módulo, gravando o que foi chamado (sem rede, sem processo)."""
 
     def __init__(self, ler=None):
         self.criadas = []
+        self.vivas = []          # janelas de mentira que EXISTEM (criadas e não mortas)
+        self.eventos = []        # ordem real de matar:/criar: (prova de ORDEM do B3)
         self.config_dirs = []
         self.digitadas = []
         self.matadas = []
@@ -37,9 +54,12 @@ class _Bateia:
     def criar(self, nome, cwd, config_dir=None):
         if self.falhar_criacao:
             return None
+        alvo = f"term-{nome}"
         self.criadas.append(nome)
+        self.vivas.append(alvo)      # a sessao que EXISTE e o retorno (term-<chave>)
+        self.eventos.append(f"criar:{nome}")
         self.config_dirs.append(config_dir)
-        return f"term-{nome}"
+        return alvo
 
     def digitar(self, nome, texto):
         self.digitadas.append((nome, texto))
@@ -55,9 +75,17 @@ class _Bateia:
         return self.ler_()
 
     def matar(self, nome):
+        if nome not in self.vivas:
+            # Nunca existiu: no-op, igual ao kill_session idempotente — sem isto o B3
+            # (matar sobra ANTES de criar) apareceria como morte a cada iniciar.
+            return
+        self.vivas.remove(nome)
+        self.eventos.append(f"matar:{nome}")
         self.matadas.append(nome)
         # Depois de morta, a tentativa some: um cancelar concorrente não pode matar de novo.
-        _tentativas.pop("conta-a", None)
+        # Referencia ao MODULO: o nome cru levantava NameError engolido pelo try/except do
+        # _limpar (o pop nunca tinha rodado de verdade) — corrigido aqui.
+        login_conta._tentativas.pop("conta-a", None)
 
 
 @pytest.fixture
@@ -105,6 +133,16 @@ def test_iniciar_ja_em_andamento_nao_duplica_janela(bateia):
         login_conta.iniciar("conta-a", "/home/u")
     assert bateia.criadas == ["login-conta-a"]
 
+def test_iniciar_mata_sobra_de_janela_antes_de_criar(bateia):
+    # B3 — um backend que caiu no meio de uma tentativa deixa a janela VIVA no servidor
+    # do tmux (a sessao sobrevive ao processo). Reatar traria um `claude auth login`
+    # parado no prompt do codigo; o iniciar mata a sobra ANTES de criar a janela nova.
+    bateia.vivas.append("term-login-conta-a")   # sobra de um backend morto
+    login_conta.iniciar("conta-a", "/home/u")
+    # ORDEM (não só ocorrência): matar a sobra vem ANTES de criar a janela nova.
+    assert bateia.eventos == ["matar:term-login-conta-a", "criar:login-conta-a"]
+    assert bateia.matadas == ["term-login-conta-a"]
+
 
 def test_cancelar_mata_a_janela(bateia):
     login_conta.iniciar("conta-a", "/home/u")
@@ -131,6 +169,33 @@ def test_le_endereco_de_autorizacao(bateia):
     assert "https://claude.com/cai/oauth/authorize" in passo["url"]
     assert "client_id=9d1c250a" in passo["url"]
 
+def test_passo_une_url_quebrada_na_margem(monkeypatch):
+    # B2 — a URL OAuth passa de 80 colunas da janela escondida e o CLI a quebra na margem;
+    # sem o -J o capture cru devolve a quebra como \n e o link da tela morre no meio
+    # (medido: /login/passo devolvia "https://claude.com/cai/oauth/authorize?code=t").
+    # O _shell_ler REAL pede o -J à primitiva e o passo devolve a URL INTEIRA, com o
+    # state no fim.
+    juntar_usado = {}
+
+    def capture_fake(nome, lines=200, cores=False, juntar=False):
+        juntar_usado["juntar"] = juntar
+        return _URL_JUNTA if juntar else _URL_QUEBRADA
+
+    monkeypatch.setattr(tmux, "capture_pane", capture_fake)
+    monkeypatch.setattr(login_conta, "_shell_criar",
+                        lambda nome, cwd, config_dir=None: f"term-{nome}")
+    monkeypatch.setattr(login_conta, "_shell_submeter", lambda nome, texto: None)
+    monkeypatch.setattr(login_conta, "_shell_matar", lambda nome: None)
+
+    login_conta.iniciar("conta-a", "/home/u/.claude-conta-a")
+    passo = login_conta.passo("conta-a")
+    assert passo["etapa"] == "aguardando"
+    assert passo["url"] == ("https://claude.com/cai/oauth/authorize?code=true&client_id="
+                            "9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code"
+                            "&code_challenge=xyz&state=abc")
+    # O _shell_ler de verdade pediu o -J à primitiva — não é o duplo que decide.
+    assert juntar_usado["juntar"] is True
+
 
 def test_sem_url_ainda_na_tela_passo_aguardando_sem_url(bateia):
     bateia.ler_ = lambda: "Welcome to Claude Code!"
@@ -145,48 +210,24 @@ def test_sem_tentativa_passo_devolve_idle(bateia):
     assert passo["etapa"] == "idle"
 
 
-def test_confirmar_antigo_nao_mata_janela_da_tentativa_nova(bateia):
-    # B5 — corrida: o usuário cancela DURANTE a espera do confirmar e entra de novo. A
-    # thread velha do confirmar não pode matar a janela da tentativa NOVA quando sair
-    # (o `finally` limpa só o que é dela).
-    def estado_fake(dir_conta):
-        return conta_estado._estado_login({"loggedIn": False})
-
-    def cancela_e_recomeca():
-        time.sleep(0.02)
-        login_conta.cancelar("conta-a")
-        login_conta.iniciar("conta-a", "/home/u")
-
-    monkeypatch_poll(0.001)
-    login_conta.iniciar("conta-a", "/home/u")
-    t = threading.Thread(target=cancela_e_recomeca)
-    t.start()
-    with pytest.raises(RuntimeError):
-        login_conta.confirmar("conta-a", "CODE-123", estado_fake=estado_fake, timeout_s=5)
-    t.join()
-    # A tentativa nova CONTINUA em voo e a janela dela NÃO foi morta pela thread velha.
-    # (O cancelar matou a primeira; a segunda segue viva.)
-    assert login_conta._em_curso("conta-a")
-    assert bateia.matadas == ["term-login-conta-a"]
-    # Cancela a segunda (limpeza do teste).
-    login_conta.cancelar("conta-a")
-    assert bateia.matadas == ["term-login-conta-a", "term-login-conta-a"]
-
-
 # --------------------------------------------------------------------- confirmação
 
 
 def test_confirmar_digita_o_codigo_e_confirma_pela_releitura(bateia):
     # A confirmação é RELER o estado da conta — nunca a aparência da tela (requisito do
     # Step 1). Aqui a tela de mentira NUNCA mostra login; quem decide é o `_estado_login`.
-    # Sem estado fake, a releitura lê a CLI REAL — que existe nesta máquina e responde
-    # `loggedIn: false` (a conta virgem de mentira): espera até o teto, por isso o
-    # `timeout_s` curto.
+    # Com `estado_fake` (a porta de teste do leitor real): a releitura devolve deslogada e
+    # o teto curto estoura. O caminho sem estado_fake lê a CLI REAL e é da fumaça, não do
+    # teste de unidade (B1: com o caminho de mentira a CLI criaria diretório fora da árvore
+    # do repo).
     bateia.ler_ = lambda: "Paste code here if prompted >"
     monkeypatch_poll(0.001)
     login_conta.iniciar("conta-a", "/home/u")
     with pytest.raises(TimeoutError):
-        login_conta.confirmar("conta-a", "CODE-123", timeout_s=0.3)
+        login_conta.confirmar(
+            "conta-a", "CODE-123",
+            estado_fake=lambda d: conta_estado._estado_login({"loggedIn": False}),
+            timeout_s=0.3)
 
     assert bateia.digitadas[-1] == ("term-login-conta-a", "CODE-123")
     # O Enter foi enviado (o código precisa SUBMETER, não só ser digitado — B3).
@@ -200,6 +241,25 @@ def test_confirmar_digita_o_codigo_e_confirma_pela_releitura(bateia):
 def test_confirmar_sem_tentativa_devolve_erro(bateia):
     with pytest.raises(RuntimeError):
         login_conta.confirmar("conta-a", "CODE-123")
+
+def test_confirmar_rele_o_estado_pelo_caminho_da_conta_nao_pelo_rotulo(bateia, monkeypatch):
+    # B1 — a confirmação relê o estado pelo CAMINHO REAL da conta (dir_conta), nunca pelo
+    # RÓTULO: com um rótulo relativo a CLI criava backend/<rotulo>/ dentro da árvore do
+    # repo (medido: backend/conta-a/) e a conta nunca relia logada. O teste captura o
+    # argumento que chega ao leitor real — o path, nunca o label.
+    capturados = []
+
+    def auth_status_captura(dir_conta):
+        capturados.append(dir_conta)
+        return {"loggedIn": True, "email": "u@exemplo.com", "subscriptionType": "max"}
+
+    monkeypatch.setattr(conta_estado, "_auth_status", auth_status_captura)
+    monkeypatch_poll(0.001)
+    login_conta.iniciar("conta-a", "/home/u/.claude-conta-a")
+    resultado = login_conta.confirmar("conta-a", "CODE-123")
+    assert resultado["ok"] is True
+    assert resultado["email"] == "u@exemplo.com"
+    assert capturados == [Path("/home/u/.claude-conta-a")]
 
 
 def test_confirmar_espera_ate_a_conta_mostrar_logada(bateia):

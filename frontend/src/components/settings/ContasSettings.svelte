@@ -101,6 +101,12 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   let loginPoll: ReturnType<typeof setInterval> | null = null;
   let loginIniciando = $state(false);
   let loginParado = $state(false);
+  // B4 — o onDestroy só enxerga `loginDe`, que é escrito DEPOIS do await do iniciar:
+  // desmontar ENTRE o clique e a resposta do servidor deixava o poll órfão e a tentativa
+  // presa (o próximo Entrar caía em 409 sem botão de Cancelar). Flag como a do
+  // Composer.svelte (getUserMedia em voo num componente morto): quem morreu não pode
+  // armar poll nem registrar tentativa.
+  let destruido = $state(false);
 
   async function iniciarEntrar(conta: ContaEstado) {
     if (loginDe || loginIniciando) return;
@@ -110,6 +116,12 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     loginPasso = { etapa: 'idle' };
     try {
       await iniciarLogin(conta.label);
+      if (destruido) {
+        // Desmontou no meio do voo: sem tela onde mostrar erro (o mesmo ramo silencioso
+        // do onDestroy), mas a janela do servidor precisa morrer de qualquer forma.
+        cancelarLogin(conta.label).catch(() => {});
+        return;
+      }
       loginDe = conta.label;
       // Primeira leitura do passo logo de cara (a URL pode já estar no pane), depois o poll.
       // O poll só começa depois do login confirmado no servidor: um 409/404 no iniciar NÃO
@@ -198,6 +210,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   // aceitável aqui: o componente já não existe, não há tela onde mostrar o erro, e a
   // janela do servidor precisa morrer de qualquer forma.
   onDestroy(() => {
+    destruido = true;
     pararPoll();
     if (loginDe) cancelarLogin(loginDe).catch(() => {});
   });

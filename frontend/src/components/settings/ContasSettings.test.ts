@@ -215,6 +215,34 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     }
   });
 
+  it('desmontar ENQUANTO o iniciarLogin esta em voo cancela e nao arma poll (B4)', async () => {
+    // B8 fechou a porta "desmontar com o painel jah aberto"; esta e a porta que o
+    // onDestroy nao via: desmontar ENTRE o clique e a resposta do servidor. O loginDe so
+    // e escrito depois do await — sem a flag `destruido`, o onDestroy nao cancela nada e
+    // o setInterval fica orfao batendo em /login/passo (e a tentativa presa no servidor).
+    vi.useFakeTimers();
+    try {
+      let resolver!: () => void;
+      loginMock.iniciarLogin.mockReturnValue(
+        new Promise<void>((r) => { resolver = r; }) as never);
+      const t = montar([DESLOGADA]);
+      await tick(); await tick();
+      t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+      await tick(); await tick(); await tick(); await tick();
+      expect(loginMock.iniciarLogin).toHaveBeenCalledWith('testes');
+      unmount(t.comp);      // desmonta ANTES de o iniciarLogin resolver
+      resolver();           // a resposta chega num componente morto
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+      await tick();
+      expect(loginMock.cancelarLogin).toHaveBeenCalledWith('testes');
+      const passosAntes = loginMock.passoLogin.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(loginMock.passoLogin.mock.calls.length).toBe(passosAntes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('confirmar com campo vazio não chama a API', async () => {
     const t = montar([DESLOGADA]);
     await tick(); await tick();
