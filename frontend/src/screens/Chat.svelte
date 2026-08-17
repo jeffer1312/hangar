@@ -41,6 +41,7 @@
     answerQuestions,
     getRunners,
     isAbortError,
+    isTimeoutError,
     getPlan,
   } from '../lib/api';
   import { formataErro } from '../lib/errosApi';
@@ -872,12 +873,37 @@
   // o mesmo resultado, então esta não convida a tentar. Sumir calada é que não pode.
   let histGap = $state<'' | 'failed' | 'unjoinable'>('');
 
+  // Primeira carga: teto CURTO e uma segunda tentativa. Medido no iPhone em 17/08/2026 — abrir uma
+  // sessao caia num skeleton parado por minutos e o pedido NAO aparecia no log do backend (nem
+  // chegou a sair do celular). Com o teto unico de 45s, esse tempo todo era tela de esqueleto sem
+  // nada pra fazer. Agora: 10s, segunda tentativa (conexao nova) com 15s, e ai a tela de erro com o
+  // botao de tentar de novo — que ja existia e ninguem alcancava.
+  const TAIL_TIMEOUT_1 = 10_000;
+  const TAIL_TIMEOUT_2 = 15_000;
+  let histRetentando = $state(false);
+
+  async function tailComRetentativa(signal: AbortSignal) {
+    try {
+      return await getHistory(sessionName, TAIL_FIRST, signal, TAIL_TIMEOUT_1);
+    } catch (err) {
+      // So o TETO justifica repetir. Cancelamento (troca de sessao, /clear) e erro do servidor
+      // (404/500) sobem: repetir os dois seria pedir de novo o que ja falhou de verdade.
+      if (!isTimeoutError(err)) throw err;
+      histRetentando = true;
+      try {
+        return await getHistory(sessionName, TAIL_FIRST, signal, TAIL_TIMEOUT_2);
+      } finally {
+        histRetentando = false;
+      }
+    }
+  }
+
   async function loadHistory() {
     const signal = newHistLoad();
     const g = histGen;
     histGap = '';
     try {
-      const tail = await getHistory(sessionName, TAIL_FIRST, signal);
+      const tail = await tailComRetentativa(signal);
       if (g !== histGen) return;   // outra carga assumiu no meio do voo: esta resposta é velha
       events = tail;
       rebuildIndex();
@@ -1608,6 +1634,11 @@
       <div class="sk-line sk-r" style="width:38%"></div>
       <div class="sk-line" style="width:90%"></div>
       <div class="sk-line" style="width:55%"></div>
+      {#if histRetentando}
+        <!-- A 1a tentativa estourou o teto. Sem esta linha, a 2a rodada era mais esqueleto parado e
+             quem olha nao tem como saber se o app desistiu. -->
+        <p class="sk-aviso">{m.chat_historico_demorando()}</p>
+      {/if}
     </div>
   {:else if kimiPreNascimento}
     <!-- Kimi pre-1o-prompt: NAO e erro — a sessao (id + wire.jsonl) so nasce no primeiro envio.
@@ -1898,6 +1929,14 @@
     animation: sk-shim 1.6s linear infinite;
   }
   .sk-line.sk-r { align-self: flex-end; }   /* algumas linhas "do usuario" a direita */
+  /* Aviso da 2a tentativa: transparente de proposito — quem carrega o material e a tela (ver a
+     regra de transparencia no CLAUDE.md); aqui e so texto por cima. */
+  .sk-aviso {
+    align-self: center;
+    margin: var(--space-3) 0 0;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
   @keyframes sk-shim {
     0%   { background-position: 140% 0; }
     100% { background-position: -140% 0; }

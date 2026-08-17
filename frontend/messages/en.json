@@ -390,6 +390,7 @@
   "chat_sem_historico_anterior": "No earlier history — the transcript changed",
   "chat_sessao_encerrada": "This session was ended.",
   "chat_carregando_historico": "Loading history",
+  "chat_historico_demorando": "Taking a while… retrying",
   "chat_aguardando_pill": "{n} waiting →",
   "chat_aguardando_proxima_1": "{n} session waiting — go to the next one",
   "chat_aguardando_proxima": "{n} sessions waiting — go to the next one",
