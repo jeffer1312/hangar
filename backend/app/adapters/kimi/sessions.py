@@ -11,7 +11,8 @@ workDirKey = "wd_" + slug(basename(cwd)) + "_" + sha256(cwd)[:12] — hash confi
 (/tmp/kimi-acp-probe -> 15ca61fc9ec9, /home/jefferson/Projetos/hangar -> 5112ff7a84e0).
 O slug e o `slugifyWorkDirName` do proprio CLI (agent-core/src/utils/workdir-slug.ts, lido no
 binario 0.36.1): minusculas, tudo fora de [a-z0-9._-] vira "-", hifen das pontas cai, corta em 40
-chars, e vazio/"."/".." viram "workspace". Sem o minusculas, uma pasta com maiuscula no nome
+chars e o hifen das pontas cai DE NOVO (o corte pode deixar um "-" no fim — sao dois strips no CLI),
+e vazio/"."/".." viram "workspace". Sem o minusculas, uma pasta com maiuscula no nome
 gerava `wd_MinhaPasta_...` enquanto o CLI procurava `wd_minhapasta_...`: o pre-trust nao era achado
 e a TUI nascia no "Trust this folder?" — a primeira mensagem do app respondia o picker e o Kimi saia.
 
@@ -23,10 +24,13 @@ Duas diferencas pro layout do Claude que dirigem o desenho do adapter:
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import time
 from pathlib import Path
+
+_log = logging.getLogger("claude_pocket.kimi.sessions")
 
 
 def kimi_home() -> Path:
@@ -108,5 +112,8 @@ def pretrust_cwd(cwd: str) -> None:
         tmp.write_text(json.dumps({"root": resolved, "trustedAt": int(time.time() * 1000)}),
                        encoding="utf-8")
         os.replace(tmp, f)  # atomico, mesmo padrao dos marcadores
-    except OSError:
-        pass
+    except OSError as e:
+        # Best-effort NAO e mudo: o unico sintoma de um pre-trust que nao foi gravado e a TUI
+        # parada no "Trust this folder?", e sem esta linha nao ha nada no log ligando uma coisa a
+        # outra. Mesmo aviso do irmao do lado Claude (registry._pretrust_cwd).
+        _log.warning("pretrust do kimi falhou pra %s: %r", cwd, e)

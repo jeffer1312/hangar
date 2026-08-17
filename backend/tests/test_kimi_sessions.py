@@ -24,6 +24,9 @@ def test_workdir_key_slug_segue_o_slugify_do_cli():
     # Casos de borda: vazio vira "workspace", e corta em 40 chars.
     assert _slug("/@@@") == "workspace"
     assert _slug("/" + "a" * 60) == "a" * 40
+    # Corte caindo EM CIMA de um hifen: o CLI faz o strip das pontas duas vezes (antes e depois do
+    # slice), entao o "-" que sobra na ponta cai e o slug tem 39 chars, nao 40 terminando em "-".
+    assert _slug("/" + "a" * 39 + "-" + "b" * 10) == "a" * 39
 
 
 def test_transcript_path_via_session_index(tmp_path, monkeypatch):

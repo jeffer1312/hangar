@@ -882,18 +882,21 @@
   const TAIL_TIMEOUT_2 = 15_000;
   let histRetentando = $state(false);
 
-  async function tailComRetentativa(signal: AbortSignal) {
+  // `g` (a geracao da carga) entra aqui pelo mesmo motivo de todo o resto do loadHistory: uma carga
+  // velha nao pode escrever na tela da carga nova. Sem isso, o aviso ficava aceso pela ordem em que
+  // os `finally` calham de rodar — que hoje funciona e nao e garantia de nada.
+  async function tailComRetentativa(signal: AbortSignal, g: number) {
     try {
       return await getHistory(sessionName, TAIL_FIRST, signal, TAIL_TIMEOUT_1);
     } catch (err) {
       // So o TETO justifica repetir. Cancelamento (troca de sessao, /clear) e erro do servidor
       // (404/500) sobem: repetir os dois seria pedir de novo o que ja falhou de verdade.
       if (!isTimeoutError(err)) throw err;
-      histRetentando = true;
+      if (g === histGen) histRetentando = true;
       try {
         return await getHistory(sessionName, TAIL_FIRST, signal, TAIL_TIMEOUT_2);
       } finally {
-        histRetentando = false;
+        if (g === histGen) histRetentando = false;
       }
     }
   }
@@ -902,8 +905,9 @@
     const signal = newHistLoad();
     const g = histGen;
     histGap = '';
+    histRetentando = false;   // carga nova comeca sem o aviso da anterior, igual ao histGap
     try {
-      const tail = await tailComRetentativa(signal);
+      const tail = await tailComRetentativa(signal, g);
       if (g !== histGen) return;   // outra carga assumiu no meio do voo: esta resposta é velha
       events = tail;
       rebuildIndex();
@@ -914,7 +918,11 @@
       if (tail.length >= TAIL_FIRST) loadOlderInBackground(g);
     } catch (err) {
       if (isAbortError(err) || g !== histGen) return;   // cancelado ≠ falhou: nada na tela
-      const msg = err instanceof Error ? err.message : m.chat_erro_carregar_historico();
+      // Teto estourado vira frase traduzida: o texto que o navegador poe no TimeoutError e
+      // "signal timed out", que nao diz nada pra quem le a tela (mesma troca que o
+      // apiFetchForServer ja faz em lib/api.ts).
+      const msg = isTimeoutError(err) ? m.chat_historico_sem_resposta()
+        : err instanceof Error ? err.message : m.chat_erro_carregar_historico();
       // Kimi pre-1o-prompt: o 404 do /history e ESPERADO (sem jsonl ainda) -> vira hint, nao a
       // tela de erro "Não encontrei o transcript" (que apavorava num estado que e por design).
       // Pelo `.status` que o apiFetch anexa, NAO por regex na frase do backend: o texto do detail

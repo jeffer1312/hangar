@@ -391,6 +391,7 @@
   "chat_sessao_encerrada": "Esta sessão foi encerrada.",
   "chat_carregando_historico": "Carregando histórico",
   "chat_historico_demorando": "Demorando… tentando de novo",
+  "chat_historico_sem_resposta": "O servidor não respondeu a tempo.",
   "chat_aguardando_pill": "{n} aguardando →",
   "chat_aguardando_proxima_1": "{n} sessão aguardando — ir para a próxima",
   "chat_aguardando_proxima": "{n} sessões aguardando — ir para a próxima",
