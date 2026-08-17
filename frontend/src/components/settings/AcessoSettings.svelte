@@ -139,6 +139,7 @@
     line-height: 1.4;
   }
   .ac-cartao {
+    container-type: inline-size;
     margin: 0;
     padding: 0;
     list-style: none;
@@ -220,4 +221,11 @@
     line-height: 1.45;
   }
   .ac-alerta-txt b { color: var(--text-primary); font-weight: 600; }
+
+  /* Alvo de toque no celular: o botao declara min-height:0, que anula a regra global
+     `button { min-height: 44px }` do app.css:546 — sem isto ele fica 30px na folha
+     estreita. Mesmo padrao da aba Contas (ContasSettings.svelte). */
+  @container (max-width: 620px) {
+    .ac-copiar { height: 44px; min-height: 44px; }
+  }
 </style>

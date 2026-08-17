@@ -41,6 +41,21 @@ _TETO_TAILSCALE_S = 2.0
 _LOOPBACK_ONLY = {"127.0.0.1", "localhost", "::1"}
 
 
+class _SemRedirect(urllib.request.HTTPRedirectHandler):
+    """Não segue redirecionamento. Devolver None faz o 3xx subir como HTTPError, que
+    `_bater` já trata como alcance ("a porta respondeu")."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# `urlopen` reaplica o teto INTEIRO a cada um dos até 10 redirects: medido, "teto de 3s"
+# virou 11s numa cadeia de 302. Alcance é "a porta respondeu"; seguir o link não faz
+# parte da pergunta. build_opener SUBSTITUI o handler padrão porque _SemRedirect é
+# subclasse dele — passar só os outros handlers NÃO tira o redirect (medido).
+_ABRIDOR = urllib.request.build_opener(_SemRedirect())
+
+
 def _bater(url: str) -> float:
     """Bate na porta e devolve o tempo em ms. Qualquer resposta HTTP conta como
     alcance — a porta respondeu (mesmo 4xx/5xx é porta viva); só falta de transporte
@@ -48,7 +63,7 @@ def _bater(url: str) -> float:
     """
     inicio = time.monotonic()
     try:
-        with urllib.request.urlopen(url + "/", timeout=TETO_ESPERA_S):
+        with _ABRIDOR.open(url + "/", timeout=TETO_ESPERA_S):
             pass
     except urllib.error.HTTPError:
         pass  # respondeu HTTP — alcance, não qualidade

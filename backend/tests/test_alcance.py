@@ -125,3 +125,40 @@ def test_public_url_entra_e_e_testada(monkeypatch):
     assert pub["tipo"] == "publico"
     assert pub["url"] == "https://hangar.example.com"  # sem a barra final
     assert pub["estado"] == "ok"
+
+def test_teto_vale_para_a_chamada_inteira_nao_por_hop():
+    """Um 302 em cadeia reaplicava o teto a cada hop: 11s medidos com teto de 3s.
+
+    Este é o ÚNICO teste do arquivo que chama o `_bater` de verdade (socket local,
+    porta efêmera, sem rede externa nem processo — mesmo padrão dos testes de socket
+    desta base): a suíte inteira substituía `_bater` e o teto furado passava verde.
+    """
+    import http.server
+    import itertools
+    import socketserver
+    import threading
+
+    cont = itertools.count()
+
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{porta}/h{next(cont)}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), H)
+    srv.daemon_threads = True
+    porta = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        alcance.testar_endereco(f"http://127.0.0.1:{porta}")
+        # Sem o _SemRedirect este número passa de 10 (a cadeia inteira é seguida).
+        assert next(cont) <= 2
+    finally:
+        srv.shutdown()
