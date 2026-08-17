@@ -9,9 +9,17 @@ Grupo cross-server de N não existe (o pareamento cross-server é 1:1); quando e
 import http.client
 import json
 import logging
+import os
+import re
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:      # Windows: sem flock, a trava vira no-op (_salvar) — mesmo padrão de contas.py
+    fcntl = None
 
 _log = logging.getLogger("claude_pocket")
 
@@ -57,6 +65,132 @@ def _load() -> dict:
         _log.warning("peers.json não é um objeto JSON (%s)", _PEERS_FILE)
         return {}
     return data
+
+
+_ID_OK = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def validar_id(nome: str) -> None:
+    """Identificador de máquina (peer OU desta máquina): mesmo domínio do nome de conta.
+
+    fullmatch e não match+$: com `$`, um nome terminado em quebra de linha final passava e o
+    arquivo nascia com controle de linha no nome (precedente contas.py:79). O nome vira chave do
+    peers.json e prefixo de endereço `srv::sessao` — os dois não aceitam espaço nem maiúscula.
+    """
+    if not isinstance(nome, str) or not _ID_OK.fullmatch(nome):
+        raise ValueError("identificador: use minúsculas, números, '-' ou '_' (até 32 caracteres)")
+
+
+def _ler_estrito() -> dict:
+    """Leitura pra ESCRITA. O _load tolera corrompido (quem só lê não pode derrubar a malha);
+    aqui corrompido é RECUSA: gravar por cima apagaria os tokens que o operador ainda podia
+    recuperar à mão (mesmo racional de cp_panel_common). Ausente continua sendo {}, sem peers.
+    """
+    try:
+        data = json.loads(_PEERS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}   # esperado: sem peers.json = cross-server desligado, não é erro
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        raise ValueError(f"peers.json ilegível ({e}) — corrija o arquivo antes de gravar") from e
+    if not isinstance(data, dict):
+        raise ValueError("peers.json não é um objeto JSON — corrija o arquivo antes de gravar")
+    return data
+
+
+def _mutar(fn):
+    """Read-MODIFY-WRITE do arquivo sob UM lock exclusivo — a LEITURA também fica dentro.
+
+    Sem isto duas gravações concorrentes liam o mesmo estado ANTES do lock e a última a escrever
+    apagava a mudança da outra, calado (test_gravacao_concorrente pega exatamente isso). O lock é
+    sidecar (.lock) e não o próprio arquivo porque o os.replace troca o INODE — travar o arquivo
+    antigo seguraria um inode órfão (mesmo desenho de cp_panel_common; no Windows sem fcntl a
+    trava vira no-op, como em contas.py).
+
+    Escrita atômica (tmp + os.replace) com o PID no nome do temporário: com nome fixo, duas
+    escritas concorrentes abriam o MESMO caminho em modo truncate e o replace promovia bytes
+    entrelaçados das duas — o acidente que este formato existe pra impedir.
+    """
+    lock_path = _PEERS_FILE.with_name(_PEERS_FILE.name + ".lock")
+    with open(lock_path, "w", encoding="utf-8") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        dados = _ler_estrito()
+        resultado = fn(dados)
+        # Órfão de processo morto entre o write e o replace (kill -9/OOM não roda except): contém
+        # a malha inteira de tokens — não pode apodrecer no disco esperando a próxima gravação.
+        for stale in _PEERS_FILE.parent.glob(_PEERS_FILE.name + ".*.tmp"):
+            stale.unlink(missing_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(_PEERS_FILE.parent),
+            prefix=f"{_PEERS_FILE.name}.{os.getpid()}.",
+            suffix=".tmp")
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(dados, fh, ensure_ascii=False, indent=2)
+                fh.write("\n")
+            os.chmod(tmp, 0o600)          # mkstemp já nasce 0600; explícito porque é contrato
+            os.replace(tmp, _PEERS_FILE)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    # Arquivo que JÁ existia com modo frouxo volta a 0600 na gravação (o replace carrega o modo
+    # do tmp, que é 0600; este chmod é a rede se algo alargar o modo entre replace e aqui).
+    try:
+        os.chmod(_PEERS_FILE, 0o600)
+    except OSError as e:
+        _log.warning("não consegui garantir 0600 em %s: %r", _PEERS_FILE, e)
+    return resultado
+
+
+def listar_peers() -> dict:
+    """Mapa id -> cfg do peers.json. Arquivo ausente = sem peers, não erro."""
+    return _load()
+
+
+def gravar_peer(server_id: str, base_url: str, token: str, web_url: str | None = None) -> dict:
+    """Upsert de um peer: regravar o mesmo identificador substitui, não duplica. Valida ANTES de
+    escrever (recusa é recusa — nada de gravação parcial). Preserva `enabled`, que é o toggle do
+    painel e não pertence a este formulário."""
+    validar_id(server_id)
+    if not isinstance(base_url, str) or not isinstance(token, str):
+        raise ValueError("endereço e token precisam ser texto")
+    if web_url is not None and not isinstance(web_url, str):
+        raise ValueError("web_url precisa ser texto")
+    base = base_url.strip()
+    tok = token.strip()
+    if not (base.startswith("http://") or base.startswith("https://")) or not tok:
+        raise ValueError("endereço precisa ser http(s):// e o token não pode ficar vazio")
+
+    def _gravar(dados: dict) -> dict:
+        antigo = dados.get(server_id)
+        dados[server_id] = {"base_url": base.rstrip("/"), "token": tok}
+        if isinstance(antigo, dict) and antigo.get("enabled") is not None:
+            dados[server_id]["enabled"] = antigo["enabled"]
+        # web_url é do painel (cp_panel_common/cp-panel-data), não deste formulário: quem regrava
+        # sem informá-lo não está pedindo pra apagá-lo. Mesmo racional do enabled.
+        if isinstance(antigo, dict) and antigo.get("web_url"):
+            dados[server_id]["web_url"] = antigo["web_url"]
+        if web_url:
+            w = web_url.strip()
+            if w:
+                dados[server_id]["web_url"] = w
+        return dados[server_id]
+
+    return _mutar(_gravar)
+
+
+def remover_peer(server_id: str) -> None:
+    """Remove um peer do arquivo. Desconhecido é recusa (ValueError), não no-op: apagar um peer
+    que não existe esconderia o typo de quem pediu."""
+    validar_id(server_id)
+
+    def _remover(dados: dict) -> None:
+        if server_id not in dados:
+            raise ValueError(f"servidor '{server_id}' não está no peers.json")
+        del dados[server_id]
+
+    _mutar(_remover)
 
 
 def peer_cfg(server_id: str) -> tuple[str, str] | None:

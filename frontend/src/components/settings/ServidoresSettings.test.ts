@@ -42,9 +42,17 @@ vi.mock('../../lib/api', () => ({
   setQuietHoursForServer: vi.fn(),
 }));
 vi.mock('../../lib/push', () => ({ enablePush: vi.fn(), pushSupported: () => true }));
+vi.mock('../../lib/peers', () => ({
+  getIdentificador: vi.fn(async () => ({ identificador: '' })),
+  setIdentificador: vi.fn(async (v: string) => ({ identificador: v })),
+  listarPeers: vi.fn(async () => []),
+  gravarPeer: vi.fn(async (d: unknown) => [d]),
+  removerPeer: vi.fn(async () => []),
+}));
 
 const authMock = vi.mocked(auth);
 const apiMock = vi.mocked(api);
+const peersMock = vi.mocked(await import('../../lib/peers'));
 const SRV: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'x' } as Server;
 
 let onLogoutResolve: (() => void) | null = null;
@@ -312,6 +320,240 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
     await tick();
     // ConfirmDialog desmontou (pendingRemoval=null) e o ModalDialog restaurou o foco pro gatilho
     expect(document.activeElement).toBe(del);
+    unmount(t.comp);
+  });
+});
+
+// ── Seções da Task 5: identificador desta máquina + máquinas que este servidor alcança ───
+describe('ServidoresSettings — identificador e peers (Task 5)', () => {
+  async function esperarCarga() {
+    await Promise.resolve(); await Promise.resolve(); await tick();
+  }
+
+  it('estado 1 do mock: sem identificador, aviso visível e seção de alcance vazia, sem registrar', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const t = montar();
+    await esperarCarga();
+    expect(peersMock.getIdentificador).toHaveBeenCalledWith(null);  // alvo null = servidor ativo
+    // Esta máquina: rótulo + legenda + aviso, campo com borda de aviso e placeholder
+    expect(t.el.textContent).toContain(m.peers_esta_maquina());
+    expect(t.el.textContent).toContain(m.peers_legenda_identificador());
+    const aviso = t.el.querySelector('.id-aviso');
+    expect(aviso?.textContent).toContain(m.peers_aviso_nao_definido());
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo');
+    expect(campo?.classList.contains('vazio')).toBe(true);
+    expect(campo?.value).toBe('');
+    expect(campo?.getAttribute('placeholder')).toContain('casa');
+    // alcance: só a legenda de vazio, sem cartão nem botão de registrar (mock estado 1)
+    expect(t.el.textContent).toContain(m.peers_vazio());
+    expect(t.el.querySelector('.pr-cartao')).toBeNull();
+    expect(t.el.querySelector('.pr-btn')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('estado 2 do mock: identificador definido, peer listado com endereço e Remover', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: '••••reto' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.textContent).toContain(m.peers_identificador_definido({ nome: 'casa' }));
+    expect(t.el.querySelector('.id-aviso')).toBeNull();          // definido: sem aviso
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo');
+    expect(campo?.classList.contains('vazio')).toBe(false);
+    expect(campo?.value).toBe('casa');
+    expect(t.el.textContent).toContain(m.peers_legenda_alcance());
+    const nome = t.el.querySelector('.pr-nome');
+    expect(nome?.textContent).toBe('notebook');
+    expect(t.el.querySelector('.pr-url')?.textContent).toContain('192.168.0.77');
+    expect(t.el.querySelector('.pr-btn.primaria')?.textContent).toContain(m.peers_registrar());
+    unmount(t.comp);
+  });
+
+  it('Enter no campo grava o identificador; inválido mostra a dica e não grava', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.setIdentificador.mockResolvedValue({ identificador: 'casa' });
+    const t = montar();
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(peersMock.setIdentificador).toHaveBeenCalledWith(null, 'casa');
+    expect(t.el.querySelector('.id-aviso')).toBeNull();          // virou definido
+    // inválido (maiúscula): a dica É a regra, e nada vai pro backend
+    campo.value = 'Casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(t.el.querySelector('.id-erro')?.textContent).toContain(m.peers_identificador_dica({ exemplos: 'casa, notebook' }));
+    expect(peersMock.setIdentificador).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('registrar um peer: diálogo com id/endereço/token grava e a lista atualiza', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.gravarPeer.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
+    await tick();
+    // rótulo curto no botão primário do diálogo: "Confirmar" cabe em uma linha (bloq 3)
+    expect(document.querySelector('.confirm-card .c-primary')?.textContent?.trim())
+      .toBe(m.comum_confirmar());
+    const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
+    inputs[0].value = 'notebook';
+    inputs[0].dispatchEvent(new Event('input'));
+    inputs[1].value = 'http://192.168.0.77:8765';
+    inputs[1].dispatchEvent(new Event('input'));
+    inputs[2].value = 'segredo';
+    inputs[2].dispatchEvent(new Event('input'));
+    await tick();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    await tick(); await tick();
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(null, {
+      id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo',
+    });
+    expect(document.querySelector('.confirm-card')).toBeNull();  // fechou no sucesso
+    expect(t.el.querySelector('.pr-nome')?.textContent).toBe('notebook');
+    unmount(t.comp);
+  });
+
+  it('remover um peer pede confirmação e chama o backend com o id', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://n:8765', token: '••••' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    t.el.querySelector<HTMLButtonElement>('.pr-btn.min')!.click();
+    await tick();
+    expect(document.querySelector('.confirm-card')).not.toBeNull();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-danger')!.click();
+    await tick();
+    expect(peersMock.removerPeer).toHaveBeenCalledWith(null, 'notebook');
+    unmount(t.comp);
+  });
+
+  it('fala com o servidor ESCOLHIDO na aba, não com o ativo', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const outro = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServidoresSettings, { target: el, props: {
+      resolvedServer: outro, apiTarget: outro, onPickTarget: vi.fn(), onLogout: vi.fn() } });
+    await esperarCarga();
+    expect(peersMock.getIdentificador).toHaveBeenCalledWith(outro);
+    expect(peersMock.listarPeers).toHaveBeenCalledWith(outro);
+    unmount(comp as never);
+  });
+
+  it('servidor indisponível não carrega nada', async () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServidoresSettings, { target: el, props: {
+      resolvedServer: null, apiTarget: null, onPickTarget: vi.fn(), onLogout: vi.fn() } });
+    await esperarCarga();
+    expect(peersMock.getIdentificador).not.toHaveBeenCalled();
+    expect(peersMock.listarPeers).not.toHaveBeenCalled();
+    unmount(comp as never);
+  });
+
+  it('falha ao listar peers aparece com nome, e não some quando não é Error', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.querySelector('.id-erro')?.textContent).toContain(m.falha_conexao());
+    unmount(t.comp);
+
+    peersMock.listarPeers.mockRejectedValueOnce('caiu');   // rejeição que NÃO é Error
+    const t2 = montar();
+    await esperarCarga();
+    expect(t2.el.querySelector('.id-erro')?.textContent).toContain(m.erro_desconhecido());
+    unmount(t2.comp);
+  });
+
+  it('peer existente aparece mesmo sem identificador, e a tela não diz "nenhuma"', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.listarPeers.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: '••••reto' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.querySelector('.pr-nome')?.textContent).toBe('notebook');
+    expect(t.el.textContent).not.toContain(m.peers_vazio());
+    expect(t.el.querySelector('.pr-btn.primaria')).toBeNull();   // sem identificador, sem registrar
+    unmount(t.comp);
+  });
+
+  it('identificador definido e lista vazia: legenda explica o registro, não manda definir o id', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.textContent).not.toContain(m.peers_vazio());
+    expect(t.el.textContent).toContain(m.peers_legenda_alcance());
+    expect(t.el.querySelector('.pr-btn.primaria')).not.toBeNull();
+    unmount(t.comp);
+  });
+
+  it('enquanto a listagem não volta, a tela não afirma que não há nenhum', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockReturnValueOnce(new Promise(() => {}));   // nunca resolve
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.textContent).not.toContain(m.peers_vazio());
+    expect(t.el.textContent).toContain(m.comum_carregando());
+    unmount(t.comp);
+  });
+
+  it('Enter não dispara dois PUT: o blur causado pelo disabled é ignorado', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    let resolver!: (v: { identificador: string }) => void;
+    peersMock.setIdentificador.mockReturnValueOnce(new Promise((r) => { resolver = r; }));
+    const t = montar();
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    campo.dispatchEvent(new Event('blur'));      // o blur que o disabled provoca no navegador
+    await tick();
+    expect(peersMock.setIdentificador).toHaveBeenCalledTimes(1);
+    resolver({ identificador: 'casa' });
+    await tick(); await tick();
+    expect(peersMock.setIdentificador).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('o campo não é desabilitado durante a gravação (o foco não sai dele)', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    let resolver!: (v: { identificador: string }) => void;
+    peersMock.setIdentificador.mockReturnValueOnce(new Promise((r) => { resolver = r; }));
+    const t = montar();
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(campo.disabled).toBe(false);     // disabled tiraria o foco do campo
+    expect(campo.readOnly).toBe(true);      // e readonly impede a edição sem tirar
+    resolver({ identificador: 'casa' });
+    await tick(); await tick();
+    expect(campo.readOnly).toBe(false);
     unmount(t.comp);
   });
 });

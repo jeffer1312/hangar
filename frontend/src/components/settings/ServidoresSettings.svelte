@@ -2,6 +2,8 @@
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { getSessions } from '../../lib/api';
+  import { getIdentificador, setIdentificador, listarPeers, gravarPeer, removerPeer,
+           type PeerView } from '../../lib/peers';
   import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
@@ -177,6 +179,128 @@
     : apiTarget ? { mode: 'server', server: apiTarget } as const
     : { mode: 'global' } as const,
   );
+
+  // ── Seções da Task 5: identificador desta máquina + máquinas que este servidor alcança ───────
+  // O backend/peers.json (lido também pelo cp-send) guarda id -> {base_url, token}; a rota
+  // devolve a credencial MASCARADA — este front só exibe o que já chegou mascarado.
+  const ID_OK = /^[a-z0-9][a-z0-9_-]{0,31}$/;   // espelho da regra do backend (fullmatch)
+  const ID_DICA = () => m.peers_identificador_dica({ exemplos: 'casa, notebook' });
+
+  // Erro de rede/servidor com nome, no idioma da tela: mensagem crua ("Failed to fetch") é o
+  // erro genérico que a régua do projeto proíbe, e `''` fazia a falha sumir da tela.
+  // Mesmo formato das linhas 96 e 120, que são o precedente desta própria aba.
+  function msgErro(e: unknown): string {
+    return e instanceof Error ? `${m.falha_conexao()}: ${e.message}` : m.erro_desconhecido();
+  }
+
+  let identificador = $state('');
+  let idOriginal = $state('');          // último valor commitado: blur sem mudança não re-PUTa
+  let idCarregado = $state(false);
+  let idSalvando = $state(false);
+  let idErro = $state('');
+
+  let peers = $state<PeerView[]>([]);
+  let peersCarregando = $state(false);
+  let peersErro = $state('');
+
+  $effect(() => {
+    // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção lia
+    // o servidor ATIVO com a aba dizendo que o escolhido não existe.
+    if (!resolvedServer) {
+      peers = []; identificador = ''; idOriginal = ''; idCarregado = true;
+      return;
+    }
+    void carregarIdentificador();
+    void carregarPeers();
+  });
+
+  async function carregarIdentificador() {
+    idErro = '';
+    try {
+      const r = await getIdentificador(apiTarget);
+      identificador = r.identificador;
+      idOriginal = r.identificador;
+    } catch (e) {
+      idErro = msgErro(e);
+    } finally {
+      idCarregado = true;
+    }
+  }
+
+  async function carregarPeers() {
+    peersCarregando = true;
+    peersErro = '';
+    try {
+      peers = await listarPeers(apiTarget);
+    } catch (e) {
+      peersErro = msgErro(e);
+    } finally {
+      peersCarregando = false;
+    }
+  }
+
+  // Enter salva; blur salva SÓ se mudou (sair do campo sem tocar não re-PUTa o mesmo valor).
+  function salvarIdentificador() {
+    if (idSalvando) return;   // gravação em voo: Enter e blur não abrem uma segunda (linha 82)
+    const valor = identificador.trim();
+    if (valor === idOriginal) return;
+    if (valor && !ID_OK.test(valor)) {
+      idErro = ID_DICA();        // a dica É a regra: minúsculas, números, hífen
+      return;
+    }
+    idSalvando = true;
+    idErro = '';
+    void setIdentificador(apiTarget, valor)
+      .then((r) => { identificador = r.identificador; idOriginal = r.identificador; })
+      .catch((e) => { idErro = msgErro(e); })
+      .finally(() => { idSalvando = false; });
+  }
+
+  // Registrar um peer: id + endereço + token. A legenda do mock promete "as duas pontas" — o
+  // lado remoto (testar/ligar) é da Task 8; aqui se grava o vínculo local, que é a fundação.
+  let mostrandoRegistro = $state(false);
+  let regId = $state('');
+  let regUrl = $state('');
+  let regToken = $state('');
+  let regErro = $state('');
+  let regSalvando = $state(false);
+
+  function abrirRegistro() {
+    mostrandoRegistro = true;
+    regId = ''; regUrl = ''; regToken = ''; regErro = '';
+  }
+
+  async function registrarPeer() {
+    if (regSalvando) return;
+    const id = regId.trim();
+    const url = regUrl.trim();
+    const token = regToken.trim();
+    if (!ID_OK.test(id)) { regErro = ID_DICA(); return; }
+    if (!/^https?:\/\//.test(url)) { regErro = m.url_invalida(); return; }
+    regSalvando = true;
+    regErro = '';
+    try {
+      peers = await gravarPeer(apiTarget, { id, base_url: url, token });
+      mostrandoRegistro = false;
+    } catch (e) {
+      regErro = msgErro(e);
+    } finally {
+      regSalvando = false;
+    }
+  }
+
+  let removerPeerId = $state<string | null>(null);
+  async function removerPeerConfirmado() {
+    const id = removerPeerId;
+    removerPeerId = null;
+    if (!id) return;
+    peersErro = '';
+    try {
+      peers = await removerPeer(apiTarget, id);
+    } catch (e) {
+      peersErro = msgErro(e);
+    }
+  }
 </script>
 
 {#if resolvedServer}
@@ -225,6 +349,64 @@
   <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)} disabled={logoutInFlight}>{m.sessao_sair_curto()}</button>
 </div>
 
+<div class="ss-sep"></div>
+<!-- Identificador desta máquina (Task 5): é o CP_SERVER_ID, gravado no .env — o mesmo que o
+     cp-send usa no endereço de resposta srv::sessao. Vazio = pareamento entre servidores recusado. -->
+<p class="ss-secao">{m.peers_esta_maquina()}</p>
+{#if !identificador}
+  <p class="ss-legenda">{m.peers_legenda_identificador()}</p>
+  <p class="id-aviso">{m.peers_aviso_nao_definido()}</p>
+{/if}
+<div class="id-linha">
+  <span class="id-rot">{m.peers_identificador()}
+    {#if identificador}
+      <small>{m.peers_identificador_definido({ nome: identificador })}</small>
+    {:else}
+      <small>{ID_DICA()}</small>
+    {/if}
+  </span>
+  <input class="id-campo" class:vazio={!identificador} bind:value={identificador}
+         placeholder={m.peers_identificador_placeholder()}
+         aria-label={m.peers_identificador()}
+         autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+         disabled={!idCarregado}
+         readonly={idSalvando}
+         onkeydown={(e) => { idErro = ''; if (e.key === 'Enter' && !idSalvando) salvarIdentificador(); }}
+         onblur={salvarIdentificador} />
+</div>
+{#if idErro}<p class="id-erro" role="alert">{idErro}</p>{/if}
+
+<div class="ss-sep"></div>
+<!-- Máquinas que este servidor alcança (Task 5): a lista do peers.json. O estado das duas pontas
+     (testar/liga) é da Task 8 — aqui se mostra e se edita o vínculo local. -->
+<p class="ss-secao">{m.peers_secao_alcance()}</p>
+{#if peers.length}
+  <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
+  <div class="pr-cartao">
+    {#each peers as peer (peer.id)}
+      <div class="pr-linha">
+        <span class="pr-txt">
+          <span class="pr-nome">{peer.id}</span>
+          <span class="pr-url">{peer.base_url}</span>
+        </span>
+        <button class="pr-btn min" onclick={() => (removerPeerId = peer.id)}>{m.peers_remover()}</button>
+      </div>
+    {/each}
+  </div>
+{:else if peersCarregando}
+  <p class="ss-legenda">{m.comum_carregando()}</p>
+{:else if identificador}
+  <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
+{:else}
+  <p class="ss-legenda">{m.peers_vazio()}</p>
+{/if}
+{#if identificador}
+  <div class="pr-acoes">
+    <button class="pr-btn primaria" onclick={abrirRegistro}>{m.peers_registrar()}</button>
+  </div>
+{/if}
+{#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
+
 {#if showAdd}
   <ConfirmDialog title={m.sessao_adicionar_servidor()} aria={m.sessao_adicionar_servidor()} role="dialog"
     {fallbackFocus}
@@ -250,6 +432,51 @@
       aria-describedby={addError ? 'ss-add-err' : undefined}
     />
     {#if addError}<p id="ss-add-err" class="ss-add-err" role="alert">{addError}</p>{/if}
+  </ConfirmDialog>
+{/if}
+
+{#if mostrandoRegistro}
+  <ConfirmDialog title={m.peers_registrar()} aria={m.peers_registrar()} role="dialog"
+    {fallbackFocus}
+    onClose={() => (mostrandoRegistro = false)}
+    actions={[
+      { label: m.comum_cancelar(), onClick: () => (mostrandoRegistro = false) },
+      { label: m.comum_confirmar(), kind: 'primary',
+        disabled: regSalvando || !regId.trim() || !regUrl.trim() || !regToken.trim(),
+        onClick: registrarPeer },
+    ]}>
+    <label class="pr-form-campo">
+      <span class="pr-form-rot">{m.peers_identificador()}</span>
+      <input class="pr-form-input" bind:value={regId}
+             placeholder={m.peers_identificador_placeholder()}
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+             onkeydown={(e) => { regErro = ''; if (e.key === 'Enter' && regSalvando === false && regId.trim() && regUrl.trim() && regToken.trim()) registrarPeer(); }} />
+    </label>
+    <label class="pr-form-campo">
+      <span class="pr-form-rot">{m.sessao_url_servidor()}</span>
+      <input class="pr-form-input" bind:value={regUrl}
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+             onkeydown={(e) => { regErro = ''; if (e.key === 'Enter' && regSalvando === false && regId.trim() && regUrl.trim() && regToken.trim()) registrarPeer(); }} />
+    </label>
+    <label class="pr-form-campo">
+      <span class="pr-form-rot">{m.sessao_token()}</span>
+      <input class="pr-form-input" bind:value={regToken}
+             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+             onkeydown={(e) => { regErro = ''; if (e.key === 'Enter' && regSalvando === false && regId.trim() && regUrl.trim() && regToken.trim()) registrarPeer(); }} />
+    </label>
+    {#if regErro}<p class="pr-form-erro" role="alert">{regErro}</p>{/if}
+  </ConfirmDialog>
+{/if}
+
+{#if removerPeerId}
+  <ConfirmDialog title={m.config_servidores_remover({ nome: removerPeerId })} aria={m.config_servidores_remover_aria()}
+    {fallbackFocus}
+    onClose={() => (removerPeerId = null)}
+    actions={[
+      { label: m.comum_cancelar(), onClick: () => (removerPeerId = null) },
+      { label: m.peers_remover(), kind: 'danger', onClick: removerPeerConfirmado },
+    ]}>
+    <p class="ss-dialog-copy">{m.config_servidores_token_removido()}</p>
   </ConfirmDialog>
 {/if}
 
@@ -320,4 +547,53 @@
   .ss-add-input:focus { border-color: var(--accent); }
   .ss-add-err { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--error); }
   .ss-dialog-copy { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
+
+  /* ── Seções Task 5: identificador + máquinas que este servidor alcança ──────────────────
+     Classes espelhando o mock de servidores.html (que por sua vez veio destas mesmas telas e
+     dos tokens de app.css) — o pedaço novo tem que ser do mesmo peso do resto da aba. */
+  .id-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
+  .id-rot { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-primary); }
+  .id-rot small { display: block; color: var(--text-muted); font-size: var(--text-xs);
+                  line-height: 1.35; margin-top: 2px; }
+  .id-campo {
+    width: 200px; height: 34px; flex-shrink: 0; padding: 0 var(--space-3);
+    background: var(--surface-inset); border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm); color: var(--text-primary);
+    font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; outline: none;
+  }
+  .id-campo.vazio { border-color: var(--warning); }
+  .id-campo:focus { border-color: var(--accent); }
+  .id-campo:disabled { opacity: 0.6; }
+  .id-campo:read-only { opacity: 0.6; }
+  .id-aviso { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--warning); }
+  .id-erro { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--error); }
+
+  .pr-cartao { background: var(--surface-card); border: 1px solid var(--border-subtle);
+               border-radius: var(--radius-md); overflow: hidden; }
+  .pr-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); }
+  .pr-linha + .pr-linha { border-top: 1px solid var(--border-subtle); }
+  .pr-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .pr-nome { font-size: var(--text-sm); color: var(--text-primary); }
+  .pr-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+            word-break: break-all; }
+  .pr-acoes { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+  .pr-btn {
+    height: 36px; min-height: 0; padding: 0 var(--space-4); border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle); background: var(--surface-raised);
+    color: var(--text-primary); font-size: var(--text-sm); font-family: inherit;
+  }
+  .pr-btn.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pr-btn.min { height: 30px; padding: 0 var(--space-3); font-size: var(--text-xs); }
+  .pr-btn:disabled { opacity: 0.45; }
+
+  .pr-form-campo { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-3); }
+  .pr-form-rot { font-size: var(--text-xs); color: var(--text-secondary); }
+  .pr-form-input {
+    height: 40px; padding: 0 var(--space-3);
+    background: var(--surface-inset); border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm); color: var(--text-primary);
+    font-family: var(--font-mono); font-size: var(--text-sm); outline: none;
+  }
+  .pr-form-input:focus { border-color: var(--accent); }
+  .pr-form-erro { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--error); }
 </style>
