@@ -28,7 +28,10 @@ def cli():
     return TestClient(app)
 
 
-def test_listagem_vazia(cli):
+def test_listagem_vazia(arquivo_peers, cli):
+    # arquivo_peers isola o peers.json da máquina (tmp_path + monkeypatch): sem a fixture,
+    # este teste lia o peers.json REAL do usuário — e a suíte passava na worktree (arquivo
+    # ausente) e quebrava na main (arquivo presente).
     r = cli.get("/api/peers", headers=AUTH)
     assert r.status_code == 200
     assert r.json() == []
