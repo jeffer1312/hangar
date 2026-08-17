@@ -42,9 +42,17 @@ vi.mock('../../lib/api', () => ({
   setQuietHoursForServer: vi.fn(),
 }));
 vi.mock('../../lib/push', () => ({ enablePush: vi.fn(), pushSupported: () => true }));
+vi.mock('../../lib/peers', () => ({
+  getIdentificador: vi.fn(async () => ({ identificador: '' })),
+  setIdentificador: vi.fn(async (v: string) => ({ identificador: v })),
+  listarPeers: vi.fn(async () => []),
+  gravarPeer: vi.fn(async (d: unknown) => [d]),
+  removerPeer: vi.fn(async () => []),
+}));
 
 const authMock = vi.mocked(auth);
 const apiMock = vi.mocked(api);
+const peersMock = vi.mocked(await import('../../lib/peers'));
 const SRV: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'x' } as Server;
 
 let onLogoutResolve: (() => void) | null = null;
@@ -312,6 +320,121 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
     await tick();
     // ConfirmDialog desmontou (pendingRemoval=null) e o ModalDialog restaurou o foco pro gatilho
     expect(document.activeElement).toBe(del);
+    unmount(t.comp);
+  });
+});
+
+// ── Seções da Task 5: identificador desta máquina + máquinas que este servidor alcança ───
+describe('ServidoresSettings — identificador e peers (Task 5)', () => {
+  async function esperarCarga() {
+    await Promise.resolve(); await Promise.resolve(); await tick();
+  }
+
+  it('estado 1 do mock: sem identificador, aviso visível e seção de alcance vazia, sem registrar', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    const t = montar();
+    await esperarCarga();
+    // Esta máquina: rótulo + legenda + aviso, campo com borda de aviso e placeholder
+    expect(t.el.textContent).toContain(m.peers_esta_maquina());
+    expect(t.el.textContent).toContain(m.peers_legenda_identificador());
+    const aviso = t.el.querySelector('.id-aviso');
+    expect(aviso?.textContent).toContain(m.peers_aviso_nao_definido());
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo');
+    expect(campo?.classList.contains('vazio')).toBe(true);
+    expect(campo?.value).toBe('');
+    expect(campo?.getAttribute('placeholder')).toContain('casa');
+    // alcance: só a legenda de vazio, sem cartão nem botão de registrar (mock estado 1)
+    expect(t.el.textContent).toContain(m.peers_vazio());
+    expect(t.el.querySelector('.pr-cartao')).toBeNull();
+    expect(t.el.querySelector('.pr-btn')).toBeNull();
+    unmount(t.comp);
+  });
+
+  it('estado 2 do mock: identificador definido, peer listado com endereço e Remover', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: '••••reto' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    expect(t.el.textContent).toContain(m.peers_identificador_definido({ nome: 'casa' }));
+    expect(t.el.querySelector('.id-aviso')).toBeNull();          // definido: sem aviso
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo');
+    expect(campo?.classList.contains('vazio')).toBe(false);
+    expect(campo?.value).toBe('casa');
+    expect(t.el.textContent).toContain(m.peers_legenda_alcance());
+    const nome = t.el.querySelector('.pr-nome');
+    expect(nome?.textContent).toBe('notebook');
+    expect(t.el.querySelector('.pr-url')?.textContent).toContain('192.168.0.77');
+    expect(t.el.querySelector('.pr-btn.primaria')?.textContent).toContain(m.peers_registrar());
+    unmount(t.comp);
+  });
+
+  it('Enter no campo grava o identificador; inválido mostra a dica e não grava', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: '' });
+    peersMock.setIdentificador.mockResolvedValue({ identificador: 'casa' });
+    const t = montar();
+    await esperarCarga();
+    const campo = t.el.querySelector<HTMLInputElement>('.id-campo')!;
+    campo.value = 'casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(peersMock.setIdentificador).toHaveBeenCalledWith('casa');
+    expect(t.el.querySelector('.id-aviso')).toBeNull();          // virou definido
+    // inválido (maiúscula): a dica É a regra, e nada vai pro backend
+    campo.value = 'Casa';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(t.el.querySelector('.id-erro')?.textContent).toContain(m.peers_identificador_dica({ exemplos: 'casa, notebook' }));
+    expect(peersMock.setIdentificador).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('registrar um peer: diálogo com id/endereço/token grava e a lista atualiza', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.gravarPeer.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
+    await tick();
+    const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
+    inputs[0].value = 'notebook';
+    inputs[0].dispatchEvent(new Event('input'));
+    inputs[1].value = 'http://192.168.0.77:8765';
+    inputs[1].dispatchEvent(new Event('input'));
+    inputs[2].value = 'segredo';
+    inputs[2].dispatchEvent(new Event('input'));
+    await tick();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    await tick(); await tick();
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith({
+      id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo',
+    });
+    expect(document.querySelector('.confirm-card')).toBeNull();  // fechou no sucesso
+    expect(t.el.querySelector('.pr-nome')?.textContent).toBe('notebook');
+    unmount(t.comp);
+  });
+
+  it('remover um peer pede confirmação e chama o backend com o id', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://n:8765', token: '••••' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    t.el.querySelector<HTMLButtonElement>('.pr-btn.min')!.click();
+    await tick();
+    expect(document.querySelector('.confirm-card')).not.toBeNull();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-danger')!.click();
+    await tick();
+    expect(peersMock.removerPeer).toHaveBeenCalledWith('notebook');
     unmount(t.comp);
   });
 });
