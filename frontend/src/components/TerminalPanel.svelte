@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { TermSocket, termUrl } from '../lib/term';
+  import { TermSocket, termUrlForServer, sessionExistsOnServer } from '../lib/term';
   import { openShell, openNativeTerminal } from '../lib/api';
+  import { listServers, getBaseUrl, getToken, onServersChanged } from '../lib/auth';
+  import type { Server } from '../lib/auth';
   // `import type`: some no build (nao vira require), entao NAO desfaz o import dinamico logo abaixo
   // -- o xterm continua fora do bundle de quem nunca abre o terminal.
   import type { Terminal } from '@xterm/xterm';
@@ -17,10 +19,20 @@
   let secEl = $state<HTMLElement | null>(null);
   let maximizado = $state(false);
   let caiu = $state(false);
+  // BLOQUEADOR 3: contador de MUTACAO da lista de servidores. `listServers()` le localStorage e NAO
+  // e reativo; sem isto, trocar/remover um servidor com o painel aberto nao fechava o socket velho
+  // (credencial e endereco antigos continuavam vivos) nem mostrava servidor_nao_existe quando a
+  // entrada sumia. Mesmo padrao do App.svelte:149 (versaoServidores) e ServidoresSettings:37.
+  let servidoresVersao = $state(0);
   // Motivo da queda, quando existe: o backend fecha com texto legivel ("outra conexao assumiu"), e
   // a falha de CARREGAMENTO do xterm escreve o dela aqui. Sem isto o rotulo era sempre
   // "desconectado", indistinguivel de queda de rede.
   let motivo = $state<string | null>(null);
+  // Erro NOMEADO do anexo (aba "attach"): sessao que nao existe no servidor dela, ou servidor da
+  // sessao que sumiu da lista local. Separa a RECUSA da queda de rede — o backend recusa sessao
+  // inexistente antes do accept (1006 mudo no navegador), e sem o probe as duas caiam em
+  // "desconectado" sem distincao (Task 2, Step 6).
+  let anexoErro = $state<string | null>(null);
   let geracao = $state(0);          // incrementar reconecta de verdade
   let sock: TermSocket | null = null;
   let term: Terminal | null = null;
@@ -64,6 +76,10 @@
   let abaAtiva = $state<'attach' | 'shell'>('attach');
   let shellVisitada = false;                     // trava contra reclique repetindo o POST /shell
   let shellNome = $state<string | null>(null);   // "term-<nome>" devolvido pelo backend -- e o ALVO
+  // BLOQUEADOR 1: servidor capturado no clique da aba (antes do await do POST /shell). O efeito do
+  // shell e OUTRA funcao — sem esta variavel de estado, `srvShell` local do abrirAbaShell morreria
+  // no retorno e o efeito estouraria "srvShell is not defined" (medido no teste de componente).
+  let srvShell = $state<Server | null>(null);
   let shellErro = $state<string | null>(null);
   let shellCarregando = $state(false);
   let hostShell = $state<HTMLDivElement | null>(null);
@@ -111,6 +127,11 @@
   // de novo, sem botao apertado.
   $effect(() => { if (!open) { maximizado = false; resizing = false; } });
 
+  // BLOQUEADOR 3: assina a mutacao da lista de servidores (addServer/updateServer/removeServer
+  // notificam via onServersChanged, auth.ts). O $effect devolve o unsubscribe — o Svelte chama o
+  // cleanup ao desmontar/reexecutar, entao nunca sobra listener.
+  $effect(() => onServersChanged(() => servidoresVersao++));
+
   // Avisa o pai (DesktopShell) sempre que o maximizado mudar -- inclusive ao FECHAR o painel
   // maximizado (o effect acima zera `maximizado` nesse caso tambem), senao o chat que o pai
   // escondeu ficaria escondido pra sempre.
@@ -126,6 +147,7 @@
     shellVisitada = false;
     shellNome = null;
     shellErro = null;
+    anexoErro = null;
     // Sem isto, trocar de sessao com o POST /shell ainda em voo deixava a sessao NOVA nascendo com
     // shellCarregando===true pra sempre (o `finally` do abrirAbaShell so zera se `alvo===sessionName`,
     // e a sessao mudou). Sem consequencia visivel hoje (nada le isto antes do 1o clique), mas e
@@ -231,24 +253,71 @@
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   }
 
+  // Servidor da SESSAO, lido de connKey ("<serverId>::<nome>" — workspaceSessionKey, DesktopShell):
+  // o painel abre o terminal da sessao de B tem que conectar em B, nunca no servidor ATIVO. `null`
+  // quando o servidor saiu da lista local (removido nas configs com o painel aberto).
+  function servidorDe(connKey: string): Server | null {
+    const id = connKey.split('::')[0];
+    return listServers().find((s) => s.id === id) ?? null;
+  }
+
+  // Servidor ATIVO, so pro terminal SHELL: o POST /shell (api.ts openShell) cria a sessao escondida
+  // no servidor ATIVO, entao o socket da aba segue ESSE mesmo servidor — apontar pro serverId da
+  // sessao anexaria um term-<nome> que nao existe ali. getBaseUrl/getToken ja resolveram o ativo
+  // (lista vazia => ''), e o fallback de location.origin vive dentro de termUrlForServer.
+  // O valor e capturado UMA vez, no clique (abrirAbaShell) e reusado no efeito do socket: reler
+  // `servidorAtivo()` depois do `await` do POST poderia casar com o servidor que o usuario TROCOU
+  // nesse meio-tempo — o POST criaria term-<nome> em A e o socket abriria em B (achado da revisao).
+  function servidorAtivo(): Server {
+    return { id: '', label: '', baseUrl: getBaseUrl() ?? '', token: getToken() ?? '' };
+  }
+
   $effect(() => {
     // Os tres lidos AQUI, sincronos: se `sessionName` so fosse lido dentro do callback async (depois
     // do await), o Svelte nao o rastrearia e trocar de sessao no sidebar deixaria o terminal preso
     // na anterior. `geracao` e o que faz o botao de reconectar funcionar.
     const alvo = sessionName;
-    // connKey (server-aware, "servidor::nome"): so o nome nao bastava — trocar de servidor com uma
-    // sessao homonima na tela nao mudava `sessionName`, e o socket ficava conectado no servidor
-    // VELHO (termUrl usa o servidor ATIVO no instante da conexao, nao um serverId explicito).
-    void connKey;
+    // connKey (server-aware, "servidor::nome") agora ENTRA no endereco: o socket da sessao de um
+    // servidor nao-ativo vai pra ESSE servidor (serverId resolvido via servidorDe acima) — antes
+    // termUrl usava o servidor ATIVO no instante da conexao, e o terminal da sessao de B anexava
+    // na homonima do A (o defeito que esta Task conserta; a correcao vive em term.ts, o painel so
+    // passa o identificador que ja recebia).
+    const srv = servidorDe(connKey);
+    // BLOQUEADOR 3: `servidoresVersao` entra no efeito como dependencia — a cada mutacao da lista,
+    // o efeito reexecuta: o cleanup fecha o socket velho (credencial/endereco antigos) e o probe
+    // recomeca com o registro atual. Se o servidor sumiu, `srv` vira null e o erro nomeado aparece.
+    void servidoresVersao;
     void geracao;
     if (!open || !host) return;
     let vivo = true;
     caiu = false;
     motivo = null;
+    anexoErro = null;
 
     (async () => {
-      // Import DINAMICO: xterm so entra no bundle de quem abre o terminal. E feature desktop-only na
-      // v1 — o PWA do celular nao pode pagar o download.
+      // Servidor da sessao fora da lista: nao ha endereco pra onde conectar, e cair pro ativo
+      // seria reintroduzir o defeito desta Task. Reusa a frase que o ServerManager ja mostra.
+      if (!srv) {
+        caiu = true;
+        anexoErro = m.servidor_nao_existe();
+        return;
+      }
+      // Probe antes do socket: a recusa da sessao inexistente chega como 1006 mudo, e o probe
+      // (a lista do MESMO servidor) e a unica forma de virar texto. Servidor fora do ar NAO e
+      // "sessao nao encontrada" — deixa a conexao tentar e cair no fluxo normal de desconexao.
+      let existe = true;
+      try {
+        existe = await sessionExistsOnServer(srv, alvo);
+      } catch {
+        existe = true;
+      }
+      if (!vivo || !host) return;
+      if (!existe) {
+        caiu = true;
+        anexoErro = m.erro_sessao_inexistente();
+        return;
+      }
+
       const [{ Terminal }, { FitAddon }] = await Promise.all([
         import('@xterm/xterm'),
         import('@xterm/addon-fit'),
@@ -265,7 +334,7 @@
       garantirObserverDeTema();
 
       const enc = new TextEncoder();
-      sock = new TermSocket(termUrl(alvo, t.cols, t.rows), {
+      sock = new TermSocket(termUrlForServer(srv, alvo, t.cols, t.rows), {
         data: (b) => t.write(b),
         // `vivo`, nao incondicional: TermSocket.close() dispara onclose ASSINCRONO. Ao trocar de
         // sessao, o cleanup fecha o socket velho -> o efeito novo zera `caiu` -> DEPOIS chega o
@@ -316,6 +385,8 @@
     shellCarregando = true;
     shellErro = null;
     const alvo = sessionName;   // captura ANTES do await, mesma cautela do efeito principal
+    // BLOQUEADOR 1: captura ANTES do await; o efeito do socket usa este mesmo objeto (via $state).
+    srvShell = servidorAtivo();
     try {
       const r = await openShell(alvo);
       if (alvo !== sessionName) return;   // sessao trocou enquanto esperava -- descarta resposta velha
@@ -341,8 +412,18 @@
   // porque `abaAtiva` nao entra nas dependencias: o socket da aba inativa continua aberto).
   $effect(() => {
     const alvo = shellNome;
+    // `srvShell` e estado do componente (capturado no clique): entrar como dependencia faz o
+    // efeito reexecutar quando o POST resolve e o valor chega (antes era variável local morta).
+    void srvShell;
+    // LIDO ANTES do guard de proposito: se `hostShell` so fosse lido depois do `return`, a primeira
+    // execucao (shellNome null) sairia no `!alvo` sem nunca ler `hostShell` — e ele nao viraria
+    // dependencia. Quando o POST resolve e o host monta, o efeito rodaria uma vez, veria `hostShell`
+    // ainda null (bind:this preenche depois do flush) e sairia pra sempre: o socket do shell nunca
+    // nascia no happy-dom (e na pratica, no primeiro clique com o xterm lento). Mesmo padrao do
+    // efeito do attach, que le `host` antes do guard.
+    const hostEl = hostShell;
     void geracaoShell;
-    if (!open || !alvo || !hostShell) return;
+    if (!open || !alvo || !hostEl) return;
     let vivo = true;
     caiuShell = false;
     motivoShell = null;
@@ -353,23 +434,27 @@
         import('@xterm/addon-fit'),
       ]);
       await import('@xterm/xterm/css/xterm.css');
-      if (!vivo || !hostShell) return;
+      if (!vivo || !hostEl) return;
 
-      const r = novoTerminal(hostShell, Terminal, FitAddon);
+      const r = novoTerminal(hostEl, Terminal, FitAddon);
       termShell = r.term; fitShell = r.fit;
       const t = r.term;                          // mesma copia local nao-nula do efeito do attach
 
       garantirObserverDeTema();
 
       const enc = new TextEncoder();
-      sockShell = new TermSocket(termUrl(alvo, t.cols, t.rows), {
+      // BLOQUEADOR 1: `srvShell` (capturado no clique) e nao `servidorAtivo()` — reler aqui, depois
+      // do await do POST, poderia casar com o servidor TROCADO no meio e abrir o socket num B que
+      // nao recebeu o POST /shell. Se ainda nao ha servidor (clique antes do POST?), nao conecta.
+      if (!srvShell) return;
+      sockShell = new TermSocket(termUrlForServer(srvShell, alvo, t.cols, t.rows), {
         data: (b) => t.write(b),
         close: (motivoFechamento) => { if (vivo) { caiuShell = true; motivoShell = motivoFechamento ?? null; } },
       });
       t.onData((d: string) => sockShell?.send(enc.encode(d)));
 
       roShell = new ResizeObserver(() => { r.fit.fit(); sockShell?.resize(t.cols, t.rows); });
-      roShell.observe(hostShell);
+      roShell.observe(hostEl);
       // Mesmo motivo do efeito do attach acima: a estreia desta aba so foca aqui -- e so com
       // `podeFocar()` (Q2), pelo mesmo risco (POST /shell + import dinamico do xterm e tempo de
       // sobra pro usuario ja estar digitando em outro lugar).
@@ -441,7 +526,22 @@
       <button onclick={onClose} aria-label={m.sessao_fechar()}>✕</button>
     </header>
     <div class="tp-screens">
+      <!-- BLOQUEADOR 2: o host do xterm fica SEMPRE montado. Antes, o erro de attach trocava o ramo
+           `{:else}` (removia o div com bind:this={host}) e o $effect relia `host` como null na
+           proxima execucao — laço de efeito ate `effect_update_depth_exceeded`, tela travada. O
+           erro agora e um OVERLAY irmao por cima do host: o host permanece, o botao de reconectar
+           (geracao++) repete o probe normalmente. -->
       <div class="tp-screen" class:hidden={abaAtiva !== 'attach'} bind:this={host}></div>
+      {#if anexoErro}
+        <!-- MESMO tratamento das mensagens de estado do painel (barra do shell, "abrindo shell"):
+             texto no centro da tela, tp-erro e a cor de erro ja conhecida. Sem isto a recusa da
+             sessao inexistente era "desconectado" mudo (Task 2, Step 6). role="alert" (WCAG
+             4.1.3): a mensagem nasce DEPOIS de uma busca assincrona, e sem anúncio o leitor de
+             tela nao e avisado (achado da revisao). -->
+        <div class="tp-screen tp-status tp-sobreposto" class:hidden={abaAtiva !== 'attach'} role="alert">
+          <p class="tp-erro">{anexoErro}</p>
+        </div>
+      {/if}
       {#if shellNome}
         <div class="tp-screen" class:hidden={abaAtiva !== 'shell'} bind:this={hostShell}></div>
       {:else if shellErro}
@@ -533,6 +633,11 @@
      durante composicao de IME, entao nao cobre a tela normalmente). */
   .tp-screen :global(.xterm-viewport) { background-color: transparent; }
   .tp-status { display: flex; align-items: center; justify-content: center; }
+  /* Overlay POR CIMA do host, que ja pinta o vidro do painel: repintar --glass-panel aqui empilha
+     dois veus e o papel de parede e cortado so neste retangulo (medido: canal verde 69,7 -> 104,0
+     com Transparencia no maximo). Quem carrega o material e o host embaixo. .tp-status NAO pode
+     virar transparent: nos ramos do shell ela e a unica camada da tela. */
+  .tp-sobreposto { background: transparent; }
   .tp-msg { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
   .tp-erro { margin: 0; padding: 0 var(--space-4); font-size: var(--text-sm); color: var(--error); text-align: center; }
   /* Flutua fora do painel (que pode estar fechado quando isto aparece) -- superficie propria porque

@@ -1,16 +1,33 @@
 // getBaseUrl/getToken vivem em auth.ts; o api.ts so as IMPORTA (api.ts:1) e nao reexporta.
-import { getBaseUrl, getToken } from './auth';
+import type { Server } from './auth';
+import { fetchSessionsForServer } from './api';
 
 // Coalescencia do resize: arrastar a borda emite dezenas de eventos, e cada um redesenha a janela do
 // tmux inteira — o capture-pane concorrente devolveria quadros meio-pintados pro preview e pro
 // estado. 150ms e o mesmo numero que a extensao do Pi usa.
 export const RESIZE_DEBOUNCE_MS = 150;
 
-export function termUrl(name: string, cols: number, rows: number): string {
-  // getBaseUrl() e VAZIO quando o front e servido da mesma origem (auth.ts:166) — o caso do PWA da
-  // VPS. Sem o fallback, `new WebSocket('/api/...')` levanta SyntaxError.
-  const base = (getBaseUrl() || location.origin).replace(/^http/, 'ws');
-  const qs = new URLSearchParams({ token: getToken() ?? '', cols: String(cols), rows: String(rows) });
+// A sessao existe no servidor? Probe ANTES/DURANTE a abertura do socket: o backend recusa sessao
+// inexistente FECHANDO ANTES do accept (termsock.py: close 1008, reason "sessao nao existe"), e esse
+// fechamento chega no navegador como handshake recusado (onclose 1006, reason vazio) — o TermSocket
+// nao tem como saber POR QUE caiu, e a tela so dizia "desconectado". O probe e a unica forma de
+// transformar a recusa em texto legivel (Task 2, Step 6). Fala com a lista do servidor (o MESMO
+// /api/sessions que a visao agregada ja consume), nao com um endpoint novo — zero backend tocado.
+// I/O isolado aqui de proposito: o teste troca fetchSessionsForServer por um fake (regra do grupo).
+export async function sessionExistsOnServer(s: Server, name: string): Promise<boolean> {
+  const sessoes = await fetchSessionsForServer(s);
+  return sessoes.some((x) => x.name === name);
+}
+
+// Endereco do terminal de UM servidor EXPLICITO, no molde de apiFetchForServer (api.ts:132) e
+// fetchSessionsForServer: o painel da sessao de B tem que conectar em B, nao no servidor ATIVO — com
+// sessoes homonimas nos dois, montar pelo ativo anexava silenciosamente ao terminal da homonima do
+// outro servidor (o defeito que esta Task conserta). `location.origin` quando o baseUrl e VAZIO: o
+// servidor da mesma origem (front servido pelo proprio backend, o PWA da VPS) guarda baseUrl vazio e
+// `new WebSocket('/api/...')` sozinho levanta SyntaxError — mesmo fallback do termUrl antigo.
+export function termUrlForServer(s: Server, name: string, cols: number, rows: number): string {
+  const base = (s.baseUrl || location.origin).replace(/^http/, 'ws');
+  const qs = new URLSearchParams({ token: s.token, cols: String(cols), rows: String(rows) });
   return `${base}/api/sessions/${encodeURIComponent(name)}/term?${qs}`;
 }
 
