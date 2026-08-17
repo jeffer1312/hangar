@@ -107,10 +107,16 @@ def _auth_status(dir_conta: Path) -> dict | None:
         # FileNotFoundError (claude fora do PATH) é subclasse de OSError: cai aqui junto.
         _log.debug("auth status falhou para %s: %r", dir_conta, e)
         return None
-    if r.returncode != 0:
+    # rc != 0 NAO e ausencia de resposta: o `claude auth status --json` sai com rc=1 numa
+    # conta VIRGEM (deslogada de verdade) e imprime o JSON do mesmo jeito — medido em 17/08
+    # contra a CLI real. Descartar por rc fazia a conta recém-criada (o buraco que a Task 7
+    # existe pra fechar) virar `indisponivel` e o botão Entrar nunca aparecer. A confiança
+    # vem do PARSE: JSON válido de dict é resposta, qualquer que seja o rc; só cai em None
+    # quando o parse falha (CLI ausente ou formato novo, que aí sim é `indisponivel`).
+    bruto = _parse_auth_status(r.stdout)
+    if bruto is None:
         _log.debug("auth status rc=%s para %s: %s", r.returncode, dir_conta, r.stderr[:200])
-        return None
-    return _parse_auth_status(r.stdout)
+    return bruto
 
 
 def _estado_login(bruto: dict | None) -> EstadoLogin:

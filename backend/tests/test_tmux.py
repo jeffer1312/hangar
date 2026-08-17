@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -678,3 +679,26 @@ def test_paste_text_falha_no_load_buffer_nao_cola_nada():
          patch("app.tmux._paste_linha_a_linha", return_value=True) as plinha:
         assert tmux.paste_text("cc", "linha 1\nlinha 2") is True
     assert plinha.called
+
+
+# ---------------------------------------------------------------- Task 7 — fonte real (B4)
+#
+# A régua do contrato: commit que muda módulo de backend exercita esse módulo contra a fonte
+# REAL. O `config_dir` novo do `new_hidden_shell` é exercitado aqui contra o tmux de verdade —
+# criando a janela, lendo `/proc/<pane_pid>/environ` (o CLAUDE_CONFIG_DIR de quem roda no pane)
+# e matando a janela no fim. O valor afirmado é exatamente o passado, nunca o do servidor tmux.
+
+
+def test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane():
+    cfg = "/tmp/zz-config-dir-prova"
+    alvo = tmux.new_hidden_shell(f"prova-cfg-{uuid.uuid4().hex[:6]}", "/tmp", config_dir=cfg)
+    assert alvo is not None
+    try:
+        pane_pid = tmux._run(["tmux", "display-message", "-p", "-t", f"={alvo}:",
+                              "#{pane_pid}"]).stdout.strip()
+        assert pane_pid.isdigit()
+        env = Path(f"/proc/{pane_pid}/environ").read_bytes()
+        env = env.replace(b"\0", b"\n").decode("utf-8", "replace")
+        assert f"CLAUDE_CONFIG_DIR={cfg}" in env
+    finally:
+        tmux.kill_session(alvo)

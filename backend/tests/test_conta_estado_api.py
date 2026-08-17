@@ -227,3 +227,19 @@ def test_cancelar_login_mata_a_janela(cli, login_fake):
 def test_cancelar_401_sem_credencial(cli):
     r = cli.post("/api/conta-estado/testes/login/cancelar")
     assert r.status_code == 401
+
+def test_auth_status_real_conta_virgem_e_ok_deslogada(monkeypatch, tmp_path):
+    # B1 — a régua "fonte REAL": a CLI existe nesta máquina e responde JSON válido com
+    # rc=1 numa conta virgem (deslogada de verdade). `_auth_status` NÃO pode jogar isso
+    # fora por causa do rc: é exatamente o estado em que o botão Entrar precisa aparecer.
+    # O config dir é um diretório vazio de verdade (a conta virgem); o HOME vai pro tmp
+    # pra não tocar nas contas reais da máquina.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    d = tmp_path / ".claude-conta-virgem"
+    d.mkdir()
+    bruto = conta_estado._auth_status(d)
+    assert bruto is not None
+    assert bruto.get("loggedIn") is False
+    estado = conta_estado._estado_login(bruto)
+    assert estado.estado == "ok"
+    assert estado.loggedIn is False

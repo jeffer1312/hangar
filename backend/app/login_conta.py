@@ -21,9 +21,11 @@ sessões escondidas do painel de terminal). Tentativa em voo recusa começar de 
 A I/O com o tmux é só nas quatro funções privadas `_shell_*` abaixo, trocadas nos testes
 por texto de mentira (precedente: `engine_probe._buscar`, `conta_estado._auth_status`).
 """
+import itertools
 import logging
 import re
 import time
+from dataclasses import dataclass
 
 from app import conta_estado, tmux
 
@@ -43,19 +45,38 @@ _POLL_S = 0.5
 _PREFIXO = "login-"
 
 
-def _nome_janela(conta: str) -> str:
+def _chave_janela(conta: str) -> str:
     return f"{_PREFIXO}{conta}"
 
 
-def _shell_criar(nome: str, cwd: str) -> str | None:
-    """I/O: cria a janela escondida (tmux.new_hidden_shell). None = tmux recusou."""
-    return tmux.new_hidden_shell(nome, cwd)
+def _shell_criar(nome: str, cwd: str, config_dir: str | None = None) -> str | None:
+    """I/O: cria a janela escondida (tmux.new_hidden_shell). None = tmux recusou.
+
+    `config_dir` (o path da conta) vai pro `-e CLAUDE_CONFIG_DIR` do new-session:
+    o `claude auth login` grava o `.credentials.json` no config dir do AMBIENTE do
+    pane, nao no cwd — sem isto a credencial iria pra conta ativa do servidor tmux
+    (B4).
+    """
+    return tmux.new_hidden_shell(nome, cwd, config_dir=config_dir)
 
 
 def _shell_digitar(nome: str, texto: str) -> None:
     """I/O: digita texto no pane da janela escondida (terminal_input.send_text)."""
     from app import terminal_input
     terminal_input.TerminalInput().send_text(nome, texto)
+
+
+def _shell_submeter(nome: str, texto: str) -> None:
+    """I/O: digita o texto e ENVIA Enter — sem isto o comando/código fica digitado e
+    nunca executa (B3; o precedente é `TerminalInput.select`, que manda o Enter
+    explicitamente depois de navegar).
+
+    Recebe o ALVO real (`term-<chave>`), não a chave — o send-keys/capture-pane
+    acertam a sessão que existe de verdade (B2).
+    """
+    _shell_digitar(nome, texto)
+    if not tmux.send_keys(nome, "Enter"):
+        raise RuntimeError(f"nao consegui enviar Enter para a janela de login de {nome}")
 
 
 def _shell_ler(nome: str) -> str:
@@ -68,10 +89,18 @@ def _shell_matar(nome: str) -> None:
     tmux.kill_session(nome)
 
 
-# A tentativa em voo por conta: nome da janela + relógio (para o cancelamento da
-# confirmação saber que o confirmar ainda está rodando). Não é persistido de propósito:
-# um backend reiniciado não deixa janela pendurada (a limpeza é por processo).
-_tentativas: dict[str, float] = {}
+# A tentativa em voo por conta: identidade (id que so cresce) + alvo REAL da janela (o
+# retorno de `new_hidden_shell`, que e `term-<chave>` e NAO a chave pedida — B2) + relógio.
+# Nao é persistido de propósito: um backend reiniciado não deixa janela pendurada (a
+# limpeza é por processo).
+@dataclass
+class Tentativa:
+    id: int
+    alvo: str
+    inicio: float
+
+_tentativas: dict[str, Tentativa] = {}
+_proximo_id = itertools.count(1)
 
 
 def _em_curso(conta: str) -> bool:
@@ -79,11 +108,25 @@ def _em_curso(conta: str) -> bool:
     return conta in _tentativas
 
 
-def _limpar(conta: str) -> None:
-    """Remove o registro da tentativa e garante a janela morta. Idempotente."""
+def _limpar(conta: str, t: Tentativa | None = None) -> None:
+    """Remove o registro da tentativa e garante a janela morta. Idempotente.
+
+    `t` é a identidade: quando a chamada pertence a uma tentativa específica
+    (confirmar), só limpa se AINDA for a mesma — uma tentativa antiga nunca pode
+    matar a janela de uma nova (B5: corrida cancelar→Entrar).
+    """
+    if t is None:
+        _tentativas.pop(conta, None)
+        try:
+            _shell_matar(_chave_janela(conta))
+        except Exception:
+            _log.debug("login: matar janela de %s falhou", conta, exc_info=True)
+        return
+    if _tentativas.get(conta) is not t:
+        return
     _tentativas.pop(conta, None)
     try:
-        _shell_matar(_nome_janela(conta))
+        _shell_matar(t.alvo)
     except Exception:
         # Matar janela que não existe é sucesso (kill_session é idempotente); falha de
         # tmux aqui não pode mascarar o resultado do fluxo.
@@ -94,17 +137,18 @@ def iniciar(conta: str, cwd: str) -> dict:
     """Abre a janela escondida e digita o comando de login. Recusa se já há uma tentativa."""
     if _em_curso(conta):
         raise RuntimeError(f"login já em andamento para a conta {conta}")
-    nome = _nome_janela(conta)
-    alvo = _shell_criar(nome, cwd)
+    chave = _chave_janela(conta)
+    alvo = _shell_criar(chave, cwd, config_dir=cwd)
     if alvo is None:
         raise RuntimeError(f"não consegui abrir a janela escondida para {conta}")
     # Registra ANTES de digitar: um erro de digitação cai no caminho de erro e a limpeza
     # sabe qual janela matar.
-    _tentativas[conta] = time.monotonic()
+    tentativa = Tentativa(id=next(_proximo_id), alvo=alvo, inicio=time.monotonic())
+    _tentativas[conta] = tentativa
     try:
-        _shell_digitar(nome, "claude auth login --claudeai")
+        _shell_submeter(alvo, "claude auth login --claudeai")
     except Exception:
-        _limpar(conta)
+        _limpar(conta, tentativa)
         raise
     return {"ok": True}
 
@@ -117,9 +161,10 @@ def passo(conta: str) -> dict:
     """
     if not _em_curso(conta):
         return {"etapa": "idle", "url": None}
-    texto = _shell_ler(_nome_janela(conta))
-    m = _URL_RE.search(texto)
-    url = m.group(1) if m else None
+    t = _tentativas[conta]
+    texto = _shell_ler(t.alvo)
+    m_url = _URL_RE.search(texto)
+    url = m_url.group(1) if m_url else None
     if url and _PROMPT_RE.search(texto):
         return {"etapa": "aguardando", "url": url}
     return {"etapa": "aguardando", "url": url}
@@ -137,11 +182,11 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
     """
     if not _em_curso(conta):
         raise RuntimeError(f"nenhuma tentativa de login em voo para a conta {conta}")
-    nome = _nome_janela(conta)
+    tentativa = _tentativas[conta]
     try:
-        _shell_digitar(nome, codigo)
+        _shell_submeter(tentativa.alvo, codigo)
     except Exception:
-        _limpar(conta)
+        _limpar(conta, tentativa)
         raise
 
     ler_estado = estado_fake or (lambda d: conta_estado._estado_login(
@@ -156,8 +201,9 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
                     "email": estado.email,
                     "plano": estado.plano,
                 }
-            if not _em_curso(conta):
-                # O usuário cancelou durante a espera — a janela já morreu no cancelar.
+            if _tentativas.get(conta) is not tentativa:
+                # O usuário cancelou durante a espera e JÁ COMEÇOU OUTRA tentativa: a
+                # janela é de outra pessoa agora — sai sem tocar em nada (B5).
                 raise RuntimeError(f"login da conta {conta} cancelado")
             if estado.estado != "ok":
                 raise RuntimeError(f"não consegui reler o estado da conta {conta}: "
@@ -166,14 +212,14 @@ def confirmar(conta: str, codigo: str, *, estado_fake=None, timeout_s: float = _
                 raise TimeoutError(f"a conta {conta} não apareceu logada em {timeout_s:.0f}s")
             time.sleep(_POLL_S)
     finally:
-        # Já cancelada: `_limpar` não remata (a janela morreu no cancelar).
-        if _em_curso(conta):
-            _limpar(conta)
+        # Já cancelada: `_limpar` não remata (a janela morreu no cancelar). A identidade
+        # garante que uma tentativa velha nunca mata a janela de uma nova (B5).
+        _limpar(conta, tentativa)
 
 
 def cancelar(conta: str) -> dict:
     """Cancela a tentativa em voo e mata a janela escondida. No-op sem tentativa."""
     if not _em_curso(conta):
         return {"ok": True}
-    _limpar(conta)
+    _limpar(conta, _tentativas[conta])
     return {"ok": True}

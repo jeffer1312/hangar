@@ -27,19 +27,29 @@ class _Bateia:
 
     def __init__(self, ler=None):
         self.criadas = []
+        self.config_dirs = []
         self.digitadas = []
         self.matadas = []
+        self.enters = []
         self.ler_ = ler or (lambda: "Welcome to Claude Code!")
         self.falhar_criacao = False
 
-    def criar(self, nome, cwd):
+    def criar(self, nome, cwd, config_dir=None):
         if self.falhar_criacao:
             return None
         self.criadas.append(nome)
+        self.config_dirs.append(config_dir)
         return f"term-{nome}"
 
     def digitar(self, nome, texto):
         self.digitadas.append((nome, texto))
+
+    def enviar_enter(self, nome):
+        self.enters.append(nome)
+
+    def submeter(self, nome, texto):
+        self.digitar(nome, texto)
+        self.enviar_enter(nome)
 
     def ler(self, nome):
         return self.ler_()
@@ -55,6 +65,8 @@ def bateia(monkeypatch):
     b = _Bateia()
     monkeypatch.setattr(login_conta, "_shell_criar", b.criar)
     monkeypatch.setattr(login_conta, "_shell_digitar", b.digitar)
+    monkeypatch.setattr(login_conta, "_shell_submeter", b.submeter)
+    monkeypatch.setattr(tmux, "send_keys", b.enviar_enter)
     monkeypatch.setattr(login_conta, "_shell_ler", b.ler)
     monkeypatch.setattr(login_conta, "_shell_matar", b.matar)
     return b
@@ -71,8 +83,12 @@ def _limpa_estado(monkeypatch):
 
 def test_iniciar_cria_janela_e_digita_login(bateia):
     login_conta.iniciar("conta-a", "/home/u")
+    # A chave pedida ao tmux é `login-conta-a`; o alvo REAL usado em digitar/Enter é o
+    # retorno (`term-login-conta-a`) — o duplo devolve o que a primitiva devolve (B2).
     assert bateia.criadas == ["login-conta-a"]
-    assert bateia.digitadas == [("login-conta-a", "claude auth login --claudeai")]
+    assert bateia.config_dirs == ["/home/u"]
+    assert bateia.digitadas == [("term-login-conta-a", "claude auth login --claudeai")]
+    assert bateia.enters == ["term-login-conta-a"]
 
 
 def test_iniciar_falhou_na_criacao_nao_digita_e_devolve_erro(bateia):
@@ -93,7 +109,7 @@ def test_iniciar_ja_em_andamento_nao_duplica_janela(bateia):
 def test_cancelar_mata_a_janela(bateia):
     login_conta.iniciar("conta-a", "/home/u")
     login_conta.cancelar("conta-a")
-    assert bateia.matadas == ["login-conta-a"]
+    assert bateia.matadas == ["term-login-conta-a"]
     # Depois de cancelar, uma tentativa nova pode começar.
     login_conta.iniciar("conta-a", "/home/u")
     assert bateia.criadas == ["login-conta-a", "login-conta-a"]
@@ -129,20 +145,56 @@ def test_sem_tentativa_passo_devolve_idle(bateia):
     assert passo["etapa"] == "idle"
 
 
+def test_confirmar_antigo_nao_mata_janela_da_tentativa_nova(bateia):
+    # B5 — corrida: o usuário cancela DURANTE a espera do confirmar e entra de novo. A
+    # thread velha do confirmar não pode matar a janela da tentativa NOVA quando sair
+    # (o `finally` limpa só o que é dela).
+    def estado_fake(dir_conta):
+        return conta_estado._estado_login({"loggedIn": False})
+
+    def cancela_e_recomeca():
+        time.sleep(0.02)
+        login_conta.cancelar("conta-a")
+        login_conta.iniciar("conta-a", "/home/u")
+
+    monkeypatch_poll(0.001)
+    login_conta.iniciar("conta-a", "/home/u")
+    t = threading.Thread(target=cancela_e_recomeca)
+    t.start()
+    with pytest.raises(RuntimeError):
+        login_conta.confirmar("conta-a", "CODE-123", estado_fake=estado_fake, timeout_s=5)
+    t.join()
+    # A tentativa nova CONTINUA em voo e a janela dela NÃO foi morta pela thread velha.
+    # (O cancelar matou a primeira; a segunda segue viva.)
+    assert login_conta._em_curso("conta-a")
+    assert bateia.matadas == ["term-login-conta-a"]
+    # Cancela a segunda (limpeza do teste).
+    login_conta.cancelar("conta-a")
+    assert bateia.matadas == ["term-login-conta-a", "term-login-conta-a"]
+
+
 # --------------------------------------------------------------------- confirmação
 
 
 def test_confirmar_digita_o_codigo_e_confirma_pela_releitura(bateia):
     # A confirmação é RELER o estado da conta — nunca a aparência da tela (requisito do
     # Step 1). Aqui a tela de mentira NUNCA mostra login; quem decide é o `_estado_login`.
+    # Sem estado fake, a releitura lê a CLI REAL — que existe nesta máquina e responde
+    # `loggedIn: false` (a conta virgem de mentira): espera até o teto, por isso o
+    # `timeout_s` curto.
     bateia.ler_ = lambda: "Paste code here if prompted >"
+    monkeypatch_poll(0.001)
     login_conta.iniciar("conta-a", "/home/u")
-    with pytest.raises(RuntimeError):
-        login_conta.confirmar("conta-a", "CODE-123")  # sem estado fake: CLI real ausente no teste
+    with pytest.raises(TimeoutError):
+        login_conta.confirmar("conta-a", "CODE-123", timeout_s=0.3)
 
-    assert bateia.digitadas[-1] == ("login-conta-a", "CODE-123")
-    # A janela só sai no fim (limpeza garantida em qualquer caminho).
-    assert bateia.matadas == ["login-conta-a"]
+    assert bateia.digitadas[-1] == ("term-login-conta-a", "CODE-123")
+    # O Enter foi enviado (o código precisa SUBMETER, não só ser digitado — B3).
+    # Duas vezes: uma do comando (iniciar) e uma do código (confirmar).
+    assert bateia.enters == ["term-login-conta-a", "term-login-conta-a"]
+    # A janela só sai no fim (limpeza garantida em qualquer caminho) — e o alvo é o
+    # REAL (term-<chave>), não a chave pedida (B2).
+    assert bateia.matadas == ["term-login-conta-a"]
 
 
 def test_confirmar_sem_tentativa_devolve_erro(bateia):
@@ -168,8 +220,8 @@ def test_confirmar_espera_ate_a_conta_mostrar_logada(bateia):
     assert resultado["ok"] is True
     assert resultado["email"] == "u@exemplo.com"
     assert resultado["plano"] == "max"
-    # A janela morreu no fim do fluxo (caminho de sucesso).
-    assert bateia.matadas == ["login-conta-a"]
+    # A janela morreu no fim do fluxo (caminho de sucesso) — pelo alvo REAL.
+    assert bateia.matadas == ["term-login-conta-a"]
 
 
 def test_confirmar_estado_indisponivel_nao_vira_logado(bateia):
@@ -182,7 +234,7 @@ def test_confirmar_estado_indisponivel_nao_vira_logado(bateia):
     login_conta.iniciar("conta-a", "/home/u")
     with pytest.raises(RuntimeError):
         login_conta.confirmar("conta-a", "CODE-123", estado_fake=estado_fake)
-    assert bateia.matadas == ["login-conta-a"]
+    assert bateia.matadas == ["term-login-conta-a"]
 
 
 def test_confirmar_timeout_deixa_janela_morta(bateia):
@@ -193,7 +245,7 @@ def test_confirmar_timeout_deixa_janela_morta(bateia):
     login_conta.iniciar("conta-a", "/home/u")
     with pytest.raises(TimeoutError):
         login_conta.confirmar("conta-a", "CODE-123", estado_fake=estado_fake, timeout_s=0.05)
-    assert bateia.matadas == ["login-conta-a"]
+    assert bateia.matadas == ["term-login-conta-a"]
 
 
 def test_cancelar_depois_do_confirmar_mata_janela(bateia):
@@ -213,7 +265,35 @@ def test_cancelar_depois_do_confirmar_mata_janela(bateia):
     with pytest.raises(RuntimeError):
         login_conta.confirmar("conta-a", "CODE-123", estado_fake=estado_fake, timeout_s=5)
     t.join()
-    assert bateia.matadas == ["login-conta-a"]
+    assert bateia.matadas == ["term-login-conta-a"]
+
+
+def test_confirmar_antigo_nao_mata_janela_da_tentativa_nova(bateia):
+    # B5 — corrida: o usuário cancela DURANTE a espera do confirmar e entra de novo. A
+    # thread velha do confirmar não pode matar a janela da tentativa NOVA quando sair
+    # (o `finally` limpa só o que é dela).
+    def estado_fake(dir_conta):
+        return conta_estado._estado_login({"loggedIn": False})
+
+    def cancela_e_recomeca():
+        time.sleep(0.02)
+        login_conta.cancelar("conta-a")
+        login_conta.iniciar("conta-a", "/home/u")
+
+    monkeypatch_poll(0.001)
+    login_conta.iniciar("conta-a", "/home/u")
+    t = threading.Thread(target=cancela_e_recomeca)
+    t.start()
+    with pytest.raises(RuntimeError):
+        login_conta.confirmar("conta-a", "CODE-123", estado_fake=estado_fake, timeout_s=5)
+    t.join()
+    # A tentativa nova CONTINUA em voo e a janela dela NÃO foi morta pela thread velha.
+    # (O cancelar matou a primeira; a segunda segue viva.)
+    assert login_conta._em_curso("conta-a")
+    assert bateia.matadas == ["term-login-conta-a"]
+    # Cancela a segunda (limpeza do teste).
+    login_conta.cancelar("conta-a")
+    assert bateia.matadas == ["term-login-conta-a", "term-login-conta-a"]
 
 
 # -------------------------------------------------------------------------- helpers

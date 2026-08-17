@@ -4,7 +4,8 @@
   // login, plano e a idade do último limite; a Task 7 liga o botão Entrar e a Task 9 desenha a
   // faixa de cota na coluna do limite (a partir de `limite.linha`, que o lib/statusline.ts já
   // sabe parsear).
-  import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib/api';
+  import { onDestroy } from 'svelte';
+import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib/api';
   import { listarEstadosDeConta, formatarIntervalo, type ContaEstado } from '../../lib/contaEstado';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
   import { initials } from '../../lib/format';
@@ -188,6 +189,18 @@
       loginParado = false;
     }
   }
+
+  // B8 — o poll e a tentativa em voo NÃO podem sobreviver à desmontagem do componente.
+  // Portas: trocar de aba, fechar o modal, a janela cruzar 820px (DesktopShell →
+  // SessionList desmonta a aba). Sem isto o setInterval fica órfão batendo em /login/passo
+  // e a tentativa continua no servidor — o próximo Entrar cai em 409 sem que exista botão
+  // de Cancelar na tela. O .catch(() => {}) é deliberado e é o único ramo silencioso
+  // aceitável aqui: o componente já não existe, não há tela onde mostrar o erro, e a
+  // janela do servidor precisa morrer de qualquer forma.
+  onDestroy(() => {
+    pararPoll();
+    if (loginDe) cancelarLogin(loginDe).catch(() => {});
+  });
 </script>
 
 <div class="ct-superficie">
@@ -320,7 +333,7 @@
         <span class="ct-num" aria-hidden="true">3</span>
         <span class="ct-passo-txt">
           <b>{m.contas_passo3()}</b>
-          <input class="ct-campo" type="text" autocomplete="one-time-code"
+          <input class="ct-campo-cod" type="text" autocomplete="one-time-code"
             placeholder={m.contas_codigo_placeholder()} aria-label={m.contas_codigo_placeholder()}
             bind:value={loginCodigo} disabled={loginEnviando}
             onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); confirmarEntrar(); } }} />
@@ -459,7 +472,7 @@
   .ct-passo-txt b { color: var(--text-primary); font-weight: 600; }
   .ct-link { display: inline-block; margin-top: var(--space-1); font-family: var(--font-mono);
              font-size: 11px; color: var(--accent); word-break: break-all; }
-  .ct-campo { width: 100%; height: 38px; margin-top: var(--space-2); padding: 0 var(--space-3);
+  .ct-campo-cod { width: 100%; height: 38px; margin-top: var(--space-2); padding: 0 var(--space-3);
               background: var(--surface-inset); border: 1px solid var(--border-default);
               border-radius: var(--radius-sm); color: var(--text-primary);
               font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
