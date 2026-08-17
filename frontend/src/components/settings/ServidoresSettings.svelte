@@ -213,6 +213,9 @@
     // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
     // pertencem à máquina que saiu da tela.
     idErro = ''; peersErro = ''; mostrandoRegistro = false; removerPeerId = null;
+    // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
+    // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
+    idSalvando = false; regSalvando = false;
     if (!resolvedServer) {
       // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
       // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
