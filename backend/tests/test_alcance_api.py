@@ -11,7 +11,7 @@ suíte ficou verde — o caso de 401 sem credencial é obrigatório (régua do g
 import pytest
 from fastapi.testclient import TestClient
 
-from app import alcance
+from app import alcance, config
 from app.api import app
 from app.config import settings
 
@@ -57,3 +57,53 @@ def test_lista_estado_por_endereco_e_sinal_de_loopback(cli, monkeypatch):
     assert dados["enderecos"][0]["tempo_ms"] == 12
     assert dados["enderecos"][3]["estado"] == "nao_configurado"
     assert dados["enderecos"][3]["tempo_ms"] is None
+
+
+# ── Pareamento (Task 6, Lote B) ────────────────────────────────────────────────
+# A rota devolve endereço + credencial para o candidato pedido; candidato desconhecido
+# é recusado; sem credencial configurada, erro nomeado. O QR é SVG, desenhado no
+# BACKEND (decisão de plano: o front só tem qr-scanner, que lê e não gera).
+
+
+def test_pareamento_sem_credencial_e_401(cli):
+    # Régua da casa: rota nova traz o caso de 401 sem credencial (mesmo padrão do
+    # test_sem_credencial_e_401 da listagem).
+    assert cli.get("/api/alcance/pareamento?endereco=rede_local").status_code == 401
+
+
+def test_pareamento_devolve_url_com_token_e_qr_svg(cli, monkeypatch):
+    monkeypatch.setattr(alcance, "_detectar_lan", lambda: "192.168.0.42")
+    # pairing_url (config.py:215) chama detect_lan_ip DIRETO do config — o mesmo
+    # patch no alcance._detectar_lan não alcança; o patch abaixo cobre os dois.
+    monkeypatch.setattr(config, "detect_lan_ip", lambda: "192.168.0.42")
+    monkeypatch.setattr(settings, "lan_bind_ip", "127.0.0.1")
+    monkeypatch.setattr(settings, "public_url", "")
+    monkeypatch.setattr(settings, "front_port", 5173)
+    monkeypatch.setattr(settings, "auth_token", "9f4c2ae1b73d08e5")
+    r = cli.get(
+        "/api/alcance/pareamento?endereco=rede_local",
+        headers={"Authorization": "Bearer 9f4c2ae1b73d08e5"},
+    )
+    assert r.status_code == 200
+    dados = r.json()
+    # Endereço do candidato pedido + credencial, no formato que o validarPareamento
+    # (lib/auth.ts:368-405) exige: exatamente um token=.
+    assert dados["url"] == "http://192.168.0.42:5173/?token=9f4c2ae1b73d08e5"
+    assert "<svg" in dados["qr_svg"]
+
+
+def test_pareamento_endereco_desconhecido_recusado(cli):
+    r = cli.get("/api/alcance/pareamento?endereco=nao_existe", headers=AUTH)
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "alcance_endereco_desconhecido"
+
+
+def test_pareamento_sem_credencial_configurada_erro_nomeado(cli, monkeypatch):
+    # Credencial de fábrica: o require_auth compara o Bearer com o settings ATUAL —
+    # ao trocar o token, o header AUTH (constante) deixa de valer; usa-se o token
+    # novo no header, e a rota ainda responde 400 (e não 401) porque o auth passa.
+    monkeypatch.setattr(settings, "auth_token", "change-me")
+    monkeypatch.setattr(settings, "lan_bind_ip", "127.0.0.1")
+    r = cli.get("/api/alcance/pareamento?endereco=rede_local", headers={"Authorization": "Bearer change-me"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "alcance_sem_credencial"

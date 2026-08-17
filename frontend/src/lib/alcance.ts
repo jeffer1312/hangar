@@ -45,6 +45,27 @@ export async function alcanceDoServidor(s: Server, init?: RequestInit): Promise<
   return res.json() as Promise<AlcanceDoServidor>;
 }
 
+// ── Pareamento (Task 6, Lote B) ────────────────────────────────────────────────
+// O QR vem PRONTO do backend (decisão de plano: o front só tem qr-scanner, que lê e
+// não gera). A rota devolve o endereço escolhido + credencial, e o SVG da imagem.
+
+export interface PareamentoDoServidor {
+  url: string;
+  qr_svg: string;
+}
+
+export async function pareamentoDoServidor(s: Server, endereco: TipoEndereco): Promise<PareamentoDoServidor> {
+  const res = await fetch(`${s.baseUrl}/api/alcance/pareamento?endereco=${encodeURIComponent(endereco)}`, {
+    signal: AbortSignal.timeout(8000),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${s.token}`,
+    },
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<PareamentoDoServidor>;
+}
+
 // Frase de estado POR LINHA, derivada dos mocks (estados 1 e 3): o ok varia conforme o
 // tipo (wifi / 4G / nesta máquina), falhou e testando são fixos, "não configurado" é
 // neutro de propósito — não estar configurado não é defeito.
