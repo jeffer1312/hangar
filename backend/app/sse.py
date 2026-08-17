@@ -9,6 +9,7 @@ from app.adapters.codex.preview import CodexPreviewSource
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent, session_key
+from app.stats import Accumulator as StatsAccumulator
 from app.registry import SessionRegistry
 from app.askquestion import read_pending_askq
 
@@ -451,6 +452,26 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
 
+    async def stats_pump(path: str):
+        # Faixa de estatísticas (turnos/steps/tokens/tempos) — fold incremental do MESMO arquivo
+        # do transcript, IO no threadpool. FEATURE, não núcleo: diferente dos outros pumps, erro
+        # aqui NUNCA derruba o stream (regra do incidente 2026-07-23) — loga e a faixa some.
+        try:
+            acc = StatsAccumulator.for_provider(provider, path)
+            if acc is None:
+                return                       # provider sem fold (codex, por ora) -> sem faixa
+            last = None
+            while True:
+                snap = await asyncio.to_thread(acc.collect)
+                if snap and snap != last:
+                    last = snap
+                    await queue.put(("stats", json.dumps(snap)))
+                await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            raise                            # rebind do /clear cancela de propósito
+        except Exception:
+            _log.exception("sse: stats_pump falhou name=%s (faixa desligada)", name)
+
     async def jsonl_watcher():
         # Detecta /clear (e qualquer troca de transcript): o claude abre um .jsonl NOVO, mas o tailer foi
         # bindado no antigo -> nada novo chegaria ate o EventSource reconectar (o usuario tinha que sair e
@@ -502,8 +523,10 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # start_offset so vale pro tail INICIAL (veio do Last-Event-ID desta conexao). O rebind do
     # /clear abaixo recria sem ele: o transcript e outro arquivo, o offset antigo nao significa nada.
     tail_task = asyncio.create_task(tail_pump(jsonl, start_offset))
+    stats_task = asyncio.create_task(stats_pump(jsonl))
     tasks = [
         tail_task,
+        stats_task,
         # Fila duravel: user_msg sinteticos (id "queued-") pras msgs enfileiradas. O front faz o
         # dedup cruzado (queued- vs real) por texto.
         asyncio.create_task(pump("message", pqueue.follow(min_ts=start_ts))),
@@ -536,12 +559,16 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 # suppress/preview, e manda 'reset' pro front recarregar o history do zero.
                 tasks.remove(tail_task)
                 tail_task.cancel()
+                tasks.remove(stats_task)
+                stats_task.cancel()          # transcript novo -> acumulador novo (faixa zera)
                 committed["text"] = ""
                 _enqueue_preview("")
                 current_jsonl = data
                 ask_q_emitted = False
                 tail_task = asyncio.create_task(tail_pump(data))
                 tasks.append(tail_task)
+                stats_task = asyncio.create_task(stats_pump(data))
+                tasks.append(stats_task)
                 yield {"event": "reset", "data": "{}"}
                 continue
             if event == "preview":

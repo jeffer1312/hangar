@@ -149,6 +149,21 @@ export interface StateEvent {
   loop_max?: number | null;
 }
 
+// Faixa de estatísticas da sessão (evento SSE `stats`, app/stats.py). Todos os campos
+// além de turns/steps/in_tok/out_tok são opcionais — o front só desenha o que veio.
+// Tempos/velocidade são aproximados por construção (o front prefixa "~").
+export interface StatsEvent {
+  turns: number;
+  steps: number;
+  in_tok: number;
+  out_tok: number;
+  llm_ms?: number;
+  tool_ms?: number;
+  tok_s?: number;
+  cache_pct?: number;
+  ttft_ms?: number;
+}
+
 export interface CommandInfo {
   name: string;
   display: string;                 // forma exibida, ex: "/clear"
