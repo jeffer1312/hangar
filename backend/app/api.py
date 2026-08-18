@@ -40,6 +40,7 @@ from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, Run
 from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError, PIN_NONE
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
 from app.prune import prune_loop as _prune_loop
+from app.renova_token import laco as _renova_token_loop
 from app.chain import ThenLink
 from app import terminal_input
 from app.terminal_input import TerminalInput, drain
@@ -72,7 +73,7 @@ from app.search import SearchHit, search, extract_terms, search_terms, build_ask
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import pair
 from app import peers
-from app import alcance, conta_estado, peers_api
+from app import alcance, conta_estado, cotas, credenciais, peers_api
 from app.pair import PairLink, contract_path_for
 from app.hook_state import hook_state
 from app import push
@@ -170,6 +171,19 @@ async def _lifespan(app: FastAPI):
     # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
     # 24h — ver app/prune.py para o criterio conservador (chave de sessao nao viva + idade
     # minima de 7 dias) e o porquê de periodica em vez de so no startup.
+    # Renovação de token das contas PARADAS (Task de 18/08). Sem ela, conta que você não abre há
+    # dias fica com o accessToken vencido: a cota dela some da faixa do rodapé e, no limite do prazo
+    # do refresh (~26 dias), a conta pede login de novo. Abrir a sessão é o que renova — medido.
+    renova_task = asyncio.create_task(_renova_token_loop())
+
+    def _renova_done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("renova_token.laco crashed", exc_info=exc)
+
+    renova_task.add_done_callback(_renova_done)
+
     prune_task = asyncio.create_task(_prune_loop())
 
     def _prune_done(t: asyncio.Task) -> None:
@@ -215,6 +229,7 @@ async def _lifespan(app: FastAPI):
         task.cancel()
         stall_task.cancel()
         prune_task.cancel()
+        renova_task.cancel()
         try:
             await task
         except asyncio.CancelledError:
@@ -225,6 +240,13 @@ async def _lifespan(app: FastAPI):
             pass
         try:
             await prune_task
+        except asyncio.CancelledError:
+            pass
+        # Esperar, e não só cancelar: a rodada de renovação roda em to_thread e abre uma janela
+        # tmux que só morre no `finally` dela. Sair sem esperar deixaria a janela órfã justo no
+        # restart do backend, que aqui é rotina.
+        try:
+            await renova_task
         except asyncio.CancelledError:
             pass
 
@@ -250,6 +272,8 @@ app.include_router(deploy_router)
 # só no módulo dela. Última edição de api.py deste plano.
 app.include_router(alcance.alcance_router)
 app.include_router(conta_estado.conta_estado_router)
+app.include_router(cotas.cotas_router)
+app.include_router(credenciais.credenciais_router)
 app.include_router(peers_api.peers_router)
 registry = SessionRegistry()
 terminal = TerminalInput()

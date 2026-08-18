@@ -14,46 +14,71 @@ import * as contaEstadoLib from '../../lib/contaEstado';
 import * as apiLib from '../../lib/api';
 import * as loginLib from '../../lib/loginConta';
 import { mensagemDeErro } from '../../lib/errosApi';
-import type { ContaEstado } from '../../lib/contaEstado';
+import * as credLib from '../../lib/credenciais';
+import type { Credencial } from '../../lib/credenciais';
 import type { Server } from '../../lib/auth';
 
-vi.mock('../../lib/contaEstado', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../../lib/contaEstado')>();
-  return { ...real, listarEstadosDeConta: vi.fn() };
+vi.mock('../../lib/credenciais', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../lib/credenciais')>();
+  return { ...real, listarCredenciais: vi.fn(), definirApelido: vi.fn(async () => ({ id: 'x', apelido: null })) };
 });
 vi.mock('../../lib/api', () => ({
   criarConta: vi.fn(async () => ({ path: '/x', label: 'x', active: false })),
   apagarConta: vi.fn(async () => {}),
+  putEngine: vi.fn(async () => ({ motores: {} })),
+  putEngineForServer: vi.fn(async () => ({ motores: {} })),
+  deleteEngine: vi.fn(async () => ({ ok: true })),
+  deleteEngineForServer: vi.fn(async () => ({ ok: true })),
+  isAbortError: () => false,
+  isTimeoutError: () => false,
 }));
 vi.mock('../../lib/loginConta', () => ({
   iniciarLogin: vi.fn(async () => ({ ok: true })),
   passoLogin: vi.fn(async () => ({ etapa: 'aguardando', url: 'https://claude.com/cai/oauth/authorize' })),
-  confirmarLogin: vi.fn(async () => ({ ok: true, email: 'u@example.com', plano: 'max' })),
+  confirmarLogin: vi.fn(async () => ({ ok: true, email: 'u@exemplo.com', plano: 'max' })),
   cancelarLogin: vi.fn(async () => ({ ok: true })),
 }));
 
-const estadoMock = vi.mocked(contaEstadoLib);
+const credMock = vi.mocked(credLib);
 const apiMock = vi.mocked(apiLib);
 const loginMock = vi.mocked(loginLib);
 
-const LOGADA: ContaEstado = {
-  path: '/home/u/.claude-jefferson', label: 'jefferson', active: true,
-  login: { estado: 'ok', loggedIn: true, email: 'jefferson@example.com', plano: 'max' },
-  limite: { estado: 'lido', linha: '⚡5h:64% 📅7d:83%', ts: 1, idade_s: 5 },
-};
-const DESLOGADA: ContaEstado = {
-  path: '/home/u/.claude-testes', label: 'testes', active: false,
-  login: { estado: 'ok', loggedIn: false },
-  limite: { estado: 'sem_leitura' },
-};
+// Uma linha da lista unificada. `nome` é o que a tela mostra; `nome_natural` é o que vai pras
+// rotas — a distinção é o que faz Entrar/Apagar continuarem certos depois de renomear.
+function claude(over: Partial<Credencial> = {}): Credencial {
+  return {
+    id: `claude:${over.path ?? '/home/u/.claude-jefferson'}`,
+    tipo: 'claude', nome: 'jefferson', nome_natural: 'jefferson', ativa: true,
+    path: '/home/u/.claude-jefferson',
+    login: { estado: 'ok', loggedIn: true, email: 'pessoa@exemplo.com', plano: 'max' },
+    usos: [],
+    cota: { estado: 'lida', janelas: [{ rotulo: '5h', pct: 64 }, { rotulo: '7d', pct: 83 }], ts: 1, idade_s: 5 },
+    ...over,
+  };
+}
+function chave(over: Partial<Credencial> = {}): Credencial {
+  return {
+    id: 'chave:kimi', tipo: 'chave', nome: 'Kimi', nome_natural: 'Kimi', ativa: false,
+    base_url: 'https://api.kimi.com/coding/v1', chave_mascarada: 'sk-kimi••••4f2a',
+    usos: ['claude_code'],
+    cota: { estado: 'lida', janelas: [{ rotulo: '5h', pct: 5 }], ts: 1, idade_s: 5 },
+    ...over,
+  };
+}
+const LOGADA: Credencial = claude();
+const DESLOGADA: Credencial = claude({
+  id: 'claude:/home/u/.claude-testes', path: '/home/u/.claude-testes',
+  nome: 'testes', nome_natural: 'testes', ativa: false,
+  login: { estado: 'ok', loggedIn: false }, cota: { estado: 'sem_credencial', janelas: [] },
+});
 
 // Alvo EXPLÍCITO (outra máquina): é o contrato do parecer — a aba tem de afirmar o alvo, não
 // só que a função foi chamada. Os casos abaixo passam a exigir `ALVO` como primeiro argumento;
 // o caminho global (null) tem caso próprio no fim.
 const ALVO: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 't-b' };
 
-function montar(contas: ContaEstado[], alvo: Server | null = ALVO) {
-  estadoMock.listarEstadosDeConta.mockResolvedValue(contas);
+function montar(contas: Credencial[], alvo: Server | null = ALVO) {
+  credMock.listarCredenciais.mockResolvedValue(contas);
   const el = document.createElement('div');
   document.body.appendChild(el);
   const comp = mount(ContasSettings, { target: el, props: { apiTarget: alvo } });
@@ -69,8 +94,11 @@ describe('ContasSettings — a lista', () => {
     const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
     expect(linha.querySelector('.ct-nome')!.textContent).toBe('jefferson');
     expect(linha.querySelector('.ct-emuso')!.textContent).toBe(m.contas_em_uso());
-    expect(linha.querySelector('.ct-sub')!.textContent).toContain('jefferson@example.com');
-    expect(linha.querySelector('.ct-cota')!.textContent).toContain(m.cota_lido_agora());
+    expect(linha.querySelector('.ct-sub')!.textContent).toContain('pessoa@exemplo.com');
+    // A coluna do limite mostra as JANELAS do provedor, não a idade da leitura: é a mesma
+    // fonte da faixa do rodapé (/api/cotas), uma leitura por credencial.
+    expect(linha.querySelector('.ct-cota')!.textContent).toContain('64%');
+    expect(linha.querySelector('.ct-cota')!.textContent).toContain('83%');
     unmount(t.comp);
   });
 
@@ -82,7 +110,8 @@ describe('ContasSettings — a lista', () => {
     const fora = linhas[1];
     expect(fora.textContent).toContain('testes');
     expect(fora.textContent).toContain(m.contas_nao_conectada());
-    expect(fora.textContent).toContain(m.contas_sem_leitura());
+    // Sem credencial legível a coluna diz o que fazer, em vez de mostrar 0%.
+    expect(fora.textContent).toContain(m.cota_precisa_entrar());
     expect(fora.querySelector('.ct-acao.primaria')!.textContent).toBe(m.contas_entrar());
     unmount(t.comp);
   });
@@ -90,11 +119,12 @@ describe('ContasSettings — a lista', () => {
   it('conta logada por chave de API (sem e-mail) NAO pode dizer que nao esta conectada', async () => {
     // Shape REAL medido em 17/08 na máquina do usuário, conta before-merge-20260418-185405:
     // `claude auth status --json` -> {loggedIn:true, authMethod:"api_key"} SEM email.
-    const API_KEY: ContaEstado = {
-      path: '/home/u/.claude-before-merge', label: 'before-merge', active: false,
+    const API_KEY: Credencial = claude({
+      id: 'claude:/home/u/.claude-before-merge', path: '/home/u/.claude-before-merge',
+      nome: 'before-merge', nome_natural: 'before-merge', ativa: false,
       login: { estado: 'ok', loggedIn: true, email: null, plano: null },
-      limite: { estado: 'sem_leitura' },
-    };
+      cota: { estado: 'indisponivel', janelas: [] },
+    });
     const t = montar([API_KEY]);
     await tick(); await tick();
     const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
@@ -104,11 +134,12 @@ describe('ContasSettings — a lista', () => {
   });
 
   it('estado indisponivel nao pode ser confundido com deslogada', async () => {
-    const INDISP: ContaEstado = {
-      path: '/home/u/.claude-x', label: 'x', active: false,
+    const INDISP: Credencial = claude({
+      id: 'claude:/home/u/.claude-x', path: '/home/u/.claude-x',
+      nome: 'x', nome_natural: 'x', ativa: false,
       login: { estado: 'indisponivel', motivo: 'cli-indisponivel' },
-      limite: { estado: 'sem_leitura' },
-    };
+      cota: { estado: 'indisponivel', janelas: [] },
+    });
     const t = montar([INDISP]);
     await tick(); await tick();
     const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
@@ -118,7 +149,8 @@ describe('ContasSettings — a lista', () => {
   });
 
   it('limite velho aparece com a idade e sem parecer fresco', async () => {
-    const t = montar([{ ...LOGADA, active: false, limite: { estado: 'lido', linha: 'x', ts: 1, idade_s: 7200 } }]);
+    const t = montar([claude({ ativa: false,
+      cota: { estado: 'lida', janelas: [{ rotulo: '5h', pct: 3 }], ts: 1, idade_s: 7200 } })]);
     await tick(); await tick();
     const cota = t.el.querySelector<HTMLElement>('.ct-cota')!;
     expect(cota.textContent).toContain(m.cota_ultima_leitura({ n: '2 h' }));
@@ -128,19 +160,19 @@ describe('ContasSettings — a lista', () => {
 });
 
 describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
-  it('criar: campo inline + criarConta + recarrega a lista', async () => {
+  it('+ Nova conta abre o catálogo de provedores (a escolha saiu da linha do rodapé)', async () => {
+    // O rodapé tem UM botão. A escolha do provedor e o formulário vivem no modal
+    // (NovaCredencialSheet): inline, a pergunta e as opções viravam cinco controles competindo
+    // pela mesma linha — o que o usuário apontou em 18/08.
     const t = montar([LOGADA]);
     await tick(); await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-btn')!.click();   // + Nova conta
-    await tick();
-    const input = t.el.querySelector<HTMLInputElement>('.ct-campo')!;
-    input.value = 'minha-conta';
-    input.dispatchEvent(new Event('input'));
-    await tick();
-    t.el.querySelector<HTMLButtonElement>('.ct-rodape .ct-btn:nth-of-type(2)')!.click(); // criar
+    const rodape = [...t.el.querySelectorAll<HTMLButtonElement>('.ct-rodape .ct-btn')];
+    expect(rodape.map((b) => b.textContent)).toEqual([m.contas_nova()]);
+    rodape[0].click();
     await tick(); await tick();
-    expect(apiMock.criarConta).toHaveBeenCalledWith(ALVO, 'minha-conta');
-    expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(2);   // montagem + pós-criar
+    // O catálogo é do modal, que monta em document.body (BottomSheet), não dentro da aba.
+    expect(document.body.textContent).toContain(m.novacred_custom_nome());
+    expect(document.body.textContent).toContain(m.novacred_claude_nome());
     unmount(t.comp);
   });
 
@@ -155,7 +187,7 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
     await tick(); await tick();
     expect(apiMock.apagarConta).toHaveBeenCalledWith(ALVO, 'jefferson');
-    expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(2);
+    expect(credMock.listarCredenciais).toHaveBeenCalledTimes(2);
     unmount(t.comp);
   });
 
@@ -179,7 +211,7 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     expect(aviso).not.toBeNull();
     expect(aviso!.textContent).toContain(m.erro_conta_inexistente({ nome: 'backup' }));
     // Sem recarga da lista (não há sucesso pra recarregar) e sem fechar a confirmação.
-    expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(1);
+    expect(credMock.listarCredenciais).toHaveBeenCalledTimes(1);
     expect(t.el.querySelector('.ct-confirma')).not.toBeNull();
     unmount(t.comp);
   });
@@ -221,7 +253,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     await tick(); await tick();
     expect(loginMock.confirmarLogin).toHaveBeenCalledWith(ALVO, 'testes', 'CODE-123');
     // O pós-login recarrega a lista (o poll do passo não a recarrega — só o /passo).
-    expect(estadoMock.listarEstadosDeConta.mock.calls.length).toBe(2);
+    expect(credMock.listarCredenciais.mock.calls.length).toBe(2);
     unmount(t.comp);
   });
 
@@ -280,7 +312,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     // como hoje — o caminho global com self-heal de 401.
     const t = montar([DESLOGADA], null);
     await tick(); await tick();
-    expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledWith(null);
+    expect(credMock.listarCredenciais).toHaveBeenCalledWith(null);
     t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
     expect(loginMock.iniciarLogin).toHaveBeenCalledWith(null, 'testes');
@@ -296,7 +328,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(ContasSettings, { target: el, props });
-    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
+    credMock.listarCredenciais.mockResolvedValue([DESLOGADA]);
     await tick(); await tick(); await tick();
     el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
@@ -314,11 +346,12 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     // máquina errada (o defeito que a Task 5 antiga levou duas rodadas pra fechar).
     const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
     const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
-    let resolverA!: (v: ContaEstado[]) => void;
-    estadoMock.listarEstadosDeConta.mockImplementation((alvo: Server | null) =>
+    let resolverA!: (v: Credencial[]) => void;
+    credMock.listarCredenciais.mockImplementation((alvo: Server | null) =>
       alvo?.id === 'srv-b'
-        ? Promise.resolve([{ ...LOGADA, label: 'bbbb', path: '/home/u/.claude-b' }])
-        : new Promise<ContaEstado[]>((r) => { resolverA = r; }));
+        ? Promise.resolve([claude({ id: 'claude:/home/u/.claude-b', nome: 'bbbb',
+                                     nome_natural: 'bbbb', path: '/home/u/.claude-b' })])
+        : new Promise<Credencial[]>((r) => { resolverA = r; }));
     const props = criarProps({ apiTarget: A as Server | null });
     const el = document.createElement('div');
     document.body.appendChild(el);
@@ -342,17 +375,17 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(ContasSettings, { target: el, props });
-    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
+    credMock.listarCredenciais.mockResolvedValue([DESLOGADA]);
     await tick(); await tick(); await tick();
     el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
     expect(loginMock.iniciarLogin).toHaveBeenCalledWith(A, 'testes');
-    const chamadas = estadoMock.listarEstadosDeConta.mock.calls.length;
+    const chamadas = credMock.listarCredenciais.mock.calls.length;
     props.apiTarget = { ...A };   // MESMO servidor, objeto reconstruído
     await tick(); await tick(); await tick();
     expect(loginMock.cancelarLogin).not.toHaveBeenCalled();
     expect(el.querySelector('.ct-login')).not.toBeNull();
-    expect(estadoMock.listarEstadosDeConta.mock.calls.length).toBe(chamadas);
+    expect(credMock.listarCredenciais.mock.calls.length).toBe(chamadas);
     unmount(comp as never);
   });
 
@@ -368,7 +401,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(ContasSettings, { target: el, props });
-    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
+    credMock.listarCredenciais.mockResolvedValue([DESLOGADA]);
     await tick(); await tick(); await tick();
     el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
@@ -400,7 +433,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(ContasSettings, { target: el, props });
-    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
+    credMock.listarCredenciais.mockResolvedValue([DESLOGADA]);
     await tick(); await tick(); await tick();
     el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
@@ -437,7 +470,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
     await tick(); await tick(); await tick();
     // montagem + recarga do ramo de erro: a lista não fica presa no estado antigo.
-    expect(estadoMock.listarEstadosDeConta.mock.calls.length).toBe(2);
+    expect(credMock.listarCredenciais.mock.calls.length).toBe(2);
     expect(t.el.querySelector<HTMLElement>('.ct-aviso.erro')!.textContent).toContain(m.erro_login_timeout());
     unmount(t.comp);
   });

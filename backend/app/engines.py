@@ -139,7 +139,14 @@ def validar_base_url(url: str) -> str:
         # A api_key vai no header Authorization: em http para host público ela atravessa a rede em
         # claro. Loopback/rede privada segue liberado — é o caso do proxy tradutor local.
         raise ValueError("base_url: use https (http só para loopback ou rede privada)")
-    return url.rstrip("/")
+    limpo = url.rstrip("/")
+    # `/v1` no fim é TIRADO: neste app base_url é a raiz do provedor, e quem acrescenta o dialeto é
+    # quem consome — `engine_probe` monta `{base}/v1/models`, e o Claude Code monta `{base}/v1/...`
+    # a partir de ANTHROPIC_BASE_URL. Colar a URL do jeito que o provedor documenta
+    # ("https://api.kimi.com/coding/v1", que é o que está no config.toml do próprio Kimi) gerava
+    # `/coding/v1/v1/models`: 404, zero modelo, e nenhuma pista do porquê. Aceitar as duas formas é
+    # mais barato que ensinar a diferença em cada campo de URL da tela.
+    return limpo[:-3].rstrip("/") if limpo.endswith("/v1") else limpo
 
 
 def _normalizar(nome: str, dados: dict[str, Any]) -> dict[str, Any]:

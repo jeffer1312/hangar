@@ -163,12 +163,12 @@
       </details>
     {/if}
     {#if md}
-      <!-- `livemd` = o mesmo corte por cima do .plain (teto de 10lh, o fim do texto sempre visivel),
-           SEM o `pre-wrap` — aqui o conteudo ja e HTML com paragrafo proprio, e o pre-wrap dobraria
-           toda quebra. Sem teto, previa longa cresce sem limite e empurra a tela de quem esta lendo:
-           e o "pulo" que o corte do outro ramo existe pra evitar. -->
+      <!-- `livemd` = a prévia que veio do PRÓPRIO agente (sidecar do Pi, hook MessageDisplay do
+           Claude): markdown cru, incremental, na ordem — o mesmo texto que vai cair no .jsonl.
+           Por isso ela é desenhada como uma mensagem de verdade, inteira e rolável, sem o teto de
+           10 linhas que o ramo `.plain` (raspagem do pane) precisa ter. -->
       <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-      <div class="prose livemd" class:masked={plainOverflows} bind:this={plainEl}>{@html previewHtml}</div>
+      <div class="prose livemd" bind:this={plainEl}>{@html previewHtml}</div>
     {:else if !todo || todo.rest}
       <!-- O <span> em volta do texto+caret NÃO é decorativo: o .prose.plain é flex (pro corte por
            cima, ver o CSS), e num flex container um nó de texto SOLTO vira item anônimo próprio —
@@ -433,13 +433,19 @@
     display: flex; flex-direction: column; justify-content: flex-end;
     max-height: 10lh; overflow: hidden;
   }
+  /* SEM teto, e isso é a diferença que importa (18/08/2026). O teto acima existe porque a prévia
+     RASPADA do pane é uma cópia do que o terminal desenha AGORA: ela troca inteira ~7×/s e alterna
+     entre uma frase e um painel de 13 itens, então cresce e encolhe debaixo de quem lê. A prévia do
+     AGENTE (`md`, vinda do sidecar/hook) não faz isso: são deltas incrementais do mesmo texto, na
+     ordem, e é literalmente o markdown que vai cair no .jsonl — cresce só pro fim, igual a uma
+     mensagem chegando. Cortá-la em 10 linhas era herdar um remédio de outra doença, e o efeito era
+     o usuário não conseguir LER a resposta enquanto ela era escrita (o começo saía por cima e não
+     havia rolagem que o trouxesse de volta). O teto continua valendo pro `.plain`, que é o pane. */
   .prose.livemd {
-    display: flex; flex-direction: column; justify-content: flex-end;
-    max-height: 10lh; overflow: hidden;
+    display: block;
   }
   /* Só quando há corte de verdade (class:masked). Ver o comentário do plainOverflows no script. */
-  .prose.plain.masked,
-  .prose.livemd.masked { mask-image: linear-gradient(to bottom, transparent, black 1.6lh); }
+  .prose.plain.masked { mask-image: linear-gradient(to bottom, transparent, black 1.6lh); }
 
   /* Painel de tarefas do TUI dentro do preview: uma linha fechada, arvore ao abrir. SEM caixa —
      nada no fluxo do chat tem superficie propria (bolha do assistente e texto solto, ToolGroup e

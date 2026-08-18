@@ -98,6 +98,7 @@
 
   const runningAgents = $derived(activity.agents.filter((a) => a.kind === 'agent' && a.running));
 
+
   // ── Subagente ao vivo ─────────────────────────────────────────────────────
   // O transcript PROPRIO do subagente (<session-dir>/subagents/agent-<id>.jsonl) nao entra no jsonl
   // do pai: o pai so tem o pedido e, no fim, o resultado. O backend le esse arquivo e devolve as
@@ -127,6 +128,35 @@
     return subs.find((s) => s.prompt && norm(s.prompt).startsWith(head)) ?? null;
   }
 
+  // Título de um subagente que só o disco conhece: a primeira linha do prompt dele. O prompt de
+  // skill começa com o cabeçalho do arquivo ("Base directory for this skill: …"), então a linha que
+  // interessa é a primeira que não seja esse cabeçalho.
+  function tituloDoSub(s2: SubagentRun): string {
+    const linhas = (s2.prompt ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const util = linhas.find((l) => !/^base directory for this skill:/i.test(l) && !l.startsWith('#'));
+    return (util ?? linhas[0] ?? s2.agentId).slice(0, 90);
+  }
+
+  // Abre pelo OBJETO. O `openSubagent` casa por prompt porque parte de uma linha do transcript; aqui
+  // já se tem o subagente, e re-casar por texto só criaria uma chance de errar o alvo.
+  function abrirDoDisco(s2: SubagentRun) {
+    subTitle = tituloDoSub(s2);
+    subDetail = s2;
+    level = 'subagent';
+    iniciarSubPoll(s2);
+  }
+
+// Subagentes que só o DISCO conhece. O transcript do pai não os menciona quando quem forkou foi
+  // uma skill (`plugin:kubectl`) ou quando é agente de FUNDO — medido em 18/08/2026 numa sessão do
+  // usuário: 3 subagentes no disco, zero ferramenta `Agent` no transcript, e o painel dizia "nada
+  // rolando agora" com os arquivos deles ali do lado.
+  //
+  // Só entram os que NÃO casam com uma linha já listada acima (o casamento é pelo prompt), pra o
+  // mesmo subagente não aparecer duas vezes com dois rótulos diferentes.
+  const orfaos = $derived(
+    subs.filter((s2) => !activity.agents.some((a) => matchSub(a.prompt)?.agentId === s2.agentId)),
+  );
+
   async function openSubagent(prompt: string | undefined, title: string) {
     if (subs.length === 0) {
       try {
@@ -142,12 +172,30 @@
     subTitle = title;
     subDetail = match;
     level = 'subagent';
+    iniciarSubPoll(match);
+  }
+
+  // O ciclo de leitura do transcript do subagente. Extraído do openSubagent (18/08) porque agora há
+  // DOIS caminhos até aqui: a linha do transcript do pai e a linha do disco (`abrirDoDisco`) —
+  // duplicar o tick faria uma das duas portas ficar sem o "ao vivo" na primeira mudança.
+  // Geração do subagente aberto. `stopSubPoll` só limpa o intervalo — não cancela um fetch já em
+  // voo. Abrir o subagente A com rede lenta, voltar e abrir o B: a resposta atrasada de A chegava
+  // depois e escrevia em `subDetail`, deixando o cabeçalho dizendo B e o corpo mostrando A. Mesmo
+  // guard de geração que o QuotaStrip e a aba Contas já usam.
+  let geracaoSub = 0;
+  function iniciarSubPoll(alvo: SubagentRun) {
+    stopSubPoll();
+    subFails = 0;
+    const g = ++geracaoSub;
     const tick = async () => {
       try {
-        subDetail = await getSubagent(sessionName, match.agentId, 200);
+        const d = await getSubagent(sessionName, alvo.agentId, 200);
+        if (g !== geracaoSub) return;
+        subDetail = d;
         subFails = 0;
         subError = '';
       } catch {
+        if (g !== geracaoSub) return;
         // Uma falha isolada e normal (o arquivo some quando o agente termina) -> mantem o ultimo
         // estado. Tres seguidas nao sao "sumiu": e erro de verdade, e a tela precisa parar de
         // fingir que esta ao vivo.
@@ -157,7 +205,7 @@
         }
       }
     };
-    tick();
+    void tick();
     subTimer = setInterval(tick, 2500);
   }
   let subTitle = $state('');
@@ -338,6 +386,27 @@
               </div>
             {/if}
 
+            {#if orfaos.length > 0}
+              <div class="section">
+                <span class="section-label">{m.atividade_subagentes()}</span>
+                {#each orfaos as s2 (s2.agentId)}
+                  <button type="button" class="agent-row openable"
+                          onclick={() => abrirDoDisco(s2)}>
+                    <span class="agent-body">
+                      <span class="agent-head">
+                        <span class="agent-desc">{tituloDoSub(s2)}</span>
+                        {#if s2.agentType}<span class="agent-tag">{s2.agentType}</span>{/if}
+                      </span>
+                      <span class="agent-now">
+                        {m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}
+                      </span>
+                    </span>
+                    <span class="agent-arrow" aria-hidden="true">›</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
             {#if activity.tasks.length > 0}
               <div class="section">
                 <span class="section-label">{m.atividade_tarefas()}</span>
@@ -351,7 +420,7 @@
             {/if}
 
             {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
-            {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0}
+            {#if workflows.length === 0 && activity.tasks.length === 0 && runningAgents.length === 0 && orfaos.length === 0}
               <p class="activity-empty">{m.atividade_vazio()}</p>
             {/if}
           </div>

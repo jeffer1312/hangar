@@ -3,6 +3,35 @@
 Captured from live testing (phone, real session). Deferred by the user to the polish
 phase — not blockers. Newest first.
 
+## A tela do subagente mostra o PEDIDO, não o trabalho (2026-08-18)
+
+Pedido do usuário depois de a lista de subagentes voltar a funcionar. O que está errado hoje,
+olhando a tela de verdade (print em `/tmp/ver-front/subagentes3.png` e os do usuário de 18/08):
+
+- **A lista está boa.** "Rodando agora" mostra cada subagente com o tipo, quantas ferramentas ele já
+  chamou e a última que rodou. Isso responde "o que está acontecendo".
+- **O detalhe está ruim.** Ao abrir uma linha, o corpo é o **prompt cru** — a instrução inteira que
+  o pai mandou, em texto corrido, sem renderização de markdown, sem título, sem parágrafo. Numa
+  tarefa com brief grande (o caso normal do repo) isso é uma parede de texto que ninguém lê, e ela
+  ocupa a tela toda ANTES do que interessa, que é o que o agente fez.
+
+Direção acordada (não implementada):
+
+1. O detalhe abre no **trabalho**, não no pedido: a conversa do subagente (`getSubagent(..., events)`
+   já devolve os eventos no mesmo `ChatEvent` do chat) primeiro; o prompt vira uma seção recolhida.
+2. O prompt, quando aberto, passa por `lib/markdown.ts` como todo `.md` do app — a régua "markdown
+   nunca aparece cru" do CLAUDE.md vale aqui e está sendo violada.
+3. Um cabeçalho com o que dá pra saber sem ler nada: tipo do agente, duração, tokens, ferramentas.
+4. Título da linha: hoje sai da primeira linha útil do prompt. Quando o hook novo
+   (`SubagentStart`/`SubagentStop`, ver `hooks/subagent_hook.py`) tiver rodado desde o começo da
+   sessão, há coisa melhor — `last_assistant_message` é o resumo do próprio agente.
+
+Contexto de por que a lista sumiu, que vale guardar: o painel derivava os subagentes do transcript,
+contando `tool_use` de nome `Agent`. Skill que forka entra como `Skill` e agente de fundo não entra
+como ferramenta nenhuma — medido numa sessão real: 3 subagentes no disco, 0 no painel. O dado sempre
+esteve em `<projeto>/<sessao>/subagents/agent-<id>.jsonl` e a rota `GET /api/sessions/{name}/subagents`
+sempre soube lê-lo; o que faltava era o gatilho.
+
 ## Claude Code shipped native cross-session messaging (2026-08-07)
 
 Anthropic released it the same day, in **v2.1.224**: two tools Claude drives itself — `ListAgents`

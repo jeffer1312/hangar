@@ -153,7 +153,10 @@ class _FoldClaude(_Fold):
         if texto and not _is_command_meta(texto) and _strip_meta_blocks(texto):
             self.turns += 1
             self._prompt_ts = ts
-            self._gap(ts)            # gap até aqui é o usuário pensando — não conta pra ninguém
+        # Avança o cursor MESMO na linha sintética: uma task-notification que chega com a sessão
+        # parada deixava o cursor no assistente anterior, e a resposta seguinte engolia a espera
+        # inteira como "LLM" (medido: 32min de idle numa faixa de 40min).
+        self._gap(ts)                # gap até aqui não é LLM — usuário pensando ou sessão parada
 
 
 class _FoldKimi(_Fold):
@@ -224,14 +227,27 @@ class _FoldPi(_Fold):
                 self.in_tok += _int(u.get("input")) + cr + _int(u.get("cacheWrite"))
                 self.cache_read_tok += cr
                 self.out_tok += _int(u.get("output"))
+            # O Pi grava a linha do assistente quando a geração COMEÇA (medido em
+            # sessão real: gap ~1ms da linha anterior mesmo com 4k tok de saída),
+            # então o gap não mede LLM — a duração vem no campo da própria mensagem.
+            # Sem o campo (Pi antigo), cai no gap, que era a conta original.
             gap = self._gap(ts)
-            if gap is not None:
+            dur = msg.get("_piClaudeStyleThinkingDurationMs")
+            dur_s = (dur / 1000.0
+                     if isinstance(dur, (int, float)) and not isinstance(dur, bool)
+                     and 0 <= dur <= _GAP_TETO_S * 1000.0 else None)
+            if dur_s is not None:
+                self.llm_ms += dur_s * 1000.0
+            elif gap is not None:
                 self.llm_ms += gap * 1000.0
             self._ttft(ts)
+            # A tool só dispara quando a geração termina — ancorar no ts da linha
+            # (início) faria o tempo de LLM entrar dobrado dentro de tool_ms.
+            ts_fim = ts + dur_s if (ts is not None and dur_s is not None) else ts
             content = msg.get("content")
             for b in (content if isinstance(content, list) else []):
                 if isinstance(b, dict) and b.get("type") == "toolCall":
-                    self._tool_start(b.get("id"), ts)
+                    self._tool_start(b.get("id"), ts_fim)
         elif role == "toolResult":
             self._tool_end(msg.get("toolCallId"), ts)
             self._gap(ts)            # espera de tool — só avança o cursor

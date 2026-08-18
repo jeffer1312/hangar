@@ -3,7 +3,13 @@
     "_justificativas": {
       "Workflow": "activity.ts:171 — case de protocolo (tipo de evento do transcript do agente), nao e texto exibido; o rotulo do badge usa m.atividade_workflow()",
       "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
-      "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo"
+      "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo",
+      "Kimi Code": "NovaCredencialSheet.svelte — NOME DE MARCA do provedor no catálogo, não texto de interface: marca não se traduz. Os outros do mesmo catálogo (OpenCode Zen, Anthropic, OpenRouter, DeepSeek) não caem na heurística; estes dois caem por serem duas palavras curtas.",
+      "Groq": "NovaCredencialSheet.svelte — NOME DE MARCA do provedor no catálogo, não texto de interface: marca não se traduz. Os outros do mesmo catálogo (OpenCode Zen, Anthropic, OpenRouter, DeepSeek) não caem na heurística; estes dois caem por serem duas palavras curtas.",
+      "anthropic.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
+      "kimi.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
+      "deepseek.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
+      "groq.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com."
     }
   },
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
@@ -177,5 +183,11 @@
   "* inteira, e 60×/s disso no celular é custo sem ganho visível.",
   "/** Texto atualmente revelado — o que a bolha renderiza. */",
   "/** Um passo da animação. Público só pra teste — em produção quem chama é o rAF. */",
-  "/** Desmontagem da bolha: nenhum frame pendente pode sobreviver ao componente. */"
+  "/** Desmontagem da bolha: nenhum frame pendente pode sobreviver ao componente. */",
+  "Kimi Code",
+  "Groq",
+  "anthropic.com",
+  "kimi.com",
+  "deepseek.com",
+  "groq.com"
 ]

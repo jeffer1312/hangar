@@ -1,0 +1,383 @@
+"""Cota por conta lida NA FONTE do provedor (janelas 5h/7d), não no sidecar de statusline.
+
+Por que existe (medido 18/08/2026): a faixa do rodapé tirava o limite do último sidecar de
+statusline DENTRO da pasta da conta. Numa máquina onde `<conta>/.claude-pocket-status` é um
+symlink pra pasta da conta padrão — o caso desta aqui — as três contas liam o MESMO arquivo e
+desenhavam o MESMO número; e mesmo sem o symlink, conta sem sessão aberta nunca teve leitura
+nenhuma. Cota não é propriedade da sessão, é da CREDENCIAL: quem responde tem que ser o provedor.
+
+Fontes, todas verificadas contra a API real em 18/08/2026:
+
+ - Claude: GET https://api.anthropic.com/api/oauth/usage com o `accessToken` de
+   `<conta>/.credentials.json`. Devolve `five_hour`/`seven_day` com `utilization` (percentual) e
+   `resets_at` (ISO). NÃO é chamada de inferência — não consome cota nenhuma.
+ - Kimi: GET <base_url>/usages com a `api_key` de cada provider `type = "kimi"` do
+   `~/.kimi-code/config.toml`. A janela curta vem em `limits[]` (`window.duration == 300`
+   minutos) e a longa em `usage`. Os dois trazem `limit`/`remaining` como STRING, e o usado é
+   `limit - remaining`: campo `used` não existe nesta API (o refresher da statusline em
+   `scripts/omniroute-statusline.js` lê `detail.used` e por isso nunca desenhou a cota do Kimi).
+ - OpenCode Zen: fora, de propósito. `/v1/usage`, `/v1/usages`, `/v1/me`, `/v1/balance` e
+   `/v1/account` respondem 404 (só `/v1/models` existe) — faltar a linha é melhor que inventar
+   número.
+
+Token expirado NÃO é renovado aqui. O refresh token da Anthropic rotaciona: gravar o par novo por
+baixo de um CLI vivo derrubaria a sessão dele. `expiresAt` no passado vira estado `expirada` sem
+nem gastar a requisição; 401/403 caem no mesmo estado.
+"""
+import json
+import logging
+import threading
+import time
+import tomllib
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Literal
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from app import apelidos, contas, engines, opencode_cota
+from app.adapters.kimi import sessions as kimi_sessions
+from app.auth import require_auth
+from app.config import list_config_dirs
+
+_log = logging.getLogger("claude_pocket.cotas")
+
+cotas_router = APIRouter(prefix="/api/cotas")
+
+# 5 min: é a régua que o usuário pediu e o que a janela de 5h suporta sem mentir (1% de erro no
+# pior caso). Conta EM USO não depende deste TTL pra parecer viva — a statusline da sessão dela
+# continua desenhando o número no chat; aqui o que importa é a conta parada ter algum número.
+_TTL_S = 300.0
+_HTTP_TIMEOUT = 8.0
+_URL_CLAUDE = "https://api.anthropic.com/api/oauth/usage"
+# Mesmo cabeçalho que o CLI manda no endpoint OAuth; sem ele a rota responde, mas mandá-lo é o
+# contrato documentado do token `sk-ant-oat`.
+_BETA_CLAUDE = "oauth-2025-04-20"
+
+Estado = Literal["lida", "sem_credencial", "expirada", "indisponivel"]
+Provedor = Literal["claude", "kimi", "opencode"]
+
+
+class JanelaCota(BaseModel):
+    """Uma janela de limite. `rotulo` é dado do provedor ("5h"/"7d"), não texto de interface."""
+
+    rotulo: str
+    pct: float
+    reset_ts: float | None = None
+
+
+class CotaConta(BaseModel):
+    """Cota de UMA credencial. `estado` distingue os quatro casos que a tela precisa separar:
+    lida, conta sem credencial no disco, credencial expirada e falha de leitura."""
+
+    id: str
+    label: str
+    provedor: Provedor
+    # Conta-base do app (o `~/.claude` de `list_config_dirs`) — é a que uma sessão nova nasce
+    # usando, e a faixa a marca. Não é "a conta da sessão em foco": isso é do chat, não da faixa.
+    ativa: bool = False
+    estado: Estado
+    janelas: list[JanelaCota] = []
+    ts: float | None = None
+    idade_s: float | None = None
+    motivo: str | None = None
+
+
+# Resultado cru de um leitor: (estado, janelas, motivo).
+_Leitura = tuple[Estado, list[JanelaCota], str | None]
+
+
+@dataclass(frozen=True)
+class _Fonte:
+    chave: str
+    label: str
+    provedor: Provedor
+    ler: Callable[[], _Leitura]
+    ativa: bool = False
+
+
+# ------------------------------------------------------------------------------------ HTTP
+
+
+def _get_json(url: str, headers: dict[str, str]) -> tuple[int, object]:
+    """GET -> (status, json). Status 0 = nem chegou a ter resposta (rede/timeout/DNS).
+
+    Nada aqui levanta: uma conta que não responde não pode derrubar a lista das outras.
+    """
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as r:
+            return r.status, json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+        _log.debug("cota: %s falhou: %r", url, e)
+        return 0, None
+
+
+def _iso_ts(v: object) -> float | None:
+    """ISO-8601 do provedor -> epoch. Formato estranho vira None (a janela some, o pct fica)."""
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------------- Claude
+
+
+def _janela_claude(o: object, rotulo: str) -> JanelaCota | None:
+    if not isinstance(o, dict):
+        return None
+    pct = o.get("utilization")
+    if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+        return None
+    return JanelaCota(rotulo=rotulo, pct=float(pct), reset_ts=_iso_ts(o.get("resets_at")))
+
+
+def _token_claude(dir_conta: Path) -> tuple[str | None, _Leitura | None]:
+    """Token OAuth da conta, ou o motivo de não dar pra usar. `expiresAt` vem em MILISSEGUNDOS."""
+    try:
+        o = json.loads((dir_conta / ".credentials.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, ("sem_credencial", [], "credencial-ilegivel")
+    oauth = o.get("claudeAiOauth") if isinstance(o, dict) else None
+    tok = oauth.get("accessToken") if isinstance(oauth, dict) else None
+    if not isinstance(tok, str) or not tok:
+        return None, ("sem_credencial", [], "sem-token")
+    exp = oauth.get("expiresAt")
+    if isinstance(exp, (int, float)) and not isinstance(exp, bool) and exp / 1000 <= time.time():
+        return None, ("expirada", [], "token-expirado")
+    return tok, None
+
+
+def _ler_claude(dir_conta: Path) -> _Leitura:
+    tok, falha = _token_claude(dir_conta)
+    if falha is not None:
+        return falha
+    status, j = _get_json(_URL_CLAUDE, {
+        "Authorization": f"Bearer {tok}",
+        "Accept": "application/json",
+        "anthropic-beta": _BETA_CLAUDE,
+    })
+    if status in (401, 403):
+        return "expirada", [], f"http-{status}"
+    if not isinstance(j, dict):
+        return "indisponivel", [], (f"http-{status}" if status else "sem-resposta")
+    janelas = [w for w in (_janela_claude(j.get("five_hour"), "5h"),
+                           _janela_claude(j.get("seven_day"), "7d")) if w is not None]
+    if not janelas:
+        return "indisponivel", [], "formato-desconhecido"
+    return "lida", janelas, None
+
+
+# ------------------------------------------------------------------------------------ Kimi
+
+
+def _num(v: object) -> float | None:
+    """O Kimi manda limite/restante como STRING ("100"). Aceita os dois, recusa o resto."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v)
+        except ValueError:
+            return None
+    return None
+
+
+def _janela_kimi(detalhe: object, rotulo: str) -> JanelaCota | None:
+    """`limit`/`remaining` -> pct USADO. Sem `used` nesta API: usar `limit - remaining`."""
+    if not isinstance(detalhe, dict):
+        return None
+    lim, rest = _num(detalhe.get("limit")), _num(detalhe.get("remaining"))
+    if lim is None or rest is None or lim <= 0:
+        return None
+    pct = max(0.0, min(100.0, (lim - rest) / lim * 100.0))
+    return JanelaCota(rotulo=rotulo, pct=pct, reset_ts=_iso_ts(detalhe.get("resetTime")))
+
+
+def _rotulo_janela(minutos: object) -> str:
+    """Duração em minutos -> rótulo curto ("300" -> "5h"). Desconhecida vira "janela"."""
+    n = _num(minutos)
+    if n is None or n <= 0:
+        return "janela"
+    if n >= 1440 and n % 1440 == 0:
+        return f"{int(n // 1440)}d"
+    if n >= 60 and n % 60 == 0:
+        return f"{int(n // 60)}h"
+    return f"{int(n)}min"
+
+
+def _ler_kimi(api_key: str, base_url: str) -> _Leitura:
+    """Forma do Kimi (`GET <base>/usages`), tentada em qualquer provedor de chave.
+
+    Resposta ruim aqui NUNCA vira `expirada`, e isso é decisão, não descuido: só a rota OAuth do
+    Claude tem semântica de credencial: um 401/403/404 aqui quase sempre quer dizer "esta URL não
+    é essa rota" — medido 18/08 com a chave do OpenCode Zen, que devolve 403 num caminho que não
+    existe. Chamar isso de "chave vencida" mandaria a pessoa refazer um login que está inteiro.
+    Tudo que não for uma leitura boa cai em `indisponivel`, que a tela desenha como "não informa
+    cota", com o código HTTP no motivo pra quem for investigar."""
+    status, j = _get_json(base_url.rstrip("/") + "/usages", {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    })
+    if not isinstance(j, dict):
+        return "indisponivel", [], (f"http-{status}" if status else "sem-resposta")
+    janelas: list[JanelaCota] = []
+    limites = j.get("limits")
+    for w in limites if isinstance(limites, list) else []:
+        if not isinstance(w, dict):
+            continue
+        janela = w.get("window")
+        rot = _rotulo_janela(janela.get("duration") if isinstance(janela, dict) else None)
+        item = _janela_kimi(w.get("detail"), rot)
+        if item is not None:
+            janelas.append(item)
+    # A janela larga do Kimi não traz duração: é a do plano (7 dias, medido pelo resetTime).
+    longa = _janela_kimi(j.get("usage"), "7d")
+    if longa is not None:
+        janelas.append(longa)
+    if not janelas:
+        return "indisponivel", [], "formato-desconhecido"
+    return "lida", janelas, None
+
+
+def _ler_opencode(cfg: dict[str, str]) -> _Leitura:
+    """Adapta o leitor do painel do OpenCode ao formato de leitura deste módulo."""
+    estado, janelas, motivo = opencode_cota.ler(cfg["workspace_id"], cfg["auth_cookie"])
+    return estado, [JanelaCota(**j) for j in janelas], motivo
+
+
+def _providers_kimi() -> list[tuple[str, str, str]]:
+    """(nome, api_key, base_url) de cada provider Kimi com chave. Provider por OAuth fica de fora:
+    o arquivo de storage é vazio nesta máquina e adivinhar o formato dele seria inventar."""
+    cfg = kimi_sessions.kimi_home() / "config.toml"
+    try:
+        dados = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, ValueError):
+        return []
+    provedores = dados.get("providers")
+    if not isinstance(provedores, dict):
+        return []
+    out = []
+    for nome, p in provedores.items():
+        if not isinstance(p, dict) or p.get("type") != "kimi":
+            continue
+        key, base = p.get("api_key"), p.get("base_url")
+        if isinstance(key, str) and key and isinstance(base, str) and base:
+            out.append((str(nome), key, base))
+    return out
+
+
+# ------------------------------------------------------------------------- fontes e cache
+
+_cache: dict[str, tuple[float, CotaConta]] = {}
+_lock = threading.Lock()
+
+
+def _fontes() -> list[_Fonte]:
+    """Uma fonte por CREDENCIAL. As contas Claude usam o mesmo filtro da aba Contas (conta de
+    verdade ou a base do app) — pasta de backup não vira linha na faixa."""
+    out: list[_Fonte] = []
+    for c in list_config_dirs():
+        p = Path(c.path)
+        if contas.e_conta(p) or c.active:
+            out.append(_Fonte(f"claude:{c.path}", c.label, "claude",
+                              lambda p=p: _ler_claude(p), bool(c.active)))
+    for nome, key, base in _providers_kimi():
+        out.append(_Fonte(f"kimi:{nome}", nome, "kimi",
+                          lambda k=key, b=base: _ler_kimi(k, b)))
+    # Chaves cadastradas no app (engines.json). O id casa com o da lista unificada
+    # (`chave:<nome>`) de propósito: é a MESMA credencial nas duas telas, e ids diferentes fariam
+    # a tela mostrar a linha sem cota enquanto a faixa mostra a cota, sem ninguém entender.
+    # Só a forma do Kimi é tentada; provedor que não a responde vira `indisponivel` (que a tela
+    # desenha como "não informa cota"), nunca um número inventado.
+    for nome, dados in engines.listar().items():
+        key, base = dados.get("api_key"), dados.get("base_url")
+        if not (isinstance(key, str) and key and isinstance(base, str) and base):
+            continue
+        cid, rotulo = f"chave:{nome}", dados.get("label") or nome
+        # OpenCode Go não tem rota de cota nenhuma (medido; ver app/opencode_cota.py): a leitura
+        # dele é a página do painel com o cookie de sessão, e só existe se a pessoa colou o cookie.
+        # Sem cookie a credencial continua na lista, sem número — nunca zero.
+        cfg = opencode_cota.config_de(cid) if "opencode.ai" in base else None
+        if cfg is not None:
+            out.append(_Fonte(cid, rotulo, "opencode",
+                              lambda c=cfg: _ler_opencode(c)))
+        else:
+            out.append(_Fonte(cid, rotulo, "kimi", lambda k=key, b=base: _ler_kimi(k, b)))
+    return out
+
+
+def _seguro(f: _Fonte) -> _Leitura:
+    try:
+        return f.ler()
+    except Exception:                                        # noqa: BLE001 - fail-soft por fonte
+        # `exception` e não `debug`: falha de REDE já é tratada dentro do `_get_json` (e lá o debug
+        # é certo, porque é ruído esperado). Chegar aqui significa defeito no leitor — e um defeito
+        # em debug seria relido a cada 5 min, pra sempre, sem ninguém ver.
+        _log.exception("cota: leitor de %s levantou", f.chave)
+        return "indisponivel", [], "erro-leitor"
+
+
+def _atualizar(fontes: list[_Fonte]) -> None:
+    """Relê em paralelo as fontes fora do TTL. Falha de REDE não apaga leitura boa (o número
+    envelhece e a tela mostra a idade); `expirada`/`sem_credencial` são fato sobre a conta e
+    sobrescrevem — deixar número velho ali faria conta deslogada parecer em uso."""
+    agora = time.monotonic()
+    with _lock:
+        vencidas = [f for f in fontes
+                    if (h := _cache.get(f.chave)) is None or agora - h[0] >= _TTL_S]
+    if not vencidas:
+        return
+    with ThreadPoolExecutor(max_workers=min(8, len(vencidas))) as ex:
+        leituras = list(ex.map(_seguro, vencidas))
+    with _lock:
+        for f, (estado, janelas, motivo) in zip(vencidas, leituras):
+            anterior = _cache.get(f.chave)
+            if estado == "indisponivel" and anterior is not None and anterior[1].estado == "lida":
+                # Mantém a leitura boa mas deixa o carimbo do TTL novo: sem isto uma queda de rede
+                # faria as 8 requisições voltarem a cada poll de 60s.
+                _cache[f.chave] = (time.monotonic(), anterior[1])
+                continue
+            _cache[f.chave] = (time.monotonic(), CotaConta(
+                id=f.chave, label=f.label, provedor=f.provedor, ativa=f.ativa, estado=estado,
+                janelas=janelas, ts=time.time() if estado == "lida" else None, motivo=motivo,
+            ))
+
+
+@cotas_router.get("", dependencies=[Depends(require_auth)], response_model=list[CotaConta])
+def listar_cotas() -> list[CotaConta]:
+    """Cota de cada credencial da máquina, com no máximo 5 min de idade.
+
+    A rota é síncrona de propósito (o FastAPI já a roda em thread): quem chama é um poll de 60s
+    da faixa, e dentro do TTL ela não toca a rede — o custo real é uma rodada de requisições a
+    cada 5 minutos, em paralelo.
+    """
+    fontes = _fontes()
+    _atualizar(fontes)
+    agora = time.time()
+    # O nome exibido é o apelido, quando a pessoa deu um: sem isto a faixa mostra o nome que o
+    # disco impôs — foi como uma conta chamada "apikey" foi parar no rodapé.
+    nomes = apelidos.ler()
+    saida = []
+    with _lock:
+        for f in fontes:
+            hit = _cache.get(f.chave)
+            if hit is None:
+                continue
+            c = hit[1]
+            saida.append(c.model_copy(update={
+                "label": nomes.get(c.id) or c.label,
+                "idade_s": (agora - c.ts) if c.ts is not None else None}))
+    return saida

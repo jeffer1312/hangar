@@ -137,6 +137,41 @@ def test_pi_usage_e_toolresult(tmp_path):
     assert snap["tool_ms"] == 2000
 
 
+def test_claude_linha_sintetica_avanca_o_cursor(tmp_path):
+    # task-notification chegando com a sessão parada: sem avançar o cursor, a resposta
+    # seguinte engolia a espera inteira como LLM (32min medidos numa sessão real).
+    p = tmp_path / "s.jsonl"
+    _w(p, [
+        _claude_user("2026-08-18T08:00:00Z", "pedido"),
+        _claude_assistant("2026-08-18T08:00:05Z", "m1"),
+        _claude_user("2026-08-18T08:30:00Z", "<task-notification>terminou</task-notification>"),
+        _claude_assistant("2026-08-18T08:30:04Z", "m2"),
+    ])
+    snap = Accumulator("claude", str(p)).collect()
+    assert snap["llm_ms"] == 9000        # 5s + 4s — os 30min parados ficam de fora
+
+
+def test_pi_duracao_vem_do_campo_e_tool_desconta_geracao(tmp_path):
+    # O Pi grava a linha do assistente no COMEÇO da geração; a duração real vem em
+    # _piClaudeStyleThinkingDurationMs. tool_ms começa no fim da geração.
+    p = tmp_path / "session.jsonl"
+    _w(p, [
+        {"type": "message", "message": {"role": "user", "timestamp": 1000_000,
+                                        "content": [{"type": "text", "text": "oi"}]}},
+        {"type": "message", "message": {"role": "assistant", "timestamp": 1001_000,
+                                        "_piClaudeStyleThinkingDurationMs": 7000,
+                                        "content": [{"type": "toolCall", "id": "t1"}],
+                                        "usage": {"input": 20, "output": 700,
+                                                  "cacheRead": 80, "cacheWrite": 0}}},
+        {"type": "message", "message": {"role": "toolResult", "timestamp": 1012_000,
+                                        "toolCallId": "t1", "content": []}},
+    ])
+    snap = Accumulator("pi", str(p)).collect()
+    assert snap["llm_ms"] == 7000        # do campo, não do gap de 1s
+    assert snap["tok_s"] == 100.0        # 700 tok / 7s
+    assert snap["tool_ms"] == 4000       # 1012.0 - (1001.0 + 7.0)
+
+
 def test_provider_sem_fold_retorna_none():
     assert Accumulator.for_provider("codex", "/x") is None
     assert Accumulator.for_provider("claude", "") is None

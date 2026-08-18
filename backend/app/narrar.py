@@ -526,6 +526,14 @@ class _Travas(NamedTuple):
     # Timeout POR ESTILO: reorganizar dois minutos de fala e uma tarefa maior que pontuar uma
     # frase, e o teto unico de 8s (dimensionado pra "so limpar") derrubava a estruturacao pelo
     # relogio antes de dar pra julgar se ela era boa.
+    #
+    # SUBIDOS em 18/08/2026 (20/45/60s) porque o provedor mudou debaixo dos numeros: os tetos
+    # antigos (8/25/25) foram calibrados em 14/08 com o gpt-oss-120b respondendo em ~1,2s no Groq,
+    # e a medicao de hoje no MESMO modelo e no MESMO texto deu 3,9-10,6s (limpar), 8,2-17,2s
+    # (prosa) e 21,5-23,2s (briefing) — o briefing encostava no teto TODA vez, e o ditado voltava
+    # cru com "falha ao contatar o provedor". Teto e rede de seguranca contra pendurar, nao regua
+    # de qualidade: quem chama espera 120s (lib/api.ts), entao a folga existe. Se um dia o
+    # provedor voltar a ser rapido, isto continua correto — so deixa de ser exercitado.
     timeout: int
 
 
@@ -536,14 +544,14 @@ _TRAVAS_POR_ESTILO = {
     # "limpar" nao reordena nem corta ideia, entao pode exigir cobertura ALTA: perder 15% do que a
     # pessoa falou, aqui, e defeito, nao servico.
     "limpar": _Travas(inflacao_max=1.5, encolhe_min=0.5, cobertura_min=0.80,
-                      cobra_invencao=True, timeout=8),
+                      cobra_invencao=True, timeout=20),
     # Prosa CORTA repeticao, entao o piso de encolhimento cai: o ditado de 79s do usuario repetia
     # "nao sei se e possivel" 3x e "PWA" 4x — encolher pra 0,45x ali e o servico funcionando.
     "prosa": _Travas(inflacao_max=1.3, encolhe_min=0.3, cobertura_min=0.60,
-                     cobra_invencao=True, timeout=25),
+                     cobra_invencao=True, timeout=45),
     # Briefing acrescenta titulos e hifens, entao infla um pouco mesmo cortando repeticao.
     "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.3, cobertura_min=0.45,
-                        cobra_invencao=False, timeout=25),
+                        cobra_invencao=False, timeout=60),
 }
 
 

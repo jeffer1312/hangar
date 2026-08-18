@@ -1,5 +1,5 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
-const { app, BrowserWindow, screen } = require('electron');
+const { app, BrowserWindow, screen, shell } = require('electron');
 const { ler, gravar } = require('./settings.cjs');
 
 // MEDIDO 05/08/2026 (Hyprland/Wayland, Electron 43.3.0): o switch `enable-transparent-visuals`
@@ -107,6 +107,26 @@ app.whenReady().then(async () => {
   // do SPA troque o título.
   win.setTitle('hangar');
   win.on('page-title-updated', (e) => e.preventDefault());
+
+  // Link do chat (`target="_blank"`) sem isto abre uma BrowserWindow NOVA do proprio Electron — sem
+  // barra de endereco, sem abas, sem as sessoes/extensoes do usuario. Parece "outro navegador".
+  // `openExternal` manda pro navegador padrao do sistema (aqui, o Chrome).
+  win.webContents.setWindowOpenHandler(({ url: alvo }) => {
+    if (/^https?:/i.test(alvo)) shell.openExternal(alvo);
+    return { action: 'deny' };
+  });
+  // Mesmo destino pra link que navega na PROPRIA janela (sem `target`): sem isto o cockpit vira um
+  // navegador de uma aba so e o usuario fica preso no site externo, sem botao de voltar.
+  win.webContents.on('will-navigate', (e, alvo) => {
+    if (alvo.startsWith('data:')) return;                 // tela de recuperacao navega sozinha
+    const atual = win.webContents.getURL();
+    if (atual.startsWith('data:')) return;                // o submit da tela de recuperacao
+    try {
+      if (new URL(alvo).origin === new URL(atual).origin) return;   // navegacao interna do app
+    } catch { return; }
+    e.preventDefault();
+    if (/^https?:/i.test(alvo)) shell.openExternal(alvo);
+  });
 
   // A tela de recuperação não é endereço de cockpit: se o fechamento pegar a janela parada nela
   // (backend fora, usuário fechou em vez de responder), gravar essa URL faria a próxima abertura

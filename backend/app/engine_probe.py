@@ -37,6 +37,11 @@ def _validar_sem_quebra(campo: str, valor: str) -> None:
 
 def _buscar(base_url: str, api_key: str) -> dict[str, Any]:
     _validar_sem_quebra("base_url", base_url)
+    # Idem validar_base_url: a URL pode chegar com o `/v1` que o provedor documenta, e aqui embaixo
+    # o `/v1/models` é acrescentado — sem tirar, o pedido vai pra `/v1/v1/models` e volta 404.
+    base_url = base_url.rstrip("/")
+    if base_url.endswith("/v1"):
+        base_url = base_url[:-3].rstrip("/")
     _validar_sem_quebra("api_key", api_key)
     # /v1/models é o dialeto OpenAI, que os dois provedores servem ao lado do /v1/messages Anthropic.
     # User-Agent explícito: o Cloudflare da opencode (/zen/go) responde 403 "error code: 1010" ao

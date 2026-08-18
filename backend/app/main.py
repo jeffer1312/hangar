@@ -10,6 +10,7 @@ from app.hook_installer import (
     ensure_askq_hook_installed,
     ensure_guard_hooks_installed,
     ensure_preview_hook_installed,
+    ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
 from app.hook_state import hook_state
@@ -93,6 +94,7 @@ def main():
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
     ensure_preview_hook_installed()
+    ensure_subagent_hook_installed()
     ensure_guard_hooks_installed()
     # Idem pro hook do Kimi (config.toml do ~/.kimi-code) — ver app/kimi_hook_installer.py.
     from app.kimi_hook_installer import ensure_kimi_hooks_installed

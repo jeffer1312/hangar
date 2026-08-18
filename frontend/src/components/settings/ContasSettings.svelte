@@ -1,14 +1,25 @@
 <script lang="ts">
-  // Aba Contas (Configurações › Contas do Claude neste servidor). Fonte única do estado das
-  // contas: backend/app/conta_estado.py (GET /api/conta-estado). Esta Task desenha a lista com
-  // login, plano e a idade do último limite; a Task 7 liga o botão Entrar e a Task 9 desenha a
-  // faixa de cota na coluna do limite (a partir de `limite.linha`, que o lib/statusline.ts já
-  // sabe parsear).
+  // Aba Contas — TODA credencial deste servidor numa lista só: conta do Claude (login) e chave
+  // de API, mesma linha, mesmo menu, mesmo limite à direita. Decisão do usuário em 18/08/2026,
+  // depois de a chave de API ter vivido numa tela separada ("Motores") com outro vocabulário: a
+  // pergunta "quanto sobrou nessa credencial?" só tinha resposta num dos dois lugares.
+  //
+  // Fonte: GET /api/credenciais (backend/app/credenciais.py), que já traz apelido e cota. As
+  // ESCRITAS continuam nas rotas de sempre — /api/claude-configs pra conta, /api/engines pra
+  // chave —, porque unificar a tela não pode virar dois donos do mesmo dado no servidor.
+  //
+  // Nome exibido é `nome` (o apelido, quando existe); TUDO que vai pra rota usa `nome_natural`,
+  // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
+  // existe assim que a pessoa renomear a primeira.
   import { onDestroy, untrack } from 'svelte';
-import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib/api';
-  import { listarEstadosDeConta, formatarIntervalo, type ContaEstado } from '../../lib/contaEstado';
+import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, deleteEngineForServer, isAbortError, isTimeoutError } from '../../lib/api';
+  import { formatarIntervalo } from '../../lib/contaEstado';
+  import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
   import { initials } from '../../lib/format';
+  import { nivelDePct, VELHA_APOS_S } from '../../lib/cota';
+  import NovaCredencialSheet from './NovaCredencialSheet.svelte';
+  import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import { serverIdentidade, type Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
 
@@ -21,17 +32,35 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   }
   let { apiTarget }: Props = $props();
 
-  let contas = $state<ContaEstado[]>([]);
+  let contas = $state<Credencial[]>([]);
   let carregando = $state(true);
   let erro = $state('');
 
-  // Criar: campo inline no rodapé, mesmo fluxo do CreateSessionSheet.
-  let pedindoNome = $state(false);
+  // Criar: um botão só ("+ Nova conta") e a escolha do TIPO acontece depois do clique — pedido
+  // do usuário: "eu seleciono qual vou criar na hora". Dois botões lado a lado obrigavam a
+  // decidir antes de saber que existiam duas coisas.
+  let novo = $state<null | 'escolha' | 'claude' | 'chave'>(null);
   let nomeConta = $state('');
   let criando = $state(false);
+  // Campos da conta por chave de API.
+  let chaveNome = $state('');
+  let chaveUrl = $state('');
+  let chaveSegredo = $state('');
+  // Renomear: o apelido é do app, não do disco — renomear pasta mexeria em caminho que um CLI
+  // vivo tem aberto, e renomear motor quebraria o `cp-engine --exec <nome>` de sessão rodando.
+  let renomeando = $state<string | null>(null);   // id da credencial em edição
+  let apelidoTexto = $state('');
+  let salvandoApelido = $state(false);
+  // Cookie do painel do OpenCode: ele não tem rota de cota (ver backend/app/opencode_cota.py),
+  // então a leitura é a página do painel. Fica atrás do kebab e só na credencial que aceita —
+  // oferecer o campo pra quem tem rota de verdade seria prometer trabalho inútil.
+  let cookieDe = $state<string | null>(null);   // id da credencial com o formulário aberto
+  let cookieWs = $state('');
+  let cookieValor = $state('');
+  let salvandoCookie = $state(false);
   // Apagar: kebab por linha abre o menu; confirmar apaga e recarrega.
-  let menuDe = $state<string | null>(null);       // path da conta com o menu aberto
-  let confirmando = $state<string | null>(null);  // path da conta com a confirmação aberta
+  let menuDe = $state<string | null>(null);       // id da credencial com o menu aberto
+  let confirmando = $state<string | null>(null);  // id da credencial com a confirmação aberta
   let apagando = $state(false);
   let aviso = $state('');
   let avisoErro = $state(false);
@@ -40,7 +69,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     carregando = true;
     erro = '';
     try {
-      const lista = await listarEstadosDeConta(apiTarget);
+      const lista = await listarCredenciais(apiTarget);
       if (meu !== geracao) return;
       contas = lista;
     } catch (e) {
@@ -87,12 +116,95 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     loginErro = ''; loginEnviando = false; loginIniciando = false; loginParado = false;
     erro = ''; aviso = ''; avisoErro = false;
     confirmando = null; menuDe = null;
+    renomeando = null; apelidoTexto = ''; salvandoApelido = false;
+    cookieDe = null; cookieWs = ''; cookieValor = ''; salvandoCookie = false;
+    novo = null; nomeConta = ''; chaveNome = ''; chaveUrl = ''; chaveSegredo = '';
     criando = false; apagando = false;
     void carregar(meu);
   });
 
-  const leituraFresca = (c: ContaEstado) =>
-    c.limite.estado === 'lido' && c.limite.idade_s != null && c.limite.idade_s < 60;
+  // O backend relê a cota a cada 5 min, então "velha" aqui é o mesmo corte da faixa do rodapé
+  // (10 min = duas tentativas falhadas), não "não é deste segundo": com o corte de 1 minuto a
+  // coluna inteira nasceria esmaecida em toda montagem da tela.
+  const leituraFresca = (c: Credencial) =>
+    c.cota?.estado === 'lida' && (c.cota.idade_s == null || c.cota.idade_s <= VELHA_APOS_S);
+
+  async function salvarChave() {
+    const nome = chaveNome.trim();
+    const url = chaveUrl.trim();
+    const segredo = chaveSegredo.trim();
+    if (!nome || !url || !segredo || criando) return;
+    const g = geracao;
+    criando = true;
+    aviso = '';
+    avisoErro = false;
+    try {
+      // Mesma rota que a tela de Motores sempre usou: o cadastro da chave é o engines.json.
+      // `model: ''` é deliberado — a chave pode existir só pra acompanhar o limite; escolher
+      // modelo é assunto de quem for RODAR o Claude Code nela, não de quem só a cadastra.
+      const dados = { label: nome, base_url: url, api_key: segredo, model: '' };
+      if (apiTarget) await putEngineForServer(apiTarget, chaveIdDe(nome), dados);
+      else await putEngine(chaveIdDe(nome), dados);
+      if (g !== geracao) return;
+      novo = null; chaveNome = ''; chaveUrl = ''; chaveSegredo = '';
+      await carregar(geracao);
+    } catch (e) {
+      if (g !== geracao) return;
+      aviso = e instanceof Error && e.message ? e.message : m.criar_conta_erro();
+      avisoErro = true;
+    } finally {
+      criando = false;
+    }
+  }
+
+  // O engines.json tem alfabeto próprio pro nome (minúsculas, números, '-' e '_'): o nome bonito
+  // vai pro `label` e o id sai daqui. Sem isto, "PMédico 01" seria recusado com 400 e o usuário
+  // levaria a culpa por ter digitado um nome com espaço.
+  function chaveIdDe(nome: string): string {
+    const base = nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+    return base || `chave-${Date.now().toString(36)}`;
+  }
+
+  async function salvarApelido(c: Credencial) {
+    if (salvandoApelido) return;
+    const texto = apelidoTexto.trim();
+    const g = geracao;
+    salvandoApelido = true;
+    try {
+      await definirApelido(apiTarget, c.id, texto);
+      if (g !== geracao) return;
+      renomeando = null;
+      apelidoTexto = '';
+      await carregar(geracao);
+    } catch (e) {
+      if (g !== geracao) return;
+      aviso = e instanceof Error && e.message ? e.message : String(e);
+      avisoErro = true;
+    } finally {
+      salvandoApelido = false;
+    }
+  }
+
+  async function salvarCookie(c: Credencial, apagar = false) {
+    if (salvandoCookie) return;
+    const g = geracao;
+    salvandoCookie = true;
+    aviso = '';
+    avisoErro = false;
+    try {
+      await definirCookie(apiTarget, c.id, apagar ? '' : cookieWs.trim(), apagar ? '' : cookieValor.trim());
+      if (g !== geracao) return;
+      cookieDe = null; cookieWs = ''; cookieValor = '';
+      await carregar(geracao);
+    } catch (e) {
+      if (g !== geracao) return;
+      aviso = e instanceof Error && e.message ? e.message : String(e);
+      avisoErro = true;
+    } finally {
+      salvandoCookie = false;
+    }
+  }
 
   async function novaConta() {
     const nome = nomeConta.trim();
@@ -108,7 +220,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
       await criarConta(apiTarget, nome);
       if (g !== geracao) return;
       nomeConta = '';
-      pedindoNome = false;
+      novo = null;
       aviso = m.criar_conta_deslogada();
       await carregar(geracao);
     } catch (e) {
@@ -121,13 +233,15 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   }
 
   async function apagar() {
-    const path = confirmando;
-    if (!path || apagando) return;
-    // `confirmando` guarda o PATH (chave única da lista); o DELETE espera o NOME (label) —
-    // a pasta é ~/.claude-<nome>. Derivar do estado atual evita mandar um nome velho se a
-    // lista mudou entre o clique e o fim da operação.
-    const conta = contas.find((x) => x.path === path);
+    const alvo = confirmando;
+    if (!alvo || apagando) return;
+    // `confirmando` guarda o ID (chave única da lista); a rota espera o nome NO DISCO. Derivar
+    // do estado atual evita mandar um nome velho se a lista mudou entre o clique e o fim da
+    // operação — e usar `nome_natural`, não `nome`, é o que faz apagar uma conta renomeada
+    // mirar a pasta certa em vez de um apelido que rota nenhuma conhece.
+    const conta = contas.find((x) => x.id === alvo);
     if (!conta) return;
+    const idDisco = conta.id.startsWith('chave:') ? conta.id.slice('chave:'.length) : conta.nome_natural;
     // Geração desta operação: "conta X apagada" pertence à máquina que recebeu o DELETE — troca
     // de ?srv= no meio do voo não deixa o relato da máquina antiga na tela da nova (rodada 2).
     const g = geracao;
@@ -135,11 +249,16 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     aviso = '';
     avisoErro = false;
     try {
-      await apagarConta(apiTarget, conta.label);
+      if (conta.tipo === 'chave') {
+        if (apiTarget) await deleteEngineForServer(apiTarget, idDisco);
+        else await deleteEngine(idDisco);
+      } else {
+        await apagarConta(apiTarget, idDisco);
+      }
       if (g !== geracao) return;
       confirmando = null;
       menuDe = null;
-      aviso = m.criar_conta_apagada({ nome: conta.label });
+      aviso = m.criar_conta_apagada({ nome: conta.nome });
       // A conta pode ter sumido da lista entre o clique e o fim do DELETE (outro painel, outra
       // sessão) — recarregar é a fonte única, não remover item por item.
       await carregar(geracao);
@@ -171,7 +290,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   // armar poll nem registrar tentativa.
   let destruido = $state(false);
 
-  async function iniciarEntrar(conta: ContaEstado) {
+  async function iniciarEntrar(conta: Credencial) {
     if (loginDe || loginIniciando) return;
     // Alvo desta tentativa, capturado AGORA: se o ?srv= trocar no meio do voo, este é o alvo
     // ANTIGO — o cancelamento do efeito de geração e o ramo `g !== geracao` abaixo usam o
@@ -183,20 +302,20 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     loginCodigo = '';
     loginPasso = { etapa: 'idle' };
     try {
-      await iniciarLogin(alvo, conta.label);
+      await iniciarLogin(alvo, conta.nome_natural);
       if (destruido || g !== geracao) {
         // Desmontou ou o alvo trocou ENTRE o clique e a resposta: sem tela onde mostrar erro
         // (o mesmo ramo silencioso do onDestroy), mas a janela do servidor — a máquina ANTIGA —
         // precisa morrer de qualquer forma.
-        cancelarLogin(alvo, conta.label).catch(() => {});
+        cancelarLogin(alvo, conta.nome_natural).catch(() => {});
         return;
       }
-      loginDe = conta.label;
+      loginDe = conta.nome_natural;
       // Primeira leitura do passo logo de cara (a URL pode já estar no pane), depois o poll.
       // O poll só começa depois do login confirmado no servidor: um 409/404 no iniciar NÃO
       // deixa intervalo órfão rodando.
       try {
-        loginPasso = await passoLogin(alvo, conta.label);
+        loginPasso = await passoLogin(alvo, conta.nome_natural);
       } catch {
         // Poll silencioso: o erro de rede aparece na ação (confirmar/cancelar), não no loop.
       }
@@ -308,63 +427,129 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     <p class="ct-aviso">{m.comum_nada_encontrado()}</p>
   {:else}
     <div class="ct-cartao">
-      {#each contas as conta (conta.path)}
-        <div class="ct-linha" class:fora={conta.login.estado === 'ok' && !conta.login.loggedIn}>
-          <span class="ct-av" aria-hidden="true">{initials(conta.label)}</span>
+      {#each contas as conta (conta.id)}
+        <div class="ct-linha" class:fora={conta.login?.estado === 'ok' && !conta.login.loggedIn}>
+          <ProvedorIcone tipo={conta.tipo} baseUrl={conta.base_url} iniciais={initials(conta.nome)} />
           <span class="ct-txt">
             <span class="ct-nome-l">
-              <span class="ct-nome">{conta.label}</span>
-              {#if conta.active}<span class="ct-emuso">{m.contas_em_uso()}</span>{/if}
-            </span>
-            {#if conta.login.estado === 'ok' && conta.login.loggedIn && conta.login.email}
-              <!-- Decisão do árbitro 17/08 (recorte): NÃO exibir a frase do plano. A chave
-                   contas_email_plano tem "Max" literal + {max} que o auth status não entrega —
-                   um mapa inventaria o multiplicador. Só o e-mail, que vem da fonte. Task de
-                   ajuste serial troca a frase quando o Lote A mergear. -->
-              <span class="ct-sub">{conta.login.email}</span>
-            {:else if conta.login.estado === 'ok' && !conta.login.loggedIn}
-              <span class="ct-sub fraco">{m.contas_nao_conectada()}</span>
-            {/if}
-            <span class="ct-dir">{conta.path}</span>
-          </span>
-
-          {#if conta.limite.estado === 'lido'}
-            <!-- Coluna do limite: nesta Task só a idade; a Task 9 desenha a faixa de cota -->
-            <!-- (barras 5h/7d) aqui dentro, a partir de conta.limite.linha. -->
-            <span class="ct-cota" class:velha={!leituraFresca(conta)}>
-              {#if leituraFresca(conta)}
-                <span class="ct-idade">{m.cota_lido_agora()}</span>
+              {#if renomeando === conta.id}
+                <!-- svelte-ignore a11y_autofocus -->
+                <input class="ct-campo ct-campo-nome" type="text" autofocus bind:value={apelidoTexto}
+                  aria-label={m.contas_renomear({ nome: conta.nome })} disabled={salvandoApelido}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); salvarApelido(conta); }
+                    else if (e.key === 'Escape') { renomeando = null; apelidoTexto = ''; }
+                  }} />
+                <button type="button" class="ct-mini" onclick={() => salvarApelido(conta)}
+                  disabled={salvandoApelido}>{salvandoApelido ? '…' : m.ctx_salvar()}</button>
+                <button type="button" class="ct-mini" onclick={() => { renomeando = null; apelidoTexto = ''; }}
+                  disabled={salvandoApelido}>{m.comum_cancelar()}</button>
               {:else}
-                <span class="ct-idade">{m.cota_ultima_leitura({ n: formatarIntervalo(conta.limite.idade_s) })}</span>
+                <span class="ct-nome">{conta.nome}</span>
+                <button type="button" class="ct-lapis" aria-label={m.contas_renomear({ nome: conta.nome })}
+                  onclick={() => { renomeando = conta.id; apelidoTexto = conta.apelido ?? ''; }}>✎</button>
+                <span class="ct-tipo" class:chave={conta.tipo === 'chave'}>
+                  {conta.tipo === 'chave' ? m.contas_tipo_chave() : m.contas_tipo_claude()}</span>
+                {#if conta.usos.includes('claude_code')}
+                  <span class="ct-tipo uso">{m.contas_usa_claude_code()}</span>
+                {/if}
+                {#if conta.cookie_definido}
+                  <span class="ct-tipo uso">{m.contas_cookie_definido()}</span>
+                {/if}
+                {#if conta.ativa}<span class="ct-emuso">{m.contas_em_uso()}</span>{/if}
               {/if}
             </span>
+            {#if conta.tipo === 'chave'}
+              <!-- A chave NUNCA volta inteira do servidor (credenciais._mascarar): o que a tela
+                   mostra é o rabicho, o bastante pra saber QUAL chave é sem expor a chave. -->
+              <span class="ct-sub">{conta.base_url ?? ''}{conta.chave_mascarada ? ` · ${conta.chave_mascarada}` : ''}</span>
+              {#if conta.nome !== conta.nome_natural}<span class="ct-dir">{conta.nome_natural}</span>{/if}
+            {:else}
+              {#if conta.login?.estado === 'ok' && conta.login.loggedIn && conta.login.email}
+                <span class="ct-sub">{conta.login.email}</span>
+              {:else if conta.login?.estado === 'ok' && !conta.login.loggedIn}
+                <span class="ct-sub fraco">{m.contas_nao_conectada()}</span>
+              {/if}
+              <span class="ct-dir">{conta.path}</span>
+            {/if}
+          </span>
+
+          <!-- Coluna do limite: a MESMA leitura da faixa do rodapé (uma fonte só). Credencial sem
+               número aparece dizendo por quê — some-la esconderia justo a que precisa de atenção. -->
+          {#if conta.cota && conta.cota.estado === 'lida' && conta.cota.janelas.length}
+            <span class="ct-cota" class:velha={!leituraFresca(conta)}>
+              {#each conta.cota.janelas as j (j.rotulo)}
+                <span class="ct-jan"><span class="ct-jan-rot">{j.rotulo}</span>
+                  <b class={nivelDePct(j.pct)}>{Math.round(j.pct)}%</b></span>
+              {/each}
+              {#if !leituraFresca(conta)}
+                <span class="ct-idade">{m.cota_ultima_leitura({ n: formatarIntervalo(conta.cota.idade_s) })}</span>
+              {/if}
+            </span>
+          {:else if conta.cota && (conta.cota.estado === 'expirada' || conta.cota.estado === 'sem_credencial')}
+            <span class="ct-semleitura">{m.cota_precisa_entrar()}</span>
           {:else}
-            <span class="ct-semleitura">{m.contas_sem_leitura()}</span>
+            <span class="ct-semleitura">{m.contas_sem_cota()}</span>
           {/if}
 
-          {#if conta.login.estado === 'ok' && !conta.login.loggedIn}
-            <!-- Inerte de propósito nesta Task: o fluxo de Entrar é a Task 7, montada por cima
-                 deste mesmo estado. Presente para a tela dizer o que uma conta deslogada é. -->
+          {#if conta.tipo === 'claude' && conta.login?.estado === 'ok' && !conta.login.loggedIn}
             <button type="button" class="ct-acao primaria"
-              aria-label={m.contas_entrar_titulo({ nome: conta.label })}
+              aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
               disabled={!!loginDe || loginIniciando}
               onclick={() => iniciarEntrar(conta)}>{m.contas_entrar()}</button>
           {/if}
 
-          <button type="button" class="ct-kebab" aria-haspopup="true" aria-expanded={menuDe === conta.path}
-            aria-label={m.comum_fechar_menu_conta()} onclick={() => (menuDe = menuDe === conta.path ? null : conta.path)}>⋯</button>
+          <button type="button" class="ct-kebab" aria-haspopup="true" aria-expanded={menuDe === conta.id}
+            aria-label={m.comum_fechar_menu_conta()} onclick={() => (menuDe = menuDe === conta.id ? null : conta.id)}>⋯</button>
 
-          {#if menuDe === conta.path && confirmando !== conta.path}
+          {#if menuDe === conta.id && confirmando !== conta.id}
             <div class="ct-menu">
+              {#if conta.aceita_cookie}
+                <button type="button" class="ct-menu-item"
+                  onclick={() => { menuDe = null; cookieDe = conta.id; cookieWs = ''; cookieValor = ''; }}
+                  >{m.contas_cookie_acao()}</button>
+                {#if conta.cookie_definido}
+                  <button type="button" class="ct-menu-item"
+                    onclick={() => { menuDe = null; salvarCookie(conta, true); }}
+                    >{m.contas_cookie_apagar()}</button>
+                {/if}
+              {/if}
               <button type="button" class="ct-menu-item"
-                onclick={() => { menuDe = null; confirmando = conta.path; }}>{m.comum_apagar()}</button>
+                onclick={() => { menuDe = null; confirmando = conta.id; }}>{m.comum_apagar()}</button>
             </div>
           {/if}
 
-          {#if confirmando === conta.path}
+          {#if cookieDe === conta.id}
+            <div class="ct-cookie">
+              <p class="ct-form-leg">{m.contas_cookie_legenda()}</p>
+              <div class="ct-form-linha">
+                <label class="ct-campo-l">
+                  <span>{m.contas_cookie_ws()}</span>
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <input class="ct-campo" type="text" autofocus bind:value={cookieWs}
+                    disabled={salvandoCookie} />
+                </label>
+                <label class="ct-campo-l larga">
+                  <span>{m.contas_cookie_valor()}</span>
+                  <input class="ct-campo" type="password" autocomplete="off"
+                    bind:value={cookieValor} disabled={salvandoCookie} />
+                </label>
+              </div>
+              <div class="ct-rodape">
+                <button type="button" class="ct-btn primario" onclick={() => salvarCookie(conta)}
+                  disabled={salvandoCookie || !cookieWs.trim() || !cookieValor.trim()}
+                  >{salvandoCookie ? '…' : m.ctx_salvar()}</button>
+                <button type="button" class="ct-btn" disabled={salvandoCookie}
+                  onclick={() => { cookieDe = null; cookieWs = ''; cookieValor = ''; }}
+                  >{m.comum_cancelar()}</button>
+              </div>
+            </div>
+          {/if}
+
+          {#if confirmando === conta.id}
             <div class="ct-confirma">
               <span class="ct-confirma-txt">
-                {m.comum_apagar()} <strong>{conta.label}</strong> {m.criar_apagar_fim()}
+                {m.comum_apagar()} <strong>{conta.nome}</strong> {m.criar_apagar_fim()}
               </span>
               <button type="button" class="ct-confirma-btn perigo" onclick={apagar}
                 disabled={apagando}>{apagando ? '…' : m.comum_apagar()}</button>
@@ -377,23 +562,17 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     </div>
 
     <div class="ct-rodape">
-      <button type="button" class="ct-btn" onclick={() => (pedindoNome = true)}
-        disabled={pedindoNome}>{m.contas_nova()}</button>
-      {#if pedindoNome}
-        <!-- svelte-ignore a11y_autofocus -->
-        <input class="ct-campo" type="text" autofocus bind:value={nomeConta}
-          placeholder={m.criar_conta_placeholder()} aria-label={m.criar_conta_nova_aria()}
-          disabled={criando}
-          onkeydown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); novaConta(); }
-            else if (e.key === 'Escape') { pedindoNome = false; nomeConta = ''; }
-          }} />
-        <button type="button" class="ct-btn" onclick={novaConta}
-          disabled={criando || !nomeConta.trim()}>{criando ? '…' : m.comum_criar()}</button>
-        <button type="button" class="ct-btn" onclick={() => { pedindoNome = false; nomeConta = ''; }}
-          disabled={criando}>{m.comum_cancelar()}</button>
-      {/if}
+      <!-- UM botão. A escolha do provedor e o formulário vivem no modal (NovaCredencialSheet):
+           inline, a pergunta e as opções viravam cinco controles competindo pela mesma linha. -->
+      <button type="button" class="ct-btn" onclick={() => (novo = 'escolha')}
+        disabled={!!novo}>{m.contas_nova()}</button>
     </div>
+  {/if}
+
+  {#if novo}
+    <NovaCredencialSheet {apiTarget}
+      onFechar={() => (novo = null)}
+      onCriada={() => { void carregar(geracao); }} />
   {/if}
 
   {#if aviso}
@@ -488,8 +667,15 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   .ct-linha.fora .ct-av { background: var(--bg-elevated); color: var(--text-muted); }
 
   .ct-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-  .ct-nome-l { display: flex; align-items: center; gap: var(--space-2); }
-  .ct-nome { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600; }
+  /* A linha do nome NÃO quebra: com um rótulo longo (o motor "DeepSeek · opencode direto (sem
+     gateway)") o nome descia pra duas linhas e empurrava a linha inteira, e a etiqueta ao lado
+     quebrava no meio de "chave de API". Quem cede é o NOME (elipse), nunca a etiqueta — o tipo da
+     credencial é o que distingue as duas metades da lista. */
+  .ct-nome-l { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+  .ct-nome {
+    color: var(--text-primary); font-size: var(--text-sm); font-weight: 600;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .ct-emuso { flex-shrink: 0; height: 18px; padding: 0 var(--space-2); border-radius: var(--radius-full);
               background: var(--accent-dim); color: var(--accent); font-size: 11px; line-height: 18px;
               letter-spacing: 0.02em; }
@@ -578,5 +764,58 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     .ct-acao, .ct-kebab, .ct-menu-item, .ct-confirma-btn { height: 44px; min-height: 44px; }
     .ct-kebab { width: 44px; }
     .ct-btn { height: 44px; }
+  }
+
+  /* ---------------------------------------------------------------- lista unificada (18/08)
+     A linha é a MESMA pros dois tipos — conta do Claude e chave de API. O que muda é a etiqueta
+     e o subtítulo; desenhar duas linhas diferentes traria de volta os dois vocabulários que a
+     unificação veio matar. */
+  .ct-av.chave { background: var(--warning-dim, rgba(232,145,45,.16)); color: var(--warning); }
+  .ct-lapis {
+    background: transparent; border: none; padding: 0 2px; cursor: pointer;
+    color: var(--text-muted); font-size: 11px; line-height: 1; opacity: .75;
+  }
+  .ct-lapis:hover { opacity: 1; color: var(--text-secondary); }
+  .ct-tipo {
+    flex-shrink: 0; white-space: nowrap;
+    font-size: 10px; padding: 1px 7px; border-radius: 999px;
+    background: var(--accent-dim); color: var(--accent);
+  }
+  .ct-tipo.chave { background: rgba(232,145,45,.16); color: var(--warning); }
+  .ct-tipo.uso { background: var(--surface-raised); color: var(--text-muted); }
+  .ct-campo-nome { max-width: 22ch; }
+  .ct-mini {
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
+    color: var(--text-secondary); border-radius: 6px; padding: 2px 8px;
+    font: inherit; font-size: 11px; cursor: pointer;
+  }
+  /* Coluna do limite: as janelas do provedor, empilhadas. Números tabulares pra coluna não dançar
+     entre as linhas — é uma tabela, mesmo sem ser <table>. */
+  .ct-jan { display: flex; gap: 5px; justify-content: flex-end; font-variant-numeric: tabular-nums; }
+  .ct-jan-rot { color: var(--text-muted); font-size: 10px; }
+  .ct-jan b { font-weight: 600; color: var(--text-secondary); }
+  .ct-jan b.alerta { color: var(--warning); }
+  .ct-jan b.cheio { color: var(--error); }
+  .ct-escolha-txt { color: var(--text-secondary); font-size: 12px; align-self: center; }
+  /* Formulário da chave: superfície própria (é área de entrada), por isso --surface-inset e não
+     --bg-base cru — com papel de parede ligado, o cru vira retângulo chapado sobre a foto. */
+  .ct-form {
+    margin-top: var(--space-3); padding: var(--space-3);
+    border: 1px solid var(--border-subtle); border-radius: 10px;
+    background: var(--surface-inset);
+  }
+  .ct-form-leg { color: var(--text-muted); font-size: 12px; margin: 0 0 var(--space-3); }
+  /* Container query, não media query: quem aperta a linha é a largura do PAINEL. */
+  .ct-form-linha { display: flex; gap: var(--space-3); }
+  @container (max-width: 460px) { .ct-form-linha { flex-direction: column; } }
+  .ct-campo-l { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--space-3); min-width: 0; }
+  .ct-campo-l.larga { flex: 1; }
+  .ct-campo-l > span { font-size: 11.5px; color: var(--text-secondary); }
+  /* Formulário do cookie: mora DENTRO da linha da credencial (largura cheia, abaixo dela) porque
+     é configuração daquela credencial, não uma tela nova. Mesma superfície do formulário da chave. */
+  .ct-cookie {
+    flex-basis: 100%; margin-top: var(--space-2); padding: var(--space-3);
+    border: 1px solid var(--border-subtle); border-radius: 10px;
+    background: var(--surface-inset);
   }
 </style>

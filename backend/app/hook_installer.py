@@ -233,6 +233,40 @@ def ensure_preview_hook_installed() -> list[str]:
     return touched
 
 
+SUBAGENT_HOOK = str((Path(__file__).parent.parent / "hooks" / "subagent_hook.py").resolve())
+_SUBAGENT_COMMAND = f'"{sys.executable}" "{SUBAGENT_HOOK}"{_FALHA_NAO_BLOQUEIA}'
+# Os DOIS eventos: `Start` é o que faz o subagente aparecer enquanto roda (que é o ponto do painel),
+# e `Stop` é o que traz `agent_transcript_path` e a última mensagem. Só com o Stop, um subagente de
+# 5 minutos ficaria invisível justo enquanto está trabalhando.
+_SUBAGENT_EVENTS = ["SubagentStart", "SubagentStop"]
+
+
+def ensure_subagent_hook_installed() -> list[str]:
+    """Instala (idempotente) o publicador de subagentes nos 2 eventos, em cada config dir.
+
+    Mesma forma do preview: fail-soft por arquivo, casado POR NOME do script (por_nome=True) pra
+    não duplicar a entrada quando o caminho do repo mudar de lugar.
+    """
+    try:
+        dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+    except Exception:
+        return []
+    touched: list[str] = []
+    for d in dirs:
+        try:
+            if not d.is_dir():
+                continue
+            changed = False
+            for ev in _SUBAGENT_EVENTS:
+                if _ensure_event_hook(d / "settings.json", ev, _SUBAGENT_COMMAND, por_nome=True):
+                    changed = True
+            if changed:
+                touched.append(str(d))
+        except Exception:
+            continue
+    return touched
+
+
 GUARD_HOOK = str((Path(__file__).parent.parent / "hooks" / "guard_tmux.py").resolve())
 
 

@@ -35,7 +35,7 @@ export interface ContaEstado {
 // `reqEm` com um servidor EXPLÍCITO — sem self-heal, porque um 401 de outra máquina não pode
 // apagar a credencial ativa (mesmo contrato de api.ts:129-131). Prazo de 8s no explícito:
 // servidor atrás de VPN não recusa conexão, pendura — sem prazo a lista ficava "Carregando…".
-async function req(path: string): Promise<ContaEstado[]> {
+async function req<T>(path: string): Promise<T> {
   const token = getToken();
   const res = await fetch(`${getBaseUrl()}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -50,7 +50,7 @@ async function req(path: string): Promise<ContaEstado[]> {
   return res.json();
 }
 
-async function reqEm(s: Server, path: string): Promise<ContaEstado[]> {
+async function reqEm<T>(s: Server, path: string): Promise<T> {
   const res = await fetch(`${s.baseUrl}${path}`, {
     signal: AbortSignal.timeout(8000),
     headers: { Authorization: `Bearer ${s.token}` },
@@ -60,12 +60,45 @@ async function reqEm(s: Server, path: string): Promise<ContaEstado[]> {
 }
 
 // Uma porta só pros exportados: alvo null = servidor ativo (é o contrato do apiTarget).
-function em(alvo: Server | null, path: string): Promise<ContaEstado[]> {
-  return alvo ? reqEm(alvo, path) : req(path);
+function em<T>(alvo: Server | null, path: string): Promise<T> {
+  return alvo ? reqEm<T>(alvo, path) : req<T>(path);
 }
 
 export async function listarEstadosDeConta(alvo: Server | null): Promise<ContaEstado[]> {
-  return em(alvo, '/api/conta-estado');
+  return em<ContaEstado[]>(alvo, '/api/conta-estado');
+}
+
+// --------------------------------------------------------------------------- cota por conta
+//
+// A cota NÃO sai daqui do estado de conta: /api/cotas fala com o provedor usando a credencial
+// de cada conta (ver backend/app/cotas.py). O motivo é medido — o `limite` acima vem do sidecar
+// de statusline DENTRO da pasta da conta, e numa máquina onde essa pasta é um symlink pra conta
+// padrão as três contas liam o MESMO arquivo. Sessão parada também nunca teve leitura nenhuma.
+// O fetch é o mesmo par req/reqEm (401 do servidor ativo desloga; do explícito, não).
+
+export type EstadoCota = 'lida' | 'sem_credencial' | 'expirada' | 'indisponivel';
+
+export interface JanelaCota {
+  /** Rótulo da janela como o PROVEDOR o define ("5h"/"7d") — dado do servidor, não interface. */
+  rotulo: string;
+  pct: number;
+  reset_ts?: number | null;
+}
+
+export interface CotaConta {
+  id: string;
+  label: string;
+  provedor: 'claude' | 'kimi';
+  ativa: boolean;
+  estado: EstadoCota;
+  janelas: JanelaCota[];
+  ts?: number | null;
+  idade_s?: number | null;
+  motivo?: string | null;
+}
+
+export async function listarCotas(alvo: Server | null): Promise<CotaConta[]> {
+  return em<CotaConta[]>(alvo, '/api/cotas');
 }
 
 // Intervalo curto ("2 h", "3 d") para a idade de uma leitura — a frase completa vem das

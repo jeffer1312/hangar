@@ -38,6 +38,7 @@
     getSessions,
     createSession,
     getWorkflows,
+    getSubagents,
     answerQuestions,
     getRunners,
     isAbortError,
@@ -800,7 +801,32 @@
   const actFolder = createActivityFolder();
   let activity = $state(actFolder.snapshot());
   const activityBadge = $derived(activity.inProgress + activity.runningAgents);
-  const hasActivity = $derived(activity.tasks.length > 0 || activity.agents.length > 0);
+
+  // Subagentes que existem NO DISCO (`<session-dir>/subagents/agent-*.jsonl`), contados pelo
+  // backend. Sem isto o painel só abria quando o transcript trazia a ferramenta `Agent` — e o uso
+  // real mudou: skill que forka entra como `Skill`, e agente de FUNDO não entra como ferramenta
+  // nenhuma. Medido em 18/08/2026 numa sessão do usuário: 0 `Agent` no transcript, 3 subagentes no
+  // disco, e o botão de Atividade nunca aparecia — com os dados prontos numa rota que já existia.
+  let subagentesNoDisco = $state(0);
+  const hasActivity = $derived(
+    activity.tasks.length > 0 || activity.agents.length > 0 || subagentesNoDisco > 0,
+  );
+
+  // Quando perguntar: enquanto TRABALHA (é quando nasce subagente) e uma vez ao parar, pra pegar o
+  // último que terminou junto com o turno. Sessão parada não fica batendo no backend.
+  $effect(() => {
+    const trabalhando = currentState === 'working';
+    let vivo = true;
+    async function contar() {
+      try {
+        const lista = await getSubagents(sessionName);
+        if (vivo) subagentesNoDisco = lista.length;
+      } catch { /* offline / sessão sem transcript -> mantém o que tinha */ }
+    }
+    void contar();
+    const id = trabalhando ? setInterval(contar, 5000) : undefined;
+    return () => { vivo = false; if (id !== undefined) clearInterval(id); };
+  });
 
   // Workflow roda em BACKGROUND -> nao da pra inferir "rodando" so pelos eventos (activity.ts marca
   // workflow running:false). Pergunta ao backend (le os arquivos do run) SÓ com motivo: sheet de
@@ -2063,8 +2089,11 @@
       margin-inline: auto;
     }
     /* (o `right` do dock agora vem do bloco de centro fixo acima, junto com o `left`) */
+    /* MESMA fórmula da .messages-inner (teto × escala), não um número próprio: com teto fixo
+       (1220px), bastava a coluna escalada passar dele pra bordas de texto e composer descolarem —
+       texto colado na esquerda com o composer centrado (relatado 18/08/2026, modo abas + painel). */
     .chat-screen.with-context .bottom-dock :global(.composer-card) {
-      max-width: min(1220px, 94vw);
+      max-width: min(calc(min(1200px, 100%) * var(--cp-width-scale, 1)), 100%);
     }
     .chat-screen.with-context .chat-skeleton,
     .chat-screen.with-context .chat-error { transform: translateX(calc(var(--ctx-w) / -2)); }
@@ -2080,10 +2109,12 @@
      janela, 60 e 150 davam os mesmos 1440px. Mesma forma das outras: a escala multiplica o que a
      coluna teria (o menor entre o degrau e o espaco), limitada ao espaco real. */
   @media (min-width: 1600px) {
-    .chat-screen.with-context :global(.messages-inner) { max-width: min(calc(min(1320px, 100%) * var(--cp-width-scale, 1)), 100%); }
+    .chat-screen.with-context :global(.messages-inner),
+    .chat-screen.with-context .bottom-dock :global(.composer-card) { max-width: min(calc(min(1320px, 100%) * var(--cp-width-scale, 1)), 100%); }
   }
   @media (min-width: 1900px) {
-    .chat-screen.with-context :global(.messages-inner) { max-width: min(calc(min(1440px, 100%) * var(--cp-width-scale, 1)), 100%); }
+    .chat-screen.with-context :global(.messages-inner),
+    .chat-screen.with-context .bottom-dock :global(.composer-card) { max-width: min(calc(min(1440px, 100%) * var(--cp-width-scale, 1)), 100%); }
   }
 
   /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).

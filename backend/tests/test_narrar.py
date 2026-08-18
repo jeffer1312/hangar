@@ -350,7 +350,12 @@ def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypat
     narrar.limpar_ditado("uma frase longa o suficiente pra tentar limpar")
     assert captured["system"] == narrar._SYSTEM_POR_ESTILO["limpar"]
     assert captured["temperature"] == 0
-    assert captured["timeout"] == 8    # o teto que impede o celular preso em "transcrevendo…"
+    # O teto que impede o celular preso em "transcrevendo…". Subiu de 8 pra 20 em 18/08/2026: o
+    # provedor ficou lento (medido 3,9-10,6s no MESMO modelo e texto que davam ~1,2s em 14/08) e o
+    # teto antigo derrubava a limpeza pelo relogio. Vem da tabela, nao de um numero solto aqui —
+    # duplicar o valor faria o teste passar com a tabela errada.
+    assert captured["timeout"] == narrar._TRAVAS_POR_ESTILO["limpar"].timeout
+    assert captured["timeout"] == 20
 
 
 def test_cada_estilo_manda_o_proprio_prompt_e_o_proprio_timeout(monkeypatch):

@@ -54,8 +54,8 @@ describe('aba Contas fala com o servidor do ?srv=, não com o ativo', () => {
     location.hash = '#/?config=contas&srv=srv-b';
     const t = montar(ContasSettings, { apiTarget: SRV_B });
     await tick(); await tick(); await tick();
-    expect(urls.filter((u) => u.includes('/api/conta-estado'))[0])
-      .toMatch(/^http:\/\/b\.local:8765\/api\/conta-estado$/);
+    expect(urls.filter((u) => u.includes('/api/credenciais'))[0])
+      .toMatch(/^http:\/\/b\.local:8765\/api\/credenciais$/);
     unmount(t.comp);
   });
 
@@ -63,8 +63,8 @@ describe('aba Contas fala com o servidor do ?srv=, não com o ativo', () => {
     location.hash = '#/?config=contas';
     const t = montar(ContasSettings, { apiTarget: null });
     await tick(); await tick(); await tick();
-    expect(urls.filter((u) => u.includes('/api/conta-estado'))[0])
-      .toMatch(/^http:\/\/a\.local:8765\/api\/conta-estado$/);
+    expect(urls.filter((u) => u.includes('/api/credenciais'))[0])
+      .toMatch(/^http:\/\/a\.local:8765\/api\/credenciais$/);
     unmount(t.comp);
   });
 

@@ -1,105 +1,125 @@
-// Faixa de cota do rodapé do desktop (Task 9): módulo puro que decide se a faixa aparece e o
-// que cada conta desenha. Nenhuma rede aqui — recebe ContaEstado[] e devolve o quê mostrar.
-import { describe, it, expect } from 'vitest';
-import { faixaDeCota, nivelDePct, VELHA_APOS_S } from './cota';
-import type { ContaEstado } from './contaEstado';
+// Faixa de cota do rodapé do desktop: módulo puro que decide o que cada conta desenha. Nenhuma
+// rede aqui — recebe o CotaConta[] de /api/cotas e devolve o quê mostrar.
+import { describe, it, expect, beforeEach } from 'vitest';
+import { overwriteGetLocale } from '../paraglide/runtime';
+import { faixaDeCota, nivelDePct, faltaPara, diaDoReset, janelaLonga, VELHA_APOS_S } from './cota';
+import type { CotaConta } from './contaEstado';
 
-// Uma conta 'lida' com a linha da statusline crua (o mock da faixa usa ⚡5h/📅7d).
-function lida(label: string, linha: string, ts: number | null = 1_000, idade_s: number | null = 5): ContaEstado {
+function lida(label: string, cinco: number, sete: number, extra: Partial<CotaConta> = {}): CotaConta {
   return {
-    path: `/home/u/${label}`, label, active: false,
-    login: { estado: 'ok', loggedIn: true },
-    limite: { estado: 'lido', linha, ts, idade_s },
+    id: `claude:/home/u/${label}`, label, provedor: 'claude', ativa: false, estado: 'lida',
+    janelas: [
+      { rotulo: '5h', pct: cinco, reset_ts: 2_000 },
+      { rotulo: '7d', pct: sete, reset_ts: 200_000 },
+    ],
+    ts: 1_000, idade_s: 5, ...extra,
   };
 }
-// Conta legível (tem leitura de limite) com as duas janelas — o caso típico do mock.
-const COM_JANELAS = (label: string, cinco: string, sete: string) =>
-  lida(label, `🤖 Opus (high✦) │ ⚡5h:${cinco}% 📅7d:${sete}% │ 💵 $1.20`);
 
-function semLeitura(label: string): ContaEstado {
+function semLeitura(label: string, estado: CotaConta['estado'] = 'expirada'): CotaConta {
   return {
-    path: `/home/u/${label}`, label, active: false,
-    login: { estado: 'ok', loggedIn: false },
-    limite: { estado: 'sem_leitura' },
+    id: `claude:/home/u/${label}`, label, provedor: 'claude', ativa: false, estado,
+    janelas: [], ts: null, idade_s: null, motivo: 'token-expirado',
   };
 }
 
 describe('faixaDeCota — a regra de aparecer', () => {
-  it('zero contas legíveis -> não aparece (null)', () => {
+  it('sem conta nenhuma -> não aparece (null)', () => {
     expect(faixaDeCota([])).toBeNull();
   });
-  it('uma conta legível -> não aparece (o número dela já está na statusline da sessão)', () => {
-    expect(faixaDeCota([COM_JANELAS('jefferson', '64', '83')])).toBeNull();
+  it('uma conta só -> APARECE: a faixa é móvel do app, não aviso que pisca', () => {
+    // Regra antiga era >=2 contas legíveis, e por isso a tira sumia do rodapé sozinha.
+    const r = faixaDeCota([lida('jefferson', 64, 83)])!;
+    expect(r).toHaveLength(1);
   });
-  it('duas contas legíveis -> aparece com as duas', () => {
-    const r = faixaDeCota([
-      COM_JANELAS('jefferson', '64', '83'), COM_JANELAS('claude-200-1', '5', '58'),
-    ])!;
-    expect(r).toHaveLength(2);
-    expect(r.map((c) => c.label)).toEqual(['jefferson', 'claude-200-1']);
+  it('cada conta traz o SEU número (o bug que a rota nova fecha)', () => {
+    const r = faixaDeCota([lida('default', 13, 22), lida('200-01', 26, 87)])!;
+    expect(r.map((c) => c.janelas.map((j) => j.pct))).toEqual([[13, 22], [26, 87]]);
   });
-  it('conta sem leitura não conta pro total e não vira zero', () => {
-    // Uma lida + uma sem leitura = só uma legível -> não aparece.
-    expect(faixaDeCota([COM_JANELAS('jefferson', '64', '83'), semLeitura('nova')])).toBeNull();
-    // Duas lidas + uma sem leitura = aparece com as duas lidas, a sem leitura fora.
-    const r = faixaDeCota([
-      COM_JANELAS('jefferson', '64', '83'), semLeitura('nova'), COM_JANELAS('claude-200-1', '5', '58'),
-    ])!;
+  it('conta sem leitura aparece NOMEADA e vazia — nunca como zero', () => {
+    const r = faixaDeCota([lida('default', 13, 22), semLeitura('jefferson')])!;
     expect(r).toHaveLength(2);
-    expect(r.map((c) => c.label)).toEqual(['jefferson', 'claude-200-1']);
+    expect(r[1].label).toBe('jefferson');
+    expect(r[1].janelas).toEqual([]);
+    expect(r[1].estado).toBe('expirada');
   });
-  it('conta lida com linha sem janela parseável também não conta como legível', () => {
-    const linhaSemJanela = lida('tema-custom', '🤖 Opus (high✦) │ 💵 $1.20');
-    expect(faixaDeCota([COM_JANELAS('jefferson', '64', '83'), linhaSemJanela])).toBeNull();
-    const r = faixaDeCota([
-      COM_JANELAS('jefferson', '64', '83'), linhaSemJanela, COM_JANELAS('claude-200-1', '5', '58'),
-    ])!;
-    expect(r).toHaveLength(2);
+  it("estado 'lida' sem nenhuma janela cai no balde de quem não leu", () => {
+    const r = faixaDeCota([{ ...lida('x', 1, 2), janelas: [] }])!;
+    expect(r[0].estado).toBe('indisponivel');
+  });
+  it('janela com pct não-numérico é descartada, o resto da conta fica', () => {
+    const c = lida('x', 10, 20);
+    c.janelas = [{ rotulo: '5h', pct: NaN }, { rotulo: '7d', pct: 20 }];
+    const r = faixaDeCota([c])!;
+    expect(r[0].janelas.map((j) => j.rotulo)).toEqual(['7d']);
+  });
+  it('rótulo da janela vem do provedor, não de uma constante', () => {
+    const c = lida('kimi', 0, 0);
+    c.janelas = [{ rotulo: '90min', pct: 5 }];
+    expect(faixaDeCota([c])![0].janelas[0].rotulo).toBe('90min');
   });
 });
 
-describe('faixaDeCota — o que cada conta desenha', () => {
-  it('janelas 5h e 7d com porcentagem e nível de cor', () => {
-    const r = faixaDeCota([
-      COM_JANELAS('jefferson', '64', '83'), COM_JANELAS('outra', '96', '5'),
-    ])!;
-    const jeff = r.find((c) => c.label === 'jefferson')!;
-    expect(jeff.cincoH).toEqual({ rotulo: '5h', pct: 64, nivel: 'normal' });
-    expect(jeff.seteD).toEqual({ rotulo: '7d', pct: 83, nivel: 'alerta' });
-    const outra = r.find((c) => c.label === 'outra')!;
-    expect(outra.cincoH!.nivel).toBe('cheio');
-    expect(outra.seteD!.pct).toBe(5);
-  });
-  it('cor só acima de 80: 80 é normal, 81 alerta, 90 alerta, 91 cheio', () => {
+describe('faixaDeCota — cor e idade', () => {
+  it('cor só acima de 80%; acima de 90% é cheio', () => {
+    expect(nivelDePct(64)).toBe('normal');
     expect(nivelDePct(80)).toBe('normal');
-    expect(nivelDePct(81)).toBe('alerta');
-    expect(nivelDePct(90)).toBe('alerta');
-    expect(nivelDePct(91)).toBe('cheio');
+    expect(nivelDePct(83)).toBe('alerta');
+    expect(nivelDePct(96)).toBe('cheio');
   });
-  it('janela faltando na linha -> o par não é desenhado (null), não vira 0%', () => {
-    const so5h = lida('so5h', '🤖 Opus (high✦) │ ⚡5h:64% │ 💵 $1.20');
-    const r = faixaDeCota([COM_JANELAS('jefferson', '64', '83'), so5h])!;
-    const c = r.find((x) => x.label === 'so5h')!;
-    expect(c.cincoH).not.toBeNull();
-    expect(c.seteD).toBeNull();
+  it('leitura velha marca a conta e mantém a idade (dado velho parece velho)', () => {
+    const r = faixaDeCota([
+      lida('fresca', 1, 2, { idade_s: 30 }),
+      lida('velha', 1, 2, { idade_s: VELHA_APOS_S + 1 }),
+    ])!;
+    expect(r[0].velha).toBe(false);
+    expect(r[1].velha).toBe(true);
+    expect(r[1].idade_s).toBe(VELHA_APOS_S + 1);
+  });
+  it('conta-base do app vem marcada (é a que uma sessão nova vai gastar)', () => {
+    const r = faixaDeCota([lida('default', 1, 2, { ativa: true }), lida('outra', 1, 2)])!;
+    expect(r.map((c) => c.ativa)).toEqual([true, false]);
   });
 });
 
-describe('faixaDeCota — leitura velha parece velha', () => {
-  it('leitura mais velha que VELHA_APOS_S é marcada velha, com a idade em segundos', () => {
-    const agora = 10_000;
-    const velha = COM_JANELAS('velha', '5', '58');
-    velha.limite = { estado: 'lido', linha: velha.limite.linha!, ts: agora - VELHA_APOS_S - 1, idade_s: VELHA_APOS_S + 1 };
-    const fresca = COM_JANELAS('fresca', '64', '83');
-    fresca.limite = { estado: 'lido', linha: fresca.limite.linha!, ts: agora - 5, idade_s: 5 };
-    const r = faixaDeCota([velha, fresca])!;
-    expect(r.find((c) => c.label === 'velha')!.velha).toBe(true);
-    expect(r.find((c) => c.label === 'fresca')!.velha).toBe(false);
-    expect(r.find((c) => c.label === 'velha')!.idade_s).toBe(VELHA_APOS_S + 1);
+describe('faltaPara — quanto falta pro reset', () => {
+  const agora = 1_000_000;
+  it('minutos abaixo de uma hora', () => {
+    expect(faltaPara(agora + 35 * 60, agora)).toBe('35m');
   });
-  // O VELHA_APOS_S vive no módulo: se ele mudar, o teste acima continua valendo, mas a constante
-  // é o lugar onde o limiar é decidido. Esse teste congela o valor para ninguém mudar por engano.
-  it('VELHA_APOS_S é 10 minutos (600 s)', () => {
-    expect(VELHA_APOS_S).toBe(600);
+  it('horas com minutos preenchidos em dois dígitos', () => {
+    expect(faltaPara(agora + 80 * 60, agora)).toBe('1h20');
+    expect(faltaPara(agora + 120 * 60, agora)).toBe('2h');
+  });
+  it('acima de um dia', () => {
+    expect(faltaPara(agora + 50 * 3600, agora)).toBe('2d2h');
+  });
+  it('reset ausente ou já passado não desenha nada', () => {
+    expect(faltaPara(null, agora)).toBe('');
+    expect(faltaPara(agora - 10, agora)).toBe('');
+  });
+});
+
+describe('janela longa — que dia volta', () => {
+  // O nome do dia sai do Intl no idioma do app (mesmo precedente do fmt.test.ts).
+  beforeEach(() => overwriteGetLocale(() => 'pt'));
+  const agora = Date.parse('2026-08-18T10:00:00-03:00') / 1000;   // terça
+  it('reset a mais de um dia é janela longa; menos que isso, não', () => {
+    expect(janelaLonga(agora + 3 * 86400, agora)).toBe(true);
+    expect(janelaLonga(agora + 6 * 3600, agora)).toBe(false);
+    expect(janelaLonga(null, agora)).toBe(false);
+  });
+  it('mostra dia da semana e hora, no idioma do app', () => {
+    // sábado, 18h — o formato que responde "que dia a semana vira".
+    const sabado = Date.parse('2026-08-22T18:00:00-03:00') / 1000;
+    expect(diaDoReset(sabado, agora)).toBe('sáb 18h');
+  });
+  it('em inglês o dia sai em inglês — é data formatada, não chave de tradução', () => {
+    overwriteGetLocale(() => 'en');
+    expect(diaDoReset(Date.parse('2026-08-22T18:00:00-03:00') / 1000, agora)).toBe('Sat 18h');
+  });
+  it('reset ausente ou já passado não desenha nada', () => {
+    expect(diaDoReset(null, agora)).toBe('');
+    expect(diaDoReset(agora - 10, agora)).toBe('');
   });
 });

@@ -14,7 +14,18 @@
 #                                  responda um [grupo:] com --group (evita loop); responda 1:1.
 #   cp-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
 #                                  truecolor, visível no pocket). cwd default = home.
-#                                  --provider pi cria uma sessão do agente Pi em vez do Claude.
+#                                  --provider <claude|codex|pi|kimi> escolhe o AGENTE da sessão
+#                                  nova (default claude). Ex: --provider kimi abre o Kimi Code.
+#                                  --engine <motor> nasce num motor de ~/.claude/engines.json
+#                                  (outro modelo, conta do provedor — ver "Par noutro modelo").
+#                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo).
+#   cp-send --help                 esta ajuda (o cabeçalho deste arquivo).
+#
+# OUTRA CONTA: cada conta é um config dir próprio (~/.claude-<nome>), com skills/hooks symlinkados
+# do ~/.claude e credenciais + transcritos separados. `cp-conta --list` mostra as configuradas,
+# `cp-conta --new <nome>` cria uma (o /login é interativo, feito na primeira sessão dela).
+# `cp-send --new <nome> <cwd> --conta 200-01` abre a sessão já logada naquela conta — o consumo vai
+# pra assinatura DELA, não pra conta padrão. Sem o flag, nasce na conta padrão (~/.claude).
 #
 # Remetente é detectado pelo nome da sessão tmux atual e prefixado como "[de: X]",
 # pra sessão destino saber a origem e pra onde responder.
@@ -37,6 +48,15 @@
 # como sempre — recusar ali mandaria o modelo bater numa porta que não existe. --group, --pair,
 # --new e cross-server nunca são recusados: não têm equivalente nativo.
 set -euo pipefail
+
+# --help imprime o CABEÇALHO deste arquivo, não um texto paralelo: ajuda que vive longe da regra
+# envelhece calada, e foi o que aconteceu — o `--help` não existia, caía no parse de destino e
+# imprimia só a linha do envio 1:1, fazendo quem lesse concluir que --new/--engine/--conta não
+# existiam. Para no primeiro não-comentário, então flag nova documentada acima já sai aqui.
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$(realpath "$0")"
+    exit 0
+fi
 
 ENV_FILE="$(dirname "$(realpath "$0")")/../backend/.env"
 TOKEN=$(grep '^CP_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
@@ -179,7 +199,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|pi>]}"
+    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>]}"
     shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
@@ -190,25 +210,33 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|pi>]" >&2
+        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
     # Anthropic. Serve pra parear com uma sessão rodando noutro modelo — o par continua no mesmo
     # ~/.claude (skills, hooks, contrato compartilhado), só o motor difere. Aceita o flag em
     # qualquer ordem: `--new nome --engine kimi` sem cwd é o uso mais comum.
-    # --provider: qual AGENTE roda na sessão nova (claude, o default, ou pi). Mesma forma do
+    # --provider: qual AGENTE roda na sessão nova (claude, o default, ou codex/pi/kimi). Mesma forma do
     # --engine: repassa cru pro backend, que recusa com 400 o que não conhece — não duplica aqui a
     # lista de providers válidos.
-    cwd=""; engine=""; provider=""
+    # --conta: a sessão nova nasce em OUTRA CONTA Anthropic (config dir ~/.claude-<nome>), que é o
+    # que o seletor de conta da tela "Nova sessão" já fazia pelo campo config_dir do POST. Sem o
+    # flag, o único caminho era curl na API — e a ausência dele aqui vinha sendo lida como "não dá
+    # pra abrir noutra conta". Resolve pelo cp-conta (--prep reconcilia os atalhos e imprime o
+    # caminho), pra regra de nome/pasta continuar morando num lugar só.
+    cwd=""; engine=""; provider=""; conta=""; config_dir=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --engine)
                 [[ -n "$engine" ]] && { echo "erro: --engine informado duas vezes" >&2; exit 2; }
                 engine="${2:?uso: --engine <motor>}"; shift 2 ;;
+            --conta)
+                [[ -n "$conta" ]] && { echo "erro: --conta informado duas vezes" >&2; exit 2; }
+                conta="${2:?uso: --conta <nome>}"; shift 2 ;;
             --provider)
                 [[ -n "$provider" ]] && { echo "erro: --provider informado duas vezes" >&2; exit 2; }
-                provider="${2:?uso: --provider <claude|pi>}"; shift 2 ;;
+                provider="${2:?uso: --provider <claude|codex|pi|kimi>}"; shift 2 ;;
             # Token com '-' na frente que não é --engine/--provider é opção errada (--engines,
             # -engine). Aceitar como cwd fazia o erro aparecer no token SEGUINTE, apontando o inocente.
             -*) echo "erro: opção desconhecida '$1'" >&2; exit 2 ;;
@@ -217,15 +245,29 @@ if [[ "$1" == "--new" ]]; then
         esac
     done
     cwd="${cwd:-$HOME}"
+    # Conta inexistente para AQUI, antes do POST: o backend recusaria com 400, mas o erro do
+    # cp-conta já diz o nome errado e o `cp-conta --list` mostra os certos.
+    if [[ -n "$conta" ]]; then
+        config_dir=$("$(dirname "$(realpath "$0")")/cp-conta" --prep "$conta") || {
+            echo "erro: conta '$conta' indisponível — veja as configuradas com: cp-conta --list" >&2
+            exit 2
+        }
+    fi
     # engine vazio -> null: o backend trata como "conta Anthropic", o comportamento de sempre. Motor
     # que não existe volta 400 do backend (a api() mostra o detalhe) em vez de abrir uma sessão que
     # parece estar no motor e não está.
-    body=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "cwd": sys.argv[2],
-                                                          "engine": sys.argv[3] or None,
-                                                          "provider": sys.argv[4] or "claude"}))' \
-           "$name" "$cwd" "$engine" "$provider")
+    # config_dir vazio -> a chave SOME do payload (não vai null): o backend trata ausência como
+    # conta padrão, e mandar null por um campo que ele valida contra list_config_dirs é pedir 400.
+    body=$(python3 -c 'import json,sys
+d = {"name": sys.argv[1], "cwd": sys.argv[2],
+     "engine": sys.argv[3] or None,
+     "provider": sys.argv[4] or "claude"}
+if sys.argv[5]:
+    d["config_dir"] = sys.argv[5]
+print(json.dumps(d))' \
+           "$name" "$cwd" "$engine" "$provider" "$config_dir")
     api POST /api/sessions "$body" >/dev/null
-    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]} — fala com ela via: cp-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]} — fala com ela via: cp-send $name \"msg\""
     exit 0
 fi
 

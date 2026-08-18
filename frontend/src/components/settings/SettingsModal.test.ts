@@ -22,11 +22,15 @@ vi.mock('../../lib/api', () => ({
   criarConta: vi.fn(async () => ({ path: '/x', label: 'x', active: false })),
   apagarConta: vi.fn(async () => {}),
 }));
-// A aba Contas (Task 4) buscou a fonte única /api/conta-estado — sem este mock, montar a aba
+// A aba Contas busca a lista única /api/credenciais — sem este mock, montar a aba
 // faria fetch real no teste. formatarIntervalo segue real (puro; mantido via importOriginal).
 vi.mock('../../lib/contaEstado', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/contaEstado')>();
   return { ...real, listarEstadosDeConta: vi.fn(async () => []) };
+});
+vi.mock('../../lib/credenciais', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../lib/credenciais')>();
+  return { ...real, listarCredenciais: vi.fn(async () => []), definirApelido: vi.fn() };
 });
 vi.mock('../../lib/auth', () => ({
   serverColor: () => '#fff',
@@ -142,16 +146,17 @@ describe('SettingsModal — GET config por tela', () => {
   it('aba Contas mostra a lista da fonte única (Task 4 ligou a tela)', async () => {
     stubDesktop();
     const lista = [{
-      path: '/home/u/.claude-a', label: 'a', active: true,
+      id: 'claude:/home/u/.claude-a', tipo: 'claude', nome: 'a', nome_natural: 'a', ativa: true,
+      path: '/home/u/.claude-a', usos: [],
       login: { estado: 'ok', loggedIn: true, email: 'a@example.com', plano: 'max' },
-      limite: { estado: 'sem_leitura' },
+      cota: { estado: 'sem_credencial', janelas: [] },
     }];
-    const contaEstado = await import('../../lib/contaEstado');
-    vi.mocked(contaEstado.listarEstadosDeConta).mockResolvedValue(lista as never);
+    const contaEstado = await import('../../lib/credenciais');
+    vi.mocked(contaEstado.listarCredenciais).mockResolvedValue(lista as never);
     const t = montar('contas');
     await tick(); await tick();
     // Sem ?srv= o alvo é null: a aba segue pelo caminho global (self-heal de 401).
-    expect(vi.mocked(contaEstado.listarEstadosDeConta)).toHaveBeenCalledWith(null);
+    expect(vi.mocked(contaEstado.listarCredenciais)).toHaveBeenCalledWith(null);
     expect(document.body.textContent).toContain(m.contas_secao_lista());
     expect(document.body.textContent).toContain(m.contas_em_uso());
     expect(document.body.textContent).toContain('a@example.com');
@@ -160,13 +165,13 @@ describe('SettingsModal — GET config por tela', () => {
 
   it('aba Contas recebe o alvo do ?srv= e lista do servidor escolhido (parecer)', async () => {
     stubDesktop();
-    const contaEstado = await import('../../lib/contaEstado');
-    vi.mocked(contaEstado.listarEstadosDeConta).mockResolvedValue([] as never);
+    const contaEstado = await import('../../lib/credenciais');
+    vi.mocked(contaEstado.listarCredenciais).mockResolvedValue([] as never);
     const t = montar('contas', SRV as Server);
     await tick(); await tick();
     // O SettingsModal repassa o alvo que o App resolveu (targetConfig): com ?srv=B a lista
     // tem de sair para B — é o defeito do bloqueador da revisão final.
-    expect(vi.mocked(contaEstado.listarEstadosDeConta)).toHaveBeenCalledWith(SRV);
+    expect(vi.mocked(contaEstado.listarCredenciais)).toHaveBeenCalledWith(SRV);
     unmount(t.comp);
   });
 

@@ -1,60 +1,54 @@
 <script lang="ts">
-  // Faixa de cota do rodapé do desktop (Task 9). Só existe com duas ou mais contas de que se
-  // consiga ler o limite; uma linha por conta, janelas 5h/7d, cor só acima de 80% (sempre junto
-  // do número), leitura velha esmaecida com a idade ao lado. Leva à aba Contas por callback — o
-  // DesktopShell desvia para a rota (?config=contas), nunca importando o componente da aba
-  // (contrato de posse do lote).
+  // Faixa de cota do rodapé do desktop. Uma coluna por CONTA (credencial), janelas 5h/7d, cor só
+  // acima de 80% (sempre junto do número), leitura velha esmaecida com a idade ao lado. Leva à
+  // aba Contas por callback — o DesktopShell desvia pra rota (?config=contas), nunca importando
+  // o componente da aba.
   //
-  // Fonte única do estado: /api/conta-estado via lib/contaEstado (Task 4) — aqui só se lê o
-  // shape dela, nunca o sidecar de statusline por conta própria.
+  // Fonte: /api/cotas (lib/contaEstado.listarCotas), que pergunta ao PROVEDOR com a credencial de
+  // cada conta. Antes daqui a faixa parseava a linha de statusline guardada na pasta da conta —
+  // e como essa pasta é um symlink pra conta padrão nesta máquina, as três contas mostravam o
+  // MESMO número; conta sem sessão aberta não mostrava nada. Cota é da credencial, não da sessão.
+  //
+  // O backend já guarda a leitura por 5 min, então o poll daqui é barato: dentro do TTL ele nem
+  // toca a rede. A sessão que está rodando AGORA não depende deste ciclo pra parecer viva — a
+  // statusline dela continua desenhando o número dentro do chat.
   import { onMount } from 'svelte';
   import * as m from '../paraglide/messages';
-  import { listarEstadosDeConta, formatarIntervalo, type ContaEstado } from '../lib/contaEstado';
-  import { faixaDeCota } from '../lib/cota';
+  import { listarCotas, formatarIntervalo, type CotaConta } from '../lib/contaEstado';
+  import { faixaDeCota, faltaPara, diaDoReset, janelaLonga } from '../lib/cota';
 
   interface Props {
-    // Muda quando a sessão/servidor alvo muda no shell — re-busca o estado (o endpoint é do
-    // servidor ATIVO; sem re-busca a faixa mostraria as contas do servidor antigo para sempre).
+    // Muda quando a sessão/servidor alvo muda no shell — re-busca (o endpoint é do servidor
+    // ATIVO; sem re-busca a faixa mostraria as contas do servidor antigo para sempre).
     serverKey: string;
     // Leva à aba Contas. Quem constrói é o DesktopShell: () => abrirConfig('contas', getActiveId()).
     onIrParaContas: () => void;
   }
   let { serverKey, onIrParaContas }: Props = $props();
 
-  let contas = $state<ContaEstado[]>([]);
-  // Relógio local para a idade andar sem bater na rede: o backend manda o `ts` (timestamp UNIX
-  // da escrita do sidecar); a idade exibida é `agora - ts`, reavaliada a cada minuto. Sem isto
-  // uma conta lida há 2 min mostraria "lido agora" para sempre (a régua "dado velho parece
-  // velho" morre: o dado envelhece, o texto não).
+  let contas = $state<CotaConta[]>([]);
+  // Relógio local para a idade e a contagem até o reset andarem sem bater na rede.
   let agora = $state(Date.now() / 1000);
 
   const contasComIdade = $derived(
-    contas.map((c) => {
-      const ts = c.limite.ts;
-      if (ts == null) return c;
-      return { ...c, limite: { ...c.limite, idade_s: Math.max(0, agora - ts) } };
-    }),
+    contas.map((c) => (c.ts == null ? c : { ...c, idade_s: Math.max(0, agora - c.ts) })),
   );
   const linha = $derived(faixaDeCota(contasComIdade));
 
-  // Geração descarta resposta em voo de servidor anterior (mesmo papel do `vivo` do shell): o
-  // effect reexecuta a cada troca de serverKey; sem o `g` a resposta lenta do servidor antigo
-  // sobrescrevia a do novo. `contas = []` em falha: sem dado a faixa some (mesma régua de zero
-  // contas legíveis) — não desenha por cima nem mostra erro cru numa tira de 26px.
+  // Geração descarta resposta em voo de servidor anterior (mesmo papel do `vivo` do shell).
   let geracao = 0;
   async function carregar() {
     const g = ++geracao;
     try {
       // `null` explícito, decisão escrita: a faixa quer mesmo o servidor ATIVO (o componente
-      // navega com getActiveId() e o endpoint é da máquina da sessão) — com a assinatura nova
-      // de listarEstadosDeConta(alvo), não passá-lo seria acidente.
-      const lista = await listarEstadosDeConta(null);
+      // navega com getActiveId() e o endpoint é da máquina da sessão).
+      const lista = await listarCotas(null);
       if (g !== geracao) return;
       contas = lista;
     } catch {
-      // Falha de rede não apaga leitura boa: o dado que já está na tela envelhece sozinho
-      // (o `agora` sobe a cada minuto e a conta vira `velha` com a idade ao lado).
-      // Zerar aqui fazia a faixa inteira desaparecer num 500 de um segundo.
+      // Falha de rede não apaga leitura boa: o que já está na tela envelhece sozinho (o `agora`
+      // sobe e a conta vira `velha` com a idade ao lado). Zerar aqui fazia a faixa inteira
+      // desaparecer num 500 de um segundo.
     }
   }
 
@@ -64,8 +58,6 @@
   });
 
   onMount(() => {
-    // A faixa é permanente no rodapé: o percentual e a idade precisam andar com o uso. Sem o
-    // refetch, uma sessão que acabou de rodar na conta não aparece na faixa até o app remontar.
     const t = setInterval(() => {
       agora = Date.now() / 1000;
       void carregar();
@@ -77,23 +69,31 @@
 {#if linha}
   <div class="quota-faixa">
     <div class="quota-trilho">
-      {#each linha as c, i (c.label)}
-        {#if i > 0}<span class="quota-sep" aria-hidden="true"></span>{/if}
-        <span class="quota-conta" class:velha={c.velha}>
+      {#each linha as c (c.id)}
+        <span class="quota-conta" class:velha={c.velha} class:base={c.ativa}>
           <span class="quota-nome">{c.label}</span>
-          {#if c.cincoH}
-            <span class="quota-par">
-              <span class="quota-rot">{c.cincoH.rotulo}</span>
-              <span class="quota-barra" aria-hidden="true"><i class={c.cincoH.nivel} style="width:{c.cincoH.pct}%"></i></span>
-              <span class="quota-num {c.cincoH.nivel}">{c.cincoH.pct}%</span>
-            </span>
-          {/if}
-          {#if c.seteD}
-            <span class="quota-par">
-              <span class="quota-rot">{c.seteD.rotulo}</span>
-              <span class="quota-barra" aria-hidden="true"><i class={c.seteD.nivel} style="width:{c.seteD.pct}%"></i></span>
-              <span class="quota-num {c.seteD.nivel}">{c.seteD.pct}%</span>
-            </span>
+          {#if c.janelas.length === 0}
+            <!-- Conta conhecida sem número: nomeada e vazia, nunca como zero. Quando o motivo é a
+                 credencial (vencida / nunca entrou) a faixa diz o que fazer; quando é falha de
+                 leitura, só o traço — inventar explicação numa tira de 26px é pior que o traço. -->
+            <span class="quota-vazio"
+              >{c.estado === 'expirada' || c.estado === 'sem_credencial'
+                ? m.cota_precisa_entrar()
+                : '—'}</span>
+          {:else}
+            {#each c.janelas as j (j.rotulo)}
+              <span class="quota-v {j.nivel}">
+                <span class="quota-rot">{j.rotulo}</span><b>{Math.round(j.pct)}%</b>
+              </span>
+              <!-- O reset acompanha TODA janela, não só a que aperta: "quando volta" é metade da
+                   informação de uma cota. O formato muda com a escala — janela longa (7d) mostra o
+                   DIA ("↺sáb 18h"), porque "↺4d6h" ninguém converte de cabeça; janela curta mostra
+                   quanto falta ("↺2h10"), que é como se pensa em horas. -->
+              {@const reset = janelaLonga(j.resetTs, agora)
+                ? diaDoReset(j.resetTs, agora)
+                : faltaPara(j.resetTs, agora)}
+              {#if reset}<span class="quota-reset">↺{reset}</span>{/if}
+            {/each}
           {/if}
           {#if c.velha && c.idade_s != null}
             <span class="quota-idade">{m.cota_idade({ n: formatarIntervalo(c.idade_s) })}</span>
@@ -108,16 +108,14 @@
 {/if}
 
 <style>
-  /* Fiel ao mock (faixa-cota.html): irmã de .shell-linha, flex-shrink:0, altura de uma linha,
-     26px + borda. Superfície --glass-panel, o mesmo material da sidebar — acompanha o slider de
-     Transparência sozinho, não é retângulo chapado sobre o papel de parede. O trilho da barra
-     usa --surface-raised (== --bg-elevated, mas dentro da régua de transparência do app). */
+  /* Irmã de .shell-linha: flex-shrink:0, altura de uma linha, 28px + borda. Superfície
+     --glass-panel, o mesmo material da sidebar — acompanha o slider de Transparência sozinha. */
   .quota-faixa {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: var(--space-4);
-    height: 26px;
+    gap: var(--space-3);
+    height: 28px;
     padding: 0 var(--space-3);
     border-top: 1px solid var(--border-subtle);
     background: var(--glass-panel);
@@ -132,46 +130,61 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: var(--space-4);
+    gap: 7px;
     overflow-x: auto;
     scrollbar-width: none;
   }
   .quota-trilho::-webkit-scrollbar { display: none; }
-  .quota-conta { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+  /* Uma pílula por conta. A barrinha de progresso saiu de propósito (18/08): em 2% ela não
+     desenhava nada e o número já dizia tudo — oito barras cinzas eram ruído, não informação.
+     Quem separa as contas agora é a pílula, não um risquinho de 1px.
+     --surface-raised (não --bg-elevated cru) pra caixa entrar no véu do papel de parede. */
+  .quota-conta {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    flex-shrink: 0;
+    padding: 2px var(--space-2);
+    border-radius: 999px;
+    background: var(--surface-raised);
+  }
   .quota-nome {
-    color: var(--text-secondary);
-    max-width: 12ch;
+    color: var(--text-primary);
+    font-weight: 500;
+    max-width: 18ch;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .quota-par { display: flex; align-items: center; gap: 5px; }
-  .quota-rot { color: var(--text-muted); }
-  .quota-barra {
-    width: 46px;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--surface-raised);
-    overflow: hidden;
+  /* A conta-base do app (a que uma sessão nova nasce usando) ganha um ponto: é a resposta pra
+     "qual eu vou gastar se abrir agora". Ponto e não negrito — todos os nomes já são fortes. */
+  .quota-conta.base .quota-nome::before {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    vertical-align: middle;
   }
-  .quota-barra i {
-    display: block;
-    height: 100%;
-    border-radius: 2px;
-    background: var(--text-muted);
-  }
-  .quota-barra i.alerta { background: var(--warning); }
-  .quota-barra i.cheio { background: var(--error); }
-  .quota-num { font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
-  .quota-num.alerta { color: var(--warning); }
-  .quota-num.cheio { color: var(--error); }
-  /* Dado velho parece velho SEM apagar o texto: quem esmaece é a barrinha (decorativa,
-     aria-hidden) e a cor de alerta cai para o tom neutro — a pista textual é a idade ao lado,
-     que fica em contraste cheio. opacity no texto não serve: nem 0,90 chega aos 4,5:1 neste fundo. */
-  .quota-conta.velha .quota-barra { opacity: 0.45; }
-  .quota-conta.velha .quota-num { color: var(--text-muted); }
+  /* O par janela+número: o rótulo ("5h") é o mais apagado da linha, o número é claro. Essa é a
+     hierarquia que faltava — antes rótulo, barra e número tinham o mesmo peso. */
+  .quota-v { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .quota-v b { font-weight: 600; }
+  .quota-rot { color: var(--text-muted); font-size: 10px; margin-right: 2px; }
+  .quota-v.alerta, .quota-v.alerta b { color: var(--warning); }
+  .quota-v.cheio, .quota-v.cheio b { color: var(--error); }
+  /* Quanto falta pro reset só aparece na janela que já está no vermelho/amarelo: é ali que a
+     pergunta "quando volta?" existe. Nas outras seria ruído numa tira de 28px. */
+  .quota-reset { color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .quota-vazio { color: var(--text-muted); }
+  /* Dado velho parece velho SEM apagar o texto: a cor de alerta cai pro tom neutro e a pista
+     textual é a idade ao lado, que fica em contraste cheio. opacity no texto não serve: nem
+     0,90 chega aos 4,5:1 neste fundo. */
+  .quota-conta.velha .quota-v,
+  .quota-conta.velha .quota-v b { color: var(--text-muted); }
   .quota-idade { color: var(--text-muted); }
-  .quota-sep { width: 1px; height: 12px; background: var(--border-subtle); flex-shrink: 0; }
   .quota-fim { flex-shrink: 0; margin-left: var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
   .quota-link {
     min-height: 20px;
