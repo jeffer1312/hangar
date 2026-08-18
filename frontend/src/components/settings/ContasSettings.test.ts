@@ -8,12 +8,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import ContasSettings from './ContasSettings.svelte';
+import { criarProps } from './props-reativas.svelte';
 import * as m from '../../paraglide/messages';
 import * as contaEstadoLib from '../../lib/contaEstado';
 import * as apiLib from '../../lib/api';
 import * as loginLib from '../../lib/loginConta';
 import { mensagemDeErro } from '../../lib/errosApi';
 import type { ContaEstado } from '../../lib/contaEstado';
+import type { Server } from '../../lib/auth';
 
 vi.mock('../../lib/contaEstado', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/contaEstado')>();
@@ -45,11 +47,16 @@ const DESLOGADA: ContaEstado = {
   limite: { estado: 'sem_leitura' },
 };
 
-function montar(contas: ContaEstado[]) {
+// Alvo EXPLÍCITO (outra máquina): é o contrato do parecer — a aba tem de afirmar o alvo, não
+// só que a função foi chamada. Os casos abaixo passam a exigir `ALVO` como primeiro argumento;
+// o caminho global (null) tem caso próprio no fim.
+const ALVO: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 't-b' };
+
+function montar(contas: ContaEstado[], alvo: Server | null = ALVO) {
   estadoMock.listarEstadosDeConta.mockResolvedValue(contas);
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const comp = mount(ContasSettings, { target: el });
+  const comp = mount(ContasSettings, { target: el, props: { apiTarget: alvo } });
   return { el, comp: comp as never };
 }
 
@@ -132,7 +139,7 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-rodape .ct-btn:nth-of-type(2)')!.click(); // criar
     await tick(); await tick();
-    expect(apiMock.criarConta).toHaveBeenCalledWith('minha-conta');
+    expect(apiMock.criarConta).toHaveBeenCalledWith(ALVO, 'minha-conta');
     expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(2);   // montagem + pós-criar
     unmount(t.comp);
   });
@@ -147,7 +154,7 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     expect(t.el.querySelector('.ct-confirma')!.textContent).toContain(m.criar_apagar_fim());
     t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
     await tick(); await tick();
-    expect(apiMock.apagarConta).toHaveBeenCalledWith('jefferson');
+    expect(apiMock.apagarConta).toHaveBeenCalledWith(ALVO, 'jefferson');
     expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(2);
     unmount(t.comp);
   });
@@ -184,7 +191,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     await tick(); await tick();
     t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
-    expect(loginMock.iniciarLogin).toHaveBeenCalledWith('testes');
+    expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes');
     expect(t.el.querySelector('.ct-login')).not.toBeNull();
     const passos = [...t.el.querySelectorAll<HTMLElement>('.ct-passo')];
     expect(passos.length).toBe(4);
@@ -212,7 +219,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
     rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
     await tick(); await tick();
-    expect(loginMock.confirmarLogin).toHaveBeenCalledWith('testes', 'CODE-123');
+    expect(loginMock.confirmarLogin).toHaveBeenCalledWith(ALVO, 'testes', 'CODE-123');
     // O pós-login recarrega a lista (o poll do passo não a recarrega — só o /passo).
     expect(estadoMock.listarEstadosDeConta.mock.calls.length).toBe(2);
     unmount(t.comp);
@@ -228,9 +235,9 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
       await tick(); await tick();
       t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
       await tick(); await tick(); await tick(); await tick();
-      expect(loginMock.iniciarLogin).toHaveBeenCalledWith('testes');
+      expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes');
       unmount(t.comp);
-      expect(loginMock.cancelarLogin).toHaveBeenCalledWith('testes');
+      expect(loginMock.cancelarLogin).toHaveBeenCalledWith(ALVO, 'testes');
       const passosAntes = loginMock.passoLogin.mock.calls.length;
       // Depois do unmount o poll não pode mais bater em /login/passo.
       await vi.advanceTimersByTimeAsync(6000);
@@ -254,18 +261,75 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
       await tick(); await tick();
       t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
       await tick(); await tick(); await tick(); await tick();
-      expect(loginMock.iniciarLogin).toHaveBeenCalledWith('testes');
+      expect(loginMock.iniciarLogin).toHaveBeenCalledWith(ALVO, 'testes');
       unmount(t.comp);      // desmonta ANTES de o iniciarLogin resolver
       resolver();           // a resposta chega num componente morto
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
       await tick();
-      expect(loginMock.cancelarLogin).toHaveBeenCalledWith('testes');
+      expect(loginMock.cancelarLogin).toHaveBeenCalledWith(ALVO, 'testes');
       const passosAntes = loginMock.passoLogin.mock.calls.length;
       await vi.advanceTimersByTimeAsync(6000);
       expect(loginMock.passoLogin.mock.calls.length).toBe(passosAntes);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('alvo null (sem ?srv=) segue pelo caminho global: chamadas com null (parecer)', async () => {
+    // Comportamento final do parecer: sem ?srv= (ou srv == ativo) o alvo é null e tudo segue
+    // como hoje — o caminho global com self-heal de 401.
+    const t = montar([DESLOGADA], null);
+    await tick(); await tick();
+    expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledWith(null);
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(loginMock.iniciarLogin).toHaveBeenCalledWith(null, 'testes');
+    unmount(t.comp);
+  });
+
+  it('trocar de alvo com login aberto cancela no alvo ANTIGO e limpa o painel (guard do parecer)', async () => {
+    // A tentativa em voo vive no processo do backend do alvo antigo: trocar o ?srv= no meio
+    // tem de cancelar LÁ (no capturado), nunca no alvo novo.
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+    const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    await tick(); await tick(); await tick();
+    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(loginMock.iniciarLogin).toHaveBeenCalledWith(A, 'testes');
+    props.apiTarget = B;   // ?srv= trocou com a tentativa em voo
+    await tick(); await tick(); await tick();
+    expect(loginMock.cancelarLogin).toHaveBeenCalledWith(A, 'testes');
+    expect(el.querySelector('.ct-login')).toBeNull();
+    unmount(comp as never);
+  });
+
+  it('trocar de alvo com carga em voo descarta a resposta do alvo antigo (guard do parecer)', async () => {
+    // A lista do alvo A (pendurada) chega ATRASADA, depois da troca pra B: não pode escrever
+    // na tela nem sobrescrever a lista de B — o apagar clicado na lista errada sairia para a
+    // máquina errada (o defeito que a Task 5 antiga levou duas rodadas pra fechar).
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+    const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
+    let resolverA!: (v: ContaEstado[]) => void;
+    estadoMock.listarEstadosDeConta.mockImplementation((alvo: Server | null) =>
+      alvo?.id === 'srv-b'
+        ? Promise.resolve([{ ...LOGADA, label: 'bbbb', path: '/home/u/.claude-b' }])
+        : new Promise<ContaEstado[]>((r) => { resolverA = r; }));
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    await tick(); await tick();
+    props.apiTarget = B;
+    await tick(); await tick(); await tick();
+    resolverA([LOGADA]);   // resposta atrasada do alvo que saiu da tela
+    await tick(); await tick();
+    // A lista na tela é a de B; a resposta atrasada de A (label 'jefferson') foi descartada.
+    expect([...el.querySelectorAll('.ct-nome')].map((n) => n.textContent)).toEqual(['bbbb']);
+    unmount(comp as never);
   });
 
   it('confirmar com campo vazio não chama a API', async () => {
@@ -288,7 +352,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
     rodapeLogin.querySelector<HTMLButtonElement>('button:not(.primario)')!.click();
     await tick(); await tick();
-    expect(loginMock.cancelarLogin).toHaveBeenCalledWith('testes');
+    expect(loginMock.cancelarLogin).toHaveBeenCalledWith(ALVO, 'testes');
     expect(t.el.querySelector('.ct-login')).toBeNull();
     expect(t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.disabled).toBe(false);
     unmount(t.comp);

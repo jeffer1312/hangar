@@ -358,16 +358,23 @@ export async function modelOptions(
 
 // Cria a pasta da conta Claude no servidor. NÃO loga — o OAuth é interativo e roda dentro da
 // primeira sessão aberta nela (o backend devolve a conta com active=false justamente por isso).
-export async function criarConta(nome: string): Promise<ConfigDirInfo> {
-  return apiFetch<ConfigDirInfo>('/api/claude-configs', {
-    method: 'POST',
-    body: JSON.stringify({ nome }),
-  });
+// alvo não-nulo (outra máquina) sai por apiFetchForServer: sem self-heal de 401, porque um 401
+// DAQUELE servidor não pode apagar a credencial ativa (contrato de api.ts:129-131).
+export async function criarConta(alvo: Server | null, nome: string): Promise<ConfigDirInfo> {
+  const init = { method: 'POST', body: JSON.stringify({ nome }) };
+  return alvo
+    ? apiFetchForServer<ConfigDirInfo>(alvo, '/api/claude-configs', init)
+    : apiFetch<ConfigDirInfo>('/api/claude-configs', init);
 }
 
 // Apaga a conta e os transcripts dela no servidor. Recusa 409 se houver sessão viva usando-a.
-export async function apagarConta(nome: string): Promise<void> {
-  await apiFetch(`/api/claude-configs/${encodeURIComponent(nome)}`, { method: 'DELETE' });
+export async function apagarConta(alvo: Server | null, nome: string): Promise<void> {
+  const init = { method: 'DELETE' };
+  if (alvo) {
+    await apiFetchForServer<void>(alvo, `/api/claude-configs/${encodeURIComponent(nome)}`, init);
+    return;
+  }
+  await apiFetch(`/api/claude-configs/${encodeURIComponent(nome)}`, init);
 }
 
 // Web Push: chave VAPID publica deste servidor (applicationServerKey). Vazia = push desligado la.

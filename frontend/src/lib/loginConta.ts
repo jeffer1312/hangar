@@ -2,7 +2,7 @@
 // cancelar. O módulo da casa (lib/api.ts) está fechado neste lote — cada módulo novo cria o
 // seu fetch no padrão de servidor explícito (mesmo de lib/peers.ts). Este módulo é a ÚNICA
 // porta do front pro login: a tela (ContasSettings.svelte) não chama fetch direto.
-import { getBaseUrl, getToken, dropActiveServer } from './auth';
+import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
 import { errorDetail, isTimeoutError } from './api';
 import * as m from '../paraglide/messages';
 
@@ -46,21 +46,44 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function iniciarLogin(conta: string): Promise<{ ok: boolean }> {
-  return req(`/api/conta-estado/${encodeURIComponent(conta)}/login`, { method: 'POST' });
+// Servidor EXPLÍCITO (a aba aponta pra outra máquina). Nunca faz self-heal: um 401 aqui é erro
+// DAQUELE servidor e não pode apagar a credencial ativa, que é de outra máquina (mesmo desenho do
+// lib/peers.ts e do apiFetchForServer). Prazo de 8s: servidor atrás de VPN não recusa conexão,
+// pendura — sem prazo o login ficava "aguardando" pra sempre.
+async function reqEm<T>(s: Server, path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${s.baseUrl}${path}`, {
+    signal: AbortSignal.timeout(8000),
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${s.token}`,
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+  return res.json() as Promise<T>;
 }
 
-export function passoLogin(conta: string): Promise<PassoLogin> {
-  return req(`/api/conta-estado/${encodeURIComponent(conta)}/login/passo`);
+// Uma porta só pros exportados: alvo null = servidor ativo (é o contrato do apiTarget).
+function em<T>(alvo: Server | null, path: string, init?: RequestInit): Promise<T> {
+  return alvo ? reqEm<T>(alvo, path, init) : req<T>(path, init);
 }
 
-export function confirmarLogin(conta: string, codigo: string): Promise<ResultadoLogin> {
-  return req(`/api/conta-estado/${encodeURIComponent(conta)}/login/codigo`, {
+export function iniciarLogin(alvo: Server | null, conta: string): Promise<{ ok: boolean }> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login`, { method: 'POST' });
+}
+
+export function passoLogin(alvo: Server | null, conta: string): Promise<PassoLogin> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login/passo`);
+}
+
+export function confirmarLogin(alvo: Server | null, conta: string, codigo: string): Promise<ResultadoLogin> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login/codigo`, {
     method: 'POST',
     body: JSON.stringify({ codigo }),
   });
 }
 
-export function cancelarLogin(conta: string): Promise<{ ok: boolean }> {
-  return req(`/api/conta-estado/${encodeURIComponent(conta)}/login/cancelar`, { method: 'POST' });
+export function cancelarLogin(alvo: Server | null, conta: string): Promise<{ ok: boolean }> {
+  return em(alvo, `/api/conta-estado/${encodeURIComponent(conta)}/login/cancelar`, { method: 'POST' });
 }

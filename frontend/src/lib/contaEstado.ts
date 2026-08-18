@@ -4,7 +4,7 @@
 // lib/api.ts está fechado neste lote: o fetch segue o MESMO padrão dele (authHeaders +
 // ensureOk com 401 → dropActiveServer + reload), sem tocar no arquivo. `errorDetail` vem de
 // api.ts, que é exportado — importar não é editar.
-import { getBaseUrl, getToken, dropActiveServer } from './auth';
+import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
 import { errorDetail } from './api';
 import * as m from '../paraglide/messages';
 
@@ -31,9 +31,13 @@ export interface ContaEstado {
   limite: EstadoLimite;
 }
 
-export async function listarEstadosDeConta(): Promise<ContaEstado[]> {
+// Mesmo par do lib/peers.ts (dd863b88): `req` fala com o servidor ATIVO (self-heal de 401),
+// `reqEm` com um servidor EXPLÍCITO — sem self-heal, porque um 401 de outra máquina não pode
+// apagar a credencial ativa (mesmo contrato de api.ts:129-131). Prazo de 8s no explícito:
+// servidor atrás de VPN não recusa conexão, pendura — sem prazo a lista ficava "Carregando…".
+async function req(path: string): Promise<ContaEstado[]> {
   const token = getToken();
-  const res = await fetch(`${getBaseUrl()}/api/conta-estado`, {
+  const res = await fetch(`${getBaseUrl()}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   // Mesmo contrato do ensureOk do api.ts: 401 com token salvo = credencial velha, deslogar.
@@ -44,6 +48,24 @@ export async function listarEstadosDeConta(): Promise<ContaEstado[]> {
   }
   if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
   return res.json();
+}
+
+async function reqEm(s: Server, path: string): Promise<ContaEstado[]> {
+  const res = await fetch(`${s.baseUrl}${path}`, {
+    signal: AbortSignal.timeout(8000),
+    headers: { Authorization: `Bearer ${s.token}` },
+  });
+  if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+  return res.json();
+}
+
+// Uma porta só pros exportados: alvo null = servidor ativo (é o contrato do apiTarget).
+function em(alvo: Server | null, path: string): Promise<ContaEstado[]> {
+  return alvo ? reqEm(alvo, path) : req(path);
+}
+
+export async function listarEstadosDeConta(alvo: Server | null): Promise<ContaEstado[]> {
+  return em(alvo, '/api/conta-estado');
 }
 
 // Intervalo curto ("2 h", "3 d") para a idade de uma leitura — a frase completa vem das

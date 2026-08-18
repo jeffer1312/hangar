@@ -4,12 +4,22 @@
   // login, plano e a idade do último limite; a Task 7 liga o botão Entrar e a Task 9 desenha a
   // faixa de cota na coluna do limite (a partir de `limite.linha`, que o lib/statusline.ts já
   // sabe parsear).
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
 import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib/api';
   import { listarEstadosDeConta, formatarIntervalo, type ContaEstado } from '../../lib/contaEstado';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
   import { initials } from '../../lib/format';
+  import type { Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
+
+  // Contrato do apiTarget (o mesmo de ServidoresSettings): null = servidor ATIVO (API global com
+  // self-heal de 401); Server explícito = a máquina que o ?srv= escolheu. Quem resolve é o App
+  // (targetConfig): com ?srv=B a aba tem de falar com B, não com o ativo — o bloqueador da
+  // revisão final (apagar/Entrar agiam na máquina errada, com o cabeçalho nomeando outra).
+  interface Props {
+    apiTarget: Server | null;
+  }
+  let { apiTarget }: Props = $props();
 
   let contas = $state<ContaEstado[]>([]);
   let carregando = $state(true);
@@ -26,18 +36,52 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   let aviso = $state('');
   let avisoErro = $state(false);
 
-  async function carregar() {
+  async function carregar(meu: number) {
     carregando = true;
     erro = '';
     try {
-      contas = await listarEstadosDeConta();
+      const lista = await listarEstadosDeConta(apiTarget);
+      if (meu !== geracao) return;
+      contas = lista;
     } catch (e) {
+      if (meu !== geracao) return;
       erro = e instanceof Error && e.message ? e.message : String(e);
     } finally {
-      carregando = false;
+      if (meu === geracao) carregando = false;
     }
   }
-  carregar();
+
+  // Geração da carga em voo (mesmo guard de ServidoresSettings.svelte:207-221): a resposta de um
+  // alvo que a aba já não mostra não escreve na tela. Trocar de alvo com carga pendente deixava o
+  // dado da máquina anterior na tela e o apagar clicado nele saía para a máquina errada — o
+  // defeito que a Task 5 antiga levou duas rodadas pra fechar (33b0bffb, fa43b83e).
+  let geracao = 0;
+  let alvoAnterior: Server | null = null;
+
+  $effect(() => {
+    const meu = ++geracao;
+    const alvoVelho = alvoAnterior;
+    alvoAnterior = apiTarget;
+    // Login em voo vive no processo do backend do alvo ANTIGO (uma tentativa por conta, naquela
+    // máquina): trocar de alvo com login aberto tem de cancelar LÁ — cancelar no alvo novo
+    // mataria a janela da máquina que saiu da tela. `untrack` de propósito: ler loginDe sem o
+    // registrar como dependência, senão o próprio `loginDe = null` da limpeza reexecutava o
+    // efeito numa segunda rodada de carregar()/cancelar.
+    const loginAberto = untrack(() => loginDe);
+    if (loginAberto) {
+      cancelarLogin(alvoVelho, loginAberto).catch(() => {});
+    }
+    // Estados de diálogo/gravação pertencem ao alvo que saiu da tela: sem isto a confirmação de
+    // apagar nascia aberta no alvo novo, o campo de criar ficava preso e o poll do login seguia
+    // batendo no servidor antigo pra sempre.
+    pararPoll();
+    loginDe = null; loginCodigo = ''; loginPasso = { etapa: 'idle' };
+    loginErro = ''; loginEnviando = false; loginIniciando = false; loginParado = false;
+    erro = ''; aviso = ''; avisoErro = false;
+    confirmando = null; menuDe = null;
+    criando = false; apagando = false;
+    void carregar(meu);
+  });
 
   const leituraFresca = (c: ContaEstado) =>
     c.limite.estado === 'lido' && c.limite.idade_s != null && c.limite.idade_s < 60;
@@ -49,11 +93,11 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     aviso = '';
     avisoErro = false;
     try {
-      await criarConta(nome);
+      await criarConta(apiTarget, nome);
       nomeConta = '';
       pedindoNome = false;
       aviso = m.criar_conta_deslogada();
-      await carregar();
+      await carregar(geracao);
     } catch (e) {
       aviso = e instanceof Error && e.message ? e.message : m.criar_conta_erro();
       avisoErro = true;
@@ -74,13 +118,13 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     aviso = '';
     avisoErro = false;
     try {
-      await apagarConta(conta.label);
+      await apagarConta(apiTarget, conta.label);
       confirmando = null;
       menuDe = null;
       aviso = m.criar_conta_apagada({ nome: conta.label });
       // A conta pode ter sumido da lista entre o clique e o fim do DELETE (outro painel, outra
       // sessão) — recarregar é a fonte única, não remover item por item.
-      await carregar();
+      await carregar(geracao);
     } catch (e) {
       aviso = e instanceof Error && e.message ? e.message : m.criar_apagar_conta_erro();
       avisoErro = true;
@@ -110,16 +154,22 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
 
   async function iniciarEntrar(conta: ContaEstado) {
     if (loginDe || loginIniciando) return;
+    // Alvo desta tentativa, capturado AGORA: se o ?srv= trocar no meio do voo, este é o alvo
+    // ANTIGO — o cancelamento do efeito de geração e o ramo `g !== geracao` abaixo usam o
+    // capturado, nunca o apiTarget corrente.
+    const alvo = apiTarget;
+    const g = geracao;
     loginIniciando = true;
     loginErro = '';
     loginCodigo = '';
     loginPasso = { etapa: 'idle' };
     try {
-      await iniciarLogin(conta.label);
-      if (destruido) {
-        // Desmontou no meio do voo: sem tela onde mostrar erro (o mesmo ramo silencioso
-        // do onDestroy), mas a janela do servidor precisa morrer de qualquer forma.
-        cancelarLogin(conta.label).catch(() => {});
+      await iniciarLogin(alvo, conta.label);
+      if (destruido || g !== geracao) {
+        // Desmontou ou o alvo trocou ENTRE o clique e a resposta: sem tela onde mostrar erro
+        // (o mesmo ramo silencioso do onDestroy), mas a janela do servidor — a máquina ANTIGA —
+        // precisa morrer de qualquer forma.
+        cancelarLogin(alvo, conta.label).catch(() => {});
         return;
       }
       loginDe = conta.label;
@@ -127,14 +177,14 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
       // O poll só começa depois do login confirmado no servidor: um 409/404 no iniciar NÃO
       // deixa intervalo órfão rodando.
       try {
-        loginPasso = await passoLogin(conta.label);
+        loginPasso = await passoLogin(alvo, conta.label);
       } catch {
         // Poll silencioso: o erro de rede aparece na ação (confirmar/cancelar), não no loop.
       }
       loginPoll = setInterval(async () => {
         if (loginDe) {
           try {
-            loginPasso = await passoLogin(loginDe);
+            loginPasso = await passoLogin(alvo, loginDe);
           } catch {
             // Silencioso: o erro aparece nas ações, não no loop.
           }
@@ -167,7 +217,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     loginEnviando = true;
     loginErro = '';
     try {
-      const r = await confirmarLogin(conta, loginCodigo);
+      const r = await confirmarLogin(apiTarget, conta, loginCodigo);
       pararPoll();
       loginDe = null;
       loginCodigo = '';
@@ -176,7 +226,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
       // por releitura, não pela aparência da tela).
       aviso = m.contas_login_ok({ email: r.email ?? '', plano: r.plano ?? '' });
       avisoErro = false;
-      await carregar();
+      await carregar(geracao);
     } catch (e) {
       loginErro = e instanceof Error && e.message ? e.message : m.falha_conexao();
     } finally {
@@ -190,7 +240,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     loginParado = true;
     loginErro = '';
     try {
-      await cancelarLogin(conta);
+      await cancelarLogin(apiTarget, conta);
     } catch {
       // O servidor pode não ter janela pra matar (já morreu); a tentativa local morre igual.
     } finally {
@@ -212,7 +262,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   onDestroy(() => {
     destruido = true;
     pararPoll();
-    if (loginDe) cancelarLogin(loginDe).catch(() => {});
+    if (loginDe) cancelarLogin(apiTarget, loginDe).catch(() => {});
   });
 </script>
 

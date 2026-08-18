@@ -296,7 +296,7 @@
   {:else if telaAtual === 'acesso'}
     <AcessoSettings />
   {:else if telaAtual === 'contas'}
-    <ContasSettings />
+    <ContasSettings apiTarget={alvo} />
   {:else}
     <ServerSettings {store} secao={telaAtual} />
   {/if}

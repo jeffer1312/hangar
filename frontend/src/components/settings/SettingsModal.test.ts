@@ -149,9 +149,23 @@ describe('SettingsModal — GET config por tela', () => {
     vi.mocked(contaEstado.listarEstadosDeConta).mockResolvedValue(lista as never);
     const t = montar('contas');
     await tick(); await tick();
+    // Sem ?srv= o alvo é null: a aba segue pelo caminho global (self-heal de 401).
+    expect(vi.mocked(contaEstado.listarEstadosDeConta)).toHaveBeenCalledWith(null);
     expect(document.body.textContent).toContain(m.contas_secao_lista());
     expect(document.body.textContent).toContain(m.contas_em_uso());
     expect(document.body.textContent).toContain('a@example.com');
+    unmount(t.comp);
+  });
+
+  it('aba Contas recebe o alvo do ?srv= e lista do servidor escolhido (parecer)', async () => {
+    stubDesktop();
+    const contaEstado = await import('../../lib/contaEstado');
+    vi.mocked(contaEstado.listarEstadosDeConta).mockResolvedValue([] as never);
+    const t = montar('contas', SRV as Server);
+    await tick(); await tick();
+    // O SettingsModal repassa o alvo que o App resolveu (targetConfig): com ?srv=B a lista
+    // tem de sair para B — é o defeito do bloqueador da revisão final.
+    expect(vi.mocked(contaEstado.listarEstadosDeConta)).toHaveBeenCalledWith(SRV);
     unmount(t.comp);
   });
 

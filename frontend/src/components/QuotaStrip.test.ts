@@ -45,6 +45,18 @@ beforeEach(() => { vi.clearAllMocks(); });
 afterEach(() => { document.body.innerHTML = ''; });
 
 describe('QuotaStrip — a regra de aparecer', () => {
+  it('fala com o servidor ATIVO de propósito — alvo null explícito (parecer)', async () => {
+    // A faixa quer mesmo a máquina da sessão (o componente navega com getActiveId()); com a
+    // assinatura nova de listarEstadosDeConta(alvo), o null vira decisão escrita, não acidente.
+    const t = montar([
+      COM_JANELAS('jefferson', '64', '83'),
+      COM_JANELAS('claude-200-1', '5', '58'),
+    ]);
+    await tick(); await tick();
+    expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledWith(null);
+    unmount(t.comp);
+  });
+
   it('não está no DOM com uma conta só (o número dela já está na statusline da sessão)', async () => {
     const t = montar([COM_JANELAS('jefferson', '64', '83')]);
     await tick(); await tick();
