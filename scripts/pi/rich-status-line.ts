@@ -252,6 +252,101 @@ function kimiUsageSummary(token: string): string {
 	return `${fmt(kimiUsage.fiveHour, "⚡5h", "⚡5h:ok")} ${fmt(kimiUsage.weekly, "📅7d", "📅7d:?")}`;
 }
 
+// Mesmo desenho do Kimi (busca assíncrona + resetAt guardado como timestamp, pro ↻ andar a cada
+// render em vez de congelar por 5min). A diferença é que a API do Command Code NÃO manda
+// porcentagem pronta: manda dólar gasto (`used`) contra o teto da janela (`cap`), e a conta é nossa.
+interface CommandCodeWindow {
+	pct: number | "?";
+	resetAt: number | null; // epoch ms
+}
+let commandcodeUsage: {
+	token: string;
+	fiveHour: CommandCodeWindow | null;
+	weekly: CommandCodeWindow | null;
+	fetchedAt: number;
+} | null = null;
+let commandcodeFetchInFlight = false;
+let commandcodeLastAttempt = 0;
+
+function commandcodeUsageRefresh(token: string): void {
+	const now = Date.now();
+	if (commandcodeFetchInFlight) return;
+	if (
+		commandcodeUsage &&
+		commandcodeUsage.token === token &&
+		now - commandcodeUsage.fetchedAt < 300_000
+	) {
+		return;
+	}
+	if (now - commandcodeLastAttempt < 60_000) return; // backoff: falhou, não martela a API a cada render
+	commandcodeFetchInFlight = true;
+	commandcodeLastAttempt = now;
+	execFile(
+		"curl",
+		[
+			"-sS",
+			"-m",
+			"5",
+			"-H",
+			`Authorization: Bearer ${token}`,
+			"https://api.commandcode.ai/alpha/billing/credits",
+		],
+		{ encoding: "utf8", timeout: 7000 },
+		(err, stdout) => {
+			commandcodeFetchInFlight = false;
+			if (err) return; // mantém o dado velho; próxima tentativa em 60s
+			try {
+				const data = JSON.parse(stdout);
+				const limits = data?.windowLimits;
+				if (!limits) return; // erro de auth volta corpo sem windowLimits: não sobrescreve dado bom
+				const windowOf = (d: any): CommandCodeWindow => ({
+					pct:
+						Number(d?.cap) > 0
+							? Math.min(999, Math.round((Number(d?.used ?? 0) / Number(d.cap)) * 100))
+							: "?",
+					resetAt: Number.isFinite(Number(d?.resetAt)) ? Number(d.resetAt) : null,
+				});
+				commandcodeUsage = {
+					token,
+					fiveHour: limits.fiveHour ? windowOf(limits.fiveHour) : null,
+					weekly: limits.weekly ? windowOf(limits.weekly) : null,
+					fetchedAt: Date.now(),
+				};
+			} catch {}
+		},
+	);
+}
+
+// Mesma regra do kimiTokenFor: a quota que interessa é a da conta que a sessão está GASTANDO, então
+// a key sai do provider ATIVO no models.json (resolvendo indireção $ENV). Provider cujo baseUrl não
+// é o do Command Code não ganha chip — mostrar a quota da conta errada é pior que não mostrar nada.
+function commandcodeTokenFor(providerName: string | undefined): string {
+	if (!providerName) return "";
+	try {
+		const models = JSON.parse(readFileSync(PI_MODELS_PATH, "utf8"));
+		const prov = models?.providers?.[providerName];
+		if (!prov) return "";
+		if (!/api\.commandcode\.ai/i.test(prov.baseUrl ?? "")) return "";
+		const apiKey = String(prov.apiKey ?? "");
+		return apiKey.startsWith("$") ? (process.env[apiKey.slice(1)] ?? "") : apiKey;
+	} catch {}
+	return "";
+}
+
+function commandcodeUsageSummary(token: string): string {
+	commandcodeUsageRefresh(token); // não bloqueia: dispara a busca se vencida e formata o que já tem
+	if (!commandcodeUsage || commandcodeUsage.token !== token) return "";
+	const now = Date.now();
+	const fmt = (w: CommandCodeWindow | null, label: string, empty: string): string => {
+		if (!w) return empty;
+		const reset = w.resetAt
+			? ` ↻${formatDurationSeconds(Math.max(0, Math.floor((w.resetAt - now) / 1000)))}`
+			: "";
+		return `${label}:${w.pct}%${reset}`;
+	};
+	return `${fmt(commandcodeUsage.fiveHour, "⚡5h", "⚡5h:ok")} ${fmt(commandcodeUsage.weekly, "📅7d", "📅7d:?")}`;
+}
+
 function coloredBadge(text: string, color: string | undefined): string {
 	const colors: Record<string, { bg: string; fg: string }> = {
 		purple: { bg: "\x1b[105m", fg: "\x1b[97m" },
@@ -512,6 +607,12 @@ export default function (pi: ExtensionAPI) {
 		const clineLimitText = ctx.model?.provider === "clinepass" ? clineUsageSummary() : "";
 		const clineLimitPart = clineLimitText ? theme.fg("warning", clineLimitText) : "";
 
+		const commandcodeToken = commandcodeTokenFor(ctx.model?.provider);
+		const commandcodeLimitText = commandcodeToken ? commandcodeUsageSummary(commandcodeToken) : "";
+		const commandcodeLimitPart = commandcodeLimitText
+			? theme.fg("warning", commandcodeLimitText)
+			: "";
+
 		// Cost
 		const costPart = theme.fg("success", `💵 $${cost.toFixed(2)}`);
 
@@ -538,6 +639,7 @@ export default function (pi: ExtensionAPI) {
 			codexLimitPart,
 			kimiLimitPart,
 			clineLimitPart,
+			commandcodeLimitPart,
 			costPart,
 			timePart,
 			clockPart,
@@ -557,6 +659,8 @@ export default function (pi: ExtensionAPI) {
 				// em background; o render seguinte (quando quer que seja) já mostra dado fresco.
 				const kimiToken = kimiTokenFor(ctx.model?.provider);
 				if (kimiToken) kimiUsageRefresh(kimiToken);
+				const commandcodeToken = commandcodeTokenFor(ctx.model?.provider);
+				if (commandcodeToken) commandcodeUsageRefresh(commandcodeToken);
 				tui.requestRender();
 			}, 30_000);
 
