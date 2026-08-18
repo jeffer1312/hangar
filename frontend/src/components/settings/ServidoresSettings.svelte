@@ -2,8 +2,9 @@
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { getSessions } from '../../lib/api';
-  import { getIdentificador, setIdentificador, listarPeers, gravarPeer, removerPeer,
+  import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeer,
            type PeerView } from '../../lib/peers';
+  import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
   import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
@@ -213,9 +214,12 @@
     // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
     // pertencem à máquina que saiu da tela.
     idErro = ''; peersErro = ''; mostrandoRegistro = false; removerPeerId = null;
+    corrigeId = null; corrigeUrl = ''; corrigeToken = '';
     // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
     idSalvando = false; regSalvando = false;
+    // Estados de checagem pertencem ao alvo que saiu da tela (Task 8).
+    estados = {};
     if (!resolvedServer) {
       // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
       // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
@@ -249,11 +253,34 @@
       const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
       peers = lista;
+      // Task 8 (rodada 3): cada peer da lista ganha o estado REAL da ida ao montar — uma linha
+      // nunca fica em "Testando as duas pontas…" quando ninguém está testando. Só a IDA: o token
+      // do peer não volta da lista (PeerView.token é máscara), então a volta honesta é o selo
+      // '·' ("não sei daqui"); a volta real só existe a partir do gesto de registrar.
+      void checarLista(meu);
     } catch (e) {
       if (meu !== geracao) return;
       peersErro = msgErro(e);
     } finally {
       if (meu === geracao) peersCarregando = false;
+    }
+  }
+
+  async function checarLista(meu: number) {
+    const resultados = await Promise.all(peers.map(async (p) => {
+      const ida = await checkPeer(apiTarget, p.base_url, p.id).catch((e) => ({
+        estado: 'falhou' as const,
+        motivo: String((e as Error)?.message ?? e),
+      }));
+      return [p.id, ida] as const;
+    }));
+    // Guard de geração: a resposta de um alvo que a aba já não mostra não escreve na tela.
+    if (meu !== geracao) return;
+    for (const [id, ida] of resultados) {
+      estados = { ...estados, [id]: {
+        lados: [{ lado: 'ida', ...ida }, { lado: 'volta', estado: 'nao_configurado' }],
+        ok: false,
+      } };
     }
   }
 
@@ -275,14 +302,26 @@
       .finally(() => { if (meu === geracao) idSalvando = false; });
   }
 
-  // Registrar um peer: id + endereço + token. A legenda do mock promete "as duas pontas" — o
-  // lado remoto (testar/ligar) é da Task 8; aqui se grava o vínculo local, que é a fundação.
+  // Registrar um peer (Task 5 → 8): o gesto único agora registra os DOIS lados de uma vez
+  // (A em B e B em A, com a credencial que o celular já guarda de cada um) e testa cada lado
+  // com a primitiva da Task 3. A tela mostra o estado de cada lado e, quando um falha, abre o
+  // bloco de correção de endereço (mock estado 3).
   let mostrandoRegistro = $state(false);
   let regId = $state('');
   let regUrl = $state('');
   let regToken = $state('');
   let regErro = $state('');
   let regSalvando = $state(false);
+  // Estados de checagem por peer: id -> {lados, ok, endereco_alternativo} (Task 8).
+  let estados = $state<Record<string, { lados: LadoState[]; ok: boolean; endereco_alternativo?: string }>>({});
+  let corrigeId = $state<string | null>(null);
+  let corrigeUrl = $state('');       // endereço digitado no bloco de correção (bind:value)
+  let corrigeToken = $state('');     // credencial do gesto que abriu o bloco (não volta da lista)
+
+  // Selo de UM lado derivado do estado (Task 8, rodada 3): ✓ passou, ✗ falhou, · não sei
+  // (nao_configurado — nunca é nem uma coisa nem outra). O glifo não é mais texto chumbado.
+  const selo = (l?: LadoState) =>
+    l?.estado === 'ok' ? '✓' : l && l.estado !== 'nao_configurado' ? '✗' : '·';
 
   function abrirRegistro() {
     mostrandoRegistro = true;
@@ -300,14 +339,53 @@
     regErro = '';
     const meu = geracao;
     try {
-      const lista = await gravarPeer(apiTarget, { id, base_url: url, token });
+      // Task 8: um gesto registra os dois lados e testa os dois — a lista volta do backend.
+      const r = await registrarPeerDoisLados(apiTarget, { id, base_url: url, token });
       if (meu !== geracao) return;
-      peers = lista; mostrandoRegistro = false;
+      // A lista nova vem da gravação no DONO (o backend devolve a lista atualizada).
+      const lista = await listarPeers(apiTarget);
+      if (meu !== geracao) return;
+      peers = lista;
+      // O estado dos dois lados fica na tela (mock estados 2 e 3).
+      estados = { ...estados, [id]: { lados: r.lados, ok: r.ok, endereco_alternativo: r.endereco_alternativo } };
+      if (!r.ok) {
+        // Bloco de correção aberto no endereço que FALHOU — com a credencial do gesto guardada
+        // (o token não volta da lista; é o que "Testar de novo" reusa no endereço digitado).
+        corrigeId = id;
+        corrigeUrl = url;
+        corrigeToken = token;
+      }
+      mostrandoRegistro = false;
     } catch (e) {
       if (meu !== geracao) return;
       regErro = msgErro(e);
     } finally {
       if (meu === geracao) regSalvando = false;
+    }
+  }
+
+  // Fecha o bloco de correção (o usuário escolheu "deixar só de ida" — aceita o estado parcial).
+  function fecharCorrige() {
+    corrigeId = null;
+    corrigeUrl = '';
+    corrigeToken = '';
+  }
+
+  // "Testar de novo": re-registra e re-testa o peer no ENDEREÇO DIGITADO (o bloco de correção
+  // existe justamente para testar um endereço novo). Só fecha quando o par fecha; senão o estado
+  // novo fica à vista. Risco do token guardado: regToken do gesto que abriu o bloco (não volta
+  // da lista, que mascara) — mesmo contrato do registrarPeer.
+  async function testarDeNovo(peer: PeerView) {
+    const url = corrigeUrl.trim();
+    if (!/^https?:\/\//.test(url)) { peersErro = m.url_invalida(); return; }
+    try {
+      const r = await registrarPeerDoisLados(apiTarget, { id: peer.id, base_url: url, token: corrigeToken });
+      const lista = await listarPeers(apiTarget);
+      peers = lista;
+      estados = { ...estados, [peer.id]: { lados: r.lados, ok: r.ok, endereco_alternativo: r.endereco_alternativo } };
+      if (r.ok) { corrigeId = null; corrigeUrl = ''; corrigeToken = ''; }
+    } catch (e) {
+      peersErro = msgErro(e);
     }
   }
 
@@ -410,13 +488,49 @@
   <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
   <div class="pr-cartao">
     {#each peers as peer (peer.id)}
+      {@const st = estados[peer.id]}
+      {@const ida = st?.lados.find((l) => l.lado === 'ida')}
+      {@const volta = st?.lados.find((l) => l.lado === 'volta')}
+      {@const ok = ida?.estado === 'ok' && volta?.estado === 'ok'}
+      {@const meio = st && !ok}
       <div class="pr-linha">
+        <span class="pr-farol" class:ok class:nao={meio} class:test={!st}>
+          {st ? (ok ? '●' : '◌') : '◌'}
+        </span>
         <span class="pr-txt">
           <span class="pr-nome">{peer.id}</span>
           <span class="pr-url">{peer.base_url}</span>
+          {#if st}
+            {#if ok}
+              <span class="pr-estado ok">{m.peers_estado_ok()}</span>
+            {:else}
+              <span class="pr-estado nao">{m.peers_estado_parcial()}</span>
+            {/if}
+          {:else}
+            <span class="pr-estado neutro">{m.peers_estado_testando()}</span>
+          {/if}
         </span>
+        {#if st}
+          <span class="pr-lados">
+        <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>{selo(ida)} {m.peers_lado_ida()}</span>
+            <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>{selo(volta)} {m.peers_lado_volta()}</span>
+          </span>
+        {/if}
         <button class="pr-btn min" onclick={() => (removerPeerId = peer.id)}>{m.peers_remover()}</button>
       </div>
+      {#if st && !ok && corrigeId === peer.id}
+        <div class="corrige">
+          <p>
+            {m.peers_corrige_1({ nome: peer.id, endereco: peer.base_url })}
+          </p>
+          <p><b>{m.peers_corrige_pergunta({ nome: peer.id })}</b></p>
+          <input class="corrige-input" bind:value={corrigeUrl} aria-label={m.peers_corrige_pergunta({ nome: peer.id })} />
+          <div class="acoes">
+            <button class="btn primaria" onclick={() => testarDeNovo(peer)}>{m.peers_testar_novamente()}</button>
+            <button class="btn" onclick={() => fecharCorrige()}>{m.peers_so_ida()}</button>
+          </div>
+        </div>
+      {/if}
     {/each}
   </div>
 {:else if peersCarregando}
@@ -598,17 +712,40 @@
                border-radius: var(--radius-md); overflow: hidden; }
   .pr-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); }
   .pr-linha + .pr-linha { border-top: 1px solid var(--border-subtle); }
+  .pr-farol { flex-shrink: 0; width: 1.2em; text-align: center; font-size: 14px; }
+  .pr-farol.ok { color: var(--success); }
+  .pr-farol.nao { color: var(--error); }
+  .pr-farol.test { color: var(--text-muted); }
   .pr-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
   .pr-nome { font-size: var(--text-sm); color: var(--text-primary); }
   .pr-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
             word-break: break-all; }
+  .pr-estado { font-size: var(--text-xs); line-height: 1.35; }
+  .pr-estado.ok { color: var(--success); }
+  .pr-estado.nao { color: var(--warning); }
+  .pr-estado.neutro { color: var(--text-muted); }
+  .pr-lados { display: flex; gap: var(--space-2); flex-shrink: 0; }
+  .pr-lado { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted);
+             padding: 2px var(--space-2); border-radius: var(--radius-full);
+             background: var(--surface-raised); border: 1px solid var(--border-subtle); }
+  .pr-lado.ok { color: var(--success); }
+  .pr-lado.nao { color: var(--error); }
+  .corrige { margin-top: var(--space-3); padding: var(--space-3); background: var(--surface-card);
+             border: 1px solid var(--border-default); border-left: 3px solid var(--warning);
+             border-radius: var(--radius-md); }
+  .corrige p { margin: 0 0 var(--space-2); font-size: var(--text-xs); color: var(--text-secondary);
+               line-height: 1.45; }
+  .corrige b { color: var(--text-primary); font-weight: 600; }
+  .corrige input { width: 100%; height: 34px; padding: 0 var(--space-3);
+                   background: var(--surface-inset); border: 1px solid var(--border-default);
+                   border-radius: var(--radius-sm); color: var(--text-primary);
+                   font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
+  .acoes { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+  .btn { height: 36px; min-height: 0; padding: 0 var(--space-4); border-radius: var(--radius-sm);
+         border: 1px solid var(--border-subtle); background: var(--surface-raised);
+         color: var(--text-primary); font-size: var(--text-sm); font-family: inherit; }
+  .btn.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
   .pr-acoes { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
-  .pr-btn {
-    height: 36px; min-height: 0; padding: 0 var(--space-4); border-radius: var(--radius-sm);
-    border: 1px solid var(--border-subtle); background: var(--surface-raised);
-    color: var(--text-primary); font-size: var(--text-sm); font-family: inherit;
-  }
-  .pr-btn.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
   .pr-btn.min { height: 30px; padding: 0 var(--space-3); font-size: var(--text-xs); }
   .pr-btn:disabled { opacity: 0.45; }
 
