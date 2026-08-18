@@ -11,20 +11,24 @@ import json
 
 import pytest
 
-from app import alcance, peers_check
+from app import alcance, peers, peers_check
+
+# A função real de I/O, capturada antes do fixture autouse trocá-la: o teste do socket local
+# (Authorization no header) chama ELA, não o fake — mesmo padrão de test_alcance.py:132.
+_bater_real = peers_check._bater
 
 
 class _bater_fake:
     """Dupla da primitiva de I/O — devolve (status, corpo) como o real faria. O teste dirige o script."""
 
     def __init__(self):
-        self.chamadas: list[tuple[str, str]] = []
+        self.chamadas: list[tuple[str, str, str | None]] = []
         self._status = 0
         self._corpo = None
         self._lanca: Exception | None = None
 
-    def __call__(self, url: str, path: str = "/api/peers/identificador") -> tuple[int, dict | None]:
-        self.chamadas.append((url, path))
+    def __call__(self, url: str, path: str = "/api/peers/identificador", token: str | None = None) -> tuple[int, dict | None]:
+        self.chamadas.append((url, path, token))
         if self._lanca is not None:
             raise self._lanca
         try:
@@ -94,6 +98,68 @@ def test_recusou_quando_credencial_rejeitada(_seam):
     r = peers_check.checar_peer("http://notebook:8765", "notebook")
     assert r["estado"] == "recusou"
     assert r["motivo"] == "credencial"
+
+
+# A correção da rodada 2: o batimento usa a credencial DO PEER (token do peers.json). Sem ela o
+# remoto responde 401 -> recusou (medido na fumaça: os dois sentidos recusavam). O duplo continua
+# na I/O (_bater); quem está sob prova é o caminho token-pra-header.
+def test_pega_o_token_do_peer_no_peers_json(_seam, monkeypatch):
+    # peer registrado com token: checar_peer resolve pelo id e o batimento sai com o token.
+    monkeypatch.setattr(peers, "peer_cfg", lambda sid: ("http://x:8765", "tok-123") if sid == "notebook" else None)
+    _seam.dirige(200, '{"identificador": "notebook"}')
+    r = peers_check.checar_peer("http://notebook:8765", "notebook")
+    assert r["estado"] == "ok"
+    assert _seam.chamadas[0][2] == "tok-123"
+
+
+def test_sem_peer_registrado_vai_sem_token(_seam, monkeypatch):
+    # peer fora do peers.json (ou sem token): GET sai sem Authorization; o remoto devolve 401 e
+    # o estado é recusou — "credencial não configurada" é estado nomeado, não erro.
+    monkeypatch.setattr(peers, "peer_cfg", lambda sid: None)
+    _seam.dirige(401, '{"detail": "x"}')
+    r = peers_check.checar_peer("http://n:8765", "notebook")
+    assert r["estado"] == "recusou"
+    assert _seam.chamadas[0][2] is None
+
+
+def test_bater_real_manda_authorization_do_token(monkeypatch):
+    """O `_bater` REAL monta o header Authorization quando recebe o token.
+
+    Socket local, porta efêmera, sem rede externa nem processo — mesmo padrão de test_alcance.py.
+    Cai sem a correção (o GET ia sem header) e passa com ela.
+    """
+    import http.server
+    import socketserver
+    import threading
+
+    recebido: dict[str, str] = {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            recebido["authorization"] = self.headers.get("Authorization") or ""
+            corpo = json.dumps({"identificador": "x"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(corpo)))
+            self.end_headers()
+            self.wfile.write(corpo)
+
+        def log_message(self, *a):
+            pass
+
+    with socketserver.TCPServer(("127.0.0.1", 0), H) as srv:
+        porta = srv.server_address[1]
+        t = threading.Thread(target=srv.handle_request, daemon=True)
+        t.start()
+        # Restaura a função real (o fixture autouse trocou pelo fake) só neste teste.
+        monkeypatch.setattr(peers_check, "_bater", _bater_real)
+        status, corpo = peers_check._bater(f"http://127.0.0.1:{porta}", token="tok-123")
+        t.join(timeout=2)
+    assert status == 200
+    assert corpo == {"identificador": "x"}
+    assert recebido["authorization"] == "Bearer tok-123"
 
 
 # Estado falhou: o peer não responde (timeout/recusa de conexão/erro de rede).

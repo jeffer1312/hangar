@@ -17,24 +17,30 @@ import time
 import urllib.error
 import urllib.request
 
-from app import alcance
+from app import alcance, peers
 
 # O MESMO teto da Task 3 — uma chamada de checagem é uma chamada de alcance.
 TETO_ESPERA_S = alcance.TETO_ESPERA_S
 
 
-def _bater(url: str, path: str = "/api/peers/identificador") -> tuple[int, dict | None]:
+def _bater(url: str, path: str = "/api/peers/identificador", token: str | None = None) -> tuple[int, dict | None]:
     """GET autenticado em `/api/peers/identificador` no peer. Devolve (status, corpo JSON|None).
 
-    Sempre usa a credencial DO PEER (a que o backend remoto espera). O corpo pode ser None quando
-    não-JSON. Levanta exceção de transporte (rede) — quem traduz é checar_peer.
+    Usa a credencial DO PEER (a que o backend remoto espera): token do peers.json, resolvido em
+    checar_peer pelo id do peer. Sem token guardado o GET sai sem Authorization — o remoto
+    responde 401, que vira recusou (credencial não configurada é estado nomeado, não erro). O
+    corpo pode ser None quando não-JSON. Levanta exceção de transporte (rede) — quem traduz é
+    checar_peer.
 
     url vem do peers.json já com a barra final removida (peers.gravar_peer guarda sem barra).
     """
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         url + path,
         method="GET",
-        headers={"Accept": "application/json"})
+        headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TETO_ESPERA_S) as r:
             status = r.status
@@ -68,8 +74,13 @@ def checar_peer(url: str, id_esperado: str) -> dict:
     if not url:
         return {"estado": "nao_configurado", "identificador": "", "motivo": "", "tempo_ms": None}
     inicio = time.monotonic()
+    # Credencial DO PEER: o token que este servidor guardou para o id (a chave registrada no gesto
+    # é o mesmo id usado aqui). Sem registro/token no peers.json, o GET sai sem auth e o remoto
+    # responde 401 -> recusou: o estado certo pra "credencial não configurada".
+    cfg = peers.peer_cfg(id_esperado)
+    token = cfg[1] if cfg else None
     try:
-        status, corpo = _bater(url)
+        status, corpo = _bater(url, token=token)
     except Exception as e:
         return {
             "estado": "falhou",

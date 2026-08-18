@@ -146,8 +146,9 @@ def test_gravar_campo_nao_texto_e_400_nomeado_sem_escrever(arquivo_peers, cli, c
 
 
 def test_checar_peer_rota_ok(monkeypatch, cli):
-    from app import peers_check
-    monkeypatch.setattr(peers_check, "_bater", lambda url, path="/api/peers/identificador": (200, {"identificador": "notebook"}))
+    from app import peers, peers_check
+    monkeypatch.setattr(peers_check, "_bater", lambda url, path="/api/peers/identificador", token=None: (200, {"identificador": "notebook"}))
+    monkeypatch.setattr(peers, "peer_cfg", lambda sid: None)  # peers.json da máquina não entra no teste
     r = cli.get("/api/peers/check?url=http%3A%2F%2Fnotebook%3A8765&id=notebook", headers=AUTH)
     assert r.status_code == 200
     assert r.json()["estado"] == "ok"
@@ -158,16 +159,18 @@ def test_checar_peer_rota_sem_credencial_e_401(cli):
 
 
 def test_checar_peer_rota_url_faltando_e_400_nomeado(monkeypatch, cli):
-    from app import peers_check
-    monkeypatch.setattr(peers_check, "_bater", lambda url, path="/api/peers/identificador": (200, {"identificador": "n"}))
+    from app import peers, peers_check
+    monkeypatch.setattr(peers_check, "_bater", lambda url, path="/api/peers/identificador", token=None: (200, {"identificador": "n"}))
+    monkeypatch.setattr(peers, "peer_cfg", lambda sid: None)
     r = cli.get("/api/peers/check?id=n", headers=AUTH)
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "peers_check_url_obrigatoria"
 
 
 def test_checar_peer_rota_id_faltando_e_400_nomeado(monkeypatch, cli):
-    from app import peers_check
-    monkeypatch.setattr(peers_check, "_bater", lambda url, path="/api/peers/identificador": (200, {"identificador": "n"}))
+    from app import peers, peers_check
+    monkeypatch.setattr(peers_check, "_bater", lambda url, path="/api/peers/identificador", token=None: (200, {"identificador": "n"}))
+    monkeypatch.setattr(peers, "peer_cfg", lambda sid: None)
     r = cli.get("/api/peers/check?url=http%3A%2F%2Fn%3A8765", headers=AUTH)
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "peers_check_id_obrigatorio"
