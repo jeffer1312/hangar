@@ -151,6 +151,31 @@ describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
     expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(2);
     unmount(t.comp);
   });
+
+  it('falha ao apagar mostra a mensagem traduzida do backend e nao engana com sucesso (Task 4)', async () => {
+    // O usuário viu "não foi" sem mensagem nenhuma ao apagar pasta de backup: o aviso sumia
+    // com o erro engolido. O detalhe do DELETE vira envelope {code, params, msg}; a mensagem
+    // tem que chegar à tela TRADUZIDA. Este teste cai se o erro voltar a ser engolido
+    // (sem .ct-aviso.erro, ou com o texto cru do servidor no lugar da chave).
+    apiMock.apagarConta.mockRejectedValueOnce(
+      Object.assign(new Error(mensagemDeErro('erro_conta_inexistente', { nome: 'backup' })!),
+        { status: 404 }));
+    const t = montar([LOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-kebab')!.click();
+    await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-menu-item')!.click();
+    await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-confirma-btn.perigo')!.click();
+    await tick(); await tick();
+    const aviso = t.el.querySelector<HTMLElement>('.ct-aviso.erro');
+    expect(aviso).not.toBeNull();
+    expect(aviso!.textContent).toContain(m.erro_conta_inexistente({ nome: 'backup' }));
+    // Sem recarga da lista (não há sucesso pra recarregar) e sem fechar a confirmação.
+    expect(estadoMock.listarEstadosDeConta).toHaveBeenCalledTimes(1);
+    expect(t.el.querySelector('.ct-confirma')).not.toBeNull();
+    unmount(t.comp);
+  });
 });
 
 describe('ContasSettings — o botão Entrar (Task 7)', () => {

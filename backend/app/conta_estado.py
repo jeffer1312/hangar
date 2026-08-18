@@ -26,7 +26,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app import login_conta
+from app import contas, login_conta
 from app.auth import require_auth
 from app.config import list_config_dirs
 from app.mensagens import erro
@@ -194,13 +194,23 @@ def _limite(dir_conta: Path) -> EstadoLimite:
 def listar_contas() -> list[ContaEstado]:
     """A lista de contas com estado de login e último limite — a fonte das abas Contas e da
     faixa de cota (Task 9). Conta deslogada CONTINUA na lista: `active`/`label`/`path` vêm do
-    list_config_dirs, que não filtra por login."""
+    list_config_dirs, que não filtra por login.
+
+    Só PASTA DE CONTA de verdade entra aqui (Task 4, 17/08). O catálogo `list_config_dirs` é
+    mais largo que a aba de propósito: ele alimenta também o seletor de config dir da criação de
+    sessão e a soma de custos, onde um `~/.claude*` com login legítimo (backup antigo incluso)
+    continua sendo um config dir a contabilizar. A ABA é de contas gerenciáveis: quem nasceu do
+    hangar (carimbado) ou é a própria base do app (`active`) — uma pasta de backup que a lista
+    mostrasse viraria linha que a tela não consegue apagar (o DELETE exige conta de verdade e
+    recusa com 404). `active` fica mesmo sem marcador: o `~/.claude` default é a conta-base do
+    app, não apagável por aqui (409 com motivo) e sumi-lo da tela seria "some sem explicação"."""
     return [
         ContaEstado(
             path=c.path, label=c.label, active=c.active,
             login=_login_de(c), limite=_limite(Path(c.path)),
         )
         for c in list_config_dirs()
+        if contas.e_conta(Path(c.path)) or c.active
     ]
 
 

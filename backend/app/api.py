@@ -1124,7 +1124,9 @@ async def delete_claude_config(nome: str):
     try:
         alvo = contas.caminho(nome)
     except contas.ContaError as e:
-        raise HTTPException(e.status, e.detail) from None
+        # Nome fora do alfabeto da conta (ex: pasta de backup com ponto no nome): envelope pra
+        # o front traduzir no idioma do app, em vez de mostrar a string crua do módulo.
+        raise HTTPException(e.status, detail=erro("erro_conta_nome_invalido", e.detail)) from None
     if alvo.resolve() == _backend_config_base().resolve():
         # A config ativa do backend é o ~/.claude (ou o CLAUDE_CONFIG_DIR dele): settings,
         # custos e transcripts do próprio app moram lá — apagar derrubaria o app em si.
@@ -1174,8 +1176,10 @@ async def delete_claude_config(nome: str):
     try:
         await asyncio.to_thread(_checar_e_apagar)
     except contas.ContaError as e:
-        # Pasta não carimbada (ou conta que sumiu): mesmo 404 do apagar() antigo.
-        raise HTTPException(e.status, e.detail) from None
+        # Pasta não carimbada (ou conta que sumiu): mesmo 404 do apagar() antigo, agora como
+        # envelope — a mesma chave do login (erro_conta_inexistente) traduz nos dois fluxos.
+        raise HTTPException(e.status, detail=erro("erro_conta_inexistente", e.detail,
+                                                  nome=nome)) from None
     return {"ok": True}
 
 

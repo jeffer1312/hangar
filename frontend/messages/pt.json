@@ -1729,6 +1729,7 @@
   "contas_confirmar_codigo": "Confirmar código",
   "contas_login_ok": "Entrou como {email} · plano {plano}",
   "erro_conta_inexistente": "conta {nome} não existe",
+  "erro_conta_nome_invalido": "nome inválido: use minúsculas, números, '-' ou '_' (até 32 caracteres)",
   "erro_login_ja_em_curso": "já existe um login em andamento para esta conta",
   "erro_login_sem_tentativa": "não há login em andamento para esta conta",
   "erro_login_timeout": "o login demorou demais — tente de novo",
