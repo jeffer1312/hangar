@@ -259,22 +259,24 @@ import * as m from '../paraglide/messages';
   // `void currentKey` e proposital: currentSession sozinho NAO muda de valor nessa troca (mesma
   // string "api" nos dois servidores), entao so ler currentKey aqui garante o recalculo na hora certa
   // -- getActiveId() em si nao e reativo.
+  // Servidor da sessao PRINCIPAL, UM lugar so: o da ROTA quando ela carrega um, senao o ATIVO. `||`
+  // e nao `??`, igual ao SessionTabs.svelte:42 -- a forma legada #/chat/<nome> (aceita de proposito,
+  // route.ts:30) chega aqui como currentKey "::<nome>", cujo serverId e a string VAZIA, e `??` so
+  // captura null/undefined. Com as duas contas divergindo, terminalKey virava "::<nome>" enquanto
+  // sessoesNaTela trazia "<ativo>::<nome>", e o $effect abaixo fechava o painel no mesmo flush.
+  const serverIdPrincipal = $derived((currentKey?.split('::')[0] || getActiveId()) ?? '');
+
   const sessoesNaTela = $derived.by(() => {
     if (view === 'board' || view === 'canvas') {
       return overlaySession ? [workspaceSessionKey(overlaySession)] : [];
     }
     void currentKey;
     if (!currentSession || currentSession === 'null' || currentSession === 'undefined') return [];
-    // Servidor da sessao PRINCIPAL vem da ROTA (currentKey "<serverId>::<nome>"), nunca do ativo:
-    // o ativo pode trocar sem navegacao (atencao de outra maquina, sync) e o painel de terminal
-    // tem que continuar preso ao DONO da sessao — o $effect abaixo fecha o painel quando a chave
-    // sai da tela, e com o ativo ele fechava o painel da sessao de B ao trocar o ativo pra A.
     // O SPLIT (par) segue o ativo de proposito: o Chat do split ja e ativo-based (nao recebe
     // connKey) — alinhar so o terminal a outro servidor quebraria a coerecia do split inteiro.
-    const serverIdDaRota = currentKey?.split('::')[0] ?? '';
     const serverIdAtivo = getActiveId() ?? '';
     return [currentSession, ...splitSessions].map((nome) =>
-      workspaceSessionKey({ serverId: nome === currentSession ? (serverIdDaRota || serverIdAtivo) : serverIdAtivo, name: nome }));
+      workspaceSessionKey({ serverId: nome === currentSession ? serverIdPrincipal : serverIdAtivo, name: nome }));
   });
   $effect(() => {
     if (terminalOpen && !sessoesNaTela.includes(terminalKey)) terminalOpen = false;
@@ -405,8 +407,8 @@ import * as m from '../paraglide/messages';
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
             onOpenSplit={openSplit}
-            onOpenTerminalPanel={() => abrirTerminal(cur, currentKey?.split('::')[0] ?? getActiveId() ?? '')}
-            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: currentKey?.split('::')[0] ?? getActiveId() ?? '', name: cur })}
+            onOpenTerminalPanel={() => abrirTerminal(cur, serverIdPrincipal)}
+            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: serverIdPrincipal, name: cur })}
             terminalPanelDisponivel={terminalCapaz}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
