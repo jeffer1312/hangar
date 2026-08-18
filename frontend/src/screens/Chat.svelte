@@ -49,7 +49,7 @@
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
-  import type { ChatEvent, StateEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
+  import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { rotuloEstado, stateColors, countAwaiting, nextAwaiting, providerName, untrackedReason } from '../lib/format';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
@@ -244,6 +244,8 @@
   // estava na tela via preview — re-animar era o "pisca" que fazia perder a posicao de leitura).
   const swapIds = new Set<string>();
   let stateEvent = $state<StateEvent | null>(null);
+  // Faixa de estatísticas (evento SSE `stats`). Só o último snapshot importa (full-replace).
+  let statsEvent = $state<StatsEvent | null>(null);
   let loading = $state(true);
   let error = $state('');
   let es: EventSource | null = null;
@@ -1088,6 +1090,11 @@
       }
     });
 
+    // Faixa de estatísticas da sessão (app/stats.py). Full-replace; ausência de evento = sem faixa.
+    es.addEventListener('stats', (e: MessageEvent) => {
+      try { statsEvent = JSON.parse(e.data) as StatsEvent; } catch {}
+    });
+
     // Heartbeat do backend: so prova de vida (reseta o watchdog numa conexao ociosa, sem msgs).
     es.addEventListener('ping', () => noteAlive());
 
@@ -1140,6 +1147,7 @@
       reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
       previewText = '';
       stateEvent = null;
+      statsEvent = null;      // transcript novo -> a faixa zera junto (o backend recomeça o fold)
       loadHistory();
     });
 
@@ -1759,6 +1767,7 @@
         sessionState={currentState}
         status={status}
         {lastCache}
+        stats={statsEvent}
         onSend={handleSend}
         onSteer={sessionProvider === 'kimi' ? () => steerSession(sessionName) : undefined}
         {filaCount}

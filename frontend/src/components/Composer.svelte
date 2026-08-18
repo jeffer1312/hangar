@@ -1,6 +1,6 @@
 <script module lang="ts">
   import type { CommandInfo } from '../lib/types';
-  import { stateColors } from '../lib/format';
+  import { stateColors, abbrevNum } from '../lib/format';
   // Cache de comandos por sessao: sobrevive a remontagens do Composer (ex: voltar de
   // awaiting_input) pra buscar a lista so uma vez por sessao.
   const commandCache = new Map<string, CommandInfo[]>();
@@ -41,7 +41,7 @@
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, type ModelEffortBody } from '../lib/api';
-  import type { State } from '../lib/types';
+  import type { State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
 
@@ -68,6 +68,8 @@
     sendToPair?: boolean;
     onToggleSendToPair?: () => void;
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
+    // Faixa de estatísticas da sessão (evento SSE `stats`). null = sem faixa (ex: Codex).
+    stats?: StatsEvent | null;
     // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
     // o Codex nao tem nem um nem outro); "kimi" nao tem sheet de modelo neste MVP (pill so leitura).
@@ -80,7 +82,19 @@
     inputText = $bindable(''),
     provider = 'claude',
     filaCount = 0,
+    stats = null,
   }: Props = $props();
+
+  // ── Faixa de estatísticas ──────────────────────────────────────────────────
+  // "52s" / "18m01s" / "1h02m". Sub-10s ganha 1 decimal (TTFT vive nessa faixa).
+  function fmtDur(ms: number): string {
+    const s = ms / 1000;
+    if (s < 10) return `${s.toFixed(1)}s`;   // ponto decimal: precedente do ActivitySheet:195
+    if (s < 60) return `${Math.round(s)}s`;
+    const min = Math.floor(s / 60);
+    if (min < 60) return `${min}m${String(Math.round(s % 60)).padStart(2, '0')}s`;
+    return `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}m`;
+  }
 
   // ── Prazo do cache de prompt ───────────────────────────────────────────────
   // O cache do Claude expira num prazo fixo a partir do ultimo turno (usar renova). Saber se ele
@@ -1209,33 +1223,38 @@
     <div class="control-row">
       <div class="control-left">
         {#if isPi}
-          <button
-            class="model-pill"
-            bind:this={piPillEl}
-            onclick={() => (piPopOpen = true)}
-            aria-haspopup="dialog"
-            aria-expanded={piPopOpen}
-            aria-label={m.composer_modelo_pi()}
-          >
-            <span class="pill-label">
-              <span class="pill-model">{piModel ?? status?.model ?? m.composer_modelo()}</span>
-            </span>
-            <ContextRing pct={status?.ctxPct ?? null} />
-          </button>
-          <!-- Nivel de raciocinio em pill propria (referencia: opencode). Antes vivia dentro da
-               folha de modelo, atras da lista de 390 itens. -->
-          <button
-            class="model-pill"
-            bind:this={piEffortPillEl}
-            onclick={() => (piEffortOpen = true)}
-            aria-haspopup="dialog"
-            aria-expanded={piEffortOpen}
-            aria-label={m.composer_nivel_raciocinio_pi()}
-          >
-            <span class="pill-label">
-              <span class="pill-model">{piEffort ?? m.composer_nivel()}</span>
-            </span>
-          </button>
+          <!-- pill-duo: no celular as duas pills (modelo + esforço) se fundem num chip só —
+               fundo compartilhado, divisor fino, cada metade abre seu popover. Desktop:
+               display:contents, idêntico a duas pills soltas. -->
+          <span class="pill-duo">
+            <button
+              class="model-pill"
+              bind:this={piPillEl}
+              onclick={() => (piPopOpen = true)}
+              aria-haspopup="dialog"
+              aria-expanded={piPopOpen}
+              aria-label={m.composer_modelo_pi()}
+            >
+              <span class="pill-label">
+                <span class="pill-model">{piModel ?? status?.model ?? m.composer_modelo()}</span>
+              </span>
+              <ContextRing pct={status?.ctxPct ?? null} />
+            </button>
+            <!-- Nivel de raciocinio em pill propria (referencia: opencode). Antes vivia dentro da
+                 folha de modelo, atras da lista de 390 itens. -->
+            <button
+              class="model-pill"
+              bind:this={piEffortPillEl}
+              onclick={() => (piEffortOpen = true)}
+              aria-haspopup="dialog"
+              aria-expanded={piEffortOpen}
+              aria-label={m.composer_nivel_raciocinio_pi()}
+            >
+              <span class="pill-label">
+                <span class="pill-model">{piEffort ?? m.composer_nivel()}</span>
+              </span>
+            </button>
+          </span>
         {:else if isKimi}
           <!-- Kimi nao tem sheet de modelo neste MVP (o /model dele e so-TUI): pill vira rotulo
                passivo com o modelo da statusline, sem abrir nada — nem o popover de modelo do Claude. -->
@@ -1246,35 +1265,37 @@
             <ContextRing pct={status?.ctxPct ?? null} />
           </span>
         {:else if !isCodex}
-          <button
-            class="model-pill"
-            bind:this={claudePillEl}
-            onclick={() => (claudePopOpen = true)}
-            aria-haspopup="dialog"
-            aria-expanded={claudePopOpen}
-            aria-label={m.composer_modelo_contexto()}
-          >
-            <span class="pill-label">
-              <span class="pill-model">{pillModel ?? m.composer_modelo()}</span>
-            </span>
-            <ContextRing pct={status?.ctxPct ?? null} />
-          </button>
-          <!-- Esforco em pill propria. Some no Haiku, que nao usa esforco (o picker responde
-               "Effort not supported") — pill que nao aplica nada e pior que pill ausente. -->
-          {#if !semEsforcoClaude}
+          <span class="pill-duo">
             <button
               class="model-pill"
-              bind:this={claudeEffortPillEl}
-              onclick={() => (claudeEffortOpen = true)}
+              bind:this={claudePillEl}
+              onclick={() => (claudePopOpen = true)}
               aria-haspopup="dialog"
-              aria-expanded={claudeEffortOpen}
-              aria-label={m.composer_esforco_raciocinio()}
+              aria-expanded={claudePopOpen}
+              aria-label={m.composer_modelo_contexto()}
             >
               <span class="pill-label">
-                <span class="pill-model">{pillEffort ?? m.composer_esforco()}</span>
+                <span class="pill-model">{pillModel ?? m.composer_modelo()}</span>
               </span>
+              <ContextRing pct={status?.ctxPct ?? null} />
             </button>
-          {/if}
+            <!-- Esforco em pill propria. Some no Haiku, que nao usa esforco (o picker responde
+                 "Effort not supported") — pill que nao aplica nada e pior que pill ausente. -->
+            {#if !semEsforcoClaude}
+              <button
+                class="model-pill"
+                bind:this={claudeEffortPillEl}
+                onclick={() => (claudeEffortOpen = true)}
+                aria-haspopup="dialog"
+                aria-expanded={claudeEffortOpen}
+                aria-label={m.composer_esforco_raciocinio()}
+              >
+                <span class="pill-label">
+                  <span class="pill-model">{pillEffort ?? m.composer_esforco()}</span>
+                </span>
+              </button>
+            {/if}
+          </span>
         {:else}
           <button
             class="model-pill"
@@ -1340,6 +1361,47 @@
       </div>
     </div>
   </div>
+
+  {#if stats}
+    <!-- Faixa de estatísticas (app/stats.py). Números de tempo/velocidade são aproximados
+         por construção -> "~" no rótulo. transparent: quem carrega o material é o .composer. -->
+    <!-- tabindex: a faixa rola de lado sem barra visível; sem foco, teclado não alcança o
+         que transbordou. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -- região rolável: o padrão WAI manda
+         ela ser focável pra rolar por teclado (role=region + rótulo). -->
+    <div class="stats-strip" role="region" aria-label={m.stats_faixa_aria()} tabindex="0">
+      <!-- wrapper com margin-inline auto: centraliza quando cabe, e quando transborda as margens
+           colapsam pra 0 -> o INÍCIO continua alcançável pelo scroll (justify-content: center
+           cortaria a esquerda sem como rolar até ela). -->
+      <span class="stats-inner">
+      <span>{stats.turns === 1 ? m.stats_turnos_1() : m.stats_turnos({ n: stats.turns })}</span>
+      <span class="dot">·</span>
+      <span>{stats.steps === 1 ? m.stats_chamadas_1() : m.stats_chamadas({ n: stats.steps })}</span>
+      {#if stats.llm_ms}
+        <span class="sep">|</span>
+        <span>{m.stats_llm({ t: fmtDur(stats.llm_ms) })}</span>
+        {#if stats.tool_ms}
+          <span class="dot">·</span>
+          <span>{m.stats_tools({ t: fmtDur(stats.tool_ms) })}</span>
+        {/if}
+      {/if}
+      {#if stats.tok_s}
+        <span class="sep">|</span>
+        <span>{m.stats_toks({ n: Math.round(stats.tok_s) })}</span>
+      {/if}
+      {#if stats.ttft_ms}
+        <span class="dot">·</span>
+        <span>{m.stats_ttft({ t: fmtDur(stats.ttft_ms) })}</span>
+      {/if}
+      {#if stats.cache_pct != null}
+        <span class="sep">|</span>
+        <span>{m.stats_cache({ n: stats.cache_pct })}</span>
+      {/if}
+      <span class="sep">|</span>
+      <span>{m.stats_io({ i: abbrevNum(stats.in_tok), o: abbrevNum(stats.out_tok) })}</span>
+      </span>
+    </div>
+  {/if}
 
   <ClaudeModelPopover
     open={claudePopOpen}
@@ -1422,6 +1484,31 @@
   @media (min-width: 820px) {
     .composer { padding-bottom: var(--composer-pb, var(--space-5)); }
   }
+
+  /* Faixa de estatísticas: métrica passiva sob o card (precedente do cache-chip), na cor
+     apagada e SEM fundo próprio — o vidro é do .composer. Numa tela estreita rola de lado
+     (scrollbar escondida): quebrar linha empurraria o textarea pra cima. */
+  .stats-strip {
+    display: flex;
+    align-items: center;
+    padding: 6px 4px 0;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    background: transparent;
+  }
+  .stats-strip::-webkit-scrollbar { display: none; }
+  .stats-inner {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-inline: auto;   /* centro quando cabe; 0 quando transborda (início alcançável) */
+  }
+  .stats-strip .dot { opacity: 0.5; }
+  .stats-strip .sep { color: var(--border-strong); }
 
   /* Card unico que reune status, textarea e controles. */
   .composer-card {
@@ -1531,6 +1618,55 @@
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
     flex-shrink: 0;
+  }
+
+  /* Duo modelo+esforço: no desktop não existe visualmente (display:contents = duas pills
+     soltas, como sempre). No celular vira UM chip estilo app do Claude ("Opus 5 Alto"):
+     fundo compartilhado, esforço em cinza, dois alvos de toque com emenda invisível. */
+  .pill-duo {
+    display: contents;
+  }
+  @media (max-width: 819px) {
+    .control-left { gap: var(--space-1); }       /* fileira mais apertada no celular */
+    .pill-duo {
+      display: inline-flex;
+      align-items: center;
+      background: var(--accent-dim);
+      border-radius: var(--radius-md);
+      flex-shrink: 1;
+      min-width: 0;
+    }
+    .pill-duo > .model-pill {
+      background: transparent;
+      flex-shrink: 1;
+      min-width: 0;
+      gap: var(--space-1);                       /* anel de contexto mais colado no nome */
+    }
+    /* A pill avulsa (estilo do ditado) também perde o padding assimétrico de 12px. */
+    .control-left > .model-pill { padding: 0 var(--space-2); }
+    .pill-duo > .model-pill:first-child {
+      padding-left: var(--space-2);
+      padding-right: var(--space-1);
+    }
+    .pill-duo > .model-pill + .model-pill { padding-left: var(--space-1); }
+    /* Haiku não tem esforço -> o duo fica com UMA pill; o padding-right de emenda não vale. */
+    .pill-duo > .model-pill:only-child { padding-right: var(--space-2); }
+    .pill-duo > .model-pill + .model-pill .pill-model {
+      color: var(--text-muted);                  /* "Alto" em cinza, como no app do Claude */
+      font-weight: 500;
+    }
+    /* O esforço é palavra curta ("high") — encolher ele vira "hi…", pior que nada. */
+    .pill-duo > .model-pill + .model-pill { flex-shrink: 0; }
+    /* Ícone de 20px não precisa de 44px de largura (a ALTURA da fileira segue 44 = alvo do
+       dedo). É daqui que sai o espaço que faltava, em vez de cortar palavra com reticências.
+       `.control-left >` não é enfeite: a regra base de .attach-btn vem DEPOIS neste arquivo e,
+       em especificidade igual, venceria — o seletor composto desempata. */
+    .control-left > .attach-btn { width: 32px; min-width: 0; }  /* min-width fura o alvo global de 44px */
+    /* Anel de contexto de 26px vira 20 dentro do chip (o viewBox escala o desenho inteiro). */
+    .pill-duo .model-pill :global(svg) { width: 20px; height: 20px; }
+    /* Última defesa numa tela muito estreita: as pills de texto encolhem com reticências
+       (pill-model já tem ellipsis) em vez de invadir o send-btn. */
+    .control-left > .model-pill { flex-shrink: 1; min-width: 0; }
   }
 
   .pill-label {
