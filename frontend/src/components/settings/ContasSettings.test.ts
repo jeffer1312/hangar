@@ -356,6 +356,70 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     unmount(comp as never);
   });
 
+  it('trocar de alvo com confirmar em voo: erro atrasado do alvo ANTIGO não pinta a tela da nova (rodada 2)', async () => {
+    // O efeito limpou a tela na troca; a resposta atrasada de A não pode repintar o erro. O
+    // `{#if loginErro}` é FORA do `{#if loginDe}` de propósito — por isso a ausência é o alvo.
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+    const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
+    let rejeitar!: (e: Error) => void;
+    loginMock.confirmarLogin.mockReturnValue(
+      new Promise((_r, j) => { rejeitar = j; }) as never);
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
+    await tick(); await tick(); await tick();
+    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    const input = el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
+    input.value = 'CODE-123';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    const rodapeLogin = [...el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
+    await tick(); await tick();
+    expect(loginMock.confirmarLogin).toHaveBeenCalledWith(A, 'testes', 'CODE-123');
+    props.apiTarget = B;   // ?srv= trocou com o confirmar em voo
+    await tick(); await tick(); await tick();
+    rejeitar(Object.assign(new Error('ERRO-DA-MAQUINA-A'), { status: 0 }));   // resposta atrasada de A
+    await tick(); await tick();
+    expect(el.querySelector('.ct-aviso.erro')).toBeNull();
+    unmount(comp as never);
+  });
+
+  it('trocar de alvo com confirmar em voo: sucesso atrasado do alvo ANTIGO não anuncia login na tela da nova (rodada 2)', async () => {
+    // A pior forma do bloqueador: a aba de B anuncia, com e-mail e plano, um login que aconteceu
+    // em A — o usuário age nisso (abre sessão em B esperando aquela conta).
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+    const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' };
+    let resolver!: (v: { ok: boolean; email: string; plano: string }) => void;
+    loginMock.confirmarLogin.mockReturnValue(
+      new Promise((r) => { resolver = r; }) as never);
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
+    await tick(); await tick(); await tick();
+    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    const input = el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
+    input.value = 'CODE-123';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    const rodapeLogin = [...el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
+    await tick(); await tick();
+    props.apiTarget = B;   // ?srv= trocou com o confirmar em voo
+    await tick(); await tick(); await tick();
+    resolver({ ok: true, email: 'conta-da-MAQUINA-A@x.com', plano: 'max' });   // resposta atrasada de A
+    await tick(); await tick();
+    // Nenhum aviso nenhum: o efeito limpou na troca e a resposta atrasada não repintou.
+    expect([...el.querySelectorAll<HTMLElement>('.ct-aviso')]).toHaveLength(0);
+    unmount(comp as never);
+  });
+
   it('confirmar com erro ainda recarrega a lista — o login pode ter completado no servidor (parecer passo 4)', async () => {
     // Teto estourado corta o cliente mas o backend SEGUE: a conta acaba logada. A lista tem de
     // recarregar mesmo no ramo de erro, senão a tela mente sozinha dizendo deslogada.

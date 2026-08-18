@@ -12,6 +12,7 @@
 // login ficava "aguardando" pra sempre.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server as HttpServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { Server } from './auth';
 import * as m from '../paraglide/messages';
 
@@ -26,7 +27,10 @@ const store = new Map<string, string>();
 
 const { iniciarLogin, confirmarLogin } = await import('./loginConta');
 
-const SRV: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://127.0.0.1:8871', token: 't-b' };
+// baseUrl montado DEPOIS do listen: porta 0 = o kernel escolhe uma livre (R1 da rodada 2) — porta
+// fixa ocupada derrubaria o arquivo com EADDRINUSE e a falha leria como "o teto quebrou".
+const SRV_BASE: Omit<Server, 'baseUrl'> = { id: 'srv-b', label: 'B', token: 't-b' };
+let SRV: Server;
 
 // Servidor de mentira: responde /login/codigo DEPOIS de um atraso configurável (dentro dos 300s
 // que o backend aceita); o resto na hora.
@@ -50,7 +54,9 @@ beforeAll(async () => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end('{"ok":true}');
   });
-  await new Promise<void>((r) => srv.listen(8871, '127.0.0.1', r));
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const addr = srv.address() as AddressInfo;
+  SRV = { ...SRV_BASE, baseUrl: `http://127.0.0.1:${addr.port}` };
 });
 afterAll(async () => {
   await new Promise<void>((r) => srv.close(() => r()));

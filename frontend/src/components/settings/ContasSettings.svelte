@@ -97,16 +97,22 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   async function novaConta() {
     const nome = nomeConta.trim();
     if (!nome || criando) return;
+    // Geração desta operação: o aviso de "criada" pertence à máquina que recebeu o POST — se o
+    // ?srv= trocou no meio do voo, a resposta da máquina antiga não escreve na tela da nova
+    // (parecer da rodada 2, mesmo molde do iniciarEntrar).
+    const g = geracao;
     criando = true;
     aviso = '';
     avisoErro = false;
     try {
       await criarConta(apiTarget, nome);
+      if (g !== geracao) return;
       nomeConta = '';
       pedindoNome = false;
       aviso = m.criar_conta_deslogada();
       await carregar(geracao);
     } catch (e) {
+      if (g !== geracao) return;
       aviso = e instanceof Error && e.message ? e.message : m.criar_conta_erro();
       avisoErro = true;
     } finally {
@@ -122,11 +128,15 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
     // lista mudou entre o clique e o fim da operação.
     const conta = contas.find((x) => x.path === path);
     if (!conta) return;
+    // Geração desta operação: "conta X apagada" pertence à máquina que recebeu o DELETE — troca
+    // de ?srv= no meio do voo não deixa o relato da máquina antiga na tela da nova (rodada 2).
+    const g = geracao;
     apagando = true;
     aviso = '';
     avisoErro = false;
     try {
       await apagarConta(apiTarget, conta.label);
+      if (g !== geracao) return;
       confirmando = null;
       menuDe = null;
       aviso = m.criar_conta_apagada({ nome: conta.label });
@@ -134,6 +144,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
       // sessão) — recarregar é a fonte única, não remover item por item.
       await carregar(geracao);
     } catch (e) {
+      if (g !== geracao) return;
       aviso = e instanceof Error && e.message ? e.message : m.criar_apagar_conta_erro();
       avisoErro = true;
     } finally {
@@ -222,10 +233,16 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   async function confirmarEntrar() {
     const conta = loginDe;
     if (!conta || loginEnviando) return;
+    // Geração desta tentativa: a resposta de um alvo que saiu da tela não escreve aviso/erro nela
+    // (o molde é o iniciarEntrar, 60 linhas acima). O teto do confirmar (310s) deixa o voo aberto
+    // por minutos — justo a janela em que o usuário espera o OAuth e pode trocar o ?srv=
+    // (parecer da rodada 2).
+    const g = geracao;
     loginEnviando = true;
     loginErro = '';
     try {
       const r = await confirmarLogin(apiTarget, conta, loginCodigo);
+      if (g !== geracao) return;
       pararPoll();
       loginDe = null;
       loginCodigo = '';
@@ -236,6 +253,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
       avisoErro = false;
       await carregar(geracao);
     } catch (e) {
+      if (g !== geracao) return;
       loginErro = e instanceof Error && e.message ? e.message : m.falha_conexao();
       // O erro NÃO prova que o login falhou: o teto pode ter cortado com o backend SEGUINDO
       // (a conta acaba logada de verdade). Recarregar a lista para de mentir sozinha — a tela
