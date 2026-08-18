@@ -45,7 +45,10 @@
   async function carregar() {
     const g = ++geracao;
     try {
-      const lista = await listarEstadosDeConta();
+      // `null` explícito, decisão escrita: a faixa quer mesmo o servidor ATIVO (o componente
+      // navega com getActiveId() e o endpoint é da máquina da sessão) — com a assinatura nova
+      // de listarEstadosDeConta(alvo), não passá-lo seria acidente.
+      const lista = await listarEstadosDeConta(null);
       if (g !== geracao) return;
       contas = lista;
     } catch {

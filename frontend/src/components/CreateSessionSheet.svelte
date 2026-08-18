@@ -221,7 +221,9 @@
     contaErro = false;
     contaCriadaPath = null;
     try {
-      await apagarConta(nome);
+      // null de propósito: o sheet já fez selectServer(id) no pickTarget — o alvo É o ativo,
+      // então o caminho global (com self-heal de 401) é o certo aqui.
+      await apagarConta(null, nome);
       if (seq !== cfgSeq || targetServer !== serverId) return;
       confirmandoApagar = false;
       let cs: ConfigDirInfo[];
@@ -276,7 +278,8 @@
     avisoConta = '';
     contaErro = false;
     try {
-      const c = await criarConta(nome);
+      // null de propósito (mesmo do apagar acima): o alvo já virou o ativo via selectServer.
+      const c = await criarConta(null, nome);
       if (seq !== cfgSeq || targetServer !== serverId) return;
       // Refresh em FASE PRÓPRIA: o POST já respondeu 200, então falha do GET não é falha da
       // criação — reportá-la como tal faria o usuário tentar de novo e levar 409.
