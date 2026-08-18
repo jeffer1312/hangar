@@ -395,3 +395,72 @@ def test_dois_embrulhos_concatenados_nao_viram_uma_bolha_so():
         "type": "queue-operation", "operation": "remove", "timestamp": "t", "content": bruto,
     }))
     assert ev.text == bruto and not ev.text.startswith("[de:")
+
+
+# --- Defeito (A): recado preso em type='system' (entrega bloqueada por hook) ---
+# Formato medido em 18/08/2026 no transcript do desc2-arbitro: o hook de UserPromptSubmit falhou
+# e o Claude Code registrou a tentativa como system, com o texto da entrega apos "Original prompt:".
+
+_SYSTEM_BLOQUEADO = (
+    'UserPromptSubmit operation blocked by hook:\n'
+    '["/home/jefferson/wt-desc/t8/backend/.venv/bin/python" "/x/state_hook.py"]: '
+    "can't open file '/x/state_hook.py': [Errno 2] No such file or directory\n"
+    '\n'
+    '\n'
+    'Original prompt: [de: desc2-exec2] RODADA 3 ENTREGUE — texto do reporte aqui.'
+)
+
+
+def test_system_com_recado_bloqueado_vira_bubble():
+    # O recado nunca chegou ao agente, mas o texto existe no transcript e o app precisa mostra-lo:
+    # sem isto a mensagem some e a bolha da fila fica marcada "nao chegou" pra sempre.
+    [ev] = parse_line(_line({
+        "type": "system", "subtype": "informational", "level": "warning",
+        "uuid": "f1aaa5a4", "timestamp": "2026-08-18T00:36:42.691Z",
+        "content": _SYSTEM_BLOQUEADO,
+    }))
+    assert ev.kind == "user_msg"
+    assert ev.text.startswith("[de: desc2-exec2] RODADA 3 ENTREGUE")
+    assert ev.id.startswith("held:")
+    assert ev.ts == 1787013402.691  # ts da 1a tentativa, nao da ultima
+
+
+def test_system_recado_repetido_tem_id_deterministico():
+    # O reenvio grava N entradas system com o MESMO texto; id deterministico pelo texto -> o front
+    # deduplica por id e mostra UMA bolha, no lugar da 1a tentativa.
+    a = parse_line(_line({"type": "system", "uuid": "u1", "timestamp": "2026-08-18T00:36:42Z",
+                          "content": _SYSTEM_BLOQUEADO}))
+    b = parse_line(_line({"type": "system", "uuid": "u2", "timestamp": "2026-08-18T00:36:51Z",
+                          "content": _SYSTEM_BLOQUEADO}))
+    assert a[0].id == b[0].id
+    assert a[0].ts < b[0].ts          # ordena pelo momento da 1a tentativa
+
+
+def test_system_com_embrulho_nativo_vira_bubble_normalizada(monkeypatch):
+    # O texto da entrega pode ser um recado NATIVO (embrulho <cross-session-message>): entra no
+    # mesmo formato do cp-send, como o resto do app le.
+    import app.registry as registry
+    monkeypatch.setattr(registry, "name_of_pid", lambda pid: None)
+    bruto = ("<cross-session-message from=\"uds:/run/user/1000/cc-socks/4242.sock\" "
+             "from-name=\"desc2-cap\">\ncorpo do recado\n</cross-session-message>")
+    [ev] = parse_line(_line({"type": "system", "uuid": "u3",
+                             "timestamp": "2026-08-18T00:36:42Z",
+                             "content": _SYSTEM_BLOQUEADO.replace(
+                                 "[de: desc2-exec2] RODADA 3 ENTREGUE — texto do reporte aqui.",
+                                 bruto)}))
+    assert ev.kind == "user_msg"
+    assert ev.text == "[de: desc2-cap] corpo do recado"
+
+
+def test_system_ruido_de_tooling_nao_vira_bubble():
+    # system carrega ruido de verdade: /model, avisos do harness, fala do usuario bloqueada sem
+    # recado, e o aviso de recado SEGURADO (preview truncado, sem o texto). Nenhum vira conversa —
+    # o filtro e pelo FORMATO do recado, nunca pelo tipo.
+    assert parse_line(_line({"type": "system", "content": None})) == []
+    assert parse_line(_line({"type": "system", "content": "Held peer message — from uds:/x.sock "
+                          "[verified pid 1] (peer claims name: cap-c4); preview: «de: desc2-rev2 "
+                          "Parecer...» — not delivered to Claude (1 held)."})) == []
+    assert parse_line(_line({"type": "system", "content": "UserPromptSubmit operation blocked by hook:\n"
+                          "[x]\n\nOriginal prompt: Vê a minha última msg"})) == []
+    assert parse_line(_line({"type": "system", "content": "o usuario citou 'Original prompt: [de: x] y' "
+                          "num aviso qualquer"})) == []

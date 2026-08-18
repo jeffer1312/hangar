@@ -3,7 +3,8 @@
     "_justificativas": {
       "Workflow": "activity.ts:171 — case de protocolo (tipo de evento do transcript do agente), nao e texto exibido; o rotulo do badge usa m.atividade_workflow()",
       "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
-      "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo"
+      "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo",
+      "covers.ts": "lib/covers.ts — linhas de COMENTARIO que a heuristica leu como string; nenhuma e texto exibido (a funcao covers() so compara textos, nao renderiza)"
     }
   },
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
@@ -177,5 +178,7 @@
   "* inteira, e 60×/s disso no celular é custo sem ganho visível.",
   "/** Texto atualmente revelado — o que a bolha renderiza. */",
   "/** Um passo da animação. Público só pra teste — em produção quem chama é o rAF. */",
-  "/** Desmontagem da bolha: nenhum frame pendente pode sobreviver ao componente. */"
+  "/** Desmontagem da bolha: nenhum frame pendente pode sobreviver ao componente. */",
+  "\" + o \"—\" que liga. Mesma",
+  "\", o transcript grava so a legenda ->"
 ]

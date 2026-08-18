@@ -13,7 +13,7 @@ from watchfiles import awatch
 
 from app.config import settings
 from app.models import ChatEvent, dumps_safe, scrub_surrogates
-from app.transcript import parse_obj
+from app.transcript import _recado_em_system, parse_obj
 
 # Limite de entradas mantidas no sidecar (poda no append pra nao crescer sem fim).
 _MAX_ENTRIES = 1000
@@ -32,6 +32,27 @@ _append_lock = threading.Lock()  # serializa o read-modify-write do append (hand
 
 def _sanitize(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "-", name)
+
+
+_PREFIXO_MIN = 8   # piso de prefixo: "ok"/"sim"/"1" nao confirmam frase alheia que comeca igual
+
+
+def _casam(linhas: set[str], disponiveis: set[str]) -> set[str]:
+    """Linhas do transcript que `linhas` (de UMA entrada da fila) cobrem: iguais + prefixos.
+
+    O eco pode chegar com SUFIXO — medido em 18/08/2026: a fila digitou "Vamos fazer ate as 23
+    com o Deepseek..." e o transcript gravou a MESMA linha com "… eu tinha mandado isso" no fim.
+    O casamento por linha exata nunca casava, a entrega desistia e a bolha ficava marcada 'nao
+    chegou' sobre uma msg que CHEGOU. Piso de comprimento pro prefixo: resposta curta nao
+    confirma frase alheia.
+    """
+    consumidas: set[str] = set()
+    for ln in linhas:
+        if ln in disponiveis:
+            consumidas.add(ln)
+        elif len(ln) >= _PREFIXO_MIN:
+            consumidas.update(d for d in disponiveis if d.startswith(ln))
+    return consumidas
 
 
 def _entry_event(entry: dict) -> ChatEvent:
@@ -190,6 +211,15 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
                             add(ev.text)
                     continue
                 etype = obj.get("type")
+                if etype == "system":
+                    # Recado preso em system (entrega bloqueada por hook, ver transcript._recado_em_system):
+                    # o texto EXISTE no transcript, entao conta como "aterrissou" — sem isto o reconcile
+                    # redigita o recado (mais entradas system) e acaba desistindo com a bolha marcada
+                    # 'nao chegou' sobre uma mensagem que esta visivel no transcript.
+                    c = obj.get("content")
+                    if isinstance(c, str) and (recado := _recado_em_system(c)) is not None:
+                        add(recado)
+                    continue
                 if etype == "queue-operation":
                     c = obj.get("content")
                     if isinstance(c, str):
@@ -371,9 +401,9 @@ class PromptQueue:
                                 *(ln.strip() for ln in texto.split("\n")),
                                 *(ln.strip() for ln in podado.split("\n"))}
                     linhas_r.discard("")
-                    casou = linhas_r & disponiveis
+                    casou = _casam(linhas_r, disponiveis)
                     if casou:
-                        disponiveis -= linhas_r      # a linha foi usada: nao confirma outra entrada
+                        disponiveis -= casou    # a(s) linha(s) foi usada: nao confirma outra entrada
                         r["confirmed"] = True
                         r.pop("desistiu", None)
                         changed = True
@@ -392,8 +422,9 @@ class PromptQueue:
                          *(ln.strip() for ln in text_raw.split("\n")),
                          *(ln.strip() for ln in text.split("\n"))}
                 lines.discard("")
-                if not text_raw or lines & disponiveis:
-                    disponiveis -= lines         # uma linha do transcript confirma UMA entrada so
+                cons = _casam(lines, disponiveis)
+                if not text_raw or cons:
+                    disponiveis -= cons            # as linhas casadas confirmam UMA entrada so
                     r["confirmed"] = True
                 elif confirm_only:
                     # Meio do turno sem prova: nao decide. Entrada segue entregue/nao-confirmada e

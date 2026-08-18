@@ -835,3 +835,80 @@ def test_resgate_ignora_entrada_de_sessao_anterior():
     q.reconcile_delivered({"Sim"}, agora - 100, agora)   # min_ts = inicio da sessao atual
     r = q.load()[0]
     assert r.get("desistiu") is True and "confirmed" not in r
+
+
+def test_reconcile_resgata_desistida_quando_o_eco_tem_sufixo(tmp_path):
+    # Defeito (B) medido em 18/08/2026: a fila digitou "Vamos fazer ate as 23 com o Deepseek..."
+    # e o transcript gravou a MESMA linha com "… eu tinha mandado isso" no fim. O casamento por
+    # linha exata nunca casava -> a entrega desistia e a bolha ficava marcada "nao chegou" pra
+    # sempre sobre uma msg que CHEGOU. O resgate tem de casar por PREFIXO (piso de comprimento).
+    import json
+    X = "Vamos fazer ate as 23 com o Deepseek dps agnt para e volta amanha"
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": X + "… eu tinha mandado isso"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps({"id": "b1", "text": X, "ts": 1787075400.0,
+                                  "delivered": True, "attempts": 2, "desistiu": True}) + "\n",
+                      encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    row = q.load()[0]
+    assert row["confirmed"] is True
+    assert "desistiu" not in row          # a marca "nao chegou" saiu da bolha
+    # e o merged_history nao mostra mais a bolha da fila (a real cobre)
+    assert all(not e.id.startswith("queued-") for e in pqueue.merged_history("s", str(j)))
+
+
+def test_reconcile_prefixo_curto_nao_resgata(tmp_path):
+    # Piso do prefixo: "ok"/"sim" nao podem confirmar frase alheia que comeca igual — resposta
+    # curta desistida continua desistida (honesta: nao ha prova de que chegou).
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": "ok, vamos fazer"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text('{"id":"b2","text":"ok","ts":1787075400.0,"delivered":true,"attempts":2,"desistiu":true}\n',
+                      encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    row = q.load()[0]
+    assert row["desistiu"] is True and "confirmed" not in row
+
+
+def test_reconcile_confirma_por_prefixo_sem_desistir(tmp_path):
+    # Mesmo eco com sufixo, mas a entrada ainda NAO desistiu (primeira checagem): confirmar por
+    # prefixo evita a redigitacao (o drain reenviaria o texto ja presente no prompt final).
+    import json
+    X = "Vamos fazer ate as 23 com o Deepseek dps agnt para e volta amanha"
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": X + "… eu tinha mandado isso"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps({"id": "b3", "text": X, "ts": 1787075400.0, "delivered": True}) + "\n",
+                      encoding="utf-8")
+    req = q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    assert req == []                            # nada re-enfileirado: nao redigita
+    row = q.load()[0]
+    assert row["confirmed"] is True
+
+
+def test_committed_lines_veem_recado_preso_em_system(tmp_path):
+    # Defeito (A): recado que o hook bloqueou fica no transcript como type='system'. O oraculo do
+    # reconcile precisa ve-lo — senao o recado e redigitado (mais entradas system) e a bolha da
+    # fila desiste marcada "nao chegou" sobre um texto que ESTA no transcript.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "system", "content":
+                             "UserPromptSubmit operation blocked by hook:\n[x]\n\n"
+                             "Original prompt: [de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas."}) + "\n",
+                 encoding="utf-8")
+    lines = pqueue.committed_user_lines(str(j))
+    assert "[de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas." in lines
+    # fala do usuario sem recado nao entra (a bolha da fila desistida segue cobrindo, com marca)
+    j.write_text(json.dumps({"type": "system", "content":
+                             "UserPromptSubmit operation blocked by hook:\n[x]\n\n"
+                             "Original prompt: Ve a minha ultima msg"}) + "\n", encoding="utf-8")
+    lines = pqueue.committed_user_lines(str(j))
+    assert "Ve a minha ultima msg" not in lines
