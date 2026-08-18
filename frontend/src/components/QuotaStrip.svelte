@@ -117,7 +117,6 @@
     gap: var(--space-3);
     height: 28px;
     padding: 0 var(--space-3);
-    border-top: 1px solid var(--border-subtle);
     background: var(--glass-panel);
     font-size: 11px;
     color: var(--text-muted);
@@ -125,6 +124,40 @@
   }
   /* Trilho rolável, mesmo desenho da .tabs-strip do SessionTabs: em janela estreita as contas
      saem de vista por rolagem, em vez de encolherem até o nome desaparecer. */
+  /* Aparência → Painéis. A faixa é irmã da sidebar e do painel de contexto, então segue a MESMA
+     regra deles, em vez de ser sempre uma parede de ponta a ponta:
+       "Soltos" (padrão) -> card flutuante, com margem, canto e sombra iguais aos outros dois;
+       "Colados"         -> parede, encostada nas bordas, com o risco de separação em cima.
+     Antes ela era parede nos dois modos: com os painéis flutuando, sobrava uma barra chapada
+     colada no fundo da janela que não pertencia a nada. */
+  :global(html:not([data-panels='edge'])) .quota-faixa {
+    margin: 0 var(--space-3) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 1px var(--glass-specular);
+  }
+  /* Colados: encosta nas bordas e NÃO desenha risco nenhum contra os painéis — com a mesma
+     superfície dos dois, a linha era a única coisa dizendo que ali havia duas peças. Sem ela, a
+     faixa lê como continuação do painel que está em cima dela, que é o que se quer (pedido do
+     usuário, 18/08).
+     Trade-off aceito, não descuido: a faixa atravessa a janela, e sob o TRECHO do meio está a
+     coluna do chat, que é outra superfície — ali o risco separava algo de verdade. Borda de caixa
+     não varia por trecho (ou some nos dois lados, ou fica nos dois), e o que se perde foi medido:
+     `--border-subtle` é alpha 0.07 entre `#100e11` e `rgb(26 24 29 / .86)`, cores quase iguais. O
+     precedente do painel de contexto (que zera a borda e devolve só a `border-left`) não serve
+     aqui: ele é vertical e encosta no chat por UM lado inteiro, não por um pedaço. */
+  :global(html[data-panels='edge']) .quota-faixa {
+    border: none;
+  }
+  /* MESMO material dos painéis, não um próprio. Medido em 18/08: sidebar e painel de contexto
+     resolviam pra `rgb(38 36 44 / .46)` (o `--glass-bg`, porque o liquid está ligado) enquanto esta
+     faixa ficava em `rgb(26 24 29 / .86)` — mais escura e mais opaca, e era só isso que fazia ela
+     parecer de outro app. O par de regras é o mesmo da Sidebar: `--glass-panel` como rede de
+     segurança e `--glass-bg` quando o Chromium mantém o backdrop-filter. */
+  :global(html[data-liquid][data-theme='dark']) .quota-faixa {
+    background: var(--glass-bg);
+  }
+
   .quota-trilho {
     flex: 1;
     min-width: 0;

@@ -212,6 +212,20 @@ import * as m from '../paraglide/messages';
     background: transparent;
     border-bottom: 1px solid var(--border-subtle);
   }
+  /* Aparência → Painéis → "Colados": a barra deixa de ser uma faixa vazia por cima de duas paredes
+     e vira a MESMA parede — mesma superfície da sidebar e do painel de contexto, sem risco de
+     separação entre elas. Em "Soltos" ela continua transparente de propósito: ali os painéis são
+     cards flutuando, e uma faixa opaca no topo brigaria com o papel de parede que passa em volta
+     deles. Mesma escolha de material da Sidebar (`--glass-panel`, e `--glass-bg` no liquid escuro,
+     onde o panel só empilharia um segundo fundo e viraria parede chapada). */
+  :global(html[data-panels='edge']) .tabs-bar {
+    background: var(--glass-panel);
+    border-bottom-color: transparent;
+  }
+  :global(html[data-panels='edge'][data-liquid][data-theme='dark']) .tabs-bar {
+    background: var(--glass-bg);
+  }
+
   .tabs-strip {
     flex: 1;
     min-width: 0;
