@@ -593,15 +593,27 @@ cabe aqui.
 
 ## 4.10 Ordem que eu seguiria
 
-1. **Última mensagem + tempo na terceira linha** do card e da barra lateral — o buraco já existe.
-2. **Não-lido** ("pronto para revisar") como quarto estado, e "falhou" a partir de `stalled`/`limited`.
-3. **Presença antes do push** (`push.py`) — não notificar a sessão que você está lendo.
-4. **Frases de indisponibilidade** no Git, no lugar de botão cinza mudo.
-5. **Agendamento** reusando o `TickCtx`, com o "pulou, não acumula" do Paseo.
-6. **Modo de permissão** como pílula no composer.
+> **Ordem revisada em 16/08/2026 pelo usuário**, depois que a árvore de arquivos (C1+C2) ficou pronta.
+> Ele leu os três primeiros da ordem original e adiou os três — **não foram descartados, foram para o
+> fim**. A ordem abaixo já reflete isso; o texto de análise de cada item continua no lugar, nas
+> Partes 1 a 4 e no backlog da Parte 5.
 
-Os quatro primeiros são de front e texto. O quinto é backend e mexe no `loop.py`. O sexto depende de
-como cada provedor expõe os modos, e é o único que não dá para estimar sem medir.
+1. **Frases de indisponibilidade** no Git, no lugar de botão cinza mudo (D1). *O mais barato e mais
+   valioso da varredura; cabe numa tarde.*
+2. **Três vazios por causa**, no Arquivo e nas listas (D2).
+3. **Agendamento** reusando o `TickCtx`, com o "pulou, não acumula" do Paseo (B2).
+4. **Modo de permissão** como pílula no composer (4.6) — o único que não dá para estimar sem medir,
+   porque depende de como cada provedor expõe os modos.
+5. **Agrupar por estado + preferências de exibição** (A4).
+
+**Adiados pelo usuário em 16/08/2026** — ficam no fim até ele pedir:
+
+- **A1 — última mensagem + tempo na terceira linha.** Era o nº 1 da ordem original.
+- **A2 — não-lido / "pronto para revisar" como estado**, com "falhou" junto. Era o nº 2.
+- **B1 — presença antes do push.** Era o nº 3, e a análise o chama de melhor achado da varredura.
+
+Nenhum dos três perdeu valor por isto; a decisão foi de ordem, não de mérito. **A3 continua depois de
+B3** (a linha só mostra o `+N −M` quando o backend souber calcular), e essa amarra não mudou.
 
 
 ---
