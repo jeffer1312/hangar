@@ -47,7 +47,7 @@
   } from '../lib/api';
   import { formataErro } from '../lib/errosApi';
   import { appendTail, hasSeam, prependOlder } from '../lib/history';
-  import { covers } from '../lib/covers';
+  import { especificidade, donoDaLinha } from '../lib/covers';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
@@ -1043,19 +1043,33 @@
         // ja existe. (covers: a "cobre" b se forem iguais, b for linha de a, ou b for prefixo
         // de linha de a — o eco com sufixo, ver lib/covers.ts.)
         if (ev.kind === 'user_msg' && ev.text) {
+          // Textos das bolhas da fila que ja estao na tela — as candidatas a dona de uma linha do
+          // transcript. Cobrir nao basta: quem sai da tela e a DONA (ver lib/covers.ts).
+          const filas: { i: number; text: string }[] = [];
+          for (let i = 0; i < events.length; i++) {
+            const x = events[i];
+            if (x.kind === 'user_msg' && x.id.startsWith('queued-') && x.text) filas.push({ i, text: x.text });
+          }
           if (ev.id.startsWith('queued-')) {
             // Dedup INTEGRAL (todos os events): o follow re-emite a fila INTEIRA a cada reconexao;
             // limitar a janela (tentado em 2026-07-02) deixava entradas antigas escaparem e
             // aparecerem soltas no fim do chat. O falso-positivo raro (um "ok" antigo engolindo a
             // bubble de um "ok" novo na fila) e o custo aceito — cosmetico e a entrega nao muda.
-            if (events.some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text && covers(x.text, ev.text!))) {
-              return; // real ja cobre este texto -> ignora o sintetico
+            // O sintetico so e engolido se ELE for o dono da linha real: se outra bolha da fila a
+            // reivindica de forma mais especifica, a linha e dela e esta aqui continua pendente
+            // (senao o aviso "não chegou" da mais curta sumia pela linha da mais longa).
+            const candidatos = [...filas.map((f) => f.text), ev.text];
+            if (events.some((x) => x.kind === 'user_msg' && !x.id.startsWith('queued-') && x.text
+                  && especificidade(x.text, ev.text!) >= 0
+                  && donoDaLinha(x.text, candidatos) === candidatos.length - 1)) {
+              return; // real ja cobre este texto, e ele e o dono -> ignora o sintetico
             }
           } else {
-            // Remove SO a 1a queued- que casar (nao todas): com duas "ok" na fila e uma real
-            // commitada, a 2a continua pendente e visivel.
-            const qi = events.findIndex((x) => x.kind === 'user_msg' && x.id.startsWith('queued-') && x.text && covers(ev.text!, x.text));
-            if (qi >= 0) {
+            // Remove SO a bolha DONA desta linha (nao todas, e nao a 1a que casar): com duas "ok"
+            // na fila e uma real commitada, a 2a continua pendente e visivel.
+            const dono = donoDaLinha(ev.text, filas.map((f) => f.text));
+            if (dono >= 0) {
+              const qi = filas[dono].i;
               events = [...events.slice(0, qi), ...events.slice(qi + 1)];
               rebuildIndex();
             }
