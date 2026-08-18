@@ -28,6 +28,12 @@ Regra prática ao fechar uma Task: o que você escreve no registro é história;
 alguma frase dali **muda o que a próxima sessão faz**. Se muda, ela pertence às regras, em
 forma de régua — não de relato.
 
+**E o registro se escreve NO EVENTO, não "depois".** Parecer chegou, merge feito, sessão trocada →
+a linha entra **antes da próxima ação**. Não existe "atualizo no fim do dia": medido em
+17/08/2026, o registro de uma execução parou às 10:39 e as 6h45 seguintes — justamente as duas
+Tasks mais caras — ficaram sem diário; a retrospectiva virou arqueologia de git e mtime. A vigia
+cobra o mtime do arquivo (flag `--diario`), mas a vigia é rede, não desculpa.
+
 ### Você é o único que reescreve as regras — e por isso tem teto
 
 Cada parecer fecha com uma linha de **desperdício** (`revisor.md`, "Formato do parecer"): o que a
@@ -131,13 +137,23 @@ que estava toda em assinatura.
 Escolha que o usuário fizer no meio do caminho **vai pro contrato antes de você usá-la**. O que
 mora só na conversa some no `/clear` seguinte, e a sessão nova improvisa de novo.
 
+**E quando o PLANO inteiro deixa de ser confiável** — premissa central caiu, método sem a metade
+executora, duas Tasks seguidas estourando a estimativa pela mesma causa, ou o usuário mandou —
+remendar Task a Task é jogar rodada fora: o caminho é `references/replanejar.md` (a fase 1 de
+novo, menor, só sobre o que resta, com sessão de planejador fresca e aprovação do usuário). Você
+não reescreve o próprio plano: propõe o replanejamento e conduz a troca.
+
 ## O ciclo de uma Task
 
 1. Você libera **uma** Task ao executor.
 2. Ele executa, marca os Steps, roda as verificações, commita só os paths da Task e para.
 3. Ele reporta hash, saída dos testes, `git status --short`, riscos.
 4. **Você confere o relato contra o repo** — `git log --oneline -1` (o hash é a ponta?),
-   `git show --stat <hash>` (os arquivos batem com a Task?), nenhum intocável stageado.
+   `git show --stat <hash>` (os arquivos batem com a Task?), nenhum intocável stageado — **e uma
+   linha de CUSTO**: o `ctx`/`$` da statusline da sessão executora (o sidecar já existe; é um
+   `cat`). Task acima de **2× o custo ou o relógio estimado** sem fechar é espiral com outro nome:
+   pare e pergunte, como na espiral de rodadas. Medido em 17/08/2026: "T8 = $6,75 e subindo, 0
+   commits" estava legível em tempo real, e quem viu foi o usuário, no painel do provedor.
    Relato é relato; o repo é o fato. Divergiu → volta pro executor, não pro revisor.
    **A lista é fechada e é só metadado**: esses comandos, e mais nenhum. Rodar teste, abrir o
    diff linha a linha ou julgar o código é o passo 5 — do revisor.
@@ -151,6 +167,12 @@ mora só na conversa some no `/clear` seguinte, e a sessão nova improvisa de no
 
 Você não é intermediário de correção. Entre o REPROVA e o relatório do executor, o trabalho anda sem
 você — e é assim que tem que ser.
+
+**Um hash, UM revisor.** Rotação de revisor com parecer em voo **mata o parecer do aposentado**:
+quem assume julga do zero, e o hash só fecha com o veredito de um revisor nomeado no registro.
+Chegaram dois vereditos pro mesmo hash → o portão **não** fechou; trate como DEVOLVIDO e mande um
+julgamento novo. Medido em 17/08/2026: um APROVA e um REPROVA sobre o mesmo commit, o merge saiu
+com o APROVA, e o defeito que o REPROVA nomeava entrou na `main`.
 
 Nenhuma Task começa antes da anterior ser aprovada — **no fluxo serial, que é o padrão**.
 
@@ -262,10 +284,10 @@ Depois do "pode ir", você decide. Estes três são **automáticos**, sem espera
 
 | Medida | Ação |
 |---|---|
-| Sessão sem reportar há 15 min | `cp-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca |
+| Sessão sem reportar há 15 min | `cp-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca. **`working` também se confere**: olhe o ÚLTIMO comando dela — igual há 3 leituras é loop, não trabalho (medido 17/08/2026: 1.231× o mesmo comando por 3h, `working` o tempo todo) |
 | **Sessão do time sumiu e não foi você que fechou** | **abre outra e continua.** Não investigue. |
-| Escritor acima de **50% da própria janela** (500k numa de 1M) | propõe rotação no próximo marco |
-| **Revisor acima de 85% da própria janela** | abre a substituta **antes** de a correção chegar |
+| Escritor acima de **50% da própria janela** (500k numa de 1M) | **não recebe mais despacho: a troca vem ANTES da próxima rodada, sempre.** "No próximo marco" não existe — o marco pode não chegar (medido 17/08/2026: 65% da janela sem troca, cada chamada custando 2,6× a da primeira hora, numa Task que nunca fechou). E trocar não refaz prova: os prints vivem no diretório durável |
+| **Revisor acima de 85% da própria janela** | abre a substituta **antes** de a correção chegar — e **despachar rodada pra quem já avisou que passou é proibido** (medido: rodada mandada a 86%, estourou 100% no meio do julgamento) |
 | Mesma causa reprovada 2× | pede ao revisor receita com abordagem nova — ou rotaciona o revisor. Você não desenha receita. |
 
 **O gatilho é fração, não número absoluto.** O teto de 500k nasceu do escritor de janela de 1M e não
@@ -351,9 +373,22 @@ consulta o estado das sessões e termina (te acordando) quando o dono da vez fic
 Use o script que já vem com a skill:
 
 ```bash
-setsid nohup "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> 5 \
-  > /tmp/vigia.log 2>&1 < /dev/null &
+systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
+  "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 \
+  -d <config>/.claude-pocket-pair/grupo-<gid>.md
 ```
+
+**Os minutos vão por flag (`-m 5`), NUNCA como número solto no fim.** Com mais de três sessões, o
+número posicional era lido como NOME de sessão e os alarmes iam pra uma sessão chamada "5" —
+medido em 17/08/2026: 10 alarmes corretos entregues a sessões chamadas "10" e "8", enquanto o
+grupo parava por horas. Foi a própria documentação desta seção que ensinou a forma errada. O
+`-d` aponta o registro: a vigia te cobra se ele ficar 60 min sem escrita.
+
+**Por que não `setsid nohup … &`** (que era a receita até 17/08/2026): medido duas vezes numa máquina
+real, o processo **não sobrevive ao turno** — some do `ps`, log vazio, e o script roda sem erro nenhum
+em primeiro plano. Uma vigia que morre junto com você não cobre o caso que ela existe para cobrir, que
+é justamente você morrer. O `--property=Restart=always` é a outra metade: sem ele, a unidade que
+morrer por qualquer motivo deixa o trabalho sem rede, e você só descobre horas depois.
 
 **O último nome é sempre o árbitro**, e o número no fim são os minutos de silêncio (padrão 5).
 Passe **todas** as sessões do trabalho, não um par: num lote paralelo há vários escritores, e uma
@@ -361,8 +396,9 @@ vigia por par enxerga só o próprio pedaço — ela acordaria você enquanto ou
 trabalha. Uma vigia só, com todo mundo dentro:
 
 ```bash
-setsid nohup "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro 10 \
-  > /tmp/vigia.log 2>&1 < /dev/null &
+systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
+  "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
+  -d ~/.claude/.claude-pocket-pair/grupo-<gid>.md
 ```
 
 Ela consulta a cada 60s e acorda você depois de N leituras paradas seguidas. Três coisas nela não
@@ -388,9 +424,33 @@ não está trabalhando. Duas exceções avisam na hora, sem esperar o silêncio:
 `working` mas não produz evento há 10 min) e sessão **sem cota** — as duas são paradas que não se
 desfazem sozinhas.
 
-**Rode com `setsid nohup`.** Sem isso a vigia é filha do teu turno e morre junto com você — e a tua
-morte é justamente o caso que ela existe para cobrir. Confirme depois: `ps -eo pid,ppid,cmd | grep
-vigia.sh` tem que mostrar o processo.
+**A prova de que ela funciona é o alarme sintético CHEGAR.** Ao armar, a vigia dispara sozinha um
+`[vigia] ARMADA ...` para você, **pelo mesmo caminho dos alarmes reais** — se esse prompt chegou na
+sua sessão, o canal está provado; se a unidade subiu e ele não chegou em 2 minutos, o canal está
+quebrado e "active" não vale nada. Teste digitado à mão não conta: em 17/08/2026 ele "provou" duas
+vezes um caminho que não era o quebrado, enquanto 10 alarmes reais iam pro vazio.
+
+**Confirmar que ela subiu NÃO é confirmar que ela vive.** `systemctl --user is-active` logo depois do
+`systemd-run` responde `active` porque a unidade acabou de nascer — não porque ela está lendo a API.
+Medido em 17/08/2026: uma vigia ficou `active` por horas, **sem uma linha de log**, enquanto quatro
+executores paravam por cota e ninguém era avisado; quem percebeu foi o usuário. As duas confirmações
+que valem, e são baratas:
+
+```bash
+journalctl --user -u vigia-<gid> --since "-3min"   # tem que estar SEM erro repetido a cada ciclo
+systemctl --user show vigia-<gid> -p ActiveState -p MainPID
+```
+
+Espere **um ciclo inteiro** (o intervalo é de 60s) antes de dar por confirmada. E o modo de falha a
+procurar no journal é este, porque ele não se anuncia como erro de vigia:
+
+```
+vigia.sh: linha NNN: /dev/stderr: Endereço ou dispositivo inexistente
+```
+
+Sem terminal, `/dev/stderr` não abre pra escrita, o redirecionamento falha e **o comando nem roda** —
+a leitura volta vazia e a vigia conclui "API sem resposta" com o backend perfeito. O script já cai pra
+arquivo sozinho desde 17/08; se você vir essa linha, está rodando uma cópia velha.
 
 **Vigie o PAR, não um só.** Depois que você manda um commit pro revisor, a bola pode passar dele pro
 executor **sem você ver** — é o desenho: `REPROVA` vai direto, e você só reaparece quando o executor
@@ -406,6 +466,22 @@ apontando pro par da vez.
 
 Recado de sessão chega como prompt e já te acorda sozinho: a vigia é a **rede** pro caso de o recado
 não vir, não o caminho normal.
+
+## Modo noturno — três pré-condições, ou você não dorme o grupo
+
+Deixar o time virar a noite sem usuário é legítimo — com três coisas provadas ANTES, porque de
+madrugada não há quem descubra o que você não previu. Medido em 16–17/08/2026: a cota do provedor
+dos executores estourou às 23:35, os 4 morreram no mesmo minuto, a vigia estava `inactive` — e
+quem descobriu foi o usuário, às 05:56, 6h21 depois.
+
+1. **Vigia provada** — não `active`: o alarme sintético que ela mesma dispara ao armar chegou como
+   prompt na sua sessão (ver a seção da vigia).
+2. **Cota conferida** — a cota restante de cada provedor do time contra o consumo médio por Task
+   já medido neste trabalho. Não cobre a noite → não largue.
+3. **Fallback válido** — o plano B de provedor que o contrato autorizou por escrito ainda existe.
+
+Qualquer uma falhando: **pare no fim da Task corrente e acorde o usuário ANTES de dormir** — uma
+pergunta às 23h custa uma resposta; a falta dela custou 3 intervenções de madrugada.
 
 ## Sessão que morre não é caso de investigação
 
@@ -496,6 +572,8 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 | "Eu não parei, meu último turno foi agora" | Do lado de dentro sempre parece isso. Quem tem o relógio é o usuário. |
 | "Confiro o achado do revisor rapidinho" | Conferir achado é revisar de novo: mesmo resultado, pago duas vezes. Revisor fraco se conserta no revisor — forma cobrada, rotação. |
 | "Rodo eu a verificação, é mais rápido que pedir" | Verificação tem dono: executor roda, revisor re-roda. A tua conferência é relato×repo, em metadado. |
+| "O plano veio de outro método, então esse artefato não existe" | O portão de saída da fase 1 é agnóstico de método. Artefato faltando é plano incompleto: devolve ao planejador — ou replaneja (`replanejar.md`) —, nunca segue sem. |
+| "Está `working`, então está trabalhando" | Polling é `working` que não progride. O último comando igual há 3 leituras é loop — e loop com contexto inchado fica mais caro a cada volta. |
 
 ## Red flags
 
@@ -506,6 +584,8 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 - Parecer sem `VEREDITO:` ou sem "verificado por mim" sendo repassado assim mesmo.
 - Próxima Task começando com o parecer anterior em aberto.
 - Sessão calada há mais de 15 minutos sem você ter checado.
+- **Vigia `active` que você nunca viu ler.** `active` prova que nasceu, não que funciona — confira o
+  journal por um ciclo. Foi assim que um trabalho inteiro ficou 3h parado sem aviso.
 - **Trabalho em andamento sem uma vigia viva.** `ps -eo pid,ppid,cmd | grep vigia.sh` vazio, ou
   apontando pro par aposentado, é o tubo andando sem rede.
 - **Você respondendo "não parei" quando o usuário diz que você parou.** Queda de API é invisível de

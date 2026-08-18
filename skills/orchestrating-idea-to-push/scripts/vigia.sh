@@ -22,10 +22,21 @@
 # Rode com `setsid nohup … &`. Sem isso ela é filha do turno do árbitro e morre junto com ele —
 # exatamente o que não pode acontecer, já que a morte dele é o caso que ela existe para cobrir.
 #
-# Uso: vigia.sh <sessao> [sessao...] <arbitro> [-m <minutos>]
+# Uso: vigia.sh <sessao> [sessao...] <arbitro> [-m <minutos>] [-d <diario.md>]
 #      O ÚLTIMO nome é sempre o árbitro. Ex.:
-#      vigia.sh t1 t2 t3 review review2 arbitro -m 10
+#      vigia.sh t1 t2 t3 review review2 arbitro -m 10 -d ~/.claude/.claude-pocket-pair/grupo-x.md
 #      A forma antiga `vigia.sh exec rev arb 5` continua valendo.
+#
+# Três alarmes além do "todo mundo parado", cada um nascido de uma falha real de 17/08/2026:
+#   - REPETIÇÃO: sessão `working` cujo último comando é o MESMO por N leituras seguidas está em
+#     loop, não trabalhando — polling produz evento a cada poucos segundos e engana o sensor de
+#     ociosidade. Medido: 1.231 execuções do mesmo comando por 3h, `working` o tempo inteiro,
+#     68% da fatura da execução. Sucesso repetido é tão parado quanto erro repetido.
+#   - DIÁRIO (-d): registro do árbitro sem escrita há 60min com o grupo ativo. Medido: 6h45 sem
+#     uma linha, justamente as duas Tasks mais caras.
+#   - ARMAMENTO PROVADO: ao subir, a vigia manda um alarme sintético ao árbitro PELO MESMO caminho
+#     dos alarmes reais. "Funcionando" é esse prompt chegar — não `is-active`, não teste digitado à
+#     mão (os dois "provaram" duas vezes um canal que estava quebrado).
 
 set -u
 # Aceita QUANTAS sessões forem: `vigia.sh <s1> <s2> ... <arbitro> [minutos]`. O último nome é
@@ -43,10 +54,12 @@ set -u
 # sessão chamada `123` seria comida como limite de minutos, e a vigia passaria a olhar uma sessão a
 # menos, calada. Nome de sessão numérico não é hipótese: `sanitize_session_name` os aceita.
 LIMITE=5
+DIARIO=
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -m|--minutos) LIMITE=${2:?"-m precisa do numero de minutos"}; shift 2 ;;
+    -d|--diario)  DIARIO=${2:?"-d precisa do caminho do registro"}; shift 2 ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
@@ -74,11 +87,37 @@ T=$(grep '^CP_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)
 CURLRC=$(mktemp /tmp/vigia-curlrc-XXXXXX)
 printf 'header = "Authorization: Bearer %s"\n' "$T" > "$CURLRC"
 
+# Onde vai o erro do leitor. O default NAO pode ser /dev/stderr: rodando sem terminal (systemd,
+# cron, nohup redirecionado) ele nao abre pra escrita, o redirecionamento `2>>` FALHA, e o bash nao
+# executa o comando — `st` volta vazio e a vigia conclui "API sem resposta". Medido em 17/08/2026:
+# a unidade ficava `active` cinco minutos e gritava "nao estou vigiando nada" com o backend
+# respondendo 200 em 11ms. Testa uma vez e cai pra arquivo quando nao der.
+if [ -z "${CP_VIGIA_LOG:-}" ]; then
+  if : 2>>/dev/stderr; then CP_VIGIA_LOG=/dev/stderr
+  else CP_VIGIA_LOG=${TMPDIR:-/tmp}/vigia-$$.err; fi
+fi
+export CP_VIGIA_LOG
+
 parados=0
 avisos=0
+PSEQ=()          # leituras seguidas paradas, por sessão (o aviso por sessão usa isto)
+NUDGE=()         # já cutucou esta sessão nesta parada? (1 empurrão por parada, não a cada aviso)
+RHASH=()         # hash do último comando visto, por sessão (detector de loop)
+RSEQ=()          # leituras seguidas com o MESMO comando, por sessão
+RAVISO=()        # já avisou este loop? (1 aviso por streak)
 mudos=0
 avisou_cota=
 avisou_travado=
+diario_avisado=0
+
+# ARMAMENTO PROVADO: o alarme sintético sai pelo MESMO caminho dos reais. Se ele não entrega, a
+# vigia NÃO fica de pé fingindo rede — sai com erro alto, que é o contrário de gritar pro vazio.
+cp-send --tmux "$ARB" "[vigia] ARMADA sobre: ${SESSOES[*]} (janela ${LIMITE}min${DIARIO:+, diario $DIARIO}). Esta mensagem E a prova do canal — se voce a leu, os alarmes chegam. Nao responda."
+rc_arm=$?
+if [ "$rc_arm" -ne 0 ]; then
+  echo "[vigia] FALHA ao provar o canal com '$ARB' (cp-send --tmux rc=$rc_arm). NAO estou armada." >&2
+  exit 1
+fi
 
 # O leitor de estado mora num arquivo, não numa linha `python3 -c '...'` dentro do laço. Motivo
 # medido em 14/08/2026: o `-c` estava entre aspas SIMPLES do shell, e um `\"` ali chega ao Python
@@ -125,6 +164,26 @@ for nome in sys.argv[1:]:
 print("|".join(saida))
 PY
 
+# Detector de LOOP: extrai do /history o hash do último comando de ferramenta. Sessão `working`
+# devolvendo o MESMO hash por REP_LIMITE leituras não está trabalhando — está apertando a mesma
+# tecla. O id do evento muda a cada chamada; o que se compara é o CONTEÚDO (tool_input).
+LOOPDET=$(mktemp /tmp/vigia-loopdet-XXXXXX.py)
+trap 'rm -f "$LEITOR" "$CURLRC" "$LOOPDET"' EXIT
+cat > "$LOOPDET" <<'PY'
+import hashlib, json, sys
+try:
+    evs = json.load(sys.stdin)
+    tool = [e for e in evs if isinstance(e, dict) and e.get("kind") == "tool_use"]
+    if not tool:
+        print("")
+    else:
+        payload = json.dumps(tool[-1].get("tool_input"), sort_keys=True, ensure_ascii=False)
+        print(hashlib.md5(payload.encode()).hexdigest())
+except Exception:
+    print("")
+PY
+REP_LIMITE=${CP_VIGIA_REP:-10}
+
 # Intervalo entre leituras. Existe como variável só para o teste de fumaça poder rodar o laço
 # inteiro em segundos; em uso normal ninguém passa isso.
 INTERVALO=${CP_VIGIA_INTERVALO:-60}
@@ -164,6 +223,80 @@ for i in $(seq 1 1440); do
   for e in "${ESTADOS[@]}"; do
     case "$e" in idle|awaiting_input|sumiu|semcota|travado) ;; *) quieto=0 ;; esac
   done
+
+  # POR SESSÃO: qualquer uma do par parada por LIMITE leituras seguidas avisa SOZINHA, sem esperar
+  # o time inteiro parar. O disparo coletivo abaixo ("ninguém está com a bola") existe para o tubo
+  # em deadlock, e ele NUNCA fecha enquanto o árbitro trabalha — foi assim que, em 17/08/2026, as
+  # três executoras morreram juntas num timeout do provedor às 12:41 e ninguém foi avisado: o
+  # árbitro estava de bola cheia, então `quieto` nunca virou 1. O usuário resumiu o requisito real:
+  # "se alguma sessão parar e ficar parada por muito tempo tem que avisar".
+  # Re-avisa a cada LIMITE minutos enquanto continuar parada (o contador zera ao avisar).
+  ULT=$(( ${#SESSOES[@]} - 1 ))
+  for k in "${!SESSOES[@]}"; do
+    [ "$k" -eq "$ULT" ] && continue          # o árbitro é o último; parado é o normal dele
+    case "${ESTADOS[$k]:-?}" in
+      idle|awaiting_input|sumiu|semcota|travado) PSEQ[$k]=$(( ${PSEQ[$k]:-0} + 1 )) ;;
+      *) PSEQ[$k]=0; NUDGE[$k]=0 ;;
+    esac
+    if [ "${PSEQ[$k]:-0}" -ge "$LIMITE" ]; then
+      # PRIMEIRO cutuca a propria sessao, DEPOIS avisa o arbitro. A ordem importa: o caso mais
+      # comum (medido 17/08/2026) e turno morto por timeout do provedor com as 3 tentativas
+      # estouradas — o Pi nao retenta sozinho e a sessao fica viva, parada, ate alguem digitar
+      # nela. Um empurrao resolve isso sem ninguem acordar. So avisar o arbitro nao resolvia:
+      # ele tambem pode estar caido, e ai o usuario e que vinha olhar.
+      # Cutuca UMA vez por parada (nudge=1) e segue avisando a cada LIMITE min enquanto durar.
+      if [ "${NUDGE[$k]:-0}" -eq 0 ] && [ "${ESTADOS[$k]:-?}" != "sumiu" ] && [ "${ESTADOS[$k]:-?}" != "semcota" ]; then
+        cp-send --tmux "${SESSOES[$k]}" "[vigia] Voce esta parada ha ${LIMITE} min sem reportar. Se o seu ultimo turno morreu (timeout do provedor, tentativas estouradas, conexao cortada), CONTINUE de onde parou, sem recomecar e sem refazer o que ja estava feito. Se voce ja entregou e esta esperando veredito, ignore esta mensagem. Se voce esta travada esperando alguma coisa do arbitro, diga em uma linha o que e." >/dev/null 2>&1
+        NUDGE[$k]=1
+        cutucada=" — CUTUQUEI ela agora (1a vez); se nao voltar, o turno nao morreu, ela esta travada de verdade"
+      else
+        cutucada=" — ja cutucada nesta parada; ela NAO voltou sozinha"
+      fi
+      msg="[vigia] ${SESSOES[$k]} esta parada (${ESTADOS[$k]:-?}) ha ${LIMITE} min${cutucada}. Time: $resumo. Olhe o PANE dela: timeout de provedor com as tentativas estouradas, turno morto e reporte preso na fila nao se desfazem sozinhos."
+      echo "$msg"
+      cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+      PSEQ[$k]=0
+    fi
+  done
+
+  # LOOP: sessão do par em `working` com o MESMO comando por REP_LIMITE leituras. O sensor de
+  # ociosidade nunca pega isso (polling produz evento a cada poucos segundos e parece trabalho);
+  # medido em 17/08/2026: 1.231 execuções do mesmo comando em 3h, `working` o tempo todo, e quem
+  # percebeu foi o usuário. Um curl de cauda por sessão trabalhando, por ciclo — barato.
+  for k in "${!SESSOES[@]}"; do
+    [ "$k" -eq "$ULT" ] && continue
+    if [ "${ESTADOS[$k]:-?}" = "working" ]; then
+      h=$(curl -s --config "$CURLRC" "$BASE/api/sessions/${SESSOES[$k]}/history?limit=3" \
+          | python3 "$LOOPDET" 2>>"${CP_VIGIA_LOG:-/dev/stderr}")
+      if [ -n "$h" ] && [ "$h" = "${RHASH[$k]:-}" ]; then
+        RSEQ[$k]=$(( ${RSEQ[$k]:-0} + 1 ))
+      else
+        RSEQ[$k]=0; RAVISO[$k]=0
+      fi
+      RHASH[$k]=$h
+      if [ "${RSEQ[$k]:-0}" -ge "$REP_LIMITE" ] && [ "${RAVISO[$k]:-0}" -eq 0 ]; then
+        msg="[vigia] ${SESSOES[$k]} parece em LOOP: diz working mas o ultimo comando e o MESMO ha ${RSEQ[$k]} leituras (~${RSEQ[$k]} min). Polling de espera nao e trabalho — olhe o pane: se ela re-checa a mesma condicao, mande-a PARAR e reportar o que espera (executor.md, teto de espera). Time: $resumo"
+        echo "$msg"
+        cp-send --tmux "${SESSOES[$k]}" "[vigia] Voce repete o MESMO comando ha ~${RSEQ[$k]} min. Se e espera por condicao externa, o teto ja estourou: PARE de re-checar e reporte ao arbitro o que voce espera e o ultimo retorno (regra do executor.md)." >/dev/null 2>&1
+        cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+        RAVISO[$k]=1
+      fi
+    else
+      RSEQ[$k]=0; RHASH[$k]=""; RAVISO[$k]=0
+    fi
+  done
+
+  # DIÁRIO parado: registro do árbitro é rede da retrospectiva; >60min sem escrita com o grupo
+  # ativo é o árbitro trabalhando sem deixar rastro (medido: 6h45 sem uma linha). Re-avisa por hora.
+  if [ -n "$DIARIO" ] && [ -f "$DIARIO" ]; then
+    idade=$(( $(date +%s) - $(stat -c %Y "$DIARIO" 2>/dev/null || echo 0) ))
+    if [ "$idade" -ge 3600 ] && [ "$diario_avisado" -lt "$(( idade / 3600 ))" ]; then
+      diario_avisado=$(( idade / 3600 ))
+      cp-send --tmux "$ARB" "[vigia] O registro ($DIARIO) esta ha $(( idade / 60 ))min sem uma escrita, com o grupo ativo. O registro se escreve NO EVENTO — se pareceres/merges aconteceram nesse intervalo, eles estao fora do diario." >/dev/null 2>&1
+      echo "[vigia] diario parado ha $(( idade / 60 ))min"
+    fi
+    [ "$idade" -lt 3600 ] && diario_avisado=0
+  fi
 
   # Sessão TRAVADA no par avisa na hora, sem esperar os três pararem: o árbitro está de bola cheia
   # justamente porque acha que o outro está trabalhando. Foi o caso de 14/08 — 1h17 de fila parada

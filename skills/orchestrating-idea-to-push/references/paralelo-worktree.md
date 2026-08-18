@@ -91,7 +91,23 @@ contrato junto com o lote, não depois.
 Neste repo cada worktree quer o **próprio** `node_modules` e `.venv`, e o portão visual
 precisa de backend e Vite no ar — que brigam pelas portas 8765/5173. Duas Tasks visuais em
 paralelo é uma delas esperando a porta, ou uma configuração de porta por worktree que alguém
-tem que escrever. Task visual em paralelo, na dúvida: serialize.
+tem que escrever. **A tabela de portas por Task vai no PLANO** (Task → `CP_PORT` → porta do vite)
+— a execução de 16–17/08 escreveu e funcionou. Task visual em paralelo, na dúvida: serialize.
+
+**E as portas não bastam: o NAVEGADOR de automação é um por máquina.** `agent-browser` e afins têm
+uma aba só — dois executores capturando ao mesmo tempo roubam a página um do outro, sem erro
+nenhum. Medido em 17/08/2026: a aba de uma executora devolveu a URL da Task vizinha às 13:44, e
+ela passou 3h perguntando à página errada se a tela dela tinha voltado. Lote com 2+ Tasks
+visuais: ou **instância de navegador própria por executor** (perfil/porta separados, se a máquina
+suporta), ou **prova visual como seção crítica** — um executor captura por vez, o árbitro dá a
+vez. O plano declara qual dos dois; o executor confere a aba antes de cada captura de qualquer
+jeito (`executor.md`, passo 3).
+
+**Instalador NUNCA roda de dentro de worktree.** Symlink global apontando pra worktree morre com
+ela: medido em 17/08/2026, remover uma worktree de ensaio levou 6 symlinks (`cp-send`,
+`cp-engine`, 2 skills…), calou a vigia da máquina inteira e derrubou a statusline de toda sessão
+Claude. Setup de máquina roda do checkout principal, sempre — e ao remover worktree, confira o
+rastro: `ls -la ~/.local/bin | grep <worktree>`.
 
 ## Racionalizações — todas significam PARE
 

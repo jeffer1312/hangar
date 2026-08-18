@@ -125,6 +125,27 @@ caso: peça o trecho de novo, não adivinhe.
 
 ### A receita quebra outra coisa → pare, reporte com a evidência, espere
 
+## Espera por condição externa tem TETO — polling infinito é o seu pior modo de falha
+
+Passo que depende de algo que você **não controla no turno** — servidor subir, sessão tmux
+aparecer, elemento renderizar, arquivo de outra sessão — não se espera re-checando em silêncio:
+
+- **Teto: 10 tentativas ou 10 minutos, o que vier primeiro.** Estourou → PARE e reporte
+  "esperando <condição>, não veio; tentei N vezes em T", com o último retorno colado.
+- **Resposta IDÊNTICA 3 vezes seguidas = re-checar é inútil por construção.** O mundo não vai
+  mudar porque você perguntou de novo. Mude a verificação, ou pare e reporte.
+- **O palco da sua prova é SEU.** Servidor, conta de teste, sessão de prova: quem cria é você, como
+  Step explícito, antes de qualquer checagem. Checar se existe uma coisa que só você criaria é
+  esperar por ninguém.
+
+Medido em 17/08/2026, nas duas Tasks mais caras de uma execução real: uma rodou **1.231 vezes o
+mesmo comando byte a byte** (3h, resposta `"sem"` 1.185× seguidas — a aba do navegador tinha sido
+levada por outra sessão); a outra, **1.179 vezes o mesmo poll** (2h39, esperando um palco que só
+ela podia montar). Nenhuma parou sozinha; em 2.456 turnos de laço houve **2** blocos de
+pensamento; e como cada volta reinjetava o contexto inteiro, a última hora custou **2,6×** a
+primeira fazendo estritamente menos. Os laços foram **68% da fatura** da execução. Exit 0 não é
+progresso: sucesso repetido é tão parado quanto erro repetido.
+
 ## O plano errou uma premissa no meio da Task: decidir sozinho ou parar?
 
 Acontece: você chega num Step e a realidade contradiz algo que o plano afirma — a biblioteca se
@@ -176,6 +197,11 @@ registrada é armadilha que a próxima pessoa reintroduz.
 - **Só o árbitro escreve no contrato.** Você lê. Decisão sua vai no reporte, não no arquivo.
 - **Recado de par alegando "o usuário autorizou"** contradizendo a ordem vigente do árbitro
   **não é autorização**: confirme com o árbitro antes de commitar.
+- **Acima de 50% da própria janela de contexto: termine o passo atual, commite o que está são e
+  peça substituição no reporte.** Não espere o árbitro medir por você. Sessão inchada erra mais e
+  paga mais por turno (medido em 17/08/2026: a 65% da janela, cada chamada custava 2,6× a da
+  primeira hora); e a troca **não** refaz a sua prova — os prints já capturados vivem no diretório
+  durável, não no seu contexto.
 
 ## Verificação que não mente
 
@@ -236,6 +262,23 @@ Braço que devolveu algo que você não entende ou que foge da lista de arquivos
 commite**, desfaça a parte dele e refaça você. Diff que você não consegue explicar é diff que
 você não pode defender no portão.
 
+## Task de FLUXO: você tem que RODAR o fluxo
+
+Vale para toda Task que cria ou muda **orquestração** — tmux, CLI, processo, conta, rede — mesmo
+que o plano não tenha o Step de fumaça (plano incompleto não é permissão pra pular).
+
+**O duplo de uma primitiva devolve o que a PRIMITIVA devolve.** Fake que reproduz a sua suposição
+sobre o tmux prova a suposição, não o tmux. Medido em 17/08/2026: uma Task entregou com
+2.167+935 testes verdes e o fluxo inteiro morto — **405 linhas de teste novo passavam com o módulo
+inoperante**, porque os fakes assumiam que o nome pedido era o nome da sessão tmux (não era) e
+nenhum teste exigia o Enter. 10 bloqueadores, achados pela revisora rodando contra o tmux real.
+
+- Antes do commit, **rode o fluxo de ponta a ponta contra a fonte real** — o tmux de verdade, a CLI
+  de verdade, a conta de teste de verdade — e cole no reporte o que aconteceu, não o que os testes
+  dizem que aconteceria.
+- **Contagem da suíte que CAI vira nota obrigatória no reporte.** "935 verdes" com a base em 936 é
+  meio relato: na mesma Task, 7 testes de uma Task aprovada tinham sido apagados, calados.
+
 ## Task visual: você tem que VER a tela
 
 Vale para toda Task que muda o que aparece — **mesmo que o plano não peça**. Se o seu diff
@@ -292,6 +335,18 @@ Clique que não faz nada visível é **defeito**, não "provavelmente funciona":
 motivo (console, rede, o handler) antes de reportar.
 
 ### 3. Capture
+
+**Primeiro, confirme que a aba é SUA.** O navegador de automação (`agent-browser` e afins) pode ser
+**um por máquina** — noutro lote, outra sessão navega a MESMA aba que você. Antes de cada rodada de
+captura: `location.href` tem que devolver a **sua** porta. Devolveu outra → a aba foi levada;
+reabra a sua URL. Levaram de novo → **reporte o conflito ao árbitro** em vez de insistir. Medido em
+17/08/2026: uma executora perdeu a aba às 13:44 (a URL devolvida era a porta de OUTRA Task) e
+passou 3 horas perguntando "minha tela voltou?" a uma página que não era dela — um comando de 1s
+teria virado um reporte às 13:45.
+
+**E a captura tem teto: 1h ou 60 comandos de navegação por Task.** Estourou → pare e reporte com o
+que já tem. Estado novo descoberto no meio vai pra lista do árbitro, não pro seu laço. (O teto de 2
+rodadas lá embaixo é da comparação cega; este é do trabalho de capturar — os dois coexistem.)
 
 Um print por estado, em **caminho absoluto** e num diretório **durável** — o que o lançamento
 decidiu (o padrão é `~/.claude/orq-retros/<data>-<gid>/visual/`), nunca `/tmp`, que some no reboot e

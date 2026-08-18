@@ -39,9 +39,15 @@ sessão acaba confirmando que é revisora enquanto está no meio de um commit.
 | **revisão final** | `references/revisao-final.md` | o kick-off diz `Papel: revisão da branch` |
 | **retrospectiva** | `references/retrospectiva.md` | o kick-off diz `Papel: retrospectiva` |
 
-Uma página que não é papel: `references/paralelo-worktree.md`, a **exceção** de rodar Tasks
-em paralelo com uma worktree cada. O padrão é serial; leia só se o plano declarou um lote
-paralelo (planejador) ou se você vai integrá-lo (árbitro).
+Duas páginas que não são papel:
+
+- `references/paralelo-worktree.md` — a **exceção** de rodar Tasks em paralelo com uma worktree
+  cada. O padrão é serial; leia só se o plano declarou um lote paralelo (planejador) ou se você
+  vai integrá-lo (árbitro).
+- `references/replanejar.md` — **reescrever o plano e o contrato no MEIO da execução**, quando o
+  usuário mandar ou o plano deixar de ser confiável (premissa caída, método sem metade executora,
+  estimativa estourando pela mesma causa). Não é troca de método escondida: é a fase 1 rodando de
+  novo, menor, só sobre o que resta — e é a **única** porta legítima para trocar de método.
 
 **Papel é declarado, nunca deduzido — e é recusado quando contradiz o que você está
 fazendo.** Kick-off dizendo "você é revisor read-only" chegando numa sessão que está no meio
@@ -67,6 +73,13 @@ Método: superpowers    # planejador: brainstorming → writing-plans · executo
 Método: mattpocock     # planejador: /grill-me → /to-spec → /to-tickets · executor: /implement
 ```
 
+**`superpowers` é o padrão e a recomendação — decisão do usuário, 17/08/2026, depois de medir a
+única execução em `mattpocock`.** Outro método só com pedido explícito dele, e com a **metade
+executora instalada e testada antes de aceitar**: a execução de 16–17/08 rodou `mattpocock` com o
+`/implement` ausente (o árbitro improvisou "os Steps são o método"), e o `/to-tickets` não gerou
+estimativa a priori nem prova de não-colisão — dois artefatos que o portão de saída da fase 1
+(`planejamento.md`) cobra de **qualquer** método.
+
 Nenhum papel escolhe método, e **nenhum troca de método no meio**. Plano nascido num método e
 executado noutro é o defeito que esta seção existe para impedir: os dois escrevem o trabalho em formatos
 diferentes (Task com Steps em `- [ ]` de um lado, ticket do outro), e quem lê depois — o executor, o
@@ -80,7 +93,9 @@ Três regras, e as três são do árbitro:
    árbitro **escreve a linha** antes de seguir, em vez de deixar implícito.
 
 Método que você não conhece, ou pedido de trocar no meio: **pare e pergunte ao usuário**. É decisão
-dele, como modelo e conta.
+dele, como modelo e conta. Troca que ele aprovar não se faz por emenda: roda
+`references/replanejar.md`, e o plano do trabalho restante nasce **inteiro** no método novo — nunca
+metade em cada.
 
 ## Kick-off — a mensagem aponta, não copia
 

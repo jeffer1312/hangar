@@ -209,7 +209,14 @@ existe.
 - **fluxo completo**, na UI ou no comando real, não só a unidade tocada;
 - **callers irmãos**: quem mais usa o símbolo alterado tem a mesma causa?
 - **concorrência**: resposta atrasada, duplo clique, troca de alvo no meio, unmount;
-- **estado final**: o que ficou no disco/storage/URL depois — não só o retorno.
+- **estado final**: o que ficou no disco/storage/URL depois — não só o retorno;
+- **Task de orquestração (tmux, CLI, processo, conta): RODE o fumaça contra a fonte real, você
+  mesmo.** Suíte verde de fakes não é prova de fluxo: medido em 17/08/2026, um módulo chegou com
+  2.167+935 testes verdes e o fluxo morto — 405 linhas de teste novo provavam a suposição errada
+  do próprio código, e quem pegou os 10 bloqueadores foi a revisora reproduzindo contra o tmux
+  real. E **confira a CONTAGEM da suíte contra a base**: contagem que caiu sem nota no reporte é
+  bloqueador por si (na mesma Task, 936→935 calado escondia 7 testes de uma Task aprovada
+  apagados).
 
 O contrato do grupo diz o que este trabalho exige a mais (skills de revisão por tipo de
 Task, verificação visual, harness de carga). Leia antes do primeiro parecer.

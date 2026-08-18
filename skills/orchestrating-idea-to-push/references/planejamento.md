@@ -11,9 +11,13 @@ usuário** — pergunte no começo, não deduza, e a resposta vai para a linha `
 você escreve na fase 2 e que **todo kick-off repete**.
 
 - `superpowers` → você usa `superpowers:brainstorming` e depois `superpowers:writing-plans`; o
-  executor usa `superpowers:executing-plans`.
+  executor usa `superpowers:executing-plans`. **É o padrão e a recomendação** (decisão do usuário,
+  17/08/2026).
 - `mattpocock` → você usa `/grill-me` (ou `/grill-with-docs`) → `/to-spec` → `/to-tickets`; o
-  executor usa `/implement`.
+  executor usa `/implement`. **Só com pedido explícito do usuário, e só depois de conferir que o
+  `/implement` está instalado** — a execução de 16–17/08 rodou sem ele e o árbitro teve de
+  improvisar. Qualquer que seja o método, o **portão de saída da fase 1** (seção no fim desta
+  página) vale igual: artefato que o método não gera, você gera à mão.
 
 O plano e a execução têm de sair do **mesmo** método: os formatos de Task/ticket diferem, e quem lê
 depois — executor, árbitro, e a barra de progresso do app — lê o formato errado sem erro nenhum.
@@ -69,8 +73,24 @@ Além do que o `writing-plans` já pede, o plano carrega:
   por vez, portão fechando cada uma. Trabalho grande com Tasks de verdade independentes pode
   virar lote paralelo com uma worktree cada — a exceção, o gatilho e o custo estão em
   `paralelo-worktree.md`, e a decisão é **aqui**, com o usuário, nunca do árbitro depois.
+- **Estimado × real, escrito ANTES do kick-off**: um arquivo próprio, uma linha por Task —
+  relógio, rodadas e custo esperados. Não é adivinhação: é a régua que deixa o árbitro ver
+  "estourou" enquanto acontece. Medido nas duas direções: a execução de 15/08 escreveu antes e a
+  régua pegou a Montagem estourando (3h–6h → 10h50, documentado na hora); a de 16–17/08 não
+  escreveu para as Tasks 1–5 e uma Task rodou **4h19 de captura com zero commits** sem nenhum
+  número gritando. Plano sem esse arquivo não passa no portão de saída.
+- **Pré-condição externa com DONO**: todo Step cuja prova depende de coisa que o executor não
+  controla no turno (servidor de pé, sessão tmux, conta de teste, elemento na tela) declara quem a
+  cria — e o dono é **o próprio executor**, como Step anterior explícito ("suba o backend na porta
+  X, confirme com curl, DEPOIS capture"). Espera sem dono declarado vira polling infinito: medido
+  em 17/08/2026, uma executora checou 1.179× se uma sessão de prova existia — que só ela mesma
+  podia criar.
 - **Intocáveis**: paths com mudança paralela na árvore, listados um a um.
-- **Verificação por Task**: o comando exato e o que conta como passou.
+- **Verificação por Task**: o comando exato e o que conta como passou. Task de **orquestração**
+  (tmux, CLI, processo, conta, rede) leva um Step de **teste de fumaça contra a fonte real**, com o
+  comando literal — suíte verde de fakes não prova fluxo: medido em 17/08/2026, um módulo passou
+  com 2.167+935 testes verdes e o fluxo inteiro morto (405 linhas de teste reproduziam a suposição
+  errada do código; nenhum Step do plano tocava o tmux).
 - **Steps escritos como `- [ ] **Step N: …**`** — é o formato que o contador de progresso reconhece
   (`_STEP_RE` em `backend/app/planprog.py`; `### Task N:` para os cabeçalhos). Numerar de outro
   jeito (`Passo A`, `Etapa 1`) faz a Task inteira contar **zero** e a barra que o usuário acompanha
@@ -81,7 +101,13 @@ Além do que o `writing-plans` já pede, o plano carrega:
 - **Barra** das Tasks que mexem em pixel: contra o que o resultado vai ser comparado — ver abaixo.
 - **O que a revisão precisa cobrir** — ver abaixo. Isso entra **antes da Task 1**.
 - **Decisões em aberto**: o que ainda não foi decidido e quem decide. Lista vazia é a meta.
-- **Teto**: quanto de custo/cota o usuário aceita gastar sozinho, e o que faz parar.
+- **Teto**: quanto de custo/cota o usuário aceita gastar sozinho, e o que faz parar — em número
+  **operacional**: o total, o esperado por Task (sai do estimado×real acima), a **cota restante de
+  cada provedor do time** (colada, com a hora da leitura) e o **fallback autorizado por escrito**
+  ("a cota de X acabar → executores migram pra Y, efeito conhecido: ..."). Medido em 17/08/2026: a
+  cota do provedor dos executores estourou às 23:35 com o usuário dormindo, os 4 morreram no mesmo
+  minuto, e a decisão de fallback custou 3 intervenções dele de madrugada — porque não estava
+  escrita.
 - **O time**, com motor e conta de cada papel.
 
 ### Antes de fechar a decomposição, procure o ESTADO compartilhado
@@ -116,6 +142,24 @@ de Task.
 Task visual entra com **a lista dos estados** que precisam de screenshot (as duas larguras,
 overlay, tela cheia, o que mais a Task afetar). É essa lista que o revisor cobra depois —
 estado que ninguém listou é estado que ninguém olha.
+
+#### A captura tem DONO e TETO — e acima de ~5 estados ela vira Task própria
+
+A lista acima é sobre cobertura; esta régua é sobre custo. Task cuja prova passa de **~5 estados ×
+variantes** (idiomas, larguras, hosts) não embute a captura no executor: a captura vira **Task
+própria ou papel próprio** — uma sessão capturadora barata, com a lista fechada de estados escrita
+no kick-off, contexto pequeno e descartável. O executor entrega código + gates + 1 print de
+sanidade; quem varre estados é a capturadora, e a estimativa da Task lista a captura como linha.
+
+Medido nas duas direções: a execução de 13–14/08 fez a varredura como Task própria (71 prints, 2
+idiomas × 2 larguras) e fechou em horas; a de 16–17/08 embutiu "print de cada estado × 2 hosts × 2
+idiomas" dentro do executor e as duas Tasks mais caras ficaram **12h53 presas em captura, com 72%
+do custo do provedor e nenhum merge**.
+
+E a régua-mãe, que vale para qualquer portão desta skill: **exigência de prova nova (desfecho, mais
+estados, mais variantes) só entra com o teto e o dono na MESMA frase.** Foi exatamente o par
+"prova termina no desfecho" (régua certa, sem dono do palco) + "o teto só conta rodada de barra"
+(régua certa, que deixou a captura sem fronteira), somado no mesmo dia, que produziu as 12h53.
 
 ### Task visual entra também com uma BARRA
 
@@ -296,6 +340,34 @@ O que você não conseguir rodar entra marcado: `<!-- NÃO VERIFICADO: … -->`.
 como descrição, não como receita — e é infinitamente melhor que ele descobrir sozinho no meio da
 Task.
 
+## Portão de saída da fase 1 — checklist fechado, agnóstico de método
+
+A fase 1 só fecha com os doze abaixo conferidos, **um a um, por escrito no plano ou no contrato**.
+Cada item já existe como regra em alguma seção; a lista existe porque regra espalhada em prosa é
+regra que um método novo não conhece — medido em 16–17/08/2026: o `/to-tickets` saiu sem os itens
+2 e 3, e o custo foi o lote derrubado 3 vezes e uma Task rodando 4h19 sem régua de estouro. Item
+que o método escolhido não gera, **você gera à mão**.
+
+1. `parse_plan` conta Tasks e Steps certos (comando e saída colados no plano).
+2. **Estimado × real a priori** escrito, uma linha por Task (relógio, rodadas, custo).
+3. **Não-colisão do lote provada**: arquivos por Task levantados **do texto dos Steps** ×
+   `git merge-tree` — saída colada.
+4. Estado compartilhado procurado; contrato de posse escrito onde houver.
+5. Barra (ou `nenhuma — decisão do usuário`) registrada por Task visual.
+6. Task de tela com >~5 estados × variantes: captura como Task/papel próprio, e ponto de rotação
+   de contexto previsto no Step ("Step N é marco de troca segura").
+7. Task de orquestração: Step de fumaça contra a fonte real, comando literal.
+8. Pré-condição externa com dono declarado em cada Step que espera algo.
+9. Lote paralelo com prova visual: navegador exclusivo por executor ou prova como seção crítica
+   (`paralelo-worktree.md`).
+10. Teto operacional: total + por Task + cota restante dos provedores + fallback autorizado.
+11. Método com a metade executora instalada e testada.
+12. Pass adversarial oferecido, baseline verde, todo código citado rodado.
+
+E uma régua de prudência que não é item, é postura: **uma estreia por vez.** Método de plano novo,
+skill recém-editada e provedor novo não entram juntos na mesma execução — a de 16–17/08 estreou os
+três no mesmo dia, e a linha-síntese da retrospectiva foi exatamente "tudo era estreia".
+
 **A mesma régua vale pra afirmação factual** — no plano, no recorte da Task e no kick-off. O
 executor e o revisor leem o recorte como dado, não como opinião de quem o escreveu; uma frase errada
 ali vira comentário errado no código, e comentário que afirma coisa falsa é semente de bug futuro.
@@ -323,12 +395,19 @@ Não resolveu → aí sim é decisão dele.
 cwd parece um segundo escritor, e você gasta uma rodada mandando recado — para você mesmo, que
 volta como `[de: <você>]`. Medido em 13/08/2026.
 
-**Branch: `main`/`master` não é decisão sua.** Se a árvore está na branch principal e o plano tem
-mais de um commit, **pergunte antes de criar sessão** — criar ou trocar branch por iniciativa
-própria é proibido, e largar um time de doze commits na `main` é pior. Chegue com a proposta pronta
-(branch nova a partir do HEAD atual, com nome) e a alternativa (commitar direto), e deixe ele
-escolher. Se ele pedir `pull` antes, **reconfira os números do plano depois**: um pull que traz
-centenas de linhas move as linhas que o plano cita e pode mudar as contagens que a fase 1 mediu.
+**Branch: a pergunta é OBRIGATÓRIA em todo lançamento, e a recomendação é branch nova a partir da
+`main`.** Decisão do usuário, 17/08/2026, depois de duas execuções inteiras caírem direto na
+`main`. Antes de criar a primeira sessão, pergunte onde o trabalho vai correr, com a recomendação
+na frente:
+
+> "Onde este trabalho corre? (a) **branch nova a partir da `main`** — recomendado: N commits de
+> time não nascem na principal, e o push vira decisão única no fim; (b) direto na `<branch atual>`.
+> Proposta de nome: `<trab>`."
+
+Criar ou trocar branch por iniciativa própria continua proibido — a pergunta é sua, a escolha é
+dele, e a resposta **vai pro contrato** (`Branch: ...`, com a data). Se ele pedir `pull` antes,
+**reconfira os números do plano depois**: um pull que traz centenas de linhas move as linhas que o
+plano cita e pode mudar as contagens que a fase 1 mediu.
 
 **Baseline verde antes da Task 1.** Rode cada comando de verificação que o plano define, **uma
 vez, na base** — ainda antes de criar sessão. Só isso pega dois modos de falha que custam uma
