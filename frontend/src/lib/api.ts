@@ -1,8 +1,7 @@
-import { getBaseUrl, getToken, dropActiveServer } from './auth';
+import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
 import * as m from '../paraglide/messages';
 import { localeAtual } from './locale';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
-import type { Server } from './auth';
 import type {
   SessionInfo,
   Provider,
@@ -1152,18 +1151,23 @@ export async function sendTermInput(name: string, payload: { text?: string; key?
   });
 }
 
-// Cria (ou reata) a sessao de shell escondida do app, no cwd da sessao do agente. Devolve o nome
-// tmux real ("term-<nome>") — e ele, nao `name`, que a aba do shell usa pra conectar. 409 = ja
-// existe uma sessao com esse nome que nao e o nosso shell; a mensagem do backend explica o motivo,
-// e quem chama deve mostra-la (nao engolir).
-export function openShell(name: string): Promise<{ ok: true; shell: string }> {
-  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/shell`, { method: 'POST' });
+// Cria (ou reata) a sessao de shell escondida do app, no cwd da sessao do agente, no servidor `srv`
+// (o DONO da sessao — nunca o ativo: a sessao vive numa maquina, e o POST tem que chegar nela).
+// Devolve o nome tmux real ("term-<nome>") — e ele, nao `name`, que a aba do shell usa pra conectar.
+// 409 = ja existe uma sessao com esse nome que nao e o nosso shell; a mensagem do backend explica o
+// motivo, e quem chama deve mostra-la (nao engolir). Mesmo molde do apiFetchForServer: sem self-heal
+// de 401 (a credencial ativa e de OUTRA maquina — nao se limpa o ativo por erro de um remoto).
+export function openShell(srv: Server, name: string): Promise<{ ok: true; shell: string }> {
+  return apiFetchForServer<{ ok: true; shell: string }>(
+    srv, `/api/sessions/${encodeURIComponent(name)}/shell`, { method: 'POST' });
 }
 
-// Abre um emulador de terminal NATIVO (janela do SO) anexado a sessao `name`. 503 = sem emulador no
-// PATH, ou o emulador morreu logo apos abrir — o `detail` do erro e texto pra humano, mostrar direto.
-export function openNativeTerminal(name: string): Promise<{ ok: true }> {
-  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/open-terminal`, { method: 'POST' });
+// Abre um emulador de terminal NATIVO (janela do SO) anexado a sessao `name` no servidor `srv` (o
+// dono — mesma regra do openShell). 503 = sem emulador no PATH, ou o emulador morreu logo apos
+// abrir — o `detail` do erro e texto pra humano, mostrar direto.
+export function openNativeTerminal(srv: Server, name: string): Promise<{ ok: true }> {
+  return apiFetchForServer<{ ok: true }>(
+    srv, `/api/sessions/${encodeURIComponent(name)}/open-terminal`, { method: 'POST' });
 }
 
 export interface ModelEffortBody {

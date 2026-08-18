@@ -265,8 +265,16 @@ import * as m from '../paraglide/messages';
     }
     void currentKey;
     if (!currentSession || currentSession === 'null' || currentSession === 'undefined') return [];
-    const serverId = getActiveId() ?? '';
-    return [currentSession, ...splitSessions].map((nome) => workspaceSessionKey({ serverId, name: nome }));
+    // Servidor da sessao PRINCIPAL vem da ROTA (currentKey "<serverId>::<nome>"), nunca do ativo:
+    // o ativo pode trocar sem navegacao (atencao de outra maquina, sync) e o painel de terminal
+    // tem que continuar preso ao DONO da sessao — o $effect abaixo fecha o painel quando a chave
+    // sai da tela, e com o ativo ele fechava o painel da sessao de B ao trocar o ativo pra A.
+    // O SPLIT (par) segue o ativo de proposito: o Chat do split ja e ativo-based (nao recebe
+    // connKey) — alinhar so o terminal a outro servidor quebraria a coerecia do split inteiro.
+    const serverIdDaRota = currentKey?.split('::')[0] ?? '';
+    const serverIdAtivo = getActiveId() ?? '';
+    return [currentSession, ...splitSessions].map((nome) =>
+      workspaceSessionKey({ serverId: nome === currentSession ? (serverIdDaRota || serverIdAtivo) : serverIdAtivo, name: nome }));
   });
   $effect(() => {
     if (terminalOpen && !sessoesNaTela.includes(terminalKey)) terminalOpen = false;
@@ -397,8 +405,8 @@ import * as m from '../paraglide/messages';
             onBack={() => onNavigateToChat('')}
             onNavigateToChat={onNavigateToChat}
             onOpenSplit={openSplit}
-            onOpenTerminalPanel={() => abrirTerminal(cur, getActiveId() ?? '')}
-            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: getActiveId() ?? '', name: cur })}
+            onOpenTerminalPanel={() => abrirTerminal(cur, currentKey?.split('::')[0] ?? getActiveId() ?? '')}
+            terminalPanelOpen={terminalOpen && terminalKey === workspaceSessionKey({ serverId: currentKey?.split('::')[0] ?? getActiveId() ?? '', name: cur })}
             terminalPanelDisponivel={terminalCapaz}
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
