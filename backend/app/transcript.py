@@ -166,6 +166,46 @@ def _peer_msg_embrulhado(texto) -> Optional[str]:
     return f"[de: {_peer_nome(int(sock.group(1)) if sock else None, attrs.get('from-name'))}] {corpo}"
 
 
+# Entrega BLOQUEADA por hook, registrada na entrada system: o Claude Code nao entrega o prompt ao
+# agente mas deixa a tentativa no content. Formato medido (10x no transcript de 18/08/2026):
+#   UserPromptSubmit operation blocked by hook:
+#   ["<path do hook>"]: <erro>
+#   (linha em branco)
+#   Original prompt: <texto>
+# Um recado '[de: desc2-exec2] RODADA 3 ENTREGUE...' ficou preso assim, tres vezes (as tres
+# tentativas de reenvio), e o transcript.py o descartava junto com o ruido de tooling — o app
+# nunca mostrou o texto e a bolha da fila ficou marcada 'nao chegou' pra sempre.
+# O cabecalho "UserPromptSubmit operation blocked by hook:" e PARTE da ancora: "Original prompt:"
+# sozinho aparece em citações (um aviso que menciona a frase); os dois juntos so existem na
+# entrega bloqueada registrada pelo harness.
+_ORIGINAL_PROMPT_RE = re.compile(
+    r"UserPromptSubmit operation blocked by hook:.*?Original prompt: (.+)$", re.DOTALL)
+
+
+def _recado_em_system(content) -> Optional[str]:
+    """Recado entre sessoes preso numa entrada type='system', ou None.
+
+    So o que e RECADO entra — o filtro e pelo FORMATO, nunca pelo tipo: system tambem carrega
+    ruido de verdade (o /model, avisos do harness, 'Held peer message') e ate fala de usuario
+    bloqueada; exibir isso como conversa seria passar ruido de tooling por fala do usuario.
+
+    'Original prompt:' e a ancora: e o marcador do harness que prova que o texto depois dele e
+    uma ENTREGA registrada, nao um aviso SOBRE ela. Um aviso que apenas MENCIONE a frase nao
+    passa — sem o cabecalho 'blocked by hook' + o marcador, sem recado.
+    """
+    if not isinstance(content, str):
+        return None
+    m = _ORIGINAL_PROMPT_RE.search(content)
+    if not m:
+        return None
+    texto = m.group(1).strip()
+    if (peer := _peer_msg_embrulhado(texto)) is not None:
+        return peer
+    if texto.startswith("[de: "):
+        return texto
+    return None
+
+
 def _is_command_meta(text: str) -> bool:
     return text.lstrip().startswith(_COMMAND_META_PREFIXES)
 
@@ -207,6 +247,21 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
     # enquanto o turno corria; os 4 que chegaram entre turnos vieram como user e fechavam certo).
     # Mesmo tool_result sintetico do caminho normal — `resulted` no fold e um Set, entao a entrega
     # posterior da mesma notificacao (quando vier) so repete, sem efeito.
+    if etype == "system":
+        # Recado em entrega bloqueada por hook (ver _recado_em_system): o texto existe no
+        # transcript e o app precisa mostra-lo — mas a entrega tem preventContinuation=true: o
+        # agente NUNCA recebeu o prompt. A bolha nasce marcada (desistiu=True) pra o aviso
+        # vermelho "nao chegou" seguir de pe — e a verdade. id DETERMINISTICO pelo texto: as N
+        # tentativas do reenvio gravam N entradas system com o MESMO texto, e o front deduplica
+        # por id — uma bolha so, no lugar da 1a tentativa. ts da entrada: a bolha nasce no
+        # momento da 1a tentativa, nao da ultima.
+        content = obj.get("content")
+        if (recado := _recado_em_system(content)) is not None:
+            digest = hashlib.md5(recado.encode("utf-8", "replace")).hexdigest()[:8]
+            return [ChatEvent(kind="user_msg", id=f"held:{digest}", text=recado, ts=_ts(obj),
+                              desistiu=True)]
+        return []
+
     if etype == "queue-operation":
         queued = obj.get("content")
         if isinstance(queued, str) and queued.lstrip().startswith("<task-notification>"):

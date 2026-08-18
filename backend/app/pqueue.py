@@ -34,6 +34,79 @@ def _sanitize(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "-", name)
 
 
+_PREFIXO_MIN = 8   # piso de prefixo: "ok"/"sim"/"1" nao confirmam frase alheia que comeca igual
+
+
+def _linhas_da_entrada(r: dict) -> set[str]:
+    """Formas do texto de UMA entrada da fila: cru, sem o marcador de anexo, e cada uma por linha.
+
+    As duas formas sao as mesmas em dois pontos do reconcile (resgate e caminho normal) — um
+    helper unico evita que um dos lados normalize diferente do outro e casamentos divergirem.
+    """
+    cru = str(r.get("text") or "").strip()
+    podado = _strip_attach(cru).strip()
+    ls = {cru, podado,
+          *(ln.strip() for ln in cru.split("\n")),
+          *(ln.strip() for ln in podado.split("\n"))}
+    ls.discard("")
+    return ls
+
+
+def _dono_do_prefixo(rows: list[dict], disponiveis: set[str]) -> dict[str, str]:
+    """Linha do transcript -> o MAIOR prefixo que alguma entrada pendente reivindica nela.
+
+    `reservadas` resolve exato-contra-prefixo. Isto resolve prefixo-contra-prefixo: com o eco
+    chegando com SUFIXO, NENHUMA das entradas casa exato (reservadas fica vazia) e a entrada mais
+    CURTA levava a linha da mais especifica — invertendo as duas marcas de novo (X perdida vira
+    entregue, Y que chegou ganha 'nao chegou'). A regra das duas e uma so: a linha pertence a quem
+    a reivindica de forma MAIS ESPECIFICA — exato ganha de prefixo; prefixo mais longo ganha de
+    prefixo mais curto.
+    """
+    dono: dict[str, str] = {}
+    for r in rows:
+        if r.get("delivered") is not True or r.get("confirmed"):
+            continue
+        for ln in _linhas_da_entrada(r):
+            if len(ln) < _PREFIXO_MIN:
+                continue
+            for d in disponiveis:
+                if d.startswith(ln) and len(ln) > len(dono.get(d, "")):
+                    dono[d] = ln
+    return dono
+
+
+def _casam(linhas: set[str], disponiveis: set[str],
+           reservadas: frozenset[str] = frozenset(),
+           dono: dict[str, str] | None = None) -> set[str]:
+    """Linhas do transcript que `linhas` (de UMA entrada da fila) cobrem: iguais + prefixos.
+
+    O eco pode chegar com SUFIXO — medido em 18/08/2026: a fila digitou "Vamos fazer ate as 23
+    com o Deepseek..." e o transcript gravou a MESMA linha com "… eu tinha mandado isso" no fim.
+    O casamento por linha exata nunca casava, a entrega desistia e a bolha ficava marcada 'nao
+    chegou' sobre uma msg que CHEGOU. Piso de comprimento pro prefixo: resposta curta nao
+    confirma frase alheia.
+
+    Prioridade (parecer G2 rev2, bloqueador 1): a linha do transcript pertence a quem a
+    reivindica de forma MAIS ESPECIFICA. `reservadas` = linha que casa EXATO com outra entrada
+    pendente pertence a ela (prefixo nenhum a leva). `dono` = linha com sufixo pertence ao MAIOR
+    prefixo que a reivindica (sem isto, "Vamos fazer" comeria a linha de "Vamos fazer ate as 23
+    com o Deepseek" e as marcas invertiam). E o prefixo consome UMA linha por linha da fila (a
+    mais curta = a menos abrangente), nao todas.
+    """
+    consumidas: set[str] = set()
+    for ln in linhas:
+        if ln in disponiveis:
+            consumidas.add(ln)
+        elif len(ln) >= _PREFIXO_MIN:
+            cands = sorted((d for d in disponiveis
+                            if d.startswith(ln) and d not in reservadas
+                            and (dono is None or dono.get(d) == ln)),
+                           key=len)
+            if cands:
+                consumidas.add(cands[0])
+    return consumidas
+
+
 def _entry_event(entry: dict) -> ChatEvent:
     # user_msg sintetico com id prefixado ("queued-") pro front distinguir de evento real do
     # transcript. ts fica None de proposito: o ts so serve pra ORDENAR no historico, nao pra
@@ -190,6 +263,11 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
                             add(ev.text)
                     continue
                 etype = obj.get("type")
+                # system NAO entra de proposito: recado preso em entrega BLOQUEADA por hook tem
+                # preventContinuation=true — o agente nunca o recebeu, e committed_user_lines e o
+                # oraculo de "aterrissou na sessao". Conta-lo confirmaria a entrega e a bolha
+                # ficaria sem a marca vermelha sobre uma mensagem que nunca chegou (ver parecer
+                # G2 rev1, bloqueador 1).
                 if etype == "queue-operation":
                     c = obj.get("content")
                     if isinstance(c, str):
@@ -349,6 +427,18 @@ class PromptQueue:
             # Sim" se repete) casariam as duas contra a mesma linha — e uma que se perdeu de verdade
             # viraria `confirmed`, escondendo a falha em vez de mostra-la. Gasta-se a linha ao usar.
             disponiveis = set(committed)
+            # Linhas que casam EXATO com alguma entrada pendente pertencem a ELA — o prefixo de
+            # outra entrada nao pode leva-las (senao "pode seguir" comeria a linha de "pode seguir
+            # com a Task 4 agora": a perdida vira entregue e a que chegou ganha a marca — o defeito
+            # da Task reaberto por outra porta, parecer G2 rev1 bloqueador 2).
+            reservadas = frozenset().union(*[
+                _linhas_da_entrada(r) & disponiveis
+                for r in rows if r.get("delivered") is True and not r.get("confirmed")
+            ] or [frozenset()])
+            # Linha com sufixo (nenhuma entrada casa exato nelas) -> pertence ao MAIOR prefixo que
+            # a reivindica; sem isto a entrada mais curta levava a linha da mais especifica e as
+            # duas marcas invertiam (parecer G2 rev2, bloqueador 1).
+            dono = _dono_do_prefixo(rows, disponiveis)
             for r in rows:
                 if r.get("delivered") is not True or r.get("confirmed"):
                     continue
@@ -365,15 +455,10 @@ class PromptQueue:
                     # "1") casaria por coincidencia — dando por entregue o que nunca chegou.
                     if ts < min_ts:
                         continue
-                    texto = str(r.get("text") or "").strip()
-                    podado = _strip_attach(texto).strip()
-                    linhas_r = {texto, podado,
-                                *(ln.strip() for ln in texto.split("\n")),
-                                *(ln.strip() for ln in podado.split("\n"))}
-                    linhas_r.discard("")
-                    casou = linhas_r & disponiveis
+                    linhas_r = _linhas_da_entrada(r)
+                    casou = _casam(linhas_r, disponiveis, reservadas, dono)
                     if casou:
-                        disponiveis -= linhas_r      # a linha foi usada: nao confirma outra entrada
+                        disponiveis -= casou    # a(s) linha(s) foi usada: nao confirma outra entrada
                         r["confirmed"] = True
                         r.pop("desistiu", None)
                         changed = True
@@ -387,13 +472,10 @@ class PromptQueue:
                 # Compara CRU e podado (espelha o lado do committed_user_lines): so um dos lados
                 # podado deixava msg com anexo orfa -> requeue indevido.
                 text_raw = str(r.get("text") or "").strip()
-                text = _strip_attach(text_raw).strip()
-                lines = {text_raw, text,
-                         *(ln.strip() for ln in text_raw.split("\n")),
-                         *(ln.strip() for ln in text.split("\n"))}
-                lines.discard("")
-                if not text_raw or lines & disponiveis:
-                    disponiveis -= lines         # uma linha do transcript confirma UMA entrada so
+                lines = _linhas_da_entrada(r)
+                cons = _casam(lines, disponiveis, reservadas, dono)
+                if not text_raw or cons:
+                    disponiveis -= cons            # as linhas casadas confirmam UMA entrada so
                     r["confirmed"] = True
                 elif confirm_only:
                     # Meio do turno sem prova: nao decide. Entrada segue entregue/nao-confirmada e

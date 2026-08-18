@@ -835,3 +835,149 @@ def test_resgate_ignora_entrada_de_sessao_anterior():
     q.reconcile_delivered({"Sim"}, agora - 100, agora)   # min_ts = inicio da sessao atual
     r = q.load()[0]
     assert r.get("desistiu") is True and "confirmed" not in r
+
+
+def test_reconcile_resgata_desistida_quando_o_eco_tem_sufixo(tmp_path):
+    # Defeito (B) medido em 18/08/2026: a fila digitou "Vamos fazer ate as 23 com o Deepseek..."
+    # e o transcript gravou a MESMA linha com "… eu tinha mandado isso" no fim. O casamento por
+    # linha exata nunca casava -> a entrega desistia e a bolha ficava marcada "nao chegou" pra
+    # sempre sobre uma msg que CHEGOU. O resgate tem de casar por PREFIXO (piso de comprimento).
+    import json
+    X = "Vamos fazer ate as 23 com o Deepseek dps agnt para e volta amanha"
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": X + "… eu tinha mandado isso"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps({"id": "b1", "text": X, "ts": 1787075400.0,
+                                  "delivered": True, "attempts": 2, "desistiu": True}) + "\n",
+                      encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    row = q.load()[0]
+    assert row["confirmed"] is True
+    assert "desistiu" not in row          # a marca "nao chegou" saiu da bolha
+    # e o merged_history nao mostra mais a bolha da fila (a real cobre)
+    assert all(not e.id.startswith("queued-") for e in pqueue.merged_history("s", str(j)))
+
+
+def test_reconcile_prefixo_curto_nao_resgata(tmp_path):
+    # Piso do prefixo: "ok"/"sim" nao podem confirmar frase alheia que comeca igual — resposta
+    # curta desistida continua desistida (honesta: nao ha prova de que chegou).
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": "ok, vamos fazer"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text('{"id":"b2","text":"ok","ts":1787075400.0,"delivered":true,"attempts":2,"desistiu":true}\n',
+                      encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    row = q.load()[0]
+    assert row["desistiu"] is True and "confirmed" not in row
+
+
+def test_reconcile_confirma_por_prefixo_sem_desistir(tmp_path):
+    # Mesmo eco com sufixo, mas a entrada ainda NAO desistiu (primeira checagem): confirmar por
+    # prefixo evita a redigitacao (o drain reenviaria o texto ja presente no prompt final).
+    import json
+    X = "Vamos fazer ate as 23 com o Deepseek dps agnt para e volta amanha"
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": X + "… eu tinha mandado isso"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps({"id": "b3", "text": X, "ts": 1787075400.0, "delivered": True}) + "\n",
+                      encoding="utf-8")
+    req = q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    assert req == []                            # nada re-enfileirado: nao redigita
+    row = q.load()[0]
+    assert row["confirmed"] is True
+
+
+def test_committed_lines_NAO_contam_recado_preso_em_system(tmp_path):
+    # Parecer G2 rev1, bloqueador 1: recado preso em entrega BLOQUEADA por hook tem
+    # preventContinuation=true — o agente NUNCA o recebeu. committed_user_lines e o oraculo de
+    # "aterrissou na sessao": conta-lo confirmaria a entrega e a bolha ficaria sem a marca
+    # vermelha sobre uma mensagem que nao chegou (o proprio diagnostico da Task: "nesse caso a
+    # marca esta CERTA").
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "system", "content":
+                             "UserPromptSubmit operation blocked by hook:\n[x]\n\n"
+                             "Original prompt: [de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas."}) + "\n" +
+                 json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": "uma msg normal que chegou"}}) + "\n",
+                 encoding="utf-8")
+    lines = pqueue.committed_user_lines(str(j))
+    assert "[de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas." not in lines
+    assert "uma msg normal que chegou" in lines   # o oraculo segue vivo: so o system fica fora
+
+
+def test_reconcile_desistida_mantem_marca_com_system_no_transcript(tmp_path):
+    # Desfecho do bloqueador 1: entrada ja desistida + transcript que tem SO o system com o
+    # recado (nunca virou user) → a entrada segue desistida, sem confirmed. O reconcile re-drena
+    # ate max_attempts e desiste (limitado, pqueue.py:437) — a marca vermelha e a verdade.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "system", "content":
+                             "UserPromptSubmit operation blocked by hook:\n[x]\n\n"
+                             "Original prompt: [de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas."}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps({"id": "b1", "text": "[de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas.",
+                                  "ts": 1787075400.0, "delivered": True, "attempts": 2,
+                                  "desistiu": True}) + "\n", encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    row = q.load()[0]
+    assert row["desistiu"] is True
+    assert "confirmed" not in row
+
+
+def test_reconcile_prefixo_nao_rouba_linha_do_exato(tmp_path):
+    # Parecer G2 rev1, bloqueador 2: X = "pode seguir" (perdida) / Y = "pode seguir com a Task 4
+    # agora" (chegou). Sem as RESERVADAS, o prefixo de X consumia a linha exata de Y: X virava
+    # entregue (falha escondida) e Y ganhava a marca "nao chegou" (o defeito da Task reaberto).
+    # A linha que casa EXATO com Y pertence a Y — nenhum prefixo a leva.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": "pode seguir com a Task 4 agora"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    rows = [
+        {"id": "X", "text": "pode seguir", "ts": 1787075400.0, "delivered": True,
+         "attempts": 2, "desistiu": True},
+        {"id": "Y", "text": "pode seguir com a Task 4 agora", "ts": 1787075500.0,
+         "delivered": True, "attempts": 2},
+    ]
+    q.path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787100000.0)
+    got = {r["id"]: r for r in q.load()}
+    assert got["X"]["desistiu"] is True and "confirmed" not in got["X"]  # perdida, honesta
+    assert got["Y"]["confirmed"] is True and "desistiu" not in got["Y"]  # chegou, sem marca
+
+
+def test_reconcile_prefixo_nao_rouba_linha_do_mais_especifico(tmp_path):
+    # Parecer G2 rev2, bloqueador 1: eco chega COM sufixo -> nenhuma das entradas casa exato,
+    # reservadas fica vazia, e a entrada mais CURTA levava a linha da mais especifica:
+    #   X = "Vamos fazer" (perdida) / Y = "Vamos fazer ate as 23 com o Deepseek" (chegou)
+    #   transcript: "Vamos fazer ate as 23 com o Deepseek — eu tinha mandado isso"
+    # A linha pertence a quem a reivindica de forma MAIS ESPECIFICA (dono = maior prefixo).
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user",
+                             "content": "Vamos fazer ate as 23 com o Deepseek — eu tinha mandado isso"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    rows = [
+        {"id": "X", "text": "Vamos fazer", "ts": 1787075400.0, "delivered": True,
+         "attempts": 2, "desistiu": True},
+        {"id": "Y", "text": "Vamos fazer ate as 23 com o Deepseek", "ts": 1787075500.0,
+         "delivered": True, "attempts": 2},
+    ]
+    q.path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787100000.0)
+    got = {r["id"]: r for r in q.load()}
+    assert got["X"]["desistiu"] is True and "confirmed" not in got["X"]  # perdida, honesta
+    assert got["Y"]["confirmed"] is True and "desistiu" not in got["Y"]  # chegou, sem marca

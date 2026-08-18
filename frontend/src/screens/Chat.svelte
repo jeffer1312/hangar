@@ -46,6 +46,7 @@
   } from '../lib/api';
   import { formataErro } from '../lib/errosApi';
   import { appendTail, hasSeam, prependOlder } from '../lib/history';
+  import { covers } from '../lib/covers';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
@@ -1013,16 +1014,9 @@
         // Dedup cruzado fila<->transcript: a fila duravel emite user_msg sintetico (id "queued-").
         // Quando o Claude Code grava o prompt real, chega o user_msg real -> tira o sintetico de
         // mesmo texto (por linha, pq ele pode fundir varias). E nao adiciona sintetico se o real
-        // ja existe. (covers: a "cobre" b se forem iguais ou b for uma linha de a.)
+        // ja existe. (covers: a "cobre" b se forem iguais, b for linha de a, ou b for prefixo
+        // de linha de a — o eco com sufixo, ver lib/covers.ts.)
         if (ev.kind === 'user_msg' && ev.text) {
-          const covers = (a: string, b: string) => {
-            const at = a.trim(), bt = b.trim();
-            if (at === bt || at.split('\n').some((ln) => ln.trim() === bt)) return true;
-            // Msg com imagem: eco/fila carrega "📎 imagem: <path>", o transcript grava so a legenda ->
-            // casa pela legenda canonica (senao a bolha com foto fica pendente eterna).
-            const ac = _cap(a), bc = _cap(b);
-            return !!bc && ac === bc;
-          };
           if (ev.id.startsWith('queued-')) {
             // Dedup INTEGRAL (todos os events): o follow re-emite a fila INTEIRA a cada reconexao;
             // limitar a janela (tentado em 2026-07-02) deixava entradas antigas escaparem e

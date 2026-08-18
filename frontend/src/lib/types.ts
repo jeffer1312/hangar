@@ -125,7 +125,8 @@ export interface ChatEvent {
   cache_read?: number | null;
   cache_ttl_s?: number | null;
   image_count?: number | null;   // imagens coladas no terminal -> busca lazy em /transcript-image
-  desistiu?: boolean | null;     // só em bolha "queued-": entrega dada como perdida (a TUI engoliu)
+  desistiu?: boolean | null;     // só em bolhas "queued-" e "held-" (não em evento real): entrega
+                                 // dada como perdida — a TUI engoliu as teclas ou o hook barrou o prompt
 }
 
 export interface StateEvent {
