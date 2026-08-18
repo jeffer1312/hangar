@@ -5,6 +5,18 @@
 # Re-aplica só o que o pull não atualiza sozinho (units, protocolo, deps, build do front).
 # Nada aqui pede senha. Pra desligar: rm .git/hooks/post-merge
 cd "$(git rev-parse --show-toplevel)" || exit 0
+
+# WORKTREE NAO INSTALA. `.git/hooks` e compartilhado entre o checkout principal e todas as
+# worktrees, entao um `git merge` dentro de uma worktree rodaria o instalador com o toplevel
+# valendo a worktree — e o install.sh reaponta unidades systemd, symlinks de ~/.local/bin e o
+# build do front pra ela. Medido em 17/08/2026: dois merges numa worktree tiraram o app do ar
+# duas vezes, e o rastro nao aparece em lugar nenhum porque quem roda e o git, nao quem digitou.
+# Numa worktree linkada o git-dir e .git/worktrees/<nome>; no checkout principal os dois batem.
+if [ "$(git rev-parse --absolute-git-dir)" != "$(cd "$(git rev-parse --git-common-dir)" && pwd)" ]; then
+  printf '\n\033[36m==>\033[0m hangar: worktree — pulando a atualização (instale a partir do checkout principal)\n'
+  exit 0
+fi
+
 printf '\n\033[36m==>\033[0m hangar: aplicando a atualização (post-merge)\n'
 # Git hook roda no bash do Git for Windows também, e lá quem atualiza é o install.ps1.
 case "$(uname -s)" in
