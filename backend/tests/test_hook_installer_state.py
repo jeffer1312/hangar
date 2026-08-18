@@ -88,3 +88,27 @@ def test_other_checkout_same_filename_is_left_alone(tmp_path):
     assert hi._ensure_event_hook(p, "Stop", NEW) is True
     cmds = [h["command"] for b in json.loads(p.read_text())["hooks"]["Stop"] for h in b["hooks"]]
     assert cmds == [alheio, NEW]
+
+
+def test_hook_nunca_bloqueia_e_script_of_ignora_o_sufixo():
+    # Telemetria não pode virar prompt bloqueado: todo command nosso termina em `|| exit 0`
+    # (incidente 17/08/2026 — venv de worktree apagado bloqueava todo prompt da máquina).
+    for cmd in (hi._COMMAND, hi._STATE_COMMAND, hi._PREVIEW_COMMAND):
+        assert cmd.endswith("|| exit 0")
+        # e o _sync_hook continua achando a NOSSA entrada pelo .py, não pelo "0" do sufixo
+        assert hi._script_of(cmd).endswith(".py")
+
+
+def test_entrada_antiga_sem_sufixo_vira_a_nova_no_lugar(tmp_path):
+    # Máquina que instalou o hook ANTES do sufixo: a entrada velha tem que ser atualizada
+    # no lugar (uma entrada só, agora com `|| exit 0`), nunca duplicada.
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+        {"hooks": [{"type": "command",
+                    "command": '"python3" "/velho/checkout/backend/hooks/state_hook.py"'}]}
+    ]}}))
+    assert hi._ensure_event_hook(settings, "UserPromptSubmit", hi._STATE_COMMAND, por_nome=True)
+    data = json.loads(settings.read_text())
+    entradas = [h["command"] for b in data["hooks"]["UserPromptSubmit"] for h in b["hooks"]
+                if hi._refers_to(h.get("command"), "state_hook.py", por_nome=True)]
+    assert entradas == [hi._STATE_COMMAND]

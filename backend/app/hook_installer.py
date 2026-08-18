@@ -13,13 +13,22 @@ HOOK = str((Path(__file__).parent.parent / "hooks" / "askq_capture.py").resolve(
 # Store que ABRE A LOJA em vez de rodar o hook). sys.executable ainda garante o Python do venv do
 # backend em vez de torcer pelo que estiver no PATH quando o Claude dispara o hook. Aspas nos dois
 # porque qualquer um dos caminhos pode ter espaco (C:\Program Files\..., "Application Support").
-_COMMAND = f'"{sys.executable}" "{HOOK}"'
+# `|| exit 0`: hook nosso e TELEMETRIA (estado, previa, captura) — falha dele NUNCA pode virar
+# prompt bloqueado. Sem isso, um venv apagado na maquina (o backend subiu de uma worktree que
+# depois perdeu o .venv — incidente de 17/08/2026 na maquina de casa) fazia o Claude Code recusar
+# TODO prompt da maquina com "operation blocked by hook". Vale em sh e no cmd do Windows.
+_FALHA_NAO_BLOQUEIA = " || exit 0"
+_COMMAND = f'"{sys.executable}" "{HOOK}"{_FALHA_NAO_BLOQUEIA}'
 _MATCHER = "AskUserQuestion"
 
 
 def _script_of(command: str) -> str:
-    """Caminho do script dentro de um command nosso ('"py" "X"' -> 'X'). E o ultimo token."""
-    return _tokens(command)[-1]
+    """Caminho do script dentro de um command nosso ('"py" "X"' -> 'X'). E o ultimo token
+    terminado em .py — o command carrega um `|| exit 0` atras, entao "ultimo token" cru
+    devolveria `0` e o _sync_hook passaria a casar hooks alheios."""
+    toks = _tokens(command)
+    return next((t.strip("\"'") for t in reversed(toks) if t.strip("\"'").endswith(".py")),
+                toks[-1])
 
 
 def _tokens(command: str) -> list[str]:
@@ -147,7 +156,7 @@ def _ensure_settings_file(settings_path: Path) -> bool:
 
 
 STATE_HOOK = str((Path(__file__).parent.parent / "hooks" / "state_hook.py").resolve())
-_STATE_COMMAND = f'"{sys.executable}" "{STATE_HOOK}"'  # mesma razao do _COMMAND acima
+_STATE_COMMAND = f'"{sys.executable}" "{STATE_HOOK}"{_FALHA_NAO_BLOQUEIA}'  # mesma razao do _COMMAND acima
 # SessionStart inclui o caso de abrir ja com --resume/clear (fixa o transcript ativo na hora); os
 # demais eventos cobrem o /resume feito DENTRO da sessao (marca no 1o prompt/tool depois dele).
 _STATE_EVENTS = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SessionStart"]
@@ -195,7 +204,7 @@ def ensure_state_hooks_installed() -> list[str]:
 
 
 PREVIEW_HOOK = str((Path(__file__).parent.parent / "hooks" / "preview_hook.py").resolve())
-_PREVIEW_COMMAND = f'"{sys.executable}" "{PREVIEW_HOOK}"'  # mesma razao do _COMMAND acima
+_PREVIEW_COMMAND = f'"{sys.executable}" "{PREVIEW_HOOK}"{_FALHA_NAO_BLOQUEIA}'  # mesma razao do _COMMAND acima
 # MessageDisplay = os deltas do texto em voo (Claude Code >= 2.1.152); Stop = zera a previa no fim
 # do turno ("" e resposta, nao ausencia — ver o contrato em app/preview.py).
 _PREVIEW_EVENTS = ["MessageDisplay", "Stop"]
