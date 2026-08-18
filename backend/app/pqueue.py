@@ -52,8 +52,32 @@ def _linhas_da_entrada(r: dict) -> set[str]:
     return ls
 
 
+def _dono_do_prefixo(rows: list[dict], disponiveis: set[str]) -> dict[str, str]:
+    """Linha do transcript -> o MAIOR prefixo que alguma entrada pendente reivindica nela.
+
+    `reservadas` resolve exato-contra-prefixo. Isto resolve prefixo-contra-prefixo: com o eco
+    chegando com SUFIXO, NENHUMA das entradas casa exato (reservadas fica vazia) e a entrada mais
+    CURTA levava a linha da mais especifica — invertendo as duas marcas de novo (X perdida vira
+    entregue, Y que chegou ganha 'nao chegou'). A regra das duas e uma so: a linha pertence a quem
+    a reivindica de forma MAIS ESPECIFICA — exato ganha de prefixo; prefixo mais longo ganha de
+    prefixo mais curto.
+    """
+    dono: dict[str, str] = {}
+    for r in rows:
+        if r.get("delivered") is not True or r.get("confirmed"):
+            continue
+        for ln in _linhas_da_entrada(r):
+            if len(ln) < _PREFIXO_MIN:
+                continue
+            for d in disponiveis:
+                if d.startswith(ln) and len(ln) > len(dono.get(d, "")):
+                    dono[d] = ln
+    return dono
+
+
 def _casam(linhas: set[str], disponiveis: set[str],
-           reservadas: frozenset[str] = frozenset()) -> set[str]:
+           reservadas: frozenset[str] = frozenset(),
+           dono: dict[str, str] | None = None) -> set[str]:
     """Linhas do transcript que `linhas` (de UMA entrada da fila) cobrem: iguais + prefixos.
 
     O eco pode chegar com SUFIXO — medido em 18/08/2026: a fila digitou "Vamos fazer ate as 23
@@ -62,18 +86,21 @@ def _casam(linhas: set[str], disponiveis: set[str],
     chegou' sobre uma msg que CHEGOU. Piso de comprimento pro prefixo: resposta curta nao
     confirma frase alheia.
 
-    `reservadas` (linhas que casam EXATO com outra entrada PENDENTE) ficam de fora do prefixo:
-    pertencem a quem casa exato — sem isto, "pode seguir" (perdida) comeria a linha de "pode
-    seguir com a Task 4 agora" (chegou) e os dois ficariam invertidos (medido no parecer G2
-    rev1, bloqueador 2). E o prefixo consome UMA linha por linha da fila (a mais curta = a menos
-    abrangente), nao todas.
+    Prioridade (parecer G2 rev2, bloqueador 1): a linha do transcript pertence a quem a
+    reivindica de forma MAIS ESPECIFICA. `reservadas` = linha que casa EXATO com outra entrada
+    pendente pertence a ela (prefixo nenhum a leva). `dono` = linha com sufixo pertence ao MAIOR
+    prefixo que a reivindica (sem isto, "Vamos fazer" comeria a linha de "Vamos fazer ate as 23
+    com o Deepseek" e as marcas invertiam). E o prefixo consome UMA linha por linha da fila (a
+    mais curta = a menos abrangente), nao todas.
     """
     consumidas: set[str] = set()
     for ln in linhas:
         if ln in disponiveis:
             consumidas.add(ln)
         elif len(ln) >= _PREFIXO_MIN:
-            cands = sorted((d for d in disponiveis if d.startswith(ln) and d not in reservadas),
+            cands = sorted((d for d in disponiveis
+                            if d.startswith(ln) and d not in reservadas
+                            and (dono is None or dono.get(d) == ln)),
                            key=len)
             if cands:
                 consumidas.add(cands[0])
@@ -408,6 +435,10 @@ class PromptQueue:
                 _linhas_da_entrada(r) & disponiveis
                 for r in rows if r.get("delivered") is True and not r.get("confirmed")
             ] or [frozenset()])
+            # Linha com sufixo (nenhuma entrada casa exato nelas) -> pertence ao MAIOR prefixo que
+            # a reivindica; sem isto a entrada mais curta levava a linha da mais especifica e as
+            # duas marcas invertiam (parecer G2 rev2, bloqueador 1).
+            dono = _dono_do_prefixo(rows, disponiveis)
             for r in rows:
                 if r.get("delivered") is not True or r.get("confirmed"):
                     continue
@@ -425,7 +456,7 @@ class PromptQueue:
                     if ts < min_ts:
                         continue
                     linhas_r = _linhas_da_entrada(r)
-                    casou = _casam(linhas_r, disponiveis, reservadas)
+                    casou = _casam(linhas_r, disponiveis, reservadas, dono)
                     if casou:
                         disponiveis -= casou    # a(s) linha(s) foi usada: nao confirma outra entrada
                         r["confirmed"] = True
@@ -442,7 +473,7 @@ class PromptQueue:
                 # podado deixava msg com anexo orfa -> requeue indevido.
                 text_raw = str(r.get("text") or "").strip()
                 lines = _linhas_da_entrada(r)
-                cons = _casam(lines, disponiveis, reservadas)
+                cons = _casam(lines, disponiveis, reservadas, dono)
                 if not text_raw or cons:
                     disponiveis -= cons            # as linhas casadas confirmam UMA entrada so
                     r["confirmed"] = True

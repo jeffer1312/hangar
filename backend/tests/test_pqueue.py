@@ -904,10 +904,13 @@ def test_committed_lines_NAO_contam_recado_preso_em_system(tmp_path):
     j = tmp_path / "t.jsonl"
     j.write_text(json.dumps({"type": "system", "content":
                              "UserPromptSubmit operation blocked by hook:\n[x]\n\n"
-                             "Original prompt: [de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas."}) + "\n",
+                             "Original prompt: [de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas."}) + "\n" +
+                 json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": "uma msg normal que chegou"}}) + "\n",
                  encoding="utf-8")
     lines = pqueue.committed_user_lines(str(j))
     assert "[de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas." not in lines
+    assert "uma msg normal que chegou" in lines   # o oraculo segue vivo: so o system fica fora
 
 
 def test_reconcile_desistida_mantem_marca_com_system_no_transcript(tmp_path):
@@ -945,6 +948,32 @@ def test_reconcile_prefixo_nao_rouba_linha_do_exato(tmp_path):
         {"id": "X", "text": "pode seguir", "ts": 1787075400.0, "delivered": True,
          "attempts": 2, "desistiu": True},
         {"id": "Y", "text": "pode seguir com a Task 4 agora", "ts": 1787075500.0,
+         "delivered": True, "attempts": 2},
+    ]
+    q.path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787100000.0)
+    got = {r["id"]: r for r in q.load()}
+    assert got["X"]["desistiu"] is True and "confirmed" not in got["X"]  # perdida, honesta
+    assert got["Y"]["confirmed"] is True and "desistiu" not in got["Y"]  # chegou, sem marca
+
+
+def test_reconcile_prefixo_nao_rouba_linha_do_mais_especifico(tmp_path):
+    # Parecer G2 rev2, bloqueador 1: eco chega COM sufixo -> nenhuma das entradas casa exato,
+    # reservadas fica vazia, e a entrada mais CURTA levava a linha da mais especifica:
+    #   X = "Vamos fazer" (perdida) / Y = "Vamos fazer ate as 23 com o Deepseek" (chegou)
+    #   transcript: "Vamos fazer ate as 23 com o Deepseek — eu tinha mandado isso"
+    # A linha pertence a quem a reivindica de forma MAIS ESPECIFICA (dono = maior prefixo).
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user",
+                             "content": "Vamos fazer ate as 23 com o Deepseek — eu tinha mandado isso"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    rows = [
+        {"id": "X", "text": "Vamos fazer", "ts": 1787075400.0, "delivered": True,
+         "attempts": 2, "desistiu": True},
+        {"id": "Y", "text": "Vamos fazer ate as 23 com o Deepseek", "ts": 1787075500.0,
          "delivered": True, "attempts": 2},
     ]
     q.path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
