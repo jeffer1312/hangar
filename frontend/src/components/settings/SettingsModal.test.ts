@@ -30,6 +30,7 @@ vi.mock('../../lib/contaEstado', async (importOriginal) => {
 });
 vi.mock('../../lib/auth', () => ({
   serverColor: () => '#fff',
+  serverIdentidade: vi.fn(() => 'global'),
   listServers: vi.fn(),
   getActiveId: vi.fn(),
   selectServer: vi.fn(),

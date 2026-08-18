@@ -9,7 +9,7 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   import { listarEstadosDeConta, formatarIntervalo, type ContaEstado } from '../../lib/contaEstado';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
   import { initials } from '../../lib/format';
-  import type { Server } from '../../lib/auth';
+  import { serverIdentidade, type Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
 
   // Contrato do apiTarget (o mesmo de ServidoresSettings): null = servidor ATIVO (API global com
@@ -57,8 +57,16 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
   // defeito que a Task 5 antiga levou duas rodadas pra fechar (33b0bffb, fa43b83e).
   let geracao = 0;
   let alvoAnterior: Server | null = null;
+  // Identidade COMPOSTA (id+label+baseUrl+token), não o objeto: o App reconstrói o Server a cada
+  // listServers() (JSON.parse do localStorage) e o sync sobe versaoServidores sem o usuário tocar
+  // na aba — comparar o objeto matava um login em voo com o servidor sendo o MESMO (R1 do parecer;
+  // mesmo contrato do SettingsModal.svelte:23-26).
+  let identidadeAnterior: string | null = null;
 
   $effect(() => {
+    const identidade = serverIdentidade(apiTarget);
+    if (identidade === identidadeAnterior) return;
+    identidadeAnterior = identidade;
     const meu = ++geracao;
     const alvoVelho = alvoAnterior;
     alvoAnterior = apiTarget;
@@ -229,6 +237,10 @@ import { criarConta, apagarConta, isAbortError, isTimeoutError } from '../../lib
       await carregar(geracao);
     } catch (e) {
       loginErro = e instanceof Error && e.message ? e.message : m.falha_conexao();
+      // O erro NÃO prova que o login falhou: o teto pode ter cortado com o backend SEGUINDO
+      // (a conta acaba logada de verdade). Recarregar a lista para de mentir sozinha — a tela
+      // mostra a conta como o servidor a vê (parecer da rodada 1, passo 4).
+      await carregar(geracao);
     } finally {
       loginEnviando = false;
     }

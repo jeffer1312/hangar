@@ -296,6 +296,7 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(ContasSettings, { target: el, props });
+    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
     await tick(); await tick(); await tick();
     el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
     await tick(); await tick(); await tick(); await tick();
@@ -330,6 +331,51 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     // A lista na tela é a de B; a resposta atrasada de A (label 'jefferson') foi descartada.
     expect([...el.querySelectorAll('.ct-nome')].map((n) => n.textContent)).toEqual(['bbbb']);
     unmount(comp as never);
+  });
+
+  it('objeto NOVO com a MESMA identidade não é troca de alvo: login em voo sobrevive (R1)', async () => {
+    // O App reconstrói o Server a cada listServers() (JSON.parse do localStorage) e o sync sobe
+    // versaoServidores sem o usuário tocar na aba — comparar o OBJETO mataria o login em voo com
+    // o servidor sendo o mesmo. O guard compara a identidade composta (id+label+baseUrl+token).
+    const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+    const props = criarProps({ apiTarget: A as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ContasSettings, { target: el, props });
+    estadoMock.listarEstadosDeConta.mockResolvedValue([DESLOGADA]);
+    await tick(); await tick(); await tick();
+    el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(loginMock.iniciarLogin).toHaveBeenCalledWith(A, 'testes');
+    const chamadas = estadoMock.listarEstadosDeConta.mock.calls.length;
+    props.apiTarget = { ...A };   // MESMO servidor, objeto reconstruído
+    await tick(); await tick(); await tick();
+    expect(loginMock.cancelarLogin).not.toHaveBeenCalled();
+    expect(el.querySelector('.ct-login')).not.toBeNull();
+    expect(estadoMock.listarEstadosDeConta.mock.calls.length).toBe(chamadas);
+    unmount(comp as never);
+  });
+
+  it('confirmar com erro ainda recarrega a lista — o login pode ter completado no servidor (parecer passo 4)', async () => {
+    // Teto estourado corta o cliente mas o backend SEGUE: a conta acaba logada. A lista tem de
+    // recarregar mesmo no ramo de erro, senão a tela mente sozinha dizendo deslogada.
+    loginMock.confirmarLogin.mockRejectedValueOnce(
+      Object.assign(new Error(m.erro_login_timeout()), { status: 0 }));
+    const t = montar([DESLOGADA]);
+    await tick(); await tick();
+    t.el.querySelector<HTMLButtonElement>('.ct-acao.primaria')!.click();
+    await tick(); await tick(); await tick(); await tick();
+    const input = t.el.querySelector<HTMLInputElement>('.ct-campo-cod')!;
+    input.value = 'CODE-123';
+    input.dispatchEvent(new Event('input'));
+    await tick();
+    const rodapeLogin = [...t.el.querySelectorAll<HTMLElement>('.ct-rodape')][1];
+    rodapeLogin.querySelector<HTMLButtonElement>('.ct-btn.primario')!.click();
+    await tick(); await tick(); await tick();
+    // montagem + recarga do ramo de erro: a lista não fica presa no estado antigo.
+    expect(estadoMock.listarEstadosDeConta.mock.calls.length).toBe(2);
+    expect(t.el.querySelector<HTMLElement>('.ct-aviso.erro')!.textContent).toContain(m.erro_login_timeout());
+    unmount(t.comp);
   });
 
   it('confirmar com campo vazio não chama a API', async () => {
