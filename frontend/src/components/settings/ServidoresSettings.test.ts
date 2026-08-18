@@ -742,4 +742,116 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     expect(peersMock.gravarPeer.mock.calls.length).toBe(2);
     unmount(comp as never);
   });
+
+  // Rodada 3 (parecer do revisor): selos de lado derivados do ESTADO — o sucesso não pode
+  // mostrar ✗ (o glifo não é mais texto chumbado); a montagem checa a ida da lista; e o bloco
+  // de correção de endereço ganha vida (testa no endereço digitado).
+  async function gestoRegistrar(id: string, url: string, token: string, t: { el: HTMLElement }) {
+    t.el.querySelector<HTMLButtonElement>('.pr-btn.primaria')!.click();
+    await tick();
+    const inputs = document.querySelectorAll<HTMLInputElement>('.pr-form-input');
+    inputs[0].value = id; inputs[0].dispatchEvent(new Event('input'));
+    inputs[1].value = url; inputs[1].dispatchEvent(new Event('input'));
+    inputs[2].value = token; inputs[2].dispatchEvent(new Event('input'));
+    await tick();
+    document.querySelector<HTMLButtonElement>('.confirm-card .c-primary')!.click();
+    await esperarCarga();
+  }
+
+  it('B2 — sucesso com os dois lados ok não mostra ✗ em nenhum selo; falha mostra só na volta', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([]);
+    peersMock.gravarPeer.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    peersMock.listarPeers.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    // sucesso: ida ok + volta ok
+    peersMock.checkPeer.mockImplementation(async () => ({ estado: 'ok' }) as never);
+    const t = montar();
+    await esperarCarga();
+    await gestoRegistrar('notebook', 'http://192.168.0.77:8765', 'segredo', t);
+    const lados = [...t.el.querySelectorAll<HTMLElement>('.pr-lado')];
+    expect(lados).toHaveLength(2);
+    for (const l of lados) expect(l.textContent).not.toContain('✗');
+    expect(lados[0].textContent).toContain(m.peers_lado_ida());
+    expect(lados[1].textContent).toContain(m.peers_lado_volta());
+    unmount(t.comp);
+
+    // falha: a volta recusou → ✗ só no selo da volta, ✓ no da ida. Montagem com lista VAZIA
+    // (nenhuma checagem pré-gesto consome os drives do check), e o gesto re-lista com o peer.
+    peersMock.listarPeers.mockResolvedValueOnce([]);
+    peersMock.listarPeers.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'recusou', motivo: 'credencial' });
+    const t2 = montar();
+    await esperarCarga();
+    await gestoRegistrar('notebook', 'http://192.168.0.77:8765', 'segredo', t2);
+    const l2 = [...t2.el.querySelectorAll<HTMLElement>('.pr-lado')];
+    expect(l2[0].textContent).toContain('✓');
+    expect(l2[0].textContent).not.toContain('✗');
+    expect(l2[1].textContent).toContain('✗');
+    expect(l2[1].textContent).not.toContain('✓');
+    unmount(t2.comp);
+  });
+
+  it('B3 — peers já na lista são checados na montagem: nada fica "Testando…" e checkPeer roda por peer', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([
+      { id: 'notebook', base_url: 'http://n:8765', token: '••••' },
+      { id: 'nuvem', base_url: 'http://nv:8765', token: '••••' },
+    ]);
+    const t = montar();
+    await esperarCarga();
+    // uma checagem de IDA por peer, com id e endereço DELE
+    expect(peersMock.checkPeer).toHaveBeenCalledTimes(2);
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(null, 'http://n:8765', 'notebook');
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(null, 'http://nv:8765', 'nuvem');
+    // nenhuma linha presa em "Testando as duas pontas…" (agora mostram o estado real + '·' na volta)
+    expect(t.el.textContent).not.toContain(m.peers_estado_testando());
+    const linhas = [...t.el.querySelectorAll('.pr-linha')];
+    expect(linhas).toHaveLength(2);
+    for (const l of linhas) {
+      expect(l.querySelector('.pr-estado')?.textContent).not.toContain(m.peers_estado_testando());
+    }
+    unmount(t.comp);
+  });
+
+  it('B4 — "Testar de novo" do bloco de correção registra e testa no ENDEREÇO DIGITADO', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.gravarPeer.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    // montagem com lista vazia (nada consome os drives do check); o gesto e a correção re-listam
+    // com o peer — sem isto o card some junto com o bloco de correção.
+    peersMock.listarPeers.mockResolvedValueOnce([]);
+    peersMock.listarPeers.mockImplementation(async () => [
+      { id: 'notebook', base_url: 'http://192.168.0.77:8765', token: 'segredo' },
+    ] as never);
+    const t = montar();
+    await esperarCarga();
+    // gesto com a volta recusando: o bloco de correção abre
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'recusou', motivo: 'credencial' });
+    await gestoRegistrar('notebook', 'http://192.168.0.77:8765', 'segredo', t);
+    const campo = t.el.querySelector<HTMLInputElement>('.corrige-input');
+    expect(campo).not.toBeNull();   // bloco aberto
+    // o usuário digita o endereço CERTO e clica em "Testar de novo"
+    campo!.value = 'http://novo:9999';
+    campo!.dispatchEvent(new Event('input'));
+    await tick();
+    t.el.querySelector<HTMLButtonElement>('.corrige .btn.primaria')!.click();
+    // o gesto de correção roda contra o NOVO endereço (hoje não rodava contra nada)
+    await esperarCarga();
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ id: 'notebook', base_url: 'http://novo:9999', token: 'segredo' }),
+    );
+    // o bloco só fecha quando o par fecha (o r.ok do segundo giro, com o mock default ok)
+    expect(t.el.querySelector('.corrige')).toBeNull();
+    unmount(t.comp);
+  });
 });

@@ -2,7 +2,7 @@
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { getSessions } from '../../lib/api';
-  import { getIdentificador, setIdentificador, listarPeers, removerPeer,
+  import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeer,
            type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
   import { pushSupported } from '../../lib/push';
@@ -214,7 +214,7 @@
     // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
     // pertencem à máquina que saiu da tela.
     idErro = ''; peersErro = ''; mostrandoRegistro = false; removerPeerId = null;
-    corrigeId = null;
+    corrigeId = null; corrigeUrl = ''; corrigeToken = '';
     // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
     idSalvando = false; regSalvando = false;
@@ -253,11 +253,34 @@
       const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
       peers = lista;
+      // Task 8 (rodada 3): cada peer da lista ganha o estado REAL da ida ao montar — uma linha
+      // nunca fica em "Testando as duas pontas…" quando ninguém está testando. Só a IDA: o token
+      // do peer não volta da lista (PeerView.token é máscara), então a volta honesta é o selo
+      // '·' ("não sei daqui"); a volta real só existe a partir do gesto de registrar.
+      void checarLista(meu);
     } catch (e) {
       if (meu !== geracao) return;
       peersErro = msgErro(e);
     } finally {
       if (meu === geracao) peersCarregando = false;
+    }
+  }
+
+  async function checarLista(meu: number) {
+    const resultados = await Promise.all(peers.map(async (p) => {
+      const ida = await checkPeer(apiTarget, p.base_url, p.id).catch((e) => ({
+        estado: 'falhou' as const,
+        motivo: String((e as Error)?.message ?? e),
+      }));
+      return [p.id, ida] as const;
+    }));
+    // Guard de geração: a resposta de um alvo que a aba já não mostra não escreve na tela.
+    if (meu !== geracao) return;
+    for (const [id, ida] of resultados) {
+      estados = { ...estados, [id]: {
+        lados: [{ lado: 'ida', ...ida }, { lado: 'volta', estado: 'nao_configurado' }],
+        ok: false,
+      } };
     }
   }
 
@@ -292,6 +315,13 @@
   // Estados de checagem por peer: id -> {lados, ok, endereco_alternativo} (Task 8).
   let estados = $state<Record<string, { lados: LadoState[]; ok: boolean; endereco_alternativo?: string }>>({});
   let corrigeId = $state<string | null>(null);
+  let corrigeUrl = $state('');       // endereço digitado no bloco de correção (bind:value)
+  let corrigeToken = $state('');     // credencial do gesto que abriu o bloco (não volta da lista)
+
+  // Selo de UM lado derivado do estado (Task 8, rodada 3): ✓ passou, ✗ falhou, · não sei
+  // (nao_configurado — nunca é nem uma coisa nem outra). O glifo não é mais texto chumbado.
+  const selo = (l?: LadoState) =>
+    l?.estado === 'ok' ? '✓' : l && l.estado !== 'nao_configurado' ? '✗' : '·';
 
   function abrirRegistro() {
     mostrandoRegistro = true;
@@ -318,7 +348,13 @@
       peers = lista;
       // O estado dos dois lados fica na tela (mock estados 2 e 3).
       estados = { ...estados, [id]: { lados: r.lados, ok: r.ok, endereco_alternativo: r.endereco_alternativo } };
-      if (!r.ok) corrigeId = id;
+      if (!r.ok) {
+        // Bloco de correção aberto no endereço que FALHOU — com a credencial do gesto guardada
+        // (o token não volta da lista; é o que "Testar de novo" reusa no endereço digitado).
+        corrigeId = id;
+        corrigeUrl = url;
+        corrigeToken = token;
+      }
       mostrandoRegistro = false;
     } catch (e) {
       if (meu !== geracao) return;
@@ -328,9 +364,29 @@
     }
   }
 
-  // Fecha o bloco de correção (o usuário escolheu "deixar só de ida" ou "testar de novo").
+  // Fecha o bloco de correção (o usuário escolheu "deixar só de ida" — aceita o estado parcial).
   function fecharCorrige() {
     corrigeId = null;
+    corrigeUrl = '';
+    corrigeToken = '';
+  }
+
+  // "Testar de novo": re-registra e re-testa o peer no ENDEREÇO DIGITADO (o bloco de correção
+  // existe justamente para testar um endereço novo). Só fecha quando o par fecha; senão o estado
+  // novo fica à vista. Risco do token guardado: regToken do gesto que abriu o bloco (não volta
+  // da lista, que mascara) — mesmo contrato do registrarPeer.
+  async function testarDeNovo(peer: PeerView) {
+    const url = corrigeUrl.trim();
+    if (!/^https?:\/\//.test(url)) { peersErro = m.url_invalida(); return; }
+    try {
+      const r = await registrarPeerDoisLados(apiTarget, { id: peer.id, base_url: url, token: corrigeToken });
+      const lista = await listarPeers(apiTarget);
+      peers = lista;
+      estados = { ...estados, [peer.id]: { lados: r.lados, ok: r.ok, endereco_alternativo: r.endereco_alternativo } };
+      if (r.ok) { corrigeId = null; corrigeUrl = ''; corrigeToken = ''; }
+    } catch (e) {
+      peersErro = msgErro(e);
+    }
   }
 
   let removerPeerId = $state<string | null>(null);
@@ -456,8 +512,8 @@
         </span>
         {#if st}
           <span class="pr-lados">
-            <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>✓ {m.peers_lado_ida()}</span>
-            <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>✗ {m.peers_lado_volta()}</span>
+        <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>{selo(ida)} {m.peers_lado_ida()}</span>
+            <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>{selo(volta)} {m.peers_lado_volta()}</span>
           </span>
         {/if}
         <button class="pr-btn min" onclick={() => (removerPeerId = peer.id)}>{m.peers_remover()}</button>
@@ -468,9 +524,9 @@
             {m.peers_corrige_1({ nome: peer.id, endereco: peer.base_url })}
           </p>
           <p><b>{m.peers_corrige_pergunta({ nome: peer.id })}</b></p>
-          <input class="corrige-input" value={peer.base_url} aria-label={m.peers_corrige_pergunta({ nome: peer.id })} />
+          <input class="corrige-input" bind:value={corrigeUrl} aria-label={m.peers_corrige_pergunta({ nome: peer.id })} />
           <div class="acoes">
-            <button class="btn primaria" onclick={() => fecharCorrige()}>{m.peers_testar_novamente()}</button>
+            <button class="btn primaria" onclick={() => testarDeNovo(peer)}>{m.peers_testar_novamente()}</button>
             <button class="btn" onclick={() => fecharCorrige()}>{m.peers_so_ida()}</button>
           </div>
         </div>

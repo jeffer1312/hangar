@@ -6,7 +6,8 @@
 // Um lado falhar não pode deixar o outro registrado em silêncio — o par completo só vira sucesso
 // quando os dois gravaram E os dois testes passaram.
 import type { Server } from './auth';
-import { checkPeer, gravarPeer, listarPeers, type PeerView } from './peers';
+import { getBaseUrl, getToken } from './auth';
+import { checkPeer, getIdentificador, gravarPeer } from './peers';
 
 export interface LadoState {
   lado: 'ida' | 'volta';
@@ -34,9 +35,8 @@ export async function registrarPeerDoisLados(
   // 1) Grava o peer no DONO (o lado que a aba edita): o vínculo local. `dono` null = modo
   //    global — o cliente `gravarPeer(null, …)` usa o servidor ATIVO (mesmo contrato do
   //    resto da aba). Sem servidor nenhum cadastrado a gravação falha e o erro é nomeado.
-  let lista: PeerView[] = [];
   try {
-    lista = await gravarPeer(dono, {
+    await gravarPeer(dono, {
       id: alvo.id,
       base_url: alvo.base_url,
       token: alvo.token,
@@ -50,22 +50,26 @@ export async function registrarPeerDoisLados(
     };
   }
 
-  // 2) Se o DONO tem uma credencial de servidor salva para o peer (a aba Servidores mostra a
-  //    lista de peers do alvo), grava também no peer: A em B e B em A. Sem credencial do peer,
-  //    o lado "volta" fica nao_configurado (não é defeito — o mock estado 2 tem os dois).
-  const peerSalvo = Array.isArray(lista) ? lista.find((p) => p.id === alvo.id) : undefined;
-  if (peerSalvo) {
+  // 2) Resolve a identidade do DONO — o que o peer precisa guardar para chamar esta máquina
+  //    de volta: o nome REAL do backend (CP_SERVER_ID), não o rótulo local do celular.
+  const remoto: Server = { id: alvo.id, label: alvo.id, baseUrl: alvo.base_url, token: alvo.token };
+  const meuBase = dono?.baseUrl ?? getBaseUrl();
+  const meuToken = dono?.token ?? getToken() ?? '';
+  let meuId = '';
+  try { meuId = (await getIdentificador(dono)).identificador ?? ''; } catch { meuId = ''; }
+
+  // 3) Sem o identificador do DONO (servidor sem CP_SERVER_ID) nada é gravado no peer — gravar
+  //    com id vazio tomaria 400 do validar_id — e a volta vira estado nomeado (não é defeito).
+  if (meuId) {
     try {
-      await gravarPeer(
-        { id: alvo.id, label: alvo.id, baseUrl: alvo.base_url, token: alvo.token },
-        { id: alvo.id, base_url: alvo.base_url, token: alvo.token },
-      );
+      await gravarPeer(remoto, { id: meuId, base_url: meuBase, token: meuToken });
     } catch {
       // gravação do lado do peer falhou: o estado real sai da checagem abaixo
     }
   }
 
-  // 3) Testa os dois lados, cada um com a primitiva de alcance (Task 8 reusa a da Task 3).
+  // 4) Testa os dois lados. A ida pergunta ao DONO sobre o ALVO; a volta pergunta ao PEER sobre
+  //    o DONO (o espelho do que acabamos de gravar — quem responde é a máquina de cá).
   //    `dono` null = modo global: a checagem da ida usa o servidor ATIVO (cliente com alvo null).
   const lados: LadoState[] = [];
   const ida = await checkPeer(dono, alvo.base_url, alvo.id).catch((e) => ({
@@ -73,17 +77,16 @@ export async function registrarPeerDoisLados(
     motivo: String((e as Error)?.message ?? e),
   }));
   lados.push({ lado: 'ida', ...ida });
-  if (peerSalvo) {
-    // O lado remoto fala com o servidor EXPLÍCITO (a credencial guardada do peer) — o mesmo
-    // contrato de apiFetchForServer: um 401 daqui não pode derrubar a credencial ativa.
-    const remoto: Server = { id: alvo.id, label: alvo.id, baseUrl: alvo.base_url, token: alvo.token };
-    const volta = await checkPeer(remoto, alvo.base_url, alvo.id).catch((e) => ({
+  if (meuId) {
+    // O lado remoto fala com o servidor EXPLÍCITO do peer (a credencial guardada do par) — o
+    // mesmo contrato de apiFetchForServer: um 401 daqui não pode derrubar a credencial ativa.
+    const volta = await checkPeer(remoto, meuBase, meuId).catch((e) => ({
       estado: 'falhou' as const,
       motivo: String((e as Error)?.message ?? e),
     }));
     lados.push({ lado: 'volta', ...volta });
   } else {
-    lados.push({ lado: 'volta', estado: 'nao_configurado' });
+    lados.push({ lado: 'volta', estado: 'nao_configurado', motivo: 'identificador' });
   }
 
   const ok = lados.every((l) => l.estado === 'ok');

@@ -13,10 +13,15 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
+vi.mock('./auth', () => ({
+  getBaseUrl: vi.fn(() => 'http://casa:8765'),
+  getToken: vi.fn(() => 'tcasa'),
+}));
+
 vi.mock('./peers', () => ({
   gravarPeer: vi.fn(),
-  listarPeers: vi.fn(),
   checkPeer: vi.fn(),
+  getIdentificador: vi.fn(async () => ({ identificador: 'srv-casa' })),
 }));
 
 const { registrarPeerDoisLados } = await import('./registrarPeerDoisLados');
@@ -25,36 +30,36 @@ const peersMock = vi.mocked(peers);
 
 const DONO: Server = { id: 'srv-casa', label: 'casa', baseUrl: 'http://casa:8765', token: 'tcasa' } as Server;
 const NOTEBOOK = { id: 'notebook', base_url: 'http://notebook:8765', token: 'tnot' };
+// O peer (B) — o servidor EXPLÍCITO que a volta usa para falar com B e B com A.
+const REMOTO_B = expect.objectContaining({ baseUrl: 'http://notebook:8765', token: 'tnot' });
+// O DONO como B deve guardar: o id real do backend do dono + a credencial dele.
+const DONO_NO_PEER = { id: 'srv-casa', base_url: 'http://casa:8765', token: 'tcasa' };
 
 beforeEach(() => { vi.clearAllMocks(); store.clear(); });
 
 describe('registrarPeerDoisLados — os dois lados, sucesso e falha nomeada', () => {
-  it('os dois gravam e os dois testes passam → sucesso silencioso, dois selos ok', async () => {
-    peersMock.gravarPeer.mockResolvedValueOnce([
-      { id: 'notebook', base_url: 'http://notebook:8765', token: '•••' },
-    ]);   // grava no dono
-    peersMock.gravarPeer.mockResolvedValueOnce([
-      { id: 'notebook', base_url: 'http://notebook:8765', token: 'tnot' },
-    ]);   // grava no peer (volta)
-    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });    // ida
-    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });    // volta
+  it('grava o alvo no dono E o dono no peer; os dois testes passam → dois selos ok', async () => {
+    peersMock.gravarPeer.mockResolvedValueOnce([NOTEBOOK]);   // grava no dono
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });    // ida (dono pergunta sobre o alvo)
+    peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });    // volta (peer pergunta sobre o dono)
     const r = await registrarPeerDoisLados(DONO, NOTEBOOK);
     expect(r.ok).toBe(true);
     expect(r.lados).toEqual([
       { lado: 'ida', estado: 'ok' },
       { lado: 'volta', estado: 'ok' },
     ]);
-    // gravação no DONO (o alvo da aba) e no PEER (A em B, B em A)
+    // A em B: grava o ALVO no dono, e o DONO no peer (A em B, B em A).
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(DONO, NOTEBOOK);
-    expect(peersMock.gravarPeer).toHaveBeenCalledWith(
-      expect.objectContaining({ baseUrl: 'http://notebook:8765', token: 'tnot' }),
-      NOTEBOOK,
-    );
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(REMOTO_B, DONO_NO_PEER);
+    // A ida pergunta ao dono pelo alvo; a volta pergunta ao PEER pelo DONO (não por ele mesmo).
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(DONO, 'http://notebook:8765', 'notebook');
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(REMOTO_B, 'http://casa:8765', 'srv-casa');
+    // o identificador do dono veio do backend (CP_SERVER_ID), não do rótulo local
+    expect(peersMock.getIdentificador).toHaveBeenCalledWith(DONO);
   });
 
   it('um lado falha → ok=false, nomeia o lado e o estado; o outro registrado NÃO vira silêncio', async () => {
-    peersMock.gravarPeer.mockResolvedValueOnce([NOTEBOOK]);
-    peersMock.gravarPeer.mockResolvedValueOnce([NOTEBOOK]);   // volta grava
+    peersMock.gravarPeer.mockResolvedValueOnce([NOTEBOOK]);   // grava no dono
     peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });    // ida OK
     peersMock.checkPeer.mockResolvedValueOnce({ estado: 'recusou', motivo: 'credencial' });  // volta recusou
     const r = await registrarPeerDoisLados(DONO, NOTEBOOK);
@@ -74,29 +79,33 @@ describe('registrarPeerDoisLados — os dois lados, sucesso e falha nomeada', ()
     expect(peersMock.checkPeer).not.toHaveBeenCalled();
   });
 
-  it('sem credencial salva do peer, o lado volta fica nao_configurado (não é defeito)', async () => {
-    peersMock.gravarPeer.mockResolvedValueOnce([]);   // dono não guardou credencial do peer
+  it('sem identificador do dono, a volta fica nao_configurado e NADA é gravado no peer', async () => {
+    peersMock.getIdentificador.mockResolvedValueOnce({ identificador: '' });
+    peersMock.gravarPeer.mockResolvedValueOnce([NOTEBOOK]);   // só a gravação no dono
     peersMock.checkPeer.mockResolvedValueOnce({ estado: 'ok' });    // ida
     const r = await registrarPeerDoisLados(DONO, NOTEBOOK);
     expect(r.ok).toBe(false);   // sem os dois lados não é sucesso
     expect(r.lados).toEqual([
       { lado: 'ida', estado: 'ok' },
-      { lado: 'volta', estado: 'nao_configurado' },
+      { lado: 'volta', estado: 'nao_configurado', motivo: 'identificador' },
     ]);
-    expect(peersMock.gravarPeer).toHaveBeenCalledTimes(1);
+    expect(peersMock.gravarPeer).toHaveBeenCalledTimes(1);   // nada no peer (id vazio daria 400)
+    expect(peersMock.checkPeer).toHaveBeenCalledTimes(1);    // só a ida rodou
   });
 
-  it('dono null (modo global) grava no servidor ATIVO e testa a ida', async () => {
+  it('dono null (modo global) grava no servidor ATIVO e a volta usa a credencial do ativo', async () => {
     peersMock.gravarPeer.mockImplementation(async () => [NOTEBOOK] as never);
     peersMock.checkPeer.mockImplementation(async () => ({ estado: 'ok' }) as never);
     const r = await registrarPeerDoisLados(null, NOTEBOOK);
-    expect(r.ok).toBe(true);   // grava no ativo e o lado volta é o próprio peer
+    expect(r.ok).toBe(true);
     expect(r.lados).toEqual([
       { lado: 'ida', estado: 'ok' },
       { lado: 'volta', estado: 'ok' },
     ]);
     // modo global: grava no ativo (cliente usa getToken/getBaseUrl com alvo null)
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(null, NOTEBOOK);
+    expect(peersMock.gravarPeer).toHaveBeenCalledWith(REMOTO_B, DONO_NO_PEER);
     expect(peersMock.checkPeer).toHaveBeenCalledWith(null, 'http://notebook:8765', 'notebook');
+    expect(peersMock.checkPeer).toHaveBeenCalledWith(REMOTO_B, 'http://casa:8765', 'srv-casa');
   });
 });
