@@ -68,7 +68,7 @@ def test_morta_velha_some(tmp_path):
     _escreve(base, ".claude-pocket-queue", "morto-nome", _AGORA, 8, ".jsonl")
     _escreve(base, ".claude-pocket-pi", "999", _AGORA, 8)
     _escreve(base, ".claude-pocket-kimi", "888", _AGORA, 8)
-    apagados = prune._podar([base], set(), set(), set(), _AGORA)
+    apagados = prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)
     assert apagados[".claude-pocket-state"] == 1
     assert apagados[".claude-pocket-pi/models"] == 1
     assert apagados[".claude-pocket-queue"] == 1
@@ -82,23 +82,23 @@ def test_morta_recente_nao_some(tmp_path):
     diagnostico — decisao da Task, registrada no reporte (leitura ja recusa velho)."""
     base = tmp_path / "cfg"
     _escreve(base, ".claude-pocket-status", "morreu-ontem", _AGORA, 1)
-    assert _total(prune._podar([base], set(), set(), set(), _AGORA)) == 0
+    assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
 
 
 def test_borda_exata(tmp_path):
     """A borda e >= _MIN_AGE: exatamente na idade cai; um segundo antes, nao."""
     base = tmp_path / "cfg"
     _escreve(base, ".claude-pocket-status", "na-borda", _AGORA, prune._MIN_AGE / 86400)
-    assert prune._podar([base], set(), set(), set(), _AGORA)[".claude-pocket-status"] == 1
+    assert prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)[".claude-pocket-status"] == 1
     _escreve(base, ".claude-pocket-status", "quase", _AGORA, prune._MIN_AGE / 86400 - 1e-6)
-    assert _total(prune._podar([base], set(), set(), set(), _AGORA)) == 0
+    assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
 
 
 def test_arquivo_sem_stat_nao_derruba(tmp_path):
     base = tmp_path / "cfg"
     f = _escreve(base, ".claude-pocket-status", "sumiu", _AGORA, 30)
     f.unlink()  # some entre o glob e o stat
-    assert _total(prune._podar([base], set(), set(), set(), _AGORA)) == 0
+    assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
 
 
 def test_tmp_meio_escrito_nao_casa(tmp_path):
@@ -108,7 +108,23 @@ def test_tmp_meio_escrito_nao_casa(tmp_path):
     d.mkdir(parents=True)
     (d / "aaa.json.tmp.123").write_text("x", encoding="utf-8")
     (d / "aaa.jsonl").write_text("x", encoding="utf-8")
-    assert _total(prune._podar([base], set(), set(), set(), _AGORA)) == 0
+    assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
+
+
+def test_conjunto_vazio_de_chaves_NAO_apaga_nada(tmp_path):
+    """Chaves vazias = 'nao sei quem esta vivo', nunca 'nada esta vivo': a varredura pula a
+    familia (e loga WARNING) em vez de apagar por idade pura. Sem este guard, tmux fora do ar
+    (list_panes_all devolve {} com rc!=0, sem levantar) fazia a 1a varredura do boot virar
+    limpeza por idade sobre os dirs todos — o bloqueador do parecer G3 rev1."""
+    base = tmp_path / "cfg"
+    _escreve(base, ".claude-pocket-status", "velho-stem", _AGORA, 30)
+    _escreve(base, ".claude-pocket-queue", "velho-fila", _AGORA, 30, ".jsonl")
+    _escreve(base, ".claude-pocket-pi", "9", _AGORA, 30)
+    apagados = prune._podar([base], set(), set(), set(), _AGORA)
+    assert _total(apagados) == 0
+    assert (base / ".claude-pocket-status" / "velho-stem.json").exists()
+    assert (base / ".claude-pocket-queue" / "velho-fila.jsonl").exists()
+    assert (base / ".claude-pocket-pi" / "9.json").exists()
 
 
 # ── prune_sidecars: chaves resolvidas dos infos ───────────────────────────────

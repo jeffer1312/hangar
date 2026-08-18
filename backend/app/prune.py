@@ -65,6 +65,14 @@ def _config_bases() -> list[Path]:
 
 
 def _pane_ids_vivos() -> set[str]:
+    """Pane_ids vivos, ou set() se nao der para saber.
+
+    Cuidado: tmux.list_panes_all() devolve {} quando o comando falha (rc != 0) — ele NAO
+    levanta. Entao o except abaixo so cobre o tmux que levanta (ex: import ausente); o tmux
+    que responde {} NAO passa por ele e devolve set() igual. Quem distingue "set() = nao
+    ha pane" de "set() = nao sei" e o guard de _podar, que pula a familia quando o
+    conjunto esta vazio (ver la).
+    """
     out: set[str] = set()
     try:
         for panes in tmux.list_panes_all().values():
@@ -72,8 +80,8 @@ def _pane_ids_vivos() -> set[str]:
                 pid = p.get("pane_id") or ""
                 if pid:
                     out.add(pid.lstrip("%"))
-    except Exception:  # noqa: BLE001 — tmux fora: nao poda pane-keyed, nunca derruba a poda
-        _log.warning("prune: sem tmux, bilhetes pane->sessao ficam", exc_info=True)
+    except Exception:  # noqa: BLE001 — tmux que LEVANTA: nao poda pane-keyed, nunca derruba a poda
+        _log.warning("prune: tmux levantou, bilhetes pane->sessao ficam", exc_info=True)
     return out
 
 
@@ -103,15 +111,30 @@ def _podar(bases: list[Path], chaves_stem: set[str], chaves_nome: set[str],
            chaves_pane: set[str], agora: float) -> dict[str, int]:
     """Varre as bases e devolve {subdir: quantos apagou}. Separada de prune_sidecars para o
     teste rodar com tmp_path, sem tocar nos config dirs reais do usuario."""
+    # Conjunto de chaves VAZIO = "nao sei quem esta vivo", NUNCA "nada esta vivo". Sem este
+    # guard o criterio conservador virava varredura por IDADE PURA: tmux fora do ar faz
+    # list_panes_all devolver {} com rc!=0 (SEM levantar — o except nem dispara), e
+    # registry.list() devolve [] junto; a 1a varredura roda no BOOT, quando e comum nao
+    # haver sessao nenhuma ainda. Pular custa um ciclo de lixo; nao pular custa sidecar de
+    # sessao viva.
+    if not chaves_stem:
+        _log.warning("prune: sem chave de sessao viva — %s ficam", ", ".join(_STEM_KEYED))
+    if not chaves_nome:
+        _log.warning("prune: sem nome de sessao viva — %s fica", _NOME_KEYED)
+    if not chaves_pane:
+        _log.warning("prune: sem pane vivo (tmux fora?) — %s ficam", ", ".join(_PANE_KEYED))
     apagados: dict[str, int] = {}
     for base in bases:
-        for sub in _STEM_KEYED:
-            apagados[sub] = apagados.get(sub, 0) + _podar_dir(base / sub, chaves_stem, agora)
-        apagados[_NOME_KEYED] = (apagados.get(_NOME_KEYED, 0)
-                                 + _podar_dir(base / _NOME_KEYED, chaves_nome, agora, "*.jsonl"))
-        for sub in _PANE_KEYED:
-            apagados[sub] = (apagados.get(sub, 0)
-                             + _podar_dir(base / sub, chaves_pane, agora))
+        if chaves_stem:
+            for sub in _STEM_KEYED:
+                apagados[sub] = apagados.get(sub, 0) + _podar_dir(base / sub, chaves_stem, agora)
+        if chaves_nome:
+            apagados[_NOME_KEYED] = (apagados.get(_NOME_KEYED, 0)
+                                     + _podar_dir(base / _NOME_KEYED, chaves_nome, agora, "*.jsonl"))
+        if chaves_pane:
+            for sub in _PANE_KEYED:
+                apagados[sub] = (apagados.get(sub, 0)
+                                 + _podar_dir(base / sub, chaves_pane, agora))
     return apagados
 
 
