@@ -124,8 +124,24 @@ def test_apagar_conta(casa):
 
 def test_apagar_pasta_nao_carimbada_devolve_404(casa):
     (casa / ".claude-backup").mkdir()
-    assert TestClient(app).delete("/api/claude-configs/backup", headers=AUTH).status_code == 404
+    r = TestClient(app).delete("/api/claude-configs/backup", headers=AUTH)
+    # O 404 vira envelope (Task 4): a MESMA chave do login, pra o front traduzir no idioma
+    # do app — antes era string crua em português até no app em inglês.
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "erro_conta_inexistente"
+    assert r.json()["detail"]["params"]["nome"] == "backup"
     assert (casa / ".claude-backup").is_dir()
+
+
+def test_apagar_nome_fora_do_alfabeto_devolve_400_envelope(casa):
+    """Nome de backup com ponto (ex: work.bak-...): o caminho() do módulo recusa com 400 e a
+    pasta NÃO é tocada. Task 4: o motivo vira envelope com chave própria, não string crua."""
+    (casa / ".claude-work.bak-2026-08-12-1538").mkdir()
+    r = TestClient(app).delete("/api/claude-configs/work.bak-2026-08-12-1538", headers=AUTH)
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_conta_nome_invalido"
+    assert "minúsculas" in r.json()["detail"]["msg"]
+    assert (casa / ".claude-work.bak-2026-08-12-1538").is_dir()
 
 
 def test_apagar_a_config_ativa_do_backend_devolve_409(casa, monkeypatch):

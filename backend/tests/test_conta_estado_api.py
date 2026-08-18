@@ -10,7 +10,7 @@ CLI do claude nunca são chamadas de verdade aqui.
 import pytest
 from fastapi.testclient import TestClient
 
-from app import conta_estado, login_conta
+from app import conta_estado, contas, login_conta
 from app.api import app
 from app.config import settings
 
@@ -67,10 +67,19 @@ def _cfg(path: str, label: str, active: bool):
     return type("Cfg", (), {"path": path, "label": label, "active": active})()
 
 
-def test_listagem_traz_estado_por_conta(cli, monkeypatch):
+def _conta_carimbada(tmp_path, nome: str, active: bool = False):
+    """Aba lista só pasta de conta de verdade (Task 4): o catálogo é fake, mas `e_conta`
+    roda de verdade — o path precisa ser uma pasta real com marcador real."""
+    d = tmp_path / f".claude-{nome}"
+    d.mkdir()
+    (d / contas.MARCADOR).write_text("", encoding="utf-8")
+    return _cfg(str(d), nome, active)
+
+
+def test_listagem_traz_estado_por_conta(cli, monkeypatch, tmp_path):
     monkeypatch.setattr(conta_estado, "list_config_dirs", lambda: [
-        _cfg("/home/u/.claude-a", "a", True),
-        _cfg("/home/u/.claude-b", "b", False),
+        _conta_carimbada(tmp_path, "a", active=True),
+        _conta_carimbada(tmp_path, "b"),
     ])
     monkeypatch.setattr(conta_estado, "_auth_status",
                         lambda p: {"loggedIn": True, "email": "a@example.com",
@@ -84,7 +93,7 @@ def test_listagem_traz_estado_por_conta(cli, monkeypatch):
     contas = r.json()
     assert len(contas) == 2
     a = contas[0]
-    assert a["path"] == "/home/u/.claude-a"
+    assert a["path"] == str(tmp_path / ".claude-a")
     assert a["label"] == "a"
     assert a["active"] is True
     assert a["login"]["estado"] == "ok"
@@ -97,9 +106,9 @@ def test_listagem_traz_estado_por_conta(cli, monkeypatch):
     assert b["active"] is False
 
 
-def test_conta_deslogada_continua_na_lista(cli, monkeypatch):
+def test_conta_deslogada_continua_na_lista(cli, monkeypatch, tmp_path):
     monkeypatch.setattr(conta_estado, "list_config_dirs",
-                        lambda: [_cfg("/home/u/.claude-testes", "testes", False)])
+                        lambda: [_conta_carimbada(tmp_path, "testes")])
     monkeypatch.setattr(conta_estado, "_auth_status", lambda p: {"loggedIn": False})
     monkeypatch.setattr(conta_estado, "_limite",
                         lambda p: conta_estado.EstadoLimite(estado="sem_leitura"))
@@ -115,9 +124,9 @@ def test_conta_deslogada_continua_na_lista(cli, monkeypatch):
     assert contas[0]["limite"]["estado"] == "sem_leitura"
 
 
-def test_cli_indisponivel_nao_derruba_lista(cli, monkeypatch):
+def test_cli_indisponivel_nao_derruba_lista(cli, monkeypatch, tmp_path):
     monkeypatch.setattr(conta_estado, "list_config_dirs",
-                        lambda: [_cfg("/home/u/.claude-x", "x", False)])
+                        lambda: [_conta_carimbada(tmp_path, "x")])
     monkeypatch.setattr(conta_estado, "_auth_status", lambda p: None)
     monkeypatch.setattr(conta_estado, "_limite",
                         lambda p: conta_estado.EstadoLimite(estado="sem_leitura"))
@@ -130,10 +139,10 @@ def test_cli_indisponivel_nao_derruba_lista(cli, monkeypatch):
     assert contas[0]["login"]["motivo"] == "cli-indisponivel"
 
 
-def test_sem_leitura_e_explicito_nao_zero(cli, monkeypatch):
+def test_sem_leitura_e_explicito_nao_zero(cli, monkeypatch, tmp_path):
     # Régua: conta sem leitura de limite devolve o estado nomeado, nunca 0 nem ausente.
     monkeypatch.setattr(conta_estado, "list_config_dirs",
-                        lambda: [_cfg("/home/u/.claude-x", "x", False)])
+                        lambda: [_conta_carimbada(tmp_path, "x")])
     monkeypatch.setattr(conta_estado, "_auth_status", lambda p: {"loggedIn": True})
     monkeypatch.setattr(conta_estado, "_limite",
                         lambda p: conta_estado.EstadoLimite(estado="sem_leitura"))
@@ -149,6 +158,45 @@ def test_401_sem_credencial(cli):
     # remove o require_auth um dia e nada acusa.
     r = cli.get("/api/conta-estado")
     assert r.status_code == 401
+
+
+def test_backup_sem_marcador_nao_aparece_na_aba(cli, monkeypatch, tmp_path):
+    """Task 4: a pasta de backup (login + projects de verdade, SEM o marcador .hangar-conta)
+    sai da lista de contas — era a linha que a própria tela não conseguia apagar (o DELETE
+    exige conta carimbada e devolve 404). O catálogo continua vendo ela (o GET
+    /api/claude-configs é outro consumidor), a ABA não."""
+    backup = tmp_path / ".claude-work.bak-2026-08-12-1538"
+    backup.mkdir()
+    (backup / ".credentials.json").write_text("{}", encoding="utf-8")
+    (backup / "projects" / "ws").mkdir(parents=True)
+    monkeypatch.setattr(conta_estado, "_auth_status", lambda p: {"loggedIn": True})
+    monkeypatch.setattr(conta_estado, "_limite",
+                        lambda p: conta_estado.EstadoLimite(estado="sem_leitura"))
+    monkeypatch.setattr(conta_estado, "list_config_dirs", lambda: [
+        _conta_carimbada(tmp_path, "valida"),
+        _cfg(str(backup), "work.bak-2026-08-12-1538", False),
+    ])
+
+    r = cli.get("/api/conta-estado", headers=AUTH)
+    assert r.status_code == 200
+    labels = [c["label"] for c in r.json()]
+    assert labels == ["valida"]
+    assert "work.bak-2026-08-12-1538" not in labels
+
+
+def test_default_ativo_continua_na_aba_sem_marcador(cli, monkeypatch, tmp_path):
+    """Task 4: o `~/.claude` default (a base do app) não é carimbado, mas é `active` e aparece
+    na aba até hoje (com "em uso"; o DELETE dela recusa com 409 e motivo). Filtrá-lo fora seria
+    "some da tela sem explicação" — o critério é e_conta OU active."""
+    monkeypatch.setattr(conta_estado, "list_config_dirs", lambda: [
+        _cfg(str(tmp_path / ".claude"), "default", True),
+    ])
+    monkeypatch.setattr(conta_estado, "_auth_status", lambda p: {"loggedIn": True})
+    monkeypatch.setattr(conta_estado, "_limite",
+                        lambda p: conta_estado.EstadoLimite(estado="sem_leitura"))
+
+    r = cli.get("/api/conta-estado", headers=AUTH)
+    assert [c["label"] for c in r.json()] == ["default"]
 
 
 # ------------------------------------------------------------------ login remoto (Task 7)

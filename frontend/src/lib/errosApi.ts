@@ -56,6 +56,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_config_dirs_fixo: () => m.erro_config_dirs_fixo(),
   erro_conta_ativa_backend: () => m.erro_conta_ativa_backend(),
   erro_conta_lista_fixa: () => m.erro_conta_lista_fixa(),
+  erro_conta_nome_invalido: () => m.erro_conta_nome_invalido(),
   erro_conta_inexistente: (p) => m.erro_conta_inexistente({ nome: String(p.nome) }),
   erro_login_ja_em_curso: () => m.erro_login_ja_em_curso(),
   erro_login_sem_tentativa: () => m.erro_login_sem_tentativa(),

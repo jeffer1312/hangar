@@ -1729,6 +1729,7 @@
   "contas_confirmar_codigo": "Confirm code",
   "contas_login_ok": "Signed in as {email} · plan {plano}",
   "erro_conta_inexistente": "account {nome} does not exist",
+  "erro_conta_nome_invalido": "invalid name: use lowercase letters, numbers, '-' or '_' (up to 32 characters)",
   "erro_login_ja_em_curso": "a login is already in progress for this account",
   "erro_login_sem_tentativa": "there is no login in progress for this account",
   "erro_login_timeout": "the login took too long — try again",
