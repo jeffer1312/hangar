@@ -183,6 +183,37 @@ na principal de cada vez, e só depois do `APROVA` dela. O resto da integração
 você não resolve, verificação completa depois de cada merge — está em `paralelo-worktree.md`.
 Plano que não declarou lote → serial, e você não promove nada a paralelo por conta própria.
 
+## Fato do árbitro tem hora — e escopo. O de duas horas atrás é lembrança
+
+Você é a única sessão que atravessa o trabalho inteiro, e por isso é a única que fala de memória sem
+perceber. Seis vezes em 48 horas, medido em 17–18/08/2026:
+
+| A afirmação | O fato | O que custou |
+|---|---|---|
+| baseline `2215` no kick-off | `2217` — a base da branch já tinha um commit a mais | uma rodada: o executor teve de provar o número antes de reportar o próprio delta |
+| `ahead 37`, lido no `git status` | **behind 2** — `status` sem `fetch` é foto velha | um merge de Task numa `main` desatualizada, e uma verificação completa refeita |
+| "o executor repontou as unidades do systemd" | o autor era o `post-merge` do próprio repo | uma acusação retirada por escrito e uma rodada de mensagem |
+| "não é o servidor ativo" (a uma suspeita do usuário) | era: a tela apagava conta e conversas na máquina errada | uma Task com três rodadas, 11 horas depois |
+| "a compactação de 241k foi o cutucão da vigia" | foi a própria sessão, 34 min antes do cutucão chegar | uma régua construída sobre a causa errada |
+| "139 + 183 + 178 + 142 + 104 sidecars órfãos" | você contou **um** diretório de configuração; o código varre todos — é ~4× isso | um número parcial entregue ao usuário como total |
+
+As cinco regras que saem disso, e as cinco são baratas:
+
+1. **Baseline vai no kick-off com o hash ao lado**, medida na base que a branch tem como pai:
+   `Baseline (<hash>): backend N · check N · front N + <vermelho conhecido nomeado>`. Herdar número
+   de duas horas antes é mandar o executor provar a tua medida.
+2. **`git fetch` antes de todo merge.** A linha `## main...origin/main` só vale depois dele.
+3. **Correlação de horário não é autoria.** Antes de nomear um autor, o comando tem que aparecer no
+   transcript dele. Não apareceu → o relatório diz "autor não identificado" e a investigação vai
+   para o **mecanismo**. Foi o mecanismo que fechou o caso, e virou conserto de verdade no repo.
+4. **Suspeita do usuário sobre o produto é item de verificação, não pergunta a responder.** Escreva
+   a suspeita no registro e entregue-a ao próximo revisor como **pergunta dirigida**. Medido duas
+   vezes em 48h: as duas vezes ele estava certo e o árbitro respondeu que não era — e as duas vezes
+   a pergunta dirigida, quando finalmente foi feita, devolveu o achado mais fino da rodada.
+5. **Número que você reporta traz o escopo da medição** — o que entrou na conta e de onde. "Órfãos:
+   746" sem dizer que só um diretório foi contado é um número errado com cara de medição, e quem
+   corrigiu foi o executor.
+
 ## A correção não passa por você
 
 O revisor escreve o parecer num `.md` e manda o caminho **direto ao executor**. Você **não recebe o
@@ -323,6 +354,14 @@ Parar **entre** Tasks é limpo; parar **durante** deixa a árvore num estado que
 entende depois. Ao acordar o usuário, entregue a decisão pronta: o que está em jogo, as
 opções, e o que você recomenda.
 
+**Bloqueador de LEGENDA não paga palco novo.** Achado de descrição (a legenda diz o que a imagem não
+mostra) se corrige na **descrição**, com duas condições: onde a imagem **repete outro quadro**, a
+legenda declara isso e aponta onde aquele estado está provado de verdade; onde a imagem **mostra um
+defeito**, a legenda diz que está quebrado e nomeia o defeito. Medido em 18/08/2026, cinco
+bloqueadores de legenda: 38 linhas reescritas, zero "idem", e a rodada seguinte mexeu em **+239
+bytes** — a recaptura teria custado um palco inteiro (241 chamadas e 54,7M de leitura de cache na
+primeira montagem) e teria **escondido** exatamente os defeitos que as legendas passaram a nomear.
+
 ### Task visual sem barra: pergunte ANTES de liberar
 
 O plano diz quais arquivos cada Task toca — então você sabe, antes de abrir o portão, se ela
@@ -362,6 +401,15 @@ três se resolvem sem perguntar a ninguém:
    o mais recente, mensagens `type: "assistant"`; a última costuma ser exatamente o que faltou).
 3. **A sessão sumiu** → seção abaixo: abre outra e segue.
 
+**E você não reenvia antes de olhar o disco.** Dono da vez `idle` e nada chegou: o arquivo dele pode
+já estar lá (foi o que aconteceu três vezes em 48h), e o transcript quase sempre tem o texto inteiro.
+Ler custa um `cat`; reenviar custa um turno da sessão paga e pode chegar duplicado.
+
+**Antes de culpar o canal, olhe o pane do destinatário.** Um assistente de primeira execução aberto
+na sessão dela recusa toda digitação, e o backend reporta isso como "sessão indisponível" — que
+parece fila quebrada. Medido em 18/08/2026: um `Esc` no pane fez a entrega passar de primeira, e
+duas conclusões que o árbitro tinha escrito sobre "a fila está quebrada" estavam erradas.
+
 **Todo mundo do time ocioso ao mesmo tempo é o alarme mais forte que existe**, porque em operação
 normal alguém está sempre com a bola. Se você chegou nesse estado sem ter fechado uma Task, alguma
 coisa não chegou.
@@ -391,15 +439,35 @@ em primeiro plano. Uma vigia que morre junto com você não cobre o caso que ela
 morrer por qualquer motivo deixa o trabalho sem rede, e você só descobre horas depois.
 
 **O último nome é sempre o árbitro**, e o número no fim são os minutos de silêncio (padrão 5).
-Passe **todas** as sessões do trabalho, não um par: num lote paralelo há vários escritores, e uma
-vigia por par enxerga só o próprio pedaço — ela acordaria você enquanto outro executor ainda
-trabalha. Uma vigia só, com todo mundo dentro:
+
+**A vigia cobre quem tem a BOLA agora, mais você — e mais ninguém.** A lista de sessões do comando é
+o estado da vez, não a tabela do contrato: sessão que ainda não abriu, sessão aposentada e sessão
+**parada por ordem sua** ficam de fora, e você **reescreve o comando a cada passe de bola** — ao
+liberar Task, ao mandar commit pro revisor. Isso inclui o executor: depois de um `REPROVA` a bola
+passa do revisor pra ele **sem você ver**, e é o desenho. Num lote paralelo "quem tem a bola" é
+todos os escritores, porque ali todos têm — uma vigia só, com todos eles dentro:
 
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
   -d ~/.claude/.claude-pocket-pair/grupo-<gid>.md
 ```
+
+**Ninguém com a bola = vigia desarmada.** Time sem trabalho (tudo aprovado, esperando decisão do
+usuário) com a vigia viva só produz alarme falso e cutucão em sessão paga. Desarme, e rearme quando
+a bola voltar.
+
+Medido em 17–18/08/2026: **dez alarmes falsos, todos da mesma família** — sessão parada por ordem do
+árbitro lida como sessão quebrada. Dois por sessões que a tabela do contrato previa e que o árbitro
+tinha decidido **não abrir ainda**; três por revisores que já tinham entregado o parecer; os outros
+por executores esperando veredito. A vigia não sabe distinguir "parada porque acabou" de "parada
+porque quebrou" — e quem sabe é você, que é justamente quem ela acorda. **Cutucão em sessão parada de
+propósito não é só ruído: é um turno pago**, e a sessão cutucada divide árvore com quem está medindo
+os portões.
+
+E o comando da vigia **não** vai no arquivo de regras com a lista de nomes: vai a forma. Lista de
+sessões escrita num arquivo envelhece entre a escrita e a leitura, que é a mesma razão de o estado da
+vez morar no kick-off.
 
 Ela consulta a cada 60s e acorda você depois de N leituras paradas seguidas. Três coisas nela não
 são detalhe de implementação — são o que a faz funcionar, e cada uma custou uma falha real:
@@ -451,13 +519,6 @@ vigia.sh: linha NNN: /dev/stderr: Endereço ou dispositivo inexistente
 Sem terminal, `/dev/stderr` não abre pra escrita, o redirecionamento falha e **o comando nem roda** —
 a leitura volta vazia e a vigia conclui "API sem resposta" com o backend perfeito. O script já cai pra
 arquivo sozinho desde 17/08; se você vir essa linha, está rodando uma cópia velha.
-
-**Vigie o PAR, não um só.** Depois que você manda um commit pro revisor, a bola pode passar dele pro
-executor **sem você ver** — é o desenho: `REPROVA` vai direto, e você só reaparece quando o executor
-reporta a correção. Vigia armada só no revisor dispara assim que ele entrega o parecer ao executor, e
-você acorda pra um alarme falso enquanto o trabalho anda normalmente.
-
-Mesma coisa com duas Tasks em paralelo: um laço, todos os alvos, acorda quando todos pararem.
 
 **Rearme a vigia toda vez que passar a bola** — ao liberar Task, ao mandar commit pro revisor. Vigia
 vencida e não rearmada é silêncio que ninguém percebe. **E mate a vigia antiga ao aposentar uma
@@ -592,6 +653,8 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
   dentro: teu último turno parece ter acabado agora. Ele está olhando o relógio; você não. Aceite,
   confira o estado do par, e retome.
 - Executor no mesmo modelo/família do revisor.
+- **Worktree removida sem conferir o rastro dela na configuração global** (`paralelo-worktree.md`):
+  depois de removida, o rastro aponta pra um caminho que não existe mais e o estrago fica silencioso.
 
 ## Antes do time: leia a política de contas da máquina
 

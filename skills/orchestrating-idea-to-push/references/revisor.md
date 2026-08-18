@@ -46,6 +46,10 @@ Isso não é preferência de formato: revisão picada em pedaços entope a fila 
 árbitro e ele passa a gastar o tempo dele limpando fila em vez de arbitrar. Se a sua análise
 não cabe numa mensagem, escreva num `.md` e mande **o caminho**.
 
+**O arquivo nasce ANTES do envio, sempre nessa ordem** — parecer e receita em disco primeiro, a
+mensagem levando o caminho depois. É o que faz o teu trabalho sobreviver ao canal (`SKILL.md`,
+"Travas que valem para todos os papéis").
+
 Mensagem longa vai por heredoc de aspas simples (`<<'EOF'`) — com aspas duplas o shell come
 crase e `$`, e um bloqueador que chega mutilado vira round perdida.
 
@@ -198,9 +202,16 @@ a pílula do composer; custou **dois commits** e ele mesmo retirou a régua na r
 de medir que zerar o recuo lateral levava o cartão de **376px para 534px** e a sobreposição sumia
 com 91px de folga. A caixa que provava isso já estava na medição dele da rodada anterior.
 
-As duas receitas erradas foram pegas antes do estrago — uma pela consciência do próprio revisor,
-outra por um executor que resolveu medir. Nenhuma das duas é processo, e é por isso que o campo
-existe.
+**3. Receita que nomeia um CASO quando a regra é uma ORDEM.** "A linha que casa exato com outra
+entrada pertence a ela" nomeia o caso extremo; a regra é "a linha pertence a quem a reivindica de
+forma **mais específica**". Escrita como caso, ela deixa o resto do espaço sem regra — e o resto do
+espaço costuma ser exatamente o cenário da Task. **Antes de mandar, pergunte: "e quando nenhum dos
+dois casa?"** Medido em 18/08/2026: a rodada 2 de uma Task existiu só por isso, e a própria autora da
+receita abriu o parecer dizendo que o bloqueador era dela.
+
+As duas primeiras receitas erradas foram pegas antes do estrago — uma pela consciência do próprio
+revisor, outra por um executor que resolveu medir. Nenhuma das três é processo, e é por isso que o
+campo existe.
 
 ## O que o parecer precisa cobrir
 
@@ -216,10 +227,47 @@ existe.
   do próprio código, e quem pegou os 10 bloqueadores foi a revisora reproduzindo contra o tmux
   real. E **confira a CONTAGEM da suíte contra a base**: contagem que caiu sem nota no reporte é
   bloqueador por si (na mesma Task, 936→935 calado escondia 7 testes de uma Task aprovada
-  apagados).
+  apagados). **E teste que troca a biblioteca inteira por um duplo prova que o botão chama a
+  função, nunca para onde a função vai** — ver `executor.md`, "Task de FLUXO", as duas metades da
+  régua e as duas de desfecho (o conteúdo dos dois lados; a evidência trazendo o que distingue os
+  dois caminhos).
+- **o caso vazio**: código que **apaga**, que casa por semelhança, ou que decide a partir de uma
+  lista de vivos — o que ele faz quando o conjunto vem **vazio**? Medido em 18/08/2026: uma poda em
+  que "não sei quem está vivo" virava "ninguém está vivo", apagando 8 de 8 arquivos de sessão viva,
+  fila incluída; a função que consulta devolve `{}` sem levantar, então o `except` do autor nunca
+  disparava. Régua curta: **lista de vivos vazia é motivo para NÃO apagar.**
+- **a mesma regra escrita duas vezes**: dois lados que precisam concordar (backend e front, dois
+  componentes, duas cópias do mesmo cliente) concordam **hoje** e nada garante amanhã. Medido em
+  18/08/2026: um piso de prefixo duplicado nos dois lados; o backend ganhou a noção de dono e o
+  front ficou só com o piso — as regras **já divergiram** e ninguém foi avisado.
+
+**Branch cuja base não é a `main` atual: aritmética de suíte mente.** Compare **nomes** — inventário
+dos nomes de teste do pai contra o commit; nenhum pode sumir. Medido em 17/08/2026: uma branch
+nascida 15 commits atrás, com a contagem batendo por coincidência e a única conferência válida sendo
+o inventário.
 
 O contrato do grupo diz o que este trabalho exige a mais (skills de revisão por tipo de
 Task, verificação visual, harness de carga). Leia antes do primeiro parecer.
+
+### Declare a unidade — o defeito mora um nível acima de onde te mandaram olhar
+
+O modo de falha mais caro desta skill não é ler pouco: é ler **na unidade errada**. Antes de fechar
+o parecer, diga em uma linha qual foi a sua unidade de leitura — e suba um nível:
+
+| Você recebeu | Sua unidade mínima é |
+|---|---|
+| um diff | a **função inteira** onde ele caiu |
+| uma função corrigida | o **arquivo**: o que as irmãs do mesmo tipo fazem (guard, flag de em-voo, limpeza na troca) |
+| um módulo que fala com a rede | a **rota inteira**: para QUAL destino cada função fala, e o que a tela mostra quando cada uma falha |
+| uma correção que muda **tempo de voo** | **todo mundo que corre junto com aquele voo** — a corrida nova não aparece em nenhuma linha do diff |
+| um porte de padrão | a **rota de destino**: número que veio junto (teto, prazo, limiar) é medida da origem e precisa ser justificado de novo aqui |
+| a correção de um defeito de família | a **branch**: `git grep` do símbolo, com a contagem no parecer |
+
+Medido em 17–18/08/2026, seis rodadas, sempre a mesma forma: um teto de 8s copiado para uma rota
+que espera 300s; uma escrita sem guard a uma linha da escrita guardada; uma função nova nascida
+fora da regra que as quatro irmãs seguiam; e o defeito que atravessou a branch inteira porque cada
+Task olhou o próprio arquivo. **Custo do remédio: um `git grep` de quatro segundos.** Custo de não
+fazer, medido: quatro rodadas de executor e um defeito que só a revisão de conjunto pegou.
 
 ### O teste prova o cenário, ou prova a si mesmo?
 
@@ -237,6 +285,11 @@ foco do teste novo. Tirando o guard do atalho irmão, `PASS(7) FAIL(0)` — suí
 aquele ponto virou nota de lacuna. Na segunda metade do mesmo trabalho a técnica foi usada em quatro
 dos sete pareceres, e uma das mutações devolveu **880 testes verdes com o defeito de volta inteiro**.
 Não é sugestão: é a única coisa que separa teste que prova o cenário de teste decorativo.
+
+**E o fixture não pode ser o mundo em que o defeito é invisível.** O teste que prova "o morto some"
+usa um **vivo diferente**, nunca um mundo sem vivos: com o mundo vazio, "morto some" e "apaga tudo"
+dão a mesma saída, e a suíte assina embaixo do defeito. Medido em 18/08/2026: **6 chamadas** de
+teste passavam "não há ninguém vivo" como fixture, e era o caminho de perda de dado.
 
 **A outra metade: receita que instala TRAVA exige prova invertida.** A mutação responde "o teste
 prova o cenário?"; a prova invertida responde "a trava trava?". Toda receita cujo objetivo é impedir
@@ -449,6 +502,10 @@ captura descreve — o executor e a tua sessão verificadora têm como enxergar 
 ou subagente de visão; numa máquina com o helper `see`, é ele). Deixe os dois trabalharem e, **no
 fim, abra TODOS os prints de uma vez** e confira se cada um mostra o que você precisava. Uma passada
 sua, no fim, sobre o conjunto — não uma leitura tua por imagem.
+
+E **afirmação de símbolo se confere ampliada**: na passada final, sinal e cor citados na legenda
+valem contra o recorte, não contra a imagem inteira — medido em 18/08/2026, duas leituras a olho
+chamaram de `✗` uma pastilha `✓` verde.
 
 O que essa passada final procura: print que não prova o que a legenda diz, estado capturado no
 momento errado (antes da correção, com a tela em transição), e principalmente **estado que ninguém

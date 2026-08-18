@@ -74,3 +74,27 @@ conta dele.
 - Nunca truncar comando que lista arquivo (`--stat`, `--name-only`, `status`).
 - Medir o arquivo de regras antes de cada kick-off, e compactar no teto.
 - Reportar `ctx` junto de cada entrega, como todo mundo.
+
+## Medido em 17–18/08/2026 (revisora de 11 rodadas + revisão de branch + árbitro)
+
+- **Revisão da branch (53 commits, 76 arquivos, +9089 −129): 1 sessão, 1 bloqueador real**, achado
+  onde nenhum portão de Task podia ver — e o portão dela foi montar o teste que faltava (bibliotecas
+  reais, `fetch` espionado) usando a **tela vizinha que acerta como controle**. É a técnica a copiar:
+  controle interno vale mais que argumento.
+- **Prova os dois lados de uma trava sem ser pedida**: que o buraco fechou **e** que a trava trava
+  (renomeou os rótulos de volta na cópia e a trava ficou vermelha nomeando o arquivo). Também
+  conferiu o commit **intermediário** da série — ninguém que bisecar cai em commit vermelho — e fez
+  um **build real** pra provar que dublês de teste não vazam pro bundle.
+- **Bloqueia por buraco pequeno quando "registrado" significa que ninguém corrige**, e diz isso com
+  essas palavras. Nas três Tasks da rodada final, as três REPROVAS foram de uma linha ou de uma
+  palavra, e as três eram regressão ou buraco permanente.
+- **Assume a própria receita errada na abertura do parecer** ("o bloqueador é culpa da minha receita
+  da rodada 1, não do trabalho dele"). Duas das quatro réguas mais fortes desta execução saíram da
+  autocrítica das revisoras, não do árbitro.
+- **Responde pergunta dirigida com medição, não com leitura** — em 5 de 5 perguntas do árbitro nesta
+  rodada a resposta veio com número (11 casos escolhidos pra divergir, mutação uma de cada vez,
+  ensaio na ponta).
+- Como **árbitro**, o modo de falha é **afirmar de memória** (`arbitro.md`, "Fato do árbitro tem
+  hora — e escopo"): baseline de duas horas antes, `ahead` sem `fetch`, autoria por correlação de
+  horário, contagem de um diretório reportada como total, e "não é isso" a uma suspeita do usuário
+  que estava certa — duas vezes.

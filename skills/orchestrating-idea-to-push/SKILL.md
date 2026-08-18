@@ -204,10 +204,21 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
 - **Stage por caminho explícito.** Nunca `git add -A` nem `git add .`. Intocáveis nunca
   entram, em commit nenhum.
 - **Sem `--amend`/rebase/squash** em commit já commitado. Correção é commit novo.
-- **`cp-send <sessao>` RECUSA falar com sessão Claude desta máquina** (rc=3, "o caminho nativo
-  alcança os dois lados") e manda usar `SendMessage`. Se o `ListAgents` vier **vazio** — acontece —,
-  o `SendMessage` não tem endereço e você fica sem caminho nenhum. A saída é `cp-send --tmux
-  <sessao>`, que envia do jeito antigo. Sessão Pi ou Codex não sofre disso: só o par Claude→Claude.
+- **Escreva primeiro, avise depois — sempre nessa ordem.** Parecer, reporte e receita nascem como
+  **arquivo** no diretório durável do trabalho **antes** de qualquer envio, e a mensagem carrega o
+  **caminho**, nunca o conteúdo. Não é formatação: é o que faz o trabalho sobreviver ao canal —
+  medido em 17–18/08/2026, quatro modos de falha diferentes no mesmo canal em 48h, e nas quatro nada
+  se perdeu porque o arquivo já existia. É também o que torna impossível a mensagem mutilada: texto
+  que vai como caminho não tem crase para o shell comer.
+- **A escada de transporte, em ordem, e o degrau seguinte só depois de o anterior falhar:**
+  **olhe o pane do destinatário** (overlay/menu aberto recusa digitação, e é o que o backend reporta
+  como "sessão indisponível") → `SendMessage` → `cp-send --tmux <sessao>` → `tmux send-keys` no
+  pane. `cp-send <sessao>` **recusa** falar com sessão Claude desta máquina (rc=3, "o caminho nativo
+  alcança os dois lados") e manda usar `SendMessage`; com o `ListAgents` **vazio** — acontece — o
+  nativo não tem endereço, e sobra o `--tmux`. Sessão Pi ou Codex não sofre disso: só o par
+  Claude→Claude. Recusa **de quem recebe** não se contorna por outro transporte; recusa **da
+  ferramenta**, sim — e o degrau usado vai no reporte, porque canal quebrado que ninguém registra é
+  o mesmo susto duas vezes.
 - **`cp-send` recebe a mensagem como argumento, não por stdin.** Texto longo vai por heredoc
   de aspas simples **dentro** de uma substituição:
 

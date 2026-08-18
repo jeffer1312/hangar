@@ -78,6 +78,12 @@ tentação de resolver sozinho é maior, que essa regra precisa estar escrita.
 Terminou o lote: `git worktree remove` em cada uma. Worktree órfã é a próxima sessão
 trabalhando num checkout que ninguém explica.
 
+**E a conferência de rastro roda ANTES de remover**, procurando o caminho da worktree em toda
+configuração global, não só nos symlinks: `grep -rl "<caminho da worktree>" ~/.local/bin <dirs de
+configuração do agente> <dir de unidades de serviço>`. Removida a worktree, o rastro aponta pra um
+caminho que não existe mais e o estrago passa a ser silencioso — medido em 18/08/2026: os hooks das
+**três** contas do usuário apontavam pra uma worktree de prova, 10 ocorrências só na conta padrão.
+
 ## O portão que o paralelo cria
 
 No serial, cada Task é revisada já em cima do que a anterior fez — a interação entra no
@@ -102,6 +108,14 @@ visuais: ou **instância de navegador própria por executor** (perfil/porta sepa
 suporta), ou **prova visual como seção crítica** — um executor captura por vez, o árbitro dá a
 vez. O plano declara qual dos dois; o executor confere a aba antes de cada captura de qualquer
 jeito (`executor.md`, passo 3).
+
+**Os hooks do git são compartilhados, e por isso worktree NÃO roda `git merge main`.** `.git/hooks`
+vale para o checkout principal e para todas as worktrees. Um `post-merge` que rode o instalador do
+projeto executa com o toplevel valendo **a worktree** — e reaponta unidades de serviço, symlinks
+globais e o build do front para dentro dela. Medido em 17/08/2026, batendo no minuto nos dois
+incidentes: o app do usuário saiu do ar duas vezes. **Quem integra a `main` é o árbitro, no checkout
+principal**, onde o hook roda no lugar certo. Desligar hook do git é decisão do usuário, não saída do
+time.
 
 **Instalador NUNCA roda de dentro de worktree.** Symlink global apontando pra worktree morre com
 ela: medido em 17/08/2026, remover uma worktree de ensaio levou 6 symlinks (`cp-send`,

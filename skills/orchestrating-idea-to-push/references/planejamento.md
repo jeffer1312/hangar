@@ -124,6 +124,25 @@ Achou um? O plano escreve o **contrato de posse** antes da primeira das duas Tas
 quem limpa, o que acontece quando um host desmonta, e o que acontece no resize. Duas linhas no
 plano; sem elas, seis rodadas.
 
+**Contrato de posse ("o arquivo X está fechado neste lote; cada módulo novo cria o seu") evita
+conflito de merge e cria duplicata — declare o que acontece com ela.** Medido em 18/08/2026: a regra
+foi escrita com essas palavras em três módulos e produziu **quatro clientes de rede quase idênticos**,
+com o bloco de recuperação de 401 copiado **três vezes**. Quando duas Tasks diferentes descobriram,
+cada uma por si, o mesmo defeito de destino, cada uma consertou dentro da própria cópia — **não havia
+um lugar só onde consertar**, e o defeito sobreviveu à branch inteira, inclusive ao último commit,
+que mexeu justamente na tela afetada.
+
+Ao escrever a regra de posse, escreva junto:
+- **quantas cópias ela vai criar** (é o número de Tasks que tocam o padrão), e
+- **a Task de unificação**, no fim do lote, ou a frase explícita "as N cópias ficam, e a revisão de
+  conjunto confere as N" — que é o que o revisor final vai cobrar.
+
+E a versão pequena da mesma coisa, que vale dentro de um commit só: **duas contas que TÊM de dar o
+mesmo resultado viram uma, derivada de um lugar** — não duas cópias. Medido em 18/08/2026: o mesmo
+`serverId` calculado em três pontos do mesmo componente, dois com `??` e um com `||`; na rota legada
+o valor é string vazia, que `??` não pega, e o painel abria e fechava no mesmo flush — regressão
+introduzida pelo próprio commit que consertava a tela (pai verde, filho vermelho).
+
 **É a mesma causa que faz a estimativa de Task de tela errar, e por isso Task de tela se estima pelo
 ESTADO que ela mexe, não pelo pixel.** Tela que monta um host de um store que já existe custa 4 a 6
 rodadas; tela que desenha componente novo sobre estado próprio custa 1 a 2. Não estime pela
@@ -352,7 +371,8 @@ que o método escolhido não gera, **você gera à mão**.
 2. **Estimado × real a priori** escrito, uma linha por Task (relógio, rodadas, custo).
 3. **Não-colisão do lote provada**: arquivos por Task levantados **do texto dos Steps** ×
    `git merge-tree` — saída colada.
-4. Estado compartilhado procurado; contrato de posse escrito onde houver.
+4. Estado compartilhado procurado; contrato de posse escrito onde houver — **com o número de
+   cópias que ele cria e quem confere as N** (ou a Task de unificação no fim do lote).
 5. Barra (ou `nenhuma — decisão do usuário`) registrada por Task visual.
 6. Task de tela com >~5 estados × variantes: captura como Task/papel próprio, e ponto de rotação
    de contexto previsto no Step ("Step N é marco de troca segura").

@@ -13,8 +13,13 @@ remendar Task a Task era jogar rodada fora, e não havia forma prevista de troca
 - **Método capenga**: o plano nasceu num método cuja metade executora não existe na máquina, ou o
   usuário decidiu trocar de método — troca de método **só** acontece por aqui (`SKILL.md`), nunca
   por emenda.
-- **Estouro sistemático**: duas Tasks seguidas passando de 2× a estimativa **pela mesma causa** —
-  é o sinal de que o desenho está errado, não a execução (mesma régua da espiral de rodadas).
+- **Task presa ANTES do portão.** Duas Tasks seguidas passando de 2× a estimativa **pela mesma
+  causa** é um sinal — e é o sinal **tardio**, porque conta rodadas, e Task que trava antes do
+  primeiro commit não produz rodada nenhuma para contar. O gatilho que teria disparado a tempo é
+  mais simples: **Task com mais de 3 horas de relógio de executor e ZERO commits.** Medido em
+  16–17/08/2026: duas Tasks somaram ~13h de relógio, 958k de saída e **nenhum commit** — logo,
+  nenhuma rodada, nenhum veredito e nenhuma régua de espiral disparando. Depois do replanejamento,
+  as **mesmas duas Tasks** fecharam em 2h52, com 329k de saída e dois merges.
 
 O árbitro **propõe** ("replaneja, ou seguimos remendando? custo até agora: X"), o usuário decide.
 Árbitro não replaneja por conta própria — e **não reescreve o próprio plano**: quem planejou de
@@ -78,3 +83,12 @@ Aprovado o plano novo:
 - **Não é licença pra decidir time, conta ou branch** — as três continuam do usuário.
 - **Não se repete como rotina.** Dois replanejamentos no mesmo trabalho = o problema não é o
   plano; pare e discuta o trabalho em si com o usuário.
+
+## O procedimento pagou na estreia
+
+O número é este: **13h sem merge viraram 2h52 com dois merges**, por ~2h15 de replanejamento (análise
+pronta 18:31 → primeira Task em voo 19:20), medido em 17–18/08/2026. O que fez a diferença não foi o
+plano ser novo — foi ele nascer com os artefatos que o portão da fase 1 cobra: estimativa a priori
+(que segurou a fase em +23%), captura como Task própria com lista fechada, e a fumaça contra a fonte
+real, que **destapou três bloqueadores na primeira vez que foi rodada**, depois de duas rodadas de
+suíte verde não terem visto nenhum.
