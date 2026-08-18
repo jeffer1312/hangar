@@ -466,3 +466,25 @@ def test_system_ruido_de_tooling_nao_vira_bubble():
                           "[x]\n\nOriginal prompt: Vê a minha última msg"})) == []
     assert parse_line(_line({"type": "system", "content": "o usuario citou 'Original prompt: [de: x] y' "
                           "num aviso qualquer"})) == []
+
+
+def test_system_com_cara_de_recado_sem_ancora_registra_aviso(caplog):
+    # Falha CALADA e o modo de falha que fez o defeito (A) durar: se o harness mudar o texto da
+    # ancora, o recado para de aparecer e ninguem fica sabendo. Nao vira bubble (o formato nao esta
+    # provado), mas vira linha de log.
+    conteudo = "Algum aviso novo do harness\n\nPrompt original: [de: outra-sessao] RODADA 3 ENTREGUE"
+    with caplog.at_level("WARNING", logger="claude_pocket.transcript"):
+        assert parse_line(_line({"type": "system", "uuid": "u9",
+                                 "timestamp": "2026-08-18T00:36:42Z",
+                                 "content": conteudo})) == []
+    assert any("ancora do harness" in r.getMessage() for r in caplog.records)
+
+
+def test_system_ruido_comum_nao_registra_aviso(caplog):
+    # Ruido de tooling (a maioria das entradas system) nao pode virar log: aviso que aparece
+    # sempre e aviso que ninguem le.
+    with caplog.at_level("WARNING", logger="claude_pocket.transcript"):
+        assert parse_line(_line({"type": "system", "uuid": "u10",
+                                 "timestamp": "2026-08-18T00:36:42Z",
+                                 "content": "Kept model as claude-opus-5"})) == []
+    assert caplog.records == []

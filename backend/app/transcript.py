@@ -197,6 +197,13 @@ def _recado_em_system(content) -> Optional[str]:
         return None
     m = _ORIGINAL_PROMPT_RE.search(content)
     if not m:
+        # A ancora e o FORMATO do harness (medido na 2.1.234). Se uma versao futura mudar o texto,
+        # o recado volta a sumir da tela EM SILENCIO — que e a caracteristica que fez este defeito
+        # durar semanas sem ninguem notar. Entao: entrada `system` que cheira a recado e nao casa a
+        # ancora vira aviso no log. Troca falha muda por falha registrada; nao muda comportamento.
+        if "[de: " in content or "<cross-session-message" in content:
+            _log.warning("entrada system parece recado e NAO casou a ancora do harness "
+                         "(formato mudou?): %.200s", content.replace("\n", " "))
         return None
     texto = m.group(1).strip()
     if (peer := _peer_msg_embrulhado(texto)) is not None:
