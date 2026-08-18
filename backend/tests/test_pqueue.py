@@ -894,10 +894,12 @@ def test_reconcile_confirma_por_prefixo_sem_desistir(tmp_path):
     assert row["confirmed"] is True
 
 
-def test_committed_lines_veem_recado_preso_em_system(tmp_path):
-    # Defeito (A): recado que o hook bloqueou fica no transcript como type='system'. O oraculo do
-    # reconcile precisa ve-lo — senao o recado e redigitado (mais entradas system) e a bolha da
-    # fila desiste marcada "nao chegou" sobre um texto que ESTA no transcript.
+def test_committed_lines_NAO_contam_recado_preso_em_system(tmp_path):
+    # Parecer G2 rev1, bloqueador 1: recado preso em entrega BLOQUEADA por hook tem
+    # preventContinuation=true — o agente NUNCA o recebeu. committed_user_lines e o oraculo de
+    # "aterrissou na sessao": conta-lo confirmaria a entrega e a bolha ficaria sem a marca
+    # vermelha sobre uma mensagem que nao chegou (o proprio diagnostico da Task: "nesse caso a
+    # marca esta CERTA").
     import json
     j = tmp_path / "t.jsonl"
     j.write_text(json.dumps({"type": "system", "content":
@@ -905,10 +907,48 @@ def test_committed_lines_veem_recado_preso_em_system(tmp_path):
                              "Original prompt: [de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas."}) + "\n",
                  encoding="utf-8")
     lines = pqueue.committed_user_lines(str(j))
-    assert "[de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas." in lines
-    # fala do usuario sem recado nao entra (a bolha da fila desistida segue cobrindo, com marca)
+    assert "[de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas." not in lines
+
+
+def test_reconcile_desistida_mantem_marca_com_system_no_transcript(tmp_path):
+    # Desfecho do bloqueador 1: entrada ja desistida + transcript que tem SO o system com o
+    # recado (nunca virou user) → a entrada segue desistida, sem confirmed. O reconcile re-drena
+    # ate max_attempts e desiste (limitado, pqueue.py:437) — a marca vermelha e a verdade.
+    import json
+    j = tmp_path / "t.jsonl"
     j.write_text(json.dumps({"type": "system", "content":
                              "UserPromptSubmit operation blocked by hook:\n[x]\n\n"
-                             "Original prompt: Ve a minha ultima msg"}) + "\n", encoding="utf-8")
-    lines = pqueue.committed_user_lines(str(j))
-    assert "Ve a minha ultima msg" not in lines
+                             "Original prompt: [de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas."}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.path.write_text(json.dumps({"id": "b1", "text": "[de: exec2] RODADA 3 ENTREGUE — correcoes aplicadas.",
+                                  "ts": 1787075400.0, "delivered": True, "attempts": 2,
+                                  "desistiu": True}) + "\n", encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787075500.0)
+    row = q.load()[0]
+    assert row["desistiu"] is True
+    assert "confirmed" not in row
+
+
+def test_reconcile_prefixo_nao_rouba_linha_do_exato(tmp_path):
+    # Parecer G2 rev1, bloqueador 2: X = "pode seguir" (perdida) / Y = "pode seguir com a Task 4
+    # agora" (chegou). Sem as RESERVADAS, o prefixo de X consumia a linha exata de Y: X virava
+    # entregue (falha escondida) e Y ganhava a marca "nao chegou" (o defeito da Task reaberto).
+    # A linha que casa EXATO com Y pertence a Y — nenhum prefixo a leva.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-08-18T01:04:51Z",
+                             "message": {"role": "user", "content": "pode seguir com a Task 4 agora"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    rows = [
+        {"id": "X", "text": "pode seguir", "ts": 1787075400.0, "delivered": True,
+         "attempts": 2, "desistiu": True},
+        {"id": "Y", "text": "pode seguir com a Task 4 agora", "ts": 1787075500.0,
+         "delivered": True, "attempts": 2},
+    ]
+    q.path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    q.reconcile_delivered(pqueue.committed_user_lines(str(j)), min_ts=100.0, now=1787100000.0)
+    got = {r["id"]: r for r in q.load()}
+    assert got["X"]["desistiu"] is True and "confirmed" not in got["X"]  # perdida, honesta
+    assert got["Y"]["confirmed"] is True and "desistiu" not in got["Y"]  # chegou, sem marca

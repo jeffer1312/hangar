@@ -10,7 +10,7 @@
 // frase alheia que começa igual.
 const PREFIXO_MIN = 8;
 
-// Legenda canonica: sem o marcador "📎 imagem:/arquivo: <path>" + o "—" que liga. Mesma
+// Legenda canonica: sem o marcador "📎 imagem:/arquivo: `path`" + o "—" que liga. Mesma
 // normalização do _cap do Chat.svelte — mantida em cópia porque o Chat usa a dele em mais
 // lugares e mexer neles não é o escopo desta correção.
 function _cap(text: string): string {
@@ -21,7 +21,7 @@ function _cap(text: string): string {
 export function covers(a: string, b: string): boolean {
   const at = a.trim(), bt = b.trim();
   if (at === bt || at.split('\n').some((ln) => ln.trim() === bt)) return true;
-  // Msg com imagem: eco/fila carrega "📎 imagem: <path>", o transcript grava so a legenda ->
+  // Msg com imagem: eco/fila carrega "📎 imagem: `path`", o transcript grava so a legenda ->
   // casa pela legenda canonica (senao a bolha com foto fica pendente eterna).
   const ac = _cap(a), bc = _cap(b);
   if (!!bc && ac === bc) return true;

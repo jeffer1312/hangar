@@ -316,13 +316,13 @@
           <ImageBubble caption={img ? img.caption : ev.text ?? ''}
                        srcs={[...(img?.filenames ?? []).map((f) => uploadUrl(sessionName, f)),
                               ...Array.from({ length: ev.image_count }, (_, i) => imageUrl ? imageUrl(ev.id, i) : transcriptImageUrl(sessionName, ev.id, i))]} />
-        {:else if ev.id.startsWith('queued-')}
-          <!-- Msg da fila durável: atenuada enquanto o Claude trabalha (= na fila, ainda nao
-               processada); acende solida quando ele fica idle (= aceita). Da o sinal de "quando
-               foi aceita" que o usuario pediu.
-               `desistiu` = o backend conferiu contra o transcript e o texto NUNCA chegou (a TUI
-               engoliu as teclas). Sem esta linha a bolha perdida acendia solida igual a uma aceita
-               e o usuario ficava achando que mandou — falha tem que aparecer, nao sumir. -->
+        {:else if ev.id.startsWith('queued-') || ev.id.startsWith('held:')}
+          <!-- Msg da fila durável ("queued-") ou recado preso em entrega bloqueada ("held:", o
+               harness registrou o texto de um UserPromptSubmit que hook barrou e o agente NUNCA
+               recebeu). As duas seguem atenuadas/aceitas pela mesma regra; `desistiu` = texto que
+               nao chegou ao agente (fila: a TUI engoliu as teclas; held: o hook barrou). Sem esta
+               linha a bolha perdida acendia solida igual a uma aceita e o usuario ficava achando
+               que mandou — falha tem que aparecer, nao sumir. -->
           <div class="queued-row" class:dim={working && !ev.desistiu}>
             {#if imgFotos}
               <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />

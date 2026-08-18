@@ -412,8 +412,9 @@ _SYSTEM_BLOQUEADO = (
 
 
 def test_system_com_recado_bloqueado_vira_bubble():
-    # O recado nunca chegou ao agente, mas o texto existe no transcript e o app precisa mostra-lo:
-    # sem isto a mensagem some e a bolha da fila fica marcada "nao chegou" pra sempre.
+    # O recado nunca chegou ao agente (preventContinuation=true), mas o texto existe no
+    # transcript e o app precisa mostra-lo — E com a marca vermelha, que e a verdade. Sem o
+    # desistiu=True a bolha pareceria uma entrega normal e o usuario acharia que chegou.
     [ev] = parse_line(_line({
         "type": "system", "subtype": "informational", "level": "warning",
         "uuid": "f1aaa5a4", "timestamp": "2026-08-18T00:36:42.691Z",
@@ -422,6 +423,7 @@ def test_system_com_recado_bloqueado_vira_bubble():
     assert ev.kind == "user_msg"
     assert ev.text.startswith("[de: desc2-exec2] RODADA 3 ENTREGUE")
     assert ev.id.startswith("held:")
+    assert ev.desistiu is True      # marca "nao chegou" visivel: o agente nao recebeu
     assert ev.ts == 1787013402.691  # ts da 1a tentativa, nao da ultima
 
 

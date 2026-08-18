@@ -249,15 +249,17 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
     # posterior da mesma notificacao (quando vier) so repete, sem efeito.
     if etype == "system":
         # Recado em entrega bloqueada por hook (ver _recado_em_system): o texto existe no
-        # transcript e o app precisa mostra-lo, senao o usuario manda e a mensagem some, com a
-        # bolha da fila marcada 'nao chegou' pra sempre (medido: 3x o mesmo recado). id
-        # DETERMINISTICO pelo texto: as N tentativas do reenvio gravam N entradas system com o
-        # MESMO texto, e o front deduplica por id — uma bolha so, no lugar da 1a tentativa.
-        # ts da entrada: a bolha nasce no momento da 1a tentativa, nao da ultima.
+        # transcript e o app precisa mostra-lo — mas a entrega tem preventContinuation=true: o
+        # agente NUNCA recebeu o prompt. A bolha nasce marcada (desistiu=True) pra o aviso
+        # vermelho "nao chegou" seguir de pe — e a verdade. id DETERMINISTICO pelo texto: as N
+        # tentativas do reenvio gravam N entradas system com o MESMO texto, e o front deduplica
+        # por id — uma bolha so, no lugar da 1a tentativa. ts da entrada: a bolha nasce no
+        # momento da 1a tentativa, nao da ultima.
         content = obj.get("content")
         if (recado := _recado_em_system(content)) is not None:
             digest = hashlib.md5(recado.encode("utf-8", "replace")).hexdigest()[:8]
-            return [ChatEvent(kind="user_msg", id=f"held:{digest}", text=recado, ts=_ts(obj))]
+            return [ChatEvent(kind="user_msg", id=f"held:{digest}", text=recado, ts=_ts(obj),
+                              desistiu=True)]
         return []
 
     if etype == "queue-operation":

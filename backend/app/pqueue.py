@@ -13,7 +13,7 @@ from watchfiles import awatch
 
 from app.config import settings
 from app.models import ChatEvent, dumps_safe, scrub_surrogates
-from app.transcript import _recado_em_system, parse_obj
+from app.transcript import parse_obj
 
 # Limite de entradas mantidas no sidecar (poda no append pra nao crescer sem fim).
 _MAX_ENTRIES = 1000
@@ -37,7 +37,23 @@ def _sanitize(name: str) -> str:
 _PREFIXO_MIN = 8   # piso de prefixo: "ok"/"sim"/"1" nao confirmam frase alheia que comeca igual
 
 
-def _casam(linhas: set[str], disponiveis: set[str]) -> set[str]:
+def _linhas_da_entrada(r: dict) -> set[str]:
+    """Formas do texto de UMA entrada da fila: cru, sem o marcador de anexo, e cada uma por linha.
+
+    As duas formas sao as mesmas em dois pontos do reconcile (resgate e caminho normal) — um
+    helper unico evita que um dos lados normalize diferente do outro e casamentos divergirem.
+    """
+    cru = str(r.get("text") or "").strip()
+    podado = _strip_attach(cru).strip()
+    ls = {cru, podado,
+          *(ln.strip() for ln in cru.split("\n")),
+          *(ln.strip() for ln in podado.split("\n"))}
+    ls.discard("")
+    return ls
+
+
+def _casam(linhas: set[str], disponiveis: set[str],
+           reservadas: frozenset[str] = frozenset()) -> set[str]:
     """Linhas do transcript que `linhas` (de UMA entrada da fila) cobrem: iguais + prefixos.
 
     O eco pode chegar com SUFIXO — medido em 18/08/2026: a fila digitou "Vamos fazer ate as 23
@@ -45,13 +61,22 @@ def _casam(linhas: set[str], disponiveis: set[str]) -> set[str]:
     O casamento por linha exata nunca casava, a entrega desistia e a bolha ficava marcada 'nao
     chegou' sobre uma msg que CHEGOU. Piso de comprimento pro prefixo: resposta curta nao
     confirma frase alheia.
+
+    `reservadas` (linhas que casam EXATO com outra entrada PENDENTE) ficam de fora do prefixo:
+    pertencem a quem casa exato — sem isto, "pode seguir" (perdida) comeria a linha de "pode
+    seguir com a Task 4 agora" (chegou) e os dois ficariam invertidos (medido no parecer G2
+    rev1, bloqueador 2). E o prefixo consome UMA linha por linha da fila (a mais curta = a menos
+    abrangente), nao todas.
     """
     consumidas: set[str] = set()
     for ln in linhas:
         if ln in disponiveis:
             consumidas.add(ln)
         elif len(ln) >= _PREFIXO_MIN:
-            consumidas.update(d for d in disponiveis if d.startswith(ln))
+            cands = sorted((d for d in disponiveis if d.startswith(ln) and d not in reservadas),
+                           key=len)
+            if cands:
+                consumidas.add(cands[0])
     return consumidas
 
 
@@ -211,15 +236,11 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
                             add(ev.text)
                     continue
                 etype = obj.get("type")
-                if etype == "system":
-                    # Recado preso em system (entrega bloqueada por hook, ver transcript._recado_em_system):
-                    # o texto EXISTE no transcript, entao conta como "aterrissou" — sem isto o reconcile
-                    # redigita o recado (mais entradas system) e acaba desistindo com a bolha marcada
-                    # 'nao chegou' sobre uma mensagem que esta visivel no transcript.
-                    c = obj.get("content")
-                    if isinstance(c, str) and (recado := _recado_em_system(c)) is not None:
-                        add(recado)
-                    continue
+                # system NAO entra de proposito: recado preso em entrega BLOQUEADA por hook tem
+                # preventContinuation=true — o agente nunca o recebeu, e committed_user_lines e o
+                # oraculo de "aterrissou na sessao". Conta-lo confirmaria a entrega e a bolha
+                # ficaria sem a marca vermelha sobre uma mensagem que nunca chegou (ver parecer
+                # G2 rev1, bloqueador 1).
                 if etype == "queue-operation":
                     c = obj.get("content")
                     if isinstance(c, str):
@@ -379,6 +400,14 @@ class PromptQueue:
             # Sim" se repete) casariam as duas contra a mesma linha — e uma que se perdeu de verdade
             # viraria `confirmed`, escondendo a falha em vez de mostra-la. Gasta-se a linha ao usar.
             disponiveis = set(committed)
+            # Linhas que casam EXATO com alguma entrada pendente pertencem a ELA — o prefixo de
+            # outra entrada nao pode leva-las (senao "pode seguir" comeria a linha de "pode seguir
+            # com a Task 4 agora": a perdida vira entregue e a que chegou ganha a marca — o defeito
+            # da Task reaberto por outra porta, parecer G2 rev1 bloqueador 2).
+            reservadas = frozenset().union(*[
+                _linhas_da_entrada(r) & disponiveis
+                for r in rows if r.get("delivered") is True and not r.get("confirmed")
+            ] or [frozenset()])
             for r in rows:
                 if r.get("delivered") is not True or r.get("confirmed"):
                     continue
@@ -395,13 +424,8 @@ class PromptQueue:
                     # "1") casaria por coincidencia — dando por entregue o que nunca chegou.
                     if ts < min_ts:
                         continue
-                    texto = str(r.get("text") or "").strip()
-                    podado = _strip_attach(texto).strip()
-                    linhas_r = {texto, podado,
-                                *(ln.strip() for ln in texto.split("\n")),
-                                *(ln.strip() for ln in podado.split("\n"))}
-                    linhas_r.discard("")
-                    casou = _casam(linhas_r, disponiveis)
+                    linhas_r = _linhas_da_entrada(r)
+                    casou = _casam(linhas_r, disponiveis, reservadas)
                     if casou:
                         disponiveis -= casou    # a(s) linha(s) foi usada: nao confirma outra entrada
                         r["confirmed"] = True
@@ -417,12 +441,8 @@ class PromptQueue:
                 # Compara CRU e podado (espelha o lado do committed_user_lines): so um dos lados
                 # podado deixava msg com anexo orfa -> requeue indevido.
                 text_raw = str(r.get("text") or "").strip()
-                text = _strip_attach(text_raw).strip()
-                lines = {text_raw, text,
-                         *(ln.strip() for ln in text_raw.split("\n")),
-                         *(ln.strip() for ln in text.split("\n"))}
-                lines.discard("")
-                cons = _casam(lines, disponiveis)
+                lines = _linhas_da_entrada(r)
+                cons = _casam(lines, disponiveis, reservadas)
                 if not text_raw or cons:
                     disponiveis -= cons            # as linhas casadas confirmam UMA entrada so
                     r["confirmed"] = True
