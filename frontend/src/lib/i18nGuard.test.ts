@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { escanearArvore, carregarPermitidas } from '../../scripts/i18nScan.mjs';
+import { escanearArquivo, escanearArvore, carregarPermitidas } from '../../scripts/i18nScan.mjs';
 
 const RAIZ = join(import.meta.dirname, '..', '..');
 const SRC = join(RAIZ, 'src');
@@ -35,6 +35,19 @@ describe('trava de string crua', () => {
     const pt = chaves('pt.json');
     expect(pt.filter((k) => !en.includes(k)), 'chave so em pt: aparece como ID cru em ingles').toEqual([]);
     expect(en.filter((k) => !pt.includes(k)), 'chave so em en: aparece em ingles no meio do portugues').toEqual([]);
+  });
+
+  // O ramo de markup do extrator so vale pra arquivo COM markup. Num `.ts`, `<algo>` num
+  // comentario era lido como tag: a linha era cortada no `<` e o resto virava "string crua".
+  // Falso positivo que nao da pra consertar no codigo — empurrava pro i18n-allow, que e global e
+  // permanente (duas entradas em um dia, 18/08/2026, as duas por isso).
+  it('`<algo>` em comentario de .ts nao vira string crua', () => {
+    const fonte = '// marcador "📎 imagem:/arquivo: <path>" + o "—" que liga. Mesma\nexport const X = 1;';
+    expect(escanearArquivo('src/lib/exemplo.ts', fonte)).toEqual([]);
+    // e o que o extrator existe pra pegar continua sendo pego, no mesmo .ts:
+    expect(escanearArquivo('src/lib/exemplo.ts', 'const r = "Salvar alterações";')).toEqual(['Salvar alterações']);
+    // ... e o markup de verdade nao muda:
+    expect(escanearArquivo('src/components/X.svelte', '<div>Salvar alterações</div>')).toEqual(['Salvar alterações']);
   });
 
   // lib/format.ts nao tem mapa de rotulo com valor literal.

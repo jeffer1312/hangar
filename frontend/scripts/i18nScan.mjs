@@ -58,7 +58,14 @@ function pareceTexto(s, permitidas) {
 export function escanearArquivo(caminho, fonte, permitidas = new Set()) {
   const achados = [];
   const scripts = [...fonte.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-  const markup = fonte
+  // O ramo de MARKUP so roda em arquivo que TEM markup. Num `.ts` ele lia qualquer `<algo>` de
+  // comentario como tag: o `split(/<[^>]*>/)` cortava a linha no `<path>` e o resto (`" + o "—"
+  // que liga. Mesma`) virava "string crua" — falso positivo que nao da pra consertar no codigo,
+  // e por isso empurra pro i18n-allow, que e global e permanente (medido em 18/08/2026: duas
+  // entradas de allow em um dia, as duas por causa disto). O que interessa num `.ts` sao os
+  // literais, e o ramo de baixo (`corpos`) ja varre o arquivo inteiro atras deles.
+  const temMarkup = caminho.endsWith('.svelte') || caminho.endsWith('.html');
+  const markup = !temMarkup ? '' : fonte
     .replace(/<script[^>]*>[\s\S]*?<\/script>/g, '')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/g, '')
     .replace(/<!--[\s\S]*?-->/g, ' ');
