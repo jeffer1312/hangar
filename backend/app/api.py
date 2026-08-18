@@ -39,6 +39,7 @@ from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, Run
                         ProjectStatus, session_key)
 from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError, PIN_NONE
 from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
+from app.prune import prune_loop as _prune_loop
 from app.chain import ThenLink
 from app import terminal_input
 from app.terminal_input import TerminalInput, drain
@@ -166,6 +167,19 @@ async def _lifespan(app: FastAPI):
 
     stall_task.add_done_callback(_stall_watch_done)
 
+    # Poda periodica dos sidecars de sessao morta (Task G3): varre na subida e depois a cada
+    # 24h — ver app/prune.py para o criterio conservador (chave de sessao nao viva + idade
+    # minima de 7 dias) e o porquê de periodica em vez de so no startup.
+    prune_task = asyncio.create_task(_prune_loop())
+
+    def _prune_done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("prune.prune_loop crashed", exc_info=exc)
+
+    prune_task.add_done_callback(_prune_done)
+
     # Boot-resume dos loops: flags em memoria (tick em voo) morrem no restart; o sidecar e a verdade.
     # Loop ACTIVE cuja sessao existe e esta idle -> reagenda o tick; sessao sumida -> failed.
     def _boot_resume_loops() -> None:
@@ -200,12 +214,17 @@ async def _lifespan(app: FastAPI):
     finally:
         task.cancel()
         stall_task.cancel()
+        prune_task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
         try:
             await stall_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await prune_task
         except asyncio.CancelledError:
             pass
 
