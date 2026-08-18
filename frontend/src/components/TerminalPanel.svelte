@@ -1,7 +1,7 @@
 <script lang="ts">
   import { TermSocket, termUrlForServer, sessionExistsOnServer } from '../lib/term';
   import { openShell, openNativeTerminal } from '../lib/api';
-  import { listServers, getBaseUrl, getToken, onServersChanged } from '../lib/auth';
+  import { listServers, onServersChanged } from '../lib/auth';
   import type { Server } from '../lib/auth';
   // `import type`: some no build (nao vira require), entao NAO desfaz o import dinamico logo abaixo
   // -- o xterm continua fora do bundle de quem nunca abre o terminal.
@@ -105,11 +105,19 @@
   // session name que o painel embutido estaria usando ali. Fecha o painel ANTES de pedir a janela:
   // e a regra que evita dois clientes (o xterm embutido + a janela nativa) com tamanhos diferentes
   // brigando pelo `window-size=latest` da MESMA sessao tmux (mesmo motivo do comentario em
-  // termsock.py sobre "um painel por sessao").
+  // termsock.py sobre "um painel por sessao"). O POST sai pro servidor da SESSAO (o dono do
+  // terminal), nunca pro ativo — mesma regra do abrirAbaShell.
   function abrirTerminalNativo() {
     const alvo = abaAtiva === 'attach' ? sessionName : (shellNome ?? sessionName);
+    const srv = servidorDe(connKey);
+    if (!srv) {
+      // Servidor da sessao fora da lista: nao ha endereco pra onde pedir a janela.
+      nativeErro = m.servidor_nao_existe();
+      nativeErroTimer = setTimeout(() => { nativeErro = null; }, 8000);
+      return;
+    }
     onClose();
-    openNativeTerminal(alvo).catch((e) => {
+    openNativeTerminal(srv, alvo).catch((e) => {
       clearTimeout(nativeErroTimer);
       // Mensagem do backend (503 = sem emulador no PATH, ou o emulador morreu logo apos abrir) --
       // mostrada como veio, nao engolida.
@@ -261,15 +269,15 @@
     return listServers().find((s) => s.id === id) ?? null;
   }
 
-  // Servidor ATIVO, so pro terminal SHELL: o POST /shell (api.ts openShell) cria a sessao escondida
-  // no servidor ATIVO, entao o socket da aba segue ESSE mesmo servidor — apontar pro serverId da
-  // sessao anexaria um term-<nome> que nao existe ali. getBaseUrl/getToken ja resolveram o ativo
-  // (lista vazia => ''), e o fallback de location.origin vive dentro de termUrlForServer.
-  // O valor e capturado UMA vez, no clique (abrirAbaShell) e reusado no efeito do socket: reler
-  // `servidorAtivo()` depois do `await` do POST poderia casar com o servidor que o usuario TROCOU
-  // nesse meio-tempo — o POST criaria term-<nome> em A e o socket abriria em B (achado da revisao).
-  function servidorAtivo(): Server {
-    return { id: '', label: '', baseUrl: getBaseUrl() ?? '', token: getToken() ?? '' };
+  // Servidor da SESSAO, capturado no clique da aba Shell (mesmo `servidorDe(connKey)` da aba
+  // attach): o POST /shell cria term-<nome> no servidor DONO da sessao, e o socket da aba segue
+  // ESSE mesmo servidor — apontar pro ativo criaria o shell numa maquina e conectaria o terminal
+  // noutra (ou nas duas erradas, quando a sessao nem existe no ativo). O valor e capturado UMA
+  // vez, no clique (abrirAbaShell) e reusado no efeito do socket: reler `servidorDe(connKey)`
+  // depois do `await` do POST poderia casar com a sessao que o usuario TROCOU nesse meio-tempo —
+  // o POST criaria term-<nome> na sessao antiga e o socket abriria na nova.
+  function servidorDaSessao(): Server | null {
+    return servidorDe(connKey);
   }
 
   $effect(() => {
@@ -385,10 +393,19 @@
     shellCarregando = true;
     shellErro = null;
     const alvo = sessionName;   // captura ANTES do await, mesma cautela do efeito principal
-    // BLOQUEADOR 1: captura ANTES do await; o efeito do socket usa este mesmo objeto (via $state).
-    srvShell = servidorAtivo();
+    // Servidor da SESSAO capturado ANTES do await; o efeito do socket usa este mesmo objeto (via
+    // $state). Nao e o ativo: o shell nasce no servidor DONO da sessao (ver servidorDaSessao).
+    srvShell = servidorDaSessao();
+    if (!srvShell) {
+      // Servidor da sessao fora da lista: nao ha endereco pra onde pedir o shell — e cair pro
+      // ativo seria reintroduzir o defeito desta Task. Mesma recusa do efeito do attach.
+      shellErro = m.servidor_nao_existe();
+      shellVisitada = false;
+      shellCarregando = false;
+      return;
+    }
     try {
-      const r = await openShell(alvo);
+      const r = await openShell(srvShell, alvo);
       if (alvo !== sessionName) return;   // sessao trocou enquanto esperava -- descarta resposta velha
       shellNome = r.shell;
     } catch (e) {
@@ -443,9 +460,10 @@
       garantirObserverDeTema();
 
       const enc = new TextEncoder();
-      // BLOQUEADOR 1: `srvShell` (capturado no clique) e nao `servidorAtivo()` — reler aqui, depois
-      // do await do POST, poderia casar com o servidor TROCADO no meio e abrir o socket num B que
-      // nao recebeu o POST /shell. Se ainda nao ha servidor (clique antes do POST?), nao conecta.
+      // `srvShell` (o servidor da SESSAO, capturado no clique) e nao `servidorDe(connKey)` relido —
+      // reler aqui, depois do await do POST, poderia casar com a sessao que o usuario TROCOU no
+      // meio e abrir o socket num B que nao recebeu o POST /shell. Se ainda nao ha servidor
+      // (clique antes do POST?), nao conecta.
       if (!srvShell) return;
       sockShell = new TermSocket(termUrlForServer(srvShell, alvo, t.cols, t.rows), {
         data: (b) => t.write(b),
