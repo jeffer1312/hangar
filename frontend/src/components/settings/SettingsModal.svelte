@@ -10,10 +10,11 @@
   import ServidoresSettings from './ServidoresSettings.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
   import ContasSettings from './ContasSettings.svelte';
+  import ServidorSeletor from './ServidorSeletor.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
   import * as m from '../../paraglide/messages';
-  import type { Server } from '../../lib/auth';
+  import { listServers, onServersChanged, type Server } from '../../lib/auth';
 
   interface Props {
     tela: TelaConfig;
@@ -37,6 +38,27 @@
   let { tela, alvo, nomeAlvo, semServidor, identidade, resolvedServer = null, onPickServer, onLogout, onIrPara, onVoltar, onFechar }: Props = $props();
 
   const store = criarConfigServidor(() => alvo, () => identidade);
+
+  // Seletor de servidor do grupo "Servidor" (pedido repetido do usuário, 19/08/2026): o rótulo
+  // "Servidor · X" dizia o alvo mas não trocava — trocar exigia ir à tela Servidores e voltar.
+  // listServers() lê localStorage e não é reativo; o contador sobe pelo mesmo onServersChanged
+  // que o App e o ServidoresSettings usam.
+  let versaoServidores = $state(0);
+  $effect(() => onServersChanged(() => versaoServidores++));
+  const servidores = $derived.by(() => {
+    versaoServidores;
+    return listServers();
+  });
+  // O alvo corrente é o resolvedServer: o App já resolve pro ATIVO quando não há ?srv=
+  // (App.svelte, alvoConfig), então null aqui é só "alvo que não resolveu" — e nesse caso nem
+  // tela de servidor abre (telaEfetiva cai na Aparencia).
+  const servidorAtualId = $derived(resolvedServer?.id ?? '');
+  // Com UM servidor não há escolha a fazer — o rótulo estático de sempre fica. Sem onPickServer
+  // (quem monta sem a porta) também não faz sentido oferecer troca. E sem resolvedServer (um
+  // ?srv= que não resolveu) o select abriria em BRANCO — nenhuma option casa com '' —, então a
+  // condição exige o alvo resolvido (a tela em si já caiu na Aparencia nesse caso).
+  const mostrarSeletor = $derived(servidores.length > 1 && !!onPickServer && !!resolvedServer);
+  function trocarServidor(id: string) { onPickServer?.(id); }
 
   // Na tela Servidores o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
   // INVALIDADA sem nova chamada: quem manda la sao os controllers proprios (ServerManager/
@@ -233,7 +255,17 @@
       <button class="st-fechar" bind:this={fecharEl} onclick={onFechar} aria-label={m.sessao_fechar()}>✕</button>
       <aside class="st-nav">
         {#each SECOES as secao (secao)}
-          <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
+          {#if secao === 'servidor' && mostrarSeletor}
+            <!-- O rótulo do grupo vira o TROCADOR de alvo: "Servidor" + select com a máquina
+                 sendo configurada. Antes dizia "Servidor · X" e trocar exigia ir à tela
+                 Servidores e voltar (pedido recorrente do usuário). -->
+            <div class="st-secao st-secao-sel">
+              <span>{m.lista_agrupar_servidor()}</span>
+              <ServidorSeletor {servidores} atualId={servidorAtualId} onTrocar={trocarServidor} />
+            </div>
+          {:else}
+            <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
+          {/if}
           {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
             <button class="st-nav-item" class:sel={telaAtual === l.id}
                     aria-current={telaAtual === l.id ? 'page' : undefined}
@@ -257,8 +289,16 @@
       <span class="st-icone st-vazio" aria-hidden="true"></span>
       {#if TELAS_DE_SERVIDOR.includes(telaAtual) && nomeAlvo}
         <!-- Sem isto nao da pra saber em que maquina se esta mexendo: o app roda no front de um
-             servidor e a lista e agregada, entao a config aberta pode ser de outra maquina. -->
-        <p class="st-sub">{m.config_modal_em({ nome: nomeAlvo })}</p>
+             servidor e a lista e agregada, entao a config aberta pode ser de outra maquina. Com
+             mais de um servidor o texto vira o TROCADOR (select) — dizer sem deixar trocar foi o
+             pedido recorrente do usuário. -->
+        <p class="st-sub">
+          {#if mostrarSeletor}
+            <ServidorSeletor {servidores} atualId={servidorAtualId} onTrocar={trocarServidor} />
+          {:else}
+            {m.config_modal_em({ nome: nomeAlvo })}
+          {/if}
+        </p>
       {/if}
     </header>
     {@render corpo()}
@@ -269,7 +309,14 @@
 {#snippet corpo()}
   {#if telaAtual === 'root'}
     {#each SECOES as secao (secao)}
-      <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
+      {#if secao === 'servidor' && mostrarSeletor}
+        <div class="st-secao st-secao-sel">
+          <span>{m.lista_agrupar_servidor()}</span>
+          <ServidorSeletor {servidores} atualId={servidorAtualId} onTrocar={trocarServidor} />
+        </div>
+      {:else}
+        <p class="st-secao">{secao === 'servidor' && nomeAlvo ? m.config_modal_servidor_de({ nome: nomeAlvo }) : secao === 'servidor' ? m.lista_agrupar_servidor() : m.config_aparencia_app()}</p>
+      {/if}
       <div class="st-cartao">
         {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
           <SettingsRow icone={l.icone} rotulo={l.rotulo} descricao={l.descricao}
@@ -294,7 +341,9 @@
       fallbackFocus={fecharEl}
       onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
   {:else if telaAtual === 'acesso'}
-    <AcessoSettings />
+    <!-- O alvo por PROP (não pela rota lida dentro da tela): com o seletor do grupo a troca
+         não remonta a tela, e a prop reativa é o que remede os endereços (achado da revisão). -->
+    <AcessoSettings alvo={resolvedServer} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
   {:else}
@@ -324,6 +373,9 @@
     color: var(--text-muted); font-size: var(--text-xs);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
+  /* Versão com o seletor de alvo: o rótulo "Servidor" e o select na mesma linha. O select fica
+     minúsculo de propósito — o nome da máquina é dado, não título de seção. */
+  .st-secao-sel { display: flex; align-items: center; gap: var(--space-2); }
   /* Cartao arredondado com as linhas dentro, no formato do iOS. `--surface-card` entra no veu do
      papel de parede junto com o resto (CLAUDE.md, "Transparencia"). */
   .st-cartao {

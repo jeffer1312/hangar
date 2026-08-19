@@ -619,6 +619,7 @@
   "config_modal_em": "on {nome}",
   "config_modal_servidor_de": "Server · {nome}",
   "config_modal_escolha_servidor": "pick a server from the list to configure",
+  "config_modal_trocar_servidor": "Switch the server being configured",
   "config_aparencia_ver_ao_vivo": "View live",
   "config_aparencia_voltar_padrao": "Back to default",
   "config_aparencia_tema_desc": "light, dark or the system one",

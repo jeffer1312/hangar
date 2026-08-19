@@ -8,12 +8,23 @@
   import { copyText } from '../../lib/clipboard';
 
   // O alvo da config espelha a resolução do App (App.svelte): ?srv= explícito, senão o
-  // ATIVO. AcessoSettings nasceu sem prop (a Task 1 registrou a aba com <AcessoSettings />)
-  // e o SettingsModal é intocável — a tela resolve o próprio servidor pela rota.
+  // ATIVO. O alvo também pode vir por PROP (o SettingsModal passa o resolvedServer): com o
+  // seletor de servidor no painel (19/08/2026) a troca acontece SEM remontar a tela, então a
+  // prop é o caminho reativo — e a resolução pela rota fica de fallback pra quem monta direto
+  // (os testes).
+  interface Props {
+    alvo?: Server | null;
+  }
+  let { alvo = undefined }: Props = $props();
+
   function servidorAlvo(): Server | null {
     const r = parseConfig(location.hash);
     const porSrv = r?.srv ? listServers().find((s) => s.id === r.srv) ?? null : null;
     return porSrv ?? listServers().find((s) => s.id === getActiveId()) ?? null;
+  }
+
+  function servidorAtual(): Server | null {
+    return alvo !== undefined ? alvo : servidorAlvo();
   }
 
   let carregando = $state(true);
@@ -27,11 +38,17 @@
   let listaMedida = $state(false);
 
   $effect(() => {
-    const s = servidorAlvo();
+    const s = servidorAtual();
     if (!s) return;
     let vivo = true;
     carregando = true;
     listaMedida = false;
+    // Troca de alvo com a tela MONTADA (seletor do grupo, 19/08): tudo que foi medido ou
+    // revelado pro servidor anterior sai ANTES da nova medição — endereços e QR de outra
+    // máquina com o seletor dizendo a nova seriam mentira (achado da revisão).
+    enderecos = []; loopback = false; bind = ''; erro = '';
+    parEstado = 'escondido'; parUrl = ''; parQr = ''; parErro = ''; parTipo = '';
+    parGeracao++;   // mata pareamento em voo do alvo anterior
     alcanceDoServidor(s)
       .then((r) => {
         if (!vivo) return;
@@ -144,7 +161,7 @@
   let mostrarRef = $state<HTMLButtonElement | null>(null);
 
   async function revelarPar() {
-    const s = servidorAlvo();
+    const s = servidorAtual();
     if (!s || parTipo === '') return; // sem candidato não se chama a rota (bloqueador 2)
     parEstado = 'carregando';
     const geracao = ++parGeracao;

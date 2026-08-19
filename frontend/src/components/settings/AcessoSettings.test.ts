@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import AcessoSettings from './AcessoSettings.svelte';
+import { criarProps } from './props-reativas.svelte';
 import * as m from '../../paraglide/messages';
 import * as alcanceLib from '../../lib/alcance';
 import * as auth from '../../lib/auth';
@@ -324,5 +325,32 @@ describe('AcessoSettings — pareamento', () => {
     expect(nome).toContain(m.acesso_selecionar_endereco());
     expect(nome).not.toContain(m.acesso_par_trocar_aviso());
     unmount(t.comp);
+  });
+});
+
+describe('AcessoSettings — troca de alvo com a tela montada (seletor do grupo)', () => {
+  // Com o seletor de servidor no painel (19/08/2026) a troca NÃO remonta a tela: o SettingsModal
+  // passa o alvo por prop e o efeito remede. Sem isto, endereços e QR do servidor anterior
+  // ficavam na tela com o seletor dizendo o novo (achado da revisão).
+  it('trocar a prop alvo remede os endereços e some com o dado do servidor anterior', async () => {
+    const B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'y' } as Server;
+    const props = criarProps({ alvo: SRV as Server | null });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(AcessoSettings, { target: el, props });
+    await tick(); await tick(); await tick();
+    expect(alcanceMock.alcanceDoServidor).toHaveBeenCalledWith(SRV);
+    expect(el.textContent).toContain('192.168.0.42');
+
+    alcanceMock.alcanceDoServidor.mockResolvedValue({
+      loopback: false, bind: '10.0.0.9',
+      enderecos: [{ tipo: 'rede_local', url: 'http://10.0.0.9:5173', estado: 'ok', tempo_ms: 5 }] as never,
+    });
+    props.alvo = B;
+    await tick(); await tick(); await tick();
+    expect(alcanceMock.alcanceDoServidor).toHaveBeenCalledWith(B);
+    expect(el.textContent).toContain('10.0.0.9');
+    expect(el.textContent).not.toContain('192.168.0.42');
+    unmount(comp as never);
   });
 });

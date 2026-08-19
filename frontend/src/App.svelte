@@ -191,10 +191,12 @@
     abrirConfig(tela, cfg?.srv ?? null);
   }
 
-  // Tela Servidores: "Editar" numa linha escolhe o alvo (?srv=) SEM sair da tela — o painel
-  // reabre a mesma tela com o servidor novo resolvido (abrirConfig conta como nova parada).
+  // Trocar o ALVO do painel (?srv=) sem sair da tela: o seletor do grupo "Servidor" (e o
+  // "Editar" da tela Servidores) reabrem a tela ATUAL com o servidor novo resolvido
+  // (abrirConfig conta como nova parada). Antes isto sempre caía em 'servidores' — trocar o
+  // alvo da aba Contas te arrancava dela (pedido recorrente do usuário, 19/08/2026).
   function pickConfigServer(id: string) {
-    abrirConfig('servidores', id);
+    abrirConfig(cfg?.tela ?? 'servidores', id);
   }
 
   // ‹ (botaoEsquerdo de sub-tela no SettingsModal) e "subir um nivel", nao "voltar no tempo": os dois

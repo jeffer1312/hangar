@@ -619,6 +619,7 @@
   "config_modal_em": "em {nome}",
   "config_modal_servidor_de": "Servidor · {nome}",
   "config_modal_escolha_servidor": "escolha um servidor na lista pra configurar",
+  "config_modal_trocar_servidor": "Trocar o servidor que está sendo configurado",
   "config_aparencia_ver_ao_vivo": "Ver ao vivo",
   "config_aparencia_voltar_padrao": "Voltar ao padrão",
   "config_aparencia_tema_desc": "claro, escuro ou o do sistema",
