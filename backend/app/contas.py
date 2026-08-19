@@ -9,6 +9,13 @@ Por que atalho e não cópia: config dir separado normalmente significa AMBIENTE
 plugins, hooks, settings. Aqui quase tudo é link pro `~/.claude` de sempre, então editar uma skill
 vale nas contas todas no mesmo instante.
 
+Por que `settings.json` é a exceção (cópia, ver _semear_settings): o CLI escreve nele sozinho —
+primeiro boot, /config, /model — e a escrita atravessava o symlink e clobberava a config
+compartilhada de todas as contas de uma vez (2026-08-19: sumiram 14 chaves, enabledPlugins junto,
+e os plugins apagaram em todo lugar). O preço: mudança no compartilhado não propaga pras cópias —
+EXCETO o `enabledPlugins`, espelhado de volta pelo _espelhar_enabled_plugins (plugin habilitado
+no principal vale nas contas no próximo uso; o principal manda nessa chave).
+
 Por que `projects/` é a exceção: é onde ficam os `.jsonl`, e o painel de custo soma UMA VEZ POR
 CONFIG DIR (`costs_sources._config_dirs`). Compartilhar a pasta faria o mesmo gasto ser contado
 uma vez por conta e ainda aparecer em conta que nunca rodou nada. Pasta real por conta = gasto
@@ -59,8 +66,12 @@ MARCADOR = ".hangar-conta"
 DRIFT_TETO = 3
 
 # Nunca viram atalho. `projects` está aqui por causa do custo (ver docstring); `.drift` e o
-# marcador são nossos e não existem no compartilhado.
-_NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects"}
+# marcador são nossos e não existem no compartilhado. `settings.json` é CÓPIA (ver
+# _semear_settings): o CLI escreve nele por conta própria (primeiro boot, /config, /model), e
+# escrita através do symlink clobberava o compartilhado — medido 2026-08-19, o primeiro boot de
+# uma conta nova regravou o settings.json de TODAS as contas sem 14 chaves (enabledPlugins etc),
+# desligando os plugins em todo lugar.
+_NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json"}
 
 
 def compartilhado() -> Path:
@@ -265,6 +276,66 @@ def _ligar_memoria(dir_conta: Path, projeto: str | None) -> list[str]:
     return avisos
 
 
+def _semear_settings(dir_conta: Path) -> str | None:
+    """`settings.json` é cópia, não atalho — a exceção deliberada do "quase tudo é link".
+
+    O trade-off, aceito pelo usuário em 2026-08-19: mudança no settings.json compartilhado NÃO
+    propaga pras contas (cada uma tem a sua cópia), em troca de o primeiro boot de uma conta nova
+    nunca mais clobberar a config de todo mundo. Migração: conta antiga com o symlink do layout
+    anterior tem o link trocado pela cópia aqui, no próximo uso.
+    """
+    alvo = compartilhado() / "settings.json"
+    destino = dir_conta / "settings.json"
+    aviso = None
+    if destino.is_symlink():
+        if os.readlink(destino) == str(alvo):
+            destino.unlink()
+        else:
+            # Symlink que não é o do layout antigo: deriva — mesma regra do resto, gaveta.
+            aviso = _gavetar(dir_conta, destino)
+    elif destino.exists():
+        # Cópia da conta já existe (ou o CLI criou uma local): é dela — só o enabledPlugins
+        # é espelhado do compartilhado, o resto fica como está.
+        _espelhar_enabled_plugins(alvo, destino)
+        return None
+    if alvo.is_file():
+        shutil.copyfile(alvo, destino)
+    return aviso
+
+
+def _espelhar_enabled_plugins(alvo: Path, destino: Path) -> None:
+    """Espelha SÓ a chave `enabledPlugins` do settings.json compartilhado pra cópia da conta.
+
+    É o que devolve a propagação que a cópia tirou: plugin instalado/habilitado no principal
+    passa a valer nas contas no próximo uso, sem abrir mão da proteção contra clobber (a conta
+    continua escrevendo só na cópia dela). O principal MANDA nessa chave — habilitar/desabilitar
+    plugin de dentro de uma conta é desfeito aqui, de propósito.
+
+    Compartilhado SEM a chave não apaga a da conta: ausência é o sintoma do acidente de
+    2026-08-19 (clobber), e espelhá-la desligaria os plugins das contas de novo.
+    """
+    try:
+        de = json.loads(alvo.read_text(encoding="utf-8"))
+        para = json.loads(destino.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as e:
+        # Truncado por escrita concorrente, sem permissão, JSON inválido: engolir deixaria a
+        # conta divergir do principal em silêncio — mesma regra do _semear_claude_json.
+        raise ContaError(500, f"não consegui espelhar o enabledPlugins pra conta: {e}") from e
+    if not isinstance(de, dict) or not isinstance(para, dict):
+        raise ContaError(500, "settings.json não é um objeto JSON — não dá pra espelhar o enabledPlugins")
+    ligados = de.get("enabledPlugins")
+    if not isinstance(ligados, dict) or para.get("enabledPlugins") == ligados:
+        return
+    para["enabledPlugins"] = ligados
+    # tmp+rename com pid+uuid, como o _ligar: um CLI vivo da conta lendo o arquivo no meio da
+    # escrita receberia JSON truncado.
+    tmp = destino.with_name(f"{destino.name}.hangar-novo.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    tmp.write_text(json.dumps(para, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, destino)
+
+
 def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
     """Corpo da reconciliação, SEM as travas — quem chama (reconciliar público ou o ciclo da
     conta) já as segura. Validar o projeto aqui também protege o caminho do ciclo, que recebe
@@ -286,6 +357,9 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
             if aviso:
                 avisos.append(aviso)
         _ligar(destino, alvo)
+    aviso = _semear_settings(dir_conta)
+    if aviso:
+        avisos.append(aviso)
     for p in dir_conta.iterdir():
         # Atalho apontando pra coisa que sumiu do compartilhado.
         if p.is_symlink() and not p.exists():

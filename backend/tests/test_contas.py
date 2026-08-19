@@ -43,6 +43,7 @@ def casa(tmp_path, monkeypatch):
     (compartilhado / "projects" / "-tmp-x" / "memory").mkdir(parents=True)
     (compartilhado / "projects" / "-tmp-x" / "memory" / "MEMORY.md").write_text("m", encoding="utf-8")
     (compartilhado / "settings.json").write_text('{"theme":"dark"}', encoding="utf-8")
+    (compartilhado / "CLAUDE.md").write_text("# regras", encoding="utf-8")
     (compartilhado / ".credentials.json").write_text('{"claudeAiOauth":{}}', encoding="utf-8")
     (tmp_path / ".claude.json").write_text(
         json.dumps({"oauthAccount": {"emailAddress": "um@exemplo.com"},
@@ -106,7 +107,57 @@ def test_o_resto_do_ambiente_e_atalho(casa):
     p = contas.criar("conta2")
     assert (p / "skills").is_symlink()
     assert (p / "skills" / "falar" / "SKILL.md").read_text(encoding="utf-8") == "oi"
-    assert (p / "settings.json").is_symlink()
+    assert (p / "CLAUDE.md").is_symlink()
+
+
+def test_settings_e_copia_e_nao_atalho(casa):
+    """O CLI escreve no settings.json por conta própria (primeiro boot, /config, /model). Como
+    atalho, essa escrita atravessava e clobberava a config compartilhada de TODAS as contas
+    (2026-08-19: 14 chaves sumiram, enabledPlugins junto, plugins desligados em todo lugar)."""
+    p = contas.criar("conta2")
+    assert not (p / "settings.json").is_symlink()
+    assert (p / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
+    # A escrita do CLI na conta fica NA conta — o compartilhado não muda.
+    (p / "settings.json").write_text('{"stripped": true}', encoding="utf-8")
+    contas.reconciliar("conta2")
+    assert (casa / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
+    assert (p / "settings.json").read_text(encoding="utf-8") == '{"stripped": true}'
+
+
+def test_enabled_plugins_do_compartilhado_espelha_pra_conta(casa):
+    """A cópia protege do clobber mas tirava a propagação: plugin habilitado no principal não
+    chegava nas contas. O espelhamento devolve SÓ essa chave; o resto da cópia é da conta."""
+    p = contas.criar("conta2")
+    (casa / ".claude" / "settings.json").write_text(
+        '{"theme":"dark","enabledPlugins":{"superpowers@oficial":true}}', encoding="utf-8")
+    (p / "settings.json").write_text(
+        '{"theme":"light","enabledPlugins":{"velho@x":true}}', encoding="utf-8")
+    contas.reconciliar("conta2")
+    d = json.loads((p / "settings.json").read_text(encoding="utf-8"))
+    assert d["enabledPlugins"] == {"superpowers@oficial": True}
+    assert d["theme"] == "light"
+
+
+def test_espelhamento_nao_apaga_enabled_plugins_se_o_compartilhado_perdeu_a_chave(casa):
+    """Ausência da chave no compartilhado é o sintoma do acidente de 2026-08-19 (clobber);
+    espelhar a ausência desligaria os plugins das contas de novo."""
+    p = contas.criar("conta2")
+    (p / "settings.json").write_text(
+        '{"enabledPlugins":{"superpowers@oficial":true}}', encoding="utf-8")
+    contas.reconciliar("conta2")   # compartilhado da fixture não tem enabledPlugins
+    d = json.loads((p / "settings.json").read_text(encoding="utf-8"))
+    assert d["enabledPlugins"] == {"superpowers@oficial": True}
+
+
+def test_settings_symlink_do_layout_antigo_vira_copia(casa):
+    """Conta criada antes da mudança tem settings.json como atalho; o próximo uso troca por
+    cópia sem ninguém rodar nada à mão — o mesmo contrato do resto da reconciliação."""
+    p = contas.criar("conta2")
+    (p / "settings.json").unlink()
+    os.symlink(casa / ".claude" / "settings.json", p / "settings.json")
+    contas.reconciliar("conta2")
+    assert not (p / "settings.json").is_symlink()
+    assert (p / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
 
 
 def test_reconciliar_pega_pasta_que_apareceu_depois(casa):
@@ -126,9 +177,9 @@ def test_reconciliar_e_idempotente(casa):
 
 def test_reconciliar_poda_atalho_pro_que_sumiu(casa):
     contas.criar("conta2")
-    (casa / ".claude" / "settings.json").unlink()
+    (casa / ".claude" / "CLAUDE.md").unlink()
     contas.reconciliar("conta2")
-    assert not (casa / ".claude-conta2" / "settings.json").is_symlink()
+    assert not (casa / ".claude-conta2" / "CLAUDE.md").is_symlink()
 
 
 def test_arquivo_local_alterado_volta_pro_compartilhado(casa):
@@ -136,20 +187,20 @@ def test_arquivo_local_alterado_volta_pro_compartilhado(casa):
     perderia a mudança nas duas contas, e o único rastro seria um log que ninguém lê. Como o
     arquivo é compartilhado por desenho, a mudança sobe pro compartilhado."""
     p = contas.criar("conta2")
-    (p / "settings.json").unlink()
-    (p / "settings.json").write_text('{"theme":"light"}', encoding="utf-8")
+    (p / "CLAUDE.md").unlink()
+    (p / "CLAUDE.md").write_text("# regras editadas", encoding="utf-8")
     avisos = contas.reconciliar("conta2")
-    assert (casa / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"theme":"light"}'
-    assert (p / "settings.json").is_symlink()
-    assert any("settings.json" in a for a in avisos)
+    assert (casa / ".claude" / "CLAUDE.md").read_text(encoding="utf-8") == "# regras editadas"
+    assert (p / "CLAUDE.md").is_symlink()
+    assert any("CLAUDE.md" in a for a in avisos)
 
 
 def test_arquivo_local_identico_nao_gera_aviso(casa):
     p = contas.criar("conta2")
-    (p / "settings.json").unlink()
-    (p / "settings.json").write_text('{"theme":"dark"}', encoding="utf-8")
+    (p / "CLAUDE.md").unlink()
+    (p / "CLAUDE.md").write_text("# regras", encoding="utf-8")
     assert contas.reconciliar("conta2") == []
-    assert (p / "settings.json").is_symlink()
+    assert (p / "CLAUDE.md").is_symlink()
 
 
 def test_pasta_local_vai_pra_drift_com_teto(casa):
@@ -242,13 +293,13 @@ def test_symlink_local_inesperado_vai_pra_gaveta_sem_ler_o_alvo(casa):
     p = contas.criar("conta2")
     externo = casa / "segredo.txt"
     externo.write_text("dado externo", encoding="utf-8")
-    (p / "settings.json").unlink()
-    os.symlink(externo, p / "settings.json")
+    (p / "CLAUDE.md").unlink()
+    os.symlink(externo, p / "CLAUDE.md")
     avisos = contas.reconciliar("conta2")
-    assert (casa / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
-    assert (p / "settings.json").is_symlink()
-    assert (p / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
-    assert any("settings.json" in a for a in avisos)
+    assert (casa / ".claude" / "CLAUDE.md").read_text(encoding="utf-8") == "# regras"
+    assert (p / "CLAUDE.md").is_symlink()
+    assert (p / "CLAUDE.md").read_text(encoding="utf-8") == "# regras"
+    assert any("CLAUDE.md" in a for a in avisos)
 
 
 def test_drift_symlinkado_recusa_sem_tocar_o_alvo(casa):
@@ -303,9 +354,9 @@ def test_reconciliacao_concorrente_de_contas_diferentes(casa):
     os copyfile se atropelam no meio do caminho)."""
     contas.criar("conta_a")
     contas.criar("conta_b")
-    versoes = {"conta_a": '{"theme":"light"}', "conta_b": '{"theme":"sepia"}'}
+    versoes = {"conta_a": "# regras da a", "conta_b": "# regras da b"}
     for nome, versao in versoes.items():
-        cfg = casa / f".claude-{nome}" / "settings.json"
+        cfg = casa / f".claude-{nome}" / "CLAUDE.md"
         cfg.unlink()
         cfg.write_text(versao, encoding="utf-8")
     barreira = threading.Barrier(2)
@@ -322,13 +373,13 @@ def test_reconciliacao_concorrente_de_contas_diferentes(casa):
     t1.join()
     t2.join()
 
-    final = (casa / ".claude" / "settings.json").read_text(encoding="utf-8")
+    final = (casa / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
     assert final in set(versoes.values())
     for nome in ("conta_a", "conta_b"):
-        assert (casa / f".claude-{nome}" / "settings.json").is_symlink()
+        assert (casa / f".claude-{nome}" / "CLAUDE.md").is_symlink()
     assert len(avisos) == 2
     for a in avisos:
-        assert any("settings.json" in x for x in a)
+        assert any("CLAUDE.md" in x for x in a)
 
 
 def test_criar_sem_claude_na_home_cria_o_compartilhado(casa):
