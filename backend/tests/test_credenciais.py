@@ -57,7 +57,9 @@ def _monta(monkeypatch, *, dirs=(), motores=None, cotas_lista=()):
     monkeypatch.setattr(engines, "listar", lambda: dict(motores or {}))
     monkeypatch.setattr(credenciais, "_login_de", lambda c: credenciais.EstadoLogin(estado="ok", loggedIn=True))
     monkeypatch.setattr(contas, "e_conta", lambda p: True)
-    monkeypatch.setattr(cotas, "listar_cotas", lambda: list(cotas_lista))
+    # `forcar=False` na assinatura: a lista aceita ?forcar=true (botão "atualizar" da tela),
+    # que só repassa o flag pra cá — o mock recebe e ignora.
+    monkeypatch.setattr(cotas, "listar_cotas", lambda forcar=False: list(cotas_lista))
 
 
 def _dir(path, label, active=False):

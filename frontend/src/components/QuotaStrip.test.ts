@@ -100,6 +100,25 @@ describe('QuotaStrip — o que aparece', () => {
     unmount(t.comp);
   });
 
+  it('sessao-viva NÃO manda abrir sessão — a sessão já está aberta (queixa do usuário, 19/08)', async () => {
+    // Conta com sessão rodando e access token vencido: o CLI dela renova sozinho no próximo
+    // turno. A frase é "renova sozinha", nunca "abra uma sessão nela" — o usuário leu isso
+    // estando DENTRO da sessão.
+    const VIVA: CotaConta = { ...EXPIRADA, motivo: 'sessao-viva' };
+    const t = montar([VIVA]);
+    await tick(); await tick();
+    expect(t.el.querySelector('.quota-vazio')!.textContent).toBe(m.cota_sessao_viva());
+    unmount(t.comp);
+  });
+
+  it('renovacao-falhou continua mandando abrir uma sessão (é o gesto que renova)', async () => {
+    const FALHOU: CotaConta = { ...EXPIRADA, motivo: 'renovacao-falhou' };
+    const t = montar([FALHOU]);
+    await tick(); await tick();
+    expect(t.el.querySelector('.quota-vazio')!.textContent).toBe(m.cota_conta_parada());
+    unmount(t.comp);
+  });
+
   it('a conta-base do app vem marcada (é a que uma sessão nova vai gastar)', async () => {
     const t = montar([lida('default', 13, 22, { ativa: true }), lida('200-01', 26, 87)]);
     await tick(); await tick();

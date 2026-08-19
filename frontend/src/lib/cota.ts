@@ -121,11 +121,20 @@ export function diaDoReset(resetTs: number | null, agora: number): string {
 /** Texto de uma conta SEM número, escolhido pelo motivo que o backend mandou.
  *
  * "precisa entrar" é login de verdade, e dizer isso quando a credencial só está com o token
- * vencido (mas com refresh vivo) manda o usuário fazer uma coisa que não resolve — a conta volta
- * sozinha assim que qualquer sessão dela roda. Os dois motivos que o backend usa para esse caso
- * (`sessao-viva`, quando há processo usando a conta e renovar rotacionaria o par debaixo dele, e
- * `renovacao-falhou`) viram a frase que resolve. Ver backend/app/cotas.py.
+ * vencido (mas com refresh vivo) manda o usuário fazer uma coisa que não resolve. Dos motivos
+ * do backend (ver backend/app/cotas.py `_tentar_renovar`):
+ *
+ * - `sessao-viva`: há SESSÃO ABERTA na conta (ou é a conta-base do app) — renovar por fora
+ *   rotacionaria o par debaixo do processo vivo. Não tem NADA pra fazer: o CLI da sessão
+ *   renova sozinho no próximo turno e o número volta. Mandar "abra uma sessão" aqui é
+ *   absurdo — o usuário já está nela (queixa real de 19/08/2026).
+ * - `renovacao-falhou`: refresh vivo, a tentativa automática falhou — aí sim a frase que
+ *   resolve é "abra uma sessão nela" (o CLI renova ao abrir).
  */
+export function motivoSessaoViva(motivo?: string | null): boolean {
+  return motivo === 'sessao-viva';
+}
+
 export function motivoParado(motivo?: string | null): boolean {
-  return motivo === 'sessao-viva' || motivo === 'renovacao-falhou';
+  return motivo === 'renovacao-falhou';
 }

@@ -1,0 +1,122 @@
+/* Mock da aba Contas — proposta "botão de atualizar + densidade" (19/08/2026).
+   Tokens vêm do base.css da rodada de consistência (cópia fiel do app.css).
+   As classes ct-* copiam as medidas REAIS de ContasSettings.svelte; a variante .depois
+   carrega só o que a proposta muda (cada regra .depois cita o que substitui). */
+
+body { padding: var(--space-5) var(--space-4) 64px; }
+
+h1 { margin-bottom: var(--space-1); }
+.intro { margin-bottom: var(--space-5); }
+
+.par { align-items: start; }
+.par .rot { margin-bottom: var(--space-3); }
+
+/* ── Palco: a folha de ajustes como ela aparece (vidro do painel) ── */
+.folha {
+  padding: var(--space-4) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--glass-panel);
+  box-shadow: var(--elev-3);
+}
+.folha.celular { width: 375px; margin: 0 auto; }
+.folha.desktop { width: 100%; max-width: 860px; margin: 0 auto; }
+
+.st-secao {
+  font-size: var(--text-3xs); font-weight: var(--fw-bold); letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-muted); margin: 0;
+}
+
+/* ═══ HOJE ═══ */
+.ct-legenda { margin: var(--space-1) 0 var(--space-3); color: var(--text-muted);
+              font-size: var(--text-xs); line-height: 1.45; }
+
+.ct-cartao { background: var(--surface-card); border: 1px solid var(--border-subtle);
+             border-radius: var(--radius-md); overflow: hidden; }
+
+/* Linha: mesma grade do componente. No palco estreito, vale a regra do container
+   query (<620px): ícone · texto · ações em cima, cota em faixa cheia embaixo. */
+.ct-linha { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+            align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); }
+.celular .ct-linha { grid-template-columns: auto minmax(0, 1fr) auto; }
+.ct-linha + .ct-linha { border-top: 1px solid var(--border-subtle); }
+
+.ct-av { width: 28px; height: 28px; border-radius: var(--radius-full);
+         display: grid; place-items: center; font-size: var(--text-sm); font-weight: 600;
+         background: var(--accent-dim); color: var(--accent); flex-shrink: 0; }
+.ct-av.chave { background: rgba(232,145,45,.16); color: var(--warning); }
+
+.ct-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ct-nome-l { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.ct-nome { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600;
+           min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-lapis { display: grid; place-items: center; background: transparent; border: none;
+            padding: 0 2px; color: var(--text-muted); opacity: .75; flex-shrink: 0; }
+.ct-tipo { flex-shrink: 0; white-space: nowrap; font-size: 10px; padding: 1px 7px;
+           border-radius: 999px; background: var(--accent-dim); color: var(--accent); }
+.ct-tipo.chave { background: rgba(232,145,45,.16); color: var(--warning); }
+.ct-emuso { flex-shrink: 0; height: 18px; padding: 0 var(--space-2); border-radius: 999px;
+            background: var(--accent-dim); color: var(--accent); font-size: 11px;
+            line-height: 18px; }
+.ct-sub { color: var(--text-secondary); font-size: var(--text-xs);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-sub-l { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.ct-marcas { flex-shrink: 0; color: var(--text-muted); font-size: var(--text-xs); }
+.ct-dir { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted);
+          min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Coluna da cota — HOJE: número herda o corpo do texto (~15px), e no estreito cada
+   janela é uma faixa cheia embaixo. */
+.ct-cota { display: flex; flex-direction: column; gap: 3px; width: 190px; }
+.celular .ct-cota { grid-column: 1 / -1; width: auto; margin-top: var(--space-1); }
+.ct-jan { display: flex; align-items: center; gap: var(--space-2);
+          font-variant-numeric: tabular-nums; }
+.ct-jan-rot { color: var(--text-muted); font-size: 10px; width: 3ch; }
+.ct-jan b { min-width: 4ch; text-align: right; font-weight: var(--fw-semibold);
+            color: var(--text-secondary); font-size: 15px; }   /* ← o que a proposta mexe */
+.ct-jan b.alerta { color: var(--warning); }
+.ct-jan b.cheio { color: var(--error); }
+.ct-barra { flex: 1; min-width: 32px; height: 3px; border-radius: 999px;
+            background: var(--surface-raised); overflow: hidden; }
+.ct-barra i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.ct-barra i.alerta { background: var(--warning); }
+
+.ct-acoes { display: flex; align-items: center; gap: var(--space-2); }
+/* Kebab HOJE: círculo com borda e fundo — pesa na linha. */
+.ct-kebab { width: 34px; height: 34px; display: grid; place-items: center;
+            border-radius: 999px; border: 1px solid var(--border-subtle);
+            background: var(--surface-raised); color: var(--text-muted); }
+.celular .ct-kebab { width: 44px; height: 44px; }
+
+.ct-rodape { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+.ct-btn { height: 36px; padding: 0 var(--space-4); border-radius: var(--radius-sm);
+          border: 1px solid var(--border-subtle); background: var(--surface-raised);
+          color: var(--text-primary); font-size: var(--text-sm); }
+
+/* ═══ PROPOSTA (.depois) ═══ */
+
+/* 1. Cabeçalho: título + "atualizado há X" + botão de atualizar na MESMA linha.
+   Referência: Cloudscape/AWS — refresh no cabeçalho da coleção, lista visível durante
+   a busca, timestamp ao lado. */
+.depois .ct-cab { display: flex; align-items: center; gap: var(--space-2);
+                  margin-bottom: var(--space-1); }
+.depois .ct-cab .st-secao { flex: 1; }
+.ct-atualizado { font-size: var(--text-2xs); color: var(--text-muted); white-space: nowrap; }
+.ct-refresh { width: 28px; height: 28px; display: grid; place-items: center;
+              border-radius: 999px; border: 1px solid var(--border-subtle);
+              background: transparent; color: var(--text-muted); cursor: pointer;
+              flex-shrink: 0; }
+.ct-refresh:hover { color: var(--text-primary); border-color: var(--border-default); }
+.celular .ct-refresh { width: 36px; height: 36px; }
+
+/* 2. Número de cota vira metadado (12px): deixa de disputar a linha com o nome.
+   Referência: tela Usage do app do Claude — % + janela como leitura, não título. */
+.depois .ct-jan b { font-size: var(--text-xs); }
+
+/* 3. Kebab fantasma: sem círculo/borda, mesmo alvo de toque. Tira o peso que hoje
+   compete com o nome da conta (referência: listas do GitHub/Google). */
+.depois .ct-kebab { width: 28px; height: 28px; border: none; background: transparent; }
+.depois .celular .ct-kebab, .celular .depois .ct-kebab { width: 40px; height: 40px; }
+
+/* 4. Respiro vertical: com o número menor, a faixa de cota encosta mais no texto. */
+.depois .celular .ct-cota, .celular .depois .ct-cota { margin-top: 2px; gap: 2px; }

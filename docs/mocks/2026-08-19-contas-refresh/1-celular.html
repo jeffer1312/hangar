@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contas — celular: hoje × proposta</title>
+<link rel="stylesheet" href="../2026-08-18-consistencia/base.css">
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<h1>Contas — celular (375px)</h1>
+<p class="intro">Hoje × proposta. A proposta: botão de atualizar no cabeçalho com
+"atualizado há X", número de cota em tamanho de metadado e kebab sem o círculo.</p>
+
+<div class="caixa">
+  <div class="rot"><span class="tag hoje">hoje</span> cabeçalho sem refresh, % grande, kebab com círculo</div>
+  <div class="folha celular">
+    <p class="st-secao">Contas neste servidor</p>
+    <p class="ct-legenda">Toda credencial num lugar só — login do Claude ou chave de API. Cada uma tem seu limite, seu histórico e seu nome.</p>
+
+    <div class="ct-cartao">
+      <div class="ct-linha">
+        <span class="ct-av">d</span>
+        <span class="ct-txt">
+          <span class="ct-nome-l">
+            <span class="ct-nome">d…</span>
+            <span class="ct-lapis">✎</span>
+            <span class="ct-tipo">Claude · assinatura</span>
+            <span class="ct-emuso">em uso</span>
+          </span>
+          <span class="ct-sub">conta-a@exemplo.com</span>
+          <span class="ct-sub-l"><span class="ct-dir">/home/usuario/.claude</span></span>
+          <span class="ct-cota">
+            <span class="ct-jan"><span class="ct-jan-rot">5h</span><span class="ct-barra"><i style="width:4%"></i></span><b>4%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">7d</span><span class="ct-barra"><i style="width:33%"></i></span><b>33%</b></span>
+          </span>
+        </span>
+        <span class="ct-acoes"><span class="ct-kebab">⋮</span></span>
+      </div>
+
+      <div class="ct-linha">
+        <span class="ct-av">2</span>
+        <span class="ct-txt">
+          <span class="ct-nome-l">
+            <span class="ct-nome">200-01</span>
+            <span class="ct-lapis">✎</span>
+            <span class="ct-tipo">Claude · assinatura</span>
+          </span>
+          <span class="ct-sub">conta-b@exemplo.com</span>
+          <span class="ct-sub-l"><span class="ct-dir">/home/usuario/.claude-200-01</span></span>
+          <span class="ct-cota">
+            <span class="ct-jan"><span class="ct-jan-rot">5h</span><span class="ct-barra"><i style="width:56%"></i></span><b>56%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">7d</span><span class="ct-barra"><i style="width:19%"></i></span><b>19%</b></span>
+          </span>
+        </span>
+        <span class="ct-acoes"><span class="ct-kebab">⋮</span></span>
+      </div>
+
+      <div class="ct-linha">
+        <span class="ct-av chave">▣</span>
+        <span class="ct-txt">
+          <span class="ct-nome-l">
+            <span class="ct-nome">DeepSeek · opencode…</span>
+            <span class="ct-lapis">✎</span>
+            <span class="ct-tipo chave">chave de API</span>
+          </span>
+          <span class="ct-sub">https://opencode.ai/zen/go · sk-vuu5••••DAV5</span>
+          <span class="ct-sub-l"><span class="ct-marcas">roda o Claude Code · cota pelo painel</span></span>
+          <span class="ct-cota">
+            <span class="ct-jan"><span class="ct-jan-rot">5h</span><span class="ct-barra"><i style="width:1%"></i></span><b>1%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">7d</span><span class="ct-barra"><i class="alerta" style="width:83%"></i></span><b class="alerta">83%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">30d</span><span class="ct-barra"><i style="width:74%"></i></span><b>74%</b></span>
+          </span>
+        </span>
+        <span class="ct-acoes"><span class="ct-kebab">⋮</span></span>
+      </div>
+    </div>
+
+    <div class="ct-rodape"><span class="ct-btn">+ Nova conta</span></div>
+  </div>
+</div>
+
+<div class="caixa depois" style="margin-top: 48px">
+  <div class="rot"><span class="tag novo">proposta</span> refresh no cabeçalho, % em 12px, kebab fantasma</div>
+  <div class="folha celular">
+    <div class="ct-cab">
+      <p class="st-secao">Contas neste servidor</p>
+      <span class="ct-atualizado" aria-live="polite">atualizado há 2 min</span>
+      <button class="ct-refresh" aria-label="Atualizar lista e cotas">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" />
+        </svg>
+      </button>
+    </div>
+    <p class="ct-legenda">Toda credencial num lugar só — login do Claude ou chave de API. Cada uma tem seu limite, seu histórico e seu nome.</p>
+
+    <div class="ct-cartao">
+      <div class="ct-linha">
+        <span class="ct-av">d</span>
+        <span class="ct-txt">
+          <span class="ct-nome-l">
+            <span class="ct-nome">d…</span>
+            <span class="ct-lapis">✎</span>
+            <span class="ct-tipo">Claude · assinatura</span>
+            <span class="ct-emuso">em uso</span>
+          </span>
+          <span class="ct-sub">conta-a@exemplo.com</span>
+          <span class="ct-sub-l"><span class="ct-dir">/home/usuario/.claude</span></span>
+          <span class="ct-cota">
+            <span class="ct-jan"><span class="ct-jan-rot">5h</span><span class="ct-barra"><i style="width:4%"></i></span><b>4%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">7d</span><span class="ct-barra"><i style="width:33%"></i></span><b>33%</b></span>
+          </span>
+        </span>
+        <span class="ct-acoes"><span class="ct-kebab">⋮</span></span>
+      </div>
+
+      <div class="ct-linha">
+        <span class="ct-av">2</span>
+        <span class="ct-txt">
+          <span class="ct-nome-l">
+            <span class="ct-nome">200-01</span>
+            <span class="ct-lapis">✎</span>
+            <span class="ct-tipo">Claude · assinatura</span>
+          </span>
+          <span class="ct-sub">conta-b@exemplo.com</span>
+          <span class="ct-sub-l"><span class="ct-dir">/home/usuario/.claude-200-01</span></span>
+          <span class="ct-cota">
+            <span class="ct-jan"><span class="ct-jan-rot">5h</span><span class="ct-barra"><i style="width:56%"></i></span><b>56%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">7d</span><span class="ct-barra"><i style="width:19%"></i></span><b>19%</b></span>
+          </span>
+        </span>
+        <span class="ct-acoes"><span class="ct-kebab">⋮</span></span>
+      </div>
+
+      <div class="ct-linha">
+        <span class="ct-av chave">▣</span>
+        <span class="ct-txt">
+          <span class="ct-nome-l">
+            <span class="ct-nome">DeepSeek · opencode…</span>
+            <span class="ct-lapis">✎</span>
+            <span class="ct-tipo chave">chave de API</span>
+          </span>
+          <span class="ct-sub">https://opencode.ai/zen/go · sk-vuu5••••DAV5</span>
+          <span class="ct-sub-l"><span class="ct-marcas">roda o Claude Code · cota pelo painel</span></span>
+          <span class="ct-cota">
+            <span class="ct-jan"><span class="ct-jan-rot">5h</span><span class="ct-barra"><i style="width:1%"></i></span><b>1%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">7d</span><span class="ct-barra"><i class="alerta" style="width:83%"></i></span><b class="alerta">83%</b></span>
+            <span class="ct-jan"><span class="ct-jan-rot">30d</span><span class="ct-barra"><i style="width:74%"></i></span><b>74%</b></span>
+          </span>
+        </span>
+        <span class="ct-acoes"><span class="ct-kebab">⋮</span></span>
+      </div>
+    </div>
+
+    <div class="ct-rodape"><span class="ct-btn">+ Nova conta</span></div>
+  </div>
+</div>
+
+</body>
+</html>

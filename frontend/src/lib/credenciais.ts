@@ -78,8 +78,10 @@ function em<T>(alvo: Server | null, path: string, init?: RequestInit): Promise<T
   return alvo ? reqEm<T>(alvo, path, init) : req<T>(path, init);
 }
 
-export function listarCredenciais(alvo: Server | null): Promise<Credencial[]> {
-  return em<Credencial[]>(alvo, '/api/credenciais');
+// `forcar` é o botão "atualizar" da aba: pede ao servidor a leitura de cota de AGORA,
+// pulando o cache de 5 min (ver backend/app/cotas.py — `?forcar=true`).
+export function listarCredenciais(alvo: Server | null, forcar = false): Promise<Credencial[]> {
+  return em<Credencial[]>(alvo, `/api/credenciais${forcar ? '?forcar=true' : ''}`);
 }
 
 /** Apelido vazio APAGA o apelido (volta ao nome do disco). */

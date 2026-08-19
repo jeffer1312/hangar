@@ -157,6 +157,27 @@ describe('ContasSettings — a lista', () => {
     expect(cota.classList.contains('velha')).toBe(true);
     unmount(t.comp);
   });
+
+  it('sessao-viva NÃO manda abrir sessão — a sessão já está aberta (queixa do usuário, 19/08)', async () => {
+    // Conta com sessão rodando e access token vencido: o CLI dela renova sozinho. "Abra uma
+    // sessão nela" era a frase errada — o usuário leu isso estando DENTRO da sessão.
+    const t = montar([claude({ ativa: true,
+      cota: { estado: 'expirada', janelas: [], motivo: 'sessao-viva' } })]);
+    await tick(); await tick();
+    const linha = t.el.querySelector<HTMLElement>('.ct-linha')!;
+    expect(linha.textContent).toContain(m.cota_sessao_viva());
+    expect(linha.textContent).not.toContain(m.cota_conta_parada());
+    unmount(t.comp);
+  });
+
+  it('renovacao-falhou continua mandando abrir uma sessão (é o gesto que renova)', async () => {
+    const t = montar([claude({ ativa: false,
+      cota: { estado: 'expirada', janelas: [], motivo: 'renovacao-falhou' } })]);
+    await tick(); await tick();
+    expect(t.el.querySelector<HTMLElement>('.ct-linha')!.textContent)
+      .toContain(m.cota_conta_parada());
+    unmount(t.comp);
+  });
 });
 
 describe('ContasSettings — criar e apagar reusam as rotas de sempre', () => {
@@ -525,6 +546,58 @@ describe('ContasSettings — o botão Entrar (Task 7)', () => {
     const aviso = t.el.querySelector<HTMLElement>('.ct-aviso.erro')!;
     expect(aviso.textContent).toContain(m.falha_conexao());
     expect(aviso.textContent).not.toContain('Failed to fetch');
+    unmount(t.comp);
+  });
+});
+
+describe('ContasSettings — botão de atualizar do cabeçalho', () => {
+  // Referência Cloudscape: refresh no cabeçalho, lista VISÍVEL durante a busca, erro mantém os
+  // dados velhos e vira aviso. O `forcar=true` é o que diferencia o botão do carregar inicial:
+  // pede a leitura de cota de AGORA, não o cache de 5 min do servidor.
+  it('o clique pede a leitura forçada (forcar=true) e mostra o "atualizado há"', async () => {
+    const t = montar([LOGADA]);
+    await tick(); await tick();
+    // A carga inicial NÃO força: cache de 5 min vale pra abrir a tela.
+    expect(credMock.listarCredenciais).toHaveBeenCalledWith(ALVO);
+    // O carimbo nasce da carga inicial (idade < 1 min → o piso do formatarIntervalo é "1 min").
+    expect(t.el.querySelector('.ct-atualizado')!.textContent)
+      .toBe(m.contas_atualizado_ha({ n: '1 min' }));
+
+    t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.click();
+    await tick(); await tick();
+    expect(credMock.listarCredenciais).toHaveBeenLastCalledWith(ALVO, true);
+    unmount(t.comp);
+  });
+
+  it('a lista NÃO some durante o refresh (nada de "Carregando" no lugar das contas)', async () => {
+    let solta!: (v: Credencial[]) => void;
+    const t = montar([LOGADA]);
+    await tick(); await tick();
+    credMock.listarCredenciais.mockReturnValueOnce(
+      new Promise<Credencial[]>((res) => { solta = res; }));
+
+    t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.click();
+    await tick();
+    // Com a busca EM VOO, a linha da conta continua na tela e não há texto de carregando.
+    expect(t.el.querySelector('.ct-linha')).not.toBeNull();
+    expect(t.el.textContent).not.toContain(m.comum_carregando());
+    expect(t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.disabled).toBe(true);
+
+    solta([LOGADA]);
+    await tick(); await tick();
+    expect(t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.disabled).toBe(false);
+    unmount(t.comp);
+  });
+
+  it('erro no refresh mantém os dados velhos e vira aviso embaixo da lista', async () => {
+    const t = montar([LOGADA]);
+    await tick(); await tick();
+    credMock.listarCredenciais.mockRejectedValueOnce(new Error('sem rota'));
+
+    t.el.querySelector<HTMLButtonElement>('.ct-refresh')!.click();
+    await tick(); await tick();
+    expect(t.el.querySelector('.ct-linha')).not.toBeNull();
+    expect(t.el.querySelector<HTMLElement>('.ct-aviso.erro')!.textContent).toContain('sem rota');
     unmount(t.comp);
   });
 });

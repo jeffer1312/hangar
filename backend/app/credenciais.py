@@ -80,11 +80,14 @@ def _mascarar(chave: str) -> str:
     return f"{chave[:7]}••••{chave[-4:]}"
 
 
-def _cota_por_id() -> dict[str, CotaResumo]:
+def _cota_por_id(forcar: bool = False) -> dict[str, CotaResumo]:
     """Cota de todas as credenciais, indexada pelo mesmo id desta lista. Uma chamada só: o
-    `cotas.listar_cotas()` já é cache de 5 min e faz as leituras em paralelo."""
+    `cotas.listar_cotas()` já é cache de 5 min e faz as leituras em paralelo; `forcar` é o
+    botão "atualizar" da tela pedindo leitura nova em vez do cache."""
     fora = {}
-    for c in cotas.listar_cotas():
+    # Nomeado, não posicional: a assinatura da rota pode ganhar outro query param e um bool
+    # posicional escorregaria pra ele em silêncio (achado da revisão).
+    for c in cotas.listar_cotas(forcar=forcar):
         fora[c.id] = CotaResumo(estado=c.estado, janelas=c.janelas, ts=c.ts,
                                 idade_s=c.idade_s, motivo=c.motivo)
     return fora
@@ -92,10 +95,13 @@ def _cota_por_id() -> dict[str, CotaResumo]:
 
 @credenciais_router.get("", dependencies=[Depends(require_auth)],
                         response_model=list[Credencial])
-def listar() -> list[Credencial]:
-    """Contas do Claude e chaves de API na mesma lista, com apelido e cota."""
+def listar(forcar: bool = False) -> list[Credencial]:
+    """Contas do Claude e chaves de API na mesma lista, com apelido e cota.
+
+    `?forcar=true` re-lê a cota na hora (ignora o cache de 5 min) — é o botão "atualizar"
+    da tela. A listagem em si (contas, chaves, login) nunca é cache."""
     nomes = apelidos.ler()
-    cota = _cota_por_id()
+    cota = _cota_por_id(forcar)
     saida: list[Credencial] = []
 
     # Contas do Claude: mesmo filtro da aba antiga — conta de verdade (carimbada pelo app) ou a

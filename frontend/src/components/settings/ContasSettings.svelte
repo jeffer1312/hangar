@@ -17,7 +17,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
   import { initials } from '../../lib/format';
-  import { nivelDePct, VELHA_APOS_S, motivoParado } from '../../lib/cota';
+  import { nivelDePct, VELHA_APOS_S, motivoParado, motivoSessaoViva } from '../../lib/cota';
   import NovaCredencialSheet from './NovaCredencialSheet.svelte';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import { serverIdentidade, type Server } from '../../lib/auth';
@@ -65,6 +65,17 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   let aviso = $state('');
   let avisoErro = $state(false);
 
+  // Botão de atualizar do cabeçalho: `atualizadoEm` alimenta o "atualizado há X", e o relógio
+  // de 30 s faz o texto envelhecer sozinho. O intervalo morre no onDestroy junto com o poll
+  // do login — nada fica rodando depois que a aba desmonta.
+  let atualizando = $state(false);
+  let atualizadoEm = $state<number | null>(null);
+  let agora = $state(Date.now());
+  const relogio = setInterval(() => { agora = Date.now(); }, 30_000);
+  const idadeAtualizacao = $derived(
+    atualizadoEm == null ? '' : formatarIntervalo(Math.max(0, (agora - atualizadoEm) / 1000)),
+  );
+
   async function carregar(meu: number) {
     carregando = true;
     erro = '';
@@ -72,11 +83,41 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
       const lista = await listarCredenciais(apiTarget);
       if (meu !== geracao) return;
       contas = lista;
+      atualizadoEm = Date.now();
+      agora = atualizadoEm;
     } catch (e) {
       if (meu !== geracao) return;
       erro = e instanceof Error && e.message ? e.message : String(e);
     } finally {
       if (meu === geracao) carregando = false;
+    }
+  }
+
+  // Ao contrário de carregar(), NÃO liga `carregando`: a lista fica na tela durante a busca
+  // (refresh não esvazia a coleção — padrão Cloudscape), quem gira é o ícone do botão. Pede a
+  // leitura de AGORA (?forcar=true), não o cache de 5 min. Erro vai pro aviso embaixo da
+  // lista — nunca some com os dados que já estavam certos.
+  async function atualizar() {
+    if (atualizando || carregando) return;
+    // ++geracao, não só leitura: o refresh forçado é a leitura MAIS NOVA por definição —
+    // invalida qualquer carga em voo (ex.: o carregar de um rename) pra um snapshot velho não
+    // sobrescrever a resposta do botão (achado da revisão).
+    const meu = ++geracao;
+    atualizando = true;
+    aviso = '';
+    avisoErro = false;
+    try {
+      const lista = await listarCredenciais(apiTarget, true);
+      if (meu !== geracao) return;
+      contas = lista;
+      atualizadoEm = Date.now();
+      agora = atualizadoEm;
+    } catch (e) {
+      if (meu !== geracao) return;
+      aviso = e instanceof Error && e.message ? e.message : String(e);
+      avisoErro = true;
+    } finally {
+      if (meu === geracao) atualizando = false;
     }
   }
 
@@ -120,6 +161,10 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     cookieDe = null; cookieWs = ''; cookieValor = ''; salvandoCookie = false;
     novo = null; nomeConta = ''; chaveNome = ''; chaveUrl = ''; chaveSegredo = '';
     criando = false; apagando = false;
+    // Refresh em voo pertence ao alvo que saiu: o finally de atualizar() só limpa o flag se a
+    // geração for a mesma, então sem este reset o botão ficava desabilitado PRA SEMPRE no alvo
+    // novo (achado da revisão). O carimbo "atualizado há" também zera — ele era da outra máquina.
+    atualizando = false; atualizadoEm = null;
     void carregar(meu);
   });
 
@@ -411,12 +456,29 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   onDestroy(() => {
     destruido = true;
     pararPoll();
+    clearInterval(relogio);
     if (loginDe) cancelarLogin(apiTarget, loginDe).catch(() => {});
   });
 </script>
 
 <div class="ct-superficie">
-  <p class="st-secao ct-topo">{m.contas_secao_lista()}</p>
+  <!-- Cabeçalho da coleção: título + "atualizado há X" + botão de atualizar na mesma linha
+       (referência Cloudscape/AWS: refresh no cabeçalho, timestamp ao lado, lista visível
+       durante a busca). O ícone é SVG traçado 2, como o lápis e o kebab. -->
+  <div class="ct-cab">
+    <p class="st-secao ct-topo">{m.contas_secao_lista()}</p>
+    {#if atualizadoEm != null}
+      <span class="ct-atualizado" aria-live="polite">{m.contas_atualizado_ha({ n: idadeAtualizacao })}</span>
+    {/if}
+    <button type="button" class="ct-refresh" onclick={atualizar}
+      disabled={atualizando || carregando} aria-label={m.contas_atualizar()}
+      title={m.contas_atualizar()}>
+      <svg class:girando={atualizando} width="15" height="15" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" />
+      </svg>
+    </button>
+  </div>
   <p class="ct-legenda">{m.contas_legenda()}</p>
 
   {#if carregando}
@@ -517,8 +579,11 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
               {/if}
             </span>
           {:else if conta.cota && (conta.cota.estado === 'expirada' || conta.cota.estado === 'sem_credencial')}
+            <!-- sessao-viva NÃO é "abra uma sessão" — a sessão já está aberta (foi como o
+                 usuário leu a frase estando dentro dela, 19/08). Quem renova é o CLI dela. -->
             <span class="ct-semleitura"
-              >{motivoParado(conta.cota.motivo) ? m.cota_conta_parada() : m.cota_precisa_entrar()}</span>
+              >{motivoSessaoViva(conta.cota.motivo) ? m.cota_sessao_viva()
+                : motivoParado(conta.cota.motivo) ? m.cota_conta_parada() : m.cota_precisa_entrar()}</span>
           {:else}
             <span class="ct-semleitura">{m.contas_sem_cota()}</span>
           {/if}
@@ -691,6 +756,23 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
 
   .ct-topo { margin-top: 0; }
 
+  /* Cabeçalho da coleção (19/08): título + "atualizado há X" + botão de atualizar na mesma
+     linha — referência Cloudscape/AWS: refresh no cabeçalho, timestamp ao lado, lista visível
+     durante a busca. O margin do .st-secao é zerado AQUI (local) pra não depender de onde
+     vem o estilo-base do título. */
+  .ct-cab { display: flex; align-items: center; gap: var(--space-2);
+            margin: 0 var(--space-2) var(--space-1); }
+  .ct-cab .st-secao { flex: 1; min-width: 0; margin: 0; }
+  .ct-atualizado { font-size: var(--text-2xs); color: var(--text-muted); white-space: nowrap; }
+  .ct-refresh { flex-shrink: 0; width: 28px; height: 28px; min-height: 0; min-width: 0;
+                display: grid; place-items: center; border-radius: var(--radius-full);
+                border: 1px solid var(--border-subtle); background: transparent;
+                color: var(--text-muted); cursor: pointer; }
+  .ct-refresh:hover { color: var(--text-primary); border-color: var(--border-default); }
+  /* `spin` é o keyframes global do app.css. Gira só o SVG: o botão parado com o ícone
+     girando lê como "trabalhando" sem mexer o layout do cabeçalho. */
+  .ct-refresh svg.girando { animation: spin 0.8s linear infinite; }
+
   .ct-legenda { margin: 0 var(--space-2) var(--space-3); color: var(--text-muted);
                 font-size: var(--text-xs); line-height: 1.45; }
   .ct-sep { height: 1px; background: var(--border-subtle); margin: var(--space-4) 0 var(--space-3); }
@@ -763,12 +845,15 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
              background: var(--surface-raised); color: var(--text-primary); font-size: var(--text-xs);
              font-family: inherit; cursor: pointer; }
   .ct-acao.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
+  /* Kebab fantasma (19/08): a ação é rara e o círculo com borda/fundo disputava a linha com o
+     nome da conta. Vira ícone solto como o lápis; o alvo de toque de 44px no estreito continua
+     (container query abaixo). */
   .ct-kebab { flex-shrink: 0; width: 28px; height: 28px; min-height: 0; min-width: 0;
               display: grid; place-items: center;
-              border-radius: var(--radius-full); border: 1px solid var(--border-subtle);
-              background: var(--surface-raised); color: var(--text-muted); font-size: var(--text-xs);
+              border-radius: var(--radius-full); border: none;
+              background: transparent; color: var(--text-muted); font-size: var(--text-xs);
               cursor: pointer; }
-  .ct-kebab:hover { color: var(--text-primary); border-color: var(--border-default); }
+  .ct-kebab:hover { color: var(--text-primary); background: var(--bg-hover); }
 
   .ct-menu { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
   .ct-menu-item { height: 30px; min-height: 0; padding: 0 var(--space-3); border-radius: var(--radius-sm);
@@ -828,13 +913,13 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
      transparente / sutil) só mostravam o anel padrão do navegador, que some no fundo escuro. */
   .ct-lapis:focus-visible, .ct-kebab:focus-visible, .ct-acao:focus-visible,
   .ct-menu-item:focus-visible, .ct-btn:focus-visible, .ct-mini:focus-visible,
-  .ct-confirma-btn:focus-visible {
+  .ct-confirma-btn:focus-visible, .ct-refresh:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px;
   }
   /* Desabilitado PARECE desabilitado — o Entrar fica inerte enquanto há outro login em curso, e
      os botões do formulário do cookie enquanto ele salva. */
   .ct-lapis:disabled, .ct-kebab:disabled, .ct-acao:disabled, .ct-menu-item:disabled,
-  .ct-btn:disabled, .ct-mini:disabled, .ct-confirma-btn:disabled {
+  .ct-btn:disabled, .ct-mini:disabled, .ct-confirma-btn:disabled, .ct-refresh:disabled {
     opacity: .55; cursor: default;
   }
 
@@ -854,6 +939,8 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
        celular precisa acertar o dedo, não caber mais uma conta na tela. */
     .ct-lapis { min-height: 44px; min-width: 44px; }
     .ct-kebab { width: 44px; }
+    /* O refresh do cabeçalho também é alvo de dedo no estreito. */
+    .ct-refresh { width: 36px; height: 36px; }
     .ct-btn { height: 44px; }
   }
 
@@ -890,11 +977,14 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
      e o medidor embaixo, ocupando a coluna inteira: assim as barras de linhas vizinhas começam e
      terminam no mesmo x e dá pra comparar duas credenciais sem ler dígito. */
     /* Uma linha por janela: rótulo à esquerda, barra ocupando o vão, número à direita — a barra
-     no meio é o que deixa as leituras comparáveis de relance entre as contas. */
+     no meio é o que deixa as leituras comparáveis de relance entre as contas. O número é
+     metadado (12px, 19/08): no tamanho do corpo ele disputava a linha com o nome da conta —
+     referência: tela Usage do app do Claude, onde o % é leitura, não título. */
   .ct-jan { display: flex; align-items: center; gap: var(--space-2);
             font-variant-numeric: tabular-nums; }
   .ct-jan-rot { color: var(--text-muted); font-size: 10px; }
-  .ct-jan b { min-width: 4ch; text-align: right; font-weight: var(--fw-semibold); color: var(--text-secondary); }
+  .ct-jan b { min-width: 4ch; text-align: right; font-weight: var(--fw-semibold);
+              color: var(--text-secondary); font-size: var(--text-xs); }
   .ct-jan b.alerta { color: var(--warning); }
   .ct-jan b.cheio { color: var(--error); }
   /* Trilho em --surface-raised (superfície dentro de painel, nunca --bg-elevated cru: com papel

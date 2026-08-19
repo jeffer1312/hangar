@@ -387,14 +387,17 @@ def _seguro(f: _Fonte) -> _Leitura:
         return "indisponivel", [], "erro-leitor"
 
 
-def _atualizar(fontes: list[_Fonte]) -> None:
+def _atualizar(fontes: list[_Fonte], forcar: bool = False) -> None:
     """Relê em paralelo as fontes fora do TTL. Falha de REDE não apaga leitura boa (o número
     envelhece e a tela mostra a idade); `expirada`/`sem_credencial` são fato sobre a conta e
-    sobrescrevem — deixar número velho ali faria conta deslogada parecer em uso."""
+    sobrescrevem — deixar número velho ali faria conta deslogada parecer em uso.
+
+    `forcar` ignora o TTL: é o botão "atualizar" da aba Contas — quem aperta quer a leitura
+    de AGORA, não a do cache de 5 min (o poll da faixa continua sem ele)."""
     agora = time.monotonic()
     with _lock:
         vencidas = [f for f in fontes
-                    if (h := _cache.get(f.chave)) is None or agora - h[0] >= _TTL_S]
+                    if forcar or (h := _cache.get(f.chave)) is None or agora - h[0] >= _TTL_S]
     if not vencidas:
         return
     with ThreadPoolExecutor(max_workers=min(8, len(vencidas))) as ex:
@@ -414,15 +417,16 @@ def _atualizar(fontes: list[_Fonte]) -> None:
 
 
 @cotas_router.get("", dependencies=[Depends(require_auth)], response_model=list[CotaConta])
-def listar_cotas() -> list[CotaConta]:
+def listar_cotas(forcar: bool = False) -> list[CotaConta]:
     """Cota de cada credencial da máquina, com no máximo 5 min de idade.
 
     A rota é síncrona de propósito (o FastAPI já a roda em thread): quem chama é um poll de 60s
     da faixa, e dentro do TTL ela não toca a rede — o custo real é uma rodada de requisições a
-    cada 5 minutos, em paralelo.
+    cada 5 minutos, em paralelo. `?forcar=true` pula o TTL: é o botão "atualizar" da aba
+    Contas (a faixa segue chamando sem ele).
     """
     fontes = _fontes()
-    _atualizar(fontes)
+    _atualizar(fontes, forcar)
     agora = time.time()
     # O nome exibido é o apelido, quando a pessoa deu um: sem isto a faixa mostra o nome que o
     # disco impôs — foi como uma conta chamada "apikey" foi parar no rodapé.

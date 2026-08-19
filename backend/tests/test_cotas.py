@@ -170,6 +170,23 @@ def test_dentro_do_ttl_nao_relê(monkeypatch):
     assert len(chamadas) == 1
 
 
+def test_forcar_relê_dentro_do_ttl(monkeypatch):
+    """O botão "atualizar" da aba Contas: quem aperta quer a leitura de AGORA, não a do cache
+    de 5 min — `forcar` trata toda fonte como vencida."""
+    monkeypatch.setattr(cotas, "_cache", {})
+    chamadas = []
+
+    def leitor():
+        chamadas.append(1)
+        return ("lida", [cotas.JanelaCota(rotulo="5h", pct=float(len(chamadas)))], None)
+
+    f = cotas._Fonte("claude:/x", "x", "claude", leitor)
+    cotas._atualizar([f])
+    cotas._atualizar([f], forcar=True)
+    assert len(chamadas) == 2
+    assert cotas._cache["claude:/x"][1].janelas[0].pct == 2.0
+
+
 def test_leitor_que_levanta_nao_derruba_a_lista(monkeypatch):
     monkeypatch.setattr(cotas, "_cache", {})
 

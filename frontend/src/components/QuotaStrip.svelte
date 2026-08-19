@@ -15,7 +15,7 @@
   import { onMount } from 'svelte';
   import * as m from '../paraglide/messages';
   import { listarCotas, formatarIntervalo, type CotaConta } from '../lib/contaEstado';
-  import { faixaDeCota, faltaPara, diaDoReset, janelaLonga, motivoParado } from '../lib/cota';
+  import { faixaDeCota, faltaPara, diaDoReset, janelaLonga, motivoParado, motivoSessaoViva } from '../lib/cota';
 
   interface Props {
     // Muda quando a sessão/servidor alvo muda no shell — re-busca (o endpoint é do servidor
@@ -78,7 +78,8 @@
                  leitura, só o traço — inventar explicação numa tira de 26px é pior que o traço. -->
             <span class="quota-vazio"
               >{c.estado === 'expirada' || c.estado === 'sem_credencial'
-                ? (motivoParado(c.motivo) ? m.cota_conta_parada() : m.cota_precisa_entrar())
+                ? (motivoSessaoViva(c.motivo) ? m.cota_sessao_viva()
+                  : motivoParado(c.motivo) ? m.cota_conta_parada() : m.cota_precisa_entrar())
                 : '—'}</span>
           {:else}
             {#each c.janelas as j (j.rotulo)}
