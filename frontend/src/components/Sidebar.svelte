@@ -440,6 +440,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   // ── Menu de contexto (botao direito) na linha da sessao — so desktop ──────────
   let menu = $state<{ x: number; y: number; name: string; serverId: string; cwd: string; thenTarget: string | null } | null>(null);
+  let menuOrigem: HTMLElement | null = null;
   let menuMsg = $state('');   // banner efemero pro resultado do git pull / erro do editor
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -455,10 +456,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     e.preventDefault();
     clearTimeout(pressTimer);   // cancela o long-press (senao dispararia rename junto)
     hpLeave();   // botao direito nao move o mouse: fecha a espiada pra nao ficar atras do menu
+    menuOrigem = (e.currentTarget as HTMLElement | null)?.closest('.sess-row')?.querySelector('.sess-main') as HTMLElement | null;
     menu = { x: e.clientX, y: e.clientY, name: s.name, serverId, cwd: s.cwd ?? '', thenTarget: s.then_target ?? null };
     // O SessionContextMenu carrega o estado de silenciar/branches/encadeamento na propria montagem.
   }
-  function closeMenu() { menu = null; }
+  function closeMenu() { menu = null; menuOrigem?.focus(); menuOrigem = null; }
 
   // Confirmacao de troca com working tree suja (switch carrega mudancas nao-conflitantes pra outra branch).
   let confirmBranch = $state<{ name: string; serverId: string; branch: string } | null>(null);

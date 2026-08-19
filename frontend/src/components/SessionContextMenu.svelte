@@ -234,7 +234,11 @@
             class="ctx-chain-input"
             placeholder={m.ctx_prompt_enviar()}
             bind:value={chainView.text}
-            onkeydown={(e) => { if (e.key === 'Enter') void saveChain(); }}
+            onkeydown={(e) => {
+              if (e.key === 'Escape') return;
+              e.stopPropagation();
+              if (e.key === 'Enter') void saveChain();
+            }}
             aria-label={m.ctx_prompt_alvo()}
           />
           <button type="button" class="ctx-chain-save" onclick={saveChain} disabled={!chainView.target || !chainView.text.trim() || chainBusy}>{m.ctx_salvar()}</button>
@@ -265,7 +269,7 @@
     min-width: 168px; padding: 4px;
     display: flex; flex-direction: column;
     background: var(--surface-raised); border: 1px solid var(--border-default);
-    border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+    border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0,0,0,0.4); z-index: 41;
   }
   :global(.ctx-menu) button {
     height: 32px; padding: 0 10px; text-align: left; justify-content: flex-start;
@@ -275,24 +279,24 @@
   :global(.ctx-menu) button:hover { background: var(--bg-hover); }
   :global(.ctx-menu) button.danger { color: var(--error); }
   :global(.ctx-menu) button.danger:hover { background: rgba(255,69,58,0.12); }
-  :global(.ctx-sep) { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
-  :global(.ctx-more) { margin-left: auto; color: var(--text-muted); padding-left: var(--space-3); }
-  :global(.ctx-info) { padding: 6px 10px; font-size: var(--text-sm); color: var(--text-muted); }
-  :global(.ctx-scroll) { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
-  :global(.ctx-branch) { font-family: var(--font-mono); font-size: var(--text-xs); }
-  :global(.ctx-branch.current) { color: var(--accent); }
-  :global(.ctx-cur) { margin-left: auto; padding-left: var(--space-2); }
-  :global(.ctx-chain-form) { display: flex; gap: 4px; padding: 4px 6px; }
-  :global(.ctx-chain-input) {
+  :global(.ctx-menu .ctx-sep) { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+  :global(.ctx-menu .ctx-more) { margin-left: auto; color: var(--text-muted); padding-left: var(--space-3); }
+  :global(.ctx-menu .ctx-info) { padding: 6px 10px; font-size: var(--text-sm); color: var(--text-muted); }
+  :global(.ctx-menu .ctx-scroll) { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
+  :global(.ctx-menu .ctx-branch) { font-family: var(--font-mono); font-size: var(--text-xs); }
+  :global(.ctx-menu .ctx-branch.current) { color: var(--accent); }
+  :global(.ctx-menu .ctx-cur) { margin-left: auto; padding-left: var(--space-2); }
+  :global(.ctx-menu .ctx-chain-form) { display: flex; gap: 4px; padding: 4px 6px; }
+  :global(.ctx-menu .ctx-chain-input) {
     flex: 1; min-width: 0; height: 28px; padding: 0 8px; font-size: var(--text-sm);
     color: var(--text-primary); background: var(--surface-inset); border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
   }
-  :global(.ctx-chain-save) {
+  :global(.ctx-menu .ctx-chain-save) {
     height: 28px; padding: 0 10px; font-size: var(--text-sm); font-weight: 600;
     color: var(--accent); background: var(--accent-dim); border-radius: var(--radius-sm); border: 0; cursor: pointer;
   }
-  :global(.ctx-chain-save:disabled) { opacity: 0.5; }
+  :global(.ctx-menu .ctx-chain-save:disabled) { opacity: 0.5; }
   /* Sub com formulário precisa de largura um pouco maior */
-  :global(.ctx-sub) { min-width: 220px; }
+  :global(.ctx-menu.ctx-sub) { min-width: 220px; }
 </style>
