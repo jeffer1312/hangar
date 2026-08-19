@@ -1,5 +1,5 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
-const { app, BrowserWindow, screen, shell } = require('electron');
+const { app, BrowserWindow, dialog, screen, shell } = require('electron');
 const { ler, gravar } = require('./settings.cjs');
 
 // MEDIDO 05/08/2026 (Hyprland/Wayland, Electron 43.3.0): o switch `enable-transparent-visuals`
@@ -245,11 +245,25 @@ async function criarJanela() {
 // A trava vem ANTES do whenReady: quem não a conseguiu não pode chegar a criar janela nenhuma —
 // é justamente a janela quebrada que este bloco existe pra evitar. O processo que perdeu a trava
 // sai na hora, e o `second-instance` dispara no processo que já está de pé.
+// `criarJanela` e async: chamar sem catch transforma qualquer excecao dentro dela (geometria
+// salva estranha, BrowserWindow que nao nasce) numa unhandled rejection. No app empacotado isso
+// nao aparece em lugar nenhum — o clique pra abrir a segunda janela simplesmente nao faz nada —
+// e, dependendo da politica do Node, derruba o processo inteiro, fechando as janelas que ja
+// estavam abertas no meio do uso. Falha de abrir UMA janela nao pode custar as outras.
+function abrirJanela(origem) {
+  criarJanela().catch((err) => {
+    console.error(`[janela] ${origem} falhou:`, err);
+    // Segunda janela e um pedido EXPLICITO do usuario: silenciar ali e o bug. No arranque, se a
+    // primeira janela nao nasce, tambem nao ha nada na tela pra explicar o que houve.
+    dialog.showErrorBox('Hangar', `Não consegui abrir a janela.\n\n${err && err.message ? err.message : err}`);
+  });
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => { void criarJanela(); });
-  app.whenReady().then(() => criarJanela());
+  app.on('second-instance', () => abrirJanela('segunda janela'));
+  app.whenReady().then(() => abrirJanela('arranque'));
 }
 
 app.on('window-all-closed', () => app.quit());

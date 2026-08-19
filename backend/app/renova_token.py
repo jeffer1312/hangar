@@ -236,8 +236,16 @@ def renovar_por_cli(dir_conta: Path) -> bool:
     except (OSError, subprocess.SubprocessError) as e:
         _log.warning("renovação barata de %s falhou: %r", dir_conta.name, e)
         return False
-    if _renovou(antes, _assinatura(dir_conta)):
+    depois = _assinatura(dir_conta)
+    if _renovou(antes, depois):
         return True
+    if depois[0] != antes[0] and depois[1] is None:
+        # O arquivo MUDOU e o vencimento sumiu: não é "não renovou", é credencial que ficou
+        # ilegível. Sai no mesmo False (a tela não tem o que mostrar de qualquer jeito), mas o
+        # log tem que separar os dois — "abra uma sessão" é conselho errado para este caso.
+        _log.warning("renovação barata de %s: .credentials.json mudou e ficou sem expiresAt",
+                     dir_conta.name)
+        return False
     # Rodou e não renovou: sem este log a conta só some da faixa com um motivo genérico e não sobra
     # pista nenhuma de por quê. stderr cortado — é diagnóstico, não despejo.
     erro = (r.stderr or b"").decode("utf-8", "replace").strip().replace("\n", " ")[:200]

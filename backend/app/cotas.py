@@ -200,7 +200,7 @@ def _tentar_renovar(dir_conta: Path, ativa: bool) -> str | None:
 def _ler_claude(dir_conta: Path, ativa: bool = False, renovou_agora: bool = False) -> _Leitura:
     """`renovou_agora` corta a recursão: com o par recém-gravado, um 401 é recusa de verdade."""
     tok, falha = _token_claude(dir_conta)
-    if falha is not None and falha[2] == "token-expirado":
+    if falha is not None and falha[2] == "token-expirado" and not renovou_agora:
         # Vencido pelo relógio não é o fim: o refresh costuma estar vivo (medido: access de 8h,
         # refresh de ~26 dias). Quem renova é o CLI, e só quando ninguém está usando a conta.
         motivo = _tentar_renovar(dir_conta, ativa)
