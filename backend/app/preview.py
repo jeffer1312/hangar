@@ -87,12 +87,23 @@ _KIMI_PROMPT_RE = re.compile(r"^\s*✨\s")
 # braille nem lua, e o _ASCII_SPINNER_RE casa asterisco.
 _KIMI_TIP_RE = re.compile(r"^\s*[⠀-⣿\U0001f311-\U0001f318]\s.*·\s*Tip:")
 
+# Linha de spinner do Kimi SEM a dica ("  ⠋ working..." sozinha — medida na fixture _KIMI_PENSANDO
+# dos testes): o glifo e braille (U+2800..U+28FF) ou lua (U+1F311..U+1F318), nenhum dos dois em
+# SPINNER_GLYPHS — sem esta parada, a continuacao da prosa engolia o spinner e tudo que vinha
+# abaixo dele nos frames em que a dica nao aparece. Prosa nunca comeca com braille/lua.
+_KIMI_SPINNER_RE = re.compile(r"^\s*[⠀-⣿\U0001f311-\U0001f318]")
+
+# Header do painel de Todo da TUI do Kimi (o painel inteiro e descrito mais abaixo, junto da regra
+# de item — ele so entra aqui porque a tupla de paradas e montada em nivel de modulo).
+_KIMI_TODO_HEAD_RE = re.compile(r"^\s*Todo\s*$")
+
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,),
                       # Kimi desenha o composer com a MESMA caixa arredondada do Pi (medido num
                       # pane real, 0.34.0) -> a ancora de corte e a mesma. Mas a caixa e o rodape
                       # MAIS BAIXO: entre ela e a resposta ainda cabem o eco do prompt e a dica, e
                       # por isso os dois precisam parar o preview por conta propria.
-                      "kimi": (_PI_BOX_RE, _KIMI_PROMPT_RE, _KIMI_TIP_RE)}
+                      "kimi": (_PI_BOX_RE, _KIMI_PROMPT_RE, _KIMI_TIP_RE, _KIMI_SPINNER_RE,
+                               _KIMI_TODO_HEAD_RE)}
 
 # Bloco de FERRAMENTA do Pi. O _TOOL_BLOCK_RE exige "Nome(" colado, e o Pi escreve de pelo menos
 # cinco jeitos — medidos no pane em 01/08/2026:
@@ -152,6 +163,36 @@ _ASCII_SPINNER_RE = re.compile(r"^\*\s+\S[^\n]*(…|\))\s*$")
 _KIMI_ITALICO = "\x1b[3m"
 _KIMI_CINZA = "38;2;136;136;136"
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
+# Status de ferramenta CONCLUIDA do Kimi: "● Used ReadMediaFile (…/arquivo.png) · image (…)" — o
+# passado generico "Used" + o nome da ferramenta, medido no pane em 19/08/2026 (Kimi, k3). Nao casa
+# no _TOOL_BLOCK_RE (que exige "Nome(" colado no INICIO da linha, e a lista de verbos evita passado
+# ambiguo de proposito), entao a linha era eleita como bloco de prosa e a previa mostrava o status
+# da ferramenta como texto — quando o ToolCard bonito ja chega pelo tool.call do wire. A forma
+# exigida (palavra com maiuscula + parentese) e o que amarra a regra ao desenho real: "Used" em
+# prosa inglesa ("Used correctly, ...") tem a palavra seguinte minuscula e nao casa. Especifico do
+# Kimi, como o resto do chrome por provider — no Claude "Used" nem aparece.
+_KIMI_USED_RE = re.compile(r"^Used\s+[A-Z][\w-]*\s*\(")
+
+# Painel de Todo da TUI do Kimi (medido nos quadros de 19/08/2026, durante o trabalho desta
+# costura): entre a regua e a caixa do composer ele desenha o header "  Todo" e os itens
+# "   ✓ feito" / "   ● atual" — e o item ATUAL usa o MESMO ● da prosa. Como a caixa do composer
+# fica ABAIXO do painel, o corte por posicao (fim) nao o exclui da varredura, e o item era eleito
+# bloco em voo: a previa mostrava "Testes backend (costura, ...)" no lugar do texto, reproduzido
+# num quadro real no teste. So a POSICAO dentro do painel separa o ● de item do ● de prosa.
+# (O _KIMI_TODO_HEAD_RE em si e definido mais acima, antes da tupla de paradas por provider.)
+_KIMI_TODO_ITEM_RE = re.compile(r"^\s*[✓●○]\s")
+
+
+def _kimi_linha_de_todo(lines: list[str], i: int) -> bool:
+    """A linha `i` esta dentro do painel de Todo do Kimi? Sobe da linha ate achar o header "Todo"
+    (e painel) ou uma linha que nao e item nem vazia (a prosa/ferramenta de cima — nao e painel)."""
+    for j in range(i, -1, -1):
+        ln = lines[j]
+        if _KIMI_TODO_HEAD_RE.match(ln):
+            return True
+        if ln.strip() and not _KIMI_TODO_ITEM_RE.match(ln):
+            return False
+    return False
 # "… (6 more lines, ctrl+o to expand)" — rodape do bloco DOBRADO, cromo do TUI, nunca prosa. Vem em
 # `[2m` (dim), nao em italico, entao nao sai pela regra de cima.
 _KIMI_DOBRADO_RE = re.compile(r"^\s*\.\.\.\s*\(\d+ more lines")
@@ -265,6 +306,8 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
                 and not _AGENT_FINISHED_RE.match(corpo)
                 and not _TODO_PANEL_RE.match(ln)
                 and not _painel_de_subagente(lines, i, corpo)
+                and not (provider == "kimi" and _KIMI_USED_RE.match(corpo))
+                and not (provider == "kimi" and _kimi_linha_de_todo(lines, i))
                 and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
             start = i
     if start < 0:
@@ -282,6 +325,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
         if (_RULE_RE.match(ln) or _is_boundary(ln) or _USER_PROMPT_RE.match(ln)
                 or _TOOL_BLOCK_RE.match(s) or _MCP_CALL_RE.match(s)
                 or _TODO_PANEL_RE.match(ln) or _ASCII_SPINNER_RE.match(s)
+                or (provider == "kimi" and _KIMI_USED_RE.match(s))
                 or _ACTIVITY_SUMMARY_RE.search(s)):
             break
         if any(r.match(ln) for r in stops):
@@ -344,6 +388,70 @@ def read_sidecar(stem: Optional[str]) -> Optional[str]:
     return None
 
 
+def _extrair_continuacao_kimi(pane: str) -> str:
+    """Texto do TOPO do pane ate o primeiro chrome, pra quando o bloco em voo estourou a janela e a
+    linha do ● subiu junto — a TUI do Kimi rola o bloco ate o comeco sair da tela, e sem o marcador
+    o extract_assistant_text devolve "".
+
+    Sem o ● nao da pra saber onde o bloco comeca, entao esta funcao NAO decide se o texto e
+    continuacao de verdade: quem decide e a COSTURA no broker. Se nao colar no acumulado (saida de
+    ferramenta, conversa velha parada na tela), e descartado la — por isso aqui vale a forma mais
+    simples: tudo do topo ate o chrome, sem adivinhar bloco."""
+    out = []
+    for ln in pane.splitlines():
+        s = ln.lstrip()
+        if (_RULE_RE.match(ln) or _OVERLAY_RULE_RE.match(ln) or _is_boundary(ln)
+                or _USER_PROMPT_RE.match(ln) or _KIMI_SPINNER_RE.match(ln)
+                or _KIMI_TODO_HEAD_RE.match(ln) or _KIMI_TODO_ITEM_RE.match(ln)
+                or _KIMI_USED_RE.match(s)):
+            break
+        if any(r.match(ln) for r in _STOPS_BY_PROVIDER["kimi"]):
+            break
+        out.append(ln.rstrip())
+    while out and not out[0].strip():
+        out.pop(0)
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out)
+
+
+# ── Costura do texto em voo do Kimi (pane em tela alternativa NAO tem scrollback) ────────────────
+# Medido em 19/08/2026 nesta maquina: a TUI do Kimi roda com alternate_on=1, entao o que sobe da
+# tela SE PERDE (history tinha 12 linhas) — o capture devolve so a janela visivel (~45 linhas) e o
+# comeco de uma resposta longa em geracao some antes de commitar. Como o broker le o pane a cada
+# 150ms enquanto trabalha, cada quadro traz a CAUDA do bloco: colando quadro novo no acumulado pela
+# sobreposicao (o fim do acumulado casa com o comeco do quadro), o texto em voo vira incremental —
+# so cresce no fim, igual aos deltas que o hook MessageDisplay publica pro Claude. E o que permite
+# ao front mostrar a previa do Kimi SEM o teto de 10 linhas do `.plain` (que existe porque texto
+# raspado troca inteiro e instavel; o costurado nao troca).
+#
+# Best-effort como tudo neste arquivo: se a TUI redesenhar de um jeito inesperado e a sobreposicao
+# nao casar, o acumulado recomeca do quadro atual (perde o topo ate o commit) — cosmetico, a bolha
+# canonica do wire sempre corrige. Erro de cola NUNCA pode apagar texto ja commitado: a supressao
+# (preview_is_committed) e o swap final valem do mesmo jeito.
+_COSTURA_MIN = 24   # sobreposicao menor que isto e coincidencia (bloco NOVO), nao continuacao:
+                    # a 150ms de cadencia, dois quadros de uma janela de ~45 linhas se sobrepoem
+                    # quase inteiros; menos que uma frase de overlap = o bloco mudou de identidade.
+
+
+def _costurar(acum: str, novo: str) -> str:
+    """Cola o quadro atual do pane no texto em voo acumulado (ver o bloco acima). Devolve o novo
+    acumulado. `novo` vazio = quadro sem prosa (ferramenta rodando, spinner): MANTEM o acumulado —
+    o bloco em voo continua, e o front segura o ultimo texto do mesmo jeito."""
+    if not novo:
+        return acum
+    if not acum:
+        return novo
+    if novo.startswith(acum):
+        return novo          # nada rolou pra fora da tela: o quadro contem o texto inteiro
+    # Maior k tal que o SUFIXO do acumulado == PREFIXO do quadro: o quadro e a janela visivel da
+    # cauda do mesmo texto; o que passa de k e linha nova que o scroll esconderia sem a costura.
+    for k in range(min(len(acum), len(novo)), _COSTURA_MIN - 1, -1):
+        if acum.endswith(novo[:k]):
+            return acum + novo[k:]
+    return novo              # sem sobreposicao confiavel: bloco novo (proximo part) -> recomeca
+
+
 class PreviewBroker:
     """UM loop de capture por SESSÃO (não por conexão). Faz poll do pane, extrai o texto do bloco em
     voo, guarda o último num slot e acorda os subscribers via Condition. Ref-count: liga no 1º
@@ -363,6 +471,14 @@ class PreviewBroker:
         # Origem do ULTIMO texto: sidecar do agente (markdown cru) x pane (ja pintado pela TUI).
         # Anda junto com `text` -- quem le os dois no mesmo instante ve o par coerente.
         self.md = False
+        # full: o texto e INCREMENTAL (so cresce no fim) — sidecar/deltas do agente, ou a costura
+        # do pane do Kimi (ver _costurar). E o que libera o front a mostrar a previa SEM o teto de
+        # 10 linhas do texto raspado. Anda junto com text/md pelo mesmo motivo do par md.
+        self.full = False
+        # Acumulado da costura (so provider kimi; ver _costurar). Vive no broker e nao no _loop
+        # pra sobreviver a reconexoes de subscriber — o texto em voo nao pode recomecar do quadro
+        # atual so porque o celular trocou de rede.
+        self._kimi_acum = ""
         self.version = 0
         self._cond = asyncio.Condition()
         self._task: Optional[asyncio.Task] = None
@@ -409,7 +525,7 @@ class PreviewBroker:
                 _log.debug("preview: leitura do sidecar falhou stem=%s", stem, exc_info=True)
                 doAgente = None
             if doAgente is not None:
-                text, md = doAgente, True
+                text, md, full = doAgente, True, True   # o agente publica incremental -> sem teto
                 working = bool(text)   # cadencia: rapido enquanto ha texto crescendo
             else:
                 md = False
@@ -429,22 +545,38 @@ class PreviewBroker:
                     pane = sem_pensamento_kimi(pane)
                 working = _live_spinner(pane) is not None
                 text = extract_assistant_text(pane, self.provider)
-            if text != self.text or md != self.md:
+                if kimi:
+                    if not text and self._kimi_acum:
+                        # O bloco estourou a janela e o ● subiu junto (medido nos quadros de
+                        # 19/08/2026): tenta o topo do pane como continuacao. A COSTURA e o
+                        # portao — se nao colar no acumulado (saida de ferramenta, conversa
+                        # velha), cai fora e o acumulado fica como esta.
+                        cont = _extrair_continuacao_kimi(pane)
+                        colado = _costurar(self._kimi_acum, cont)
+                        text = colado if colado != cont else ""
+                    # Costura a janela visivel no acumulado (o pane em tela alternativa PERDE o que
+                    # sobe — ver _costurar): a previa do Kimi vira incremental e ganha o sem-teto.
+                    text = _costurar(self._kimi_acum, text)
+                    self._kimi_acum = text
+                full = kimi
+            if text != self.text or md != self.md or full != self.full:
                 async with self._cond:
                     self.text = text
                     self.md = md
+                    self.full = full
                     self.version += 1
                     self._cond.notify_all()
             await asyncio.sleep(0.15 if working else 0.75)
 
-    async def subscribe(self) -> AsyncIterator[tuple[str, bool]]:
-        """Emite `(texto, md)` mais recente (full-replace) a cada mudança. Coalescido por natureza: um
-        subscriber lento perde frames intermediários e pega só o último (version + slot único).
+    async def subscribe(self) -> AsyncIterator[tuple[str, bool, bool]]:
+        """Emite `(texto, md, full)` mais recente (full-replace) a cada mudança. Coalescido por
+        natureza: um subscriber lento perde frames intermediários e pega só o último (version +
+        slot único).
 
-        O `md` sai JUNTO, sob o mesmo lock que leu o texto — e não relido do broker depois. Ler os
-        dois em momentos diferentes só funciona porque hoje não há `await` de verdade entre eles;
-        qualquer coisa inserida ali no futuro (throttle, log, backpressure) desemparelharia o par
-        calado, e a bolha renderizaria markdown de uma leitura com o texto de outra."""
+        O `md` e o `full` saem JUNTOS, sob o mesmo lock que leu o texto — e não relidos do broker
+        depois. Ler em momentos diferentes só funciona porque hoje não há `await` de verdade entre
+        eles; qualquer coisa inserida ali no futuro (throttle, log, backpressure) desemparelharia
+        o trio calado, e a bolha renderizaria markdown de uma leitura com o texto de outra."""
         async with self._cond:
             self._subs += 1
             if self._task is None:
@@ -455,8 +587,8 @@ class PreviewBroker:
                 async with self._cond:
                     await self._cond.wait_for(lambda: self.version != last)
                     last = self.version
-                    text, md = self.text, self.md
-                yield text, md
+                    text, md, full = self.text, self.md, self.full
+                yield text, md, full
         finally:
             # Limpeza SINCRONA (sem await): `async with self._cond` podia ser interrompido por
             # CancelledError no acquire do lock -> _subs nao decrementava e o _loop vazava (polling

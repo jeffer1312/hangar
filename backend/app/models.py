@@ -206,6 +206,11 @@ class PreviewEvent(BaseModel):
     # renderizar de novo estragaria o que ja esta formatado. Sem esta flag o `**negrito**` do Pi
     # aparecia cru na previa — o front mostra previa em texto plano desde que a unica fonte era o pane.
     md: bool = False
+    # `full`: o texto e INCREMENTAL (so cresce no fim) — deltas do agente, ou a costura do pane do
+    # Kimi (ver _costurar em preview.py). So faz diferenca com md=False: a previa raspada comum tem
+    # teto de 10 linhas porque troca inteira e instavel; a costurada nao troca, entao o front mostra
+    # sem teto, igual ao ramo md. Fontes md=True sao incrementais por construcao (full sempre True).
+    full: bool = False
 
 
 class CommandInfo(BaseModel):

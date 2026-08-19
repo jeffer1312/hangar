@@ -19,10 +19,12 @@
     sessionName?: string;
     preview?: boolean;
     md?: boolean;        // previa cujo texto e markdown CRU (veio do agente, nao raspado da tela)
+    full?: boolean;      // previa INCREMENTAL (so cresce no fim: deltas, ou a costura do pane do
+                         // Kimi) -> texto plano SEM o teto de 10 linhas do ramo raspado comum
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade/slide
     onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (botao ↗)
   }
-  let { text, ts, sessionName = '', preview = false, md = false, animate = true, onForward = null }: Props = $props();
+  let { text, ts, sessionName = '', preview = false, md = false, full = false, animate = true, onForward = null }: Props = $props();
 
   // Previa em texto PLANO era consequencia da FONTE, nao escolha: raspada do pane, ela ja vinha
   // pintada pela TUI e renderizar de novo estragaria. Quando o proprio agente publica o texto
@@ -150,7 +152,7 @@
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
-    {@const todo = md ? null : splitTodoBlock(textoPrevia)}
+    {@const todo = md || full ? null : splitTodoBlock(textoPrevia)}
     {#if todo}
       <!-- Painel de tarefas do TUI: fechado por padrao, so o contador na linha. <details> nativo —
            sem estado no componente, e o navegador ja lembra do aberto enquanto o no viver. -->
@@ -169,6 +171,14 @@
            10 linhas que o ramo `.plain` (raspagem do pane) precisa ter. -->
       <!-- eslint-disable-next-line svelte/no-at-html-tags -->
       <div class="prose livemd" bind:this={plainEl}>{@html previewHtml}</div>
+    {:else if full}
+      <!-- `full` = a prévia raspada que o backend COSTUROU (pane do Kimi em tela alternativa: o que
+           sobe da tela se perde, entao o PreviewBroker cola os quadros pela sobreposicao — ver
+           _costurar no preview.py). O texto resultante e incremental como o do `livemd` — so
+           cresce no fim — entao vale a mesma regra: sem o teto de 10 linhas, que escondia o comeco
+           da resposta ate ela commitar. Segue TEXTO PLANO (ja pintado pela TUI): renderizar
+           markdown aqui estragaria, igual ao ramo `.plain` comum. -->
+      <div class="prose plain full" bind:this={plainEl}><span class="live">{textoPrevia}<span class="caret" aria-hidden="true"></span></span></div>
     {:else if !todo || todo.rest}
       <!-- O <span> em volta do texto+caret NÃO é decorativo: o .prose.plain é flex (pro corte por
            cima, ver o CSS), e num flex container um nó de texto SOLTO vira item anônimo próprio —
@@ -443,6 +453,14 @@
      havia rolagem que o trouxesse de volta). O teto continua valendo pro `.plain`, que é o pane. */
   .prose.livemd {
     display: block;
+  }
+  /* Previa costurada (full): incremental como a livemd, entao SEM o teto de 10 linhas do `.plain`
+     — o teto existe pra texto raspado que troca inteiro; o costurado so cresce no fim (ver o
+     comentario do ramo `full` no markup). Continua texto plano (pre-wrap), so destravada. */
+  .prose.plain.full {
+    display: block;
+    max-height: none;
+    overflow: visible;
   }
   /* Só quando há corte de verdade (class:masked). Ver o comentário do plainOverflows no script. */
   .prose.plain.masked { mask-image: linear-gradient(to bottom, transparent, black 1.6lh); }

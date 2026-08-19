@@ -386,7 +386,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # autoritativo — head-of-line). Mantemos so o ULTIMO texto + um unico marcador pendente na fila;
     # frames intermediarios sao descartados (full-replace, o ultimo vence). Sem await entre as
     # escritas do dict -> consistente no loop asyncio single-thread, sem lock.
-    preview_slot = {"text": "", "pending": False, "md": False}
+    preview_slot = {"text": "", "pending": False, "md": False, "full": False}
     # Texto da ULTIMA msg de assistente que já caiu no .jsonl (normalizado). Fonte de verdade pra
     # suprimir preview JÁ COMMITADO: no gap entre blocos (durante tool-calls) o pane ainda mostra o
     # bloco que já foi gravado -> sem isto, vira bolha duplicada. Atualizado pelo tail_pump.
@@ -415,11 +415,12 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             await asyncio.sleep(10)
             await queue.put(("ping", "{}"))
 
-    def _enqueue_preview(text: str, md: bool = False):
+    def _enqueue_preview(text: str, md: bool = False, full: bool = False):
         # Atualiza o slot e enfileira UM marcador 'preview' por vez (drop-old). Sem await entre as
         # escritas -> consistente no loop single-thread.
         preview_slot["text"] = text
         preview_slot["md"] = md
+        preview_slot["full"] = full
         if not preview_slot["pending"]:
             preview_slot["pending"] = True
             queue.put_nowait(("preview", None))
@@ -508,10 +509,11 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # 1 marcador). SUPRIME texto JA COMMITADO no .jsonl (gap entre blocos) -> manda "" pra nao
         # duplicar. Fail-loud como os outros pumps.
         try:
-            # A fonte emite o PAR: `md` diz se aquele texto e markdown cru (sidecar do agente) ou
-            # ja pintado pela TUI (pane). Vem junto de proposito — ver o docstring do subscribe().
-            async for text, md in broker.subscribe():
-                _enqueue_preview("" if _already_committed(text) else text, md)
+            # A fonte emite o TRIO: `md` diz se aquele texto e markdown cru (sidecar do agente) ou
+            # ja pintado pela TUI (pane); `full` diz se e incremental (seguro sem teto — ver
+            # PreviewEvent). Vem junto de proposito — ver o docstring do subscribe().
+            async for text, md, full in broker.subscribe():
+                _enqueue_preview("" if _already_committed(text) else text, md, full)
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
 
@@ -577,7 +579,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 preview_slot["pending"] = False
                 yield {"event": "preview",
                        "data": PreviewEvent(session=name, text=preview_slot["text"],
-                                            md=bool(preview_slot["md"])).model_dump_json()}
+                                            md=bool(preview_slot["md"]),
+                                            full=bool(preview_slot["full"])).model_dump_json()}
                 continue
             if event == "state":
                 # Rastreia transicoes do awaiting_input pra resetar o guard de emissao unica.

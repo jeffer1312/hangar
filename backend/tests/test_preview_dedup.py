@@ -421,16 +421,17 @@ def test_broker_prefere_o_sidecar_e_nao_le_o_pane(tmp_path, monkeypatch):
         agen = b.subscribe()
         try:
             async def primeiro_nao_vazio():
-                async for t, md in agen:
+                async for t, md, full in agen:
                     if t:
-                        return t, md
+                        return t, md, full
             return await _aio.wait_for(primeiro_nao_vazio(), 2)
         finally:
             await agen.aclose()
             _prev.PreviewBroker._brokers.pop("sessao-x", None)
 
-    # O par (texto, md) sai JUNTO da fonte: md=True marca "markdown cru, a bolha renderiza".
-    assert _aio.run(roda()) == ("veio do agente", True)
+    # O trio (texto, md, full) sai JUNTO da fonte: md=True marca "markdown cru, a bolha renderiza",
+    # full=True marca "incremental" (o agente publica na ordem -> a bolha fica sem teto).
+    assert _aio.run(roda()) == ("veio do agente", True, True)
     assert chamou == [], "leu o pane mesmo com sidecar publicado"
 
 
@@ -445,15 +446,16 @@ def test_broker_sem_sidecar_continua_no_pane(tmp_path, monkeypatch):
         agen = b.subscribe()
         try:
             async def primeiro_nao_vazio():
-                async for t, md in agen:
+                async for t, md, full in agen:
                     if t:
-                        return t, md
+                        return t, md, full
             return await _aio.wait_for(primeiro_nao_vazio(), 2)
         finally:
             await agen.aclose()
             _prev.PreviewBroker._brokers.pop("sessao-y", None)
 
-    assert _aio.run(roda()) == ("veio do pane", False)   # raspado da TUI: ja pintado, nao renderiza
+    # raspado da TUI: ja pintado, nao renderiza; e troca inteira (nao incremental) -> teto de 10 linhas
+    assert _aio.run(roda()) == ("veio do pane", False, False)
 
 
 def test_broker_segue_o_stem_da_conexao_mais_recente():
@@ -564,6 +566,33 @@ def test_kimi_enfase_na_resposta_nao_e_confundida_com_rascunho():
     assert extract_assistant_text(limpo, "kimi") == "O teste passou com sucesso."
 
 
+# Status de ferramenta concluida do Kimi, copiado do print do usuario (19/08/2026): a TUI desenha
+# "● Used <Tool> (…)" com o MESMO ● da prosa, e o "Used" nao estava em nenhuma lista — a linha era
+# eleita como bloco em voo e a previa mostrava o status como texto, quando o ToolCard da chamada ja
+# chega pelo tool.call do wire.
+_KIMI_USED = (
+    "● Used ReadMediaFile (…rojetos/hangar/.claude-pocket-uploads/1787141544-3efdfc.png)"
+    " · image (image/jpeg, 49.1 KB)\n"
+)
+
+
+def test_kimi_used_nao_e_prosa():
+    # So o status no pane: nenhum bloco de prosa -> previa vazia (o ToolCard vem do wire).
+    assert extract_assistant_text(_KIMI_USED, "kimi") == ""
+
+
+def test_kimi_used_depois_da_prosa_corta_o_bloco():
+    pane = "● A resposta comeca aqui.\n" + _KIMI_USED
+    assert extract_assistant_text(pane, "kimi") == "A resposta comeca aqui."
+
+
+def test_kimi_used_em_prosa_inglesa_nao_descarta():
+    # "Used" em prosa de verdade tem a palavra seguinte minuscula — NAO pode descartar o bloco
+    # (previa vazia e pior que previa suja, regra do modulo).
+    pane = "● Used correctly, the flag avoids the double render.\n"
+    assert extract_assistant_text(pane, "kimi") == "Used correctly, the flag avoids the double render."
+
+
 def test_kimi_previa_do_broker_ja_vem_sem_rascunho(monkeypatch):
     """Fiacao fim a fim: provider kimi -> capture_pane(cores=True) -> sem_pensamento_kimi.
 
@@ -588,7 +617,7 @@ def test_kimi_previa_do_broker_ja_vem_sem_rascunho(monkeypatch):
         agen = b.subscribe()
         try:
             async def primeiro_nao_vazio():
-                async for t, _md in agen:
+                async for t, _md, _full in agen:
                     if t:
                         return t
             return await _aio.wait_for(primeiro_nao_vazio(), 2)
@@ -598,6 +627,157 @@ def test_kimi_previa_do_broker_ja_vem_sem_rascunho(monkeypatch):
 
     assert _aio.run(roda()) == "Sao 6 letras r no total."
     assert vistos and vistos[0][2] is True      # pediu o pane COM cor
+
+
+# ── Costura do texto em voo do Kimi (_costurar) ──────────────────────────────────────────────────
+# A TUI do Kimi roda em tela alternativa (alternate_on=1, medido em 19/08/2026): o que sobe da
+# janela visivel SE PERDE do pane. O broker le a cada 150ms e cola os quadros pela sobreposicao —
+# sem isto o comeco de uma resposta longa so aparecia depois do commit.
+
+def test_costura_cresce_sem_rolar():
+    from app.preview import _costurar
+    acum = _costurar("", "Primeira frase.")
+    assert acum == "Primeira frase."
+    # Nada rolou pra fora da tela: o quadro contem o texto inteiro -> substitui (nao duplica).
+    assert _costurar(acum, "Primeira frase. Segunda frase.") == "Primeira frase. Segunda frase."
+
+
+def test_costura_cola_pela_sobreposicao_quando_o_topo_some():
+    from app.preview import _costurar
+    # O topo ("Primeira frase comprida. ") saiu da janela visivel; o quadro novo traz so a cauda +
+    # a linha nova. A sobreposicao real entre dois quadros a 150ms e quase a janela inteira — o
+    # piso de 24 chars e folga, nao aperto.
+    acum = _costurar("Primeira frase comprida pra valer. Segunda frase comprida pra valer.",
+                     "Segunda frase comprida pra valer. Terceira frase, recem-chegada.")
+    assert acum == ("Primeira frase comprida pra valer. Segunda frase comprida pra valer."
+                    " Terceira frase, recem-chegada.")
+
+
+def test_costura_quadro_vazio_mantem_o_acumulado():
+    from app.preview import _costurar
+    # Ferramenta rodando / spinner: o extrator nao acha prosa -> "". O bloco em voo CONTINUA —
+    # zerar aqui apagaria o que ja foi costurado ate a prosa voltar.
+    assert _costurar("texto acumulado", "") == "texto acumulado"
+
+
+def test_costura_sem_sobreposicao_recomeca():
+    from app.preview import _costurar
+    # Bloco NOVO (o part anterior commitou e outro comecou): sem overlap confiavel -> recomeca,
+    # em vez de grudar uma resposta na outra.
+    acum = _costurar("Resposta da primeira pergunta, completa.", "Assunto totalmente diferente agora.")
+    assert acum == "Assunto totalmente diferente agora."
+
+
+def test_costura_overlap_curto_demais_e_coincidencia():
+    from app.preview import _costurar
+    # Sufixo/prefixo casam por acidente ("a") mas menos que _COSTURA_MIN: NAO cola — e bloco novo.
+    acum = _costurar("Termina com a", "a resposta nova comeca aqui de verdade")
+    assert acum == "a resposta nova comeca aqui de verdade"
+
+
+def test_kimi_previa_do_broker_costura_os_quadros(monkeypatch):
+    """Fiacao fim a fim da costura: quadros sequenciais do pane — o ultimo JA SEM a linha do ●,
+    que rolou pra fora da janela (medido nos quadros reais de 19/08/2026) — e o broker publica o
+    texto INTEIRO, com full=True (a flag que tira o teto de 10 linhas no front)."""
+    import asyncio as _aio
+    from app import preview as _prev
+
+    quadros = iter([
+        "● Primeira frase comprida pra valer.\n",
+        "● Primeira frase comprida pra valer. Segunda frase comprida pra valer.\n",
+        # O ● e o topo rolaram pra fora da janela: o quadro so tem a cauda + a linha nova, e quem
+        # recupera e a extracao de CONTINUACAO (_extrair_continuacao_kimi) + a costura.
+        "Segunda frase comprida pra valer. Terceira frase, recem-chegada.\n",
+    ])
+
+    monkeypatch.setattr(_prev.tmux, "capture_pane", lambda name, lines=200, cores=False: next(quadros, ""))
+    monkeypatch.setattr(_prev, "read_sidecar", lambda stem: None)
+
+    async def roda():
+        b = _prev.PreviewBroker("sessao-kimi-costura", "kimi", lambda: "s-kimi")
+        agen = b.subscribe()
+        vistos = []
+        try:
+            async def coleta():
+                async for t, md, full in agen:
+                    if t:
+                        vistos.append((t, md, full))
+                    if len(vistos) >= 3:
+                        return vistos
+            # Cadencia ociosa (sem spinner nos quadros falsos): 0.75s por poll -> 3 textos levam
+            # ~2.3s; 4s de teto com folga.
+            return await _aio.wait_for(coleta(), 4)
+        finally:
+            await agen.aclose()
+            _prev.PreviewBroker._brokers.pop("sessao-kimi-costura", None)
+
+    vistos = _aio.run(roda())
+    assert vistos[-1][0] == ("Primeira frase comprida pra valer. Segunda frase comprida pra valer."
+                             " Terceira frase, recem-chegada.")
+    assert vistos[-1][1] is False    # texto do pane: plano, nao renderiza markdown
+    assert vistos[-1][2] is True     # costurado = incremental -> a bolha fica sem o teto
+
+
+# Painel de Todo da TUI do Kimi, desenho medido nos quadros reais de 19/08/2026: header "Todo",
+# itens "✓"/"●", entre a regua e a caixa do composer — o item atual usa o MESMO ● da prosa e era
+# eleito bloco em voo (a previa mostrava o item no lugar do texto).
+_PANE_KIMI_TODO = (
+    " ● Enquanto a captura roda, vou aproveitar pra deixar registrado o desenho completo.\n"
+    "   O texto continua aqui, segundo paragrafo do bloco em voo.\n"
+    "\n"
+    "  ⠸ working... · Tip: Try /dance for a hidden Easter egg\n"
+    " ─────────────────────────────────────────────────────────────────────────\n"
+    "   Todo\n"
+    "   ✓ Backend: costura (_costurar) + acumulador no PreviewBroker (só kimi)\n"
+    "   ● Testes backend (costura, broker, unpacks) e suíte verde\n"
+    " ╭───────────────────────────────────────────────────────────────────────╮\n"
+    " │ >                                                                     │\n"
+    " ╰───────────────────────────────────────────────────────────────────────╯\n"
+)
+
+
+def test_kimi_painel_de_todo_nao_vira_prosa():
+    out = extract_assistant_text(_PANE_KIMI_TODO, "kimi")
+    assert "Testes backend" not in out                       # o item do painel nao e prosa
+    assert out.startswith("Enquanto a captura roda")         # e a prosa em voo continua dona
+    assert "segundo paragrafo" in out
+
+
+def test_kimi_spinner_sem_dica_para_a_continuacao():
+    # Variante medida na fixture _KIMI_PENSANDO: "  ⠋ working..." SOZINHO (sem " · Tip:"). Sem a
+    # parada por glifo, a prosa engolia spinner + painel de Todo ate a caixa do composer.
+    pane = _PANE_KIMI_TODO.replace("⠸ working... · Tip: Try /dance for a hidden Easter egg",
+                                   "⠋ working...")
+    out = extract_assistant_text(pane, "kimi")
+    assert "working" not in out
+    assert "Testes backend" not in out
+    assert "segundo paragrafo" in out
+
+
+def test_kimi_continuacao_sem_bullet_pega_o_topo_ate_o_chrome():
+    from app.preview import _extrair_continuacao_kimi
+    # Bloco estourou a janela: o ● sumiu, o topo e o MEIO do bloco. A funcao devolve tudo ate o
+    # chrome — quem decide se cola e a costura.
+    pane = ("   meio do paragrafo que estava rolando.\n"
+            "   A ideia. O PreviewBroker le o pane a cada 150ms.\n"
+            "\n"
+            "  ⠸ working... · Tip: Try /dance\n"
+            " ╭───────────────────────────────────────────────────────────╮\n")
+    out = _extrair_continuacao_kimi(pane)
+    assert out == ("   meio do paragrafo que estava rolando.\n"
+                   "   A ideia. O PreviewBroker le o pane a cada 150ms.")
+
+
+def test_kimi_continuacao_nao_aceita_saida_de_ferramenta():
+    from app.preview import _costurar, _extrair_continuacao_kimi
+    # Janela cheia de saida de ferramenta (nada do bloco em voo): a extracao devolve texto, mas a
+    # costura NAO cola (sem overlap com o acumulado) — e o broker, nesse caso, mantem o acumulado.
+    pane = ("total 48\n"
+            "-rw-r--r-- 1 jefferson jefferson  9131 ago 19 09:41 preview.py\n"
+            "  ⠸ working... · Tip: x\n")
+    cont = _extrair_continuacao_kimi(pane)
+    assert _costurar("Primeira frase comprida pra valer, ainda em voo.", cont) == cont
+
 
 
 # ── Chrome novo do Claude Code: aviso de subagente concluido + resumo de atividade ────────────────

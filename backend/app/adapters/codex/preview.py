@@ -44,10 +44,11 @@ class CodexPreviewSource:
             self.version += 1
             self._cond.notify_all()
 
-    async def subscribe(self) -> AsyncIterator[tuple[str, bool]]:
-        """Emite `(texto, md)` mais recente (full-replace) a cada mudanca. Mesma mecanica (e mesmo
-        contrato de par) do PreviewBroker.subscribe. Aqui o `md` e constante (True), mas emitir o par
-        e o que deixa o pump ler UMA interface so pras duas fontes."""
+    async def subscribe(self) -> AsyncIterator[tuple[str, bool, bool]]:
+        """Emite `(texto, md, full)` mais recente (full-replace) a cada mudanca. Mesma mecanica (e
+        mesmo contrato de trio) do PreviewBroker.subscribe. Aqui `md` e `full` sao constantes
+        (True: deltas acumulados do app-server — markdown cru E incremental), mas emitir o trio e
+        o que deixa o pump ler UMA interface so pras duas fontes."""
         async with self._cond:
             self._subs += 1
         last = -1
@@ -57,7 +58,7 @@ class CodexPreviewSource:
                     await self._cond.wait_for(lambda: self.version != last)
                     last = self.version
                     text = self.text
-                yield text, self.md
+                yield text, self.md, True
         finally:
             # Limpeza sincrona (sem await entre as linhas), mesmo motivo do PreviewBroker: um
             # CancelledError no acquire do lock nao pode deixar _subs sem decrementar.

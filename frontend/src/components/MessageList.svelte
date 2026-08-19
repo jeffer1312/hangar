@@ -27,6 +27,7 @@
     dockH: number;
     preview?: string;
     previewMd?: boolean;   // o texto da previa e markdown cru -> a bolha renderiza
+    previewFull?: boolean; // a previa e incremental (so cresce no fim) -> bolha sem o teto de 10 linhas
     onSelectOption: (i: number) => void;
     onCancel: () => void;
     // AskUserQuestion inline (desktop): quando askOpen, renderiza o card no fim da lista.
@@ -48,7 +49,7 @@
   }
 
   let {
-    events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, onSelectOption, onCancel,
+    events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onCancel,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds,
     onForward, onOpenSession
   }: Props = $props();
@@ -354,7 +355,7 @@
     {/each}
 
     {#if preview}
-      <AssistantBubble text={preview} ts={undefined} preview md={previewMd} />
+      <AssistantBubble text={preview} ts={undefined} preview md={previewMd} full={previewFull} />
     {/if}
 
     {#if stateEvent?.state === 'working'}
