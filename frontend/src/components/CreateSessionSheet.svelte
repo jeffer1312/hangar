@@ -66,7 +66,8 @@
   let engine = $state('');
   let motores = $state<Record<string, Motor>>({});
 
-  // Escolha de modelo e esforço (só claude e pi — ver NIVEIS abaixo). `''` = Padrão, ou seja
+  // Escolha de modelo e esforço (modelo: claude, pi e kimi; esforço: só claude e pi — o Kimi não
+  // tem flag de esforço no CLI, ver NIVEIS abaixo). `''` = Padrão, ou seja
   // nenhuma flag no comando: comportamento de hoje, byte por byte. A lista vem do
   // GET /api/model-options (Task 4), que já traz contexto/👁 pros provedores que informam.
   let modelo = $state('');
@@ -75,10 +76,9 @@
   let listaReduzida = $state(false);
   let erroModelos = $state('');
 
-  // Listas FECHADAS por provider, as mesmas do backend (model_args.py). O Kimi é o QUARTO botão da
-  // tela e não tem nível de esforço nenhum: uma guarda `provider !== 'codex'` deixaria ele entrar
-  // aqui e `NIVEIS['kimi']` seria undefined — o `.map` derrubaria a folha inteira. Por isso a
-  // lista explícita dos dois providers em escopo.
+  // Listas FECHADAS por provider, as mesmas do backend (model_args.py). Sem entrada 'kimi' DE
+  // PROPÓSITO: o Kimi escolhe modelo mas não tem nível de esforço nenhum — um `NIVEIS['kimi']`
+  // seria undefined e o `.map` derrubaria a folha inteira. Por isso a lista explícita dos dois.
   const NIVEIS: Record<string, string[]> = {
     claude: ['low', 'medium', 'high', 'xhigh', 'max'],
     pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
@@ -105,9 +105,9 @@
   async function carregarModelos() {
     const seq = ++modSeq;
     modelos = []; erroModelos = ''; listaReduzida = false; modelo = ''; esforco = '';
-    // Só os dois providers em escopo. `provider !== 'codex'` NÃO serve: a tela tem quatro botões
-    // (claude, codex, pi, kimi) e o Kimi não tem nível de esforço nenhum.
-    if (provider !== 'claude' && provider !== 'pi') return;
+    // Só os três providers com escolha de modelo. `provider !== 'codex'` NÃO serve como guarda:
+    // a tela tem quatro botões e foi assim que o Kimi ficou de fora na primeira versão.
+    if (provider !== 'claude' && provider !== 'pi' && provider !== 'kimi') return;
     try {
       const r = await modelOptions(provider, engine, selectedConfig);
       if (seq !== modSeq) return;
@@ -593,7 +593,7 @@
         </div>
       {/if}
 
-      {#if provider === 'claude' || provider === 'pi'}
+      {#if provider === 'claude' || provider === 'pi' || provider === 'kimi'}
         <div class="field">
           <label class="field-label" for="model-pick">{m.composer_modelo()}</label>
           <Select id="model-pick" class="field-input" ariaLabel={m.composer_modelo()} value={modelo}
@@ -616,7 +616,12 @@
             <p class="model-hint" role="alert">{m.criar_abre_padrao({ erro: erroModelos })}</p>
           {/if}
         </div>
+      {/if}
 
+      {#if provider === 'claude' || provider === 'pi'}
+        <!-- Esforço fica FORA do if de cima de propósito: o Kimi tem modelo mas NÃO tem nível
+             (o CLI não tem flag; mora no [thinking] do config.toml, global) — um NIVEIS['kimi']
+             undefined derrubaria a folha inteira no .map. -->
         <div class="field">
           <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()}</label>
           <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}

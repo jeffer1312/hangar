@@ -237,8 +237,11 @@ def _kimi_corrige_ocioso(info, marker):
 
 
 # Executavel do agente -> provider. Casa o BASENAME do argv[0], nunca a linha inteira: `pip`,
-# `pipx`, `mpirun` e um caminho contendo "/pi/" nao sao o agente Pi.
-_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi"}
+# `pipx`, `mpirun` e um caminho contendo "/pi/" nao sao o agente Pi. O Kimi entra DUAS vezes:
+# sessões antigas (0.36.x) reescrevem o argv0 como `kimi`; a 0.37.2 reescreve como `kimi-code` —
+# sem a segunda entrada, a sessão recém-criada virava "claude" na re-descoberta e herdava até o
+# transcript do Claude do mesmo cwd (medido no e2e de 19/08/2026).
+_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi"}
 
 
 def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> str:

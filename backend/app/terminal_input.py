@@ -5,6 +5,7 @@ import threading
 import time
 
 from app import agentpane
+from app import kimi_models
 from app import model_picker as mp
 from app import pi_inbox
 from app import tmux
@@ -1707,6 +1708,62 @@ class TerminalInput:
                 time.sleep(_SLASH_SETTLE)
                 send_keys(name, "Enter")
                 time.sleep(_OPEN_SETTLE)
+
+    def set_kimi_model(self, name: str, alias: str, display: str) -> dict:
+        """Troca o modelo de uma sessao Kimi dirigindo o picker do `/model`.
+
+        Sequencia medida ao vivo (Kimi Code 0.37.2, ver kimi_models.py): abre com `/model`+Enter,
+        digita o ALIAS completo na busca (ela casa alias, nao so nome — a lista do picker e
+        invisivel pro capture-pane, entao navegar por setas seria as cegas) e aplica com Alt+S,
+        que troca SO na sessao. NUNCA Enter: ele gravaria o alias como default_model GLOBAL no
+        config.toml (medido: o arquivo e reescrito na hora). Confirma pela linha "Switched to …"
+        NOVA no scrollback — a das trocas anteriores continua na tela, entao a baseline e lida
+        ANTES de digitar (mesmo cuidado do set_engine_model com k3-256k -> k3).
+        """
+        with _send_lock(name):
+            if not deliverable(name):
+                raise DriveError("pane com overlay aberto ou sessao morta — nada foi digitado")
+            _wait_input_ready(name, provider="kimi")
+            antes = kimi_models.parse_switched(tmux.capture_pane(name) or "")
+            send_keys(name, "/model", literal=True)
+            time.sleep(_SLASH_SETTLE)
+            send_keys(name, "Enter")
+            # SONDAGEM, não foto única: numa sessão recém-aberta o picker leva ~2s pra pintar a
+            # primeira vez (medido no e2e), e checar uma vez só aos 0.7s abortava com o picker
+            # abrindo logo depois — o Esc de saída caía ANTES dele e ficava tudo aberto. Sem 2o
+            # Enter de insistência (o que o Claude faz em _open_model_picker): aqui ele cairia
+            # num picker JÁ aberto meio pintado e confirmaria a linha sob o cursor COMO DEFAULT
+            # GLOBAL — o lado errado da falha. Não abriu no prazo: erro e o usuário tenta de novo.
+            fim = time.monotonic() + self._RESULT_PRAZO
+            aberto = False
+            while time.monotonic() < fim:
+                time.sleep(_SETTLE)
+                if "Select a model" in (tmux.capture_pane(name) or ""):
+                    aberto = True
+                    break
+            if not aberto:
+                self._abort(name)
+                raise mp.PickerError(409, "o picker do /model do Kimi nao abriu")
+            send_keys(name, alias, literal=True)
+            # A busca filtra no redraw; teclar o Alt+S em cima da digitacao aplicaria o item que
+            # estava sob o cursor ANTES do filtro — o K3 errado com folga.
+            time.sleep(_OPEN_SETTLE)
+            send_keys(name, "M-s")
+            fim = time.monotonic() + self._RESULT_PRAZO
+            while True:
+                time.sleep(_SETTLE)
+                troca = kimi_models.parse_switched(tmux.capture_pane(name) or "")
+                if kimi_models.confirms(troca, antes, display):
+                    return {"ok": True, "result": troca["raw"]}
+                if troca is not None and troca != antes:
+                    # Saiu uma linha NOVA com outro nome: a busca casou algo inesperado. Falha
+                    # alta, nunca sucesso sobre o modelo errado.
+                    self._abort(name)
+                    raise mp.PickerError(
+                        409, f"o Kimi aplicou {troca['name']}, nao {display}")
+                if time.monotonic() >= fim:
+                    self._abort(name)
+                    raise mp.PickerError(409, f"sem confirmacao da troca pra {display} no terminal")
 
     def _abort(self, name: str) -> None:
         send_keys(name, "Escape")

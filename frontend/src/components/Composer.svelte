@@ -34,6 +34,7 @@
   import ClaudeEffortPopover from './ClaudeEffortPopover.svelte';
   import CodexModelSheet from './CodexModelSheet.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
+  import KimiModelPopover from './KimiModelPopover.svelte';
   import PiEffortPopover from './PiEffortPopover.svelte';
   import SlashSuggest from './SlashSuggest.svelte';
   import CommandSheet from './CommandSheet.svelte';
@@ -410,6 +411,18 @@
   let piEffortPillEl = $state<HTMLElement | null>(null);
   let piModel = $state<string | null>(null);
   let piEffort = $state<string | null>(null);
+  // Kimi: mesma forma do Pi (pill que abre popover), sem pill de esforço — o Kimi não tem nível
+  // ajustável por sessão (mora no [thinking] do config.toml, global). `kimiModel` é o otimista
+  // local até a statusline confirmar (ver a reconciliação logo abaixo).
+  let kimiPopOpen = $state(false);
+  let kimiPillEl = $state<HTMLElement | null>(null);
+  let kimiModel = $state<string | null>(null);
+
+  // Reconciliação do otimista do Kimi: a statusline confirmou o nome -> solta o override pra que
+  // uma troca feita DIRETO no terminal reapareça (mesma regra do chosenModel do Claude).
+  $effect(() => {
+    if (kimiModel && status?.model && status.model === kimiModel) kimiModel = null;
+  });
 
   $effect(() => {
     if (!isPi) return;
@@ -1256,14 +1269,21 @@
             </button>
           </span>
         {:else if isKimi}
-          <!-- Kimi nao tem sheet de modelo neste MVP (o /model dele e so-TUI): pill vira rotulo
-               passivo com o modelo da statusline, sem abrir nada — nem o popover de modelo do Claude. -->
-          <span class="model-pill">
+          <!-- Kimi: pill que abre o KimiModelPopover (catálogo do config.toml; aplica dirigindo
+               o picker do /model com busca + Alt+S — só a sessão, sem tocar o default global). -->
+          <button
+            class="model-pill"
+            bind:this={kimiPillEl}
+            onclick={() => (kimiPopOpen = true)}
+            aria-haspopup="dialog"
+            aria-expanded={kimiPopOpen}
+            aria-label={m.composer_modelo()}
+          >
             <span class="pill-label">
-              <span class="pill-model">{status?.model ?? m.composer_modelo()}</span>
+              <span class="pill-model">{kimiModel ?? status?.model ?? m.composer_modelo()}</span>
             </span>
             <ContextRing pct={status?.ctxPct ?? null} />
-          </span>
+          </button>
         {:else if !isCodex}
           <span class="pill-duo">
             <button
@@ -1444,6 +1464,15 @@
     {sessionName}
     onApplied={(effort) => (piEffort = effort)}
     onClose={() => (piEffortOpen = false)}
+  />
+
+  <KimiModelPopover
+    open={kimiPopOpen}
+    anchor={kimiPillEl}
+    {sessionName}
+    currentName={kimiModel ?? status?.model ?? null}
+    onApplied={(model) => (kimiModel = model)}
+    onClose={() => (kimiPopOpen = false)}
   />
 
   <CommandSheet

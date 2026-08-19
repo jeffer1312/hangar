@@ -1405,6 +1405,36 @@ export function setPiModel(
   });
 }
 
+// ── Modelo de uma sessao Kimi ────────────────────────────────────────────────────────────────
+// Catalogo do ~/.kimi-code/config.toml; a troca dirige o picker do /model (busca pelo alias +
+// Alt+S, so a sessao) e a resposta e o READ-BACK da linha "Switched to …" — quem manda no rotulo
+// e o `current` que voltou, nao o que foi pedido. 409 = sessao trabalhando/terminal aberto/sem
+// confirmacao; 422 = alias fora do catalogo.
+
+export interface KimiModel {
+  alias: string;           // "provider/id" — o que a busca do picker casa e o POST manda
+  provider: string;
+  id: string;
+  name: string;            // display_name (repete entre providers: K3 existe nos dois)
+  context_length?: number | null;
+  efforts?: string[];
+  default_effort?: string | null;
+}
+
+export function getKimiModels(name: string): Promise<{ models: KimiModel[]; default: string | null }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/kimi/models`);
+}
+
+export function setKimiModel(
+  name: string,
+  alias: string,
+): Promise<{ ok: boolean; current: { alias: string; name: string }; result: string | null }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/kimi/model`, {
+    method: 'POST',
+    body: JSON.stringify({ model: alias }),
+  });
+}
+
 // ── Loop runner (Task 9+): obter, criar, parar e resolver loops autonomos por sessao ───────────
 
 // Obtem o estado atual de um loop (ou null se nao existe) e sugestoes de próximas ações.

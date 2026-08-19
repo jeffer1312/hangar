@@ -26,6 +26,7 @@ from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
+from app import kimi_models
 from app import model_args
 from app import filesearch, filetree, git_ops
 from app.filesearch import SearchError
@@ -3817,8 +3818,16 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
                     "models": await asyncio.to_thread(pi_catalog.listar)}
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
+    if provider == "kimi":
+        # Sem subprocess aqui (não existe `kimi --list-models`): o catálogo é o config.toml.
+        cat = kimi_models.read_catalog()
+        if cat is None:
+            raise HTTPException(409, detail=erro("erro_catalogo_kimi_indisponivel",
+                                                 "catalogo do Kimi indisponível — ~/.kimi-code/config.toml "
+                                                 "ausente ou sem seções [models.*]"))
+        return {"kind": "kimi", "reduced": False, "models": cat["models"], "default": cat["default"]}
     if provider != "claude":
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude' ou 'pi'"))
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi' ou 'kimi'"))
     if engine:
         modelos = await _engine_models(engine)
         return {"kind": "engine", "reduced": False,
@@ -4013,6 +4022,75 @@ async def pi_model_set(name: str, body: PiModelBody):
                                              f"pro provedor pedido (o Pi avisa dentro do TUI)",
                                              provider=cur.get("provider"), id=cur.get("id"),
                                              thinking=after.get("thinking")))
+
+
+# ── Modelo de uma sessão Kimi ─────────────────────────────────────────────────────────────────
+# Quarto mecanismo, diferente dos três vizinhos: sem picker legível (Claude), sem extensão com
+# sidecar (Pi), sem app-server (Codex). O catálogo mora no ~/.kimi-code/config.toml e a troca
+# dirige a busca do picker + Alt+S, confirmada pela linha "Switched to …" do scrollback — ver
+# app/kimi_models.py pro que foi medido na TUI.
+
+class KimiModelBody(_StrictBody):
+    model: str
+
+
+def _kimi_catalog() -> dict:
+    cat = kimi_models.read_catalog()
+    if cat is None:
+        # Mesma política do _pi_catalog: falha ALTA com instrução, nunca lista inventada.
+        raise HTTPException(409, detail=erro("erro_catalogo_kimi_indisponivel",
+                                             "catalogo do Kimi indisponível — ~/.kimi-code/config.toml "
+                                             "ausente ou sem seções [models.*]"))
+    return cat
+
+
+async def _kimi_info(name: str):
+    info = await _cached_info(name)
+    if not info:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
+    if info.provider != "kimi":
+        raise HTTPException(400, detail=erro("erro_rota_so_kimi", "esta rota só existe pra sessões Kimi"))
+    return info
+
+
+@app.get("/api/sessions/{name}/kimi/models", dependencies=[Depends(require_auth)])
+async def kimi_models_list(name: str):
+    await _kimi_info(name)
+    cat = _kimi_catalog()
+    # "current" ao vivo não tem fonte barata (a TUI não expõe e o marcador da statusline é display
+    # name, que repete entre providers): quem mostra o atual é a pill do composer, que já lê a
+    # statusline. Aqui vai o default do config como referência da abertura.
+    return {"models": cat["models"], "default": cat["default"]}
+
+
+@app.post("/api/sessions/{name}/kimi/model", dependencies=[Depends(require_auth)])
+async def kimi_model_set(name: str, body: KimiModelBody):
+    info = await _kimi_info(name)
+    _recusa_se_painel_aberto(name)
+    # Sessão TRABALHANDO: o `/model` digitado cairia no composer e o Enter o enfileiraria como
+    # MENSAGEM — a troca viraria um "/model" pro modelo ler. No Claude o _require_drivable cobre
+    # isso pelo spinner; o do Kimi são fases de lua, fora do que ele detecta, então a guarda é o
+    # marcador do hook (corrigido: pode ser o idle CONGELADO do turno anterior).
+    if info.jsonl:
+        m = hook_state.get_state(session_key(info.jsonl))
+        if m:
+            m = corrige_ocioso_kimi(m, info.jsonl)
+        if m and m[0] == "working":
+            raise HTTPException(409, detail=erro("erro_sessao_trabalhando",
+                                                 "a sessão está trabalhando — espere ela terminar"))
+    cat = _kimi_catalog()
+    try:
+        alvo = kimi_models.check_known(cat, body.model)
+    except kimi_models.KimiModelError as e:
+        raise HTTPException(e.status, e.detail)
+    try:
+        res = await asyncio.to_thread(terminal.set_kimi_model, name, alvo["alias"], alvo["name"])
+    except terminal_input.DriveError as e:
+        raise HTTPException(409, str(e))
+    except PickerError as e:
+        raise HTTPException(e.status, e.detail)
+    return {"ok": True, "current": {"alias": alvo["alias"], "name": alvo["name"]},
+            "result": res.get("result")}
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])

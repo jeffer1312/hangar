@@ -50,6 +50,17 @@ def test_provider_of_pane_reads_proc_not_a_pane_field(monkeypatch):
     assert registry.provider_of_pane(99) == "claude"
 
 
+def test_detects_kimi_pelas_duas_grafias_do_argv0(monkeypatch):
+    # A 0.36.x reescreve o argv0 como `kimi`; a 0.37.2 como `kimi-code` (medido: a sessao nova
+    # virava "claude" na re-descoberta e herdava o transcript do Claude do mesmo cwd).
+    _pane(monkeypatch, "kimi ")
+    assert registry.provider_of_pane(99) == "kimi"
+    _pane(monkeypatch, "kimi-code" + " " * 120)
+    assert registry.provider_of_pane(99) == "kimi"
+    _pane(monkeypatch, "/usr/bin/kimi-code --model apikey/k3")
+    assert registry.provider_of_pane(99) == "kimi"
+
+
 def test_provider_of_pane_defaults_to_claude_when_nothing_matches(monkeypatch):
     # Default preserva o comportamento de hoje: qualquer pane nao reconhecido segue tratado como
     # Claude, como antes desta task existir.

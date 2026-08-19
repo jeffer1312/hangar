@@ -42,6 +42,11 @@ def _e_flag(valor: str) -> bool:
 EFFORT_CLAUDE = ("low", "medium", "high", "xhigh", "max")
 EFFORT_PI = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
+# Quem aceita ESCOLHA DE MODELO no arranque: os três têm --model (o do Kimi aceita o alias
+# `provider/id` do config.toml, medido no --help do Kimi Code 0.37.2). Esforço é separado: o Kimi
+# NÃO tem flag de esforço no CLI (mora no [thinking] do config.toml), então não entra nos mapas
+# abaixo — pedir esforço pra ele é recusado com mensagem própria, não com "provider inválido".
+_ACEITA_MODELO = ("claude", "pi", "kimi")
 _FLAG_ESFORCO = {"claude": "--effort", "pi": "--thinking"}
 _NIVEIS = {"claude": EFFORT_CLAUDE, "pi": EFFORT_PI}
 
@@ -54,12 +59,15 @@ def validar(provider: str, model: str | None, effort: str | None) -> tuple[str |
     """
     if model is None and effort is None:
         return None, None
-    if provider not in _FLAG_ESFORCO:
+    if provider not in _ACEITA_MODELO:
         raise ValueError(f"provider {provider!r} não aceita escolha de modelo aqui")
     if model is not None and (not ID_OK.match(model) or _e_flag(model)):
         raise ValueError("model: use letras, números e . _ : / - ~ [ ] (até 128 caracteres, sem começar com -)")
-    if effort is not None and effort not in _NIVEIS[provider]:
-        raise ValueError(f"effort: use um de {', '.join(_NIVEIS[provider])}")
+    if effort is not None:
+        if provider not in _FLAG_ESFORCO:
+            raise ValueError(f"provider {provider!r} não aceita escolha de esforço aqui")
+        if effort not in _NIVEIS[provider]:
+            raise ValueError(f"effort: use um de {', '.join(_NIVEIS[provider])}")
     return model, effort
 
 

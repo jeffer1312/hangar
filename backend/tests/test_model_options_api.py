@@ -114,10 +114,35 @@ def test_pi_que_falha_vira_502(cli, monkeypatch):
 
 
 def test_provider_fora_de_escopo_vira_400(cli):
-    for provider in ("codex", "kimi", ""):
+    # codex segue fora (a lista dele vem do app-server da sessão viva, não da abertura); kimi
+    # ENTROU no escopo — ver test_kimi_serve_o_catalogo_do_config.
+    for provider in ("codex", ""):
         r = cli.get("/api/model-options", headers=AUTH, params={"provider": provider})
         assert r.status_code == 400, provider
         assert "claude" in r.json()["detail"]["msg"]
+
+
+_KIMI_CAT = {"default": "apikey/k3",
+             "models": [{"alias": "apikey/k3", "provider": "apikey", "id": "k3", "name": "K3",
+                         "context_length": 1048576, "efforts": ["low", "high", "max"],
+                         "default_effort": "high"}]}
+
+
+def test_kimi_serve_o_catalogo_do_config(cli, monkeypatch):
+    monkeypatch.setattr(api.kimi_models, "read_catalog", lambda: _KIMI_CAT)
+    r = cli.get("/api/model-options", headers=AUTH, params={"provider": "kimi"})
+    assert r.status_code == 200
+    assert r.json()["kind"] == "kimi"
+    assert r.json()["models"][0]["alias"] == "apikey/k3"
+    assert r.json()["default"] == "apikey/k3"
+
+
+def test_kimi_sem_config_vira_409(cli, monkeypatch):
+    # Config ausente/sem [models.*]: falha ALTA, nunca lista vazia que parece "sem modelos".
+    monkeypatch.setattr(api.kimi_models, "read_catalog", lambda: None)
+    r = cli.get("/api/model-options", headers=AUTH, params={"provider": "kimi"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_catalogo_kimi_indisponivel"
 
 
 def test_sem_token_vira_401(cli):

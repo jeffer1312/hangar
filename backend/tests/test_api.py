@@ -1834,6 +1834,95 @@ def test_pi_model_set_requires_something_to_change(api_client):
     send.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# Modelo de uma sessão Kimi — GET/POST /kimi/model(s)
+# ---------------------------------------------------------------------------
+
+_KIMI_CAT = {
+    "default": "apikey/k3",
+    "models": [
+        {"alias": "apikey/k3", "provider": "apikey", "id": "k3", "name": "K3",
+         "context_length": 1048576, "efforts": ["low", "high", "max"], "default_effort": "high"},
+        {"alias": "apikey/k3-256k", "provider": "apikey", "id": "k3-256k", "name": "K3-256k",
+         "context_length": 262144, "efforts": ["low", "high", "max"], "default_effort": "high"},
+    ],
+}
+
+
+def _kimi_info():
+    return SessionInfo(name="kk", cwd="/p", jsonl="/p/wire_abc.jsonl", provider="kimi")
+
+
+def test_kimi_models_returns_catalog(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
+         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT):
+        r = api_client.get("/api/sessions/kk/kimi/models", headers=_h())
+    assert r.status_code == 200
+    assert r.json()["default"] == "apikey/k3"
+    assert [m["alias"] for m in r.json()["models"]] == ["apikey/k3", "apikey/k3-256k"]
+
+
+def test_kimi_models_claude_session_rejected_with_400(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
+            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))):
+        r = api_client.get("/api/sessions/cc/kimi/models", headers=_h())
+    assert r.status_code == 400
+
+
+def test_kimi_models_missing_config_is_409_not_empty_list(api_client):
+    # Mesma política do sidecar do Pi: falha ALTA, nunca catálogo vazio que parece "sem modelos".
+    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
+         patch("app.api.kimi_models.read_catalog", return_value=None):
+        r = api_client.get("/api/sessions/kk/kimi/models", headers=_h())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_catalogo_kimi_indisponivel"
+
+
+def test_kimi_model_set_aplica_e_devolve_o_readback(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
+         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.api.hook_state") as hs, \
+         patch("app.api.terminal.set_kimi_model",
+               return_value={"ok": True, "result": "Switched to K3-256k …"}) as drive:
+        hs.get_state.return_value = None
+        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
+                            json={"model": "apikey/k3-256k"})
+    assert r.status_code == 200
+    # Alias E display name: o drive digita um e confere o outro na linha "Switched to …".
+    drive.assert_called_once_with("kk", "apikey/k3-256k", "K3-256k")
+    assert r.json()["current"]["name"] == "K3-256k"
+
+
+def test_kimi_model_set_rejeita_alias_fora_do_catalogo(api_client):
+    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
+         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.api.hook_state") as hs, \
+         patch("app.api.terminal.set_kimi_model") as drive:
+        hs.get_state.return_value = None
+        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
+                            json={"model": "apikey/k4"})
+    assert r.status_code == 422
+    drive.assert_not_called()
+
+
+def test_kimi_model_set_com_sessao_trabalhando_vira_409(api_client):
+    # Sem esta guarda o `/model` digitado cai no composer e o Enter o enfileira como MENSAGEM —
+    # a troca vira um "/model" mandado pro modelo ler.
+    with patch("app.api._cached_info", AsyncMock(return_value=_kimi_info())), \
+         patch("app.api.kimi_models.read_catalog", return_value=_KIMI_CAT), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.api.hook_state") as hs, \
+         patch("app.api.corrige_ocioso_kimi", side_effect=lambda m, j: m), \
+         patch("app.api.terminal.set_kimi_model") as drive:
+        hs.get_state.return_value = ("working", 1.0)
+        r = api_client.post("/api/sessions/kk/kimi/model", headers=_h(),
+                            json={"model": "apikey/k3-256k"})
+    assert r.status_code == 409
+    drive.assert_not_called()
+
+
 def test_plan_pin_rejeita_stem_com_travessia(api_client, tmp_path):
     # Sem a guarda de separador, o proprio os.path.isfile do endpoint responde se existe um .md
     # FORA da pasta de planos (404 vs 200) — e o stem com barra ainda ia parar no arquivo de pin,
