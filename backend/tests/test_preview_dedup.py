@@ -780,13 +780,62 @@ def test_kimi_broker_reset_limpa_texto_e_acumulado(monkeypatch):
                         return t
             assert await _aio.wait_for(primeiro(), 4) == "Texto de antes do clear, em voo."
             assert b._kimi_acum                              # acumulado de verdade, nao so slot
+            gen_antes = b._gen
             b.reset()
             assert b.text == "" and b._kimi_acum == "" and b.full is False and b.md is False
+            assert b._gen == gen_antes + 1                   # epoca avancou (frame em voo morre)
         finally:
             await agen.aclose()
             _prev.PreviewBroker._brokers.pop("sessao-kimi-reset", None)
 
     _aio.run(roda())
+
+
+def test_kimi_broker_descarta_frame_capturado_antes_do_reset(monkeypatch):
+    """A corrida da epoca: o /clear (reset) cai no MEIO do capture — o frame voltou do to_thread
+    com texto da conversa apagada, e nem publica nem deixa o acumulado renascer. Sem a epoca, o
+    fantasma vivia ate o proximo bloco de prosa (achado da review)."""
+    import asyncio as _aio
+    from app import preview as _prev
+
+    broker_ref = []
+    chamadas = {"n": 0}
+
+    def falso_capture(name, lines=200, cores=False):
+        chamadas["n"] += 1
+        if chamadas["n"] == 1:
+            broker_ref[0].reset()        # o /clear cai no MEIO do capture
+            return "● Texto da conversa apagada, ainda na tela.\n"
+        return ""                        # depois o pane limpou de verdade
+
+    monkeypatch.setattr(_prev.tmux, "capture_pane", falso_capture)
+    monkeypatch.setattr(_prev, "read_sidecar", lambda stem: None)
+
+    async def roda():
+        b = _prev.PreviewBroker("sessao-kimi-epoca", "kimi", lambda: "s-kimi")
+        broker_ref.append(b)
+        agen = b.subscribe()
+        publicados = []
+        try:
+            async def coleta():
+                async for t, _md, _full in agen:
+                    if t:
+                        publicados.append(t)
+            task = _aio.create_task(coleta())
+            await _aio.sleep(1.5)        # ~2 polls ociosos: tempo de sobra pro frame voltar
+            task.cancel()
+            try:
+                await task               # espera o cancel morder antes do aclose (senao o
+            except _aio.CancelledError:  # generator ainda esta rodando e o aclose levanta)
+                pass
+            return publicados, b
+        finally:
+            await agen.aclose()
+            _prev.PreviewBroker._brokers.pop("sessao-kimi-epoca", None)
+
+    publicados, b = _aio.run(roda())
+    assert publicados == []              # nada da conversa apagada escapou
+    assert b._kimi_acum == ""            # e o acumulado nao renasceu
 
 
 # Painel de Todo da TUI do Kimi, desenho medido nos quadros reais de 19/08/2026: header "Todo",

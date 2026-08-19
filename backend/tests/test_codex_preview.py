@@ -54,6 +54,19 @@ async def test_get_returns_same_instance_for_same_name():
 
 
 @pytest.mark.asyncio
+async def test_reset_limpa_o_texto_sem_notificar():
+    # Mesmo contrato do PreviewBroker.reset (o __reset__ do SSE chama pra qualquer fonte): zera
+    # sem acordar subscriber — quem limpa o front e o proprio SSE.
+    name = "reset-basic"
+    src = CodexPreviewSource.get(name)
+    await src.push("texto em voo")
+    src.reset()
+    assert src.text == ""
+    text, md, full = await asyncio.wait_for(src.subscribe().__anext__(), timeout=1)
+    assert (text, md, full) == ("", True, True)
+
+
+@pytest.mark.asyncio
 async def test_last_subscriber_leaving_drops_the_instance():
     name = "push-refcount"
     src = CodexPreviewSource.get(name)

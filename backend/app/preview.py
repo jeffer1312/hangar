@@ -485,6 +485,9 @@ class PreviewBroker:
         # pra sobreviver a reconexoes de subscriber — o texto em voo nao pode recomecar do quadro
         # atual so porque o celular trocou de rede.
         self._kimi_acum = ""
+        # Epoca do transcript: reset() (/clear) incrementa, e o _loop descarta frame capturado
+        # antes do reset (estava em voo no to_thread) em vez de publicar a conversa apagada.
+        self._gen = 0
         self.version = 0
         self._cond = asyncio.Condition()
         self._task: Optional[asyncio.Task] = None
@@ -513,15 +516,18 @@ class PreviewBroker:
         return b
 
     def reset(self) -> None:
-        """Zera texto e acumulado: o /clear trocou de transcript, e o que estava em voo era da
-        conversa APAGADA. Sem isto o broker (que sobrevive ao clear — e por nome de sessao, nao de
-        transcript) republicava o texto velho no primeiro yield de uma reconexao, com a supressao
-        desarmada (committed zerado no mesmo evento): bolha fantasma da conversa anterior (achado
-        da review). Nao notifica: quem chama (o __reset__ do SSE) ja limpa o front por conta."""
+        """Zera texto e acumulado e AVANCA A EPOCA: o /clear trocou de transcript, e o que estava
+        em voo era da conversa APAGADA. Sem isto o broker (que sobrevive ao clear — e por nome de
+        sessao, nao de transcript) republicava o texto velho no primeiro yield de uma reconexao,
+        com a supressao desarmada (committed zerado no mesmo evento): bolha fantasma (achado da
+        review). A epoca cobre a janela que zerar os campos nao cobre: um frame capturado ANTES do
+        reset e publicado DEPOIS (o capture tava em voo no to_thread) — o _loop confere a epoca no
+        publish e descarta. Nao notifica: quem chama (o __reset__ do SSE) ja limpa o front."""
         self._kimi_acum = ""
         self.text = ""
         self.md = False
         self.full = False
+        self._gen += 1
 
     async def _loop(self) -> None:
         # SEMPRE extrai o último bloco ● (NÃO gateia por spinner): a detecção de spinner pisca falso
@@ -530,6 +536,13 @@ class PreviewBroker:
         # idle. O spinner serve só pra CADÊNCIA: rápido trabalhando, devagar ocioso. Diff-gate (só
         # notifica em mudança) evita spam.
         while True:
+            # Epoca do poll: se o reset() (/clear) cair no MEIO desta iteracao, o frame capturado
+            # e da conversa apagada — o publish la embaixo confere e descarta.
+            gen = self._gen
+            # Kimi: pane COM cor, porque so o italico separa raciocinio de resposta (ver
+            # sem_pensamento_kimi). Os outros seguem no texto puro de sempre — `-e` ali seria
+            # custo e risco por nada.
+            kimi = self.provider == "kimi"
             # Sidecar primeiro: quando o agente publica, nem chega a rodar o capture-pane (um
             # subprocess a cada 150ms por sessao — o poll mais caro que o backend tem).
             stem = self.stem_get() if self.stem_get else None
@@ -546,10 +559,6 @@ class PreviewBroker:
                 working = bool(text)   # cadencia: rapido enquanto ha texto crescendo
             else:
                 md = False
-                # Kimi: pane COM cor, porque so o italico separa raciocinio de resposta (ver
-                # sem_pensamento_kimi). Os outros seguem no texto puro de sempre — `-e` ali seria
-                # custo e risco por nada.
-                kimi = self.provider == "kimi"
                 try:
                     # A chamada dos OUTROS providers fica byte-identica de proposito (nem o
                     # argumento `lines` explicito): este e o poll mais quente do backend e ha dublê
@@ -579,7 +588,6 @@ class PreviewBroker:
                     # sobe — ver _costurar): a previa do Kimi vira incremental e ganha o sem-teto.
                     acum_antes = self._kimi_acum
                     text, colou = _costurar(acum_antes, text)
-                    self._kimi_acum = text
                     # full so vale se a costura COLOU neste frame: no recomeco o texto trocou
                     # inteiro, e publicar "incremental" derrotaria o teto exatamente no caso que
                     # ele existe (achado da review).
@@ -590,13 +598,20 @@ class PreviewBroker:
                                    self.name, len(acum_antes))
                 else:
                     full = False
-            if text != self.text or md != self.md or full != self.full:
-                async with self._cond:
-                    self.text = text
-                    self.md = md
-                    self.full = full
-                    self.version += 1
-                    self._cond.notify_all()
+            if self._gen != gen:
+                # reset() caiu no MEIO deste poll: o frame capturado e da conversa APAGADA —
+                # nem publica, nem deixa o acumulado renascer com ela (achado da review).
+                pass
+            else:
+                if kimi and doAgente is None:
+                    self._kimi_acum = text
+                if text != self.text or md != self.md or full != self.full:
+                    async with self._cond:
+                        self.text = text
+                        self.md = md
+                        self.full = full
+                        self.version += 1
+                        self._cond.notify_all()
             await asyncio.sleep(0.15 if working else 0.75)
 
     async def subscribe(self) -> AsyncIterator[tuple[str, bool, bool]]:
