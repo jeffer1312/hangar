@@ -601,7 +601,10 @@ class PreviewBroker:
             if self._gen != gen:
                 # reset() caiu no MEIO deste poll: o frame capturado e da conversa APAGADA —
                 # nem publica, nem deixa o acumulado renascer com ela (achado da review).
-                pass
+                # Cobre SO o frame em voo: um pane velho ainda nao redesenhado na iteracao
+                # SEGUINTE passaria — na pratica o jsonl_watcher so enfileira o __reset__ apos
+                # >=4s de transcript novo, e o pane ja limpou (documentado na review).
+                _log.debug("preview: frame descartado pela epoca sessao=%s", self.name)
             else:
                 if kimi and doAgente is None:
                     self._kimi_acum = text
