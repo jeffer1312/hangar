@@ -156,7 +156,7 @@
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
-    {@const todo = md ? null : splitTodoBlock(textoPrevia)}
+    {@const todo = md || full ? null : splitTodoBlock(textoPrevia)}
     {#if todo}
       <!-- Painel de tarefas do TUI: fechado por padrao, so o contador na linha. <details> nativo —
            sem estado no componente, e o navegador ja lembra do aberto enquanto o no viver. -->
