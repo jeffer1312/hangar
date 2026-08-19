@@ -108,6 +108,12 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8765',
         changeOrigin: true,
+        // `ws: true` NAO e detalhe: sem ele o proxy repassa HTTP e SSE e ENGOLE o upgrade de
+        // WebSocket — o painel do terminal (unico WS do navegador) abre vazio, com o cursor
+        // piscando, e NADA chega no backend. Medido em 18/08/2026 pelo mesmo endereco: pela 8765
+        // o primeiro quadro do tmux vem em 267 bytes; pela 5173 o aperto de mao estoura o prazo.
+        // Quem acessa pelo tailscale serve (celular, outro PC, Electron) so tem este caminho.
+        ws: true,
       },
     },
     // Allow access via the Tailscale MagicDNS host (tailscale serve → this dev server),
@@ -128,7 +134,10 @@ export default defineConfig({
     strictPort: true,
     cors: false,
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true },
+      // `ws: true` pelo mesmo motivo do server acima: o terminal e WebSocket, e o preview e o que
+      // serve o BUILD atras do tailscale serve — sem isto, terminal em branco pra todo mundo que
+      // nao esta em localhost:8765.
+      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true, ws: true },
     },
     // .omniwise.com.br: a VPS (srv1633222) serve o BUILD via preview atrás do traefik do Coolify
     // (Host pocket.omniwise.com.br chega intacto no vite; sem isto o preview responde 403).
