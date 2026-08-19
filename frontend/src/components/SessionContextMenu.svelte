@@ -274,7 +274,7 @@
   :global(.ctx-menu) button {
     height: 32px; padding: 0 10px; text-align: left; justify-content: flex-start;
     color: var(--text-primary); font-size: var(--text-sm); border-radius: var(--radius-sm);
-    display: flex; align-items: center; width: 100%; background: transparent; border: 0; cursor: pointer;
+    display: flex; align-items: center; background: transparent; border: 0; cursor: pointer;
   }
   :global(.ctx-menu) button:hover { background: var(--bg-hover); }
   :global(.ctx-menu) button.danger { color: var(--error); }
