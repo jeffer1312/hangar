@@ -434,22 +434,28 @@ _COSTURA_MIN = 24   # sobreposicao menor que isto e coincidencia (bloco NOVO), n
                     # quase inteiros; menos que uma frase de overlap = o bloco mudou de identidade.
 
 
-def _costurar(acum: str, novo: str) -> str:
-    """Cola o quadro atual do pane no texto em voo acumulado (ver o bloco acima). Devolve o novo
-    acumulado. `novo` vazio = quadro sem prosa (ferramenta rodando, spinner): MANTEM o acumulado —
-    o bloco em voo continua, e o front segura o ultimo texto do mesmo jeito."""
+def _costurar(acum: str, novo: str) -> tuple[str, bool]:
+    """Cola o quadro atual do pane no texto em voo acumulado (ver o bloco acima). Devolve
+    (novo acumulado, colou). `novo` vazio = quadro sem prosa (ferramenta rodando, spinner):
+    MANTEM o acumulado — o bloco em voo continua, e o front segura o ultimo texto do mesmo jeito.
+
+    `colou` = False so no recomeço (sem sobreposicao confiavel: o texto TROCOU inteiro, nao
+    cresceu no fim). E o que deixa a flag `full` do broker honesta: publicar "incremental" num
+    frame de troca derrotaria o teto de 10 linhas exatamente no caso que ele existe (achado da
+    review). O recomeço em si e normal — acontece a cada bloco novo apos um commit; o caso
+    anomalo e recomeço no MEIO de um bloco (a TUI redesenhou), e ele degrada pro mesmo recomeço."""
     if not novo:
-        return acum
+        return acum, True
     if not acum:
-        return novo
+        return novo, True
     if novo.startswith(acum):
-        return novo          # nada rolou pra fora da tela: o quadro contem o texto inteiro
+        return novo, True     # nada rolou pra fora da tela: o quadro contem o texto inteiro
     # Maior k tal que o SUFIXO do acumulado == PREFIXO do quadro: o quadro e a janela visivel da
     # cauda do mesmo texto; o que passa de k e linha nova que o scroll esconderia sem a costura.
     for k in range(min(len(acum), len(novo)), _COSTURA_MIN - 1, -1):
         if acum.endswith(novo[:k]):
-            return acum + novo[k:]
-    return novo              # sem sobreposicao confiavel: bloco novo (proximo part) -> recomeca
+            return acum + novo[k:], True
+    return novo, False         # sem sobreposicao confiavel: bloco novo (proximo part) -> recomeca
 
 
 class PreviewBroker:
@@ -506,6 +512,17 @@ class PreviewBroker:
             b.stem_get = stem_get
         return b
 
+    def reset(self) -> None:
+        """Zera texto e acumulado: o /clear trocou de transcript, e o que estava em voo era da
+        conversa APAGADA. Sem isto o broker (que sobrevive ao clear — e por nome de sessao, nao de
+        transcript) republicava o texto velho no primeiro yield de uma reconexao, com a supressao
+        desarmada (committed zerado no mesmo evento): bolha fantasma da conversa anterior (achado
+        da review). Nao notifica: quem chama (o __reset__ do SSE) ja limpa o front por conta."""
+        self._kimi_acum = ""
+        self.text = ""
+        self.md = False
+        self.full = False
+
     async def _loop(self) -> None:
         # SEMPRE extrai o último bloco ● (NÃO gateia por spinner): a detecção de spinner pisca falso
         # por 1 frame durante o redraw, e gatear nisso fazia o broker emitir "" -> a bolha SUMIA e
@@ -540,6 +557,10 @@ class PreviewBroker:
                     pane = await (asyncio.to_thread(tmux.capture_pane, self.name, 200, True) if kimi
                                   else asyncio.to_thread(tmux.capture_pane, self.name))
                 except Exception:
+                    # Sem log isto congela a previa do Kimi no ultimo texto com full=True,
+                    # indistinguivel de "geracao longa em andamento" (achado da review — o
+                    # except vizinho, do sidecar, ja loga com exc_info pelo mesmo motivo).
+                    _log.debug("preview: capture_pane falhou sessao=%s", self.name, exc_info=True)
                     pane = ""
                 if kimi:
                     pane = sem_pensamento_kimi(pane)
@@ -552,13 +573,23 @@ class PreviewBroker:
                         # portao — se nao colar no acumulado (saida de ferramenta, conversa
                         # velha), cai fora e o acumulado fica como esta.
                         cont = _extrair_continuacao_kimi(pane)
-                        colado = _costurar(self._kimi_acum, cont)
-                        text = colado if colado != cont else ""
+                        colado, colou = _costurar(self._kimi_acum, cont)
+                        text = colado if colou else ""
                     # Costura a janela visivel no acumulado (o pane em tela alternativa PERDE o que
                     # sobe — ver _costurar): a previa do Kimi vira incremental e ganha o sem-teto.
-                    text = _costurar(self._kimi_acum, text)
+                    acum_antes = self._kimi_acum
+                    text, colou = _costurar(acum_antes, text)
                     self._kimi_acum = text
-                full = kimi
+                    # full so vale se a costura COLOU neste frame: no recomeco o texto trocou
+                    # inteiro, e publicar "incremental" derrotaria o teto exatamente no caso que
+                    # ele existe (achado da review).
+                    full = colou
+                    if not colou:
+                        _log.debug("preview: costura recomecou sessao=%s (%d chars do acumulado "
+                                   "fora; normal a cada bloco novo, anomalo no meio de um)",
+                                   self.name, len(acum_antes))
+                else:
+                    full = False
             if text != self.text or md != self.md or full != self.full:
                 async with self._cond:
                     self.text = text

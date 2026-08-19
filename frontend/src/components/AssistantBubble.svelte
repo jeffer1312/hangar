@@ -91,6 +91,10 @@
   let plainOverflows = $state(false);
   $effect(() => {
     void textoPrevia; // prévia é full-replace ~7×/s -> remede a cada troca do que está NA TELA
+    // Ramos sem teto (livemd/full): overflow:visible -> nunca ha corte pra mascarar, e medir aqui
+    // e layout forcado por tick do typewriter num no que pode ter a resposta INTEIRA (achado da
+    // review). O masked so existe no ramo .plain com teto.
+    if (md || full) return;
     plainOverflows = !!plainEl && plainEl.scrollHeight > plainEl.clientHeight + 4;
   });
 
@@ -152,7 +156,7 @@
   {#if preview}
     <!-- Preview ao vivo: texto PLANO (markdown so no snap final canonico, pra nao piscar **/code-fence
          meio-aberto) + caret. Mesma casca da bolha real -> swap quase invisivel. -->
-    {@const todo = md || full ? null : splitTodoBlock(textoPrevia)}
+    {@const todo = md ? null : splitTodoBlock(textoPrevia)}
     {#if todo}
       <!-- Painel de tarefas do TUI: fechado por padrao, so o contador na linha. <details> nativo —
            sem estado no componente, e o navegador ja lembra do aberto enquanto o no viver. -->
@@ -171,15 +175,18 @@
            10 linhas que o ramo `.plain` (raspagem do pane) precisa ter. -->
       <!-- eslint-disable-next-line svelte/no-at-html-tags -->
       <div class="prose livemd" bind:this={plainEl}>{@html previewHtml}</div>
-    {:else if full}
+    {:else if full && (!todo || todo.rest)}
       <!-- `full` = a prévia raspada que o backend COSTUROU (pane do Kimi em tela alternativa: o que
            sobe da tela se perde, entao o PreviewBroker cola os quadros pela sobreposicao — ver
            _costurar no preview.py). O texto resultante e incremental como o do `livemd` — so
            cresce no fim — entao vale a mesma regra: sem o teto de 10 linhas, que escondia o comeco
            da resposta ate ela commitar. Segue TEXTO PLANO (ja pintado pela TUI): renderizar
-           markdown aqui estragaria, igual ao ramo `.plain` comum. -->
-      <div class="prose plain full" bind:this={plainEl}><span class="live">{textoPrevia}<span class="caret" aria-hidden="true"></span></span></div>
-    {:else if !todo || todo.rest}
+           markdown aqui estragaria, igual ao ramo `.plain` comum.
+           Com painel Todo na tela ele sai DAQUI (vai pro <details> acima): quando o painel é tudo,
+           este ramo nem renderiza e o caret fica no <summary> — sem esse corte o painel do Kimi
+           aparecia cru na prévia, o motivo deste branch existir. -->
+      <div class="prose plain full" bind:this={plainEl}><span class="live">{todo ? todo.rest : textoPrevia}<span class="caret" aria-hidden="true"></span></span></div>
+    {:else if !full && (!todo || todo.rest)}
       <!-- O <span> em volta do texto+caret NÃO é decorativo: o .prose.plain é flex (pro corte por
            cima, ver o CSS), e num flex container um nó de texto SOLTO vira item anônimo próprio —
            o caret virava um segundo item, numa linha só dele, em vez de piscar colado na última

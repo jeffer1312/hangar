@@ -44,6 +44,11 @@ class CodexPreviewSource:
             self.version += 1
             self._cond.notify_all()
 
+    def reset(self) -> None:
+        """Zera o texto em voo sem notificar — mesmo contrato do PreviewBroker.reset (o /clear
+        trocou de transcript e quem chama, o __reset__ do SSE, ja limpa o front por conta)."""
+        self.text = ""
+
     async def subscribe(self) -> AsyncIterator[tuple[str, bool, bool]]:
         """Emite `(texto, md, full)` mais recente (full-replace) a cada mudanca. Mesma mecanica (e
         mesmo contrato de trio) do PreviewBroker.subscribe. Aqui `md` e `full` sao constantes

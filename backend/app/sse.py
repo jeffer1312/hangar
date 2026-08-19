@@ -565,6 +565,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 stats_task.cancel()          # transcript novo -> acumulador novo (faixa zera)
                 committed["text"] = ""
                 _enqueue_preview("")
+                broker.reset()           # o texto em voo era do transcript APAGADO: sem isto o
+                                         # broker republicava a conversa velha na 1a reconexao
+                                         # (a supressao acabou de ser desarmada na linha acima)
                 current_jsonl = data
                 ask_q_emitted = False
                 tail_task = asyncio.create_task(tail_pump(data))

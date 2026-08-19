@@ -1150,11 +1150,12 @@
         // Guard de monotonicidade: frame TRANSITORIO do pane (mid-redraw) as vezes chega como
         // PREFIXO do texto ja mostrado -> ignorar, senao o texto recua e re-cresce (stuttering).
         // Vazio (drop) e conteudo realmente novo passam.
-        // O guard so vale DENTRO da mesma fonte. Quando `md` vira (a extensao do agente caiu no meio
-        // do turno e a previa voltou pro pane, ou o contrario), o texto novo costuma ser MENOR e
-        // prefixo do anterior — e descartar esse evento congelaria a bolha renderizando markdown de
-        // uma fonte que ja nao existe, sem nenhum sinal. Troca de fonte passa sempre.
-        if (t && !!ev.md === previewMd
+        // O guard so vale DENTRO da mesma fonte. Quando `md` ou `full` vira (a extensao do agente
+        // caiu no meio do turno e a previa voltou pro pane, ou a costura recomecou e o frame de
+        // troca veio com full=False), o texto novo costuma ser MENOR e prefixo do anterior — e
+        // descartar esse evento congelaria a bolha numa fonte que ja nao existe, sem nenhum sinal.
+        // Troca de fonte passa sempre.
+        if (t && !!ev.md === previewMd && !!ev.full === previewFull
             && t.length < previewText.length && previewText.startsWith(t)) return;
         // VAZIO enquanto a sessão TRABALHA não apaga a bolha. Medido em 11/08/2026, 200ms de
         // amostragem numa sessão Claude: entre uma ferramenta e outra o extrator não acha prosa

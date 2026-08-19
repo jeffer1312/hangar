@@ -636,10 +636,10 @@ def test_kimi_previa_do_broker_ja_vem_sem_rascunho(monkeypatch):
 
 def test_costura_cresce_sem_rolar():
     from app.preview import _costurar
-    acum = _costurar("", "Primeira frase.")
-    assert acum == "Primeira frase."
+    acum, colou = _costurar("", "Primeira frase.")
+    assert (acum, colou) == ("Primeira frase.", True)
     # Nada rolou pra fora da tela: o quadro contem o texto inteiro -> substitui (nao duplica).
-    assert _costurar(acum, "Primeira frase. Segunda frase.") == "Primeira frase. Segunda frase."
+    assert _costurar(acum, "Primeira frase. Segunda frase.") == ("Primeira frase. Segunda frase.", True)
 
 
 def test_costura_cola_pela_sobreposicao_quando_o_topo_some():
@@ -650,14 +650,14 @@ def test_costura_cola_pela_sobreposicao_quando_o_topo_some():
     acum = _costurar("Primeira frase comprida pra valer. Segunda frase comprida pra valer.",
                      "Segunda frase comprida pra valer. Terceira frase, recem-chegada.")
     assert acum == ("Primeira frase comprida pra valer. Segunda frase comprida pra valer."
-                    " Terceira frase, recem-chegada.")
+                    " Terceira frase, recem-chegada.", True)
 
 
 def test_costura_quadro_vazio_mantem_o_acumulado():
     from app.preview import _costurar
     # Ferramenta rodando / spinner: o extrator nao acha prosa -> "". O bloco em voo CONTINUA —
     # zerar aqui apagaria o que ja foi costurado ate a prosa voltar.
-    assert _costurar("texto acumulado", "") == "texto acumulado"
+    assert _costurar("texto acumulado", "") == ("texto acumulado", True)
 
 
 def test_costura_sem_sobreposicao_recomeca():
@@ -665,14 +665,16 @@ def test_costura_sem_sobreposicao_recomeca():
     # Bloco NOVO (o part anterior commitou e outro comecou): sem overlap confiavel -> recomeca,
     # em vez de grudar uma resposta na outra.
     acum = _costurar("Resposta da primeira pergunta, completa.", "Assunto totalmente diferente agora.")
-    assert acum == "Assunto totalmente diferente agora."
+    # colou=False: o texto TROCOU inteiro — e o que mantem a flag full do broker honesta (o frame
+    # de recomeco NAO e "so cresce no fim", entao a bolha fica com o teto nesse frame).
+    assert acum == ("Assunto totalmente diferente agora.", False)
 
 
 def test_costura_overlap_curto_demais_e_coincidencia():
     from app.preview import _costurar
     # Sufixo/prefixo casam por acidente ("a") mas menos que _COSTURA_MIN: NAO cola — e bloco novo.
     acum = _costurar("Termina com a", "a resposta nova comeca aqui de verdade")
-    assert acum == "a resposta nova comeca aqui de verdade"
+    assert acum == ("a resposta nova comeca aqui de verdade", False)
 
 
 def test_kimi_previa_do_broker_costura_os_quadros(monkeypatch):
@@ -716,6 +718,75 @@ def test_kimi_previa_do_broker_costura_os_quadros(monkeypatch):
                              " Terceira frase, recem-chegada.")
     assert vistos[-1][1] is False    # texto do pane: plano, nao renderiza markdown
     assert vistos[-1][2] is True     # costurado = incremental -> a bolha fica sem o teto
+
+
+def test_kimi_broker_rejeita_continuacao_que_nao_cola(monkeypatch):
+    """O portao declarado do broker: janela cheia de SAIDA DE FERRAMENTA (nada do bloco em voo) —
+    a extracao de continuacao devolve texto, mas a costura nao cola e o ACUMULADO fica intacto.
+    Sem este teste o portao e so comentario (achado da review)."""
+    import asyncio as _aio
+    from app import preview as _prev
+
+    quadros = iter([
+        "● Bloco em voo, primeira frase comprida pra valer.\n",
+        # Ferramenta rodando: a janela agora e so saida de comando — nada cola com o acumulado.
+        "total 48\n-rw-r--r-- 1 user user 9131 ago 19 09:41 preview.py\n",
+    ])
+
+    monkeypatch.setattr(_prev.tmux, "capture_pane", lambda name, lines=200, cores=False: next(quadros, ""))
+    monkeypatch.setattr(_prev, "read_sidecar", lambda stem: None)
+
+    async def roda():
+        b = _prev.PreviewBroker("sessao-kimi-portao", "kimi", lambda: "s-kimi")
+        agen = b.subscribe()
+        try:
+            async def primeiro():
+                async for t, _md, _full in agen:
+                    if t:
+                        return t
+            primeiro_texto = await _aio.wait_for(primeiro(), 4)
+            # Espera o 2o quadro rodar (cadencia ociosa 0.75s) e confere o estado INTERNO:
+            # o acumulado nao pode ter virado a saida da ferramenta.
+            await _aio.sleep(1.2)
+            return primeiro_texto, b._kimi_acum
+        finally:
+            await agen.aclose()
+            _prev.PreviewBroker._brokers.pop("sessao-kimi-portao", None)
+
+    texto, acum = _aio.run(roda())
+    assert texto == "Bloco em voo, primeira frase comprida pra valer."
+    assert acum == texto                    # a saida da ferramenta NAO entrou
+    assert "preview.py" not in acum
+
+
+def test_kimi_broker_reset_limpa_texto_e_acumulado(monkeypatch):
+    """O /clear trocou de transcript: reset() zera texto e acumulado pra reconexao nao receber a
+    conversa APAGADA no primeiro yield (achado da review — com a supressao desarmada, era bolha
+    fantasma com full=True)."""
+    import asyncio as _aio
+    from app import preview as _prev
+
+    monkeypatch.setattr(_prev.tmux, "capture_pane",
+                        lambda name, lines=200, cores=False: "● Texto de antes do clear, em voo.\n")
+    monkeypatch.setattr(_prev, "read_sidecar", lambda stem: None)
+
+    async def roda():
+        b = _prev.PreviewBroker("sessao-kimi-reset", "kimi", lambda: "s-kimi")
+        agen = b.subscribe()
+        try:
+            async def primeiro():
+                async for t, _md, _full in agen:
+                    if t:
+                        return t
+            assert await _aio.wait_for(primeiro(), 4) == "Texto de antes do clear, em voo."
+            assert b._kimi_acum                              # acumulado de verdade, nao so slot
+            b.reset()
+            assert b.text == "" and b._kimi_acum == "" and b.full is False and b.md is False
+        finally:
+            await agen.aclose()
+            _prev.PreviewBroker._brokers.pop("sessao-kimi-reset", None)
+
+    _aio.run(roda())
 
 
 # Painel de Todo da TUI do Kimi, desenho medido nos quadros reais de 19/08/2026: header "Todo",
@@ -776,7 +847,9 @@ def test_kimi_continuacao_nao_aceita_saida_de_ferramenta():
             "-rw-r--r-- 1 jefferson jefferson  9131 ago 19 09:41 preview.py\n"
             "  ⠸ working... · Tip: x\n")
     cont = _extrair_continuacao_kimi(pane)
-    assert _costurar("Primeira frase comprida pra valer, ainda em voo.", cont) == cont
+    # Nao cola: a costura devolve o proprio quadro com colou=False — e o broker, nesse caso,
+    # mantem o acumulado (a decisao dele; testada fim a fim no teste do broker abaixo).
+    assert _costurar("Primeira frase comprida pra valer, ainda em voo.", cont) == (cont, False)
 
 
 
