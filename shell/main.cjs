@@ -66,7 +66,14 @@ function geometriaValida(j) {
   };
 }
 
-app.whenReady().then(async () => {
+// UMA instância, VÁRIAS janelas. Duas instâncias sobre o MESMO userData não funcionam: o
+// armazenamento do Chromium (localStorage, onde moram o token e a aparência) só abre num
+// processo. Medido em 18/08/2026, com duas janelas abertas sobre uma cópia do perfil real: a
+// segunda subiu com `Failed to delete the database: Database IO error` e caiu na tela de login,
+// sem papel de parede — parecia "o app não pegou as configs", e era o perfil trancado.
+// Com a trava, o segundo lançamento não vira processo: ele avisa esta instância, que abre mais
+// uma janela no mesmo perfil (mesmo token, mesma aparência, mesmas sessões).
+async function criarJanela() {
   const dir = app.getPath('userData');
   const cfg = ler(dir);
   // Precedência: variável de ambiente > escolha salva > padrão.
@@ -83,13 +90,23 @@ app.whenReady().then(async () => {
 
   const fundo = opcoesDeFundo();
   const geo = geometriaValida(cfg.janela) || { width: 1280, height: 800 };
+  // Janela nova em cima de janela aberta nasce EXATAMENTE sobre a anterior (a geometria salva é
+  // uma só) e some — parece que o clique não fez nada. Desloca em cascata por janela já aberta e
+  // reencaixa na área de trabalho, pela mesma régua do `geometriaValida`.
+  const jaAbertas = BrowserWindow.getAllWindows().length;
+  if (jaAbertas > 0) {
+    const desloc = geometriaValida({ ...geo, x: (geo.x ?? 0) + 32 * jaAbertas, y: (geo.y ?? 0) + 32 * jaAbertas });
+    if (desloc) { geo.x = desloc.x; geo.y = desloc.y; }
+  }
 
   // A marca que o front lê (frontend/src/lib/background.ts, isShell) SÓ é injetada quando a janela
   // vai mesmo ser transparente. Sem esta condição, numa plataforma opaca (Windows 10, GNOME sem
   // extensão) a tela de Aparência ofereceria "Desktop" e escolher isso zeraria o fundo de uma
   // janela sólida — o app nasceria sem fundo nenhum. Vai no user agent, e não na URL, porque
   // Login.svelte:111 apaga a query quando ela traz ?token= (pareamento).
-  if (fundo.transparente) app.userAgentFallback += ' hangar-shell';
+  // `+=` uma vez só: com várias janelas, appendar a cada abertura empilharia a marca no user
+  // agent ("… hangar-shell hangar-shell").
+  if (fundo.transparente && !app.userAgentFallback.includes(' hangar-shell')) app.userAgentFallback += ' hangar-shell';
 
   const win = new BrowserWindow({
     ...geo,
@@ -223,6 +240,16 @@ app.whenReady().then(async () => {
   if (await paginaResponde(url)) alvo = url;
   else if (url !== PADRAO && (await paginaResponde(PADRAO))) alvo = PADRAO;
   win.loadURL(alvo ? alvo : telaDeUrl(url));
-});
+}
+
+// A trava vem ANTES do whenReady: quem não a conseguiu não pode chegar a criar janela nenhuma —
+// é justamente a janela quebrada que este bloco existe pra evitar. O processo que perdeu a trava
+// sai na hora, e o `second-instance` dispara no processo que já está de pé.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { void criarJanela(); });
+  app.whenReady().then(() => criarJanela());
+}
 
 app.on('window-all-closed', () => app.quit());

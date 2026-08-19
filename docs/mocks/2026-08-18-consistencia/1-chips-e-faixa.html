@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Mock 1 — chip de estado e faixa de contas</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ── HOJE: as sete implementações do MESMO chip, com as medidas reais lidas do código ── */
+  .amostras { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+  .amostra { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .amostra .de { font-size: var(--text-3xs); color: var(--text-muted); font-family: var(--font-mono); }
+
+  /* 1. Sidebar.svelte:1795 */
+  .h-sidebar { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 9999px;
+               background: rgba(52,199,89,0.14); color: #34c759; }
+  /* 2. SessionCard.svelte:703 */
+  .h-card { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 9999px;
+            background: rgba(52,199,89,0.14); color: #34c759; }
+  /* 3. DesktopSessionContext.svelte:721 — fundo neutro, cor só no texto */
+  .h-ctx { font-size: var(--text-xs); font-weight: 650; padding: 2px 8px; border-radius: 9999px;
+           background: var(--surface-raised); color: #34c759; }
+  /* 4. BoardCard.svelte:585 — o único que usa os tokens --pill-* */
+  .h-board { font-size: 10.5px; font-weight: 600; padding: 1px 8px; border-radius: 9999px;
+             background: var(--pill-idle-bg); color: var(--pill-idle-fg); }
+  /* 5. NavBar.svelte:295 */
+  .h-nav { font-size: var(--text-xs); font-weight: 600; padding: 2px 9px; border-radius: 9999px;
+           background: var(--bg-elevated); color: #34c759; }
+  /* 6. Canvas.svelte:642 — sem pílula, e com rótulo abreviado próprio */
+  .h-canvas { font-size: 10.5px; font-weight: 600; color: var(--pill-idle-fg); }
+  /* 7. o ponto, em 9 arquivos */
+  .h-dot { width: 8px; height: 8px; border-radius: 50%; background: #34c759; display: inline-block; }
+
+  /* ── PROPOSTA: um chip, dois tamanhos, quatro estados, tudo em token ── */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    border-radius: var(--radius-full);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .chip.sm { font-size: var(--text-3xs); padding: 2px var(--space-2); }
+  .chip.md { font-size: var(--text-2xs); padding: 3px 10px; }
+  .chip.trabalhando { background: var(--pill-working-bg); color: var(--pill-working-fg); }
+  .chip.pronto      { background: var(--pill-idle-bg);    color: var(--pill-idle-fg); }
+  .chip.esperando   { background: var(--pill-input-bg);   color: var(--pill-input-fg); }
+  .chip.encerrado   { background: var(--pill-dead-bg);    color: var(--pill-dead-fg); }
+  /* O ponto é o MESMO chip sem rótulo — é o que hoje vive solto em 9 arquivos. */
+  .chip.pt { padding: 0; width: 8px; height: 8px; background: currentColor; }
+  .chip.pt.trabalhando { color: var(--pill-working-fg); }
+  .chip.pt.pronto { color: var(--pill-idle-fg); }
+  .chip.pt.esperando { color: var(--pill-input-fg); }
+
+  /* ── HOJE: a faixa de contas do rodapé (QuotaStrip.svelte) ── */
+  .faixa-hoje {
+    display: flex; align-items: center; gap: var(--space-3);
+    height: 28px; padding: 0 var(--space-3);
+    font-size: 11px; color: var(--text-muted);
+    overflow: hidden;
+  }
+  .faixa-hoje .conta {
+    display: flex; align-items: center; gap: 5px; white-space: nowrap; flex: none;
+    padding: 2px var(--space-2); border-radius: 999px; background: var(--surface-raised);
+  }
+  .faixa-hoje .nome { color: var(--text-secondary); font-weight: 600; }
+  .faixa-hoje .v { font-family: var(--font-mono); }
+  .faixa-hoje .v b { font-weight: 600; }
+  .faixa-hoje .alerta { color: var(--warning); }
+  .faixa-hoje .cheio { color: var(--error); }
+  .faixa-hoje .ok { color: var(--success); }
+  .faixa-hoje .reset { opacity: .75; }
+  .faixa-hoje .fim { margin-left: auto; color: var(--text-secondary); }
+
+  /* ── PROPOSTA: uma leitura por conta, uma escala de cor, resto no hover ── */
+  .faixa {
+    display: flex; align-items: stretch; gap: 0;
+    height: 30px; padding: 0 var(--space-3);
+    font-size: var(--text-2xs); color: var(--text-muted);
+  }
+  .faixa .conta {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: 0 var(--space-3);
+    position: relative; cursor: default;
+  }
+  /* Divisória fina no lugar de uma pílula por conta: cinco caixas viravam cinco objetos;
+     a régua vertical separa sem desenhar nada. */
+  .faixa .conta + .conta::before {
+    content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+    border-left: 1px solid var(--border-subtle);
+  }
+  .faixa .nome { color: var(--text-secondary); font-weight: var(--fw-medium); }
+  .faixa .leitura { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .faixa .jan { color: var(--text-muted); }
+  .faixa .pct { color: var(--text-secondary); font-weight: var(--fw-semibold); font-family: var(--font-mono); }
+  /* UMA escala: neutro por padrão, cor só quando é alerta de verdade (a régua nivelDePct
+     que o app já tem). Verde para "2% usado" era cor sem informação. */
+  .faixa .pct.alerta { color: var(--warning); }
+  .faixa .pct.cheio { color: var(--error); }
+  .faixa .medidor { width: 34px; height: 3px; border-radius: var(--radius-full); background: var(--fill-subtle); overflow: hidden; }
+  .faixa .medidor i { display: block; height: 100%; background: var(--text-muted); }
+  .faixa .medidor i.alerta { background: var(--warning); }
+  .faixa .medidor i.cheio { background: var(--error); }
+  .faixa .fim { margin-left: auto; align-self: center; color: var(--text-secondary); }
+
+  /* O detalhe que hoje mora na faixa (as outras janelas e os relógios de reset) vira
+     revelação no hover — o dado continua a um gesto, sem ocupar a linha o tempo todo. */
+  .faixa .detalhe {
+    position: absolute; top: calc(100% + 6px); left: 0;
+    display: none; min-width: 168px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--glass-panel); box-shadow: var(--elev-2);
+    font-size: var(--text-2xs); color: var(--text-secondary);
+  }
+  .faixa .conta:hover .detalhe { display: block; }
+  .faixa .detalhe .l { display: flex; justify-content: space-between; gap: var(--space-3); padding: 2px 0; }
+  .faixa .detalhe .l span:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .abrir { display: block; margin-top: var(--space-1); padding-top: var(--space-2); border-top: 1px solid var(--border-subtle); color: var(--accent); }
+
+  .fixado .detalhe { display: block; }   /* só pro print: mostra o hover sem cursor */
+  /* A faixa ocupa a largura toda: comparar as duas configurações lado a lado espremia as
+     cinco contas em 560px e cortava a última. Empilhado, cada uma é lida no tamanho real. */
+  .empilhado { display: flex; flex-direction: column; gap: var(--space-4); }
+  .empilhado .caixa { min-width: 0; }
+  /* espaço pro cartão de detalhe, que abre pra baixo */
+  .empilhado .caixa:first-child { margin-bottom: 84px; }   /* espaço pro cartão, que abre pra baixo */
+</style>
+</head>
+<body>
+<div class="pagina">
+
+<h1>1 · O chip de estado e a faixa de contas</h1>
+<p class="intro">
+  Duas peças que aparecem em toda tela e hoje não têm dono. O chip existe em sete desenhos
+  diferentes; a faixa põe quinze números na mesma linha com quatro cores. Nada aqui muda tema,
+  transparência ou paleta: muda quantos objetos a mesma informação ocupa.
+</p>
+
+<h2>Chip de estado · hoje</h2>
+<div class="palco">
+  <div class="amostras">
+    <div class="amostra"><span class="h-sidebar">pronto</span><span class="de">Sidebar · 10px / 2·7</span></div>
+    <div class="amostra"><span class="h-card">pronto</span><span class="de">SessionCard · 11px / 3·9</span></div>
+    <div class="amostra"><span class="h-ctx">pronto</span><span class="de">Contexto · 12px 650 / 2·8</span></div>
+    <div class="amostra"><span class="h-board">pronto</span><span class="de">BoardCard · 10,5px / 1·8</span></div>
+    <div class="amostra"><span class="h-nav">pronto</span><span class="de">NavBar · 12px / 2·9</span></div>
+    <div class="amostra"><span class="h-canvas">pronto</span><span class="de">Canvas · sem pílula</span></div>
+    <div class="amostra"><span class="h-dot"></span><span class="de">ponto · 9 arquivos</span></div>
+  </div>
+</div>
+<p class="nota">
+  Cinco tamanhos de fonte, quatro paddings e três pesos para a mesma palavra. Só o BoardCard usa os
+  tokens <b>--pill-*</b> que o <b>app.css</b> já tem; os outros reescrevem a paleta na mão, então
+  trocar a cor de "esperando você" hoje é editar seis arquivos. O Canvas ainda usa rótulo próprio
+  abreviado ("exec", "você"), fora do <b>rotuloEstado</b> que todos os outros compartilham.
+</p>
+
+<h2>Chip de estado · proposta</h2>
+<div class="par">
+  <div class="caixa">
+    <div class="rot"><span class="tag novo">um componente</span> dois tamanhos</div>
+    <div class="palco">
+      <div class="amostras" style="gap: var(--space-4)">
+        <div class="amostra">
+          <div style="display:flex; gap:6px; align-items:center">
+            <span class="chip sm trabalhando">em execução</span>
+            <span class="chip sm pronto">pronto</span>
+            <span class="chip sm esperando">esperando você</span>
+            <span class="chip sm encerrado">encerrado</span>
+          </div>
+          <span class="de">sm · lista, board, canvas, abas</span>
+        </div>
+        <div class="amostra">
+          <div style="display:flex; gap:6px; align-items:center">
+            <span class="chip md trabalhando">em execução</span>
+            <span class="chip md pronto">pronto</span>
+          </div>
+          <span class="de">md · cabeçalho de painel e navbar</span>
+        </div>
+        <div class="amostra">
+          <div style="display:flex; gap:6px; align-items:center">
+            <span class="chip pt trabalhando"></span>
+            <span class="chip pt pronto"></span>
+            <span class="chip pt esperando"></span>
+          </div>
+          <span class="de">ponto · o mesmo chip sem rótulo</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="caixa">
+    <div class="rot"><span class="tag novo">atravessa tua configuração</span> vidro baixo</div>
+    <div class="palco cfg-vidro-baixo">
+      <div class="amostras" style="gap: var(--space-4)">
+        <div class="amostra">
+          <div style="display:flex; gap:6px; align-items:center">
+            <span class="chip sm trabalhando">em execução</span>
+            <span class="chip sm pronto">pronto</span>
+            <span class="chip sm esperando">esperando você</span>
+          </div>
+          <span class="de">mesma peça, painel mais transparente</span>
+        </div>
+      </div>
+    </div>
+    <p class="nota">
+      O chip tem fundo próprio tintado (<b>--pill-*-bg</b>), então ele continua legível quando o
+      painel fica mais translúcido. É por isso que o desenho não precisa de piso de contraste: a
+      peça carrega o dela.
+    </p>
+  </div>
+</div>
+
+<h2>Faixa de contas · hoje</h2>
+<div class="palco raso">
+  <div class="faixa-hoje">
+    <span class="conta"><span class="nome">200-01</span>
+      <span class="v">5h <b class="ok">2%</b></span><span class="v reset">⏳4h28</span>
+      <span class="v">7d <b class="cheio">92%</b></span><span class="v reset">⏱1h18</span></span>
+    <span class="conta"><span class="nome">● default</span>
+      <span class="v">5h <b class="ok">0%</b></span><span class="v reset">⏳4h28</span>
+      <span class="v">7d <b>27%</b></span><span class="v reset">⏳sáb 18h</span></span>
+    <span class="conta"><span class="nome">jefferson</span>
+      <span class="v">5h <b class="ok">0%</b></span>
+      <span class="v">7d <b>36%</b></span><span class="v reset">⏳sex 18h</span></span>
+    <span class="conta"><span class="nome">Kimi</span>
+      <span class="v">5h <b class="ok">5%</b></span><span class="v reset">⏳2h18</span>
+      <span class="v">7d <b>4%</b></span><span class="v reset">⏳seg 14h</span></span>
+    <span class="conta"><span class="nome">DeepSeek · opencode d…</span>
+      <span class="v">5h <b class="ok">0%</b></span><span class="v reset">⏳4h35</span>
+      <span class="v">7d <b class="alerta">82%</b></span><span class="v reset">⏳dom 21h</span>
+      <span class="v">30d <b class="alerta">74%</b></span><span class="v reset">⏳sex 17h</span></span>
+    <span class="fim">Contas</span>
+  </div>
+</div>
+<p class="nota">
+  Vinte e três números e quatro cores numa faixa de 28px. O verde de "2% usado" e o verde de
+  "0% usado" gastam a mesma tinta que o vermelho de 92%, então a coisa que precisa de atenção não
+  tem como saltar. Cada conta é uma pílula, o que transforma cinco leituras em cinco objetos.
+</p>
+
+<h2>Faixa de contas · proposta</h2>
+<div class="empilhado">
+  <div class="caixa">
+    <div class="rot"><span class="tag novo">painéis soltos</span> a leitura que aperta, por conta</div>
+    <div class="palco raso com-cartao">
+      <div class="faixa">
+        <span class="conta fixado">
+          <span class="nome">200-01</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct cheio">92%</span>
+            <span class="medidor"><i class="cheio" style="width:92%"></i></span></span>
+          <span class="detalhe">
+            <span class="l"><span>5 horas</span><span>2% · reseta 4h28</span></span>
+            <span class="l"><span>7 dias</span><span>92% · reseta 1h18</span></span>
+            <span class="abrir">Abrir Contas</span>
+          </span>
+        </span>
+        <span class="conta"><span class="nome">default</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct">27%</span>
+            <span class="medidor"><i style="width:27%"></i></span></span></span>
+        <span class="conta"><span class="nome">jefferson</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct">36%</span>
+            <span class="medidor"><i style="width:36%"></i></span></span></span>
+        <span class="conta"><span class="nome">Kimi</span>
+          <span class="leitura"><span class="jan">5h</span><span class="pct">5%</span>
+            <span class="medidor"><i style="width:5%"></i></span></span></span>
+        <span class="conta"><span class="nome">DeepSeek</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct alerta">82%</span>
+            <span class="medidor"><i class="alerta" style="width:82%"></i></span></span></span>
+        <span class="fim">Contas</span>
+      </div>
+    </div>
+  </div>
+  <div class="caixa">
+    <div class="rot"><span class="tag novo">painéis colados</span> a mesma faixa, sem card</div>
+    <div class="palco raso cfg-colado" style="border-left:0; border-top:1px solid var(--border-subtle); border-radius:0">
+      <div class="faixa">
+        <span class="conta"><span class="nome">200-01</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct cheio">92%</span>
+            <span class="medidor"><i class="cheio" style="width:92%"></i></span></span></span>
+        <span class="conta"><span class="nome">default</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct">27%</span>
+            <span class="medidor"><i style="width:27%"></i></span></span></span>
+        <span class="conta"><span class="nome">jefferson</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct">36%</span>
+            <span class="medidor"><i style="width:36%"></i></span></span></span>
+        <span class="conta"><span class="nome">Kimi</span>
+          <span class="leitura"><span class="jan">5h</span><span class="pct">5%</span>
+            <span class="medidor"><i style="width:5%"></i></span></span></span>
+        <span class="conta"><span class="nome">DeepSeek</span>
+          <span class="leitura"><span class="jan">7d</span><span class="pct alerta">82%</span>
+            <span class="medidor"><i class="alerta" style="width:82%"></i></span></span></span>
+        <span class="fim">Contas</span>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="nota">
+  Cada conta mostra <b>a janela que está mais apertada</b> — é a resposta da pergunta que a faixa
+  existe pra responder. As outras janelas e os relógios de reset continuam ali, no hover (o cartão
+  aberto no primeiro exemplo), a um gesto de distância. Cor só acima do limiar, pela mesma régua
+  <b>nivelDePct</b> que o app já usa; abaixo dele o número é neutro e a barra faz o trabalho.
+  Vinte e três números viram cinco leituras, e a conta em risco é a única colorida da linha.
+</p>
+
+</div>
+</body>
+</html>

@@ -53,7 +53,7 @@
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
-  import { rotuloEstado, stateColors, countAwaiting, nextAwaiting, providerName, untrackedReason } from '../lib/format';
+  import { countAwaiting, nextAwaiting, providerName, untrackedReason } from '../lib/format';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';
@@ -1606,7 +1606,7 @@
 >
   <div class="sr-only" role="status">{stateAnnounce}</div>
   <div class="navbar-mount" bind:this={navEl}>
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} stateLabel={desktop ? rotuloEstado(currentState) : undefined} stateColor={stateColors[currentState]} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
   </div>
 
   <!-- LoopSheet FORA do .navbar-mount: no desktop largo o mount fica display:none (a info migra

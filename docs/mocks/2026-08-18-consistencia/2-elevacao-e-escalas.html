@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Mock 2 — elevação dos painéis e as escalas que faltam</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ── Painéis: as receitas de hoje, copiadas linha a linha ── */
+  .painel { width: 100%; padding: var(--space-3); background: var(--glass-panel); }
+  .painel .cab { font-size: var(--text-2xs); color: var(--text-muted); margin-bottom: var(--space-2); }
+  .painel .linha { padding: 6px var(--space-2); border-radius: var(--radius-md); font-size: var(--text-xs); color: var(--text-secondary); }
+  .painel .linha.sel { background: var(--bg-hover); color: var(--text-primary); }
+
+  /* Sidebar.svelte:1489 — card no CONTÊINER */
+  .h-sidebar { border: 1px solid var(--border-subtle); border-radius: var(--radius-xl);
+               box-shadow: 0 18px 44px rgba(0,0,0,0.34), inset 0 1px 1px var(--glass-specular); }
+  /* Sidebar.svelte:1738 — a faixa colorida na lateral da linha */
+  .h-sidebar .linha { border-left: 3px solid transparent; border-radius: var(--radius-md); }
+  .h-sidebar .linha.sel { border-left-color: var(--accent-dim); }
+  .h-sidebar .linha.att { border-left-color: var(--warning); }
+  /* DesktopSessionContext.svelte:420 — borda mais forte, sombra SEM o specular */
+  .h-ctx { border: 1px solid var(--border-default); border-radius: var(--radius-xl);
+           box-shadow: 0 18px 44px rgba(0,0,0,0.34); }
+  /* QuotaStrip.svelte:138 — mesma sombra do sidebar, borda do subtle */
+  .h-faixa { border: 1px solid var(--border-subtle); border-radius: var(--radius-xl);
+             box-shadow: 0 18px 44px rgba(0,0,0,0.34), inset 0 1px 1px var(--glass-specular); }
+
+  /* ── Proposta: uma receita, um token ── */
+  .p-solto { border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); box-shadow: var(--elev-3); }
+  .p-colado { border: 0; border-left: 1px solid var(--border-subtle); border-radius: 0; box-shadow: none; }
+  /* O estado da linha volta pro chip/ponto, que já é o vocabulário de estado do app;
+     a faixa lateral colorida some (o próprio PRODUCT.md a lista como anti-referência). */
+  .p-solto .linha { display: flex; align-items: center; gap: var(--space-2); }
+  .p-solto .linha .pt { width: 7px; height: 7px; border-radius: 50%; flex: none; background: transparent; }
+  .p-solto .linha.sel { background: var(--bg-hover); }
+  .p-solto .linha.sel .pt { background: var(--pill-working-fg); }
+  .p-solto .linha.att .pt { background: var(--pill-input-fg); }
+
+  .trio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); align-items: start; }
+  @media (max-width: 900px) { .trio { grid-template-columns: 1fr; } }
+  .trio .de { font-size: var(--text-3xs); color: var(--text-muted); font-family: var(--font-mono); margin-top: 6px; display: block; }
+
+  /* ── Escalas ── */
+  .escada { display: flex; flex-direction: column; gap: 2px; }
+  .degrau { display: flex; align-items: baseline; gap: var(--space-3); padding: 3px var(--space-2); border-radius: var(--radius-sm); }
+  .degrau:nth-child(odd) { background: var(--fill-subtle); }
+  .degrau .n { width: 84px; flex: none; font-family: var(--font-mono); font-size: var(--text-3xs); color: var(--text-muted); }
+  .degrau .u { width: 90px; flex: none; font-family: var(--font-mono); font-size: var(--text-3xs); color: var(--text-secondary); }
+  .degrau .ex { color: var(--text-primary); }
+
+  /* Amontoado do "hoje": os 24 tamanhos, na mesma linha, pra ver a nuvem */
+  .nuvem { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-3); }
+  .nuvem span { color: var(--text-secondary); font-family: var(--font-mono); }
+  .nuvem b { color: var(--text-muted); font-size: 9px; font-weight: 400; }
+
+  .sombras { display: flex; flex-wrap: wrap; gap: var(--space-4); }
+  .quadro { width: 132px; height: 74px; border-radius: var(--radius-md); background: var(--surface-card);
+            border: 1px solid var(--border-subtle); display: grid; place-items: center;
+            font-size: var(--text-3xs); color: var(--text-muted); font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div class="pagina">
+
+<h1>2 · Elevação dos painéis e as escalas que faltam</h1>
+<p class="intro">
+  A parte chata e a que mais rende. Hoje cada painel escreve a própria sombra, e os tamanhos de
+  fonte, pesos e raios são escolhidos linha a linha. Isto não é gosto: é a diferença entre uma tela
+  desenhada e uma tela que foi crescendo.
+</p>
+
+<h2>Os três painéis · hoje</h2>
+<div class="trio">
+  <div>
+    <div class="painel h-sidebar">
+      <div class="cab">Sidebar</div>
+      <div class="linha att">api-exemplo</div>
+      <div class="linha sel">hangar</div>
+      <div class="linha">jefferson</div>
+    </div>
+    <span class="de">borda subtle · sombra com specular · faixa lateral de 3px</span>
+  </div>
+  <div>
+    <div class="painel h-ctx">
+      <div class="cab">Contexto</div>
+      <div class="linha">medição indisponível</div>
+      <div class="linha">sessão independente</div>
+    </div>
+    <span class="de">borda default · sombra SEM specular</span>
+  </div>
+  <div>
+    <div class="painel h-faixa" style="padding: var(--space-2) var(--space-3)">
+      <div class="cab" style="margin:0">200-01 · default · jefferson</div>
+    </div>
+    <span class="de">borda subtle · sombra com specular</span>
+  </div>
+</div>
+<p class="nota">
+  Três painéis irmãos, três receitas. A sombra flutuante aparece <b>escrita à mão em quatro lugares</b>,
+  duas vezes com o brilho de borda e duas sem; a borda é <b>--border-subtle</b> em dois e
+  <b>--border-default</b> no outro. No repo inteiro são <b>73 declarações de sombra em 37 valores</b>,
+  das quais oito são "a sombra do card flutuante" com blur entre 20 e 80px. E a barra lateral em
+  dock flutuante mantém borda e sombra <b>mesmo quando você escolhe "Painéis: colados"</b>: nenhuma
+  regra alcança ela.
+</p>
+
+<h2>Os três painéis · proposta</h2>
+<div class="par">
+  <div class="caixa">
+    <div class="rot"><span class="tag novo">soltos</span> uma receita, o token --elev-3</div>
+    <div class="trio" style="grid-template-columns: 1fr 1fr">
+      <div class="painel p-solto">
+        <div class="cab">Sidebar</div>
+        <div class="linha att"><i class="pt"></i>api-exemplo</div>
+        <div class="linha sel"><i class="pt"></i>hangar</div>
+        <div class="linha"><i class="pt"></i>jefferson</div>
+      </div>
+      <div class="painel p-solto">
+        <div class="cab">Contexto</div>
+        <div class="linha">medição indisponível</div>
+        <div class="linha">sessão independente</div>
+      </div>
+    </div>
+  </div>
+  <div class="caixa">
+    <div class="rot"><span class="tag novo">colados</span> a mesma regra, sem card</div>
+    <div class="trio" style="grid-template-columns: 1fr 1fr">
+      <div class="painel p-solto p-colado">
+        <div class="cab">Sidebar</div>
+        <div class="linha att"><i class="pt"></i>api-exemplo</div>
+        <div class="linha sel"><i class="pt"></i>hangar</div>
+        <div class="linha"><i class="pt"></i>jefferson</div>
+      </div>
+      <div class="painel p-solto p-colado">
+        <div class="cab">Contexto</div>
+        <div class="linha">medição indisponível</div>
+        <div class="linha">sessão independente</div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="nota">
+  A opção Painéis continua mandando: "soltos" dá a todo painel a <b>mesma</b> borda, o mesmo raio e o
+  mesmo <b>--elev-3</b>; "colados" tira os três da mesma forma, inclusive da barra em dock, que hoje
+  escapa. E a faixa colorida de 3px na lateral da linha vira o ponto de estado — o vocabulário que
+  o resto do app já usa, e que o teu próprio PRODUCT.md pede ("no colored side-stripe borders").
+</p>
+
+<h2>Tamanho de fonte · hoje são 24 valores</h2>
+<div class="palco raso">
+  <div class="nuvem">
+    <span style="font-size:38px">38<b>×1</b></span><span style="font-size:32px">32<b>×1</b></span>
+    <span style="font-size:30px">30<b>×2</b></span><span style="font-size:28px">28<b>×1</b></span>
+    <span style="font-size:22px">22<b>×2</b></span><span style="font-size:20px">20<b>×1</b></span>
+    <span style="font-size:17px">17<b>×2</b></span><span style="font-size:16px">16<b>×24</b></span>
+    <span style="font-size:15px">15<b>×4</b></span><span style="font-size:14px">14<b>×9</b></span>
+    <span style="font-size:13px">13<b>×15</b></span><span style="font-size:12.5px">12,5<b>×5</b></span>
+    <span style="font-size:12px">12<b>×20</b></span><span style="font-size:11.5px">11,5<b>×12</b></span>
+    <span style="font-size:11px">11<b>×38</b></span><span style="font-size:10.5px">10,5<b>×6</b></span>
+    <span style="font-size:10px">10<b>×55</b></span><span style="font-size:9px">9<b>×8</b></span>
+    <span style="font-size:8.5px">8,5<b>×1</b></span><span style="font-size:8px">8<b>×3</b></span>
+    <span style="font-size:7.5px">7,5<b>×1</b></span><span style="font-size:6.5px">6,5<b>×1</b></span>
+    <span style="font-size:5.5px">5,5<b>×1</b></span>
+  </div>
+</div>
+<p class="nota">
+  214 tamanhos escritos na mão, contra 684 usos dos cinco tokens. Repare onde está a massa:
+  <b>10px (55×), 11px (38×), 10,5px (6×) e 9px (8×)</b> são o texto miúdo do app inteiro — selo,
+  faixa, meta, contador — e nenhum desses quatro tem token. É por isso que peças irmãs saem
+  desalinhadas: quem escreve a próxima escolhe 10 ou 11 no olho.
+</p>
+
+<h2>Tamanho de fonte · proposta: sete degraus</h2>
+<div class="palco raso">
+  <div class="escada">
+    <div class="degrau"><span class="n">--text-3xs</span><span class="u">10px</span><span class="ex" style="font-size:10px">selo, marca, contador</span></div>
+    <div class="degrau"><span class="n">--text-2xs</span><span class="u">11px</span><span class="ex" style="font-size:11px">faixa de contas, meta, número de linha</span></div>
+    <div class="degrau"><span class="n">--text-xs</span><span class="u">12px</span><span class="ex" style="font-size:12px">rótulo de seção, texto de apoio</span></div>
+    <div class="degrau"><span class="n">--text-sm</span><span class="u">14px</span><span class="ex" style="font-size:14px">corpo dos painéis, nome de sessão</span></div>
+    <div class="degrau"><span class="n">--text-base</span><span class="u">16px</span><span class="ex" style="font-size:16px">conversa</span></div>
+    <div class="degrau"><span class="n">--text-lg</span><span class="u">18px</span><span class="ex" style="font-size:18px">título de tela</span></div>
+    <div class="degrau"><span class="n">--text-xl</span><span class="u">20px</span><span class="ex" style="font-size:20px">título grande</span></div>
+  </div>
+</div>
+<p class="nota">
+  Dois tokens novos (<b>--text-2xs</b>, <b>--text-3xs</b>) absorvem 107 das 214 ocorrências soltas.
+  Os degraus acima de 20px que existem hoje (22, 28, 30, 32, 38) são cinco casos isolados de tela
+  cheia e vazia; ficam como estão, com comentário, em vez de virar token que ninguém reusa.
+</p>
+
+<h2>Peso, raio e sombra</h2>
+<div class="par">
+  <div class="caixa">
+    <div class="rot"><span class="tag hoje">hoje</span> 9 pesos, 18 raios, 37 sombras</div>
+    <div class="palco raso">
+      <div class="escada">
+        <div class="degrau"><span class="n">peso</span><span class="u">400·500·510·560</span><span class="ex" style="font-size:12px">580 · 600 · 620 · 650 · 700</span></div>
+        <div class="degrau"><span class="n">raio</span><span class="u">6·8·9·10·14</span><span class="ex" style="font-size:12px">22 · 999 · 50% · 4 formas de bolha</span></div>
+        <div class="degrau"><span class="n">sombra</span><span class="u">37 valores</span><span class="ex" style="font-size:12px">8 delas são "o card flutuante"</span></div>
+      </div>
+      <div class="sombras" style="margin-top: var(--space-3)">
+        <div class="quadro" style="box-shadow:0 24px 80px rgba(0,0,0,.48)">24·80·.48</div>
+        <div class="quadro" style="box-shadow:0 18px 50px rgba(0,0,0,.45)">18·50·.45</div>
+        <div class="quadro" style="box-shadow:0 12px 32px rgba(0,0,0,.45)">12·32·.45</div>
+        <div class="quadro" style="box-shadow:0 8px 28px rgba(0,0,0,.4)">8·28·.40</div>
+      </div>
+    </div>
+  </div>
+  <div class="caixa">
+    <div class="rot"><span class="tag novo">proposta</span> 4 pesos, +1 raio, 3 elevações</div>
+    <div class="palco raso">
+      <div class="escada">
+        <div class="degrau"><span class="n">--fw-normal</span><span class="u">400</span><span class="ex" style="font-size:12px;font-weight:400">corpo</span></div>
+        <div class="degrau"><span class="n">--fw-medium</span><span class="u">500</span><span class="ex" style="font-size:12px;font-weight:500">rótulo com ênfase</span></div>
+        <div class="degrau"><span class="n">--fw-semibold</span><span class="u">600</span><span class="ex" style="font-size:12px;font-weight:600">nome, chip, título</span></div>
+        <div class="degrau"><span class="n">--fw-bold</span><span class="u">700</span><span class="ex" style="font-size:12px;font-weight:700">RÓTULO DE SEÇÃO</span></div>
+        <div class="degrau"><span class="n">--radius-xs</span><span class="u">8px</span><span class="ex" style="font-size:12px">o degrau que já era usado 9× sem nome</span></div>
+      </div>
+      <div class="sombras" style="margin-top: var(--space-3)">
+        <div class="quadro" style="box-shadow:var(--elev-1)">--elev-1</div>
+        <div class="quadro" style="box-shadow:var(--elev-2)">--elev-2</div>
+        <div class="quadro" style="box-shadow:var(--elev-3)">--elev-3</div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="nota">
+  Os números ímpares do espaçamento (2, 6, 10, 5, 3, 7px — 395 declarações fora da grade) não viram
+  degrau novo na grade de 8pt: quase todos são padding de chip e de selo. Eles ganham tokens de
+  <b>componente</b> (o chip tem o padding do chip), e a grade continua limpa. Anel de foco vira
+  <b>--elev-foco</b>, hoje copiado 12 vezes.
+</p>
+
+</div>
+</body>
+</html>

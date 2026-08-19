@@ -17,7 +17,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
   import { initials } from '../../lib/format';
-  import { nivelDePct, VELHA_APOS_S } from '../../lib/cota';
+  import { nivelDePct, VELHA_APOS_S, motivoParado } from '../../lib/cota';
   import NovaCredencialSheet from './NovaCredencialSheet.svelte';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import { serverIdentidade, type Server } from '../../lib/auth';
@@ -428,8 +428,23 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   {:else}
     <div class="ct-cartao">
       {#each contas as conta (conta.id)}
+        <!-- Marcas de uso ("roda o Claude Code", "cota pelo painel") saem da linha do NOME e viram
+             texto na linha do subtítulo. Pílula fica só para o TIPO da credencial e para "em uso":
+             com quatro pílulas na mesma linha, o nome — que é o que distingue uma linha da outra —
+             sumia no meio do enfeite. Mesmas chaves de sempre, nenhum texto novo. -->
+        {@const marcas = [
+          ...(conta.usos.includes('claude_code') ? [m.contas_usa_claude_code()] : []),
+          ...(conta.cookie_definido ? [m.contas_cookie_definido()] : []),
+        ]}
+        <!-- O caminho em mono é o último item das duas metades da lista (pasta da conta / nome no
+             disco do motor), então ele é calculado uma vez em vez de repetir o <span> nos ramos. -->
+        {@const dir = conta.tipo === 'chave'
+          ? (conta.nome !== conta.nome_natural ? conta.nome_natural : '')
+          : (conta.path ?? '')}
         <div class="ct-linha" class:fora={conta.login?.estado === 'ok' && !conta.login.loggedIn}>
-          <ProvedorIcone tipo={conta.tipo} baseUrl={conta.base_url} iniciais={initials(conta.nome)} />
+          <span class="ct-ico">
+            <ProvedorIcone tipo={conta.tipo} baseUrl={conta.base_url} iniciais={initials(conta.nome)} />
+          </span>
           <span class="ct-txt">
             <span class="ct-nome-l">
               {#if renomeando === conta.id}
@@ -446,16 +461,19 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
                   disabled={salvandoApelido}>{m.comum_cancelar()}</button>
               {:else}
                 <span class="ct-nome">{conta.nome}</span>
+                <!-- Lápis e kebab em SVG traçado 2, como o resto do app (components/icons,
+                     DesktopSessionContext): glifo de texto (✎ / ⋯) no meio de uma UI de ícone
+                     desenhado muda de peso e de linha de base conforme a fonte do sistema. -->
                 <button type="button" class="ct-lapis" aria-label={m.contas_renomear({ nome: conta.nome })}
-                  onclick={() => { renomeando = conta.id; apelidoTexto = conta.apelido ?? ''; }}>✎</button>
+                  onclick={() => { renomeando = conta.id; apelidoTexto = conta.apelido ?? ''; }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                  </svg>
+                </button>
                 <span class="ct-tipo" class:chave={conta.tipo === 'chave'}>
                   {conta.tipo === 'chave' ? m.contas_tipo_chave() : m.contas_tipo_claude()}</span>
-                {#if conta.usos.includes('claude_code')}
-                  <span class="ct-tipo uso">{m.contas_usa_claude_code()}</span>
-                {/if}
-                {#if conta.cookie_definido}
-                  <span class="ct-tipo uso">{m.contas_cookie_definido()}</span>
-                {/if}
                 {#if conta.ativa}<span class="ct-emuso">{m.contas_em_uso()}</span>{/if}
               {/if}
             </span>
@@ -463,44 +481,68 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
               <!-- A chave NUNCA volta inteira do servidor (credenciais._mascarar): o que a tela
                    mostra é o rabicho, o bastante pra saber QUAL chave é sem expor a chave. -->
               <span class="ct-sub">{conta.base_url ?? ''}{conta.chave_mascarada ? ` · ${conta.chave_mascarada}` : ''}</span>
-              {#if conta.nome !== conta.nome_natural}<span class="ct-dir">{conta.nome_natural}</span>{/if}
-            {:else}
-              {#if conta.login?.estado === 'ok' && conta.login.loggedIn && conta.login.email}
-                <span class="ct-sub">{conta.login.email}</span>
-              {:else if conta.login?.estado === 'ok' && !conta.login.loggedIn}
-                <span class="ct-sub fraco">{m.contas_nao_conectada()}</span>
-              {/if}
-              <span class="ct-dir">{conta.path}</span>
+            {:else if conta.login?.estado === 'ok' && conta.login.loggedIn && conta.login.email}
+              <span class="ct-sub">{conta.login.email}</span>
+            {:else if conta.login?.estado === 'ok' && !conta.login.loggedIn}
+              <span class="ct-sub fraco">{m.contas_nao_conectada()}</span>
+            {/if}
+            <!-- Marcas e caminho dividem UMA linha (densidade, 18/08): eram duas, e nenhuma das
+                 duas é a identidade da conta — quem identifica é o nome e o e-mail acima. -->
+            {#if marcas.length || dir}
+              <span class="ct-sub-l">
+                {#if marcas.length}<span class="ct-marcas">{marcas.join(' · ')}</span>{/if}
+                {#if dir}<span class="ct-dir">{dir}</span>{/if}
+              </span>
             {/if}
           </span>
 
           <!-- Coluna do limite: a MESMA leitura da faixa do rodapé (uma fonte só). Credencial sem
-               número aparece dizendo por quê — some-la esconderia justo a que precisa de atenção. -->
+               número aparece dizendo por quê — some-la esconderia justo a que precisa de atenção.
+               O medidor é o MESMO dado do número, em forma de comprimento: a pergunta da tela é
+               "quanto sobrou nessa credencial?", e um dígito só se compara lendo, uma barra se
+               compara de relance entre as linhas. Por ser repetição do número, é aria-hidden. -->
           {#if conta.cota && conta.cota.estado === 'lida' && conta.cota.janelas.length}
             <span class="ct-cota" class:velha={!leituraFresca(conta)}>
               {#each conta.cota.janelas as j (j.rotulo)}
-                <span class="ct-jan"><span class="ct-jan-rot">{j.rotulo}</span>
-                  <b class={nivelDePct(j.pct)}>{Math.round(j.pct)}%</b></span>
+                <span class="ct-jan">
+                  <span class="ct-jan-rot">{j.rotulo}</span>
+                  <span class="ct-barra" aria-hidden="true">
+                    <i class={nivelDePct(j.pct)} style="width:{Math.min(100, Math.max(0, j.pct))}%"></i>
+                  </span>
+                  <b class={nivelDePct(j.pct)}>{Math.round(j.pct)}%</b>
+                </span>
               {/each}
               {#if !leituraFresca(conta)}
                 <span class="ct-idade">{m.cota_ultima_leitura({ n: formatarIntervalo(conta.cota.idade_s) })}</span>
               {/if}
             </span>
           {:else if conta.cota && (conta.cota.estado === 'expirada' || conta.cota.estado === 'sem_credencial')}
-            <span class="ct-semleitura">{m.cota_precisa_entrar()}</span>
+            <span class="ct-semleitura"
+              >{motivoParado(conta.cota.motivo) ? m.cota_conta_parada() : m.cota_precisa_entrar()}</span>
           {:else}
             <span class="ct-semleitura">{m.contas_sem_cota()}</span>
           {/if}
 
-          {#if conta.tipo === 'claude' && conta.login?.estado === 'ok' && !conta.login.loggedIn}
-            <button type="button" class="ct-acao primaria"
-              aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
-              disabled={!!loginDe || loginIniciando}
-              onclick={() => iniciarEntrar(conta)}>{m.contas_entrar()}</button>
-          {/if}
+          <!-- Um envelope só para as ações: o Entrar é condicional, e sem ele o kebab caía na
+               COLUNA do limite (a grade coloca por posição, não por classe). -->
+          <span class="ct-acoes">
+            {#if conta.tipo === 'claude' && conta.login?.estado === 'ok' && !conta.login.loggedIn}
+              <button type="button" class="ct-acao primaria"
+                aria-label={m.contas_entrar_titulo({ nome: conta.nome })}
+                disabled={!!loginDe || loginIniciando}
+                onclick={() => iniciarEntrar(conta)}>{m.contas_entrar()}</button>
+            {/if}
 
-          <button type="button" class="ct-kebab" aria-haspopup="true" aria-expanded={menuDe === conta.id}
-            aria-label={m.comum_fechar_menu_conta()} onclick={() => (menuDe = menuDe === conta.id ? null : conta.id)}>⋯</button>
+            <button type="button" class="ct-kebab" aria-haspopup="true" aria-expanded={menuDe === conta.id}
+              aria-label={m.comum_fechar_menu_conta()} onclick={() => (menuDe = menuDe === conta.id ? null : conta.id)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="5" r="1" />
+                <circle cx="12" cy="12" r="1" />
+                <circle cx="12" cy="19" r="1" />
+              </svg>
+            </button>
+          </span>
 
           {#if menuDe === conta.id && confirmando !== conta.id}
             <div class="ct-menu">
@@ -657,16 +699,34 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
 
   .ct-cartao { background: var(--surface-card); border: 1px solid var(--border-subtle);
                border-radius: var(--radius-md); overflow: hidden; }
-  .ct-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3);
-              flex-wrap: wrap; position: relative; }
+  /* A linha é uma GRADE de quatro colunas — ícone · texto · limite · ações — e não mais um flex
+     que embrulha. Em flex com `align-items: center`, uma linha com três janelas de cota ficava
+     mais alta que a de duas e o kebab boiava no meio dela; e as colunas do limite não caíam no
+     mesmo x entre linhas vizinhas, que é justo o que se quer comparar de relance. Com colunas
+     explícitas e `align-items: start`, tudo começa na mesma altura e o limite fica numa coluna
+     de verdade. Os blocos de largura cheia (menu, confirmação, cookie) usam `grid-column: 1/-1`,
+     que é o que `flex-basis: 100%` fazia antes. */
+  /* Densidade (18/08, pedido do usuário: "cada card de conta poderia diminuir"): a linha tinha
+     ~110px de altura — 12px de padding, avatar de 34, três linhas de texto empilhadas e a coluna
+     do limite gastando DUAS linhas por janela (número em cima, barra embaixo). Agora são ~64px,
+     sem tirar nenhuma informação da tela: o padding cai pra 8, o avatar pra 28, e-mail e caminho
+     dividem uma linha, e cada janela vira uma linha só (rótulo · barra · número). */
+  .ct-linha { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+              align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3);
+              position: relative; }
   .ct-linha + .ct-linha { border-top: 1px solid var(--border-subtle); }
+  .ct-linha:hover { background: var(--bg-hover); }
+  /* Realce de estado é tinta por cima da linha, não superfície nova — por isso --bg-hover cru
+     aqui, e não um --surface-*: o véu do papel de parede continua vindo do cartão. */
+  .ct-ico { display: grid; place-items: center; }
+  .ct-acoes { display: flex; align-items: center; gap: var(--space-2); }
 
-  .ct-av { flex-shrink: 0; width: 34px; height: 34px; border-radius: var(--radius-full);
+  .ct-av { flex-shrink: 0; width: 28px; height: 28px; border-radius: var(--radius-full);
            display: grid; place-items: center; font-size: var(--text-sm); font-weight: 600;
            background: var(--accent-dim); color: var(--accent); }
   .ct-linha.fora .ct-av { background: var(--bg-elevated); color: var(--text-muted); }
 
-  .ct-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .ct-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
   /* A linha do nome NÃO quebra: com um rótulo longo (o motor "DeepSeek · opencode direto (sem
      gateway)") o nome descia pra duas linhas e empurrava a linha inteira, e a etiqueta ao lado
      quebrava no meio de "chave de API". Quem cede é o NOME (elipse), nunca a etiqueta — o tipo da
@@ -679,18 +739,23 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   .ct-emuso { flex-shrink: 0; height: 18px; padding: 0 var(--space-2); border-radius: var(--radius-full);
               background: var(--accent-dim); color: var(--accent); font-size: 11px; line-height: 18px;
               letter-spacing: 0.02em; }
-  .ct-sub { color: var(--text-secondary); font-size: var(--text-xs); }
+  .ct-sub { flex-shrink: 0; color: var(--text-secondary); font-size: var(--text-xs); }
   .ct-sub.fraco { color: var(--text-muted); }
-  .ct-dir { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
-            word-break: break-all; }
+  /* O que a credencial serve ("roda o Claude Code", "cota pelo painel"): texto, não pílula. */
+  .ct-marcas { flex-shrink: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.4; }
+  .ct-sub-l { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+  /* O caminho cede primeiro (elipse) em vez de quebrar em várias linhas: `word-break: break-all`
+     num caminho longo devolvia justamente as duas linhas que esta densidade veio tirar. */
+  .ct-dir { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted);
+            min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Coluna do limite — o número/Nome é velho de propósito e tem que PARECER velho (régua
      "dado velho parece velho"; a faixa de cota da Task 9 vive aqui dentro). */
-  .ct-cota { flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; width: 190px; }
+  .ct-cota { display: flex; flex-direction: column; gap: 3px; width: 190px; }
   .ct-idade { font-size: 11px; color: var(--text-muted); opacity: 0.9; }
   .ct-cota.velha .ct-idade { opacity: 0.75; }
   .ct-cota.velha { opacity: 0.55; }
-  .ct-semleitura { flex-shrink: 0; width: 190px; font-size: 11px; color: var(--text-muted);
+  .ct-semleitura { width: 190px; font-size: var(--text-2xs); color: var(--text-muted);
                    line-height: 1.4; }
 
   .ct-acao { flex-shrink: 0; height: 30px; min-height: 0; padding: 0 var(--space-3);
@@ -699,17 +764,19 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
              font-family: inherit; cursor: pointer; }
   .ct-acao.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
   .ct-kebab { flex-shrink: 0; width: 28px; height: 28px; min-height: 0; min-width: 0;
+              display: grid; place-items: center;
               border-radius: var(--radius-full); border: 1px solid var(--border-subtle);
               background: var(--surface-raised); color: var(--text-muted); font-size: var(--text-xs);
               cursor: pointer; }
+  .ct-kebab:hover { color: var(--text-primary); border-color: var(--border-default); }
 
-  .ct-menu { flex-basis: 100%; display: flex; justify-content: flex-end; }
+  .ct-menu { grid-column: 1 / -1; display: flex; justify-content: flex-end; }
   .ct-menu-item { height: 30px; min-height: 0; padding: 0 var(--space-3); border-radius: var(--radius-sm);
                   border: 1px solid var(--border-subtle); background: var(--surface-raised);
                   color: var(--text-primary); font-size: var(--text-xs); font-family: inherit;
                   cursor: pointer; }
 
-  .ct-confirma { flex-basis: 100%; display: flex; align-items: center; gap: var(--space-2);
+  .ct-confirma { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-2);
                  flex-wrap: wrap; }
   .ct-confirma-txt { font-size: var(--text-xs); color: var(--text-secondary); line-height: 1.4; }
   .ct-confirma-txt strong { color: var(--text-primary); }
@@ -757,11 +824,35 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
               font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
   .ct-btn.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+  /* Teclado: quem chega no Tab tem de VER onde está. Sem isto o lápis e o kebab (fundo
+     transparente / sutil) só mostravam o anel padrão do navegador, que some no fundo escuro. */
+  .ct-lapis:focus-visible, .ct-kebab:focus-visible, .ct-acao:focus-visible,
+  .ct-menu-item:focus-visible, .ct-btn:focus-visible, .ct-mini:focus-visible,
+  .ct-confirma-btn:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  /* Desabilitado PARECE desabilitado — o Entrar fica inerte enquanto há outro login em curso, e
+     os botões do formulário do cookie enquanto ele salva. */
+  .ct-lapis:disabled, .ct-kebab:disabled, .ct-acao:disabled, .ct-menu-item:disabled,
+  .ct-btn:disabled, .ct-mini:disabled, .ct-confirma-btn:disabled {
+    opacity: .55; cursor: default;
+  }
+
   /* Tangível no celular: target de toque >= 44px quando o painel aperta (o mock é desktop 1440px,
-     onde 30px é confortável em mouse). O resto do layout quebra para a coluna do limite embaixo. */
+     onde 30px é confortável em mouse). O limite desce para uma faixa de largura cheia embaixo do
+     texto — a grade perde a coluna dele e as ações continuam à direita da primeira linha. */
   @container (max-width: 620px) {
-    .ct-cota, .ct-semleitura { width: auto; flex-basis: 100%; }
+    .ct-linha { grid-template-columns: auto minmax(0, 1fr) auto; }
+    .ct-ico   { grid-column: 1; grid-row: 1; }
+    .ct-txt   { grid-column: 2; grid-row: 1; }
+    .ct-acoes { grid-column: 3; grid-row: 1; }
+    .ct-cota, .ct-semleitura { grid-column: 1 / -1; grid-row: 2; width: auto; }
     .ct-acao, .ct-kebab, .ct-menu-item, .ct-confirma-btn { height: 44px; min-height: 44px; }
+    /* O lápis também: o `min-height: 0` lá em cima é o que dá a densidade no desktop (mouse),
+       e sem esta linha ele descia a 18px no celular — abaixo do alvo tangível, justo num botão
+       que fica colado no nome. A linha do nome volta a 44px aqui, e é o certo: quem lê no
+       celular precisa acertar o dedo, não caber mais uma conta na tela. */
+    .ct-lapis { min-height: 44px; min-width: 44px; }
     .ct-kebab { width: 44px; }
     .ct-btn { height: 44px; }
   }
@@ -772,8 +863,14 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
      unificação veio matar. */
   .ct-av.chave { background: var(--warning-dim, rgba(232,145,45,.16)); color: var(--warning); }
   .ct-lapis {
+    /* Sobrescreve o alvo de toque global de 44px (app.css): sem isto o BOTÃO define a altura da
+       linha do nome — 44px de linha para um lápis de 14px, e a linha da conta inteira herdava
+       isso (medido: linha de 98px, sendo 44 só a do nome). Mesmo remédio do .ct-kebab e da
+       árvore de arquivos. O container query estreito devolve os 44px de alvo (regra lá embaixo). */
+    min-height: 0; min-width: 0;
+    flex-shrink: 0; display: grid; place-items: center;
     background: transparent; border: none; padding: 0 2px; cursor: pointer;
-    color: var(--text-muted); font-size: 11px; line-height: 1; opacity: .75;
+    color: var(--text-muted); line-height: 1; opacity: .75;
   }
   .ct-lapis:hover { opacity: 1; color: var(--text-secondary); }
   .ct-tipo {
@@ -782,7 +879,6 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     background: var(--accent-dim); color: var(--accent);
   }
   .ct-tipo.chave { background: rgba(232,145,45,.16); color: var(--warning); }
-  .ct-tipo.uso { background: var(--surface-raised); color: var(--text-muted); }
   .ct-campo-nome { max-width: 22ch; }
   .ct-mini {
     background: var(--surface-raised); border: 1px solid var(--border-subtle);
@@ -790,12 +886,26 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     font: inherit; font-size: 11px; cursor: pointer;
   }
   /* Coluna do limite: as janelas do provedor, empilhadas. Números tabulares pra coluna não dançar
-     entre as linhas — é uma tabela, mesmo sem ser <table>. */
-  .ct-jan { display: flex; gap: 5px; justify-content: flex-end; font-variant-numeric: tabular-nums; }
+     entre as linhas — é uma tabela, mesmo sem ser <table>. Cada janela é rótulo+número numa linha
+     e o medidor embaixo, ocupando a coluna inteira: assim as barras de linhas vizinhas começam e
+     terminam no mesmo x e dá pra comparar duas credenciais sem ler dígito. */
+    /* Uma linha por janela: rótulo à esquerda, barra ocupando o vão, número à direita — a barra
+     no meio é o que deixa as leituras comparáveis de relance entre as contas. */
+  .ct-jan { display: flex; align-items: center; gap: var(--space-2);
+            font-variant-numeric: tabular-nums; }
   .ct-jan-rot { color: var(--text-muted); font-size: 10px; }
-  .ct-jan b { font-weight: 600; color: var(--text-secondary); }
+  .ct-jan b { min-width: 4ch; text-align: right; font-weight: var(--fw-semibold); color: var(--text-secondary); }
   .ct-jan b.alerta { color: var(--warning); }
   .ct-jan b.cheio { color: var(--error); }
+  /* Trilho em --surface-raised (superfície dentro de painel, nunca --bg-elevated cru: com papel
+     de parede ligado o cru vira retângulo chapado sobre a foto). A cor do preenchimento é a MESMA
+     que nivelDePct dá ao número — se um dia divergirem, a barra estaria contando outra história. */
+  .ct-barra { flex: 1; min-width: 32px; height: 3px; border-radius: var(--radius-full);
+              background: var(--surface-raised); overflow: hidden; }
+  .ct-barra i { display: block; height: 100%; border-radius: var(--radius-full);
+                background: var(--accent); }
+  .ct-barra i.alerta { background: var(--warning); }
+  .ct-barra i.cheio { background: var(--error); }
   .ct-escolha-txt { color: var(--text-secondary); font-size: 12px; align-self: center; }
   /* Formulário da chave: superfície própria (é área de entrada), por isso --surface-inset e não
      --bg-base cru — com papel de parede ligado, o cru vira retângulo chapado sobre a foto. */
@@ -814,7 +924,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   /* Formulário do cookie: mora DENTRO da linha da credencial (largura cheia, abaixo dela) porque
      é configuração daquela credencial, não uma tela nova. Mesma superfície do formulário da chave. */
   .ct-cookie {
-    flex-basis: 100%; margin-top: var(--space-2); padding: var(--space-3);
+    grid-column: 1 / -1; margin-top: var(--space-2); padding: var(--space-3);
     border: 1px solid var(--border-subtle); border-radius: 10px;
     background: var(--surface-inset);
   }

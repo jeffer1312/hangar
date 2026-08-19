@@ -26,6 +26,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -186,6 +188,62 @@ def esta_em_uso(dir_conta: Path) -> bool:
 # Toda fala com o tmux passa por estas três, e é o que os testes trocam por dublê — mesmo contrato
 # das `_shell_*` do `login_conta`, que resolve o problema irmão (abrir uma janela escondida pra
 # rodar um comando do `claude` no config dir de uma conta).
+
+
+# Teto do subcomando barato. A medição deu poucos segundos; 20s é folga pra máquina carregada, e
+# curto o bastante pra não segurar a leitura de cota que o chama (ela roda em lote).
+_TIMEOUT_CLI_S = 20.0
+
+
+def _bin_claude() -> str | None:
+    """Caminho do BINÁRIO do claude, ou None.
+
+    Nunca via shell: o `claude` do usuário é uma FUNÇÃO de shell (o wrapper que abre tmux), e cair
+    nela aqui criaria uma sessão de tmux a cada chamada. `subprocess` com lista de argumentos não
+    enxerga função de shell.
+    """
+    achado = shutil.which("claude")
+    if achado:
+        return achado
+    # O serviço do systemd não herda o PATH do shell interativo (mesmo motivo do hangar.desktop).
+    padrao = Path.home() / ".local" / "bin" / "claude"
+    return str(padrao) if padrao.exists() else None
+
+
+def renovar_por_cli(dir_conta: Path) -> bool:
+    """Renovação BARATA: um subcomando local do CLI, sem tmux e sem gastar cota.
+
+    MEDIDO em 18/08/2026, e é a diferença pro que o docstring do módulo registra sobre o
+    `claude auth status --json` (que NÃO renova): `claude mcp list` autentica e regrava o
+    `.credentials.json` com o par novo. `claude --version` não serve — nem tenta autenticar.
+
+    Vale como atalho pro caminho caro (`renovar`, que abre sessão em tmux e leva ~20s): quando esta
+    devolve False, aquele continua sendo o plano.
+
+    NÃO checa `esta_em_uso` — quem chama decide, porque a resposta muda o que a tela diz. A regra
+    de segurança (não renovar por baixo de sessão viva; o refresh ROTACIONA) continua sendo
+    obrigação do chamador, igual nos dois caminhos.
+    """
+    binario = _bin_claude()
+    if binario is None:
+        _log.warning("renovação barata de %s: binário do claude não encontrado", dir_conta.name)
+        return False
+    antes = _assinatura(dir_conta)
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(dir_conta)}
+    try:
+        r = subprocess.run([binario, "mcp", "list"], env=env, timeout=_TIMEOUT_CLI_S,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        _log.warning("renovação barata de %s falhou: %r", dir_conta.name, e)
+        return False
+    if _renovou(antes, _assinatura(dir_conta)):
+        return True
+    # Rodou e não renovou: sem este log a conta só some da faixa com um motivo genérico e não sobra
+    # pista nenhuma de por quê. stderr cortado — é diagnóstico, não despejo.
+    erro = (r.stderr or b"").decode("utf-8", "replace").strip().replace("\n", " ")[:200]
+    _log.info("renovação barata de %s não renovou (saída %s)%s",
+              dir_conta.name, r.returncode, f": {erro}" if erro else "")
+    return False
 
 
 def _criar_janela(nome: str, cwd: str, dir_conta: str) -> str | None:

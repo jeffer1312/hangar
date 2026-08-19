@@ -1758,6 +1758,7 @@
   "cota_ultima_leitura": "última leitura há {n}",
   "cota_idade": "há {n}",
   "cota_precisa_entrar": "— precisa entrar",
+  "cota_conta_parada": "— abra uma sessão nela",
   "cota_sem_cota": "sem cota",
   "contas_tipo_claude": "Claude · assinatura",
   "contas_tipo_chave": "chave de API",

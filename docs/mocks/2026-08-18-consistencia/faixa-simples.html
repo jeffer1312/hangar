@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>A faixa de contas — hoje e proposta</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .pagina { max-width: 1240px; padding-top: var(--space-6); }
+  .bloco { margin-bottom: 56px; }
+  .titulo { font-size: var(--text-sm); color: var(--text-secondary); margin: 0 0 var(--space-3); font-weight: var(--fw-semibold); }
+  .frase { font-size: var(--text-xs); color: var(--text-muted); margin: var(--space-3) 0 0; }
+
+  /* ── HOJE (QuotaStrip.svelte, medidas reais) ── */
+  .hoje { display: flex; align-items: center; gap: var(--space-3); height: 28px; padding: 0 var(--space-3);
+          font-size: 11px; color: var(--text-muted); }
+  .hoje .conta { display: flex; align-items: center; gap: 5px; white-space: nowrap; flex: none;
+                 padding: 2px var(--space-2); border-radius: 999px; background: var(--surface-raised); }
+  .hoje .nome { color: var(--text-secondary); font-weight: 600; }
+  .hoje .v { font-family: var(--font-mono); }
+  .hoje .v b { font-weight: 600; }
+  .hoje .ok { color: var(--success); }
+  .hoje .alerta { color: var(--warning); }
+  .hoje .cheio { color: var(--error); }
+  .hoje .reset { opacity: .75; }
+  .hoje .fim { margin-left: auto; color: var(--text-secondary); }
+
+  /* ── PROPOSTA ── */
+  .nova { display: flex; align-items: stretch; height: 30px; padding: 0 var(--space-3);
+          font-size: var(--text-2xs); color: var(--text-muted); }
+  .nova .conta { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3); position: relative; }
+  .nova .conta + .conta::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+                                  border-left: 1px solid var(--border-subtle); }
+  .nova .nome { color: var(--text-secondary); font-weight: var(--fw-medium); }
+  .nova .jan { color: var(--text-muted); }
+  .nova .pct { color: var(--text-secondary); font-weight: var(--fw-semibold);
+               font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .nova .pct.alerta { color: var(--warning); }
+  .nova .pct.cheio { color: var(--error); }
+  .nova .medidor { width: 34px; height: 3px; border-radius: var(--radius-full);
+                   background: var(--fill-subtle); overflow: hidden; }
+  .nova .medidor i { display: block; height: 100%; background: var(--text-muted); }
+  .nova .medidor i.alerta { background: var(--warning); }
+  .nova .medidor i.cheio { background: var(--error); }
+  .nova .fim { margin-left: auto; align-self: center; color: var(--text-secondary); }
+
+  /* o detalhe: só ao passar o mouse numa conta */
+  .cartao { margin: var(--space-3) 0 0 var(--space-4); width: 210px;
+            padding: var(--space-2) var(--space-3);
+            border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+            background: var(--glass-panel); box-shadow: var(--elev-2);
+            font-size: var(--text-2xs); color: var(--text-secondary); }
+  .cartao .l { display: flex; justify-content: space-between; gap: var(--space-3); padding: 2px 0; }
+  .cartao .l span:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .cartao .ab { display: block; margin-top: var(--space-1); padding-top: var(--space-2);
+                border-top: 1px solid var(--border-subtle); color: var(--accent); }
+  .seta { font-size: var(--text-2xs); color: var(--text-muted); margin: var(--space-2) 0 0 var(--space-4); }
+</style>
+</head>
+<body>
+<div class="pagina">
+
+<div class="bloco">
+  <p class="titulo">Hoje</p>
+  <div class="palco raso">
+    <div class="hoje">
+      <span class="conta"><span class="nome">200-01</span>
+        <span class="v">5h <b class="ok">2%</b></span><span class="v reset">⏳4h28</span>
+        <span class="v">7d <b class="cheio">92%</b></span><span class="v reset">⏱1h18</span></span>
+      <span class="conta"><span class="nome">● default</span>
+        <span class="v">5h <b class="ok">0%</b></span><span class="v reset">⏳4h28</span>
+        <span class="v">7d <b>27%</b></span><span class="v reset">⏳sáb 18h</span></span>
+      <span class="conta"><span class="nome">jefferson</span>
+        <span class="v">5h <b class="ok">0%</b></span>
+        <span class="v">7d <b>36%</b></span><span class="v reset">⏳sex 18h</span></span>
+      <span class="conta"><span class="nome">Kimi</span>
+        <span class="v">5h <b class="ok">5%</b></span><span class="v reset">⏳2h18</span>
+        <span class="v">7d <b>4%</b></span><span class="v reset">⏳seg 14h</span></span>
+      <span class="conta"><span class="nome">DeepSeek · opencode d…</span>
+        <span class="v">5h <b class="ok">0%</b></span><span class="v reset">⏳4h35</span>
+        <span class="v">7d <b class="alerta">82%</b></span><span class="v reset">⏳dom 21h</span>
+        <span class="v">30d <b class="alerta">74%</b></span><span class="v reset">⏳sex 17h</span></span>
+      <span class="fim">Contas</span>
+    </div>
+  </div>
+  <p class="frase">23 números, 4 cores, 5 caixinhas.</p>
+</div>
+
+<div class="bloco">
+  <p class="titulo">Proposta</p>
+  <div class="palco raso">
+    <div class="nova">
+      <span class="conta"><span class="nome">200-01</span>
+        <span class="jan">7d</span><span class="pct cheio">92%</span>
+        <span class="medidor"><i class="cheio" style="width:92%"></i></span></span>
+      <span class="conta"><span class="nome">default</span>
+        <span class="jan">7d</span><span class="pct">27%</span>
+        <span class="medidor"><i style="width:27%"></i></span></span>
+      <span class="conta"><span class="nome">jefferson</span>
+        <span class="jan">7d</span><span class="pct">36%</span>
+        <span class="medidor"><i style="width:36%"></i></span></span>
+      <span class="conta"><span class="nome">Kimi</span>
+        <span class="jan">5h</span><span class="pct">5%</span>
+        <span class="medidor"><i style="width:5%"></i></span></span>
+      <span class="conta"><span class="nome">DeepSeek</span>
+        <span class="jan">7d</span><span class="pct alerta">82%</span>
+        <span class="medidor"><i class="alerta" style="width:82%"></i></span></span>
+      <span class="fim">Contas</span>
+    </div>
+  </div>
+  <p class="frase">5 leituras. Cor só onde está apertado. Cada conta mostra a janela que está mais cheia.</p>
+</div>
+
+<div class="bloco">
+  <p class="titulo">O resto continua ali, ao passar o mouse numa conta</p>
+  <p class="seta">passando o mouse em <b style="color:var(--text-secondary)">200-01</b> ↓</p>
+  <div class="cartao">
+    <div class="l"><span>5 horas</span><span>2% · reseta 4h28</span></div>
+    <div class="l"><span>7 dias</span><span>92% · reseta 1h18</span></div>
+    <span class="ab">Abrir Contas</span>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

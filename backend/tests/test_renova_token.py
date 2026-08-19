@@ -12,6 +12,7 @@ import json
 import time
 from pathlib import Path
 
+import subprocess
 import pytest
 
 from app import contas, renova_token
@@ -320,3 +321,66 @@ def test_rodada_nao_levanta_quando_o_catalogo_explode(monkeypatch):
 
     monkeypatch.setattr(renova_token, "list_config_dirs", explode)
     assert renova_token.rodada() == {"renovadas": [], "puladas": [], "falhas": []}
+
+
+# --------------------------------------------------------- renovação barata (subcomando do CLI)
+
+
+def _cred_rt(dir_conta: Path, *, expira_em: float) -> Path:
+    dir_conta.mkdir(parents=True, exist_ok=True)
+    (dir_conta / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "sk-ant-oat01-x",
+        "refreshToken": "rt",
+        "expiresAt": int((time.time() + expira_em) * 1000),
+    }}), encoding="utf-8")
+    return dir_conta
+
+
+def test_renovar_por_cli_so_diz_que_renovou_quando_o_VENCIMENTO_anda(tmp_path, monkeypatch):
+    """mtime é o portão barato; quem decide é o `expiresAt`.
+
+    O CLI reescreve o arquivo em outras ocasiões (gravar uma preferência, por exemplo). Se "o
+    arquivo mudou" bastasse, a faixa mostraria "renovou" para uma conta que continua vencida — o
+    mesmo motivo que `_renovou` existe no caminho caro.
+    """
+    dir_conta = _cred_rt(tmp_path / "c", expira_em=-10)
+    monkeypatch.setattr(renova_token, "_bin_claude", lambda: "/bin/true")
+
+    def _roda_e_renova(cmd, **kw):
+        _cred_rt(dir_conta, expira_em=8 * 3600)
+        return subprocess.CompletedProcess(cmd, 0, stderr=b"")
+
+    monkeypatch.setattr(renova_token.subprocess, "run", _roda_e_renova)
+    assert renova_token.renovar_por_cli(dir_conta) is True
+
+    # Agora o mesmo arquivo é reescrito SEM adiantar o vencimento (o CLI grava outra coisa nele):
+    # o mtime muda, o `expiresAt` não — e isso NÃO é renovação.
+    def _roda_e_reescreve_igual(cmd, **kw):
+        cred = dir_conta / ".credentials.json"
+        o = json.loads(cred.read_text(encoding="utf-8"))
+        o["outra_coisa"] = 1
+        cred.write_text(json.dumps(o), encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stderr=b"")
+
+    monkeypatch.setattr(renova_token.subprocess, "run", _roda_e_reescreve_igual)
+    assert renova_token.renovar_por_cli(dir_conta) is False
+
+
+def test_renovar_por_cli_sem_binario_nao_explode(tmp_path, monkeypatch):
+    """Backend sem o `claude` no PATH (serviço do systemd) devolve False, não exceção."""
+    dir_conta = _cred_rt(tmp_path / "c", expira_em=-10)
+    monkeypatch.setattr(renova_token, "_bin_claude", lambda: None)
+    assert renova_token.renovar_por_cli(dir_conta) is False
+
+
+def test_renovar_por_cli_engole_falha_do_processo(tmp_path, monkeypatch):
+    """Timeout/binário quebrado vira False — uma conta que não renova não pode derrubar a leitura
+    das outras."""
+    dir_conta = _cred_rt(tmp_path / "c", expira_em=-10)
+    monkeypatch.setattr(renova_token, "_bin_claude", lambda: "/bin/true")
+
+    def _estoura(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, 20)
+
+    monkeypatch.setattr(renova_token.subprocess, "run", _estoura)
+    assert renova_token.renovar_por_cli(dir_conta) is False

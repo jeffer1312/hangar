@@ -1,0 +1,148 @@
+/* Tokens copiados de frontend/src/app.css (tema escuro) — o mock só vale como régua se o material
+   for o real. Nada aqui inventa cor: o trabalho desta rodada é ESTRUTURA (escala, ritmo,
+   agrupamento), e cor/opacidade continuam sendo escolha do usuário na tela de Aparência. */
+:root {
+  --bg-base: #100e11;
+  --bg-surface: #1a171a;
+  --bg-elevated: #221d22;
+  --bg-hover: #2a242a;
+
+  --border-subtle: rgba(255, 248, 244, 0.07);
+  --border-default: rgba(255, 248, 244, 0.12);
+  --border-strong: rgba(255, 248, 244, 0.22);
+  --fill-subtle: rgba(255, 248, 244, 0.055);
+
+  --text-primary: #d2cbcd;
+  --text-secondary: #a0989b;
+  --text-muted: #8d8489;
+
+  --accent: #7c87e8;
+  --accent-dim: rgba(124, 135, 232, 0.18);
+
+  --success: #34c759;
+  --error: #ff453a;
+  --warning: #ff9f0a;
+
+  --pill-working-bg: rgba(124, 135, 232, 0.16);
+  --pill-working-fg: #aab2f3;
+  --pill-idle-bg: rgba(52, 199, 89, 0.12);
+  --pill-idle-fg: #34c759;
+  --pill-dead-bg: rgba(255, 69, 58, 0.12);
+  --pill-dead-fg: #ff453a;
+  --pill-input-bg: rgba(255, 159, 10, 0.12);
+  --pill-input-fg: #ff9f0a;
+
+  --glass-panel: rgb(26 24 29 / 0.86);
+  --glass-specular: rgba(255, 255, 255, 0.30);
+  --surface-raised: var(--bg-elevated);
+  --surface-inset: var(--bg-base);
+  --surface-card: var(--bg-surface);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+}
+
+/* ── PROPOSTA: os tokens que faltam ──────────────────────────────────────────
+   Nada disto é cor. São os degraus que hoje existem só como número solto no meio
+   dos .svelte: 214 font-size literais em 24 valores, 280 font-weight sem token
+   nenhum, 37 sombras distintas, e um raio de 8px que o próprio app.css já
+   documenta como "meio termo" sem lhe dar nome. */
+:root {
+  /* Micro-tipografia: os quatro degraus abaixo de --text-xs que hoje são 10px (55×),
+     11px (38×), 10.5px (6×) e 9px (8×) escritos na mão. Dois degraus resolvem os quatro. */
+  --text-2xs: 0.6875rem;  /* 11px — rótulo de faixa, meta, número de linha */
+  --text-3xs: 0.625rem;   /* 10px — selo, marca, contador */
+
+  /* Pesos: hoje são 9 valores (600 ×196, 500 ×41, 700 ×23, 650 ×14, 620, 580, 560, 510, 400). */
+  --fw-normal: 400;
+  --fw-medium: 500;   /* rótulo, texto de apoio com ênfase */
+  --fw-semibold: 600; /* nome, título de seção, chip */
+  --fw-bold: 700;     /* só rótulo de seção em caixa alta */
+
+  /* Raio que falta e é usado 9 vezes na mão. */
+  --radius-xs: 8px;
+
+  /* Elevação: hoje 73 declarações de box-shadow em 37 valores, com OITO sombras de
+     "flutuação" quase iguais (blur 20→80px, alfa .2→.5). Três degraus cobrem tudo. */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.18);                                   /* apoiado */
+  --elev-2: 0 8px 28px rgba(0, 0, 0, 0.40);                                  /* menu, popover */
+  --elev-3: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 1px var(--glass-specular); /* painel solto */
+  --elev-foco: 0 0 0 2px var(--accent-dim);                                  /* anel de foco (12 cópias hoje) */
+}
+
+/* ── Cenário do mock ─────────────────────────────────────────────────────── */
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  background:
+    radial-gradient(1200px 700px at 18% 22%, #2a3550 0%, transparent 60%),
+    radial-gradient(900px 600px at 76% 68%, #4a2f3a 0%, transparent 55%),
+    repeating-linear-gradient(52deg, rgba(255, 255, 255, 0.045) 0 2px, transparent 2px 9px),
+    #14121a;
+}
+
+.pagina { max-width: 1120px; margin: 0 auto; padding: var(--space-6) var(--space-5) 64px; }
+
+h1 { font-size: var(--text-xl); font-weight: var(--fw-semibold); margin: 0 0 var(--space-2); }
+.intro { color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.5; margin: 0 0 var(--space-6); max-width: 72ch; }
+
+h2 {
+  font-size: var(--text-3xs); font-weight: var(--fw-bold); letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-muted);
+  margin: var(--space-6) 0 var(--space-3);
+}
+
+.nota { color: var(--text-muted); font-size: var(--text-2xs); line-height: 1.5; margin: var(--space-2) 0 0; max-width: 78ch; }
+.nota b { color: var(--text-secondary); font-weight: var(--fw-semibold); }
+
+/* Par antes/depois. O rótulo é do lado de fora pra não virar chrome dentro do exemplo. */
+.par { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
+@media (max-width: 900px) { .par { grid-template-columns: 1fr; } }
+
+.caixa { min-width: 0; }
+.caixa > .rot {
+  display: flex; align-items: baseline; gap: var(--space-2);
+  font-size: var(--text-2xs); color: var(--text-muted); margin-bottom: var(--space-2);
+}
+.rot .tag {
+  font-size: var(--text-3xs); font-weight: var(--fw-semibold); letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: var(--radius-full);
+}
+.tag.hoje { background: rgba(255, 159, 10, 0.14); color: var(--warning); }
+.tag.novo { background: var(--accent-dim); color: var(--accent); }
+
+/* Palco: o vidro real do app, pra o exemplo ser lido sobre o papel de parede como no uso. */
+.palco {
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--glass-panel);
+  box-shadow: var(--elev-3);
+}
+.palco.raso { padding: var(--space-3); }
+
+/* As três configurações do usuário que os mocks precisam atravessar. Vêm do slider
+   Transparência (--cp-panel-alpha) e da opção Painéis — o mock só as simula. */
+.cfg-vidro-baixo { --glass-panel: rgb(26 24 29 / 0.55); }
+.cfg-colado { border-radius: 0; border: 0; border-left: 1px solid var(--border-default); box-shadow: none; }

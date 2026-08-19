@@ -1492,7 +1492,8 @@
     display: flex;
     align-items: center;
     padding: 6px 4px 0;
-    font-size: 11.5px;
+    /* 11px: o mesmo degrau da faixa de cota logo abaixo. 11,5 era o único no app inteiro. */
+    font-size: 11px;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -1627,7 +1628,9 @@
     display: contents;
   }
   @media (max-width: 819px) {
-    .control-left { gap: var(--space-1); }       /* fileira mais apertada no celular */
+    /* 8px entre controles (era 4): com 4px o vão entre as peças ficava MENOR que o padding de
+     dentro delas, e a fileira lia como um bloco único em vez de cinco controles. */
+  .control-left { gap: var(--space-2); }       /* fileira mais apertada no celular */
     .pill-duo {
       display: inline-flex;
       align-items: center;

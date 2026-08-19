@@ -1,10 +1,11 @@
 <script lang="ts">
-  import type { SessionInfo, State } from '../lib/types';
+  import type { SessionInfo } from '../lib/types';
 import * as m from '../paraglide/messages';
   import { rotuloEstado, stateColors, untrackedReason, providerTag } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
+  import StateChip from './StateChip.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
 
   interface Props {
@@ -27,14 +28,6 @@ import * as m from '../paraglide/messages';
     selectMode = false, selected = false, onToggleSelect,
   }: Props = $props();
 
-
-  // Fundo translucido do chip de status, por estado.
-  const stateChipBg: Record<State, string> = {
-    working: 'var(--accent-dim)',
-    idle: 'rgba(52,199,89,0.12)',
-    awaiting_input: 'rgba(255,159,10,0.14)',
-    dead: 'rgba(255,69,58,0.12)',
-  };
 
   const title = $derived(session.name);
 
@@ -360,13 +353,10 @@ import * as m from '../paraglide/messages';
       <!-- Chip so quando o estado pede atencao (idle = ponto colorido no lead, sem pilula "pronto"
            repetida em toda linha). -->
       {#if showStateChip}
-        <span
-          class="state-chip"
-          class:stalled
-          style="color: {stateColors[session.state]}; background: {stateChipBg[session.state]};"
-          title={stalled ? m.sessao_travada() : undefined}
-        >
-          {rotuloEstado(session.state)}
+        <!-- O envelope .state-chip existe pelo anel de travada e pela regra de papel de parede do
+             app.css que ja mirava essa classe; a pilula em si e o StateChip. -->
+        <span class="state-chip" class:stalled>
+          <StateChip state={session.state} title={stalled ? m.sessao_travada() : undefined} />
         </span>
       {:else}
         <!-- Sem chip, o estado so existia como COR (o .lead e aria-hidden) — leitor de tela ficava
@@ -700,17 +690,12 @@ import * as m from '../paraglide/messages';
     gap: var(--space-2);
     flex-shrink: 0;
   }
-  .state-chip {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    padding: 3px 9px;
-    border-radius: var(--radius-full);
-    white-space: nowrap;
-  }
-  /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. */
+  /* Envelope da pilula (o desenho dela vive no StateChip.svelte). */
+  .state-chip { display: inline-flex; flex-shrink: 0; border-radius: var(--radius-full); }
+  /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. Outline, e nao box-shadow
+     inset: a sombra do envelope ficaria por baixo do fundo da pilula. */
   .state-chip.stalled {
-    box-shadow: inset 0 0 0 1px var(--warning);
+    outline: 1px solid var(--warning); outline-offset: -1px;
   }
 
   /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */

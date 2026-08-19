@@ -21,13 +21,21 @@ _USAGE_CLAUDE = {
 }
 
 
-def _cred(dir_conta: Path, *, token="sk-ant-oat01-x", expira_em=3600) -> Path:
+def _cred(dir_conta: Path, *, token="sk-ant-oat01-x", expira_em=3600,
+          refresh: str | None = None, refresh_em=30 * 24 * 3600) -> Path:
     dir_conta.mkdir(parents=True, exist_ok=True)
-    (dir_conta / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+    oauth = {
         "accessToken": token,
         "expiresAt": int((time.time() + expira_em) * 1000),   # a API manda MILISSEGUNDOS
         "subscriptionType": "max",
-    }}), encoding="utf-8")
+    }
+    # `refresh` separado do resto: credencial SEM refresh token é o caso "login de verdade", e é
+    # o padrão aqui de propósito — quem quer testar a renovação diz isso explicitamente.
+    if refresh is not None:
+        oauth["refreshToken"] = refresh
+        oauth["refreshTokenExpiresAt"] = int((time.time() + refresh_em) * 1000)
+    (dir_conta / ".credentials.json").write_text(json.dumps({"claudeAiOauth": oauth}),
+                                                 encoding="utf-8")
     return dir_conta
 
 
@@ -55,7 +63,8 @@ def test_token_expirado_nao_gasta_requisicao(tmp_path, monkeypatch):
         raise AssertionError("não pode bater na rede com token vencido")
     monkeypatch.setattr(cotas, "_get_json", _nunca)
     estado, janelas, motivo = cotas._ler_claude(_cred(tmp_path / "c", expira_em=-10))
-    assert (estado, janelas, motivo) == ("expirada", [], "token-expirado")
+    # Sem refresh token no arquivo, o vencido é login de verdade — e nem tenta renovar.
+    assert (estado, janelas, motivo) == ("expirada", [], "login-necessario")
 
 
 def test_conta_sem_credencial_nao_e_zero(tmp_path, monkeypatch):
@@ -68,7 +77,7 @@ def test_conta_sem_credencial_nao_e_zero(tmp_path, monkeypatch):
 def test_401_e_expirada_e_nao_indisponivel(tmp_path, monkeypatch):
     monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (401, None))
     estado, _, motivo = cotas._ler_claude(_cred(tmp_path / "c"))
-    assert (estado, motivo) == ("expirada", "http-401")
+    assert (estado, motivo) == ("expirada", "login-necessario")
 
 
 def test_formato_novo_nao_vira_zero(tmp_path, monkeypatch):
@@ -169,3 +178,100 @@ def test_leitor_que_levanta_nao_derruba_a_lista(monkeypatch):
 
     cotas._atualizar([cotas._Fonte("claude:/x", "x", "claude", explode)])
     assert cotas._cache["claude:/x"][1].estado == "indisponivel"
+
+
+# ---------------------------------------------------------------- renovação delegada ao CLI
+
+
+def test_vencido_com_refresh_e_conta_livre_renova_e_le(tmp_path, monkeypatch):
+    """Token vencido + refresh vivo + ninguém usando a conta: renova pelo CLI e lê o número.
+
+    É o caso do dia a dia — conta parada, sessão nenhuma aberta nela. Sem isto a faixa mandava
+    "precisa entrar" para uma credencial que só precisava de um refresh.
+    """
+    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
+    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
+
+    chamou = []
+
+    def _renova(p):
+        chamou.append(p)
+        _cred(p, expira_em=3600, refresh="rt-2")   # o CLI grava o par NOVO (rotação)
+        return True
+
+    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli", _renova)
+    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (200, {
+        "five_hour": {"utilization": 7, "resets_at": None},
+        "seven_day": {"utilization": 12, "resets_at": None},
+    }))
+    estado, janelas, motivo = cotas._ler_claude(dir_conta)
+    assert chamou == [dir_conta]
+    assert (estado, motivo) == ("lida", None)
+    assert [(j.rotulo, j.pct) for j in janelas] == [("5h", 7.0), ("7d", 12.0)]
+
+
+def test_vencido_com_sessao_viva_nao_renova(tmp_path, monkeypatch):
+    """Processo vivo naquela pasta: NÃO renova. O refresh da Anthropic rotaciona, e o par novo
+    deixaria a sessão viva com um refresh morto na memória."""
+    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
+    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: True)
+    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
+                        lambda p: (_ for _ in ()).throw(AssertionError("não pode renovar")))
+    monkeypatch.setattr(cotas, "_get_json",
+                        lambda url, headers: (_ for _ in ()).throw(AssertionError("nem rede")))
+    assert cotas._ler_claude(dir_conta) == ("expirada", [], "sessao-viva")
+
+
+def test_varredura_de_processos_falha_nao_renova(tmp_path, monkeypatch):
+    """Não deu pra olhar os processos = trata como em uso (fail-closed, regra do
+    `renova_token.esta_em_uso`). O contrário seria renovar por cima de uma sessão que existe e que
+    a varredura não conseguiu enxergar."""
+    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
+    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: True)   # varredura falhou -> fail-closed
+    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
+                        lambda p: (_ for _ in ()).throw(AssertionError("não pode renovar")))
+    assert cotas._ler_claude(dir_conta) == ("expirada", [], "sessao-viva")
+
+
+def test_conta_ativa_nunca_renova(tmp_path, monkeypatch):
+    """A conta padrão (~/.claude) fica de fora: processo que a usa não define CLAUDE_CONFIG_DIR,
+    então a varredura por ambiente não o enxerga — e ela se conserta sozinha no próximo turno."""
+    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
+    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
+    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
+                        lambda p: (_ for _ in ()).throw(AssertionError("não pode renovar")))
+    assert cotas._ler_claude(dir_conta, ativa=True) == ("expirada", [], "sessao-viva")
+
+
+def test_renovacao_que_nao_grava_vira_motivo_proprio(tmp_path, monkeypatch):
+    """CLI chamado e o arquivo não mudou: some com o número, mas dizendo que a tentativa houve —
+    "precisa entrar" ali seria mentira, o refresh token continua no arquivo."""
+    dir_conta = _cred(tmp_path / "c", expira_em=-10, refresh="rt-1")
+    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
+    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli", lambda p: False)
+    assert cotas._ler_claude(dir_conta) == ("expirada", [], "renovacao-falhou")
+
+
+def test_401_com_refresh_vivo_tenta_renovar_e_nao_mente(tmp_path, monkeypatch):
+    """Provedor recusou um token que o relógio dizia bom: tenta renovar UMA vez e, se não der,
+    devolve o motivo de verdade.
+
+    O errado (e o que a primeira versão fazia) era responder "sessao-viva" só porque o refresh
+    ainda não venceu — sem ter olhado processo nenhum. A tela mandava "abra uma sessão nela" numa
+    conta revogada, e a leitura seguinte caía no mesmo 401 para sempre.
+    """
+    dir_conta = _cred(tmp_path / "c", refresh="rt-1")   # access VÁLIDO pelo relógio
+    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
+    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli", lambda p: False)
+    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (401, None))
+    assert cotas._ler_claude(dir_conta) == ("expirada", [], "renovacao-falhou")
+
+
+def test_401_depois_de_renovar_e_login_necessario(tmp_path, monkeypatch):
+    """Renovou e o provedor recusou o par NOVO: aí é login de verdade, e a recursão para."""
+    dir_conta = _cred(tmp_path / "c", refresh="rt-1")
+    monkeypatch.setattr(cotas.renova_token, "esta_em_uso", lambda p: False)
+    monkeypatch.setattr(cotas.renova_token, "renovar_por_cli",
+                        lambda p: bool(_cred(p, refresh="rt-2")))
+    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (401, None))
+    assert cotas._ler_claude(dir_conta) == ("expirada", [], "login-necessario")

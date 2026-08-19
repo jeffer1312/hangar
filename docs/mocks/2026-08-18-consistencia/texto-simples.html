@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Tamanhos de letra e espaçamento — hoje e proposta</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .pagina { max-width: 940px; padding-top: var(--space-6); }
+  .bloco { margin-bottom: 48px; }
+  .titulo { font-size: var(--text-sm); color: var(--text-secondary); margin: 0 0 var(--space-3); font-weight: var(--fw-semibold); }
+  .frase { font-size: var(--text-xs); color: var(--text-muted); margin: var(--space-3) 0 0; }
+  .frase b { color: var(--text-secondary); font-weight: var(--fw-semibold); }
+
+  /* hoje: a nuvem de tamanhos, cada um no seu tamanho real */
+  .nuvem { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3) var(--space-4); }
+  .nuvem span { color: var(--text-secondary); font-family: var(--font-mono); }
+  .nuvem i { color: var(--text-muted); font-size: 9px; font-style: normal; }
+
+  /* proposta: a escada */
+  .escada { display: flex; flex-direction: column; gap: 2px; }
+  .degrau { display: flex; align-items: baseline; gap: var(--space-4); padding: 5px var(--space-3); border-radius: var(--radius-sm); }
+  .degrau:nth-child(odd) { background: var(--fill-subtle); }
+  .degrau .px { width: 56px; flex: none; font-family: var(--font-mono); font-size: var(--text-3xs); color: var(--text-muted); }
+  .degrau .ex { color: var(--text-primary); }
+
+  .pesos { display: flex; flex-wrap: wrap; gap: var(--space-5); align-items: baseline; }
+  .pesos span { font-size: var(--text-sm); color: var(--text-secondary); }
+  .pesos b { display: block; font-family: var(--font-mono); font-size: var(--text-3xs);
+             color: var(--text-muted); font-weight: 400; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="pagina">
+
+<div class="bloco">
+  <p class="titulo">Hoje — 24 tamanhos de letra escritos na mão</p>
+  <div class="palco">
+    <div class="nuvem">
+      <span style="font-size:38px">38<i> ×1</i></span>
+      <span style="font-size:32px">32<i> ×1</i></span>
+      <span style="font-size:30px">30<i> ×2</i></span>
+      <span style="font-size:28px">28<i> ×1</i></span>
+      <span style="font-size:22px">22<i> ×2</i></span>
+      <span style="font-size:20px">20<i> ×1</i></span>
+      <span style="font-size:17px">17<i> ×2</i></span>
+      <span style="font-size:16px">16<i> ×24</i></span>
+      <span style="font-size:15px">15<i> ×4</i></span>
+      <span style="font-size:14px">14<i> ×9</i></span>
+      <span style="font-size:13px">13<i> ×15</i></span>
+      <span style="font-size:12.5px">12,5<i> ×5</i></span>
+      <span style="font-size:12px">12<i> ×20</i></span>
+      <span style="font-size:11.5px">11,5<i> ×12</i></span>
+      <span style="font-size:11px">11<i> ×38</i></span>
+      <span style="font-size:10.5px">10,5<i> ×6</i></span>
+      <span style="font-size:10px">10<i> ×55</i></span>
+      <span style="font-size:9px">9<i> ×8</i></span>
+      <span style="font-size:8.5px">8,5<i> ×1</i></span>
+      <span style="font-size:8px">8<i> ×3</i></span>
+      <span style="font-size:7.5px">7,5<i> ×1</i></span>
+      <span style="font-size:6.5px">6,5<i> ×1</i></span>
+      <span style="font-size:5.5px">5,5<i> ×1</i></span>
+    </div>
+  </div>
+  <p class="frase">Os quatro mais usados — <b>10, 11, 10,5 e 9px</b> — são o texto miudinho do app inteiro (selo, faixa, contador) e nenhum deles tem nome. Quem escreve a próxima tela escolhe 10 ou 11 no olho.</p>
+</div>
+
+<div class="bloco">
+  <p class="titulo">Proposta — sete degraus, com nome</p>
+  <div class="palco">
+    <div class="escada">
+      <div class="degrau"><span class="px">10px</span><span class="ex" style="font-size:10px">selo, marca, contador</span></div>
+      <div class="degrau"><span class="px">11px</span><span class="ex" style="font-size:11px">faixa de contas, linha de números</span></div>
+      <div class="degrau"><span class="px">12px</span><span class="ex" style="font-size:12px">rótulo de seção, texto de apoio</span></div>
+      <div class="degrau"><span class="px">14px</span><span class="ex" style="font-size:14px">corpo dos painéis, nome de sessão</span></div>
+      <div class="degrau"><span class="px">16px</span><span class="ex" style="font-size:16px">a conversa</span></div>
+      <div class="degrau"><span class="px">18px</span><span class="ex" style="font-size:18px">título de tela</span></div>
+      <div class="degrau"><span class="px">20px</span><span class="ex" style="font-size:20px">título grande</span></div>
+    </div>
+  </div>
+  <p class="frase">Cinco desses já existem no app. Faltam só os dois de baixo (10 e 11), que são justamente os mais usados.</p>
+</div>
+
+<div class="bloco">
+  <p class="titulo">Peso da letra — hoje são nove, proposta são quatro</p>
+  <div class="palco">
+    <div class="pesos">
+      <span style="font-weight:400">texto normal<b>400</b></span>
+      <span style="font-weight:500">rótulo com ênfase<b>500</b></span>
+      <span style="font-weight:600">nome, chip, título<b>600</b></span>
+      <span style="font-weight:700">RÓTULO DE SEÇÃO<b>700</b></span>
+    </div>
+  </div>
+  <p class="frase">Os outros cinco que existem hoje (510, 560, 580, 620, 650) ninguém distingue a olho — mas cada um é uma decisão a mais na hora de escrever a próxima tela.</p>
+</div>
+
+</div>
+</body>
+</html>

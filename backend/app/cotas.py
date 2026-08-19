@@ -40,7 +40,7 @@ from typing import Callable, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import apelidos, contas, engines, opencode_cota
+from app import apelidos, contas, engines, opencode_cota, renova_token
 from app.adapters.kimi import sessions as kimi_sessions
 from app.auth import require_auth
 from app.config import list_config_dirs
@@ -158,8 +158,56 @@ def _token_claude(dir_conta: Path) -> tuple[str | None, _Leitura | None]:
     return tok, None
 
 
-def _ler_claude(dir_conta: Path) -> _Leitura:
+def _refresh_vivo(dir_conta: Path) -> bool:
+    """O refresh token da conta ainda vale? (`refreshTokenExpiresAt`, em MILISSEGUNDOS)
+
+    Separa os dois avisos que a tela precisa dar: refresh vivo = a conta esta so PARADA (basta
+    uma sessao nela); refresh vencido ou ausente = ai sim e login de verdade.
+    """
+    try:
+        o = json.loads((dir_conta / ".credentials.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    oauth = o.get("claudeAiOauth") if isinstance(o, dict) else None
+    if not isinstance(oauth, dict) or not oauth.get("refreshToken"):
+        return False
+    exp = oauth.get("refreshTokenExpiresAt")
+    if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+        return exp / 1000 > time.time()
+    return True   # sem prazo no arquivo: trata como vivo (o pior caso e uma tentativa a toa)
+
+
+def _tentar_renovar(dir_conta: Path, ativa: bool) -> str | None:
+    """Renova a conta pelo caminho barato do `renova_token`. None = renovou; senão, o MOTIVO.
+
+    O motivo é código, não texto: a tela escolhe a frase por ele (`lib/cota.ts`). São três, e a
+    diferença entre eles é o que o usuário tem que fazer — nada (`sessao-viva`, volta sozinho no
+    próximo turno da sessão), login de verdade (`login-necessario`) ou olhar o log
+    (`renovacao-falhou`).
+
+    A conta ATIVA (o `~/.claude`) nunca é renovada aqui, e é limitação assumida: processo que usa
+    a pasta padrão NÃO define `CLAUDE_CONFIG_DIR`, então a varredura por ambiente não o enxerga —
+    e renovar por baixo de uma sessão viva a deixaria com um refresh que já rodou. Ela também é a
+    que mais tem sessão aberta, e a que se conserta sozinha assim que o usuário digita.
+    """
+    if not _refresh_vivo(dir_conta):
+        return "login-necessario"
+    if ativa or renova_token.esta_em_uso(dir_conta):
+        return "sessao-viva"
+    return None if renova_token.renovar_por_cli(dir_conta) else "renovacao-falhou"
+
+
+def _ler_claude(dir_conta: Path, ativa: bool = False, renovou_agora: bool = False) -> _Leitura:
+    """`renovou_agora` corta a recursão: com o par recém-gravado, um 401 é recusa de verdade."""
     tok, falha = _token_claude(dir_conta)
+    if falha is not None and falha[2] == "token-expirado":
+        # Vencido pelo relógio não é o fim: o refresh costuma estar vivo (medido: access de 8h,
+        # refresh de ~26 dias). Quem renova é o CLI, e só quando ninguém está usando a conta.
+        motivo = _tentar_renovar(dir_conta, ativa)
+        if motivo is not None:
+            return "expirada", [], motivo
+        tok, falha = _token_claude(dir_conta)
+        renovou_agora = True
     if falha is not None:
         return falha
     status, j = _get_json(_URL_CLAUDE, {
@@ -168,7 +216,16 @@ def _ler_claude(dir_conta: Path) -> _Leitura:
         "anthropic-beta": _BETA_CLAUDE,
     })
     if status in (401, 403):
-        return "expirada", [], f"http-{status}"
+        # O relógio dizia que o token valia e o provedor recusou (revogado, girado noutra máquina).
+        # Passa pela MESMA porta do vencido: sem isso o motivo "sessao-viva" saía sem ninguém ter
+        # olhado processo nenhum, e a tela mandava abrir uma sessão para uma conta que precisava de
+        # login — sem nunca tentar renovar, a cada 5 min, para sempre.
+        if not renovou_agora:
+            motivo = _tentar_renovar(dir_conta, ativa)
+            if motivo is None:
+                return _ler_claude(dir_conta, ativa, renovou_agora=True)
+            return "expirada", [], motivo
+        return "expirada", [], "login-necessario"
     if not isinstance(j, dict):
         return "indisponivel", [], (f"http-{status}" if status else "sem-resposta")
     janelas = [w for w in (_janela_claude(j.get("five_hour"), "5h"),
@@ -293,7 +350,7 @@ def _fontes() -> list[_Fonte]:
         p = Path(c.path)
         if contas.e_conta(p) or c.active:
             out.append(_Fonte(f"claude:{c.path}", c.label, "claude",
-                              lambda p=p: _ler_claude(p), bool(c.active)))
+                              lambda p=p, at=bool(c.active): _ler_claude(p, at), bool(c.active)))
     for nome, key, base in _providers_kimi():
         out.append(_Fonte(f"kimi:{nome}", nome, "kimi",
                           lambda k=key, b=base: _ler_kimi(k, b)))

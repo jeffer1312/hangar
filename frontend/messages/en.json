@@ -1758,6 +1758,7 @@
   "cota_ultima_leitura": "last read {n} ago",
   "cota_idade": "{n} ago",
   "cota_precisa_entrar": "— sign in needed",
+  "cota_conta_parada": "— open a session in it",
   "cota_sem_cota": "no quota",
   "contas_tipo_claude": "Claude · subscription",
   "contas_tipo_chave": "API key",

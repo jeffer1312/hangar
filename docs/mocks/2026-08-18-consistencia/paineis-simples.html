@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Borda e sombra dos painéis — hoje e proposta</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .pagina { max-width: 1060px; padding-top: var(--space-6); }
+  .bloco { margin-bottom: 56px; }
+  .titulo { font-size: var(--text-sm); color: var(--text-secondary); margin: 0 0 var(--space-3); font-weight: var(--fw-semibold); }
+  .frase { font-size: var(--text-xs); color: var(--text-muted); margin: var(--space-3) 0 0; }
+
+  .trio { display: flex; gap: var(--space-5); align-items: flex-start; flex-wrap: wrap; }
+  .item { flex: 1 1 280px; min-width: 260px; }
+  .onde { display: block; font-family: var(--font-mono); font-size: var(--text-3xs);
+          color: var(--text-muted); margin-top: 8px; }
+
+  .painel { padding: var(--space-3); background: var(--glass-panel); }
+  .painel .cab { font-size: var(--text-2xs); color: var(--text-muted); margin-bottom: var(--space-2); }
+  .painel .linha { padding: 6px var(--space-2); border-radius: var(--radius-md);
+                   font-size: var(--text-xs); color: var(--text-secondary); }
+  .painel .linha.sel { background: var(--bg-hover); color: var(--text-primary); }
+
+  /* ── HOJE: as três receitas, copiadas do código ── */
+  .h-lado { border: 1px solid var(--border-subtle); border-radius: var(--radius-xl);
+            box-shadow: 0 18px 44px rgba(0,0,0,.34), inset 0 1px 1px var(--glass-specular); }
+  .h-ctx  { border: 1px solid var(--border-default); border-radius: var(--radius-xl);
+            box-shadow: 0 18px 44px rgba(0,0,0,.34); }
+  .h-faixa{ border: 1px solid var(--border-subtle); border-radius: var(--radius-xl);
+            box-shadow: 0 18px 44px rgba(0,0,0,.34), inset 0 1px 1px var(--glass-specular); }
+
+  /* ── PROPOSTA ── */
+  .p-solto  { border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); box-shadow: var(--elev-3); }
+  .p-colado { border: 0; border-radius: 0; box-shadow: none; border-left: 1px solid var(--border-subtle); }
+
+  .fundo-modo { padding: var(--space-4); border-radius: var(--radius-lg);
+                background: rgba(0,0,0,.16); }
+  .modo { font-size: var(--text-2xs); color: var(--text-muted); margin: 0 0 var(--space-3); }
+</style>
+</head>
+<body>
+<div class="pagina">
+
+<div class="bloco">
+  <p class="titulo">Hoje — três painéis irmãos, três acabamentos</p>
+  <div class="trio">
+    <div class="item">
+      <div class="painel h-lado">
+        <div class="cab">barra lateral</div>
+        <div class="linha">api-exemplo</div>
+        <div class="linha sel">hangar</div>
+      </div>
+      <span class="onde">borda fraca + sombra com brilho na quina</span>
+    </div>
+    <div class="item">
+      <div class="painel h-ctx">
+        <div class="cab">painel de contexto</div>
+        <div class="linha">sessão independente</div>
+        <div class="linha">Claude · Opus5</div>
+      </div>
+      <span class="onde">borda MAIS FORTE + sombra SEM brilho</span>
+    </div>
+    <div class="item">
+      <div class="painel h-faixa" style="padding: var(--space-2) var(--space-3)">
+        <div class="cab" style="margin:0">200-01 · default · jefferson</div>
+      </div>
+      <span class="onde">borda fraca + sombra com brilho</span>
+    </div>
+  </div>
+  <p class="frase">A mesma sombra está escrita à mão em 4 arquivos, com pequenas diferenças em cada um.</p>
+</div>
+
+<div class="bloco">
+  <p class="titulo">Proposta — um acabamento só, obedecendo a tua opção "Painéis"</p>
+
+  <div class="fundo-modo" style="margin-bottom: var(--space-5)">
+    <p class="modo">Soltos</p>
+    <div class="trio">
+      <div class="item"><div class="painel p-solto">
+        <div class="cab">barra lateral</div>
+        <div class="linha">api-exemplo</div>
+        <div class="linha sel">hangar</div>
+      </div></div>
+      <div class="item"><div class="painel p-solto">
+        <div class="cab">painel de contexto</div>
+        <div class="linha">sessão independente</div>
+        <div class="linha">Claude · Opus5</div>
+      </div></div>
+      <div class="item"><div class="painel p-solto" style="padding: var(--space-2) var(--space-3)">
+        <div class="cab" style="margin:0">200-01 · default · jefferson</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="fundo-modo">
+    <p class="modo">Colados</p>
+    <div class="trio">
+      <div class="item"><div class="painel p-colado">
+        <div class="cab">barra lateral</div>
+        <div class="linha">api-exemplo</div>
+        <div class="linha sel">hangar</div>
+      </div></div>
+      <div class="item"><div class="painel p-colado">
+        <div class="cab">painel de contexto</div>
+        <div class="linha">sessão independente</div>
+        <div class="linha">Claude · Opus5</div>
+      </div></div>
+      <div class="item"><div class="painel p-colado" style="padding: var(--space-2) var(--space-3)">
+        <div class="cab" style="margin:0">200-01 · default · jefferson</div>
+      </div></div>
+    </div>
+  </div>
+
+  <p class="frase">Mesma borda, mesmo canto, mesma sombra nos três. E os três saem juntos quando tu escolhe "Colados" — hoje a barra lateral em modo dock continua com sombra mesmo nesse modo.</p>
+</div>
+
+</div>
+</body>
+</html>

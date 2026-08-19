@@ -40,6 +40,9 @@ export interface ContaCota {
   janelas: JanelaExibida[];
   velha: boolean;
   idade_s: number | null;
+  /** Motivo cru do backend (`sessao-viva`, `login-necessario`, …). É CÓDIGO, não texto de tela:
+   *  quem escolhe a frase é `motivoParado` aqui embaixo. */
+  motivo: string | null;
 }
 
 export const LIMIAR_ALERTA = 80;
@@ -74,6 +77,7 @@ export function faixaDeCota(contas: CotaConta[]): ContaCota[] | null {
       janelas,
       velha: c.idade_s != null && c.idade_s > VELHA_APOS_S,
       idade_s: c.idade_s ?? null,
+      motivo: c.motivo ?? null,
     });
   }
   return linhas.length > 0 ? linhas : null;
@@ -112,4 +116,16 @@ export function diaDoReset(resetTs: number | null, agora: number): string {
     .format(d)
     .replace(/\.$/, '');
   return `${dia} ${d.getHours()}h`;
+}
+
+/** Texto de uma conta SEM número, escolhido pelo motivo que o backend mandou.
+ *
+ * "precisa entrar" é login de verdade, e dizer isso quando a credencial só está com o token
+ * vencido (mas com refresh vivo) manda o usuário fazer uma coisa que não resolve — a conta volta
+ * sozinha assim que qualquer sessão dela roda. Os dois motivos que o backend usa para esse caso
+ * (`sessao-viva`, quando há processo usando a conta e renovar rotacionaria o par debaixo dele, e
+ * `renovacao-falhou`) viram a frase que resolve. Ver backend/app/cotas.py.
+ */
+export function motivoParado(motivo?: string | null): boolean {
+  return motivo === 'sessao-viva' || motivo === 'renovacao-falhou';
 }

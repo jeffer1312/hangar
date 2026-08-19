@@ -15,7 +15,7 @@
   import { onMount } from 'svelte';
   import * as m from '../paraglide/messages';
   import { listarCotas, formatarIntervalo, type CotaConta } from '../lib/contaEstado';
-  import { faixaDeCota, faltaPara, diaDoReset, janelaLonga } from '../lib/cota';
+  import { faixaDeCota, faltaPara, diaDoReset, janelaLonga, motivoParado } from '../lib/cota';
 
   interface Props {
     // Muda quando a sessão/servidor alvo muda no shell — re-busca (o endpoint é do servidor
@@ -78,7 +78,7 @@
                  leitura, só o traço — inventar explicação numa tira de 26px é pior que o traço. -->
             <span class="quota-vazio"
               >{c.estado === 'expirada' || c.estado === 'sem_credencial'
-                ? m.cota_precisa_entrar()
+                ? (motivoParado(c.motivo) ? m.cota_conta_parada() : m.cota_precisa_entrar())
                 : '—'}</span>
           {:else}
             {#each c.janelas as j (j.rotulo)}
@@ -134,7 +134,7 @@
     margin: 0 var(--space-3) var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xl);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 1px var(--glass-specular);
+    box-shadow: var(--elev-3);
   }
   /* Colados: encosta nas bordas e NÃO desenha risco nenhum contra os painéis — com a mesma
      superfície dos dois, a linha era a única coisa dizendo que ali havia duas peças. Sem ela, a
@@ -163,7 +163,10 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 7px;
+    /* Espaço ENTRE contas: o dobro do espaço de dentro da pílula (--space-2 abaixo). Eram os dois
+       7px, e com o mesmo respiro dentro e fora as cinco contas liam como um bloco só — a pílula
+       desenhava a separação e o espaçamento a desmanchava. */
+    gap: var(--space-4);
     overflow-x: auto;
     scrollbar-width: none;
   }
@@ -175,7 +178,7 @@
   .quota-conta {
     display: flex;
     align-items: baseline;
-    gap: 7px;
+    gap: var(--space-2);
     flex-shrink: 0;
     padding: 2px var(--space-2);
     border-radius: 999px;
@@ -230,4 +233,6 @@
     font: inherit;
     cursor: pointer;
   }
+  .quota-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  @media (hover: hover) { .quota-link:hover { color: var(--text-secondary); } }
 </style>

@@ -6,9 +6,10 @@ import * as m from '../paraglide/messages';
   import PlanPanel from './PlanPanel.svelte';
   import PlanRing from './PlanRing.svelte';
   import FilesPanel from './files/FilesPanel.svelte';
+  import StateChip from './StateChip.svelte';
   import type { State, SessionInfo, PlanDetail } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
-  import { stateColors, rotuloEstado, ctxWindow, providerName } from '../lib/format';
+  import { ctxWindow, providerName } from '../lib/format';
   import { planBadge } from '../lib/plan';
 
   interface Props {
@@ -185,7 +186,7 @@ import * as m from '../paraglide/messages';
       {#if stateDetail}<p class="header-detail">{stateDetail}</p>{/if}
     </div>
     <div class="header-right">
-      <span class="state-chip header-state" style="color: {stateColors[state]}">{rotuloEstado(state)}</span>
+      <StateChip {state} size="md" />
       {#if loopLabel}
         <button type="button" class="loop-chip" style="color: {loopColor};" onclick={onLoopTap} aria-label={m.ctx_aria_loop({ n: loopLabel })}>{loopLabel}</button>
       {/if}
@@ -417,9 +418,12 @@ import * as m from '../paraglide/messages';
     --ctx-gap: var(--space-3);
     width: calc(var(--ctx-w, 248px) - var(--ctx-gap));
     overflow: hidden;
-    border: 1px solid var(--border-default);
+    /* MESMA receita da sidebar e da faixa de cota (18/08): eram três acabamentos parecidos e
+       nenhum igual — este usava --border-default (mais forte) e uma sombra SEM o brilho de borda
+       que os outros dois tinham. A sombra agora é o token --elev-3, um lugar só. */
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xl);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
+    box-shadow: var(--elev-3);
     background: transparent;   /* o fundo vai pro leaf ::before (vidro) */
   }
 
@@ -457,7 +461,7 @@ import * as m from '../paraglide/messages';
   :global(html[data-panels='edge']) .session-context {
     --ctx-gap: 0px;
     border: 0;
-    border-left: 1px solid var(--border-default);
+    border-left: 1px solid var(--border-subtle);
     border-radius: 0;
     box-shadow: none;
   }
@@ -548,7 +552,6 @@ import * as m from '../paraglide/messages';
     white-space: nowrap;
   }
 
-  .header-state { flex-shrink: 0; }
 
   /* Faixa de acoes (ex-botoes da NavBar): icones sozinhos pediam memorizacao. Em 264px o par
      icone+rotulo cabe em duas colunas sem virar grade de cards. */
@@ -717,15 +720,6 @@ import * as m from '../paraglide/messages';
     margin-bottom: var(--space-2);
   }
   .section-head .section-label { margin-bottom: 0; }
-
-  .state-chip {
-    display: inline-flex;
-    padding: 2px 8px;
-    border-radius: var(--radius-full);
-    background: var(--surface-raised);
-    font-size: var(--text-xs);
-    font-weight: 650;
-  }
 
   /* Chip do loop (🔁 N/M): mono como os badges numericos; cor vem do tone via style inline. */
   .loop-chip {

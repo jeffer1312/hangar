@@ -14,6 +14,7 @@ import * as m from '../paraglide/messages';
 import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
+  import StateChip from './StateChip.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
   import { rotuloEstado, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
@@ -28,10 +29,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { navMode } from '../lib/navMode.svelte';
   import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
 
-  const stateChipBg: Record<State, string> = {
-    working: 'var(--accent-dim)', idle: 'rgba(52,199,89,0.12)',
-    awaiting_input: 'rgba(255,159,10,0.14)', dead: 'rgba(255,69,58,0.12)',
-  };
   const DEFAULT_BRANCHES = new Set(['main', 'master']);
 
   function showBranch(branch: string | null | undefined): branch is string {
@@ -1060,12 +1057,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {/if}
                   <PlanBar session={s} />
                 </span>
-                <span
-                  class="state-chip"
-                  class:stalled={s.stalled === true}
-                  style="color: {stateColors[s.state]}; background: {stateChipBg[s.state]};"
-                  title={s.stalled ? m.sessao_travada() : undefined}
-                >{rotuloEstado(s.state)}</span>
+                <!-- O envelope .state-chip existe pelo anel de travada e pelas regras que ja
+                     miravam essa classe (hover da linha, papel de parede no app.css); a pilula em
+                     si e o StateChip. -->
+                <span class="state-chip" class:stalled={s.stalled === true}>
+                  <StateChip state={s.state} title={s.stalled ? m.sessao_travada() : undefined} />
+                </span>
               {/if}
             </button>
             {#if expanded && !selectMode}
@@ -1506,7 +1503,21 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     margin-left: var(--space-3);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-xl);
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34), inset 0 1px 1px var(--glass-specular);
+    box-shadow: var(--elev-3);
+  }
+  /* Aparência → Painéis → "Colados" alcança o dock TAMBÉM (18/08). Antes nenhuma regra mirava o
+     `.floating`: quem escolhia "Colados" via a sidebar expandida virar parede e o dock continuar
+     boiando com canto e sombra — a opção valia pra dois dos três painéis. Encostado na borda ele
+     também não tem margem. */
+  :global(html[data-panels='edge']) .sidebar.floating {
+    align-self: stretch;
+    height: 100%;
+    max-height: none;
+    margin-left: 0;
+    border: 0;
+    border-right: 1px solid var(--border-subtle);
+    border-radius: 0;
+    box-shadow: none;
   }
   /* A lista so rola quando bate no teto: com 2 sessoes o dock e curto e sem barra. */
   .sidebar.floating .sess-list { flex: 0 1 auto; }
@@ -1792,13 +1803,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .branch-inline { flex-shrink: 0; margin-left: var(--space-1); }
-  .state-chip {
-    flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
-    padding: 2px 7px; border-radius: var(--radius-full); white-space: nowrap;
-  }
-  /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. */
+  /* Envelope da pilula (o desenho dela vive no StateChip.svelte). */
+  .state-chip { display: inline-flex; flex-shrink: 0; border-radius: var(--radius-full); }
+  /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. Outline, e nao box-shadow
+     inset: a sombra do envelope ficaria por baixo do fundo da pilula. */
   .state-chip.stalled {
-    box-shadow: inset 0 0 0 1px var(--warning);
+    outline: 1px solid var(--warning); outline-offset: -1px;
   }
   /* Rate-limit radar (feature #8): chip proprio, mesma familia visual do stalled (âmbar, calmo). */
   .limited-chip {

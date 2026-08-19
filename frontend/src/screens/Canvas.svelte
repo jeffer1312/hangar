@@ -4,6 +4,7 @@ import * as m from '../paraglide/messages';
   import { SvelteMap } from 'svelte/reactivity';
   import BoardCard from '../components/BoardCard.svelte';
   import RateStrip from '../components/RateStrip.svelte';
+  import StateChip from '../components/StateChip.svelte';
   import type { BoardRow, PendingMsg } from './Board.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { serverColor } from '../lib/auth';
@@ -431,7 +432,7 @@ import * as m from '../paraglide/messages';
                   title={m.board_abrir_chat_de({ n: membro.name })}>
             <span class="cv-chip-dot" style="background: {serverColor(membro.serverId)}" aria-hidden="true"></span>
             <span class="cv-gcard-name">{membro.name}</span>
-            <span class="cv-gcard-state" data-state={membro.state}>{membro.state === 'awaiting_input' ? m.estado_voce() : membro.state === 'working' ? m.estado_exec() : m.estado_pronto()}</span>
+            <StateChip state={membro.state} label={membro.state === 'awaiting_input' ? m.estado_voce() : membro.state === 'working' ? m.estado_exec() : m.estado_pronto()} />
           </button>
         {/each}
       </div>
@@ -639,9 +640,6 @@ import * as m from '../paraglide/messages';
   }
   .cv-gcard-row:hover { background: var(--bg-hover); }
   .cv-gcard-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cv-gcard-state { color: var(--text-muted); }
-  .cv-gcard-state[data-state='awaiting_input'] { color: var(--pill-input-fg); }
-  .cv-gcard-state[data-state='working'] { color: var(--pill-working-fg); }
   .cv-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   /* O BoardCard interno preenche o corpo (prop fill). flex-shrink não se aplica (absolute),
      mas o min-height: 0 acima é o equivalente aqui: sem ele o body estoura em vez de rolar. */

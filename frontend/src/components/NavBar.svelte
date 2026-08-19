@@ -1,7 +1,9 @@
 <script lang="ts">
   import RateChips from './RateChips.svelte';
+  import StateChip from './StateChip.svelte';
   import * as m from '../paraglide/messages';
   import type { StatusFields } from '../lib/statusline';
+  import type { State } from '../lib/types';
 
   interface Props {
     title?: string;
@@ -40,8 +42,9 @@
     subtitleHot?: string | null;
     // Desktop: breadcrumb (servidor › sessao › branch) no lugar do titulo centralizado + pilula de estado.
     crumbs?: { server: string; session: string; branch?: string; dirty?: boolean } | null;
-    stateLabel?: string;
-    stateColor?: string;
+    // Estado da sessao aberta, ao lado do breadcrumb (so no desktop; sem estado, sem pilula).
+    // O rotulo e a cor saem do proprio StateChip — antes vinham prontos do Chat.
+    state?: State;
     // Badge discreto do provider (ex: "Codex") junto do titulo/crumb — so aparece quando != Claude
     // (Claude e o caso comum, sem ruido visual extra). Ver Chat.svelte.
     providerLabel?: string | null;
@@ -54,7 +57,7 @@
     loopColor?: string;
     onLoopTap?: () => void;
   }
-  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, stateLabel, stateColor, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
+  let { title = 'Hangar', showBack = false, onBack, onMenu, onTitleTap, status = null, onExpandUsage, limited = false, limitReset = null, onOpenActivity, activityBadge = 0, activityRunning = false, onOpenTerminal, terminalAlert = false, onOpenRun, onOpenAttachments, runRunning = false, working = false, subtitle = null, subtitleHot = null, crumbs = null, state, providerLabel = null, onProviderTap, loopLabel = null, loopColor, onLoopTap }: Props = $props();
 
   // Sinal do "⋯": no celular Rodar/Atividade moram dentro do menu, entao o estado deles precisa
   // aparecer no botao — senao voce so descobre que algo esta rodando abrindo o menu.
@@ -96,7 +99,7 @@
         {:else if providerLabel}
           <span class="provider-badge">{providerLabel}</span>
         {/if}
-        {#if stateLabel}<span class="state-pill" style="color: {stateColor};">{stateLabel}</span>{/if}
+        {#if state}<StateChip {state} size="md" />{/if}
         {#if loopLabel}
           <button type="button" class="loop-chip" style="color: {loopColor};" onclick={(e) => { e.stopPropagation(); onLoopTap?.(); }} aria-label={m.ctx_aria_loop({ n: loopLabel })}>{loopLabel}</button>
         {/if}
@@ -292,12 +295,6 @@
   .crumb-branch { color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--text-xs); flex-shrink: 1; }
   .crumb-sep { color: var(--text-muted); flex-shrink: 0; }
   .dirty { color: var(--warning); }
-  .state-pill {
-    flex-shrink: 0; margin-left: var(--space-1);
-    font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.02em;
-    padding: 2px 9px; border-radius: var(--radius-full); background: var(--bg-elevated);
-  }
-
   /* Badge discreto do provider (ex: "Codex") junto do titulo/crumb. */
   .provider-badge {
     flex-shrink: 0; margin-left: var(--space-1);

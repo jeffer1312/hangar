@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>O chip de estado — hoje e proposta</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .pagina { max-width: 1000px; padding-top: var(--space-6); }
+  .bloco { margin-bottom: 56px; }
+  .titulo { font-size: var(--text-sm); color: var(--text-secondary); margin: 0 0 var(--space-3); font-weight: var(--fw-semibold); }
+  .frase { font-size: var(--text-xs); color: var(--text-muted); margin: var(--space-3) 0 0; }
+
+  .fila { display: flex; flex-wrap: wrap; gap: var(--space-5) var(--space-6); align-items: flex-start; }
+  .item { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .onde { font-family: var(--font-mono); font-size: var(--text-3xs); color: var(--text-muted); }
+
+  /* ── HOJE: os sete desenhos, com as medidas reais do código ── */
+  .h1 { font-size: 10px;   font-weight: 600; padding: 2px 7px; border-radius: 9999px; background: rgba(52,199,89,.14); color: #34c759; }
+  .h2 { font-size: 11px;   font-weight: 600; padding: 3px 9px; border-radius: 9999px; background: rgba(52,199,89,.14); color: #34c759; }
+  .h3 { font-size: 12px;   font-weight: 650; padding: 2px 8px; border-radius: 9999px; background: var(--surface-raised); color: #34c759; }
+  .h4 { font-size: 10.5px; font-weight: 600; padding: 1px 8px; border-radius: 9999px; background: var(--pill-idle-bg); color: var(--pill-idle-fg); }
+  .h5 { font-size: 12px;   font-weight: 600; padding: 2px 9px; border-radius: 9999px; background: var(--bg-elevated); color: #34c759; }
+  .h6 { font-size: 10.5px; font-weight: 600; color: var(--pill-idle-fg); }
+  .h7 { width: 8px; height: 8px; border-radius: 50%; background: #34c759; display: inline-block; }
+
+  /* ── PROPOSTA: um chip só ── */
+  .chip { display: inline-flex; align-items: center; border-radius: var(--radius-full);
+          font-weight: var(--fw-semibold); white-space: nowrap; }
+  .chip.sm { font-size: var(--text-3xs); padding: 2px var(--space-2); }
+  .chip.md { font-size: var(--text-2xs); padding: 3px 10px; }
+  .trabalhando { background: var(--pill-working-bg); color: var(--pill-working-fg); }
+  .pronto      { background: var(--pill-idle-bg);    color: var(--pill-idle-fg); }
+  .esperando   { background: var(--pill-input-bg);   color: var(--pill-input-fg); }
+  .encerrado   { background: var(--pill-dead-bg);    color: var(--pill-dead-fg); }
+  .ponto { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .ponto.trabalhando { background: var(--pill-working-fg); }
+  .ponto.pronto      { background: var(--pill-idle-fg); }
+  .ponto.esperando   { background: var(--pill-input-fg); }
+</style>
+</head>
+<body>
+<div class="pagina">
+
+<div class="bloco">
+  <p class="titulo">Hoje — a mesma palavra, sete desenhos</p>
+  <div class="palco">
+    <div class="fila">
+      <span class="item"><span class="h1">pronto</span><span class="onde">barra lateral</span></span>
+      <span class="item"><span class="h2">pronto</span><span class="onde">card do celular</span></span>
+      <span class="item"><span class="h3">pronto</span><span class="onde">painel de contexto</span></span>
+      <span class="item"><span class="h4">pronto</span><span class="onde">quadro</span></span>
+      <span class="item"><span class="h5">pronto</span><span class="onde">barra do topo</span></span>
+      <span class="item"><span class="h6">pronto</span><span class="onde">canvas</span></span>
+      <span class="item"><span class="h7"></span><span class="onde">abas e listas</span></span>
+    </div>
+  </div>
+  <p class="frase">5 tamanhos de letra, 4 espaçamentos, 3 pesos. Trocar a cor de um estado hoje é editar 6 arquivos.</p>
+</div>
+
+<div class="bloco">
+  <p class="titulo">Proposta — um chip, dois tamanhos</p>
+  <div class="palco">
+    <div class="fila">
+      <span class="item">
+        <span style="display:flex; gap:6px; align-items:center">
+          <span class="chip sm trabalhando">em execução</span>
+          <span class="chip sm pronto">pronto</span>
+          <span class="chip sm esperando">esperando você</span>
+          <span class="chip sm encerrado">encerrado</span>
+        </span>
+        <span class="onde">pequeno · listas, quadro, canvas, abas</span>
+      </span>
+      <span class="item">
+        <span style="display:flex; gap:6px; align-items:center">
+          <span class="chip md trabalhando">em execução</span>
+          <span class="chip md pronto">pronto</span>
+        </span>
+        <span class="onde">grande · topo de painel</span>
+      </span>
+      <span class="item">
+        <span style="display:flex; gap:8px; align-items:center">
+          <span class="ponto trabalhando"></span>
+          <span class="ponto pronto"></span>
+          <span class="ponto esperando"></span>
+        </span>
+        <span class="onde">ponto · onde não cabe texto</span>
+      </span>
+    </div>
+  </div>
+  <p class="frase">As cores já existem no app (os tokens de estado). O que muda é todo mundo passar a usar as mesmas.</p>
+</div>
+
+</div>
+</body>
+</html>

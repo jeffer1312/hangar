@@ -27,6 +27,16 @@ describe('FileViewer', () => {
     unmount(comp);
   });
 
+  it('o visor de arquivo numera as linhas', () => {
+    const { el, comp } = montar({
+      diff: null,
+      conteudo: { path: 'a.py', text: 'a = 1\nb = 2\nc = 3\n', size: 18, truncated: false },
+    });
+    // Uma calha por linha, numerada de 1 a N — sem contar a linha fantasma do \n final.
+    expect([...el.querySelectorAll('.conteudo .gut')].map((g) => g.textContent)).toEqual(['1', '2', '3']);
+    unmount(comp);
+  });
+
   it('pluraliza a meta: 1 linha no singular', () => {
     const { el, comp } = montar({
       diff: null,

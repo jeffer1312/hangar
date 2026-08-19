@@ -6,11 +6,12 @@ import * as m from '../paraglide/messages';
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
     uploadFileForServer, transcribeFileForServer,
   } from '../lib/api';
-  import { relativeTime, bubblesFromTail, rotuloEstado, pairColor, parsePeerMessage, providerTag } from '../lib/format';
+  import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
+  import StateChip from './StateChip.svelte';
   import type { Server } from '../lib/auth';
   import type { ChatEvent } from '../lib/types';
   import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
@@ -386,9 +387,12 @@ import * as m from '../paraglide/messages';
     <!-- Servidor por NOME, não só pela cor do dot: com 5+ servidores a cor sozinha não identifica. -->
     <span class="bc-srv" style="color: {color}" title={server.label}>{server.label}</span>
     <!-- Pill de estado SÓ no canvas (fill): lá não há colunas dizendo o estado; no board a coluna
-         já diz e o pill viraria ruído repetido. Vocabulário --pill-* do design system. -->
+         já diz e o pill viraria ruído repetido. O desenho (vocabulário --pill-* do design system)
+         mora no StateChip; este card era o precedente dele.
+         O estado 'dead' nunca chega aqui: a lista não o traz (classify() só devolve dead no SSE
+         por-sessão do Chat; ver CLAUDE.md). -->
     {#if fill}
-      <span class="bc-state" data-state={session.state}>{rotuloEstado(session.state)}</span>
+      <StateChip state={session.state} />
     {/if}
     <span class="bc-time">{relativeTime(session.last_activity)}</span>
     <span class="bc-open" title={m.board_abrir_chat()}>⤢</span>
@@ -581,16 +585,6 @@ import * as m from '../paraglide/messages';
      a listra lateral virou aro completo, mais legível de qualquer ângulo do canvas). */
   .bcard.attention { border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
   .bcard.attention:hover { border-color: color-mix(in srgb, var(--warning) 65%, transparent); }
-  /* Estado como pill (vocabulário --pill-* do app.css) — só renderizado no canvas. */
-  .bc-state {
-    font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em;
-    padding: 1px 8px; border-radius: var(--radius-full); flex-shrink: 0; white-space: nowrap;
-  }
-  .bc-state[data-state='working'] { background: var(--pill-working-bg); color: var(--pill-working-fg); }
-  .bc-state[data-state='idle'] { background: var(--pill-idle-bg); color: var(--pill-idle-fg); }
-  .bc-state[data-state='awaiting_input'] { background: var(--pill-input-bg); color: var(--pill-input-fg); }
-  /* Sem branch 'dead' de propósito: a lista nunca traz esse estado (classify() não devolve dead
-     pra lista — só o SSE por-sessão do Chat; ver CLAUDE.md). */
   /* Canvas: o wrapper dita a altura; o corpo vira o flexível (o teto de 240px é regra da COLUNA). */
   .bcard.fill { height: 100%; display: flex; flex-direction: column; }
   .bcard.fill .bc-body { max-height: none; flex: 1; }

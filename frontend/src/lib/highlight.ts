@@ -37,6 +37,10 @@ const LANG_LOADERS: Record<string, () => Promise<unknown>> = {
   cs: () => import('@shikijs/langs/csharp'),
   csharp: () => import('@shikijs/langs/csharp'),
   dart: () => import('@shikijs/langs/dart'),
+  ps1: () => import('@shikijs/langs/powershell'),
+  psm1: () => import('@shikijs/langs/powershell'),
+  fish: () => import('@shikijs/langs/fish'),
+  toml: () => import('@shikijs/langs/toml'),
 };
 
 function langFromPath(path: string): string {

@@ -2,7 +2,7 @@
   import * as m from '../../paraglide/messages';
   import { mensagemDeErro } from '../../lib/errosApi';
   import type { PathDiff, FileContent } from '../../lib/types';
-  import { highlightDiff, type DiffRow } from '../../lib/highlight';
+  import { highlightDiff, highlightCodeLines, type DiffRow, type DiffToken } from '../../lib/highlight';
   import { dec } from '../../lib/fmt';
   import DiffView from '../git/DiffView.svelte';
 
@@ -81,6 +81,42 @@
     return () => { valida = false; };
   });
 
+  // ── Arquivo sem diff: mesmas duas peças do diff, pro conteúdo ────────────────
+  // Tokens por linha do arquivo ([] = mostra plano, que é também o estado "ainda destacando").
+  let tokensArquivo: DiffToken[][] = $state([]);
+  // Qual TEXTO já está em `tokensArquivo` — o arquivo pode trocar sem o componente remontar.
+  let destacadoDeTexto: string | null = $state(null);
+
+  const linhas = $derived(doArquivo !== null ? linhasDe(doArquivo.text) : []);
+  // Largura da calha em dígitos (mínimo 2 pra não pular de largura em arquivo de <10 linhas).
+  const digitosCalha = $derived(Math.max(2, String(linhas.length).length));
+
+  const destacandoArquivo = $derived(!temDiff && doArquivo !== null && destacadoDeTexto !== doArquivo.text);
+
+  $effect(() => {
+    const f = doArquivo;
+    let valida = true;
+    if (f === null || temDiff) {
+      tokensArquivo = [];
+      destacadoDeTexto = null;
+      return () => { valida = false; };
+    }
+    const texto = f.text;
+    tokensArquivo = [];
+    highlightCodeLines(linhasDe(texto), path).then((t) => {
+      if (!valida) return;
+      // null = sem destaque possível (.txt, grammar que falhou, arquivo acima do teto interno):
+      // texto plano COM a calha, nunca erro na tela.
+      tokensArquivo = t ?? [];
+      destacadoDeTexto = texto;
+    }).catch(() => {
+      if (!valida) return;
+      tokensArquivo = [];
+      destacadoDeTexto = texto;   // desiste desta versão: não fica preso em "carregando"
+    });
+    return () => { valida = false; };
+  });
+
   // +N −M contado das linhas destacadas (a mesma conta do cabeçalho interno do DiffView).
   const estat = $derived({
     add: rows.filter((r) => r.kind === 'add').length,
@@ -109,9 +145,14 @@
     return `${dec(n / (1024 * 1024), 1)} MB`;
   }
 
+  // Linhas do arquivo, sem a linha fantasma do \n final. Serve pra contagem da meta E pro visor
+  // (calha + destaque), que precisam concordar linha a linha.
+  function linhasDe(texto: string): string[] {
+    return texto === '' ? [] : texto.replace(/\n$/, '').split('\n');
+  }
+
   function linhasDoTexto(texto: string): number {
-    if (!texto) return 0;
-    return texto.split('\n').length - (texto.endsWith('\n') ? 1 : 0);
+    return linhasDe(texto).length;
   }
 
   // Plural correto da meta: arq_meta_arquivo diz "N linhas" e o Paraglide deste projeto nao tem
@@ -125,7 +166,7 @@
   );
 </script>
 
-<div class="visor" role="region" tabindex="-1" aria-label={path} aria-busy={loading || destacando}>
+<div class="visor" role="region" tabindex="-1" aria-label={path} aria-busy={loading || destacando || destacandoArquivo}>
   <div class="cab">
     <div class="cab-l1">
       <span class="caminho">
@@ -180,7 +221,10 @@
       {#if doArquivo.truncated}
         <p class="aviso">{m.arq_arquivo_cortado()}</p>
       {/if}
-      <pre class="conteudo">{doArquivo.text}</pre>
+      <!-- Calha + linhas destacadas (mesmo desenho do DiffView: cor do token INLINE, vinda do
+           tema do Shiki). Sem tokens ainda (destaque em voo) ou sem tokens possíveis (null do
+           highlight) a linha sai em texto plano — a calha aparece nos dois casos. -->
+      <pre class="conteudo" style:--gut="{digitosCalha}ch">{#each linhas as linha, i (i)}{@const toks = tokensArquivo[i]}<span class="ln"><span class="gut">{i + 1}</span>{#if toks}{#each toks as t, j (j)}<span style={t.color ? `color: ${t.color}` : undefined}>{t.content}</span>{/each}{:else}{linha}{/if}</span>{/each}</pre>
     {:else if loading}
       <!-- Busca em voo sem nada ainda: aviso de carga, nunca a afirmação "sem diferenças". -->
       <p class="aviso">{m.git_diff_carregando()}</p>
@@ -270,5 +314,16 @@
     white-space: pre;
     flex-shrink: 1;
     min-height: 0;
+  }
+  /* A linha inteira ocupa a largura do CONTEUDO (min 100% da caixa) — sem isso a calha sticky
+     para de grudar no meio da rolagem, porque ela nao passa do bloco que a contem. */
+  .conteudo .ln { display: block; width: max-content; min-width: 100%; }
+  /* Calha: numero fixo na esquerda enquanto o codigo rola em X (sticky). O fundo e o MESMO
+     material da caixa (--surface-inset), pro codigo passar por baixo sem aparecer. */
+  .conteudo .gut {
+    position: sticky; left: 0;
+    display: inline-block; width: var(--gut); padding-right: 1.25ch;
+    text-align: right; color: var(--text-muted); user-select: none;
+    background: var(--surface-inset);
   }
 </style>
