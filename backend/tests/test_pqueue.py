@@ -981,3 +981,23 @@ def test_reconcile_prefixo_nao_rouba_linha_do_mais_especifico(tmp_path):
     got = {r["id"]: r for r in q.load()}
     assert got["X"]["desistiu"] is True and "confirmed" not in got["X"]  # perdida, honesta
     assert got["Y"]["confirmed"] is True and "desistiu" not in got["Y"]  # chegou, sem marca
+
+
+def test_confirm_delivered_carimba_so_as_entregues_nao_confirmadas():
+    # O steer do Kimi baixa a fila INTERNA da TUI — que é exatamente o conjunto delivered e ainda
+    # não confirmado. Confirmada já, não-entregue e desistida não podem mudar.
+    q = PromptQueue("s")
+    q.append("ja confirmada", delivered=True)
+    q.append("na fila da TUI", delivered=True)
+    q.append("nem digitada", delivered=False)
+    rows = q.load()
+    rows[0]["confirmed"] = True
+    q._write_atomic(rows)
+
+    assert q.confirm_delivered() == 1
+    final = PromptQueue("s").load()
+    assert final[0].get("confirmed") is True
+    assert final[1].get("confirmed") is True
+    assert "confirmed" not in final[2]
+    # Segunda passada não carimba nada (idempotente — clique duplo no chip).
+    assert q.confirm_delivered() == 0

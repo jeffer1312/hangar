@@ -386,6 +386,26 @@ class PromptQueue:
                 return bool(r.get("delivered"))
         return None
 
+    def confirm_delivered(self) -> int:
+        """Carimba `confirmed` em TODA entrada delivered ainda não confirmada. Devolve quantas.
+
+        Quem chama é o steer do Kimi (POST /steer): o ctrl-s promove a fila INTERNA da TUI pro
+        turno em curso, e essa fila é exatamente o conjunto delivered-não-confirmado daqui —
+        digitado, mas ainda fora do wire, porque o Kimi só grava o append_message da msg steerada
+        no FIM do turno (medido em 19/08/2026: 34s depois do ctrl-s). Sem este carimbo a bolha
+        "na fila" ficava acesa o turno inteiro sobre uma mensagem que já estava no turno.
+        """
+        with _append_lock:
+            rows = self.load()
+            n = 0
+            for r in rows:
+                if r.get("delivered") is True and not r.get("confirmed"):
+                    r["confirmed"] = True
+                    n += 1
+            if n:
+                self._write_atomic(rows)
+            return n
+
     def prune_before(self, min_ts: float) -> int:
         # Entradas de sessao ANTERIOR (ts < inicio do transcript atual) nunca mais casam nem drenam
         # — so acumulavam lixo e mantinham o cheap-check do drain quente pra sempre. Remove.

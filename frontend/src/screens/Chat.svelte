@@ -275,6 +275,9 @@
   // Texto da previa e markdown CRU (veio do agente: sidecar do Pi, deltas do Codex) e nao texto ja
   // pintado pela TUI. Decide se a bolha RENDERIZA -- ver AssistantBubble.
   let previewMd = $state(false);
+  // Previa INCREMENTAL (so cresce no fim): sidecar/deltas, ou a costura do pane do Kimi
+  // (_costurar no backend). Libera a bolha sem o teto de 10 linhas do texto raspado.
+  let previewFull = $state(false);
   let dockEl: HTMLElement | undefined = $state();
   // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
   let dockH = $state(150);
@@ -1142,7 +1145,7 @@
     es.addEventListener('preview', (e: MessageEvent) => {
       noteAlive();
       try {
-        const ev = JSON.parse(e.data) as { text?: string; md?: boolean };
+        const ev = JSON.parse(e.data) as { text?: string; md?: boolean; full?: boolean };
         const t = ev.text ?? '';
         // Guard de monotonicidade: frame TRANSITORIO do pane (mid-redraw) as vezes chega como
         // PREFIXO do texto ja mostrado -> ignorar, senao o texto recua e re-cresce (stuttering).
@@ -1164,6 +1167,7 @@
         if (!t && stateEvent?.state === 'working') return;
         previewText = t;
         previewMd = !!ev.md;
+        previewFull = !!ev.full;
       } catch (err) {
         // Engolir aqui congela a previa (texto E flag) no ultimo frame bom, sem rastro nenhum. O
         // erro nao pode derrubar o handler do SSE, mas tem que dar pra ver no dev.
@@ -1386,6 +1390,17 @@
         + events.filter((e) => e.kind === 'user_msg'
                           && e.id?.startsWith('queued-') && !e.desistiu).length,
   );
+
+  // "mandar agora" (chip da fila): o ctrl-s promove a fila da TUI pro turno em curso. Com
+  // promoted=true o backend JÁ baixou a fila durável — tira as bolhas "queued-" na hora, porque o
+  // user_msg real só é gravado no wire no FIM do turno (medido: ~34s depois do ctrl-s) e até lá
+  // nada mais derrubaria o chip: ele ficava aceso e clicável o turno inteiro sobre um no-op.
+  async function steerAgora(): Promise<void> {
+    const r = await steerSession(sessionName);
+    if (!r.promoted) return;
+    events = events.filter((e) => !(e.kind === 'user_msg' && e.id?.startsWith('queued-')));
+    rebuildIndex();
+  }
 
   let pendingSeq = 0;
 
@@ -1728,6 +1743,7 @@
       {swapIds}
       preview={previewText}
       previewMd={previewMd}
+      previewFull={previewFull}
       onSelectOption={handleSelect}
       onCancel={handleInterrupt}
       askOpen={isWide && askOpen}
@@ -1803,7 +1819,7 @@
         {lastCache}
         stats={statsEvent}
         onSend={handleSend}
-        onSteer={sessionProvider === 'kimi' ? () => steerSession(sessionName) : undefined}
+        onSteer={sessionProvider === 'kimi' ? steerAgora : undefined}
         {filaCount}
         onCommand={handleCommand}
         onInterrupt={handleInterrupt}

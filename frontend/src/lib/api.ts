@@ -663,8 +663,12 @@ export async function sendInput(name: string, text: string): Promise<void> {
 
 // ctrl-s avulso (só Kimi): a msg que JÁ está na fila da TUI entra no turno em curso. É o caso que o
 // botão de enviar-com-steer não cobre — quando o usuário só decide isso depois de ter mandado.
-export async function steerSession(name: string): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/steer`, {
+// promoted=true: o backend já baixou a fila durável — o front tira as bolhas "queued-" na hora,
+// porque o user_msg real só é gravado no wire no FIM do turno (medido: ~34s depois do ctrl-s).
+export async function steerSession(
+  name: string,
+): Promise<{ ok: boolean; promoted?: boolean; confirmed?: number }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/steer`, {
     method: 'POST',
   });
 }

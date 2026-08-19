@@ -1125,7 +1125,13 @@ def _partial(name: str, motivo: str, texto: str, pastes_antes: set[str] | None =
     return "partial"
 
 
-def steer_now(name: str) -> bool:
+# Marcador da fila INTERNA da TUI do Kimi ("↑ to edit · ctrl-s to steer immediately", medido em
+# 19/08/2026 no 0.37.2, some no instante em que a fila é promovida): presente = há o que steerar;
+# ausente = o ctrl-s seria no-op e o caller precisa saber disso (chip da UI fica ou sai).
+_STEER_MARKER = "ctrl-s to steer"
+
+
+def steer_now(name: str) -> bool | str:
     """`ctrl-s` AVULSO: promove o que JA esta na fila da TUI do Kimi pro turno em curso.
 
     Medido em 14/08/2026 numa sessao Kimi real: texto+Enter com ele trabalhando deixa a msg na fila
@@ -1139,14 +1145,21 @@ def steer_now(name: str) -> bool:
     Dentro do `_send_lock` da sessao: senao esta tecla pode cair no MEIO de um envio digitando
     (entre o texto e o Enter), e ai ela steera a msg ANTERIOR e deixa a nova pela metade no composer.
 
-    Sem nada na fila e no-op medido (14/08/2026: pane nao muda, teclado segue respondendo) — quem
-    checa se ha o que promover e a TUI, nao o app, porque so ela sabe.
+    Sem nada na fila e no-op medido (14/08/2026: pane nao muda, teclado segue respondendo) — e e
+    por isso que o marcador e checado ANTES: devolve "sem-fila" sem teclar nada, pro caller nao
+    confirmar entrega de uma promocao que nao aconteceu. A checagem de marcador degrada pra tecla
+    cega se o pane estiver ilegivel (comportamento de sempre), nunca bloqueia.
 
-    Devolve o retorno do `send_keys`: False = o tmux RECUSOU a tecla (pane morto, sessao caiu). Sem
-    repassar isso, a rota respondia 200 pra uma tecla que nunca saiu, o chip sumia da tela e a msg
-    ficava parada na fila sem ninguem saber — e a UI nao tem como perceber sozinha, porque o efeito
-    do ctrl-s so aparece dentro da TUI."""
+    Retorno TRI-ESTADO: False = o tmux RECUSOU a tecla (pane morto, sessao caiu) — sem repassar
+    isso, a rota respondia 200 pra uma tecla que nunca saiu, o chip sumia da tela e a msg ficava
+    parada na fila sem ninguem saber. "sem-fila" = a TUI nao tinha o que promover. True = promovido
+    (o caller baixa a fila duravel)."""
     with _send_lock(name):
+        try:
+            if _STEER_MARKER not in (_capture(name) or ""):
+                return "sem-fila"
+        except Exception:
+            pass  # pane ilegivel: degrada pro comportamento de sempre (tecla e no-op se vazio)
         return send_keys(name, "C-s") is not False
 
 

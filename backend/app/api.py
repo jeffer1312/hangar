@@ -2070,9 +2070,19 @@ async def steer_session(name: str):
     # `is False` e nao `not ...`: o unico produtor de False e o tmux recusando a tecla; um dublê de
     # teste que devolve None nao pode virar erro. Sem esta checagem a rota afirmava entrega de um
     # ctrl-s que nunca saiu (pane morto) — o chip sumia da tela e a msg ficava parada na fila.
-    if await _send_thread(terminal_input.steer_now, name) is False:
+    r = await _send_thread(terminal_input.steer_now, name)
+    if r is False:
         raise HTTPException(502, "o terminal recusou a tecla — a mensagem continua na fila")
-    return {"ok": True}
+    if r == "sem-fila":
+        # A bolha "na fila" existia mas a TUI nao tinha o marcador (a msg ja entrou no turno por
+        # outra via, ou o wire ainda nao flushou): NAO confirma nada — quem decide e o reconcile
+        # do transcript, nunca um carimbo sobre promocao que nao aconteceu.
+        return {"ok": True, "promoted": False}
+    # Promovido de verdade: baixa a fila duravel AGORA. O Kimi so grava o append_message da msg
+    # steerada no FIM do turno (medido: 34s depois do ctrl-s), entao esperar o transcript confirmar
+    # deixava o chip "N na fila" aceso o turno inteiro — e clicavel, sobre um no-op.
+    n = await _send_thread(PromptQueue(name).confirm_delivered)
+    return {"ok": True, "promoted": True, "confirmed": n}
 
 
 @app.post("/api/broadcast", dependencies=[Depends(require_auth)])

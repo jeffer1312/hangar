@@ -297,3 +297,26 @@ def test_confirmacao_atrasada_nao_entrega_duas_vezes(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "_espera_picker_fechar", lambda n: True)
     assert api.answer("k", body) == {"ok": True, "fallback": True}
     assert len(enviados) == 1 and escapes == ["k"]
+
+
+def test_steer_sem_marcador_nao_tecla(teclado, monkeypatch):
+    # O chip pode existir sem a TUI ter fila (msg já entrou no turno por outra via): sem o
+    # marcador, o ctrl-s seria no-op e confirmar a entrega ali seria mentira.
+    _panes(monkeypatch, [_PANE_FECHADO])
+    assert ti.steer_now("s") == "sem-fila"
+    assert teclado == []
+
+
+def test_steer_com_marcador_manda_ctrl_s(teclado, monkeypatch):
+    _panes(monkeypatch, ["↑ to edit · ctrl-s to steer immediately"])
+    assert ti.steer_now("s") is True
+    assert teclado == [("C-s", False)]
+
+
+def test_steer_pane_ilegivel_degrada_pra_tecla(teclado, monkeypatch):
+    # Pane ilegível NUNCA bloqueia: cai no comportamento de sempre (tecla, que é no-op se vazio).
+    def cap(name):
+        raise OSError("tmux fora")
+    monkeypatch.setattr(ti, "_capture", cap)
+    assert ti.steer_now("s") is True
+    assert teclado == [("C-s", False)]

@@ -92,10 +92,15 @@ def test_steer_manda_ctrl_s_so_no_kimi(api_client):
     """A rota do ctrl-s avulso (msg JA na fila da TUI entra no turno em curso). Fora do Kimi recusa
     com 409 e NAO toca no terminal — a tecla nao significa isso em outra TUI."""
     with patch("app.api._pane_info", return_value=("kimi", "%1")), \
-         patch("app.api.terminal_input.steer_now") as st:
+         patch("app.api.terminal_input.steer_now") as st, \
+         patch("app.api.PromptQueue") as pq:
         r = api_client.post("/api/sessions/cc/steer", headers=_h())
     assert r.status_code == 200
     st.assert_called_once_with("cc")
+    # Promoveu (retorno truthy genérico): a fila durável é baixada na hora — o wire do Kimi só
+    # grava a msg steerada no FIM do turno, e o chip não pode ficar aceso até lá.
+    pq.return_value.confirm_delivered.assert_called_once_with()
+    assert r.json()["promoted"] is True
 
     with patch("app.api._pane_info", return_value=("claude", "%1")), \
          patch("app.api.terminal_input.steer_now") as st:
@@ -109,6 +114,18 @@ def test_steer_manda_ctrl_s_so_no_kimi(api_client):
          patch("app.api.terminal_input.steer_now", return_value=False):
         r = api_client.post("/api/sessions/cc/steer", headers=_h())
     assert r.status_code == 502
+
+
+def test_steer_sem_fila_na_tui_nao_confirma_nada(api_client):
+    # "sem-fila" = o marcador nao estava no pane — ctrl-s seria no-op. Confirmar ali apagaria a
+    # bolha de uma msg que continua esperando (ou carimbaria entrega que nao aconteceu).
+    with patch("app.api._pane_info", return_value=("kimi", "%1")), \
+         patch("app.api.terminal_input.steer_now", return_value="sem-fila"), \
+         patch("app.api.PromptQueue") as pq:
+        r = api_client.post("/api/sessions/cc/steer", headers=_h())
+    assert r.status_code == 200
+    assert r.json()["promoted"] is False
+    pq.return_value.confirm_delivered.assert_not_called()
 
 
 def test_input_defer_on_overlay_marks_pending(api_client):
