@@ -642,21 +642,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   const offlineGroups = $derived(filteredGroups.filter((g) => g.error));
   const renderGroups = $derived(showOffline ? [...onlineGroups, ...offlineGroups] : onlineGroups);
 
-  // Gerenciador git (GitSheet) aberto pelo botao git DA LINHA (repo da sessao, sem abrir o chat) —
-  // mesma mecânica do menuGit (mira o server dono, restaura no fechar via closeGitSheet).
-  function rowGit(name: string, serverId: string, e: MouseEvent) {
-    e.stopPropagation();
-    gitSheetPrevServer = getActiveId();
-    selectServer(serverId);
-    gitSheet = { name };
-  }
-  // Loop runner (LoopSheet) aberto pelo botao da linha, mesma mecânica do rowGit acima.
-  function rowLoop(name: string, serverId: string, e: MouseEvent) {
-    e.stopPropagation();
-    loopSheetPrevServer = getActiveId();
-    selectServer(serverId);
-    loopSheet = { name };
-  }
+
 
   // ── Broadcast (feature #9): selecionar N sessoes e mandar 1 prompt pra todas ──────────────────
   // Mesmo padrao do mobile (SessionList): selecao = "<serverId>:<name>", groupSelectedByServer
@@ -1085,30 +1071,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   </svg>
                 </button>
               {/if}
-              <!-- Git da linha (paridade com o mobile): abre a GitSheet no repo do cwd, sem abrir o
-                   chat. So quando ha cwd. stopPropagation pra nao disparar rename/navegacao da linha. -->
-              {#if s.cwd}
-                <button class="sess-git" onclick={(e) => rowGit(s.name, s.serverId, e)} aria-label={m.sessao_aria_git({ n: s.name })} title={m.sessao_gerenciador_git()}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <line x1="6" y1="3" x2="6" y2="15"/>
-                    <circle cx="18" cy="6" r="3"/>
-                    <circle cx="6" cy="18" r="3"/>
-                    <path d="M18 9a9 9 0 0 1-9 9"/>
-                  </svg>
-                </button>
-                <!-- Loop runner da linha: mesma mecânica hover-revealed do botao git. -->
-                <button class="sess-git" onclick={(e) => rowLoop(s.name, s.serverId, e)} aria-label={m.sessao_aria_loop({ n: s.name })} title={m.sessao_loop_runner()}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="m17 2 4 4-4 4"/>
-                    <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
-                    <path d="m7 22-4-4 4-4"/>
-                    <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
-                  </svg>
-                </button>
-              {/if}
-              <button class="sess-del" onclick={(e) => handleDelete(s.name, s.serverId, e)} aria-label={m.sessao_aria_excluir({ n: s.name })}>×</button>
-              <!-- TOUCH (tablet): os 3 botoes inline esmagavam o nome (iPad, visto ao vivo) — viram
-                   um kebab que abre o MESMO menu de contexto do botao direito (Git/Loop/renomear/excluir). -->
+              <!-- Linha enxuta: só o kebab ⋯ (hover) e Retomar (quando sem id). Git/Loop/Excluir agora vivem só no menu de contexto. -->
               <button class="sess-kebab" onclick={(e) => { e.stopPropagation(); openMenu(e, s, s.serverId); }} aria-label={m.sessao_aria_opcoes({ n: s.name })} title={m.sessao_opcoes()}>⋯</button>
             {/if}
           {/if}
@@ -1938,29 +1901,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .rename-dialog-input:focus { border-color: var(--accent); }
   .rename-dialog-input[aria-invalid='true'] { border-color: var(--error); }
   .rename-dialog-err { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--error); }
-  .sess-del {
-    width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
-    color: var(--text-muted); font-size: var(--text-base); line-height: 1; margin-right: 2px;
-  }
-  .sess-del:hover { color: var(--error); background: var(--bg-base); }
-  /* Git/Loop da linha: hover-revealed. display:none (nao opacity) — invisivel NAO pode reservar
-     largura, senao em sidebar estreita os botoes fantasma esmagavam o nome (visto ao vivo). O
-     foco por teclado tambem revela (focus-within). */
-  .sess-git {
-    width: 22px; height: 22px; min-height: 0; flex-shrink: 0; border-radius: var(--radius-sm);
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-muted);
-  }
-  .sess-git:hover { color: var(--accent); background: var(--bg-base); }
   @media (hover: hover) {
-    .sess-git, .sess-del { display: none; }
-    .sess-row:hover .sess-git, .sess-row:focus-within .sess-git,
-    .sess-row:hover .sess-del, .sess-row:focus-within .sess-del { display: inline-flex; }
-    /* Os 3 botoes entram NA linha e quem cede largura e o `.row-info` (flex:1, min-width:0) — o
-       nome era espremido ate zero e a pilha de estado ainda sobrepunha o icone de git. No hover o
-       chip de estado sai: ele e o item redundante ali (o spinner/subtitulo ja dizem o estado), o
-       nome nao. */
-    .sess-row:hover .state-chip, .sess-row:focus-within .state-chip { display: none; }
+    .sess-kebab { display: none; }
+    .sess-row:hover .sess-kebab, .sess-row:focus-within .sess-kebab { display: inline-flex; }
   }
   /* TOUCH (tablet/celular na sidebar): 3 botoes inline esmagavam o nome -> some git/loop/x,
      fica SO o kebab (abre o menu de contexto completo). Desktop com mouse: kebab nao existe,
