@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cp-send — mensagem entre sessões Claude via claude-pocket.
+# cp-send — mensagem entre sessões Claude via hangar.
 #
 #   cp-send --list                 lista sessões vivas (nome, estado, cwd) — locais e remotas
 #   cp-send <sessao> <mensagem...> manda prompt pra sessão (fila durável se ocupada)
@@ -13,7 +13,7 @@
 #                                  atualizado"). Chega como [grupo: X]. UNIDIRECIONAL — nunca
 #                                  responda um [grupo:] com --group (evita loop); responda 1:1.
 #   cp-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
-#                                  truecolor, visível no pocket). cwd default = home.
+#                                  truecolor, visível no app). cwd default = home.
 #                                  --provider <claude|codex|pi|kimi> escolhe o AGENTE da sessão
 #                                  nova (default claude). Ex: --provider kimi abre o Kimi Code.
 #                                  --engine <motor> nasce num motor de ~/.claude/engines.json
@@ -94,7 +94,7 @@ api() {
     local method=$1 path=$2 body=${3:-} out code
     out=$(curl -s -w $'\n%{http_code}' -X "$method" -H "$AUTH" \
         ${body:+-H "Content-Type: application/json" -d "$body"} "$BASE$path") || {
-        echo "erro: backend inacessível em $BASE (claude-pocket rodando?)" >&2; return 1; }
+        echo "erro: backend inacessível em $BASE (hangar rodando?)" >&2; return 1; }
     code=${out##*$'\n'}
     out=${out%$'\n'*}
     if [[ $code == 2* ]]; then printf '%s' "$out"; return 0; fi
