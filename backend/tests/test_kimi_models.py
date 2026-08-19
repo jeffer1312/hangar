@@ -105,3 +105,43 @@ def test_confirms_exige_linha_nova_com_o_nome_pedido():
     # Linha nova com o nome pedido: confirmou.
     assert km.confirms({"name": "K3", "session_only": True, "raw": "…"}, antes, "K3") is True
     assert km.confirms(None, antes, "K3") is False
+
+
+def test_check_effort_valida_contra_o_suporte_do_modelo(cat):
+    k3 = km.check_known(cat, "apikey/k3")
+    assert km.check_effort(k3, "LOW") == "low"
+    with pytest.raises(km.KimiModelError) as e:
+        km.check_effort(k3, "xhigh")
+    assert e.value.status == 422
+    # Modelo SEM níveis (kimi-for-coding não declara support_efforts): recusa qualquer pedido.
+    coding = km.check_known(cat, "kimi-code/kimi-for-coding")
+    with pytest.raises(km.KimiModelError):
+        km.check_effort(coding, "low")
+
+
+def test_parse_thinking_set_e_confirms_effort():
+    pane = (
+        "   Thinking set to low for this session only.\n"
+        " 🤖 K3 (low✦)\n"
+    )
+    sw = km.parse_thinking_set(pane)
+    assert sw["level"] == "low"
+    assert km.parse_thinking_set("nada por aqui") is None
+    antes = {"level": "high", "raw": "Thinking set to high for this session only."}
+    assert km.confirms_effort(antes, antes, "low") is False      # linha VELHA não prova nada
+    assert km.confirms_effort(sw, antes, "low") is True
+    assert km.confirms_effort(sw, antes, "max") is False
+
+
+def test_parse_thinking_row_le_niveis_e_colchete():
+    pane = (
+        "  Select a model  (type to search)\n"
+        "   ❯ K3                     apikey ← current\n"
+        "  Thinking  (←→ to switch)\n"
+        "     Low    [ High ]    Max\n"
+        " 🤖 K3 (high✦)\n"
+    )
+    row = km.parse_thinking_row(pane)
+    assert row["levels"] == ["Low", "High", "Max"]
+    assert row["current"] == "High"
+    assert km.parse_thinking_row("sem picker aqui") is None

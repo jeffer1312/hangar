@@ -341,25 +341,34 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
   return { caption, filenames };
 }
 
-// Painel de tarefas do TUI ("● Todos (11/13)" + arvore ├─/└─) dentro da PREVIA AO VIVO. Ele nao e
-// prosa: e o mesmo TodoWrite que vira ToolCard quando o turno fecha no .jsonl — mas o preview le o
-// PANE, onde ele aparece como um bloco ● comum, e um turno longo deixava 13 linhas de arvore
-// ocupando a tela inteira por 40min. Aqui so SEPARO; quem colapsa e a bolha (<details>).
-// A arvore e desenhada pelo TUI, entao o formato e calibration knob: cabecalho + linhas comecando
-// por box-drawing. Cabecalho sozinho (sem arvore) nao conta — pode ser prosa do assistente.
+// Painel de tarefas do TUI dentro da PREVIA AO VIVO. Ele nao e prosa: e o mesmo TodoWrite/TodoList
+// que vira ToolCard quando o turno fecha no transcript — mas o preview le o PANE, onde ele aparece
+// como um bloco comum, e um turno longo deixava 13 linhas de painel ocupando a tela inteira por
+// 40min. Aqui so SEPARO; quem colapsa e a bolha (<details>).
+// O painel e desenhado pelo TUI, entao o formato e calibration knob — e sao DOIS:
+//   Claude: cabecalho "Todos (N/M)" + arvore ├─/└─/│ (box-drawing);
+//   Kimi:   cabecalho "Todo" seco + itens com o glifo de status ✓/●/○ (medido no 0.37.2,
+//           screenshots de 19/08/2026 — sem contador e sem arvore).
+// Cabecalho sozinho (sem item) nao conta — pode ser prosa do assistente.
 const TODO_HEAD_RE = /^Todos \((\d+)\/(\d+)\)$/;
+const TODO_HEAD_KIMI_RE = /^Todo$/;
+const TODO_ITEM_KIMI_RE = /^\s*[✓●○]\s/;
+const _CORPOS: [RegExp, RegExp][] = [[TODO_HEAD_RE, /^\s*[├└│]/], [TODO_HEAD_KIMI_RE, TODO_ITEM_KIMI_RE]];
 export function splitTodoBlock(text: string): { head: string; body: string; rest: string } | null {
   const lines = text.split('\n');
-  const i = lines.findIndex((l) => TODO_HEAD_RE.test(l.trim()));
-  if (i < 0) return null;
-  let j = i + 1;
-  while (j < lines.length && /^\s*[├└│]/.test(lines[j])) j++;
-  if (j === i + 1) return null;
-  return {
-    head: lines[i].trim(),
-    body: lines.slice(i + 1, j).join('\n'),
-    rest: [...lines.slice(0, i), ...lines.slice(j)].join('\n').trim(),
-  };
+  for (const [cab, item] of _CORPOS) {
+    const i = lines.findIndex((l) => cab.test(l.trim()));
+    if (i < 0) continue;
+    let j = i + 1;
+    while (j < lines.length && item.test(lines[j])) j++;
+    if (j === i + 1) continue;
+    return {
+      head: lines[i].trim(),
+      body: lines.slice(i + 1, j).join('\n'),
+      rest: [...lines.slice(0, i), ...lines.slice(j)].join('\n').trim(),
+    };
+  }
+  return null;
 }
 
 // Selecao do broadcast (feature #9): agrupa os nomes SELECIONADOS por servidor-dono, na ordem em

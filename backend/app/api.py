@@ -4041,7 +4041,8 @@ async def pi_model_set(name: str, body: PiModelBody):
 # app/kimi_models.py pro que foi medido na TUI.
 
 class KimiModelBody(_StrictBody):
-    model: str
+    model: str | None = None
+    effort: str | None = None
 
 
 def _kimi_catalog() -> dict:
@@ -4090,17 +4091,29 @@ async def kimi_model_set(name: str, body: KimiModelBody):
                                                  "a sessão está trabalhando — espere ela terminar"))
     cat = _kimi_catalog()
     try:
-        alvo = kimi_models.check_known(cat, body.model)
+        alvo = kimi_models.check_known(cat, body.model) if body.model else None
+        nivel = None
+        if body.effort:
+            # Com modelo junto, valida contra o support_efforts DELE. Sozinho, quem valida é o
+            # picker ao vivo (a linha Thinking mostra os níveis do modelo ATUAL — o backend não
+            # sabe o alias vigente sem perguntar à TUI).
+            nivel = (kimi_models.check_effort(alvo, body.effort) if alvo
+                     else kimi_models.clean_alias(body.effort).lower())
     except kimi_models.KimiModelError as e:
         raise HTTPException(e.status, e.detail)
+    if alvo is None and nivel is None:
+        raise HTTPException(422, detail=erro("erro_model_effort_faltando",
+                                             "informe model e/ou effort"))
     try:
-        res = await asyncio.to_thread(terminal.set_kimi_model, name, alvo["alias"], alvo["name"])
+        res = await asyncio.to_thread(terminal.set_kimi_model, name,
+                                      alvo and alvo["alias"], alvo and alvo["name"], nivel)
     except terminal_input.DriveError as e:
         raise HTTPException(409, str(e))
     except PickerError as e:
         raise HTTPException(e.status, e.detail)
-    return {"ok": True, "current": {"alias": alvo["alias"], "name": alvo["name"]},
-            "result": res.get("result")}
+    return {"ok": True,
+            "current": {"alias": alvo["alias"], "name": alvo["name"]} if alvo else None,
+            "effort": nivel, "result": res.get("result")}
 
 
 @app.get("/api/fs/roots", dependencies=[Depends(require_auth)])

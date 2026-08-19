@@ -150,8 +150,15 @@
     overflow: hidden;
     /* Mesma receita do AccountMenu, o outro menu flutuante ancorado do app: --surface-raised (que
        respeita a transparência sobre papel de parede, ao contrário do --bg-elevated cru) e sombra
-       literal — o projeto não tem token de sombra. */
+       literal — o projeto não tem token de sombra.
+       EXCETO o alfa: o slider Solidez foi pensado pro papel de parede, mas a caixa de escolha
+       (modelo, estilo) flutua sobre TEXTO do chat — e texto sobre texto não se lê nem com 0.87
+       (queixa medida no seletor de modelo, 19/08/2026). Aqui força quase opaco e borra o que
+       sobrar atrás, sem tirar o veu do resto do app. */
+    --cp-surface-alpha: 0.97;
     background: var(--surface-raised);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);

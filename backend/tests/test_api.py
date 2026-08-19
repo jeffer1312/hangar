@@ -1907,7 +1907,7 @@ def test_kimi_model_set_aplica_e_devolve_o_readback(api_client):
                             json={"model": "apikey/k3-256k"})
     assert r.status_code == 200
     # Alias E display name: o drive digita um e confere o outro na linha "Switched to …".
-    drive.assert_called_once_with("kk", "apikey/k3-256k", "K3-256k")
+    drive.assert_called_once_with("kk", "apikey/k3-256k", "K3-256k", None)
     assert r.json()["current"]["name"] == "K3-256k"
 
 

@@ -736,6 +736,26 @@ describe('splitTodoBlock', () => {
   it('cabeçalho sem árvore não casa (pode ser prosa)', () => {
     expect(splitTodoBlock('Todos (11/13)\nsegue o baile')).toBeNull();
   });
+
+  // Painel do KIMI (0.37.2, medido em screenshots de 19/08/2026): cabeçalho "Todo" seco, sem
+  // contador, e itens com o glifo de status ✓/●/○ — nada de árvore box-drawing.
+  const panelKimi = [
+    'Todo',
+    '✓ Feature: troca de modelo Kimi (commit 3635b559)',
+    '● Chip mandar agora não some',
+    '○ Popover transparente demais',
+  ].join('\n');
+
+  it('formato kimi: separa cabeçalho, itens e o resto', () => {
+    const out = splitTodoBlock(`Escrevendo antes\n${panelKimi}`)!;
+    expect(out.head).toBe('Todo');
+    expect(out.body.split('\n')).toHaveLength(3);
+    expect(out.rest).toBe('Escrevendo antes');
+  });
+
+  it('formato kimi: "Todo" sozinho não casa (pode ser prosa)', () => {
+    expect(splitTodoBlock('Todo\nna verdade era outra coisa')).toBeNull();
+  });
 });
 
 describe('parseImageMessage', () => {

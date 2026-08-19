@@ -1431,11 +1431,11 @@ export function getKimiModels(name: string): Promise<{ models: KimiModel[]; defa
 
 export function setKimiModel(
   name: string,
-  alias: string,
-): Promise<{ ok: boolean; current: { alias: string; name: string }; result: string | null }> {
+  body: { model?: string; effort?: string },
+): Promise<{ ok: boolean; current: { alias: string; name: string } | null; effort: string | null; result: string | null }> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/kimi/model`, {
     method: 'POST',
-    body: JSON.stringify({ model: alias }),
+    body: JSON.stringify(body),
   });
 }
 

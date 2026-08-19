@@ -91,7 +91,11 @@ def check_known(catalog: dict, alias: str) -> dict:
     raise KimiModelError(422, f"modelo fora do catalogo: {alias}")
 
 
-_SWITCHED = re.compile(r"Switched to (.+?) with thinking .+?( for this session only)?\.\s*$")
+_SWITCHED = re.compile(r"Switched to (.+?) with thinking (\S+?)( for this session only)?\.\s*$")
+# Troca de SÓ esforço (medida no 0.37.2): linha própria, sem modelo — "Thinking set to low for
+# this session only." O nível e a sessão só mudam juntos no config quando o Enter é usado; com
+# Alt+S é sempre "for this session only".
+_THINKING_SET = re.compile(r"Thinking set to (\S+?) for this session only\.\s*$")
 
 
 def parse_switched(pane: str) -> dict | None:
@@ -105,7 +109,19 @@ def parse_switched(pane: str) -> dict | None:
     for line in pane.splitlines():
         m = _SWITCHED.search(line)
         if m:
-            achado = {"name": m.group(1), "session_only": bool(m.group(2)), "raw": line.strip()}
+            achado = {"name": m.group(1), "level": m.group(2),
+                      "session_only": bool(m.group(3)), "raw": line.strip()}
+    return achado
+
+
+def parse_thinking_set(pane: str) -> dict | None:
+    """A última linha "Thinking set to …" do pane, ou None. Mesma regra do parse_switched:
+    comparar ANTES e DEPOIS — a linha da troca anterior continua no scrollback."""
+    achado = None
+    for line in pane.splitlines():
+        m = _THINKING_SET.search(line)
+        if m:
+            achado = {"level": m.group(1), "raw": line.strip()}
     return achado
 
 
@@ -116,3 +132,43 @@ def confirms(switched: dict | None, antes: dict | None, display: str) -> bool:
     if switched is None or switched == antes:
         return False
     return switched.get("name") == display
+
+
+def check_effort(entry: dict, effort: str) -> str:
+    """O nível tem que estar no support_efforts do modelo: fora dele a linha Thinking do picker nem
+    mostra a opção, e o app reportaria sucesso sobre um no-op. Modelo SEM níveis (a lista vem
+    vazia, ex: kimi-for-coding) recusa qualquer pedido — é o que esconde a pill de esforço no front."""
+    lv = effort.strip().lower()
+    niveis = [str(e).lower() for e in entry.get("efforts") or []]
+    if lv not in niveis:
+        raise KimiModelError(422, f"nível fora do suporte de {entry.get('alias')}: {effort!r} "
+                                  f"(use um de {', '.join(niveis) or 'nenhum — modelo sem níveis'})")
+    return lv
+
+
+def confirms_effort(set_line: dict | None, antes: dict | None, level: str) -> bool:
+    """Mesma regra do confirms: linha NOVA, com o nível pedido."""
+    if set_line is None or set_line == antes:
+        return False
+    return set_line.get("level") == level
+
+
+def parse_thinking_row(pane: str) -> dict | None:
+    """A linha de níveis do picker ("Low  [ High ]  Max" logo abaixo de "Thinking (←→ to switch)"):
+    os níveis NA ORDEM desenhada e o colchetado (ponto de partida da navegação ←→).
+
+    None = sem a linha (picker fechado, ou modelo sem níveis — a seção não aparece pra ele).
+    Os níveis vêm do PANE e não do catálogo porque a ordem de navegação é a ordem do desenho, e
+    o colchete é o único lugar que diz o nível ATUAL sem perguntar nada à TUI."""
+    lines = pane.splitlines()
+    for i, ln in enumerate(lines):
+        if "Thinking" not in ln or "switch" not in ln:
+            continue
+        for j in range(i + 1, min(i + 3, len(lines))):
+            m = re.search(r"\[\s*([A-Za-z]+)\s*\]", lines[j])
+            if not m:
+                continue
+            niveis = re.findall(r"[A-Za-z]+", re.sub(r"[\[\]]", " ", lines[j]))
+            if m.group(1) in niveis:
+                return {"levels": niveis, "current": m.group(1)}
+    return None

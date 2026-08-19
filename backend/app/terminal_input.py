@@ -1722,22 +1722,27 @@ class TerminalInput:
                 send_keys(name, "Enter")
                 time.sleep(_OPEN_SETTLE)
 
-    def set_kimi_model(self, name: str, alias: str, display: str) -> dict:
-        """Troca o modelo de uma sessao Kimi dirigindo o picker do `/model`.
+    def set_kimi_model(self, name: str, alias: str | None = None, display: str | None = None,
+                       effort: str | None = None) -> dict:
+        """Troca modelo e/ou nível de pensamento de uma sessao Kimi dirigindo o picker do `/model`.
 
-        Sequencia medida ao vivo (Kimi Code 0.37.2, ver kimi_models.py): abre com `/model`+Enter,
-        digita o ALIAS completo na busca (ela casa alias, nao so nome — a lista do picker e
-        invisivel pro capture-pane, entao navegar por setas seria as cegas) e aplica com Alt+S,
-        que troca SO na sessao. NUNCA Enter: ele gravaria o alias como default_model GLOBAL no
-        config.toml (medido: o arquivo e reescrito na hora). Confirma pela linha "Switched to …"
-        NOVA no scrollback — a das trocas anteriores continua na tela, entao a baseline e lida
-        ANTES de digitar (mesmo cuidado do set_engine_model com k3-256k -> k3).
+        Sequencia medida ao vivo (Kimi Code 0.37.2, ver kimi_models.py): abre com `/model`+Enter.
+        Modelo: digita o ALIAS completo na busca (ela casa alias, nao so nome — a lista do picker e
+        invisivel pro capture-pane, entao navegar por setas seria as cegas). Esforço: a linha
+        "Thinking (←→ to switch)" mostra os níveis do modelo com o ATUAL colchetado — lê o pane,
+        anda Left/Right a diferença de posições. SEMPRE aplica com Alt+S, que troca SO na sessao;
+        NUNCA Enter: ele gravaria o alias como default_model GLOBAL no config.toml (medido: o
+        arquivo e reescrito na hora). Confirma pela linha NOVA no scrollback — "Switched to …" pra
+        modelo, "Thinking set to …" pra esforço — com baseline lida ANTES de digitar (a linha da
+        troca anterior continua na tela, mesmo cuidado do set_engine_model com k3-256k -> k3).
         """
         with _send_lock(name):
             if not deliverable(name):
                 raise DriveError("pane com overlay aberto ou sessao morta — nada foi digitado")
             _wait_input_ready(name, provider="kimi")
-            antes = kimi_models.parse_switched(tmux.capture_pane(name) or "")
+            pane0 = tmux.capture_pane(name) or ""
+            antes_model = kimi_models.parse_switched(pane0)
+            antes_effort = kimi_models.parse_thinking_set(pane0)
             send_keys(name, "/model", literal=True)
             time.sleep(_SLASH_SETTLE)
             send_keys(name, "Enter")
@@ -1757,26 +1762,54 @@ class TerminalInput:
             if not aberto:
                 self._abort(name)
                 raise mp.PickerError(409, "o picker do /model do Kimi nao abriu")
-            send_keys(name, alias, literal=True)
-            # A busca filtra no redraw; teclar o Alt+S em cima da digitacao aplicaria o item que
-            # estava sob o cursor ANTES do filtro — o K3 errado com folga.
-            time.sleep(_OPEN_SETTLE)
+            if alias:
+                send_keys(name, alias, literal=True)
+                # A busca filtra no redraw; teclar o Alt+S em cima da digitacao aplicaria o item que
+                # estava sob o cursor ANTES do filtro — o K3 errado com folga.
+                time.sleep(_OPEN_SETTLE)
+            if effort:
+                row = kimi_models.parse_thinking_row(tmux.capture_pane(name) or "")
+                if row is None:
+                    self._abort(name)
+                    raise mp.PickerError(409, "este modelo nao tem niveis de pensamento no picker")
+                niveis = [n.lower() for n in row["levels"]]
+                if effort not in niveis:
+                    self._abort(name)
+                    raise mp.PickerError(409, f"nivel {effort} nao aparece no picker deste modelo")
+                passos = niveis.index(effort) - niveis.index(row["current"].lower())
+                for _ in range(abs(passos)):
+                    send_keys(name, "Right" if passos > 0 else "Left")
+                    time.sleep(_NAV_GAP)
+                time.sleep(_SETTLE)
             send_keys(name, "M-s")
             fim = time.monotonic() + self._RESULT_PRAZO
             while True:
                 time.sleep(_SETTLE)
-                troca = kimi_models.parse_switched(tmux.capture_pane(name) or "")
-                if kimi_models.confirms(troca, antes, display):
-                    return {"ok": True, "result": troca["raw"]}
-                if troca is not None and troca != antes:
-                    # Saiu uma linha NOVA com outro nome: a busca casou algo inesperado. Falha
-                    # alta, nunca sucesso sobre o modelo errado.
+                pane = tmux.capture_pane(name) or ""
+                troca = kimi_models.parse_switched(pane)
+                pensou = kimi_models.parse_thinking_set(pane)
+                # Modelo: "Switched to X with thinking Y". Esforço sozinho: "Thinking set to Y".
+                # Pedidos juntos: a linha "Switched" carrega o nível e serve de prova pros dois.
+                ok_model = not alias or (
+                    troca is not None and troca != antes_model and troca.get("name") == display)
+                ok_effort = not effort or (
+                    (pensou is not None and pensou != antes_effort and pensou.get("level") == effort)
+                    or (troca is not None and troca != antes_model
+                        and troca.get("level") == effort))
+                if ok_model and ok_effort:
+                    linha = (troca or pensou or {}).get("raw") if (troca or pensou) else None
+                    return {"ok": True, "result": linha}
+                novo = (troca if troca != antes_model else None) or \
+                       (pensou if pensou != antes_effort else None)
+                if novo is not None:
+                    # Saiu uma linha NOVA mas não é o pedido: a busca/navegação casou algo
+                    # inesperado. Falha alta, nunca sucesso sobre o que ficou.
                     self._abort(name)
                     raise mp.PickerError(
-                        409, f"o Kimi aplicou {troca['name']}, nao {display}")
+                        409, f"o Kimi aplicou outra coisa ({novo.get('raw')})")
                 if time.monotonic() >= fim:
                     self._abort(name)
-                    raise mp.PickerError(409, f"sem confirmacao da troca pra {display} no terminal")
+                    raise mp.PickerError(409, "sem confirmacao da troca no terminal")
 
     def _abort(self, name: str) -> None:
         send_keys(name, "Escape")

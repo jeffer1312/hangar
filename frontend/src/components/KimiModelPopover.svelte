@@ -89,8 +89,8 @@
     aplicando = md.alias;
     err = null;
     try {
-      const res = await setKimiModel(sessionName, md.alias);
-      onApplied(res.current.name);
+      const res = await setKimiModel(sessionName, { model: md.alias });
+      if (res.current) onApplied(res.current.name);
     } catch (e) {
       err = e instanceof Error ? e.message : m.comum_falha_aplicar();
       aplicando = null;
