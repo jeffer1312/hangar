@@ -28,6 +28,7 @@ vi.mock('../lib/api', () => ({
       : { kind: 'claude', reduced: true, models: [{ id: 'opus' }, { id: 'sonnet' }, { id: 'haiku' }] }),
   getSessions: vi.fn(async () => []),
   getEngines: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
+  getProviders: vi.fn(async () => ({ claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } })),
   criarConta: vi.fn(), apagarConta: vi.fn(),
 }));
 vi.mock('./FolderScanner.svelte', () => ({

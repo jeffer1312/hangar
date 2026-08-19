@@ -831,6 +831,10 @@ export function getEngines(): Promise<EnginesResponse> {
   return apiFetch('/api/engines');
 }
 
+export function getProviders(): Promise<Record<string, { disponivel: boolean; motivo: string | null }>> {
+  return apiFetch('/api/providers');
+}
+
 export function getEnginesForServer(s: Server): Promise<EnginesResponse> {
   return apiFetchForServer(s, '/api/engines');
 }

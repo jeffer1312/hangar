@@ -3,7 +3,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import Select from './Select.svelte';
   import FolderScanner from './FolderScanner.svelte';
-  import { getSessions, listClaudeConfigs, getEngines, criarConta, apagarConta,
+  import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
            modelOptions, type ModelOption, type Motor } from '../lib/api';
   import { basename, providerName } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
@@ -26,6 +26,7 @@
   // Claude com 400, entao os dois pickers abaixo seguem Claude-only).
   const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
   let provider = $state<Provider>('claude');
+  let providers = $state<Record<string, { disponivel: boolean; motivo: string | null }>>({});
 
   // Servidor-alvo da nova sessão. Como o scanner/dedupe/criação leem o servidor ATIVO, escolher
   // aqui = selectServer(id): todas as chamadas seguintes do sheet caem nesse backend.
@@ -37,6 +38,7 @@
     // sem isto a lista ficava a do servidor da ABERTURA e o create mandava um config_dir de outra
     // maquina -> 400 "config_dir invalido" no backend de destino).
     loadConfigs();
+    carregarProviders();
   }
 
   // Fluxo em dois passos: 1) escolher a pasta (scanner) -> 2) criar uma sessao nova com nome UNICO
@@ -101,6 +103,14 @@
   // Pi rejeita bare id que casa em mais de um provider). Nos outros formatos (motor, cache do
   // Claude, aliases reduzidos) não há provider e o id já é único — o valor é o id puro, como hoje.
   const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
+
+  async function carregarProviders() {
+    try {
+      providers = await getProviders();
+    } catch {
+      providers = {};
+    }
+  }
 
   async function carregarModelos() {
     const seq = ++modSeq;
@@ -361,6 +371,7 @@
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
       if (target) pickTarget(target);      // pickTarget ja carrega configs E motores do alvo
       else loadConfigs();                  // sem lista de servidores: carrega do ativo mesmo
+      carregarProviders();
     });
   });
 
@@ -518,10 +529,14 @@
               class="provider-btn"
               class:on={provider === p}
               aria-pressed={provider === p}
+              disabled={providers[p] ? !providers[p].disponivel : false}
               onclick={() => { provider = p; carregarModelos(); }}
             >{providerName(p)}</button>
           {/each}
         </div>
+      {#if providers[provider] && !providers[provider].disponivel}
+        <p class="hint" role="alert">{m.criar_provider_ausente({ p: provider })}</p>
+      {/if}
       </div>
 
       {#if provider === 'claude'}
@@ -708,6 +723,10 @@
   .provider-btn.on {
     border-color: var(--accent);
     color: var(--text-primary);
+  }
+  .provider-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   /* ── Escape hatch: digitar caminho ─────────────────────────────────────── */

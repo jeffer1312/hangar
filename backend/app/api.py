@@ -32,6 +32,7 @@ from app import filesearch, filetree, git_ops
 from app.filesearch import SearchError
 from app.filetree import FileError
 from app import pi_catalog
+from app import cli_probe
 from app import pi_models
 from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
@@ -2666,6 +2667,11 @@ def _motores_para_cliente() -> dict[str, dict]:
         visivel["api_key_definida"] = bool(chave)
         out[nome] = visivel
     return out
+
+
+@app.get("/api/providers", dependencies=[Depends(require_auth)])
+async def get_providers():
+    return await asyncio.to_thread(cli_probe.sondar_providers)
 
 
 @app.get("/api/engines", dependencies=[Depends(require_auth)])
