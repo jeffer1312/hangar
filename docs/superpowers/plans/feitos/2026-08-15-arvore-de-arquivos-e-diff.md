@@ -87,7 +87,7 @@ da primeira linha de código.
 
 Sai `0` e segue; sai `1`, **pare e avise o árbitro** — não comece a Task sem as skills.
 
-Isto não é zelo: em 15/08/2026 seis plugins (o `superpowers` e o `example` entre eles) estavam
+Isto não é zelo: em 15/08/2026 seis plugins (o `superpowers` entre eles) estavam
 habilitados no `settings.json` com o `installPath` apontando para `~/.claude-work/`, que não existe.
 O Claude Code carregava o plugin **vazio, sem erro nenhum** — a skill simplesmente não aparecia na
 lista, e a sessão só descobria ao tentar invocar, no meio da Task. O Pi tem o problema irmão: a

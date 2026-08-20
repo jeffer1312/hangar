@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Segunda rede da trava de vazamento: reescaneia TUDO que este push publicaria.
+#
+# O pre-commit olha um commit por vez e é pulável (--no-verify, clone sem install-hooks.sh) —
+# foi exatamente assim que e-mail interno chegou ao GitHub em 17/08/2026. O push é a fronteira
+# de publicação, então aqui a checagem repete sobre o intervalo inteiro que vai sair.
+#
+# Os padrões são os MESMOS do pre-commit (genéricos aqui + arquivo privado); o formato
+# `nome::regex` e os dois caminhos do arquivo privado estão documentados lá — o pre-commit é o
+# canônico, este é o cliente compacto.
+# Emergência: `git push --no-verify` pula. Saída deliberada, não bug.
+set -uo pipefail
+
+PADROES=(
+    "chave OpenAI::sk-[A-Za-z0-9_-]{20,}"
+    "token GitHub::gh[pousr]_[A-Za-z0-9]{20,}"
+    "token GitLab::glpat-[A-Za-z0-9_-]{15,}"
+    "chave AWS::AKIA[0-9A-Z]{16}"
+    "chave Anthropic::sk-ant-[A-Za-z0-9_-]{20,}"
+    "chave privada::BEGIN (RSA|OPENSSH|EC|DSA|PGP) PRIVATE KEY"
+    "senha em URL::[a-z]+://[^/[:space:]]+:[^/@[:space:]]{6,}@"
+)
+_gitdir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+for PRIVADOS in "${XDG_CONFIG_HOME:-$HOME/.config}/git/hooks-padroes-privados" \
+                ${_gitdir:+"$_gitdir/hooks-padroes-privados"}; do
+    [[ -e "$PRIVADOS" ]] || continue
+    if [[ ! -r "$PRIVADOS" ]]; then
+        echo "pre-push: $PRIVADOS existe mas não pôde ser lido — trava incompleta, push recusado." >&2
+        exit 1
+    fi
+    while IFS= read -r linha || [[ -n "$linha" ]]; do
+        [[ -z "${linha// }" || "$linha" == \#* ]] && continue
+        grep -Eq -- "${linha#*::}" </dev/null 2>/dev/null
+        if (( $? > 1 )); then
+            echo "pre-push: padrão inválido em $PRIVADOS -> ${linha%%::*}" >&2
+            exit 1
+        fi
+        PADROES+=("$linha")
+    done < "$PRIVADOS"
+done
+PADROES+=('IP da tailnet (endereço real de máquina)::100\.(6[5-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}')
+
+ZERO=0000000000000000000000000000000000000000
+achou=0
+while read -r _localref localsha _remoteref remotesha; do
+    [[ "$localsha" == "$ZERO" ]] && continue          # delete de branch: nada sai
+    if [[ "$remotesha" == "$ZERO" ]]; then
+        intervalo="$localsha --not --remotes"          # branch nova: só o que o remoto ainda não tem
+    else
+        intervalo="$remotesha..$localsha"
+    fi
+    # Só linhas ADICIONADAS pelos commits que vão sair; a própria trava fica de fora (precisa
+    # conter os padrões pra procurá-los — mesmo motivo do pre-commit).
+    adicionado="$(git log -p --unified=0 --no-color $intervalo -- . \
+        ':(exclude)scripts/hooks' ':(exclude)scripts/install-hooks.sh' \
+        | grep '^+' | grep -v '^+++' || true)"
+    [[ -z "$adicionado" ]] && continue
+    for entrada in "${PADROES[@]}"; do
+        casadas="$(printf '%s\n' "$adicionado" | grep -Ei "${entrada#*::}" || true)"
+        if [[ -n "$casadas" ]]; then
+            achou=1
+            printf '\n  \033[31m%s\033[0m  (em %s)\n' "${entrada%%::*}" "$intervalo"
+            printf '%s\n' "$casadas" | head -5 | sed 's/^+/    /' | cut -c1-140
+        fi
+    done
+done
+
+if (( achou )); then
+    cat >&2 <<'FIM'
+
+  ── push recusado: isto publicaria num repositório PÚBLICO ─────────────────
+
+  O que está acima está em commits que este push mandaria pro remoto.
+  Conserte o commit (rebase/amend) ou, se for falso positivo com certeza:
+  git push --no-verify
+
+FIM
+    exit 1
+fi
+exit 0

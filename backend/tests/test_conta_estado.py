@@ -15,12 +15,12 @@ def test_conectada_devolve_email_e_plano():
     # Formato medido em 16/08: `claude auth status --json` respeita CLAUDE_CONFIG_DIR e
     # responde sem sessão viva.
     bruto = {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty",
-             "email": "claude-200-04@example.com", "orgId": "x", "orgName": "y",
+             "email": "dev@example.com", "orgId": "x", "orgName": "y",
              "subscriptionType": "max"}
     login = conta_estado._estado_login(bruto)
     assert login.estado == "ok"
     assert login.loggedIn is True
-    assert login.email == "claude-200-04@example.com"
+    assert login.email == "dev@example.com"
     assert login.plano == "max"
 
 

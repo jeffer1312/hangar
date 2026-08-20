@@ -2,7 +2,7 @@
 # Confere que as skills de que uma sessao depende estao MESMO instaladas, antes de ela
 # comecar a trabalhar.
 #
-# Por que existe: em 15/08/2026 seis plugins (superpowers e example entre eles) estavam
+# Por que existe: em 15/08/2026 seis plugins (superpowers entre eles) estavam
 # habilitados no settings.json mas com o installPath apontando pra ~/.claude-work, que nao
 # existe. O Claude Code carregava o plugin vazio, sem erro nenhum — a skill simplesmente nao
 # aparecia. Uma sessao so descobria isso ao tentar invocar, no meio da Task. E o Pi tem o

@@ -86,3 +86,7 @@ else
     printf '\n%s\n' "$BLOCK" >> "$MD"
     echo "ok: bloco Sessões-irmãs ADICIONADO em $MD"
 fi
+
+# Trava de vazamento: toda máquina que instala o cp-send liga também os hooks git versionados
+# (scripts/hooks/), senão o clone novo commita nome interno sem nada recusar.
+"$(dirname "$(realpath "$0")")/install-hooks.sh"
