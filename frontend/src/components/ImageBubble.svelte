@@ -90,6 +90,11 @@
     height: 96px;
     object-fit: cover;
     display: block;
+    /* Filete inset neutro: sem ele a borda da foto "vaza" pra superficie quando os tons coincidem
+       (regra do make-interfaces-feel-better, com o token de borda do tema em vez de rgba fixo). */
+    outline: 1px solid var(--border-default);
+    outline-offset: -1px;
+    border-radius: var(--radius-md);
   }
   /* Com varias, encolhe um pouco pra caber 2-3 por linha sem estourar. */
   .thumb-row--multi .thumb {

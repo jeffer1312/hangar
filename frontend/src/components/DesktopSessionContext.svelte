@@ -546,7 +546,7 @@ import * as m from '../paraglide/messages';
     color: var(--text-primary);
     font-family: var(--font-mono);
     font-size: var(--text-sm);
-    font-weight: 650;
+    font-weight: var(--fw-semibold);
     line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -630,7 +630,7 @@ import * as m from '../paraglide/messages';
     border-radius: var(--radius-full);
     background: var(--accent);
     color: var(--bg-base);   /* nunca #fff: o neutro do tema ja e quente e tem contraste no indigo */
-    font-size: 10px;
+    font-size: var(--text-3xs);
     font-weight: 600;
     line-height: 16px;
     text-align: center;
@@ -671,7 +671,7 @@ import * as m from '../paraglide/messages';
     border-bottom: 2px solid transparent;
     color: var(--text-muted);
     font: inherit;
-    font-size: 12.5px;
+    font-size: var(--text-xs);
     padding: 9px 10px 8px;
     cursor: pointer;
     margin-bottom: -1px;
@@ -704,9 +704,10 @@ import * as m from '../paraglide/messages';
     display: block;
     margin-bottom: var(--space-2);
     color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
+    /* Receita unificada de rotulo de secao (tokens de app.css) — era 10px/700/0.08em so aqui. */
+    font-size: var(--label-size);
+    font-weight: var(--label-weight);
+    letter-spacing: var(--label-tracking);
     text-transform: uppercase;
   }
 
@@ -818,7 +819,9 @@ import * as m from '../paraglide/messages';
   .metric-row strong {
     display: inline;
     color: var(--text-primary);
-    font-weight: 650;
+    font-weight: var(--fw-semibold);
+    /* Percentual de limite/contexto muda com o turno — digito tabular nao danca. */
+    font-variant-numeric: tabular-nums;
   }
 
   .progress {
@@ -843,7 +846,8 @@ import * as m from '../paraglide/messages';
     margin-top: var(--space-2);
     overflow: hidden;
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: var(--text-2xs);
+    font-variant-numeric: tabular-nums;
     text-overflow: ellipsis;
     white-space: nowrap;
   }

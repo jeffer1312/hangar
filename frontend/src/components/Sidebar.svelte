@@ -1050,7 +1050,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                      miravam essa classe (hover da linha, papel de parede no app.css); a pilula em
                      si e o StateChip. -->
                 <span class="state-chip" class:stalled={s.stalled === true}>
-                  <StateChip state={s.state} title={s.stalled ? m.sessao_travada() : undefined} />
+                  <!-- "pronto" (idle) e o estado COMUM da lista: pilula com texto em toda linha e
+                       ruido, nao informacao — e a largura dela truncava o nome da sessao. Vira o
+                       ponto (a cor segue dizendo "pronto") e as pilulas de verdade (em execucao,
+                       aguardando) sobressaem. O estado segue no aria-label da linha. -->
+                  <StateChip state={s.state} dot={s.state === 'idle'} title={s.stalled ? m.sessao_travada() : undefined} />
                 </span>
               {/if}
             </button>
@@ -1574,7 +1578,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     position: fixed; z-index: 41; min-width: 220px; padding: 4px;
     display: flex; flex-direction: column;
     background: var(--surface-raised); border: 1px solid var(--border-default);
-    border-radius: var(--radius-md); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+    border-radius: var(--radius-md); box-shadow: var(--elev-2);
   }
   .kebab-item {
     display: flex; align-items: center; gap: var(--space-3);
@@ -1585,7 +1589,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .kebab-item svg { flex-shrink: 0; color: var(--text-secondary); }
   .kebab-item:hover { background: var(--bg-hover); }
   .kebab-group-label {
-    font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+    /* Receita unificada de rotulo de secao (tokens de app.css) — era 12px/600/0.04em. */
+    font-size: var(--label-size); font-weight: var(--label-weight); letter-spacing: var(--label-tracking); text-transform: uppercase;
     color: var(--text-muted); padding: var(--space-2) 10px var(--space-1);
   }
   /* Toggle dentro do popover: zera a margem que tinha quando ficava na lista. */
@@ -1623,8 +1628,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     display: flex; align-items: center; gap: var(--space-2);
     width: 100%; text-align: left;
     padding: var(--space-2) var(--space-2) 4px;
-    font-size: var(--text-xs); font-weight: 600; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.04em; border-radius: var(--radius-sm);
+    /* Receita unificada de rotulo de secao (tokens de app.css) — era 12px/600/0.04em. */
+    font-size: var(--label-size); font-weight: var(--label-weight); color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: var(--label-tracking); border-radius: var(--radius-sm);
   }
   @media (hover: hover) { .grp-head:hover { color: var(--text-secondary); } }
 
@@ -1662,6 +1668,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     flex-shrink: 0; text-transform: none; letter-spacing: 0; font-weight: 600;
     color: var(--text-muted); background: var(--surface-inset);
     border-radius: var(--radius-full); padding: 0 6px; min-width: 18px; text-align: center;
+    font-variant-numeric: tabular-nums;
   }
   /* Badge de aguardando (âmbar) — numero + title "N aguardando". */
   .grp-await {

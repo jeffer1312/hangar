@@ -29,10 +29,16 @@
     /** Falha que chegou DEPOIS da caixa fechar — quem mostra e o composer, na linha de erro dele. */
     onFail?: (msg: string) => void;
     onClose: () => void;
+    /** Modo de permissão atual + abridor do popover dele. A permissão saiu da fileira do composer
+        (a palavra do modo estourava a linha no celular) e virou uma linha deste seletor — é aqui
+        que se mexe em modelo, então é aqui que se mexe no modo. */
+    permCurrent?: string | null;
+    onOpenPermission?: () => void;
   }
   let {
     open, anchor, sessionName, currentModel = null, currentEffort = null,
     onApply, onApplied, onFail, onClose,
+    permCurrent = null, onOpenPermission,
   }: Props = $props();
 
   const MAX_ROWS = 40;   // teto de linhas desenhadas: 269 botoes travariam o celular
@@ -238,6 +244,17 @@
     {#if escondidos}
       <p class="mais">{m.modelo_refine_busca({ n: escondidos })}</p>
     {/if}
+    {#if onOpenPermission}
+      <!-- Permissão mora aqui (saiu da fileira do composer — ver Props). Linha-irmã das de
+           modelo: rótulo + modo atual, chevron avisa que abre outra caixa. -->
+      <button class="linha perm-linha" onclick={onOpenPermission}>
+        <span class="txt">
+          <span class="nome">{m.composer_permissao()}</span>
+          <span class="det">{permCurrent ?? '—'}</span>
+        </span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
+    {/if}
     <div class="acoes">
       <button class="btn-aplicar" disabled={aplicando || !escolhido || escolhido === atual}
         onclick={() => aplicar('session')}>
@@ -297,6 +314,10 @@
     font-size: var(--text-xs); color: var(--text-muted); text-align: center;
     padding: 6px 0; margin: 0; border-top: 1px solid var(--border-subtle);
   }
+
+  /* Linha da permissão: separada da lista por uma hairline, com o chevron no lugar do tique. */
+  .perm-linha { border-top: 1px solid var(--border-subtle); border-radius: 0; }
+  .perm-linha .chev { flex: none; color: var(--text-muted); font-size: var(--text-base); }
 
   .acoes { border-top: 1px solid var(--border-subtle); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
 

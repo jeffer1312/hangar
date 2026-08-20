@@ -119,7 +119,9 @@
     height: 28px;
     padding: 0 var(--space-3);
     background: var(--glass-panel);
-    font-size: 11px;
+    font-size: var(--text-2xs);
+    /* A faixa inteira e numero ao vivo (%, contagem, idade da cota) — digito tabular nao danca. */
+    font-variant-numeric: tabular-nums;
     color: var(--text-muted);
     overflow: hidden;
   }

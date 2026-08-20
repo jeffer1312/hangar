@@ -158,8 +158,16 @@ import * as m from '../paraglide/messages';
   /* A ÚNICA animação do board: o dot de "Precisa de você". Nada mais pulsa. */
   .col-dot.pulse { animation: dot-pulse 2s var(--ease-in-out) infinite; }
   @keyframes dot-pulse { 50% { opacity: 0.35; transform: scale(0.85); } }
-  .col-title { font-size: var(--text-sm); font-weight: 510; color: var(--text-secondary); }
-  .col-count { font-size: var(--text-sm); color: var(--text-muted); }
+  /* Título da coluna na receita unificada de rótulo de seção (tokens --label-* do app.css): o
+     header é ESTRUTURA, não conteúdo — em 14px/510 ele competia com o nome das sessões nos cards.
+     Caixa alta miúda recua o header e deixa o card ser o herói. */
+  .col-title { font-size: var(--label-size); font-weight: var(--label-weight); letter-spacing: var(--label-tracking); text-transform: uppercase; color: var(--text-muted); }
+  /* Contagem em pílula: numero solto ao lado do rótulo lia como mais uma palavra do título. */
+  .col-count {
+    font-size: var(--label-size); font-weight: var(--label-weight); color: var(--text-secondary);
+    background: var(--surface-raised); padding: 1px 7px; border-radius: var(--radius-full);
+    font-variant-numeric: tabular-nums;
+  }
   .col-cards { flex: 1; overflow-y: auto; padding: var(--space-2) 2px; display: flex; flex-direction: column; gap: var(--space-2); }
   .col-empty { color: var(--text-muted); font-size: var(--text-xs); text-align: center; padding: var(--space-4) 0; }
 </style>

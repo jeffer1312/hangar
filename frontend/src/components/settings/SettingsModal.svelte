@@ -370,8 +370,11 @@
   .st-vazio { border: 0; background: transparent; }   /* espelha o botao pro titulo ficar no centro */
   .st-secao {
     margin: var(--space-4) 0 var(--space-1) var(--space-2);
-    color: var(--text-muted); font-size: var(--text-xs);
-    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted);
+    /* Receita unificada de rotulo de secao (tokens de app.css) — era 12px/400/0.05em so aqui. */
+    font-size: var(--label-size);
+    font-weight: var(--label-weight);
+    text-transform: uppercase; letter-spacing: var(--label-tracking);
   }
   /* Versão com o seletor de alvo: o rótulo "Servidor" e o select na mesma linha. O select fica
      minúsculo de propósito — o nome da máquina é dado, não título de seção. */
@@ -406,7 +409,8 @@
        menu da conta: precisa de leitura, nao de veu. O desfoque abaixo termina de separar. */
     background: var(--bg-surface);
     backdrop-filter: blur(18px) saturate(150%);
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    /* --elev-3 no lugar da sombra a mao: mesmo desenho no escuro, e o claro ganha a versao leve. */
+    box-shadow: var(--elev-3);
     overflow: hidden;
   }
   /* Faixa de arrasto: `cursor: move` e `touch-action: none` (sem o segundo, o navegador rola a pagina

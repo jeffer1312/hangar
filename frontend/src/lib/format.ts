@@ -148,6 +148,14 @@ export function initials(name: string): string {
     const anterior = parts[parts.length - 2];
     return (anterior[0] + ultimo).toUpperCase().slice(0, 3);
   }
+  // Família com NÚMERO NO MEIO e sufixo textual (task-4021-api / -front / -sync): o fallback dava
+  // "T4" pra todas — na rail viravam siglas idênticas, e lá a sigla é o único texto que
+  // identifica a sessão. A letra que distingue é a do sufixo, não a do dígito do meio: vira
+  // "TA" / "TF" / "TS". Só neste formato — nome sem número no meio segue no fallback de sempre.
+  if (parts.length >= 3 && parts.slice(1, -1).some((p) => /^\d+$/.test(p))) {
+    const distintivo = parts.slice(1).find((p) => !/^\d+$/.test(p));
+    if (distintivo) return (parts[0][0] + distintivo[0]).toUpperCase();
+  }
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return parts[0].slice(0, 2).toUpperCase();
 }

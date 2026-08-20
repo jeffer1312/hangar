@@ -219,6 +219,51 @@
   // Sheet desmontada estando ABERTA (o `{#if open}` do pai some com ela inteira) não passa pelo
   // ramo else do $effect — a restauração acontece aqui, no teardown.
   onDestroy(restaurarFoco);
+
+  // ── Teclado do iOS cobria o campo da sheet (medido na sheet de pergunta: tocou em "digitar",
+  // o input ficou ATRAS do teclado — dava pra digitar, nao pra ver). A sheet e fixed no LAYOUT
+  // viewport, que o iOS nao redimensiona quando o teclado abre. Mesmo remedio da .chat-screen
+  // (Chat.svelte): com o teclado aberto o backdrop passa a ter so a altura VISIVEL (vv.height),
+  // ancorado no topo — o flex-end dele cola a sheet no topo do teclado, e a sheet ganha teto
+  // nessa altura pra o conteudo rolar dentro. Desktop nao tem teclado virtual: vv.height ===
+  // innerHeight e o fit nao muda nada.
+  let backdropEl = $state<HTMLElement | null>(null);
+  $effect(() => {
+    if (!open) return;
+    const vv = window.visualViewport;
+    const bd = backdropEl;
+    if (!vv || !bd) return;
+    const fit = () => {
+      // Frame transiente da animação do teclado reporta altura mínima — pula ESTE frame, mas
+      // reagenda: se ele for o último da sequência, os estilos do frame anterior ficavam presos.
+      if (vv.height < 120) { requestAnimationFrame(fit); return; }
+      if (vv.height < window.innerHeight - 100) {
+        // Mata o pan (offsetTop bugado no iOS 26, Apple #800125) — mesmo guard do chat: so scrolla
+        // se houver scroll REAL, senao cada evento do viewport acendia o "Desfazer" (shake-to-undo).
+        if (window.scrollY !== 0) window.scrollTo(0, 0);
+        bd.style.top = '0px';
+        bd.style.bottom = 'auto';   // inset:0 da folha de estilo tem bottom — com height, anula
+        bd.style.height = vv.height + 'px';
+        if (sheetEl) sheetEl.style.maxHeight = `calc(${vv.height}px - var(--space-8))`;
+      } else {
+        bd.style.top = '';
+        bd.style.bottom = '';
+        bd.style.height = '';
+        if (sheetEl) sheetEl.style.maxHeight = '';
+      }
+    }
+    fit();
+    vv.addEventListener('resize', fit);
+    vv.addEventListener('scroll', fit);
+    return () => {
+      vv.removeEventListener('resize', fit);
+      vv.removeEventListener('scroll', fit);
+      bd.style.top = '';
+      bd.style.bottom = '';
+      bd.style.height = '';
+      if (sheetEl) sheetEl.style.maxHeight = '';
+    };
+  });
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -226,7 +271,7 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div use:portal class="backdrop" class:centered class:naomodal={naoModal}
+  <div use:portal bind:this={backdropEl} class="backdrop" class:centered class:naomodal={naoModal}
        onpointerdown={onBackdropPointerDown} onclick={onBackdropClick}>
     <div
       bind:this={sheetEl}
@@ -350,6 +395,13 @@
   :global(html[data-liquid]) .sheet::before {
     background: var(--glass-panel);
   }
+  /* Modal centrado (config, motores) e o split dele no mobile: sobem pro --glass-modal, que fica
+     FORA do veu do slider Transparencia. O painel de acompanhamento (dock, bottom sheet) segue no
+     --glass-panel — a transparencia e a identidade dele; num modal de decisao ela vazava e o
+     conteudo atras disputava com o formulario. O blur do liquid continua — e ele que da o vidro. */
+  :global(html[data-liquid]) .sheet:is(.centered, .split)::before {
+    background: var(--glass-modal);
+  }
   /* O filtro que o comentario acima manda por no ELEMENTO nao estava em lugar nenhum: o unico
      backdrop-filter do arquivo vive no `.backdrop` (o scrim), e o dock lateral desliga esse scrim
      (`.backdrop.naomodal`, mais abaixo). Sem scrim e sem filtro proprio, a sheet dockada era so
@@ -442,7 +494,9 @@
       max-height: calc(100% - var(--space-6));
       border: 1px solid var(--border-default);
       border-radius: var(--radius-xl);
-      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.42);
+      /* --elev-3 no lugar da sombra a mao (0 18px 44px rgba(0,0,0,0.42)): mesmo desenho no escuro,
+         e o claro ganha a versao leve do token em vez de uma faixa preta. */
+      box-shadow: var(--elev-3);
     }
     /* Sem véu atrás, a translucidez do liquid (70%) deixava o painel de contexto aparecer por
        dentro deste — dava pra ler "LIMITES / 5 horas" sob "Fundo". Então SEM papel de parede o

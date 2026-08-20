@@ -13,6 +13,10 @@ vi.mock('../lib/api', () => ({
   transcribeFile: vi.fn(),
   getCodexModels: vi.fn().mockResolvedValue([]),
   getPiModels: vi.fn().mockResolvedValue([]),
+  // O prefetch do Composer (cache de catálogo) chama estes ao montar — sem eles no mock o
+  // módulo nem sobe.
+  getKimiModels: vi.fn().mockResolvedValue({ models: [], default: null }),
+  getModelOptions: vi.fn().mockResolvedValue({ kind: 'claude', models: [] }),
   isTimeoutError: vi.fn(() => false),
   isAbortError: vi.fn(() => false),
 }));

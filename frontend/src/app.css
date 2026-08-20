@@ -98,6 +98,13 @@
      e o painel inteiros. No escuro e o contrario (tinta clara sobre vidro escuro) e 0.46 basta. */
   --glass-panel:     rgb(var(--glass-panel-rgb) / 0.86);
 
+  /* Vidro de MODAL (config, motores, dialogos de decisao): quase opaco de proposito. Diferente do
+     --glass-panel, NAO entra no veu do slider Transparencia (a regra de html[data-bg] la embaixo so
+     reescreve --glass-panel) — formulario, slider e tabela nao podem disputar com a foto. O que
+     sobra de vidro e o blur do liquid + estes 7% de tint: a foto "tinge" o modal sem atravessar a
+     leitura. Quase o mesmo valor do fallback solido (0.94): a diferenca e so o blur de verdade. */
+  --glass-modal:     rgb(var(--glass-panel-rgb) / 0.93);
+
   /* Superficie DENTRO de um painel de vidro (folha, modal, sidebar, painel de contexto). Um
      `--bg-elevated`/`--bg-base` cru ali vira retangulo chapado por cima do papel de parede — o
      painel inteiro anda com o slider Transparencia e o controle nao, e ele le como recorte colado.
@@ -212,6 +219,8 @@
   --glass-specular:  rgba(255,255,255,0.95);  /* rim claro */
   --glass-shadow:    rgba(60,50,45,0.13);    /* sombra leve no claro (a 0.42 do dark vira faixa preta) */
   --glass-panel:     rgb(var(--glass-panel-rgb) / 0.90);
+  /* Par claro do --glass-modal (ver o bloco escuro): mesma ideia, alfa do fallback solido daqui. */
+  --glass-modal:     rgb(var(--glass-panel-rgb) / 0.96);
 
   /* Semantica no claro: os neon do dark (#34c759 etc.) caem a ~1.7:1 sobre paper — escurecidos
      pra >=4.5:1 ate no pior fundo (--bg-hover #e9e3da). */
@@ -277,6 +286,15 @@
   --fw-medium:   500;   /* rotulo com enfase, texto de apoio */
   --fw-semibold: 600;   /* nome, chip, titulo de secao */
   --fw-bold:     700;   /* rotulo de secao em caixa alta */
+
+  /* Rotulo de secao em caixa alta (CONTEXTO, LIMITES, APP, SERVIDOR, nome de grupo na sidebar):
+     UMA receita pra todo o app. Eram tres quase iguais — 10px/700/0.08em no painel de contexto,
+     12px/400/0.05em na config, 12px/600/0.04em na sidebar — e cada tela nova escolhia uma delas
+     (o mesmo problema que criou --text-3xs/--text-2xs). O peso 700 compensa o tamanho miudo: em
+     caixa alta e tracking aberto, 600 lia como texto comum. */
+  --label-size:     var(--text-2xs);
+  --label-weight:   var(--fw-bold);
+  --label-tracking: 0.06em;
 
   /* Elevacao. Eram 73 declaracoes de box-shadow em 37 valores distintos, das quais OITO eram "a
      sombra do card flutuante" com blur entre 20 e 80px e alfa entre .2 e .5 — parecidas, nunca

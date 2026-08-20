@@ -1210,8 +1210,48 @@ export interface ModelOptionsResponse {
  * provedor (o picker ali so lista os 4 aliases, todos o mesmo modelo).
  * 409 = sessao ocupada/menu aberto: nao da pra ler o picker agora.
  */
+// ── Cache curto dos catálogos dos seletores (modelo/esforço/permissão) ───────────────────────
+// A lista muda raramente (versão do CLI, config do provedor), mas o GET demora o bastante pro
+// popover abrir em "Carregando…" a CADA toque. TTL 60s + dedupe de em-voo (dois consumidores
+// dividem UM GET) + invalidação nos set*. O prefetch ao trocar de sessão (Composer) aquece a
+// chave antes do primeiro toque — a abertura fica instantânea.
+const _catCache = new Map<string, { at: number; data: unknown }>();
+const _catEmVoo = new Map<string, Promise<unknown>>();
+const _catEpoca = new Map<string, number>();   // por sessão: o set* incrementa -> GET em voo não grava dado pré-troca
+const _CAT_TTL = 60_000;
+
+function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const hit = _catCache.get(key);
+  if (hit && Date.now() - hit.at < _CAT_TTL) return Promise.resolve(hit.data as T);
+  const emVoo = _catEmVoo.get(key);
+  if (emVoo) return emVoo as Promise<T>;
+  const sessao = key.slice(key.indexOf('|') + 1);
+  const epoca = _catEpoca.get(sessao) ?? 0;
+  const p = fetcher()
+    .then((data) => {
+      // Se um set* invalidou a sessão enquanto este GET voava, o dado é PRÉ-troca: não cacheia.
+      if ((_catEpoca.get(sessao) ?? 0) === epoca) {
+        _catCache.set(key, { at: Date.now(), data });
+        if (_catCache.size > 100) {   // mesmo sweep do _tailCache: o TTL é lógico, a Map não pode só crescer
+          for (const [k, v] of _catCache) if (Date.now() - v.at >= _CAT_TTL) _catCache.delete(k);
+        }
+      }
+      return data;
+    })
+    .finally(() => { _catEmVoo.delete(key); });
+  _catEmVoo.set(key, p);
+  return p;
+}
+
+// Troca aplicada (modelo/effort/permissão): a LISTA não muda, mas o default/atual pode — 60s de
+// cache velho num rótulo errado é pior que um GET a mais na próxima abertura.
+function _invalidarCatalogo(name: string): void {
+  _catEpoca.set(name, (_catEpoca.get(name) ?? 0) + 1);
+  for (const k of _catCache.keys()) if (k.endsWith(`|${name}`)) _catCache.delete(k);
+}
+
 export function getModelOptions(name: string): Promise<ModelOptionsResponse> {
-  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/model/options`);
+  return _catalogo(`model|${name}`, () => apiFetch(`/api/sessions/${encodeURIComponent(name)}/model/options`));
 }
 
 /**
@@ -1222,6 +1262,7 @@ export function setEngineModel(
   name: string,
   body: { model: string; effort?: string | null },
 ): Promise<{ ok: boolean; model: string; result: string | null; effort_error?: string }> {
+  _invalidarCatalogo(name);
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/engine/model`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -1247,6 +1288,7 @@ export async function setModelEffort(
   name: string,
   body: ModelEffortBody,
 ): Promise<ModelEffortResposta> {
+  _invalidarCatalogo(name);
   return apiFetch<ModelEffortResposta>(
     `/api/sessions/${encodeURIComponent(name)}/model-effort`,
     { method: 'POST', body: JSON.stringify(body) },
@@ -1386,11 +1428,12 @@ export function getLimits(name: string): Promise<SessionLimits> {
 
 // Modelo + reasoning effort do Codex (Task C) — so sessoes Codex; o back devolve 400 pra Claude.
 export function getCodexModels(name: string): Promise<CodexModelsResponse> {
-  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/models`);
+  return _catalogo(`codex|${name}`, () => apiFetch(`/api/sessions/${encodeURIComponent(name)}/models`));
 }
 
 // Grava a escolha (dict + sidecar no backend); vale a partir do PROXIMO turno enviado.
 export function setCodexModel(name: string, model: string, effort?: string | null): Promise<void> {
+  _invalidarCatalogo(name);
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/model`, {
     method: 'POST',
     body: JSON.stringify({ model, effort: effort ?? undefined }),
@@ -1401,7 +1444,7 @@ export function setCodexModel(name: string, model: string, effort?: string | nul
 // 409 = extensao cp-state.ts ausente/desatualizada no Pi (o backend manda a instrucao no detail).
 
 export function getPiModels(name: string): Promise<PiModelsResponse> {
-  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/pi/models`);
+  return _catalogo(`pi|${name}`, () => apiFetch(`/api/sessions/${encodeURIComponent(name)}/pi/models`));
 }
 
 // Aplica na sessao viva (digita /cp-model e/ou /cp-think). A resposta e o READ-BACK: o Pi clampa o
@@ -1410,6 +1453,7 @@ export function setPiModel(
   name: string,
   body: { provider?: string; model?: string; effort?: string | null },
 ): Promise<{ ok: boolean; current: PiModelsResponse['current']; thinking: string | null; levels: string[] }> {
+  _invalidarCatalogo(name);
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/pi/model`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -1433,13 +1477,14 @@ export interface KimiModel {
 }
 
 export function getKimiModels(name: string): Promise<{ models: KimiModel[]; default: string | null }> {
-  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/kimi/models`);
+  return _catalogo(`kimi|${name}`, () => apiFetch(`/api/sessions/${encodeURIComponent(name)}/kimi/models`));
 }
 
 export function setKimiModel(
   name: string,
   body: { model?: string; effort?: string },
 ): Promise<{ ok: boolean; current: { alias: string; name: string } | null; effort: string | null; result: string | null }> {
+  _invalidarCatalogo(name);
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/kimi/model`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -1459,11 +1504,15 @@ export function writeFile(name: string, path: string, text: string, digest: stri
 }
 
 export function getPermissionModes(name: string, sondar = false): Promise<{ current: string; modes: string[]; sondavel: boolean; restaurado?: boolean }> {
+  // Fora do cache de catálogo (revisão): o `current` muda FORA do app — shift+tab no terminal da
+  // sessão — e a pill lê pelo poll do Composer; cacheado, o modo aparecia errado por até 60s.
+  // A sonda (sondar=1) segue ação viva, como sempre foi.
   const qs = sondar ? "?sondar=1" : "";
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/permission-modes${qs}`);
 }
 
 export function setPermissionMode(name: string, mode: string): Promise<{ mode: string; current: string }> {
+  _invalidarCatalogo(name);
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/permission-mode`, {
     method: 'POST',
     body: JSON.stringify({ mode }),

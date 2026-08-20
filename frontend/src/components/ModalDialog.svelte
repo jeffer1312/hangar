@@ -224,7 +224,9 @@
     background: var(--glass-bg-solid);
   }
   :global(html[data-liquid]) .modal-dialog::before {
-    background: var(--glass-panel);
+    /* --glass-modal, nao --glass-panel: dialogo e superficie de decisao, fica fora do veu do slider
+       Transparencia (mesma regra do .sheet.centered no BottomSheet). */
+    background: var(--glass-modal);
   }
 
   @keyframes modal-in {

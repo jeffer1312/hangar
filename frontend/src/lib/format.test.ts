@@ -51,6 +51,15 @@ describe('initials', () => {
     expect(initials('jeffer1312')).toBe('JE');
   });
 
+  it('família com número no meio e sufixo textual: a letra do sufixo distingue (task-4021-api → TA)', () => {
+    expect(initials('task-4021-api')).toBe('TA');
+    expect(initials('task-4021-front')).toBe('TF');
+    expect(initials('task-4021-sync-b')).toBe('TS');
+    expect(initials('task-4020-kimi')).toBe('TK');
+    // sem número no meio, nada muda: o fallback de sempre continua valendo
+    expect(initials('claude-cockpit-extra')).toBe('CC');
+  });
+
   it('takes first letter of each of two words', () => {
     expect(initials('claude-pocket')).toBe('CP');
   });

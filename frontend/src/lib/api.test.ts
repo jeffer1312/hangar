@@ -10,7 +10,7 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
-const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer } = await import('./api');
+const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel } = await import('./api');
 const { mensagemDeErro, formataErro } = await import('./errosApi');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
@@ -377,5 +377,45 @@ describe('transcribeFileForServer', () => {
     );
     const r = await transcribeFileForServer(server, 'sessao', new File(['x'], 'a.webm'), { limpar: true });
     expect(r.aviso).toBe('provedor 502');
+  });
+});
+
+// O popover de modelo abria em "Carregando…" a cada toque: toda abertura era um GET novo.
+// O cache curto (60s) + dedupe de em-voo + prefetch do Composer resolvem; estes três cobrem o
+// contrato do _catalogo. Nomes de sessão únicos por teste: o cache é module-level e sobrevive
+// entre os its deste arquivo.
+describe('cache curto dos catálogos dos seletores', () => {
+  beforeEach(() => {
+    store.set('cp_servers', JSON.stringify([server]));
+    store.set('cp_active', server.id);
+  });
+
+  it('segunda leitura dentro do TTL sai do cache — um fetch só', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ kind: 'claude', models: [] }), { status: 200 }),
+    );
+    await getModelOptions('sessao-cat-1');
+    await getModelOptions('sessao-cat-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('duas leituras em voo dividem o mesmo GET', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ kind: 'claude', models: [] }), { status: 200 }),
+    );
+    await Promise.all([getModelOptions('sessao-cat-2'), getModelOptions('sessao-cat-2')]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('aplicar um modelo invalida o cache da sessão', async () => {
+    // mockImplementation (uma Response NOVA por chamada): o body de uma Response reutilizada
+    // só pode ser lido uma vez.
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true, model: 'x', result: null }), { status: 200 }),
+    );
+    await getModelOptions('sessao-cat-3');
+    await setEngineModel('sessao-cat-3', { model: 'x' });
+    await getModelOptions('sessao-cat-3');   // sem invalidação, este viria do cache (2 fetches)
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

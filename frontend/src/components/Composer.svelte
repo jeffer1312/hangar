@@ -33,6 +33,7 @@
   import ClaudeModelPopover from './ClaudeModelPopover.svelte';
   import ClaudeEffortPopover from './ClaudeEffortPopover.svelte';
   import ClaudePermissionPopover from './ClaudePermissionPopover.svelte';
+  import Popover from './Popover.svelte';
   import CodexModelSheet from './CodexModelSheet.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
   import KimiModelPopover from './KimiModelPopover.svelte';
@@ -43,7 +44,7 @@
   import ConfirmSheet from './ConfirmSheet.svelte';
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
   import type { State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
@@ -454,13 +455,41 @@
   // com BTab. Modos fora do ciclo (dontAsk isolado, bypass sem ter nascido nele)
   // aparecem desabilitados com motivo "só na criação".
   let permPopOpen = $state(false);
-  let permPillEl = $state<HTMLElement | null>(null);
   let permCurrent = $state<string | null>(null);
+  // "+" do mobile: menu com Anexar + estilo do ditado (que saem da fileira em tela estreita).
+  let plusOpen = $state(false);
+  let plusBtnEl = $state<HTMLElement | null>(null);
+  // Viewport estreita? Decide a âncora do popover de estilo: no celular a pill de estilo está
+  // escondida (display:none não ancora nada) — a âncora viva é o "+". No desktop, a pill.
+  const mqMobile = typeof window !== 'undefined' ? window.matchMedia('(max-width: 819px)') : null;
+  let ehMobile = $state(mqMobile?.matches ?? false);
+  $effect(() => {
+    if (!mqMobile) return;
+    const sync = () => {
+      ehMobile = mqMobile.matches;
+      // Cruzou o breakpoint com caixa aberta: a âncora troca (ou vira display:none) no meio do
+      // gesto e o popover ficaria flutuando preso em elemento invisível. Fecha os dois.
+      plusOpen = false;
+      estiloAberto = false;
+    };
+    mqMobile.addEventListener('change', sync);
+    return () => mqMobile.removeEventListener('change', sync);
+  });
   let permModes = $state<string[]>([]);
   let permError = $state<string | null>(null);
   let permSondavel = $state(true);
   let permCarregando = $state(false);
   const isClaude = $derived(!isCodex && !isPi && !isKimi);
+  // Aquece o catálogo do seletor desta sessão ANTES do toque na pill (cache de 60s na api.ts):
+  // o popover abre com a lista pronta em vez de "Carregando…". O catch é silencioso de propósito:
+  // falha de verdade aparece no GET que o popover refaz ao abrir, com o erro na caixa.
+  $effect(() => {
+    const sn = sessionName;
+    if (isKimi) void getKimiModels(sn).catch(() => {});
+    else if (isPi) void getPiModels(sn).catch(() => {});
+    else if (isCodex) void getCodexModels(sn).catch(() => {});
+    else void getModelOptions(sn).catch(() => {});
+  });
   $effect(() => { if (permPopOpen) permError = null; });
   // Token de sequência: o poll de fundo e a sonda da pílula correm juntos, e sem isto a resposta
   // atrasada de um pisava no resultado do outro — inclusive zerando `permModes` (o poll pede sem
@@ -762,9 +791,36 @@
   }
 
   // ── Gravar audio: toggle (tap grava, tap para) -> vira um anexo de audio ─────
-  // Para o stream do mic e zera o estado. Chamado no onstop, no onerror, em falha e no onDestroy
+  // Mic "morno": o stream NAO e encerrado ao parar de gravar, so desabilitado (track.enabled=false
+  // -> silencio, nada vai pra lugar nenhum). No PWA do iPhone o WebKit volta a perguntar a
+  // permissao quando a captura fica parada ~1 minuto (bugs.webkit.org #215884, aberto ate o iOS
+  // 18.x) — sem isto, CADA ditado era um prompt novo. Com a captura viva a pergunta e UMA por
+  // sessao do app. Custo aceito: o indicador de microfone do iOS fica aceso com o app aberto.
+  // Troca de sessao desmonta o Composer e encerra de verdade (onDestroy, mais abaixo).
+  let micMorno: MediaStream | undefined;
+
+  // Devolve o stream morno pronto pra gravar (tracks reabilitadas), ou undefined se nao existe /
+  // morreu (o SO encerra a captura em background — a proxima gravacao cai no getUserMedia normal).
+  function retomarMicMorno(): MediaStream | undefined {
+    const s = micMorno;
+    micMorno = undefined;
+    if (!s) return undefined;
+    const vivas = s.getTracks().filter((t) => t.readyState === 'live');
+    if (!vivas.length) return undefined;
+    vivas.forEach((t) => { t.enabled = true; });
+    return s;
+  }
+
+  function pararMicMorno() {
+    micMorno?.getTracks().forEach((t) => t.stop());
+    micMorno = undefined;
+  }
+
+  // Para a gravacao e zera o estado. Chamado no onstop, no onerror, em falha e no onDestroy
   // (trocar de sessao com gravacao ativa desmonta o Composer -> sem isto o mic ficaria ligado).
-  function teardownRecording() {
+  // encerrarMic=false (o comum): o stream vira micMorno, desabilitado. =true (so onDestroy):
+  // encerra as tracks de vez.
+  function teardownRecording(encerrarMic = false) {
     if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
     if (recTimer) { clearInterval(recTimer); recTimer = undefined; }
     // Maos-livres: o contexto foi destravado pelo toque no mic e ainda vai tocar os bipes depois da
@@ -773,7 +829,17 @@
       audioCtx?.close().catch((err) => console.warn(m.composer_audiocontext_close_falhou(), err));
       audioCtx = undefined;
     }
-    recStream?.getTracks().forEach((t) => t.stop());
+    if (recStream) {
+      if (encerrarMic) {
+        recStream.getTracks().forEach((t) => t.stop());
+      } else {
+        // Vira o mic morno da proxima gravacao. Se ja havia um guardado (nao devia — um recStream
+        // por vez), o velho e encerrado pra nao vazar.
+        pararMicMorno();
+        recStream.getTracks().forEach((t) => { t.enabled = false; });
+        micMorno = recStream;
+      }
+    }
     recStream = undefined;
     mediaRecorder = undefined;
     recording = false;
@@ -908,6 +974,10 @@
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
     mediaRecorder.onstop = () => {
+      // Componente destruído com gravação no ar: parar as tracks dispara este onstop DEPOIS do
+      // destroy em browser que segue a spec — sem o guard, uma transcrição fantasma rodava na
+      // sessão que o usuário acabou de trocar (revisão do diff).
+      if (destroyed) return;
       const type = mediaRecorder?.mimeType || 'audio/webm';
       // Chrome grava webm/opus; iOS Safari grava mp4/aac. A Groq aceita os dois direto.
       const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
@@ -969,28 +1039,34 @@
     if (ttsPlayer.playing) ttsPlayer.toggle();
 
     // Grava pelo mic e transcreve na Groq ao parar; waveform real do audio.
+    // Reusa o mic morno quando ha um (sem prompt); senao pede o stream ao navegador.
+    const morno = retomarMicMorno();
     let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      // Reject TARDIO de uma tentativa morta (cancelada ou componente destruido): silencio total —
-      // zerar starting aqui mataria o hint de uma tentativa NOVA em voo, e o recError seria um
-      // erro de algo que o usuario deliberadamente cancelou.
-      if (destroyed || geracao !== recGeracao) return;
-      console.error(m.composer_getusermedia_falhou(), err);
-      const name = err instanceof DOMException ? err.name : '';
-      recError = name === 'NotFoundError' ? m.composer_sem_microfone()
-        : name === 'NotReadableError' ? m.composer_mic_em_uso()
-        : m.composer_sem_acesso_mic();
-      starting = false;
-      return;
-    }
-    // A promise resolveu TARDE: ou o usuario cancelou a espera (2o tap), ou trocou de sessao e
-    // este Composer morreu no meio do await. Sem este guard, a stream abria o mic num componente
-    // destruido/sem UI — gravador e interval vazavam pra sempre, sem ninguem pra chamar stop().
-    if (destroyed || geracao !== recGeracao) {
-      stream.getTracks().forEach((t) => t.stop());
-      return;
+    if (morno) {
+      stream = morno;
+    } else {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        // Reject TARDIO de uma tentativa morta (cancelada ou componente destruido): silencio total —
+        // zerar starting aqui mataria o hint de uma tentativa NOVA em voo, e o recError seria um
+        // erro de algo que o usuario deliberadamente cancelou.
+        if (destroyed || geracao !== recGeracao) return;
+        console.error(m.composer_getusermedia_falhou(), err);
+        const name = err instanceof DOMException ? err.name : '';
+        recError = name === 'NotFoundError' ? m.composer_sem_microfone()
+          : name === 'NotReadableError' ? m.composer_mic_em_uso()
+          : m.composer_sem_acesso_mic();
+        starting = false;
+        return;
+      }
+      // A promise resolveu TARDE: ou o usuario cancelou a espera (2o tap), ou trocou de sessao e
+      // este Composer morreu no meio do await. Sem este guard, a stream abria o mic num componente
+      // destruido/sem UI — gravador e interval vazavam pra sempre, sem ninguem pra chamar stop().
+      if (destroyed || geracao !== recGeracao) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
     }
     recStream = stream;
     maosLivres = lerMaosLivres();
@@ -1019,7 +1095,7 @@
     starting = false;
   }
 
-  onDestroy(teardownRecording);
+  onDestroy(() => { teardownRecording(true); pararMicMorno(); });   // encerra o mic de vez (o morno tambem)
   onDestroy(() => { destroyed = true; });   // getUserMedia em voo se descarta ao resolver (toggleRecord)
   onDestroy(limparUndo);   // troca de sessao desmonta o Composer -> nao deixa o setTimeout solto
   onDestroy(cancelarContagem);   // troca de sessao desmonta o Composer -> nao deixa o setInterval solto
@@ -1334,6 +1410,22 @@
 
     <div class="control-row">
       <div class="control-left">
+        <!-- "+" do celular (referência: app do Claude): anexo e estilo do ditado moram AQUI no
+             mobile, não na fileira — com modelo+esforço+permissão+ações a fileira estourava e
+             quebrava os controles. No desktop ele some e anexo/estilo ficam na fileira (CSS). -->
+        <button
+          class="attach-btn plus-btn"
+          bind:this={plusBtnEl}
+          onclick={() => (plusOpen = true)}
+          aria-haspopup="dialog"
+          aria-expanded={plusOpen}
+          aria-label={m.tabs_mais_opcoes()}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
         {#if isPi}
           <!-- pill-duo: no celular as duas pills (modelo + esforço) se fundem num chip só —
                fundo compartilhado, divisor fino, cada metade abre seu popover. Desktop:
@@ -1430,19 +1522,9 @@
                 </span>
               </button>
             {/if}
-            <!-- Permissão: terceira pill só em Claude, fora do duo (chip próprio). -->
-            <button
-              class="model-pill"
-              bind:this={permPillEl}
-              onclick={abrirPermissao}
-              aria-haspopup="dialog"
-              aria-expanded={permPopOpen}
-              aria-label={m.composer_permissao()}
-            >
-              <span class="pill-label">
-                <span class="pill-model">{permCurrent ?? m.composer_permissao()}</span>
-              </span>
-            </button>
+            <!-- Permissão NÃO é mais pill da fileira: em telas de celular a palavra do modo
+                 ("bypassPermissions") estourava a linha e derrubava os controles. Ela virou uma
+                 linha dentro do seletor de modelo (ClaudeModelPopover), que é onde se mexe nela. -->
           </span>
         {:else}
           <button
@@ -1560,6 +1642,8 @@
     onApply={handleApply}
     onApplied={handleEngineModelApplied}
     onFail={(msg) => (modelError = msg)}
+    {permCurrent}
+    onOpenPermission={() => { claudePopOpen = false; void abrirPermissao(); }}
     onClose={() => (claudePopOpen = false)}
   />
 
@@ -1573,7 +1657,7 @@
 
   <ClaudePermissionPopover
     open={permPopOpen}
-    anchor={permPillEl}
+    anchor={claudePillEl}
     current={permCurrent}
     modes={permModes}
     sondavel={permSondavel}
@@ -1635,9 +1719,21 @@
 
   <DitadoEstiloPopover
     open={estiloAberto}
-    anchor={estiloPillEl}
+    anchor={ehMobile ? plusBtnEl : estiloPillEl}
     onClose={() => (estiloAberto = false)}
   />
+
+  <!-- Menu do "+" (mobile): as duas ações que saíram da fileira. -->
+  <Popover open={plusOpen} anchor={plusBtnEl} onClose={() => (plusOpen = false)} width={260} ariaLabel={m.tabs_mais_opcoes()}>
+    <button class="plus-item" onclick={() => { plusOpen = false; fileInput?.click(); }}>
+      <IconAttach size={16} />
+      <span>{m.composer_anexar_arquivo()}</span>
+    </button>
+    <button class="plus-item" onclick={() => { plusOpen = false; estiloAberto = true; }}>
+      <span class="plus-item-label">{m.ditado_estilo_titulo()}</span>
+      <span class="plus-item-value">{rotuloEstilo}</span>
+    </button>
+  </Popover>
 
   <ConfirmSheet
     open={confirmStopOpen}
@@ -1705,6 +1801,11 @@
     position: relative;
     isolation: isolate;
     border: 1px solid var(--glass-border);
+    /* Estado de foco do card: a textarea tem outline:none e o card inteiro e o alvo de toque,
+       entao nada dizia "voce esta digitando aqui". A borda ganha tinta accent no focus-within —
+       borda, nao anel grosso: o card ja e vidro com specular, um outline por cima brigaria com o
+       rim. (make-interfaces-feel-better: bordas pra separacao e foco.) */
+    transition: border-color 180ms var(--ease-out);
     box-shadow:               /* specular rim (brilho de borda) = cara de glass iOS; glow no host */
       inset 0 1px 1px var(--glass-specular),
       inset 0 -1px 1px rgba(255, 255, 255, 0.05),
@@ -1714,6 +1815,10 @@
     /* Padding interno uniforme. A folga do home indicator saiu daqui pro .composer (margem externa)
        -> o card nao cola mais na borda; flutua com respiro do fundo. */
     padding: var(--space-3);
+  }
+
+  .composer-card:focus-within {
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   }
 
   /* Camada de vidro: leaf bare (sem conteúdo, sem descendente posicionado), bounded à caixa do dock. */
@@ -1805,10 +1910,30 @@
   .pill-duo {
     display: contents;
   }
+  /* O "+" só aparece no celular (regra no bloco mobile); no desktop anexo e estilo ficam na
+     fileira e ele some. */
+  .plus-btn { display: none; }
+
+  /* Linhas do menu do "+". */
+  .plus-item {
+    display: flex; align-items: center; gap: var(--space-2);
+    width: 100%; padding: 10px var(--space-3);
+    background: transparent; border: none; color: var(--text-primary);
+    font-size: var(--text-sm); text-align: left; cursor: pointer;
+  }
+  @media (hover: hover) { .plus-item:hover { background: var(--bg-hover); } }
+  .plus-item-label { flex: 1; min-width: 0; }
+  .plus-item-value { color: var(--text-muted); font-size: var(--text-xs); }
+
   @media (max-width: 819px) {
-    /* 8px entre controles (era 4): com 4px o vão entre as peças ficava MENOR que o padding de
-     dentro delas, e a fileira lia como um bloco único em vez de cinco controles. */
-  .control-left { gap: var(--space-2); flex-wrap: wrap; }       /* com três pílulas a fileira não cabe em 390px e quem encolhe é sempre o nome do modelo, porque as irmãs têm flex-shrink 0 */
+    /* Fileira do celular: [+] [modelo·esforço] [🎤] [↑]. Anexo e estilo do ditado moram no "+"
+       (referência: app do Claude) — antes a fileira levava seis peças (com a palavra comprida
+       "bypassPermissions") e estourava, derrubando mic e estilo órfãos pra uma segunda linha. */
+    .control-left { gap: 6px; flex-wrap: nowrap; }
+    .plus-btn { display: inline-flex; }
+    /* Anexo e pill de estilo saem da fileira (estão no "+"); o mic fica. */
+    .control-left > .attach-btn:not(.mic-btn):not(.plus-btn) { display: none; }
+    .control-left > .model-pill { display: none; }
     .pill-duo {
       display: inline-flex;
       align-items: center;
@@ -1823,8 +1948,6 @@
       min-width: 0;
       gap: var(--space-1);                       /* anel de contexto mais colado no nome */
     }
-    /* A pill avulsa (estilo do ditado) também perde o padding assimétrico de 12px. */
-    .control-left > .model-pill { padding: 0 var(--space-2); }
     .pill-duo > .model-pill:first-child {
       padding-left: var(--space-2);
       padding-right: var(--space-1);
@@ -1845,9 +1968,6 @@
     .control-left > .attach-btn { width: 32px; min-width: 0; }  /* min-width fura o alvo global de 44px */
     /* Anel de contexto de 26px vira 20 dentro do chip (o viewBox escala o desenho inteiro). */
     .pill-duo .model-pill :global(svg) { width: 20px; height: 20px; }
-    /* Última defesa numa tela muito estreita: as pills de texto encolhem com reticências
-       (pill-model já tem ellipsis) em vez de invadir o send-btn. */
-    .control-left > .model-pill { flex-shrink: 1; min-width: 0; }
   }
 
   .pill-label {
