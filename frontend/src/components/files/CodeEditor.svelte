@@ -159,6 +159,30 @@
     return v;
   }
 
+  // Modo legado: `StreamLanguage.define(modo)` é a ponte oficial do CodeMirror 5 para o 6.
+  // Os imports são ESTÁTICOS, um por arquivo de modo: com o caminho montado numa variável o
+  // bundler não resolve nada (`Failed to resolve module specifier` em runtime, medido) — ele
+  // precisa enxergar o especificador literal pra separar o pedaço.
+  const MODOS_LEGADOS: Record<string, () => Promise<Record<string, unknown>>> = {
+    clike: () => import('@codemirror/legacy-modes/mode/clike'),
+    pascal: () => import('@codemirror/legacy-modes/mode/pascal'),
+    shell: () => import('@codemirror/legacy-modes/mode/shell'),
+    toml: () => import('@codemirror/legacy-modes/mode/toml'),
+    go: () => import('@codemirror/legacy-modes/mode/go'),
+    ruby: () => import('@codemirror/legacy-modes/mode/ruby'),
+    lua: () => import('@codemirror/legacy-modes/mode/lua'),
+    swift: () => import('@codemirror/legacy-modes/mode/swift'),
+    powershell: () => import('@codemirror/legacy-modes/mode/powershell'),
+  };
+
+  async function legado(arquivo: string, nome: string) {
+    const carregar = MODOS_LEGADOS[arquivo];
+    if (!carregar) return null;
+    const [{ StreamLanguage }, mod] = await Promise.all([import('@codemirror/language'), carregar()]);
+    const modo = mod[nome];
+    return modo ? StreamLanguage.define(modo as never) : null;
+  }
+
   // Gramática por extensão. Só o que o app realmente encontra — o resto cai em texto plano com
   // numeração e busca, que já é melhor do que um `<pre>`.
   async function gramatica(p: string) {
@@ -178,10 +202,23 @@
       case 'rs': return (await import('@codemirror/lang-rust')).rust();
       case 'c': case 'h': case 'cc': case 'cpp': case 'hpp':
         return (await import('@codemirror/lang-cpp')).cpp();
-      case 'java': case 'cs': case 'kt':
-        // O modo Java cobre a família de chaves (C#, Kotlin) bem o bastante pra leitura; não há
-        // gramática oficial de C# no CodeMirror e escrever uma não é escopo desta tela.
-        return (await import('@codemirror/lang-java')).java();
+      case 'java': return (await import('@codemirror/lang-java')).java();
+      // C#, Kotlin, Dart e Pascal vêm dos modos LEGADOS (@codemirror/legacy-modes) — os do
+      // CodeMirror 5 rodando no 6 via StreamLanguage. São do mesmo autor e não têm árvore de
+      // sintaxe (então nada de dobra por bloco ou indentação inteligente), mas colorem certo,
+      // que é o que esta tela precisa. Sem eles, Delphi e C# — o que mais se lê aqui — abriam
+      // como texto plano.
+      case 'cs': return await legado('clike', 'csharp');
+      case 'kt': return await legado('clike', 'kotlin');
+      case 'dart': return await legado('clike', 'dart');
+      case 'pas': case 'dpr': case 'dpk': case 'inc': return await legado('pascal', 'pascal');
+      case 'sh': case 'bash': case 'zsh': return await legado('shell', 'shell');
+      case 'toml': return await legado('toml', 'toml');
+      case 'go': return await legado('go', 'go');
+      case 'rb': return await legado('ruby', 'ruby');
+      case 'lua': return await legado('lua', 'lua');
+      case 'swift': return await legado('swift', 'swift');
+      case 'ps1': return await legado('powershell', 'powerShell');
       case 'php': return (await import('@codemirror/lang-php')).php();
       case 'xml': case 'xsd': case 'xsl': return (await import('@codemirror/lang-xml')).xml();
       case 'yml': case 'yaml': return (await import('@codemirror/lang-yaml')).yaml();

@@ -363,6 +363,18 @@
   @media (min-width: 820px) {
     .visor { border: 1px solid var(--border-subtle); border-radius: 12px; }
   }
+  /* O app tem `button { min-height: 44px; min-width: 44px }` global — o alvo de toque. É certo
+     no celular e é o que estava inflando esta faixa no desktop: a aba ia a 60px e o segmentado a
+     48px, contra os ~34/26px do desenho. Com PONTEIRO FINO (mouse) o alvo pode ser o tamanho
+     real do controle; no toque, os 44px continuam valendo.
+
+     O corte é por LARGURA (820px, o mesmo do DesktopShell), não por `pointer: fine`: o critério
+     de ponteiro é o mais correto na teoria, mas não dá pra verificar — o navegador headless que
+     eu uso pra conferir a tela reporta `pointer: none`, então a regra nunca valeria no teste. */
+  @media (min-width: 820px) {
+    .abas button, .subbarra button { min-height: 0; min-width: 0; }
+  }
+
   /* ── faixa de abas (valores do mock C) ────────────────────────────────────────────────── */
   .abas {
     display: flex; align-items: center; gap: 4px;
