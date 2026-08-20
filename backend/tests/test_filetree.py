@@ -1,5 +1,6 @@
 """Cobertura do filetree: listar um nivel do repo da sessao e ler arquivo."""
 import os
+import pathlib
 import subprocess
 
 import pytest
@@ -694,3 +695,28 @@ def test_write_preserva_o_bit_de_execucao(tmp_path):
     lido = filetree.read_file(str(tmp_path), "s.sh")
     filetree.write_file(str(tmp_path), "s.sh", "#!/bin/sh\necho tchau\n", lido["digest"])
     assert os.stat(alvo).st_mode & 0o111, "o arquivo voltou sem poder executar"
+
+
+def test_write_sem_digest_nao_le_o_arquivo(tmp_path, monkeypatch):
+    """Rejeitar por falta de digest não pode custar uma leitura: um POST apontando pra um arquivo
+    de gigabytes derrubava o backend por memória antes mesmo de recusar o pedido."""
+    alvo = tmp_path / "grande.bin"
+    alvo.write_text("x" * 100, encoding="utf-8")
+    def explode(*a, **k):
+        raise AssertionError("leu o arquivo antes de validar")
+    monkeypatch.setattr(pathlib.Path, "read_bytes", explode)
+    with pytest.raises(filetree.FileError) as e:
+        filetree.write_file(str(tmp_path), "grande.bin", "novo\n", None)
+    assert e.value.code == "erro_arq_sem_digest"
+
+
+def test_write_recusa_arquivo_acima_do_teto(tmp_path):
+    """Arquivo maior que o teto é recusado pelo TAMANHO, sem virar bytes na memória. Arquivo real
+    (600KB) em vez de monkeypatch no `Path.stat`: mockar stat quebra o `is_dir` da própria
+    função e o teste passaria a exercitar outra coisa."""
+    alvo = tmp_path / "enorme.bin"
+    alvo.write_text("x" * (filetree.MAX_BYTES + 1024), encoding="utf-8")
+    with pytest.raises(filetree.FileError) as e:
+        filetree.write_file(str(tmp_path), "enorme.bin", "novo\n", "a" * 64)
+    assert e.value.status == 413
+    assert e.value.code == "erro_arq_grande_demais"

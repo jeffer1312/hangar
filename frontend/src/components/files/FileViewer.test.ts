@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mount, unmount } from 'svelte';
+import { mount, unmount, tick } from 'svelte';
 import FileViewer from './FileViewer.svelte';
 import * as m from '../../paraglide/messages';
 import { overwriteGetLocale } from '../../paraglide/runtime';
@@ -160,4 +160,5 @@ describe('FileViewer', () => {
     expect(el.textContent).toContain(m.git_diff_carregando());
     unmount(comp);
   });
+
 });

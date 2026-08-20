@@ -143,13 +143,6 @@
   );
   const dirLegivel = $derived(dirParte === '' ? '.' : dirParte.replace(/\/$/, '').split('/').join(' / '));
 
-  // "desde 721d1a0" chega inteiro da tradução; a barra mostra o "desde" com peso 500.
-  // Split na primeira palavra cobre pt ("desde") e en ("since").
-  const partesDesde = $derived(
-    diffDoArquivo !== null && diffDoArquivo.base !== null && diffDoArquivo.base.trim() !== ''
-      ? m.arq_escopo_desde({ base: diffDoArquivo.base }).split(/ (.+)/)
-      : null,
-  );
 
   // Tamanho binário na vírgula do idioma do app (dec usa intlLocale): "12,4 KB" casa com a
   // barra; abaixo de 1 KB mostra os bytes crus.
@@ -210,14 +203,25 @@
     editando = false;
     erroSalvar = null;
     salvoAgora = false;
+    salvando = false;   // senão o botão do arquivo novo nasce preso em "Salvando…"
   });
 
   async function salvar() {
     if (!onSalvar || !sujo || salvando) return;
+    // O arquivo em que este salvamento começou. Trocar de arquivo com a gravação em voo é
+    // possível (nada na árvore impede), e sem esta guarda a resposta antiga aterrissava na tela
+    // do arquivo novo: o erro de A aparecia sobre B, ou o "✓ Salvo" de A fechava a edição de B
+    // e sumia com o rastro do que estava sendo digitado.
+    const meu = path;
     salvando = true;
     erroSalvar = null;
-    const falha = await onSalvar(rascunho);
-    salvando = false;
+    let falha: string | null = null;
+    try {
+      falha = await onSalvar(rascunho);
+    } finally {
+      if (meu === path) salvando = false;
+    }
+    if (meu !== path) return;
     if (falha) {
       // Ja vem traduzida do api.ts; o mensagemDeErro cobre o caso de vir um codigo cru.
       erroSalvar = mensagemDeErro(falha) ?? falha;
@@ -225,7 +229,7 @@
     }
     salvoAgora = true;
     editando = false;
-    setTimeout(() => { salvoAgora = false; }, 2000);
+    setTimeout(() => { if (meu === path) salvoAgora = false; }, 2000);
   }
 
   function abrirEdicao() {

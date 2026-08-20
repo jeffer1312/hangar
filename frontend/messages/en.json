@@ -1839,5 +1839,7 @@
   "arq_ver_como": "What to show",
   "arq_ver_alteracoes": "Changes",
   "arq_ver_arquivo": "File",
-  "arq_trocar_escopo": "Change what it compares against"
+  "arq_trocar_escopo": "Change what it compares against",
+  "erro_arq_sumiu": "The file is gone from disk.",
+  "erro_arq_escrita_falhou": "Could not write the file."
 }

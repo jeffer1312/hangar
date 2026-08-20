@@ -1839,5 +1839,7 @@
   "arq_ver_como": "O que mostrar",
   "arq_ver_alteracoes": "Alterações",
   "arq_ver_arquivo": "Arquivo",
-  "arq_trocar_escopo": "Trocar o ponto de comparação"
+  "arq_trocar_escopo": "Trocar o ponto de comparação",
+  "erro_arq_sumiu": "O arquivo sumiu do disco.",
+  "erro_arq_escrita_falhou": "Não consegui gravar o arquivo."
 }

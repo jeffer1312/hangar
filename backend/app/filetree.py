@@ -258,20 +258,35 @@ def write_file(cwd: str, path: str, texto: str, digest_lido: str | None) -> dict
     if len(novo) > MAX_BYTES:
         raise FileError(413, "erro_arq_grande_demais", "arquivo grande demais")
 
-    try:
-        atual = alvo.read_bytes()
-    except PermissionError:
-        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de leitura")
     # Sem digest o cliente está gravando às cegas (leitura truncada, ou cliente antigo): recusa.
     # Um "salvar" que apaga em silêncio o que o agente acabou de escrever é o pior desfecho aqui.
+    # Esta checagem vem ANTES de tocar no disco: rejeitar não precisa ler arquivo nenhum.
     if not digest_lido:
         raise FileError(409, "erro_arq_sem_digest", "sem a impressao da leitura")
+    # Teto ANTES de ler: sem ele, um POST apontando pra um arquivo de gigabytes (dump, artefato de
+    # build) fazia o backend puxar tudo pra memória só pra depois recusar o pedido. O `read_file`
+    # nunca lê além de MAX_BYTES; a escrita não pode ser a porta que falta.
+    try:
+        tamanho_atual = alvo.stat().st_size
+    except OSError as e:
+        raise FileError(409, "erro_arq_sumiu", f"o arquivo sumiu do disco: {e}") from e
+    if tamanho_atual > MAX_BYTES:
+        raise FileError(413, "erro_arq_grande_demais", "arquivo grande demais")
+
+    try:
+        atual = alvo.read_bytes()
+        modo = alvo.stat().st_mode
+    except PermissionError as e:
+        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de leitura") from e
+    except OSError as e:
+        # Apagado entre o _resolver e agora: é o cenário que esta feature documenta (o agente da
+        # sessão mexe nos mesmos arquivos), e sair cru daqui vira 500 sem o envelope de erro.
+        raise FileError(409, "erro_arq_sumiu", f"o arquivo sumiu do disco: {e}") from e
     if _digest(atual) != digest_lido:
         raise FileError(409, "erro_arq_mudou_no_disco", "o arquivo mudou no disco")
 
     # tmp+rename no MESMO diretório (rename entre sistemas de arquivos falha), preservando o modo:
     # um arquivo executável não pode voltar sem o bit de execução.
-    modo = alvo.stat().st_mode
     fd, tmp = tempfile.mkstemp(dir=str(alvo.parent), prefix=".hangar-escrita-")
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -279,11 +294,23 @@ def write_file(cwd: str, path: str, texto: str, digest_lido: str | None) -> dict
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, modo & 0o7777)
+        # Última conferência, colada no rename: entre a primeira leitura e aqui houve fsync, e o
+        # agente escreve sem lock nenhum (ele usa o próprio Edit, direto no arquivo). Isto NÃO
+        # fecha a janela — fechar de verdade exigiria o agente cooperar —, só a encolhe pro
+        # menor tamanho que dá sem ele.
+        # ponytail: teto conhecido, um flock aqui só protegeria contra nós mesmos.
+        if _digest(alvo.read_bytes()) != digest_lido:
+            raise FileError(409, "erro_arq_mudou_no_disco", "o arquivo mudou no disco")
         os.replace(tmp, alvo)
-    except PermissionError:
-        os.unlink(tmp)
-        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de escrita")
-    except OSError:
+    except FileError:
         os.unlink(tmp)
         raise
+    except PermissionError as e:
+        os.unlink(tmp)
+        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de escrita") from e
+    except OSError as e:
+        # Disco cheio, sistema de arquivos diferente, arquivo sumido: erro do app, com envelope,
+        # nunca um 500 cru — mesma régua do `_run` do git_ops.
+        os.unlink(tmp)
+        raise FileError(409, "erro_arq_escrita_falhou", f"nao consegui gravar: {e}") from e
     return {"path": path, "size": len(novo), "digest": _digest(novo)}
