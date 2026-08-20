@@ -214,12 +214,11 @@
   // A MessageList so ancora no fim quando ela mesma controla o scroll da tela; aqui ela vive numa
   // caixa dentro do modal, entao a primeira pintura ficava no TOPO — no prompt, nao no que o agente
   // acabou de fazer. Empurra pro fim a cada atualizacao.
+  // Nada de âncora de scroll aqui: a `MessageList` já tem a dela (`atBottom`, 64px do fim, e o
+  // $effect que rola sozinho). A tela pulava porque a lista não TINHA altura — nunca porque
+  // faltasse quem ancorasse. Duplicar por fora, com outro limiar, só recriava o pulo numa faixa
+  // mais estreita, e amarrava esta folha à classe interna do componente do chat.
   let subChatEl = $state<HTMLElement | null>(null);
-  $effect(() => {
-    if (!subDetail?.events?.length || !subChatEl) return;
-    const el = subChatEl.querySelector('.message-list');
-    if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-  });
   function stopSubPoll() {
     if (subTimer) { clearInterval(subTimer); subTimer = null; }
     subFails = 0;
@@ -351,7 +350,10 @@
         <button class="modal-icon-btn modal-close" onclick={onClose} aria-label={m.sessao_fechar()}>✕</button>
       </header>
 
-      <div class="modal-body">
+      <!-- No detalhe do subagente o corpo NÃO rola: quem rola é a conversa, por dentro. Dois
+           scrolls aninhados foi o que fez a tela parecer quebrada — o rodapé saía do campo de
+           visão e a roda do mouse pegava ora um, ora outro. -->
+      <div class="modal-body" class:body-fixo={level === 'subagent'}>
         {#if level === 'list'}
           <div class="activity">
             <!-- plan_hidden junto: com "nenhum plano" escolhido, o plan_name some e o painel — que
@@ -452,11 +454,22 @@
             {/if}
           </div>
         {:else if level === 'subagent'}
-          <!-- Subagente ao vivo: o transcript dele, lido pelo backend a cada 2,5s. -->
-          <div class="activity">
+          <!-- Subagente ao vivo: o transcript dele, lido pelo backend a cada 2,5s. MESMA moldura do
+               detalhe de agente de workflow (métricas em cima, ferramentas como chips, rodapé de
+               só-leitura embaixo): as duas telas mostram a mesma coisa e divergiam só por acidente. -->
+          <div class="activity ag-detail">
             {#if !subDetail}
               <p class="activity-empty">{m.atividade_sem_transcript()}</p>
             {:else}
+              <div class="ag-meta">
+                <span class="rodando">◐ {m.atividade_rodando()}</span>
+                <span>{m.atividade_chamadas({ n: subDetail.toolCalls })}</span>
+                {#if subDetail.agentType}<span>{subDetail.agentType}</span>{/if}
+                {#if subDetail.recent.length}
+                  <span class="ag-ultima">{subDetail.recent[subDetail.recent.length - 1].name}</span>
+                {/if}
+              </div>
+
               <!-- MESMO renderizador do chat: o arquivo do subagente e um jsonl no formato de
                    sempre, entao o backend converte com a `parse_line` do transcript e a UI reusa a
                    lista de mensagens (bolhas, cartoes de tool, markdown) em vez de um segundo jeito
@@ -483,15 +496,15 @@
               {#if subError}<p class="activity-error">⚠ {subError}</p>{/if}
 
               {#if subDetail.tools.length > 0}
-                <div class="section sub-foot">
-                  <span class="section-label">{m.atividade_ferramentas_chamadas({ n: subDetail.toolCalls })}</span>
-                  <div class="sub-tools">
-                    {#each subDetail.tools as t (t.name)}
-                      <span class="agent-tag">{t.name} <b>{t.count}</b></span>
-                    {/each}
+                <div class="conv">
+                  <span class="rotulo">{m.atividade_ferramentas_chamadas({ n: subDetail.toolCalls })}</span>
+                  <div class="tools">
+                    {#each subDetail.tools as t (t.name)}<span class="chip">{t.name} ×{t.count}</span>{/each}
                   </div>
                 </div>
               {/if}
+
+              <div class="rodape">{m.atividade_conversa_so_leitura({ nome: sessionName })}</div>
             {/if}
           </div>
         {:else if level === 'workflow'}
@@ -705,11 +718,19 @@
 
   .modal-body {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     padding: var(--space-4) var(--space-5);
     padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
   }
+
+  /* `auto`, não `hidden`: as ferramentas e o rodapé ficam FORA do scroll da conversa, e num
+     subagente com muitas ferramentas distintas (chips em várias linhas) numa janela baixa eles
+     passariam do fim da caixa sem scrollbar nenhuma — cortados e inalcançáveis. Cabendo, não
+     rola; é o caso normal. */
+  .body-fixo { overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
+  .body-fixo > .activity { flex: 1 1 auto; min-height: 0; }
 
   .activity { display: flex; flex-direction: column; gap: var(--space-4); }
   .activity-count { font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; color: var(--text-secondary); flex-shrink: 0; }
@@ -765,10 +786,30 @@
   /* A lista de mensagens e a do chat: precisa de uma caixa com altura pra rolar dentro do modal. */
   .activity-error { margin: var(--space-2) 0 0; color: var(--warning); font-size: var(--text-xs); }
 
-  .sub-chat { position: relative; height: min(60vh, 560px); margin: 0 calc(var(--space-5) * -1); }
-  .sub-foot { padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
-
-  .sub-tools { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+  /* Caixa PRÓPRIA pra conversa: sem superfície, o vidro do modal deixava o chat de trás legível
+     por baixo das bolhas. `--surface-inset` é o token que acompanha o slider de transparência
+     (fundo cru viraria retângulo chapado sobre o papel de parede). */
+  .sub-chat {
+    position: relative;
+    /* Altura ELÁSTICA, não fixa: com `height: 520px` o conjunto (métricas + conversa +
+       ferramentas + rodapé) passava do teto do modal e o rodapé caía pra fora da caixa. */
+    flex: 1 1 auto;
+    /* `.message-list` é `flex: 1` — sem um pai FLEX com altura ele nunca recebe altura nenhuma,
+       o `overflow-y: scroll` dele fica inerte e a conversa transborda o modal sem rolar. Era esse
+       o defeito da tela: não era estilo, era a caixa. */
+    display: flex;
+    flex-direction: column;
+    /* Piso ALTO, não mínimo de sobrevivência: o dialog tem `height: auto`, e uma caixa que só
+       flexiona não tem tamanho natural — o modal encolhia e sobrava uma janelinha de ~260px pra
+       ler a conversa. O teto continua sendo o do modal. */
+    min-height: min(46vh, 420px);
+    max-height: min(58vh, 520px);
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .ag-ultima { font-family: var(--font-mono); }
   .sub-text { color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.5; max-height: 40vh; overflow-y: auto; }
   .sub-text :global(p) { margin: 0 0 var(--space-2); }
   .sub-text :global(code) { padding: 0 3px; border-radius: 3px; background: var(--bg-elevated); font-family: var(--font-mono); font-size: 10px; }
@@ -850,7 +891,7 @@
   .ag-result { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-primary); line-height: 1.5; white-space: pre-wrap; word-break: break-word; background: var(--bg-surface); padding: var(--space-3); border-radius: var(--radius-sm); margin: 0; }
 
   /* Novo detalhe do agente — conversa só-leitura (mock atividade-agente.html) */
-  .ag-detail { gap: var(--space-3); }
+  .ag-detail { gap: var(--space-3); min-height: 0; max-height: 100%; }
   .ag-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 0; font-size: 12px; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle); }
   .ag-meta .ok { color: var(--success); font-weight: 600; }
   .ag-meta .rodando { color: var(--accent); font-weight: 600; }
