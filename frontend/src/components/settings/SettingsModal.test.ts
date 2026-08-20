@@ -11,6 +11,8 @@ import type { Server } from '../../lib/auth';
 import type { TelaConfig } from '../../lib/configRoute';
 
 vi.mock('../../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   getConfig: vi.fn(),
   getConfigForServer: vi.fn(),
   patchConfig: vi.fn(),

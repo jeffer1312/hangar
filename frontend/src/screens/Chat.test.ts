@@ -63,6 +63,10 @@ const sseCtl = vi.hoisted(() => {
 // API: só o que o mount do Chat toca precisa responder; o resto nunca chega a ser chamado
 // com os filhos stubados.
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  errorDetail: vi.fn(async () => ''),
   getHistory: vi.fn(async () => ({ events: [], total: 0 })),
   openEventStream: vi.fn(() => ({
     onmessage: () => {}, onerror: () => {}, close: () => {},

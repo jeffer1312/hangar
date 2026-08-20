@@ -53,3 +53,112 @@ def test_create_sem_permissao_recebe_none():
         r = _client().post("/api/sessions", headers=AUTH, json={"name": "x", "cwd": "/tmp", "provider": "claude"})
     assert r.status_code == 200
     assert cr.call_args.kwargs.get("permission_mode") is None
+
+
+# ── Rotas vivas (Task 5) ────────────────────────────────────────────────────
+
+def _info_claude(name="sess", jsonl="/tmp/x.jsonl"):
+    return SessionInfo(name=name, cwd="/tmp", provider="claude", jsonl=jsonl)
+
+def _info_kimi(name="sess"):
+    return SessionInfo(name=name, cwd="/tmp", provider="kimi", jsonl="/tmp/k.jsonl")
+
+def test_perm_get_ok():
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.listar_modos", return_value=("plan", ["plan", "auto", "manual", "acceptEdits"])):
+        r = _client().get("/api/sessions/sess/permission-modes", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["current"] == "plan"
+    assert r.json()["modes"] == ["plan", "auto", "manual", "acceptEdits"]
+
+def test_perm_get_nao_claude_409():
+    info = _info_kimi()
+    with patch("app.api._cached_info", return_value=info):
+        r = _client().get("/api/sessions/sess/permission-modes", headers=AUTH)
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_permissao_so_claude"
+
+def test_perm_get_cache_usa_mesma_lista():
+    from app.api import _perm_modes_cache
+    _perm_modes_cache.clear()
+    info = _info_claude(name="sess-cache", jsonl="/tmp/cache.jsonl")
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.listar_modos", return_value=("plan", ["plan", "auto", "manual", "acceptEdits"])) as mk, \
+         patch("app.permission_mode.ler_modo", return_value="plan"):
+        r1 = _client().get("/api/sessions/sess-cache/permission-modes", headers=AUTH)
+        assert r1.status_code == 200
+        r2 = _client().get("/api/sessions/sess-cache/permission-modes", headers=AUTH)
+        assert r2.status_code == 200
+        # segunda chamada usou cache: listar_modos só uma vez
+        assert mk.call_count == 1
+
+def test_perm_post_ok():
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.trocar_modo", return_value="auto"):
+        r = _client().post("/api/sessions/sess/permission-mode", headers=AUTH, json={"mode": "auto"})
+    assert r.status_code == 200
+    assert r.json()["mode"] == "auto"
+
+def test_perm_post_aceita_permission_mode_alias():
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.trocar_modo", return_value="plan"):
+        r = _client().post("/api/sessions/sess/permission-mode", headers=AUTH, json={"permission_mode": "plan"})
+    assert r.status_code == 200
+    assert r.json()["mode"] == "plan"
+
+def test_perm_post_teto_409_devolve_ficou():
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.trocar_modo", return_value="plan"):
+        # pede dontAsk mas ficou em plan (fora do ciclo)
+        r = _client().post("/api/sessions/sess/permission-mode", headers=AUTH, json={"mode": "dontAsk"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_permissao_teto"
+    assert r.json()["detail"]["params"]["ficou"] == "plan"
+    assert r.json()["detail"]["params"]["mode"] == "plan"
+
+def test_perm_post_invalida_409():
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"):
+        r = _client().post("/api/sessions/sess/permission-mode", headers=AUTH, json={"mode": "invalido"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_permissao_invalida"
+
+def test_perm_post_nao_claude_409():
+    info = _info_kimi()
+    with patch("app.api._cached_info", return_value=info):
+        r = _client().post("/api/sessions/sess/permission-mode", headers=AUTH, json={"mode": "plan"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_permissao_so_claude"
+
+def test_perm_post_painel_aberto_409():
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api._recusa_se_painel_aberto", side_effect=__import__("fastapi").HTTPException(status_code=409, detail={"code": "erro_terminal_aberto", "params": {}, "msg": "aberto"})):
+        r = _client().post("/api/sessions/sess/permission-mode", headers=AUTH, json={"mode": "plan"})
+    assert r.status_code == 409
+
+def test_perm_post_sessao_trabalhando_409():
+    from app.terminal_input import TerminalInput
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.api.terminal._require_drivable", side_effect=TerminalInput.NaoDigitou(409, "trabalhando")):
+        r = _client().post("/api/sessions/sess/permission-mode", headers=AUTH, json={"mode": "plan"})
+    assert r.status_code == 409
+

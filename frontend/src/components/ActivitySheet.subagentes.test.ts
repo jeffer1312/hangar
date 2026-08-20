@@ -15,6 +15,10 @@ import * as apiLib from '../lib/api';
 import type { SubagentRun } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
   getWorkflows: vi.fn(async () => []),
   getWorkflow: vi.fn(),
   getWorkflowAgent: vi.fn(),

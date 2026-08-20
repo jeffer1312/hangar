@@ -1446,6 +1446,22 @@ export function setKimiModel(
   });
 }
 
+// ── Modo de permissão do Claude (Task 5) ────────────────────────────────────────
+// Leitura pelo rodapé (⏸/⏵⏵) e troca via BTab. 409 = sessão não é claude, terminal
+// aberto, sessão trabalhando, ou alvo fora do ciclo / teto de 6 teclas.
+// GET devolve o ciclo vivo (4 ou 5) + o atual; POST devolve o que FICOU.
+
+export function getPermissionModes(name: string): Promise<{ current: string; modes: string[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/permission-modes`);
+}
+
+export function setPermissionMode(name: string, mode: string): Promise<{ mode: string; current: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/permission-mode`, {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
+  });
+}
+
 // ── Loop runner (Task 9+): obter, criar, parar e resolver loops autonomos por sessao ───────────
 
 // Obtem o estado atual de um loop (ou null se nao existe) e sugestoes de próximas ações.

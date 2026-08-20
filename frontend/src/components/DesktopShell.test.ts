@@ -14,6 +14,11 @@ import { navMode } from '../lib/navMode.svelte';
 function stubDe() { return { default: createRawSnippet(() => ({ render: () => '<div />' })) }; }
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
+  errorDetail: vi.fn(async () => ''),
   getConfig: vi.fn(async () => ({})),
   createSession: vi.fn(), deleteSession: vi.fn(),
   renameSession: vi.fn(async (_old: string, nv: string) => ({ ok: true, name: nv })),

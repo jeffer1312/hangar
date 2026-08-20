@@ -18,6 +18,10 @@ import * as api from '../lib/api';
 const onCreate = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
   listClaudeConfigs: vi.fn(),
   // Devolve a lista certa por provider: pro Claude os aliases (como o backend real), pro Pi o
   // modelo fake — a memória do Pi jamais pode casar com a lista do Claude.

@@ -14,6 +14,8 @@ import { readFile } from '../../lib/api';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 
 vi.mock('../../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   listFiles: vi.fn(async () => ({
     entries: [{ name: 'a.txt', path: 'a.txt', is_dir: false, size: 1, changed: null, add: 0, del: 0 }],
     truncated: false,

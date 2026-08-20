@@ -23,6 +23,8 @@ vi.mock('../../lib/credenciais', async (importOriginal) => {
   return { ...real, listarCredenciais: vi.fn(), definirApelido: vi.fn(async () => ({ id: 'x', apelido: null })) };
 });
 vi.mock('../../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   criarConta: vi.fn(async () => ({ path: '/x', label: 'x', active: false })),
   apagarConta: vi.fn(async () => {}),
   putEngine: vi.fn(async () => ({ motores: {} })),
