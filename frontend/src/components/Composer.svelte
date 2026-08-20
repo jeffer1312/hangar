@@ -475,7 +475,6 @@
       .catch(() => {
         permCurrent = null;
         permModes = [];
-        permSondavel = false;
       });
   });
   async function abrirPermissao() {
@@ -487,7 +486,9 @@
       permCurrent = res.current;
       permModes = res.modes;
       permSondavel = res.sondavel;
-    } catch {}
+    } catch (e) {
+      permError = e instanceof Error ? e.message : String(e);
+    }
     permCarregando = false;
   }
   // Reconciliação otimista: se a statusline um dia trouxer permissão, solta; hoje não traz,
@@ -509,7 +510,10 @@
         const cur = await getPermissionModes(sessionName);
         permCurrent = cur.current;
         permModes = cur.modes;
-      } catch {}
+      } catch (e2) {
+        // mantém permError do POST; releitura falhou mas 409 já está na tela
+        if (!permError) permError = e2 instanceof Error ? e2.message : String(e2);
+      }
       throw e;
     }
   }

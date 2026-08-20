@@ -61,11 +61,13 @@
 
   {#if carregando}
     <p class="vazio">{m.comum_carregando()}</p>
-  {:else if !sondavel}
+  {:else if sondavel === false && current === 'dontAsk'}
     <div class="vazio" style="padding: 10px;">
       <p style="margin:0 0 6px; font-size: var(--text-sm);"><strong>{current ?? m.composer_permissao()}</strong> — {m.permissao_dontask_sem_volta()}</p>
       <p class="dica" style="border:none; padding:0;">{m.permissao_dica()}</p>
     </div>
+  {:else if modes.length === 0}
+    <p class="dica">{m.permissao_dica()}</p>
   {:else}
     <ul class="lista">
       {#each MODOS_TODOS as modo (modo)}
