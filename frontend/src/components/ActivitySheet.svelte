@@ -5,7 +5,7 @@
   import PlanPanel from './PlanPanel.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import MessageList from './MessageList.svelte';
-  import { onDestroy, tick, untrack } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import type { Activity, TaskStatus } from '../lib/activity';
   import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail } from '../lib/types';
 
@@ -214,29 +214,11 @@
   // A MessageList so ancora no fim quando ela mesma controla o scroll da tela; aqui ela vive numa
   // caixa dentro do modal, entao a primeira pintura ficava no TOPO — no prompt, nao no que o agente
   // acabou de fazer. Empurra pro fim a cada atualizacao.
+  // Nada de âncora de scroll aqui: a `MessageList` já tem a dela (`atBottom`, 64px do fim, e o
+  // $effect que rola sozinho). A tela pulava porque a lista não TINHA altura — nunca porque
+  // faltasse quem ancorasse. Duplicar por fora, com outro limiar, só recriava o pulo numa faixa
+  // mais estreita, e amarrava esta folha à classe interna do componente do chat.
   let subChatEl = $state<HTMLElement | null>(null);
-  // Ancorar no fim vale enquanto a pessoa ESTÁ no fim. O poll é de 2,5s, então empurrar sempre
-  // significava: rolou pra cima pra ler, e em menos de 3s a tela pulava de volta sozinha.
-  let subPreso = true;
-  const PERTO_DO_FIM = 80;
-  $effect(() => {
-    const box = subChatEl;
-    if (!box) return;
-    const el = box.querySelector('.message-list');
-    if (!el) return;
-    subPreso = true;   // caixa nova (outro subagente): nasce colada no fim
-    const onScroll = () => {
-      subPreso = el.scrollHeight - el.scrollTop - el.clientHeight < PERTO_DO_FIM;
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  });
-  $effect(() => {
-    if (!subDetail?.events?.length || !subChatEl) return;
-    const el = subChatEl.querySelector('.message-list');
-    // untrack: ler `subPreso` como dependência faria a própria rolagem da pessoa re-disparar isto.
-    if (el && untrack(() => subPreso)) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-  });
   function stopSubPoll() {
     if (subTimer) { clearInterval(subTimer); subTimer = null; }
     subFails = 0;
@@ -743,7 +725,11 @@
     padding-bottom: calc(env(safe-area-inset-bottom) + var(--space-5));
   }
 
-  .body-fixo { overflow-y: hidden; display: flex; flex-direction: column; min-height: 0; }
+  /* `auto`, não `hidden`: as ferramentas e o rodapé ficam FORA do scroll da conversa, e num
+     subagente com muitas ferramentas distintas (chips em várias linhas) numa janela baixa eles
+     passariam do fim da caixa sem scrollbar nenhuma — cortados e inalcançáveis. Cabendo, não
+     rola; é o caso normal. */
+  .body-fixo { overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
   .body-fixo > .activity { flex: 1 1 auto; min-height: 0; }
 
   .activity { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -813,7 +799,11 @@
        o defeito da tela: não era estilo, era a caixa. */
     display: flex;
     flex-direction: column;
-    min-height: 160px;
+    /* Piso ALTO, não mínimo de sobrevivência: o dialog tem `height: auto`, e uma caixa que só
+       flexiona não tem tamanho natural — o modal encolhia e sobrava uma janelinha de ~260px pra
+       ler a conversa. O teto continua sendo o do modal. */
+    min-height: min(46vh, 420px);
+    max-height: min(58vh, 520px);
     background: var(--surface-inset);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
