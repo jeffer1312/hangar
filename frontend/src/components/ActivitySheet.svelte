@@ -5,7 +5,7 @@
   import PlanPanel from './PlanPanel.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import MessageList from './MessageList.svelte';
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import type { Activity, TaskStatus } from '../lib/activity';
   import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail } from '../lib/types';
 
@@ -299,6 +299,19 @@
   const activePhase = $derived(phaseGroups[selectedPhaseIdx] ?? null);
   const hasPhaseNav = $derived(phaseGroups.length > 1 || !!phaseGroups[0]?.title);
 
+  // Prompt colapsado (mock: 132px + degradê). Mede scrollHeight real, não tamanho de string.
+  let promptEl = $state<HTMLElement | null>(null);
+  let promptClamped = $state(true);
+  let promptOverflows = $state(false);
+  $effect(() => {
+    void agentDetail?.prompt;
+    void level;
+    const el = promptEl;
+    if (!el) return;
+    const check = () => { promptOverflows = el.scrollHeight > 136; };
+    void tick().then(() => requestAnimationFrame(check));
+  });
+
   // Título do header do modal por nível.
   const headerTitle = $derived(
     level === 'list' ? m.ctx_atividade()
@@ -519,42 +532,74 @@
               {#if detail.summary}
                 <div class="ag-block wf-summary">
                   <span class="section-label">{m.atividade_resumo()}</span>
-                  <p class="ag-text">{detail.summary}</p>
+                  <div class="md ag-text">{@html renderMarkdown(detail.summary)}</div>
                 </div>
               {/if}
             {/if}
           </div>
         {:else}
-          <!-- Detalhe do agente: prompt + resultado completo + ferramentas -->
-          <div class="activity">
+          <!-- Detalhe do agente: conversa só-leitura (mock atividade-agente.html) -->
+          <div class="activity ag-detail">
             {#if loading}
               <p class="activity-empty">{m.comum_carregando()}</p>
             {:else if !agentDetail}
               <p class="activity-empty">{m.atividade_agente_nao_encontrado()}</p>
             {:else}
-              <div class="wf-detail-meta">
-                <span class="wf-agent-state wf-agent-state--{agentDetail.state}">{stateGlyph(agentDetail.state)}</span>
-                {fmtTokens(agentDetail.tokens)} {m.ctx_tokens()} · {agentDetail.toolCalls} {m.atividade_tools()}{agentDetail.durationMs ? ` · ${fmtDur(agentDetail.durationMs)}` : ''}{agentDetail.model ? ` · ${modelShort(agentDetail.model)}` : ''}
+              <div class="ag-meta">
+                {#if agentDetail.state === 'done'}
+                  <span class="ok">✓ terminou</span>
+                {:else if agentDetail.state === 'progress'}
+                  <span class="rodando">◐ rodando</span>
+                {:else if agentDetail.state === 'error'}
+                  <span class="erro">✕ erro</span>
+                {:else}
+                  <span class="wf-agent-state wf-agent-state--{agentDetail.state}">{stateGlyph(agentDetail.state)}</span>
+                {/if}
+                <span>{fmtTokens(agentDetail.tokens)} {m.ctx_tokens()}</span>
+                <span>{agentDetail.toolCalls} {m.atividade_tools()}</span>
+                {#if agentDetail.durationMs}<span>{fmtDur(agentDetail.durationMs)}</span>{/if}
+                {#if agentDetail.model}<span>{modelShort(agentDetail.model)}</span>{/if}
               </div>
 
-              {#if agentDetail.tools.length > 0}
-                <div class="wf-phases">
-                  {#each agentDetail.tools as t}<span class="wf-phase-chip">{t.name}{t.count > 1 ? ` ×${t.count}` : ''}</span>{/each}
-                </div>
-              {/if}
+              <div class="conv">
+                {#if agentDetail.prompt}
+                  <span class="rotulo">{m.atividade_prompt()}</span>
+                  <div class="bubble" class:clamp={promptClamped && promptOverflows} bind:this={promptEl}>
+                    <div class="md">{@html renderMarkdown(agentDetail.prompt)}</div>
+                  </div>
+                  {#if promptOverflows && promptClamped}
+                    <button class="ver-tudo" onclick={() => (promptClamped = false)}>{m.atividade_mostrar_prompt()}</button>
+                  {/if}
+                {/if}
 
-              {#if agentDetail.prompt}
-                <div class="ag-block">
-                  <span class="section-label">{m.atividade_prompt()}</span>
-                  <p class="ag-text">{agentDetail.prompt}</p>
-                </div>
-              {/if}
-              {#if agentDetail.result}
-                <div class="ag-block">
-                  <span class="section-label">{m.atividade_resultado()}</span>
-                  <pre class="ag-result">{agentDetail.result}</pre>
-                </div>
-              {/if}
+                {#if agentDetail.tools.length > 0}
+                  <span class="rotulo">{m.atividade_ferramentas_chamadas({ n: agentDetail.tools.length })}</span>
+                  <div class="tools">
+                    {#each agentDetail.tools as t}<span class="chip">{t.name} ×{t.count}</span>{/each}
+                  </div>
+                  {#if agentDetail.state === 'progress'}
+                    <div class="agora">
+                      <span class="spin">◐</span> {agentDetail.tools[agentDetail.tools.length - 1].name} — <code>{agentDetail.tools[agentDetail.tools.length - 1].name}</code>
+                    </div>
+                  {/if}
+                {/if}
+
+                {#if agentDetail.result}
+                  <span class="rotulo">{m.atividade_resultado()}</span>
+                  <div class="fala md">
+                    {@html renderMarkdown(agentDetail.result)}
+                  </div>
+                {:else if agentDetail.state === 'progress'}
+                  <span class="rotulo">{m.atividade_resultado()}</span>
+                  <div class="fala fala--vazia">
+                    <span class="spin">◐</span> {m.atividade_pensando()}
+                  </div>
+                {/if}
+
+                <div class="fim"><span class="glifo">⑂</span> trabalhou por {fmtDur(agentDetail.durationMs) || '—'} · {agentDetail.toolCalls} {m.atividade_chamadas({ n: agentDetail.toolCalls })}</div>
+              </div>
+
+              <div class="rodape">{m.atividade_conversa_so_leitura({ nome: sessionName })}</div>
             {/if}
           </div>
         {/if}
@@ -611,6 +656,12 @@
     padding: var(--space-4) var(--space-5);
     padding-top: calc(env(safe-area-inset-top) + var(--space-4));
     border-bottom: 1px solid var(--border-subtle);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--glass-panel);
+    backdrop-filter: blur(12px);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
   @media (min-width: 720px) { .modal-head { padding-top: var(--space-4); } }
   .modal-title {
@@ -781,8 +832,47 @@
   .wf-agent-tool { color: var(--text-secondary); }
   .wf-summary { margin-top: var(--space-2); }
 
-  /* Detalhe do agente */
+  /* Detalhe do agente — legado (workflow summary ainda usa .ag-text) */
   .ag-block { display: flex; flex-direction: column; gap: var(--space-1); }
-  .ag-text { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .ag-text { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; word-break: break-word; }
+  .ag-text :global(p) { margin: 0 0 8px; }
+  .ag-text :global(p:last-child) { margin-bottom: 0; }
+  .ag-text :global(strong) { color: var(--text-primary); font-weight: 600; }
+  .ag-text :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; }
   .ag-result { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-primary); line-height: 1.5; white-space: pre-wrap; word-break: break-word; background: var(--bg-surface); padding: var(--space-3); border-radius: var(--radius-sm); margin: 0; }
+
+  /* Novo detalhe do agente — conversa só-leitura (mock atividade-agente.html) */
+  .ag-detail { gap: var(--space-3); }
+  .ag-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 10px 0; font-size: 12px; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle); }
+  .ag-meta .ok { color: var(--success); font-weight: 600; }
+  .ag-meta .rodando { color: var(--accent); font-weight: 600; }
+  .ag-meta .erro { color: var(--error); font-weight: 600; }
+  .conv { display: flex; flex-direction: column; gap: 14px; padding: 4px 0; }
+  .rotulo { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+  .bubble { align-self: flex-end; max-width: 88%; background: var(--bubble-user); padding: 10px 14px; border-radius: 18px 18px 4px 18px; font-size: 13.5px; line-height: 1.55; position: relative; word-break: break-word; }
+  .bubble.clamp { max-height: 132px; overflow: hidden; }
+  .bubble.clamp::after { content: ''; position: absolute; inset: auto 0 0 0; height: 44px; background: linear-gradient(transparent, var(--bubble-user)); border-radius: 0 0 4px 18px; }
+  .bubble :global(p) { margin: 0 0 8px; }
+  .bubble :global(p:last-child) { margin-bottom: 0; }
+  .bubble :global(strong) { color: var(--text-primary); font-weight: 650; }
+  .bubble :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--fill-subtle, var(--bg-elevated)); box-shadow: 0 0 0 1px var(--border-subtle); border-radius: 5px; padding: 1px 5px; }
+  .ver-tudo { align-self: flex-end; margin-top: -6px; font-size: 11.5px; color: var(--accent); background: var(--accent-dim); border: 0; border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+  .tools { align-self: flex-start; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 11.5px; color: var(--text-secondary); }
+  .tools .chip { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 3px 8px; font-family: var(--font-mono); font-size: 11px; }
+  .agora { align-self: flex-start; display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 6px 10px; }
+  .fala { align-self: stretch; font-size: 13.5px; line-height: 1.6; color: var(--text-primary); word-break: break-word; }
+  .fala :global(p) { margin: 0 0 8px; }
+  .fala :global(p:last-child) { margin-bottom: 0; }
+  .fala :global(strong) { color: var(--text-primary); font-weight: 650; }
+  .fala :global(h1), .fala :global(h2), .fala :global(h3), .fala :global(h4) { font-size: 13px; margin: 12px 0 4px; color: var(--text-primary); }
+  .fala :global(ul), .fala :global(ol) { margin: 6px 0 6px 18px; }
+  .fala :global(li + li) { margin-top: 3px; }
+  .fala :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 5px; padding: 1px 5px; }
+  .fala :global(pre) { margin: 8px 0; padding: var(--space-3); background: var(--bg-surface); border-radius: var(--radius-sm); overflow-x: auto; }
+  .fala :global(pre code) { background: none; border: none; padding: 0; }
+  .fala :global(a) { color: var(--accent); }
+  .fala--vazia { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12.5px; }
+  .fim { align-self: flex-start; display: flex; gap: 7px; align-items: center; font-size: 11.5px; color: var(--text-muted); }
+  .fim .glifo { color: var(--success); }
+  .rodape { padding: 10px 0 4px; text-align: center; font-size: 11.5px; color: var(--text-muted); border-top: 1px solid var(--border-subtle); font-style: italic; }
 </style>

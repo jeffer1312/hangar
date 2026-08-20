@@ -1819,5 +1819,7 @@
   "novacred_sync_nao_instalado": "não instalado aqui",
   "novacred_sync_codex_var": "O Codex guarda só o nome da variável. Exporte {v} no seu shell pra ele usar a chave.",
   "novacred_salvando_sync": "Gravando nos agentes…",
-  "criar_provider_ausente": "«{p}» não encontrado no PATH — instale o CLI para criar sessões {p}"
+  "criar_provider_ausente": "«{p}» não encontrado no PATH — instale o CLI para criar sessões {p}",
+  "atividade_mostrar_prompt": "mostrar o prompt inteiro",
+  "atividade_conversa_so_leitura": "Conversa só-leitura — este agente pertence à sessão {nome}."
 }

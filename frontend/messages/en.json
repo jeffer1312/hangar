@@ -1819,5 +1819,7 @@
   "novacred_sync_nao_instalado": "not installed here",
   "novacred_sync_codex_var": "Codex stores only the variable name. Export {v} in your shell so it can use the key.",
   "novacred_salvando_sync": "Writing to the agents…",
-  "criar_provider_ausente": "“{p}” not found in PATH — install the CLI to create {p} sessions"
+  "criar_provider_ausente": "“{p}” not found in PATH — install the CLI to create {p} sessions",
+  "atividade_mostrar_prompt": "show full prompt",
+  "atividade_conversa_so_leitura": "Read-only conversation — this agent belongs to session {nome}."
 }
