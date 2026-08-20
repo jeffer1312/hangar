@@ -13,9 +13,13 @@ próximo; nenhum bom = não instalado. Resultado cacheado por 60s (time.monotoni
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import subprocess
+import threading
 import time
+
+_log = logging.getLogger("claude_pocket")
 
 _BIN = {"claude": "claude", "codex": "codex", "pi": "pi", "kimi": "kimi"}
 
@@ -64,10 +68,18 @@ def _obter_path() -> str:
                 _path_cache = val
                 return val
     except Exception:
-        pass
+        # Shell de login quebrado (rc com erro) some daqui e vira "provider indisponível" sem
+        # pista nenhuma pra quem for depurar.
+        _log.debug("cli_probe: PATH do shell de login falhou; usando o do processo", exc_info=True)
     val = os.environ.get("PATH", "")
     _path_cache = val
     return val
+
+
+# Serializa a sondagem: cada chamada roda em `to_thread`, e duas com o cache vencido ao mesmo
+# tempo disparavam a varredura inteira (4 binários × PATH, subprocess com timeout de 2s) em
+# paralelo. Com o lock, a segunda espera e sai pelo cache que a primeira acabou de encher.
+_sonda_lock = threading.Lock()
 
 
 def sondar_providers() -> dict[str, dict]:
@@ -75,6 +87,15 @@ def sondar_providers() -> dict[str, dict]:
     now = time.monotonic()
     if _cache is not None and (now - _cache_ts) < _TTL:
         return _cache
+    with _sonda_lock:
+        now = time.monotonic()
+        if _cache is not None and (now - _cache_ts) < _TTL:
+            return _cache
+        return _sondar_sem_cache()
+
+
+def _sondar_sem_cache() -> dict[str, dict]:
+    global _cache, _cache_ts
 
     path_str = _obter_path()
     dirs = path_str.split(os.pathsep) if path_str else []
@@ -130,5 +151,5 @@ def sondar_providers() -> dict[str, dict]:
         result[provider] = {"disponivel": disponivel, "motivo": motivo}
 
     _cache = result
-    _cache_ts = now
+    _cache_ts = time.monotonic()
     return result

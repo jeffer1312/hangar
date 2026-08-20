@@ -173,3 +173,19 @@ def test_get_agent_live_last_tool_target_not_falsified(tmp_path):
     # garante que não é o nome repetido
     assert a["lastToolTarget"] != "Grep"
 
+
+
+def test_get_agent_journal_com_linha_que_nao_e_objeto(tmp_path):
+    """Escrita truncada deixa linha que é JSON VÁLIDO mas não é objeto (`42`, `[]`): ela passa
+    pelo except do json.loads e o `.get` derrubava tudo com AttributeError."""
+    jsonl, sd = _sd(tmp_path)
+    _write(sd / "workflows" / "wf_lixo.json", {
+        "workflowProgress": [{"type": "workflow_agent", "agentId": "a1", "label": "rev"}],
+    })
+    rd = sd / "subagents" / "workflows" / "wf_lixo"
+    (rd).mkdir(parents=True, exist_ok=True)
+    (rd / "journal.jsonl").write_text(
+        '42\n[]\n"texto"\n{"type": "started", "agentId": "a1"}\n', encoding="utf-8")
+    a = workflows.get_agent(jsonl, "wf_lixo", "a1")
+    assert a is not None
+    assert a["state"] == "progress"

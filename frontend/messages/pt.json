@@ -1821,5 +1821,8 @@
   "novacred_salvando_sync": "Gravando nos agentes…",
   "criar_provider_ausente": "«{p}» não encontrado no PATH — instale o CLI para criar sessões {p}",
   "atividade_mostrar_prompt": "mostrar o prompt inteiro",
-  "atividade_conversa_so_leitura": "Conversa só-leitura — este agente pertence à sessão {nome}."
+  "atividade_conversa_so_leitura": "Conversa só-leitura — este agente pertence à sessão {nome}.",
+  "permissao_sonda_nao_restaurou": "A leitura do ciclo mexeu no modo e não conseguiu voltar; o modo mostrado é o que ficou.",
+  "criar_providers_erro": "não consegui checar quais CLIs existem nesta máquina",
+  "criar_providers_erro_detalhe": "Sonda dos CLIs falhou ({erro}) — a disponibilidade abaixo não foi verificada."
 }

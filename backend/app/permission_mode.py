@@ -78,6 +78,11 @@ TETO_TECLAS = 6
 ESPERA_POR_TECLA = 2.0
 INTERVALO_POLL = 0.2
 SETTLE_ANTES = 0.3
+# Teto de tempo da sonda inteira. Ela roda segurando o `_send_lock` da sessão — o MESMO lock de
+# toda entrega de mensagem —, então o pior caso (pane que só confirma a tecla no timeout, 13
+# teclas) deixaria a sessão ~30s sem aceitar nada do usuário. Estourou: para onde estiver e
+# devolve o que ficou; quem chama compara com o modo de antes e avisa.
+TETO_SONDA = 8.0
 
 
 def _espera_modo(name: str, anterior: str | None = None, timeout: float = ESPERA_POR_TECLA) -> str | None:
@@ -164,8 +169,11 @@ def listar_modos(name: str) -> tuple[str, list[str]]:
         vistos: list[str] = [orig]
         vistos_set: set[str] = {orig}
         cur = orig
+        prazo = time.monotonic() + TETO_SONDA
         # até 6 BTab (ciclo máximo 5 + 1 folga)
         for _ in range(6):
+            if time.monotonic() > prazo:
+                break
             tmux.send_keys(name, "BTab")
             time.sleep(SETTLE_ANTES)
             novo = _espera_modo(name, anterior=cur, timeout=ESPERA_POR_TECLA)
@@ -185,7 +193,12 @@ def listar_modos(name: str) -> tuple[str, list[str]]:
 
         # se cur != orig, tenta voltar ao original (pane ilegível no meio etc.)
         if cur != orig and orig in vistos_set:
+            # A volta tem prazo próprio: já gastamos o da descoberta, e desistir aqui é pior que
+            # desistir lá — deixa a sessão noutro modo. Mas segurar o lock pra sempre é pior ainda.
+            prazo = time.monotonic() + TETO_SONDA
             for _ in range(TETO_TECLAS + 1):
+                if time.monotonic() > prazo:
+                    break
                 tmux.send_keys(name, "BTab")
                 time.sleep(SETTLE_ANTES)
                 novo = _espera_modo(name, anterior=cur, timeout=ESPERA_POR_TECLA)

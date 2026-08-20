@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { DropdownMenu } from 'bits-ui';
   import * as m from '../paraglide/messages';
   import { getPushSettings, setSessionMute, getBranches, openEditor, gitAction, setThenLink, clearThenLink } from '../lib/api';
@@ -72,9 +72,16 @@
     onPickBranch(branch, dirty);
   }
 
-  // Chain submenu — inicializado com o alvo armado (thenTarget) pra o bind não ser opcional
+  // Chain submenu. O alvo é relido do `thenTarget` a cada abertura: a mesma instância do menu
+  // sobrevive à troca de linha (o `{#if menu}` do Sidebar só reatribui o objeto), então capturar
+  // o valor uma vez no $state mostrava o alvo da sessão anterior.
   let chainOpen = $state(false);
-  let chainView = $state<{ target: string | null; text: string }>({ target: thenTarget, text: '' });
+  let chainView = $state<{ target: string | null; text: string }>({ target: null, text: '' });
+  $effect(() => {
+    // Só a abertura dispara: lendo `thenTarget` com untrack, um poll que mude o alvo enquanto o
+    // campo está aberto não apaga o que a pessoa já digitou.
+    if (chainOpen) chainView = { target: untrack(() => thenTarget), text: '' };
+  });
   let chainBusy = $state(false);
   async function saveChain() {
     if (!chainView.target) return;

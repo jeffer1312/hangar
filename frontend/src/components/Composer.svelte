@@ -462,18 +462,26 @@
   let permCarregando = $state(false);
   const isClaude = $derived(!isCodex && !isPi && !isKimi);
   $effect(() => { if (permPopOpen) permError = null; });
+  // Token de sequência: o poll de fundo e a sonda da pílula correm juntos, e sem isto a resposta
+  // atrasada de um pisava no resultado do outro — inclusive zerando `permModes` (o poll pede sem
+  // sondar, e volta `[]` enquanto o servidor não tem cache) com o popover já aberto na lista.
+  let permSeq = 0;
   $effect(() => {
     if (!isClaude) return;
     void sessionState;
     const sn = sessionName;
+    const seq = ++permSeq;
     // só lê o atual (zero teclas); ciclo só ao abrir a pílula (bloqueador 1)
     getPermissionModes(sn, false)
       .then((res) => {
+        if (seq !== permSeq || sn !== sessionName) return;
         permCurrent = res.current;
-        permModes = res.modes;
+        // lista vazia do poll não apaga o ciclo que a sonda já trouxe
+        if (res.modes.length > 0 || permModes.length === 0) permModes = res.modes;
         permSondavel = res.sondavel;
       })
       .catch(() => {
+        if (seq !== permSeq || sn !== sessionName) return;
         permCurrent = null;
         permModes = [];
       });
@@ -482,15 +490,24 @@
     permPopOpen = true;
     if (!permSondavel || permModes.length > 0 || permCarregando) return;
     permCarregando = true;
+    const sn = sessionName;
+    const seq = ++permSeq;
     try {
-      const res = await getPermissionModes(sessionName, true);
+      const res = await getPermissionModes(sn, true);
+      if (seq !== permSeq || sn !== sessionName) return;
       permCurrent = res.current;
       permModes = res.modes;
       permSondavel = res.sondavel;
+      // A sonda dá voltas de BTab de verdade; se não voltou, a sessão FICOU noutro modo por
+      // causa de uma leitura. Falar isso é o mínimo — o backend também loga.
+      if (res.restaurado === false) permError = m.permissao_sonda_nao_restaurou();
     } catch (e) {
       permError = e instanceof Error ? e.message : String(e);
+    } finally {
+      // finally, não linha solta: o early-return do token de sequência deixaria a pílula presa
+      // no spinner pra sempre.
+      permCarregando = false;
     }
-    permCarregando = false;
   }
   // Reconciliação otimista: se a statusline um dia trouxer permissão, solta; hoje não traz,
   // mas mantém o padrão do thinking do Pi (devolver o que FICOU).

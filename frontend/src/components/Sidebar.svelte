@@ -1918,7 +1918,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     align-items: center; justify-content: center;
   }
   @media (hover: none) {
-    .sess-git, .sess-del { display: none; }
     .sess-kebab { display: inline-flex; opacity: 0.7; }
   }
   /* Retomar da linha "sem id": unica acao possivel -> SEMPRE visivel (nao hover-revealed), tingida de

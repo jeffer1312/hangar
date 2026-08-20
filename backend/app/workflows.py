@@ -49,6 +49,8 @@ def _agent_stats(rundir: Path, agent_id: str) -> dict:
                 o = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
+            if not isinstance(o, dict):
+                continue
             msg = o.get("message") or {}
             usage = msg.get("usage") or {}
             for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
@@ -84,6 +86,8 @@ def _live_agents(rundir: Path) -> list[dict]:
                 try:
                     ev = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(ev, dict):
                     continue
                 aid = ev.get("agentId")
                 if not aid:
@@ -248,6 +252,8 @@ def get_agent(jsonl: str, run_id: str, agent_id: str) -> dict | None:
                     ev = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
+                if not isinstance(ev, dict):
+                    continue
                 if ev.get("type") == "result" and ev.get("agentId") == agent_id:
                     r = ev.get("result")
                     result = r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, indent=2)
@@ -267,6 +273,8 @@ def get_agent(jsonl: str, run_id: str, agent_id: str) -> dict | None:
                 try:
                     r = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(r, dict):
                     continue
                 c = (r.get("message") or {}).get("content")
                 if r.get("type") == "user" and prompt is None:
@@ -316,6 +324,11 @@ def get_agent(jsonl: str, run_id: str, agent_id: str) -> dict | None:
                 try:
                     ev = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
+                    continue
+                # JSON válido que não é objeto (`42`, `[]` — escrita truncada) passa pelo except
+                # acima e derrubava o `.get` com AttributeError, virando 500 numa leitura que já
+                # trata corrupção como esperada. Vale pros cinco parses deste módulo.
+                if not isinstance(ev, dict):
                     continue
                 if ev.get("agentId") != agent_id:
                     continue

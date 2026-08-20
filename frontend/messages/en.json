@@ -1821,5 +1821,8 @@
   "novacred_salvando_sync": "Writing to the agents…",
   "criar_provider_ausente": "“{p}” not found in PATH — install the CLI to create {p} sessions",
   "atividade_mostrar_prompt": "show full prompt",
-  "atividade_conversa_so_leitura": "Read-only conversation — this agent belongs to session {nome}."
+  "atividade_conversa_so_leitura": "Read-only conversation — this agent belongs to session {nome}.",
+  "permissao_sonda_nao_restaurou": "Reading the cycle changed the mode and could not switch back; the mode shown is the one it landed on.",
+  "criar_providers_erro": "could not check which CLIs exist on this machine",
+  "criar_providers_erro_detalhe": "CLI probe failed ({erro}) — availability below was not verified."
 }

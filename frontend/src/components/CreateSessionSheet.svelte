@@ -110,6 +110,7 @@
   // Claude, aliases reduzidos) não há provider e o id já é único — o valor é o id puro, como hoje.
   const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
 
+  let erroProviders = $state('');
   let provSeq = 0;
   async function carregarProviders() {
     const seq = ++provSeq;
@@ -117,13 +118,17 @@
     const aberta = open;
     providersCarregando = true;
     providers = {};
+    erroProviders = '';
     try {
       const res = await getProviders();
       if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
       providers = res;
-    } catch {
+    } catch (e) {
       if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
+      // Sonda falhada deixa `providers` vazio, e vazio destrava TODO provider no markup: sem
+      // este aviso a tela finge que todos existem e o erro só aparece cru ao criar.
       providers = {};
+      erroProviders = e instanceof Error ? e.message : m.criar_providers_erro();
     } finally {
       if (seq === provSeq && aberta && targetServer === srv && open) providersCarregando = false;
     }
@@ -556,6 +561,9 @@
             >{providerName(p)}</button>
           {/each}
         </div>
+      {#if erroProviders}
+        <p class="hint" role="alert">{m.criar_providers_erro_detalhe({ erro: erroProviders })}</p>
+      {/if}
       {#if providers[provider] && !providers[provider].disponivel}
         <p class="hint" role="alert">{m.criar_provider_ausente({ p: provider })}</p>
       {/if}

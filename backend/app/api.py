@@ -3797,6 +3797,9 @@ async def permission_modes(name: str, sondar: bool = False):
     try:
         cur_now = await asyncio.to_thread(perm_mode.ler_modo, name)
     except Exception:
+        # Pane em transição e bug de parse caem no mesmo 409; sem o log os dois ficam
+        # indistinguíveis pra quem for depurar.
+        _log.debug("permission-modes: leitura do modo falhou em %s", name, exc_info=True)
         cur_now = None
     if cur_now is None:
         raise HTTPException(409, detail=erro("erro_permissao_leitura", "não consegui ler o modo atual no rodapé"))
@@ -3821,9 +3824,18 @@ async def permission_modes(name: str, sondar: bool = False):
         cur, modos = await asyncio.to_thread(perm_mode.listar_modos, name)
     except RuntimeError as e:
         raise HTTPException(409, detail=erro("erro_permissao_leitura", str(e)))
+    # Chave é nome::jsonl, então sessão nova nunca reusa entrada: sem poda o dict cresce pela
+    # vida do processo. ponytail: teto burro, o cache é só pra evitar re-sondar a mesma sessão.
+    if len(_perm_modes_cache) > 200:
+        _perm_modes_cache.clear()
     _perm_modes_cache[key] = (cur, modos)
-    # cur de listar_modos deve ser == cur_now (voltou ao original), mas devolver o que ficou
-    return {"current": cur, "modes": modos, "sondavel": cur != "dontAsk"}
+    # A sonda dá voltas de BTab de verdade. Se não conseguiu voltar, a sessão FICOU noutro modo de
+    # permissão por causa de uma chamada que o usuário leu como leitura — isso não pode sair calado.
+    restaurado = cur == cur_now
+    if not restaurado:
+        _log.warning("permission-modes: sonda deixou %s em %s (era %s)", name, cur, cur_now)
+    return {"current": cur, "modes": modos, "sondavel": cur != "dontAsk",
+            "restaurado": restaurado}
 
 @app.post("/api/sessions/{name}/permission-mode", dependencies=[Depends(require_auth)])
 async def permission_mode_set(name: str, body: PermissionModeBody):

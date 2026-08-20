@@ -92,6 +92,32 @@ def test_perm_get_ok():
     assert r2.json()["modes"] == ["plan", "auto", "manual", "acceptEdits"]
     assert mk2.call_count == 1
 
+def test_perm_get_sonda_que_nao_voltou_marca_restaurado_false():
+    """A sonda dá voltas de BTab de verdade. Quando não consegue voltar, a sessão FICA noutro
+    modo por causa de uma chamada de leitura — sem este campo isso saía calado."""
+    info = _info_claude(jsonl="/tmp/nao-restaurou.jsonl")
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.ler_modo", return_value="plan"), \
+         patch("app.permission_mode.listar_modos", return_value=("acceptEdits", ["plan", "acceptEdits"])):
+        r = _client().get("/api/sessions/sess/permission-modes?sondar=1", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["current"] == "acceptEdits"
+    assert r.json()["restaurado"] is False
+
+
+def test_perm_get_sonda_que_voltou_marca_restaurado_true():
+    info = _info_claude(jsonl="/tmp/restaurou.jsonl")
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.ler_modo", return_value="plan"), \
+         patch("app.permission_mode.listar_modos", return_value=("plan", ["plan", "auto"])):
+        r = _client().get("/api/sessions/sess/permission-modes?sondar=1", headers=AUTH)
+    assert r.json()["restaurado"] is True
+
+
 def test_perm_get_sessao_trabalhando_200_le_o_modo():
     # leitura (sem sondar) com sessão trabalhando: deve devolver 200 e o current lido, sem 409
     info = _info_claude()
