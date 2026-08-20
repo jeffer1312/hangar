@@ -36,10 +36,10 @@ describe('ActivitySheet — detalhe do agente (T6)', () => {
   it('renderiza prompt e resultado como markdown (sem ** cru)', async () => {
     const prompt = '1. **Ordem e dependências:** a sequência T1→T5 se sustenta?';
     const result = '#### Bloqueia Task\n- **A receita do PATH quebra no fish.**';
-    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: false }]);
+    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', status: 'completed', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: false }]);
     api.getWorkflow.mockResolvedValue({
       runId: 'wf1', name: 'Test', status: 'completed', totalTokens: 0, durationMs: 0, summary: null,
-      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: 'claude-sonnet', tokens: 100, durationMs: 1000, toolCalls: 3, lastToolName: 'Grep', lastToolTarget: 'test', lastToolSummary: null, resultPreview: null }],
+      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: 'claude-sonnet', tokens: 100, durationMs: 1000, toolCalls: 3, lastToolName: 'Grep', lastToolSummary: null, resultPreview: null }],
     });
     api.getWorkflowAgent.mockResolvedValue({
       agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: 'claude-sonnet', tokens: 100, durationMs: 1000, toolCalls: 3,
@@ -69,7 +69,7 @@ describe('ActivitySheet — detalhe do agente (T6)', () => {
   });
 
   it('mostra total de chamadas (toolCalls) e não a contagem distinta, sem duplicação no rodapé', async () => {
-    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: false }]);
+    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', status: 'completed', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: false }]);
     api.getWorkflow.mockResolvedValue({
       runId: 'wf1', name: 'Test', status: 'completed', totalTokens: 0, durationMs: 1000, summary: null,
       phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: null, tokens: 0, durationMs: 1000, toolCalls: 3, lastToolName: null, lastToolSummary: null, resultPreview: null }],
@@ -102,10 +102,10 @@ describe('ActivitySheet — detalhe do agente (T6)', () => {
   });
 
   it('detalhe vivo mostra rodando e última chamada real', async () => {
-    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: true }]);
+    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', status: 'running', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: true }]);
     api.getWorkflow.mockResolvedValue({
       runId: 'wf1', name: 'Test', status: 'running', totalTokens: 0, durationMs: 0, summary: null,
-      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'progress', model: null, tokens: 0, durationMs: 0, toolCalls: 3, lastToolName: 'Bash', lastToolTarget: 'grep -rn ctx-menu frontend/src', lastToolSummary: null, resultPreview: null }],
+      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'progress', model: null, tokens: 0, durationMs: 0, toolCalls: 3, lastToolName: 'Bash', lastToolSummary: null, resultPreview: null }],
     });
     api.getWorkflowAgent.mockResolvedValue({
       agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'progress', model: null, tokens: 0, durationMs: 0, toolCalls: 3,
