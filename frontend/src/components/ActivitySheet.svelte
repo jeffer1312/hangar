@@ -40,6 +40,7 @@
       runId = null;
       detail = null;
       agentDetail = null;
+      resetPromptView();
       stopSubPoll();
       subDetail = null;
       return;
@@ -67,6 +68,7 @@
 
   async function openAgent(agentId: string | null) {
     if (!runId || !agentId) return;
+    resetPromptView();
     level = 'agent';
     agentDetail = null;
     loading = true;
@@ -225,7 +227,7 @@
   // O componente e DESTRUIDO junto com o Chat a cada troca de sessao/par ({#key} no DesktopShell e
   // no PairChatModal). Sem isto o poll de 2,5s sobrevivia a morte da tela e seguia batendo no
   // backend de uma sessao que nem esta aberta.
-  onDestroy(stopSubPoll);
+  onDestroy(() => { stopSubPoll(); resetPromptView(); });
 
   function mark(status: TaskStatus): string {
     if (status === 'completed') return '✓';
@@ -303,6 +305,12 @@
   let promptEl = $state<HTMLElement | null>(null);
   let promptClamped = $state(true);
   let promptOverflows = $state(false);
+  let promptObserver: ResizeObserver | null = null;
+  function resetPromptView() {
+    promptClamped = true;
+    promptOverflows = false;
+    if (promptObserver) { promptObserver.disconnect(); promptObserver = null; }
+  }
   $effect(() => {
     void agentDetail?.prompt;
     void level;
@@ -310,6 +318,9 @@
     if (!el) return;
     const check = () => { promptOverflows = el.scrollHeight > 136; };
     void tick().then(() => requestAnimationFrame(check));
+    promptObserver = new ResizeObserver(check);
+    promptObserver.observe(el);
+    return () => { promptObserver?.disconnect(); promptObserver = null; };
   });
 
   // Título do header do modal por nível.
@@ -547,11 +558,11 @@
             {:else}
               <div class="ag-meta">
                 {#if agentDetail.state === 'done'}
-                  <span class="ok">✓ terminou</span>
+                  <span class="ok">✓ {m.atividade_concluido()}</span>
                 {:else if agentDetail.state === 'progress'}
-                  <span class="rodando">◐ rodando</span>
+                  <span class="rodando">◐ {m.atividade_rodando()}</span>
                 {:else if agentDetail.state === 'error'}
-                  <span class="erro">✕ erro</span>
+                  <span class="erro">✕ {m.term_erro()}</span>
                 {:else}
                   <span class="wf-agent-state wf-agent-state--{agentDetail.state}">{stateGlyph(agentDetail.state)}</span>
                 {/if}
@@ -573,13 +584,13 @@
                 {/if}
 
                 {#if agentDetail.tools.length > 0}
-                  <span class="rotulo">{m.atividade_ferramentas_chamadas({ n: agentDetail.tools.length })}</span>
+                  <span class="rotulo">{m.atividade_ferramentas_chamadas({ n: agentDetail.toolCalls })}</span>
                   <div class="tools">
                     {#each agentDetail.tools as t}<span class="chip">{t.name} ×{t.count}</span>{/each}
                   </div>
-                  {#if agentDetail.state === 'progress'}
+                  {#if agentDetail.state === 'progress' && agentDetail.lastToolName}
                     <div class="agora">
-                      <span class="spin">◐</span> {agentDetail.tools[agentDetail.tools.length - 1].name} — <code>{agentDetail.tools[agentDetail.tools.length - 1].name}</code>
+                      <span class="ring-spin" aria-hidden="true"></span> {agentDetail.lastToolName}{#if agentDetail.lastToolTarget} — <code>{agentDetail.lastToolTarget}</code>{/if}
                     </div>
                   {/if}
                 {/if}
@@ -596,7 +607,7 @@
                   </div>
                 {/if}
 
-                <div class="fim"><span class="glifo">⑂</span> trabalhou por {fmtDur(agentDetail.durationMs) || '—'} · {agentDetail.toolCalls} {m.atividade_chamadas({ n: agentDetail.toolCalls })}</div>
+                <div class="fim"><span class="glifo">⑂</span> {fmtDur(agentDetail.durationMs) || '—'} · {m.atividade_chamadas({ n: agentDetail.toolCalls })}</div>
               </div>
 
               <div class="rodape">{m.atividade_conversa_so_leitura({ nome: sessionName })}</div>
@@ -838,7 +849,7 @@
   .ag-text :global(p) { margin: 0 0 8px; }
   .ag-text :global(p:last-child) { margin-bottom: 0; }
   .ag-text :global(strong) { color: var(--text-primary); font-weight: 600; }
-  .ag-text :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-elevated); padding: 1px 4px; border-radius: 3px; }
+  .ag-text :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--fill-subtle); padding: 1px 4px; border-radius: 3px; }
   .ag-result { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-primary); line-height: 1.5; white-space: pre-wrap; word-break: break-word; background: var(--bg-surface); padding: var(--space-3); border-radius: var(--radius-sm); margin: 0; }
 
   /* Novo detalhe do agente — conversa só-leitura (mock atividade-agente.html) */
@@ -855,11 +866,11 @@
   .bubble :global(p) { margin: 0 0 8px; }
   .bubble :global(p:last-child) { margin-bottom: 0; }
   .bubble :global(strong) { color: var(--text-primary); font-weight: 650; }
-  .bubble :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--fill-subtle, var(--bg-elevated)); box-shadow: 0 0 0 1px var(--border-subtle); border-radius: 5px; padding: 1px 5px; }
+  .bubble :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--fill-subtle); box-shadow: 0 0 0 1px var(--border-subtle); border-radius: 5px; padding: 1px 5px; }
   .ver-tudo { align-self: flex-end; margin-top: -6px; font-size: 11.5px; color: var(--accent); background: var(--accent-dim); border: 0; border-radius: 999px; padding: 3px 10px; cursor: pointer; }
   .tools { align-self: flex-start; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 11.5px; color: var(--text-secondary); }
-  .tools .chip { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 3px 8px; font-family: var(--font-mono); font-size: 11px; }
-  .agora { align-self: flex-start; display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 6px 10px; }
+  .tools .chip { background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 3px 8px; font-family: var(--font-mono); font-size: 11px; }
+  .agora { align-self: flex-start; display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-secondary); background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 6px 10px; }
   .fala { align-self: stretch; font-size: 13.5px; line-height: 1.6; color: var(--text-primary); word-break: break-word; }
   .fala :global(p) { margin: 0 0 8px; }
   .fala :global(p:last-child) { margin-bottom: 0; }
@@ -867,8 +878,8 @@
   .fala :global(h1), .fala :global(h2), .fala :global(h3), .fala :global(h4) { font-size: 13px; margin: 12px 0 4px; color: var(--text-primary); }
   .fala :global(ul), .fala :global(ol) { margin: 6px 0 6px 18px; }
   .fala :global(li + li) { margin-top: 3px; }
-  .fala :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 5px; padding: 1px 5px; }
-  .fala :global(pre) { margin: 8px 0; padding: var(--space-3); background: var(--bg-surface); border-radius: var(--radius-sm); overflow-x: auto; }
+  .fala :global(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--fill-subtle); border: 1px solid var(--border-subtle); border-radius: 5px; padding: 1px 5px; }
+  .fala :global(pre) { margin: 8px 0; padding: var(--space-3); background: transparent; border-radius: var(--radius-sm); overflow-x: auto; }
   .fala :global(pre code) { background: none; border: none; padding: 0; }
   .fala :global(a) { color: var(--accent); }
   .fala--vazia { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12.5px; }

@@ -136,3 +136,40 @@ def test_get_agent_completion_journal_and_transcript(tmp_path):
 def test_get_agent_missing(tmp_path):
     jsonl, _ = _sd(tmp_path)
     assert workflows.get_agent(jsonl, "wf_x", "nope") is None
+
+def test_get_agent_live_started_without_result_with_repeated_tools(tmp_path):
+    jsonl, sd = _sd(tmp_path)
+    rd = sd / "subagents" / "workflows" / "wf_live"
+    _write_lines(rd / "journal.jsonl", [{"type": "started", "agentId": "a1"}])
+    _write_lines(rd / "agent-a1.jsonl", [
+        {"type": "user", "message": {"content": "prompt vivo"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/x.py"}},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "grep -rn ctx-menu frontend/src"}}]}},
+    ])
+    a = workflows.get_agent(jsonl, "wf_live", "a1")
+    assert a is not None
+    assert a["state"] == "progress"
+    assert a["toolCalls"] == 3
+    assert {t["name"]: t["count"] for t in a["tools"]} == {"Bash": 2, "Read": 1}
+    assert a["lastToolName"] == "Bash"
+    assert "grep" in a["lastToolTarget"]
+
+
+def test_get_agent_live_last_tool_target_not_falsified(tmp_path):
+    jsonl, sd = _sd(tmp_path)
+    rd = sd / "subagents" / "workflows" / "wf_live2"
+    _write_lines(rd / "journal.jsonl", [{"type": "started", "agentId": "b1"}])
+    _write_lines(rd / "agent-b1.jsonl", [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/a.py"}}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Grep", "input": {"pattern": "hello"}}]}},
+    ])
+    a = workflows.get_agent(jsonl, "wf_live2", "b1")
+    assert a["lastToolName"] == "Grep"
+    assert a["lastToolTarget"] == "hello"
+    # garante que não é o nome repetido
+    assert a["lastToolTarget"] != "Grep"
+
