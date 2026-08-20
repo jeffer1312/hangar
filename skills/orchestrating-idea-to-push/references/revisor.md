@@ -126,6 +126,14 @@ Comportamento final: <o que passa a acontecer no mesmo passo a passo>
 Prova: <teste/harness a criar ou rodar, e o que ele deve dizer>
 ```
 
+**Receita que acrescenta dado assíncrono lido pela tela declara os TRÊS estados — sucesso, falha,
+pendente — e toda ação que digita na sessão do usuário declara o GATILHO** (quem pediu, quando
+roda). Vale igual para receita que o ÁRBITRO fecha em replanejamento previsto. Medido em
+20/08/2026, os dois lados na mesma Task: "levante a lista ao vivo" sem o QUANDO virou sonda
+digitando na sessão do usuário no mount de toda conversa; e a receita da rodada seguinte, sem o
+estado de falha, fez a tela afirmar um modo que o backend nunca confirmou. O executor literal
+cumpre o que está escrito — a lacuna é sempre sua.
+
 **O inventário de callers é o campo que mais economiza round.** Sem ele o executor conserta
 o arquivo que você citou e a round seguinte reencontra a mesma causa em outro lugar — o
 padrão custou três rounds seguidas numa execução real, no mesmo defeito.
@@ -310,7 +318,11 @@ que você já conhece não é contar os pontos.
 que a página realmente carregou** — o hash do bundle, a data do arquivo, o que a plataforma tiver.
 Buildar é o primeiro passo; o segundo é conferir, e é ele que vale. Descubra antes o que a porta
 serve (`systemctl --user cat <serviço>`, o `ExecStart`): porta de desenvolvimento servindo *build*
-estático mostra o commit anterior sem avisar ninguém.
+estático mostra o commit anterior sem avisar ninguém. **Vale igual para serviço de BACKEND de
+longa duração: ele serve o código de quando subiu** — confira `ActiveEnterTimestamp` contra a data
+do commit, ou suba instância própria em outra porta (e nunca reinicie o serviço do usuário para
+medir). Medido em 20/08/2026: processo no ar desde 02:36 respondendo por um commit das 04:29 quase
+virou falso "bloqueador aberto".
 
 Medido em 16/08/2026, o mesmo defeito por dois mecanismos: primeiro uma porta rodando `npm run
 preview` serviu um bundle de 40 minutos antes do commit — custou **três** medições refeitas e uma

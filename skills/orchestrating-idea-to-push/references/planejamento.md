@@ -48,13 +48,29 @@ O que a ficha muda no plano, com exemplo medido em 15/08/2026:
 
 | A ficha diz | O plano faz diferente |
 |---|---|
-| executor **não enxerga imagem** | protocolo de visão explícito nas Tasks de tela (`see <caminho>`), e barra em **código** (HTML/CSS do mock) sempre que possível, não só em print |
+| executor **não enxerga imagem** (MEDIDO, não hipótese) | protocolo de visão explícito nas Tasks de tela (`see <caminho>`), e barra em **código** (HTML/CSS do mock) sempre que possível, não só em print |
+| qualquer capacidade em estado de **HIPÓTESE** | a hipótese vira **teste de estreia** no primeiro kick-off (um turno: um `Read` num print + uma pergunta), nunca protocolo obrigatório — e a ficha é corrigida com o resultado |
 | executor **decide por argumento quando o critério não é numérico** | toda régua visual vira **número**: "linha de 24px, medida com `getBoundingClientRect` contra a aba irmã", nunca "densidade parecida com a do app" |
 | revisor tem **janela curta** (272k) | Task de tela não cabe duas na mesma sessão — e, medido, custa **um revisor por rodada**: o plano já prevê a rotação em vez de descobrir no meio |
 | executor **aplica receita literal muito bem** | vale investir no detalhe do Step; o mesmo plano num modelo que improvisa pediria menos passo a passo e mais critério |
 
 Sem isso o plano é escrito para um executor genérico que não existe, e cada característica real do
-modelo vira uma rodada de correção.
+modelo vira uma rodada de correção. A linha da hipótese existe porque o contrário foi medido em
+19/08/2026: "não enxerga imagem" (hipótese declarada na ficha) virou protocolo `see` obrigatório
+no plano; era falsa (o modelo lê imagem por `Read`), o usuário a derrubou no meio da primeira
+Task, e o intermediário que ela impôs estava na cadeia da rodada que fechou com 4 bloqueadores de
+tela vivos — a regra "nada não testado vira régua até uma execução confirmar", logo abaixo, já
+mandava o contrário. (A primeira linha da tabela dizia só "não enxerga imagem", sem o MEDIDO, e
+ensinava exatamente esse erro.)
+
+**Step ou receita que cria estado de tela alimentado por request declara os TRÊS desfechos —
+sucesso, falha, pendente — e o QUANDO de cada chamada (mount × interação).** Medido em
+19–20/08/2026, três autores diferentes cometeram a mesma omissão e cada uma custou rodada: o
+plano declarou a falha e calou o pendente (fail-open valendo para request em voo); a receita do
+árbitro mandou "levantar a lista ao vivo" sem dizer quando (a sonda que digita rodou no mount de
+toda conversa — o bloqueador mais sério do trabalho); a receita do revisor fechou sucesso e
+"carregando" e calou a falha (pedido falho virou afirmação na tela). Com executor de receita
+literal, o desfecho não declarado é o desfecho não implementado.
 
 **Modelo do time que ainda não tem ficha:** antes de escrever o plano, faça uma varredura curta em
 **duas** fontes — o guia do fabricante e, principalmente, **a comunidade** (skill `last30days`:
@@ -354,6 +370,11 @@ Antes de fechar o plano:
   editá-lo.
 - **A barra tem que ser possível com o código que o plano manda reusar.** Mock desenhando o que o
   componente existente não faz é divergência garantida — decida no plano, não na Task.
+- **Task de MEDIÇÃO cujo resultado depende do estado inicial varre mais de um estado de partida —
+  e declara quais varreu.** Medido em 19–20/08/2026: "o ciclo de permissão tem 4 modos" era
+  artefato de medir só sessão nascida em `plan`; nascida em `bypassPermissions` o ciclo tem 5 e
+  volta nele, e `dontAsk` só existe no arranque. Quem pegou foi o usuário, não o processo — e a
+  conclusão errada teria moldado a Task seguinte inteira.
 
 O que você não conseguir rodar entra marcado: `<!-- NÃO VERIFICADO: … -->`. O executor trata isso
 como descrição, não como receita — e é infinitamente melhor que ele descobrir sozinho no meio da

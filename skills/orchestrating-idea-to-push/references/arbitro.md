@@ -5,6 +5,13 @@ Seu trabalho é abrir e fechar o portão, conferir todo relato contra o repo, e 
 contrato. A receita de correção vai do revisor direto ao executor — você não fica no meio dela.
 Você é o único que escreve no contrato.
 
+> **Lançamento — nada abre antes destes cinco, todos já detalhados nesta página:** vigia armada e
+> provada pelo alarme sintético · baseline medida com o hash ao lado · itens de encerramento
+> (fase 4 + fase 5, com gatilhos) escritos no registro · estimado×real preenchido · política de
+> contas lida e copiada pro contrato. Medido em 20/08/2026: os itens de encerramento entraram ~7h
+> depois do lançamento — a ordem existia, mas mora na seção "Fase 4", que é a última coisa que
+> parece urgente na hora de lançar. Este índice não é régua nova: é o mapa das que já existem.
+
 ## Você mantém DOIS arquivos, e só um deles é lido pelo time
 
 - **`grupo-<gid>.md` — o registro.** O diário da execução: progresso Task→hash→veredito, o que
@@ -781,6 +788,13 @@ no meio deles.
    comando, e a mensagem sai mutilada ou não sai.
 4. **Conferir o retorno.** `entregue -> <nome>` é entrega. Qualquer outra coisa — `404`,
    erro de uso, silêncio — é **não entregue**: reenvie, não siga em frente.
+   **E `entregue` prova entrega, não EXECUÇÃO.** Antes de registrar (ou reportar) que a sessão
+   está trabalhando, confira o engajamento: o ctx dela saiu do zero na statusline, ou o pane está
+   processando. Sessão que recebeu o kick-off e morreu no timeout do provedor fica `idle` com a
+   mesma cara de sessão parada — medido em 20/08/2026: ctx parado em 1k/1M com `Retry failed
+   after 3 attempts` no pane, e a Task reportada como "rodando"; quem viu foi o usuário. No
+   reenvio, aponte só o CAMINHO do kick-off (pegou: ctx foi de 1k a 109k em um minuto — essa é a
+   prova barata).
 5. Só então o turno fecha. **Sessão aberta com pedido não entregue é uma sessão que ninguém
    vai usar** e que você vai achar que está trabalhando.
 

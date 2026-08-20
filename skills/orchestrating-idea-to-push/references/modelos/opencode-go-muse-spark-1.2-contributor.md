@@ -32,9 +32,30 @@ fabricante e de reviews públicos, não de rodada nossa — a primeira execuçã
 - Thinking levels reais: conferir com `/cp-think` na sessão viva (o Pi trunca pedido acima do
   teto do modelo sem erro — precedente k3/glm).
 
-## Medições (preencher na retrospectiva da primeira execução)
+## Medições (execução enx, 19–20/08/2026 — 6 Tasks, 5 sessões; padrões vistos 1× a confirmar)
 
-- Rodadas até APROVA por tipo de Task: —
-- Custo/dia na conta: — (perguntar a fatura ao usuário, nunca somar 💵)
+- **Rodadas até APROVA por tipo:** contrato/backend largo = **1** (T3: 18 arquivos em 31 min;
+  T4 medição: 28 min); tela/estado = **3** (T1, T2, T5, T6 — todas). O que custou as rodadas
+  extras não foi código: foi PROVA e receita com lacuna.
+- **Segue receita literal: SIM, até demais** (visto 2×). Lacuna na receita ele preenche com a
+  escolha errada em vez de perguntar ("levante a lista ao vivo" sem QUANDO → sonda no mount).
+  Receita fechada ele aplica rápido: correção de 1 bloqueador em **16 min** (10+/4−); noutra,
+  aplicou a correção de método do revisor incluindo a asserção negativa (7 linhas de código,
+  138 de teste).
+- **Contexto: ~300–450k por Task** (janela 1M; thinking clampa em xhigh). **Uma Task longa por
+  sessão**: 5 sessões em 6 Tasks, 4 trocas, todas por contexto, **nenhuma custou rodada** — a do
+  meio de correção fechou em 16 min porque receita e parecer moram em arquivo.
+- **Custo:** ~US$0,12–0,20/Task (T1 medida: $0,12 em 37 min). Velocidade: 16–59 min por entrega.
+- **Ponto fraco em padrão: PROVA visual/viva** (visto 3×) — descartou a leitura visual certa e
+  provou por DOM um menu invisível (T1 r1); HTML estático como se fosse componente montado
+  (T6 r1); mock onde o mundo real desmentia (T5 r3). Kick-off de Task visual pra ele carrega o
+  palco por extenso: build → preview → confirmar bundle → capturar.
+- **Não se auto-reporta ao cruzar o portão de contexto** (visto 1×: 552k/1M com ordem escrita de
+  avisar em 500k — quem viu foi o revisor). Entre o REPROVA e o reporte ninguém mais olha: o
+  árbitro confere a statusline dele após cada REPROVA despachado.
+- **Mediu gates com o disco, não com o commit** (visto 1×: arquivo de teste fora do commit,
+  números reportados do disco — pego pelo relato×repo do árbitro). Cobrar no kick-off: gates em
+  série DEPOIS do commit, e `git status` limpo no reporte.
 - Enxerga imagem: **SIM, visão própria** (usuário, 19/08/2026). Não usar `see` com ele.
-- Segue receita literal vs improvisa: —
+- Obedece portão quando avisado (recusou abrir parecer acima do portão) e handoff limpo
+  (2 aposentadorias sem rastro pendente).

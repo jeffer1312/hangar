@@ -236,6 +236,32 @@ registrada é armadilha que a próxima pessoa reintroduz.
 - Verificação de UI é contra o que está servido de verdade. Serviço servindo `dist` não
   reflete edição sem build; tela sumindo sem erro no console é cache de HMR, não o seu
   código. Descubra isso uma vez e anote no reporte, não a cada Task.
+- **Prova válida é a que FALHARIA se o defeito existisse — antes de colar qualquer prova, diga o
+  que a faria falhar.** Medido em 19–20/08/2026, seis vezes na mesma execução, três custando uma
+  rodada inteira. Os modos que apareceram:
+  - **Prova visual é do componente MONTADO no app servido — nunca de HTML estático.** O caminho:
+    build → abrir o preview → conferir o bundle carregado contra `dist/index.html` → capturar.
+    (A régua do revisor "Prova ao vivo mede o que está SERVIDO" vale primeiro pra quem produz a
+    prova.) Medido: uma rodada caiu inteira por capturas de HTML estático tratadas como a folha
+    montada.
+  - **Defeito do tipo "X aparece indevidamente" exige asserção NEGATIVA no mesmo fixture real.**
+    Provar que o certo aparece não prova que o errado sumiu. Medido: o teste vivo provou
+    "Acontecendo agora" e deixou "nenhuma ferramenta chamada" ao lado de 3 chamadas na mesma
+    tela — custou uma rodada; a correção foram 7 linhas de código e 138 de teste.
+  - **Na hora de PROVAR, mundo real antes de mock.** Mock só depois que o real falhou, dizendo
+    por quê. Medido: as duas faces de um erro provadas com `window.fetch` interceptado, alegando
+    que o 409 real "só existe na janela do spinner"; o revisor reproduziu com 409 de verdade em
+    duas tentativas, uma com a sessão simplesmente ocupada.
+  - **Serviço de longa duração serve o código de quando SUBIU.** Antes de medir contra um
+    processo rodando, confira o início dele (`ActiveEnterTimestamp`) contra a data do commit, ou
+    suba instância própria em outra porta — e nunca reinicie o serviço do usuário pra medir.
+    Medido: processo no ar desde 02:36 respondendo por um commit das 04:29 quase virou falso
+    "bloqueador aberto".
+  - **Quando a leitura da imagem e o DOM discordarem sobre algo que se vê, o print manda.**
+    "Não há X na imagem" é um RESULTADO, não falha da ferramenta — o DOM enxerga elemento
+    existente, não visível (empilhamento, recorte, véu não aparecem em
+    `getBoundingClientRect`). Medido: o menu montava atrás da barra lateral; a leitura visual
+    disse "nenhum menu" (certa), a prova de DOM fechou a Task com 4 bloqueadores de tela vivos.
 - Arquivo temporário de depuração é apagado no mesmo comando que o criou.
 - **Experimento NUNCA na árvore que você vai commitar.** Provar que um teste pega a regressão
   (mutação) exige quebrar o código de propósito — e o desfazer é onde mora o acidente. Faça num
