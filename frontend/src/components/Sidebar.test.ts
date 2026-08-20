@@ -42,7 +42,7 @@ vi.mock('../lib/api', () => ({
   getChangedFiles: vi.fn(async () => ({ files: [], sequencer: null })),
   getGitLog: vi.fn(async () => ({ commits: [], truncated: false })),
   listFiles: vi.fn(async () => ({ entries: [], truncated: false })),
-  readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false })),
+  readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' })),
   searchFiles: vi.fn(async () => ({ hits: [], truncated: false, mode: 'names' })),
   pathDiff: vi.fn(async () => ({
     path: 'a.txt', diff: '', truncated: false,

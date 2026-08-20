@@ -1824,5 +1824,16 @@
   "atividade_conversa_so_leitura": "Read-only conversation — this agent belongs to session {nome}.",
   "permissao_sonda_nao_restaurou": "Reading the cycle changed the mode and could not switch back; the mode shown is the one it landed on.",
   "criar_providers_erro": "could not check which CLIs exist on this machine",
-  "criar_providers_erro_detalhe": "CLI probe failed ({erro}) — availability below was not verified."
+  "criar_providers_erro_detalhe": "CLI probe failed ({erro}) — availability below was not verified.",
+  "erro_arq_mudou_no_disco": "The file changed on disk since you opened it — reload before saving.",
+  "erro_arq_sem_digest": "Cannot save without having read the whole file.",
+  "erro_arq_grande_demais": "File too large to save from here.",
+  "arq_salvar": "Save",
+  "arq_salvando": "Saving…",
+  "arq_salvo": "Saved",
+  "arq_descartar": "Discard",
+  "arq_editar": "Edit",
+  "arq_nao_salvo": "unsaved changes",
+  "erro_arq_salvar_falhou": "Could not save the file.",
+  "arq_linhas_sem_mudanca": "$ unchanged lines"
 }

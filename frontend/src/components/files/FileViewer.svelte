@@ -5,6 +5,7 @@
   import { highlightDiff, highlightCodeLines, type DiffRow, type DiffToken } from '../../lib/highlight';
   import { dec } from '../../lib/fmt';
   import DiffView from '../git/DiffView.svelte';
+  import CodeEditor from './CodeEditor.svelte';
 
   interface Props {
     path: string;
@@ -21,8 +22,11 @@
     // aviso aqui e o visor o mostra com role="alert" em vez de desmontar. Opcional de
     // proposito: o host desktop do Chat nao passa (o fluxo de erro dele e outro).
     erro?: string | null;
+    // Gravar é do hospedeiro (quem tem o store). Sem esta prop o visor é só leitura — é o que
+    // acontece na aba de commit, onde o arquivo mostrado é o de um commit passado, não o do disco.
+    onSalvar?: ((texto: string) => Promise<string | null>) | null;
   }
-  let { path, diff, conteudo, loading, onEscopo, onFechar, rotuloVoltar = m.arq_voltar_conversa(), erro = null }: Props = $props();
+  let { path, diff, conteudo, loading, onEscopo, onFechar, rotuloVoltar = m.arq_voltar_conversa(), erro = null, onSalvar = null }: Props = $props();
 
   // Linhas do diff já destacadas. highlightDiff é assíncrona (import dinâmico do Shiki).
   // A flag `valida` do $effect descarta resposta velha — escopo trocado, diff novo ou o
@@ -164,6 +168,63 @@
         : m.arq_meta_arquivo({ tam: tamLegivel(doArquivo.size), linhas: linhasDoTexto(doArquivo.text) })
       : null,
   );
+  // ── edição ────────────────────────────────────────────────────────────────────────────────
+  let editando = $state(false);
+  let rascunho = $state('');
+  let salvando = $state(false);
+  let erroSalvar = $state<string | null>(null);
+  let salvoAgora = $state(false);
+  const sujo = $derived(editando && doArquivo !== null && rascunho !== doArquivo.text);
+  // Sem digest não há gravação (leitura truncada): mostrar o botão seria oferecer algo que o
+  // backend recusa de propósito.
+  // Não depende de estar mostrando o diff: o arquivo que a pessoa quer editar é justamente o que
+  // ela acabou de ver mudar. Entrando em edição, o editor toma o lugar do diff.
+  const podeEditar = $derived(onSalvar !== null && doArquivo !== null && doArquivo.digest !== null);
+
+  // A base do diff embutido. `undefined` (campo ausente, backend antigo) vira null: sem base o
+  // editor mostra só o arquivo, que é o certo — nunca um diff inventado.
+  const baseDoDiff = $derived(diffDoArquivo?.original ?? null);
+  // O editor só assume a leitura quando temos o conteúdo do disco. Arquivo truncado continua
+  // aparecendo (sem diff embutido): cortar a tela seria pior que mostrar o começo.
+  const podeUsarEditor = $derived(doArquivo !== null);
+
+  // Trocar de arquivo com edição aberta larga o rascunho: manter o texto de `a` sobre o nome de
+  // `b` seria o mesmo defeito que o `doArquivo` existe pra impedir, agora com risco de gravar.
+  $effect(() => {
+    void path;
+    editando = false;
+    erroSalvar = null;
+    salvoAgora = false;
+  });
+
+  async function salvar() {
+    if (!onSalvar || !sujo || salvando) return;
+    salvando = true;
+    erroSalvar = null;
+    const falha = await onSalvar(rascunho);
+    salvando = false;
+    if (falha) {
+      // Ja vem traduzida do api.ts; o mensagemDeErro cobre o caso de vir um codigo cru.
+      erroSalvar = mensagemDeErro(falha) ?? falha;
+      return;
+    }
+    salvoAgora = true;
+    editando = false;
+    setTimeout(() => { salvoAgora = false; }, 2000);
+  }
+
+  function abrirEdicao() {
+    if (!doArquivo) return;
+    rascunho = doArquivo.text;
+    erroSalvar = null;
+    editando = true;
+  }
+
+  function descartar() {
+    editando = false;
+    erroSalvar = null;
+  }
+
 </script>
 
 <div class="visor" role="region" tabindex="-1" aria-label={path} aria-busy={loading || destacando || destacandoArquivo}>
@@ -199,6 +260,18 @@
         {#if partesDesde && doArquivo}<span class="sep"> · </span>{/if}
         {#if doArquivo}{metaArquivo}{/if}
       </span>
+      {#if podeEditar}
+        {#if editando}
+          <button class="acao primaria" disabled={!sujo || salvando} onclick={salvar}>
+            {salvando ? m.arq_salvando() : m.arq_salvar()}
+          </button>
+          <button class="acao" onclick={descartar}>{m.arq_descartar()}</button>
+          {#if sujo}<span class="sujo">{m.arq_nao_salvo()}</span>{/if}
+        {:else}
+          <button class="acao" onclick={abrirEdicao}>{m.arq_editar()}</button>
+        {/if}
+      {/if}
+      {#if salvoAgora}<span class="salvo">✓ {m.arq_salvo()}</span>{/if}
       <button class="voltar" onclick={onFechar}>← {rotuloVoltar}</button>
     </div>
   </div>
@@ -211,6 +284,21 @@
            roda — senao o usuario veria "sem diferenças" junto de "arquivo binario", duas
            afirmacoes que se contradizem. -->
       <p class="aviso erro" role="alert">{erro}</p>
+    {:else if editando && doArquivo}
+      {#if erroSalvar}
+        <p class="aviso erro" role="alert">{erroSalvar}</p>
+      {/if}
+      <!-- Editando: o arquivo puro. Ver o diff e digitar ao mesmo tempo brigaria — as faixas de
+           texto removido são widgets, e o cursor andaria por cima delas. -->
+      <CodeEditor texto={rascunho} path={path} editavel={true} original={null}
+                  onChange={(t) => (rascunho = t)} onSalvar={salvar} />
+    {:else if podeUsarEditor && doArquivo}
+      {#if doArquivo.truncated}
+        <p class="aviso">{m.arq_arquivo_cortado()}</p>
+      {/if}
+      <!-- Leitura: o MESMO editor, com o diff por dentro (unifiedMergeView). É o que troca o
+           `diff --git`/`@@` cru por arquivo inteiro, numeração real e trechos iguais dobrados. -->
+      <CodeEditor texto={doArquivo.text} path={path} editavel={false} original={baseDoDiff} />
     {:else if temDiff && diffDoArquivo}
       {@const d = diffDoArquivo}
       {#if d.truncated}
@@ -220,6 +308,9 @@
     {:else if doArquivo}
       {#if doArquivo.truncated}
         <p class="aviso">{m.arq_arquivo_cortado()}</p>
+      {/if}
+      {#if erroSalvar}
+        <p class="aviso erro" role="alert">{erroSalvar}</p>
       {/if}
       <!-- Calha + linhas destacadas (mesmo desenho do DiffView: cor do token INLINE, vinda do
            tema do Shiki). Sem tokens ainda (destaque em voo) ou sem tokens possíveis (null do
@@ -235,7 +326,16 @@
 </div>
 
 <style>
-  .visor { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  /* OPACO de propósito, sem seguir o slider de transparência: ler ou editar código com o chat
+     de trás atravessando o texto é ilegível, e foi o que o usuário pediu pra acabar (20/08/2026).
+     Cor crua e sólida, não `--surface-inset` — este é o único lugar do app que sai do véu. */
+  .visor { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-base); }
+  .acao { padding: 3px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); background: var(--surface-raised); color: var(--text-secondary); font-size: var(--text-xs); cursor: pointer; }
+  .acao:hover:not(:disabled) { color: var(--text-primary); }
+  .acao:disabled { opacity: 0.5; cursor: default; }
+  .acao.primaria { border-color: var(--accent); color: var(--accent); }
+  .sujo { font-size: var(--text-xs); color: var(--warning); }
+  .salvo { font-size: var(--text-xs); color: var(--success); }
   .cab { padding: 11px 16px 10px; border-bottom: 1px solid var(--border-subtle); }
   .cab-l1 { display: flex; align-items: center; gap: 10px; }
   .caminho {

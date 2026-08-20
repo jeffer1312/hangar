@@ -1684,6 +1684,7 @@
         loading={filesStore.loading}
         onEscopo={(e) => filesStore.trocarEscopo(e)}
         onFechar={fecharVisor}
+        onSalvar={(t) => filesStore.salvar(arquivoAberto, t)}
       />
     </div>
   {/if}

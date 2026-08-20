@@ -510,7 +510,10 @@ export interface TreeEntry {
 export interface TreeListing { entries: TreeEntry[]; truncated: boolean }
 
 // Conteudo de UM arquivo (GET /api/sessions/{name}/files/read). `truncated` no teto de 512 KB.
-export interface FileContent { path: string; text: string; size: number; truncated: boolean }
+// `digest` é a impressão do que foi lido; volta pro backend ao salvar, que recusa a gravação se
+// o arquivo mudou no disco no meio (o agente da sessão edita os mesmos arquivos). É `null` numa
+// leitura truncada — e sem digest não há gravação.
+export interface FileContent { path: string; text: string; size: number; truncated: boolean; digest: string | null }
 
 // Um achado da busca (GET /api/sessions/{name}/files/search). No modo `names`, line e text vem null.
 export interface SearchHit { path: string; line: number | null; text: string | null }
@@ -529,4 +532,7 @@ export interface PathDiff {
   escopo_usado: 'branch' | 'nao_commitado';
   base: string | null;
   motivo: string | null;
+  // Texto do arquivo na base — o lado esquerdo do diff, pro visor desenhá-lo dentro do editor.
+  // `""` = arquivo novo (tudo é adição); `null` = não há versão na base ou o arquivo é grande demais.
+  original: string | null;
 }

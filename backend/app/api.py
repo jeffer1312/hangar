@@ -3251,6 +3251,22 @@ def files_read(name: str, path: str):
         raise _erro_arq(e)
 
 
+class FileWriteBody(_StrictBody):
+    path: str
+    text: str
+    # A impressão da leitura. Sem ela a gravação é recusada: escrever às cegas por cima do que o
+    # agente da sessão acabou de mudar é o desfecho que este campo existe pra impedir.
+    digest: str | None = None
+
+
+@app.post("/api/sessions/{name}/files/write", dependencies=[Depends(require_auth)])
+def files_write(name: str, body: FileWriteBody):
+    try:
+        return filetree.write_file(_session_cwd(name), body.path, body.text, body.digest)
+    except FileError as e:
+        raise _erro_arq(e)
+
+
 @app.get("/api/sessions/{name}/files/search", dependencies=[Depends(require_auth)])
 def files_search(name: str, q: str, mode: str = "names"):
     # `mode` e str de proposito, nao Literal: o Literal era validado pelo FastAPI e o 422

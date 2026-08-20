@@ -210,6 +210,7 @@
             onEscopo={(e) => filesStore?.trocarEscopo(e)}
             onFechar={fecharArquivo}
             rotuloVoltar={m.comum_voltar()}
+            onSalvar={filesStore ? (t) => filesStore!.salvar(arquivoAberto, t) : null}
           />
         {:else}
           <FilesPanel

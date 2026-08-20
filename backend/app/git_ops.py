@@ -528,13 +528,15 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
     # os arquivos modificados (medido no parecer 35a69cd).
     rastreado = _run(cwd, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", path).returncode == 0
     if not rastreado:
+        # Arquivo novo: a "versao original" e o vazio, e dizer isso deixa o visor desenhar o
+        # arquivo inteiro como adicao sem precisar interpretar o unified diff.
         # --no-index NAO aceita --literal-pathspecs, e tambem nao precisa: os dois paths
         # posicionais sao tratados como literais pelo proprio git (medido).
         p = _run(cwd, "-c", "core.quotePath=false", "diff", "--no-index", "--", "/dev/null", path)
         if p.returncode >= 128 or (p.returncode != 0 and not p.stdout):
             raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
         texto, cortou = _cap(p.stdout)      # --no-index sai com 1 quando ha diferenca: normal
-        return {"path": path, "diff": texto, "truncated": cortou,
+        return {"path": path, "diff": texto, "truncated": cortou, "original": "",
                 "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
 
     args = ["-c", "core.quotePath=false", "--literal-pathspecs", "diff"]
@@ -549,7 +551,29 @@ def path_diff(cwd: str, path: str, escopo: str) -> dict:
         raise GitError(409, (p.stderr or "git diff falhou").strip() or "git diff falhou")
     texto, cortou = _cap(p.stdout)
     return {"path": path, "diff": texto, "truncated": cortou,
+            "original": _versao_na_base(cwd, path, base if usado == "branch" else "HEAD"),
             "escopo_pedido": escopo, "escopo_usado": usado, "base": base, "motivo": motivo}
+
+
+def _versao_na_base(cwd: str, path: str, rev: str | None) -> str | None:
+    """Conteudo do arquivo NAQUELA revisao — o lado esquerdo do diff.
+
+    O visor desenha o diff dentro do editor (unifiedMergeView), e pra isso ele precisa do texto
+    original, nao do unified diff: interpretar o `@@` no cliente pra reconstruir o original seria
+    reimplementar o git em JavaScript.
+
+    `rev:./path` e relativo ao CWD (medido) — sem o `./`, o git resolve a partir da RAIZ do repo e
+    uma sessao aberta numa subpasta pediria o arquivo errado. `None` quando nao ha versao la
+    (arquivo criado depois da base): quem chama trata como "tudo novo".
+    """
+    if not rev:
+        return None
+    p = _run(cwd, "show", f"{rev}:./{path}")
+    if p.returncode != 0:
+        return None
+    if len(p.stdout) > _DIFF_MAX:
+        return None            # arquivo enorme: o visor cai no diff de texto, sem travar a tela
+    return p.stdout
 
 
 # Teto do diff do commit inteiro. O diff POR ARQUIVO e seguro por construcao; o do commit inteiro

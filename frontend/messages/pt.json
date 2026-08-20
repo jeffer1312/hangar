@@ -1824,5 +1824,16 @@
   "atividade_conversa_so_leitura": "Conversa só-leitura — este agente pertence à sessão {nome}.",
   "permissao_sonda_nao_restaurou": "A leitura do ciclo mexeu no modo e não conseguiu voltar; o modo mostrado é o que ficou.",
   "criar_providers_erro": "não consegui checar quais CLIs existem nesta máquina",
-  "criar_providers_erro_detalhe": "Sonda dos CLIs falhou ({erro}) — a disponibilidade abaixo não foi verificada."
+  "criar_providers_erro_detalhe": "Sonda dos CLIs falhou ({erro}) — a disponibilidade abaixo não foi verificada.",
+  "erro_arq_mudou_no_disco": "O arquivo mudou no disco desde que você abriu — recarregue antes de salvar.",
+  "erro_arq_sem_digest": "Não dá pra salvar sem ter lido o arquivo inteiro.",
+  "erro_arq_grande_demais": "Arquivo grande demais pra salvar por aqui.",
+  "arq_salvar": "Salvar",
+  "arq_salvando": "Salvando…",
+  "arq_salvo": "Salvo",
+  "arq_descartar": "Descartar",
+  "arq_editar": "Editar",
+  "arq_nao_salvo": "alterações não salvas",
+  "erro_arq_salvar_falhou": "Não consegui salvar o arquivo.",
+  "arq_linhas_sem_mudanca": "$ linhas sem mudança"
 }

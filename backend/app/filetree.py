@@ -5,7 +5,9 @@ de pasta na criacao de sessao), aqui a raiz e o cwd da sessao. Mesma trava de ca
 politica de raiz diferente.
 """
 
+import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 MAX_ENTRADAS = 1000
@@ -228,4 +230,60 @@ def read_file(cwd: str, path: str) -> dict:
         "text": bruto[:MAX_BYTES].decode("utf-8", errors="replace"),
         "size": alvo.stat().st_size,
         "truncated": cortou,
+        # Impressão do que foi lido. Quem for gravar devolve isto e a gravação recusa se o
+        # arquivo mudou no disco no meio — e aqui isso não é hipótese de manual: o agente da
+        # sessão edita os mesmos arquivos o tempo todo, enquanto a tela está aberta.
+        "digest": None if cortou else _digest(bruto),
     }
+
+
+def _digest(dados: bytes) -> str:
+    return hashlib.sha256(dados).hexdigest()
+
+
+def write_file(cwd: str, path: str, texto: str, digest_lido: str | None) -> dict:
+    """Grava `texto` no arquivo, recusando se ele mudou no disco desde a leitura.
+
+    Mesmas travas de caminho da leitura (`_resolver` + `_protege_git`): sem isso a escrita seria
+    um caminho novo pra sair da raiz da sessão ou tocar no `.git`.
+    """
+    _raiz, alvo = _resolver(cwd, path)
+    if alvo.is_dir():
+        raise FileError(400, "erro_arq_e_pasta", "isso e uma pasta")
+    if not alvo.is_file():
+        raise FileError(400, "erro_arq_nao_e_arquivo", "nao e um arquivo comum")
+    if "\x00" in texto:
+        raise FileError(415, "erro_arq_binario", "arquivo binario")
+    novo = texto.encode("utf-8")
+    if len(novo) > MAX_BYTES:
+        raise FileError(413, "erro_arq_grande_demais", "arquivo grande demais")
+
+    try:
+        atual = alvo.read_bytes()
+    except PermissionError:
+        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de leitura")
+    # Sem digest o cliente está gravando às cegas (leitura truncada, ou cliente antigo): recusa.
+    # Um "salvar" que apaga em silêncio o que o agente acabou de escrever é o pior desfecho aqui.
+    if not digest_lido:
+        raise FileError(409, "erro_arq_sem_digest", "sem a impressao da leitura")
+    if _digest(atual) != digest_lido:
+        raise FileError(409, "erro_arq_mudou_no_disco", "o arquivo mudou no disco")
+
+    # tmp+rename no MESMO diretório (rename entre sistemas de arquivos falha), preservando o modo:
+    # um arquivo executável não pode voltar sem o bit de execução.
+    modo = alvo.stat().st_mode
+    fd, tmp = tempfile.mkstemp(dir=str(alvo.parent), prefix=".hangar-escrita-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(novo)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, modo & 0o7777)
+        os.replace(tmp, alvo)
+    except PermissionError:
+        os.unlink(tmp)
+        raise FileError(403, "erro_arq_sem_permissao", "sem permissao de escrita")
+    except OSError:
+        os.unlink(tmp)
+        raise
+    return {"path": path, "size": len(novo), "digest": _digest(novo)}

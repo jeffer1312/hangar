@@ -862,3 +862,35 @@ def test_base_da_branch_pushada_usa_a_mainline_mais_proxima(tmp_path):
     assert r["escopo_usado"] == "branch", r
     # A base é a develop (mais recente), então só o `tres` é novo — o `dois` não entra.
     assert "+tres" in r["diff"] and "+dois" not in r["diff"], r["diff"]
+
+
+def test_path_diff_devolve_o_texto_da_base(tmp_path):
+    """O visor desenha o diff DENTRO do editor, e pra isso precisa do lado esquerdo em texto —
+    reconstruir o original a partir do `@@` no cliente seria reimplementar o git em JavaScript."""
+    d, f = _repo_com_upstream(tmp_path)
+    git_ops._run(d, "checkout", "-q", "-b", "trabalho")
+    f.write_text("um\ndois\n")
+    git_ops._run(d, "add", "a.txt"); git_ops._run(d, "commit", "-q", "-m", "dois")
+    f.write_text("um\ndois\ntres\n")
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["original"] == "um\n", r["original"]
+
+
+def test_path_diff_de_arquivo_novo_diz_original_vazio(tmp_path):
+    d, _f = _repo_com_upstream(tmp_path)
+    (tmp_path / "trab" / "novo.txt").write_text("nasceu agora\n")
+    r = git_ops.path_diff(d, "novo.txt", "branch")
+    # "" e nao None: o arquivo EXISTE e é todo novo. None diria "nao sei", que é outra coisa.
+    assert r["original"] == ""
+
+
+def test_path_diff_da_subpasta_pega_o_arquivo_certo(tmp_path):
+    """`git show rev:path` resolve a partir da RAIZ do repo; sem o `./` uma sessão aberta numa
+    subpasta receberia o conteúdo de outro arquivo (ou nada)."""
+    d, _f = _repo_com_upstream(tmp_path)
+    sub = tmp_path / "trab" / "sub"; sub.mkdir()
+    (sub / "a.txt").write_text("da subpasta\n")     # nome IGUAL ao da raiz, de propósito
+    git_ops._run(d, "add", "sub/a.txt"); git_ops._run(d, "commit", "-q", "-m", "sub")
+    (sub / "a.txt").write_text("da subpasta\nmexido\n")
+    r = git_ops.path_diff(str(sub), "a.txt", "nao_commitado")
+    assert r["original"] == "da subpasta\n", r["original"]

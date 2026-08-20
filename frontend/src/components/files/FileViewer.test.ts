@@ -18,29 +18,33 @@ function montar(props: Record<string, unknown>) {
 describe('FileViewer', () => {
   beforeEach(() => overwriteGetLocale(() => 'pt'));
 
-  it('sem mudanca, mostra o conteudo', () => {
+  it('sem mudanca, monta o editor com o arquivo', () => {
+    // O conteúdo agora é desenhado pelo CodeMirror (import dinâmico), então o que este nível
+    // decide — e o que cabe afirmar aqui — é montar a caixa do editor em vez do <pre>.
     const { el, comp } = montar({
       diff: null,
-      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false },
+      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false, digest: 'abc' },
     });
-    expect(el.textContent).toContain('print(1)');
+    expect(el.querySelector('.editor')).not.toBeNull();
     unmount(comp);
   });
 
-  it('o visor de arquivo numera as linhas', () => {
+  it('arquivo cortado avisa, e ainda assim mostra o editor', () => {
+    // Numeração e dobra passaram a ser do CodeMirror. O que continua sendo decisão desta tela é
+    // avisar do corte sem esconder o que deu pra ler.
     const { el, comp } = montar({
       diff: null,
-      conteudo: { path: 'a.py', text: 'a = 1\nb = 2\nc = 3\n', size: 18, truncated: false },
+      conteudo: { path: 'a.py', text: 'a = 1\n', size: 999999, truncated: true, digest: null },
     });
-    // Uma calha por linha, numerada de 1 a N — sem contar a linha fantasma do \n final.
-    expect([...el.querySelectorAll('.conteudo .gut')].map((g) => g.textContent)).toEqual(['1', '2', '3']);
+    expect(el.textContent).toContain(m.arq_arquivo_cortado());
+    expect(el.querySelector('.editor')).not.toBeNull();
     unmount(comp);
   });
 
   it('pluraliza a meta: 1 linha no singular', () => {
     const { el, comp } = montar({
       diff: null,
-      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false },
+      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false, digest: 'abc' },
     });
     expect(el.textContent).toContain('1 linha');
     expect(el.textContent).not.toContain('1 linhas');
@@ -102,13 +106,14 @@ describe('FileViewer', () => {
     unmount(comp);
   });
 
-  it('diff vazio no escopo mostra o CONTEUDO, nao "sem diferencas"', () => {
+  it('diff vazio no escopo mostra o ARQUIVO, nao "sem diferencas"', () => {
     const { el, comp } = montar({
       diff: { path: 'a.py', diff: '', truncated: false, escopo_pedido: 'branch',
-              escopo_usado: 'branch', base: 'abc1234', motivo: null },
-      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false },
+              escopo_usado: 'branch', base: 'abc1234', motivo: null, original: 'print(1)\n' },
+      conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false, digest: 'abc' },
     });
-    expect(el.textContent).toContain('print(1)');
+    expect(el.querySelector('.editor')).not.toBeNull();
+    expect(el.textContent).not.toContain(m.git_sem_diferencas());
     unmount(comp);
   });
 
@@ -134,7 +139,7 @@ describe('FileViewer', () => {
   it('nao mostra o conteudo do arquivo anterior sob o nome do novo', () => {
     const { el, comp } = montar({
       path: 'b.py', loading: true, diff: null,
-      conteudo: { path: 'a.py', text: 'CONTEUDO DE A', size: 13, truncated: false },
+      conteudo: { path: 'a.py', text: 'CONTEUDO DE A', size: 13, truncated: false, digest: 'abc' },
     });
     expect(el.textContent).not.toContain('CONTEUDO DE A');
     expect(el.textContent).toContain(m.git_diff_carregando());

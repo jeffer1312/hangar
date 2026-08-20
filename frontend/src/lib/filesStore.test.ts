@@ -32,11 +32,11 @@ describe('FilesStore', () => {
     let libera: (v: unknown) => void = () => {};
     vi.mocked(readFile)
       .mockImplementationOnce(() => new Promise((r) => (libera = r)) as never)
-      .mockResolvedValueOnce({ path: 'b.txt', text: 'B', size: 1, truncated: false });
+      .mockResolvedValueOnce({ path: 'b.txt', text: 'B', size: 1, truncated: false, digest: 'abc' });
     const s = new FilesStore('sessao');
     const primeiro = s.abrir('a.txt');
     await s.abrir('b.txt');
-    libera({ path: 'a.txt', text: 'A', size: 1, truncated: false });
+    libera({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' });
     await primeiro;
     expect(s.conteudo?.text).toBe('B'); // o primeiro nao pinta por cima
   });
@@ -70,7 +70,7 @@ describe('FilesStore', () => {
     const s = new FilesStore('sessao');
     const clique = s.abrir('a.txt');
     await s.alternarPasta('src'); // outra operacao no meio
-    libera({ path: 'a.txt', text: 'A', size: 1, truncated: false });
+    libera({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' });
     await clique;
     expect(s.conteudo?.text).toBe('A');
   });
@@ -78,7 +78,7 @@ describe('FilesStore', () => {
   // Prova do bloqueador 2: o conteudo MANDA. Fora de repositorio git o path_diff responde 409 e
   // a arvore tem que continuar lendo arquivo (regra do usuario, 15/08).
   it('fora de repositorio git, o arquivo abre mesmo sem diff', async () => {
-    vi.mocked(readFile).mockResolvedValue({ path: 'a.txt', text: 'A', size: 1, truncated: false });
+    vi.mocked(readFile).mockResolvedValue({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' });
     vi.mocked(pathDiff).mockRejectedValue(new Error('nao e um repositorio git'));
     const s = new FilesStore('sessao');
     await s.abrir('a.txt');
@@ -115,7 +115,7 @@ describe('FilesStore', () => {
   // Prova do bloqueador 6: o store recebe o VALOR, nao o evento — quem le o controle da tela e o
   // componente (o seletor da barra e um botao, nao um <select>).
   it('trocar o escopo reabre o arquivo no escopo novo', async () => {
-    vi.mocked(readFile).mockResolvedValue({ path: 'a.txt', text: 'A', size: 1, truncated: false });
+    vi.mocked(readFile).mockResolvedValue({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' });
     vi.mocked(pathDiff).mockImplementation(async (_s, _p, escopo) =>
       ({ path: 'a.txt', diff: escopo, truncated: false }) as never);
     const s = new FilesStore('sessao');
@@ -237,7 +237,7 @@ describe('FilesStore', () => {
     const antiga = s.abrir('a.txt');       // 404 -> recarregar pendurada
     await vi.waitFor(() => expect(listFiles).toHaveBeenCalled());
     // abertura NOVA no meio da recarga antiga
-    vi.mocked(readFile).mockResolvedValueOnce({ path: 'new.ts', text: 'N', size: 1, truncated: false });
+    vi.mocked(readFile).mockResolvedValueOnce({ path: 'new.ts', text: 'N', size: 1, truncated: false, digest: 'abc' });
     const nova = s.abrir('new.ts');
     await nova;
     expect(s.selecionado).toBe('new.ts');
@@ -461,7 +461,7 @@ describe('FilesStore', () => {
     const s = new FilesStore('sessao');
     const p = s.abrir('a.txt');
     expect(s.loading).toBe(true);
-    libera({ path: 'a.txt', text: 'A', size: 1, truncated: false });
+    libera({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' });
     await p;
     expect(s.loading).toBe(false);
   });
@@ -490,9 +490,9 @@ describe('FilesStore', () => {
     const a = filesStores.retain('srv-a::api', 'api');
     const b = filesStores.retain('srv-b::api', 'api');
     const pendente = a.abrir('a.ts');          // A abre, resposta pendurada
-    vi.mocked(readFile).mockResolvedValue({ path: 'b.ts', text: 'B', size: 1, truncated: false });
+    vi.mocked(readFile).mockResolvedValue({ path: 'b.ts', text: 'B', size: 1, truncated: false, digest: 'abc' });
     await b.abrir('b.ts');                      // B abre e completa no meio
-    libera({ path: 'a.ts', text: 'A', size: 1, truncated: false });
+    libera({ path: 'a.ts', text: 'A', size: 1, truncated: false, digest: 'abc' });
     await pendente;                             // resposta do A chega atrasada
     expect(b.conteudo?.path).toBe('b.ts');      // o B nao foi tocado pelo A
     expect(a.conteudo?.path).toBe('a.ts');

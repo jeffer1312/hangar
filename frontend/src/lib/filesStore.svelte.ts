@@ -7,7 +7,7 @@
 // $effect o RECRIA quando a sessao muda — o padrao contrario, que faz a regua "pasta aberta
 // continua aberta ao voltar" falhar sem erro nenhum.
 import * as m from '../paraglide/messages';
-import { listFiles, readFile, searchFiles, pathDiff } from './api';
+import { listFiles, readFile, searchFiles, pathDiff, writeFile } from './api';
 import { cleanErr } from './gitStore.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import type { FileContent, PathDiff, SearchHit, TreeEntry } from './types';
@@ -93,6 +93,38 @@ export class FilesStore {
       if (cortou && (dir === '' || this.abertos.has(dir))) return true;
     }
     return false;
+  }
+
+  // Grava o arquivo aberto. Devolve a MENSAGEM do erro em vez de levantar: o visor a mostra e
+  // mantem o texto digitado na tela — perder a edicao por causa de um conflito seria trocar um
+  // problema por outro pior. Mensagem, nao codigo: o `errorDetail` do api.ts ja traduziu o
+  // `{code, params}` do backend, e o codigo nao sobrevive ao Error que ele levanta.
+  async salvar(path: string, texto: string): Promise<string | null> {
+    const atual = this.conteudo;
+    if (!atual || atual.path !== path) return 'erro_arq_inexistente';
+    try {
+      const r = await writeFile(this.sessao, path, texto, atual.digest);
+      // So atualiza se ainda for o mesmo arquivo na tela (o usuario pode ter trocado no meio).
+      if (this.conteudo?.path === path) {
+        this.conteudo = { ...this.conteudo, text: texto, size: r.size, digest: r.digest };
+      }
+      // O diff da tela envelheceu no instante da gravacao: reler e o que impede o visor de
+      // afirmar um diff que nao existe mais.
+      void this.recarregarDiff(path);
+      return null;
+    } catch (e) {
+      return (e as Error)?.message || 'erro_arq_salvar_falhou';
+    }
+  }
+
+  async recarregarDiff(path: string) {
+    try {
+      const d = await pathDiff(this.sessao, path, this.escopo);
+      if (this.selecionado === path) this.diff = d;
+    } catch {
+      // Diff e enfeite aqui: a gravacao ja aconteceu, e falhar em reler nao pode virar erro na
+      // cara de quem acabou de salvar com sucesso.
+    }
   }
 
   // Abre um arquivo: pinta conteudo + diff (no escopo atual) quando a resposta voltar.

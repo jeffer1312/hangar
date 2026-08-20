@@ -20,7 +20,7 @@ vi.mock('../../lib/api', () => ({
     entries: [{ name: 'a.txt', path: 'a.txt', is_dir: false, size: 1, changed: null, add: 0, del: 0 }],
     truncated: false,
   })),
-  readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false })),
+  readFile: vi.fn(async () => ({ path: 'a.txt', text: 'A', size: 1, truncated: false, digest: 'abc' })),
   searchFiles: vi.fn(async () => ({ hits: [], truncated: false, mode: 'names' })),
   pathDiff: vi.fn(async () => ({
     path: 'a.txt', diff: '', truncated: false,

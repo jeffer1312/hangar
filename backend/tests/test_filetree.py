@@ -639,3 +639,58 @@ def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
     ent = {e["name"]: e for e in filetree.list_dir(d)["entries"]}
     assert "link-novo.txt" not in ent, "link intocado herdou a marca do alvo"
     assert ent["alvo.txt"]["changed"] == "M"
+
+
+# ── escrita ────────────────────────────────────────────────────────────────────────────────────
+
+def test_write_grava_e_devolve_digest_novo(tmp_path):
+    (tmp_path / "a.txt").write_text("um\n", encoding="utf-8")
+    lido = filetree.read_file(str(tmp_path), "a.txt")
+    r = filetree.write_file(str(tmp_path), "a.txt", "um\ndois\n", lido["digest"])
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "um\ndois\n"
+    # O digest devolvido é o do conteúdo novo: salvar duas vezes seguidas tem que funcionar
+    # sem reler o arquivo.
+    filetree.write_file(str(tmp_path), "a.txt", "um\ndois\ntres\n", r["digest"])
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "um\ndois\ntres\n"
+
+
+def test_write_recusa_quando_o_arquivo_mudou_no_disco(tmp_path):
+    """O caso real: a tela está aberta e o AGENTE da sessão edita o mesmo arquivo. Salvar por
+    cima apagaria o trabalho dele sem ninguém ver."""
+    (tmp_path / "a.txt").write_text("um\n", encoding="utf-8")
+    lido = filetree.read_file(str(tmp_path), "a.txt")
+    (tmp_path / "a.txt").write_text("o agente escreveu isto\n", encoding="utf-8")
+    with pytest.raises(filetree.FileError) as e:
+        filetree.write_file(str(tmp_path), "a.txt", "um\ndois\n", lido["digest"])
+    assert e.value.status == 409
+    assert e.value.code == "erro_arq_mudou_no_disco"
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "o agente escreveu isto\n"
+
+
+def test_write_sem_digest_e_recusado(tmp_path):
+    (tmp_path / "a.txt").write_text("um\n", encoding="utf-8")
+    with pytest.raises(filetree.FileError) as e:
+        filetree.write_file(str(tmp_path), "a.txt", "outro\n", None)
+    assert e.value.code == "erro_arq_sem_digest"
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "um\n"
+
+
+def test_write_nao_escapa_da_raiz_nem_toca_no_git(tmp_path):
+    raiz = tmp_path / "repo"; (raiz / ".git").mkdir(parents=True)
+    (raiz / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+    (tmp_path / "fora.txt").write_text("segredo\n", encoding="utf-8")
+    for caminho in ("../fora.txt", ".git/config"):
+        with pytest.raises(filetree.FileError):
+            filetree.write_file(str(raiz), caminho, "invadido\n", "x" * 64)
+    assert (tmp_path / "fora.txt").read_text(encoding="utf-8") == "segredo\n"
+    assert (raiz / ".git" / "config").read_text(encoding="utf-8") == "[core]\n"
+
+
+def test_write_preserva_o_bit_de_execucao(tmp_path):
+    import os
+    alvo = tmp_path / "s.sh"
+    alvo.write_text("#!/bin/sh\necho oi\n", encoding="utf-8")
+    alvo.chmod(0o755)
+    lido = filetree.read_file(str(tmp_path), "s.sh")
+    filetree.write_file(str(tmp_path), "s.sh", "#!/bin/sh\necho tchau\n", lido["digest"])
+    assert os.stat(alvo).st_mode & 0o111, "o arquivo voltou sem poder executar"
