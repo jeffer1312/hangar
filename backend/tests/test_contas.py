@@ -117,28 +117,32 @@ def test_settings_e_copia_e_nao_atalho(casa):
     p = contas.criar("conta2")
     assert not (p / "settings.json").is_symlink()
     assert (p / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
-    # A escrita do CLI na conta fica NA conta — o compartilhado não muda.
+    # A escrita do CLI na conta fica NA conta — o compartilhado não muda. É esse o sentido do
+    # clobber: o que a conta grava nunca sobe. (A volta, o espelho, está no teste seguinte.)
     (p / "settings.json").write_text('{"stripped": true}', encoding="utf-8")
     contas.reconciliar("conta2")
     assert (casa / ".claude" / "settings.json").read_text(encoding="utf-8") == '{"theme":"dark"}'
-    assert (p / "settings.json").read_text(encoding="utf-8") == '{"stripped": true}'
+    assert json.loads((p / "settings.json").read_text(encoding="utf-8")) == {
+        "stripped": True, "theme": "dark"}
 
 
-def test_enabled_plugins_do_compartilhado_espelha_pra_conta(casa):
-    """A cópia protege do clobber mas tirava a propagação: plugin habilitado no principal não
-    chegava nas contas. O espelhamento devolve SÓ essa chave; o resto da cópia é da conta."""
+def test_chaves_do_compartilhado_espelham_pra_conta(casa):
+    """A cópia protege do clobber mas tirava a propagação: mexer no principal não chegava nas
+    contas. O espelho devolve isso — o principal manda em toda chave que ele tem, e o que só
+    existe na cópia da conta fica."""
     p = contas.criar("conta2")
     (casa / ".claude" / "settings.json").write_text(
         '{"theme":"dark","enabledPlugins":{"superpowers@oficial":true}}', encoding="utf-8")
     (p / "settings.json").write_text(
-        '{"theme":"light","enabledPlugins":{"velho@x":true}}', encoding="utf-8")
+        '{"theme":"light","enabledPlugins":{"velho@x":true},"model":"opus"}', encoding="utf-8")
     contas.reconciliar("conta2")
     d = json.loads((p / "settings.json").read_text(encoding="utf-8"))
     assert d["enabledPlugins"] == {"superpowers@oficial": True}
-    assert d["theme"] == "light"
+    assert d["theme"] == "dark"          # o principal manda: o /config da conta é desfeito
+    assert d["model"] == "opus"          # chave que só a conta tem sobrevive
 
 
-def test_espelhamento_nao_apaga_enabled_plugins_se_o_compartilhado_perdeu_a_chave(casa):
+def test_espelhamento_nao_apaga_chave_que_o_compartilhado_perdeu(casa):
     """Ausência da chave no compartilhado é o sintoma do acidente de 2026-08-19 (clobber);
     espelhar a ausência desligaria os plugins das contas de novo."""
     p = contas.criar("conta2")

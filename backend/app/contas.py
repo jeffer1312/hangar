@@ -13,8 +13,8 @@ Por que `settings.json` é a exceção (cópia, ver _semear_settings): o CLI esc
 primeiro boot, /config, /model — e a escrita atravessava o symlink e clobberava a config
 compartilhada de todas as contas de uma vez (2026-08-19: sumiram 14 chaves, enabledPlugins junto,
 e os plugins apagaram em todo lugar). O preço: mudança no compartilhado não propaga pras cópias —
-EXCETO o `enabledPlugins`, espelhado de volta pelo _espelhar_enabled_plugins (plugin habilitado
-no principal vale nas contas no próximo uso; o principal manda nessa chave).
+compensado pelo _espelhar_do_principal, que copia as chaves do compartilhado por cima da cópia a
+cada reconciliação (o principal manda; `/config` dentro de uma conta é desfeito no próximo uso).
 
 Por que `projects/` é a exceção: é onde ficam os `.jsonl`, e o painel de custo soma UMA VEZ POR
 CONFIG DIR (`costs_sources._config_dirs`). Compartilhar a pasta faria o mesmo gasto ser contado
@@ -294,25 +294,28 @@ def _semear_settings(dir_conta: Path) -> str | None:
             # Symlink que não é o do layout antigo: deriva — mesma regra do resto, gaveta.
             aviso = _gavetar(dir_conta, destino)
     elif destino.exists():
-        # Cópia da conta já existe (ou o CLI criou uma local): é dela — só o enabledPlugins
-        # é espelhado do compartilhado, o resto fica como está.
-        _espelhar_enabled_plugins(alvo, destino)
+        # Cópia da conta já existe (ou o CLI criou uma local): as chaves do compartilhado são
+        # espelhadas por cima; o que só existe na cópia fica.
+        _espelhar_do_principal(alvo, destino)
         return None
     if alvo.is_file():
         shutil.copyfile(alvo, destino)
     return aviso
 
 
-def _espelhar_enabled_plugins(alvo: Path, destino: Path) -> None:
-    """Espelha SÓ a chave `enabledPlugins` do settings.json compartilhado pra cópia da conta.
+def _espelhar_do_principal(alvo: Path, destino: Path) -> None:
+    """Espelha TODAS as chaves do settings.json compartilhado pra cópia da conta.
 
-    É o que devolve a propagação que a cópia tirou: plugin instalado/habilitado no principal
-    passa a valer nas contas no próximo uso, sem abrir mão da proteção contra clobber (a conta
-    continua escrevendo só na cópia dela). O principal MANDA nessa chave — habilitar/desabilitar
-    plugin de dentro de uma conta é desfeito aqui, de propósito.
+    É o que devolve a propagação que a cópia tirou: mexer no principal (outputStyle, plugin,
+    permissão, hook) passa a valer nas contas no próximo uso delas. Não reabre o clobber de
+    2026-08-19 porque o espelho anda no sentido contrário do acidente: LÊ o compartilhado e
+    escreve só na cópia — o principal nunca é escrito aqui.
 
-    Compartilhado SEM a chave não apaga a da conta: ausência é o sintoma do acidente de
-    2026-08-19 (clobber), e espelhá-la desligaria os plugins das contas de novo.
+    O principal MANDA em toda chave que ele tem (decisão do usuário em 2026-08-20, generalizando
+    a regra que valia só pro `enabledPlugins`): `/config` ou `/model` dentro de uma conta é
+    desfeito na próxima abertura dela. Chave que só existe na cópia fica — ausência no
+    compartilhado não apaga nada, porque ausência é justamente o sintoma daquele acidente e
+    espelhá-la desligaria os plugins das contas de novo.
     """
     try:
         de = json.loads(alvo.read_text(encoding="utf-8"))
@@ -322,13 +325,12 @@ def _espelhar_enabled_plugins(alvo: Path, destino: Path) -> None:
     except (OSError, ValueError) as e:
         # Truncado por escrita concorrente, sem permissão, JSON inválido: engolir deixaria a
         # conta divergir do principal em silêncio — mesma regra do _semear_claude_json.
-        raise ContaError(500, f"não consegui espelhar o enabledPlugins pra conta: {e}") from e
+        raise ContaError(500, f"não consegui espelhar o settings.json pra conta: {e}") from e
     if not isinstance(de, dict) or not isinstance(para, dict):
-        raise ContaError(500, "settings.json não é um objeto JSON — não dá pra espelhar o enabledPlugins")
-    ligados = de.get("enabledPlugins")
-    if not isinstance(ligados, dict) or para.get("enabledPlugins") == ligados:
+        raise ContaError(500, "settings.json não é um objeto JSON — não dá pra espelhar pra conta")
+    if all(para.get(k) == v for k, v in de.items()):
         return
-    para["enabledPlugins"] = ligados
+    para.update(de)
     # tmp+rename com pid+uuid, como o _ligar: um CLI vivo da conta lendo o arquivo no meio da
     # escrita receberia JSON truncado.
     tmp = destino.with_name(f"{destino.name}.hangar-novo.{os.getpid()}.{uuid.uuid4().hex[:8]}")
