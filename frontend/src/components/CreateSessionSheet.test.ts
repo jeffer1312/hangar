@@ -400,3 +400,120 @@ describe('CreateSessionSheet — B4/B6 da revisão final da branch', () => {
     unmount(comp);
   });
 });
+
+describe('CreateSessionSheet — provider sonda (C5)', () => {
+  it('provider ausente desabilita botão, mostra frase e bloqueia criação', async () => {
+    vi.mocked(api.getProviders).mockResolvedValue({
+      claude: { disponivel: false, motivo: 'nao_encontrado' },
+      codex: { disponivel: true, motivo: null },
+      pi: { disponivel: true, motivo: null },
+      kimi: { disponivel: true, motivo: null },
+    });
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+    const claudeBtn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === 'Claude')!;
+    expect(claudeBtn.disabled).toBe(true);
+    expect(document.body.textContent).toContain(m.criar_provider_ausente({ p: 'claude' }));
+    const primary = document.querySelector('.primary-btn') as HTMLButtonElement;
+    expect(primary.disabled).toBe(true);
+    primary.click();
+    await flush();
+    expect(onCreate).not.toHaveBeenCalled();
+    unmount(comp);
+  });
+
+  it('falha da sonda não desabilita ninguém (fail-open)', async () => {
+    vi.mocked(api.getProviders).mockRejectedValue(new Error('falha'));
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+    for (const name of ['Claude', 'Codex', 'Pi', 'Kimi']) {
+      const btn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === name)!;
+      expect(btn.disabled).toBe(false);
+    }
+    expect(document.body.textContent).not.toContain('não encontrado');
+    unmount(comp);
+  });
+
+  it('abertura com alvo faz uma única chamada à sonda', async () => {
+    let chamadas = 0;
+    vi.mocked(api.getProviders).mockImplementation(async () => {
+      chamadas++;
+      return { claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } };
+    });
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+    expect(chamadas).toBe(1);
+    unmount(comp);
+  });
+
+  it('resposta velha não vence troca de servidor', async () => {
+    // Deferred para controlar ordem
+    let resolveVelha!: (v: any) => void;
+    let resolveNova!: (v: any) => void;
+    const velha = new Promise<any>(r => { resolveVelha = r; });
+    const nova = new Promise<any>(r => { resolveNova = r; });
+    let chamadas = 0;
+    vi.mocked(api.getProviders).mockImplementation(() => {
+      chamadas++;
+      if (chamadas === 1) return velha;
+      if (chamadas === 2) return nova;
+      return Promise.resolve({ claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
+    });
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+    // primeira chamada é da abertura (velha pendente)
+    // simula troca de servidor: pickTarget com novo servidor
+    // Como o harness tem servers=[], pickTarget não é chamado com dois servidores; simulamos fechando e reabrindo
+    // Fecha e reabre para gerar segunda chamada (nova)
+    (document.querySelector('[data-testid="sheet-toggle"]') as HTMLElement).click();
+    await flush();
+    (document.querySelector('[data-testid="sheet-toggle"]') as HTMLElement).click();
+    await flush();
+    await escolherPasta();
+    // Agora temos duas chamadas pendentes: velha (1) e nova (2)
+    // Resolve nova primeiro como todos disponíveis, depois velha como claude ausente
+    resolveNova({ claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
+    await flush();
+    resolveVelha({ claude: { disponivel: false, motivo: 'nao_encontrado' }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
+    await flush();
+    const claudeBtn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === 'Claude')!;
+    // A resposta velha (ausente) não deve vencer
+    expect(claudeBtn.disabled).toBe(false);
+    unmount(comp);
+  });
+
+  it('fechar e reabrir descarta resposta velha', async () => {
+    let resolveVelha!: (v: any) => void;
+    let resolveNova!: (v: any) => void;
+    const velha = new Promise<any>(r => { resolveVelha = r; });
+    const nova = new Promise<any>(r => { resolveNova = r; });
+    let chamadas = 0;
+    vi.mocked(api.getProviders).mockImplementation(() => {
+      chamadas++;
+      if (chamadas === 1) return velha;
+      return nova;
+    });
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+    // Fecha antes da velha resolver
+    (document.querySelector('[data-testid="sheet-toggle"]') as HTMLElement).click();
+    await flush();
+    // Reabre, nova chamada
+    (document.querySelector('[data-testid="sheet-toggle"]') as HTMLElement).click();
+    await flush();
+    await escolherPasta();
+    resolveNova({ claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
+    await flush();
+    resolveVelha({ claude: { disponivel: false, motivo: 'nao_encontrado' }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
+    await flush();
+    const claudeBtn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === 'Claude')!;
+    expect(claudeBtn.disabled).toBe(false);
+    unmount(comp);
+  });
+});
+

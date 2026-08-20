@@ -104,10 +104,17 @@
   // Claude, aliases reduzidos) não há provider e o id já é único — o valor é o id puro, como hoje.
   const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
 
+  let provSeq = 0;
   async function carregarProviders() {
+    const seq = ++provSeq;
+    const srv = targetServer;
+    const aberta = open;
     try {
-      providers = await getProviders();
+      const res = await getProviders();
+      if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
+      providers = res;
     } catch {
+      if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
       providers = {};
     }
   }
@@ -369,9 +376,11 @@
       contaErro = false;
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
-      if (target) pickTarget(target);      // pickTarget ja carrega configs E motores do alvo
-      else loadConfigs();                  // sem lista de servidores: carrega do ativo mesmo
-      carregarProviders();
+      if (target) pickTarget(target);      // pickTarget ja carrega configs, motores e providers do alvo
+      else {
+        loadConfigs();
+        carregarProviders();
+      }
     });
   });
 
@@ -410,6 +419,7 @@
 
   async function create() {
     if (!picked || !name.trim()) return;
+    if (providers[provider] && !providers[provider].disponivel) return;
     loading = true;
     error = '';
     try {
@@ -650,7 +660,7 @@
         <p class="error-msg" role="alert">{error}</p>
       {/if}
 
-      <button class="primary-btn" onclick={create} disabled={loading || !name.trim()}>
+      <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || (providers[provider] && !providers[provider].disponivel)}>
         {loading ? m.criar_criando() : m.sessao_nova()}
       </button>
       <button class="ghost-btn" onclick={reset}>{m.criar_outra_pasta()}</button>

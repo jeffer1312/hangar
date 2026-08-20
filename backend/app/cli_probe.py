@@ -45,6 +45,11 @@ def _obter_path() -> str:
             return ""
     if _path_cache is not None:
         return _path_cache
+    # Windows não tem /bin/sh nem SHELL; usa PATH direto
+    if os.name == "nt":
+        val = os.environ.get("PATH", "")
+        _path_cache = val
+        return val
     shell = os.environ.get("SHELL", "/bin/sh")
     try:
         r = subprocess.run(
@@ -72,7 +77,7 @@ def sondar_providers() -> dict[str, dict]:
         return _cache
 
     path_str = _obter_path()
-    dirs = path_str.split(":") if path_str else []
+    dirs = path_str.split(os.pathsep) if path_str else []
 
     result: dict[str, dict] = {}
     for provider, bin_name in _BIN.items():
@@ -83,30 +88,40 @@ def sondar_providers() -> dict[str, dict]:
         for d in dirs:
             if not d:
                 continue
-            caminho = os.path.join(d, bin_name)
-            try:
-                r = subprocess.run([caminho, "--version"], timeout=2, capture_output=True)
-                # exit com qualquer código = instalado
-                disponivel = True
-                motivo = None
-                break
-            except subprocess.TimeoutExpired:
-                disponivel = True
-                motivo = None
-                break
-            except PermissionError:
-                viu_sem_permissao = True
-                continue
-            except FileNotFoundError:
-                continue
-            except OSError as e:
-                # ENOEXEC (8) = arquivo não executável (ex: texto sem shebang + sem exec)
-                # EACCES (13) = sem permissão
-                if e.errno in (errno.EACCES, errno.ENOEXEC):
+            # candidatos: no Windows tenta cada PATHEXT
+            if os.name == "nt":
+                pathext = os.environ.get("PATHEXT", "")
+                exts = [e.strip() for e in pathext.split(";") if e.strip()] if pathext else []
+                candidatos = [os.path.join(d, bin_name + ext) for ext in exts]
+                candidatos.append(os.path.join(d, bin_name))
+            else:
+                candidatos = [os.path.join(d, bin_name)]
+            for caminho in candidatos:
+                try:
+                    r = subprocess.run([caminho, "--version"], timeout=2, capture_output=True)
+                    # exit com qualquer código = instalado
+                    disponivel = True
+                    motivo = None
+                    break
+                except subprocess.TimeoutExpired:
+                    disponivel = True
+                    motivo = None
+                    break
+                except PermissionError:
                     viu_sem_permissao = True
-                continue
-            except Exception:
-                continue
+                    continue
+                except FileNotFoundError:
+                    continue
+                except OSError as e:
+                    # ENOEXEC (8) = arquivo não executável (ex: texto sem shebang + sem exec)
+                    # EACCES (13) = sem permissão
+                    if e.errno in (errno.EACCES, errno.ENOEXEC):
+                        viu_sem_permissao = True
+                    continue
+                except Exception:
+                    continue
+            if disponivel:
+                break
 
         if not disponivel:
             motivo = "sem_permissao" if viu_sem_permissao else "nao_encontrado"

@@ -115,3 +115,25 @@ def test_cache_nao_re_sonda_dentro_do_ttl(tmp_path, monkeypatch):
     cli_probe.sondar_providers()
     n2 = chamadas["n"]
     assert n2 == n1
+
+
+def test_windows_path_com_drive_e_pathext(tmp_path, monkeypatch):
+    # Windows: PATH com ; e drive letter, PATHEXT com .EXE/.CMD, binários com extensão
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(os, "pathsep", ";")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    dir1 = tmp_path / "bin1"
+    dir1.mkdir()
+    _make_sh(dir1, "claude.EXE", exit_code=0)
+    _make_sh(dir1, "codex.CMD", exit_code=0)
+    # PATH com drive letter + ; + dir com binários
+    fake_path = f"C:\\Users\\jefferson\\bin;{dir1}"
+    monkeypatch.setattr(cli_probe, "_path_login", fake_path)
+    res = cli_probe.sondar_providers()
+    assert res["claude"]["disponivel"] is True
+    assert res["claude"]["motivo"] is None
+    assert res["codex"]["disponivel"] is True
+    assert res["codex"]["motivo"] is None
+    # pi e kimi não existem → nao_encontrado
+    assert res["pi"]["disponivel"] is False
+    assert res["kimi"]["disponivel"] is False
