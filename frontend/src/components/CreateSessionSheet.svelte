@@ -27,6 +27,7 @@
   const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
   let provider = $state<Provider>('claude');
   let providers = $state<Record<string, { disponivel: boolean; motivo: string | null }>>({});
+  let providersCarregando = $state(true);
 
   // Servidor-alvo da nova sessão. Como o scanner/dedupe/criação leem o servidor ATIVO, escolher
   // aqui = selectServer(id): todas as chamadas seguintes do sheet caem nesse backend.
@@ -109,6 +110,8 @@
     const seq = ++provSeq;
     const srv = targetServer;
     const aberta = open;
+    providersCarregando = true;
+    providers = {};
     try {
       const res = await getProviders();
       if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
@@ -116,6 +119,8 @@
     } catch {
       if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
       providers = {};
+    } finally {
+      if (seq === provSeq && aberta && targetServer === srv && open) providersCarregando = false;
     }
   }
 
@@ -419,6 +424,7 @@
 
   async function create() {
     if (!picked || !name.trim()) return;
+    if (providersCarregando) return;
     if (providers[provider] && !providers[provider].disponivel) return;
     loading = true;
     error = '';
@@ -660,7 +666,7 @@
         <p class="error-msg" role="alert">{error}</p>
       {/if}
 
-      <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || (providers[provider] && !providers[provider].disponivel)}>
+      <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
         {loading ? m.criar_criando() : m.sessao_nova()}
       </button>
       <button class="ghost-btn" onclick={reset}>{m.criar_outra_pasta()}</button>

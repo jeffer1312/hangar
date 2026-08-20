@@ -515,5 +515,25 @@ describe('CreateSessionSheet — provider sonda (C5)', () => {
     expect(claudeBtn.disabled).toBe(false);
     unmount(comp);
   });
-});
 
+  it('sonda pendente mantém criação bloqueada e guarda bloqueia clique sintético', async () => {
+    let resolve!: (v: any) => void;
+    const pending = new Promise<any>(r => { resolve = r; });
+    vi.mocked(api.getProviders).mockReturnValue(pending);
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+    const primary = document.querySelector('.primary-btn') as HTMLButtonElement;
+    expect(primary.disabled).toBe(true);
+    // libera via DOM para provar a guarda defensiva de create()
+    primary.disabled = false;
+    primary.click();
+    await flush();
+    expect(onCreate).not.toHaveBeenCalled();
+    // resolve como todos disponíveis → libera
+    resolve({ claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
+    await flush();
+    expect((document.querySelector('.primary-btn') as HTMLButtonElement).disabled).toBe(false);
+    unmount(comp);
+  });
+});
