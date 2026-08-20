@@ -1835,5 +1835,9 @@
   "arq_editar": "Editar",
   "arq_nao_salvo": "alterações não salvas",
   "erro_arq_salvar_falhou": "Não consegui salvar o arquivo.",
-  "arq_linhas_sem_mudanca": "$ linhas sem mudança"
+  "arq_linhas_sem_mudanca": "$ linhas sem mudança",
+  "arq_ver_como": "O que mostrar",
+  "arq_ver_alteracoes": "Alterações",
+  "arq_ver_arquivo": "Arquivo",
+  "arq_trocar_escopo": "Trocar o ponto de comparação"
 }

@@ -1835,5 +1835,9 @@
   "arq_editar": "Edit",
   "arq_nao_salvo": "unsaved changes",
   "erro_arq_salvar_falhou": "Could not save the file.",
-  "arq_linhas_sem_mudanca": "$ unchanged lines"
+  "arq_linhas_sem_mudanca": "$ unchanged lines",
+  "arq_ver_como": "What to show",
+  "arq_ver_alteracoes": "Changes",
+  "arq_ver_arquivo": "File",
+  "arq_trocar_escopo": "Change what it compares against"
 }

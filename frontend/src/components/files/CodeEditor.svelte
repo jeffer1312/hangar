@@ -214,7 +214,9 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    /* Quem pinta é o `.visor`, que é opaco: aqui transparente evita uma segunda camada por cima. */
-    background: transparent;
+    /* Herda a superfície do hospedeiro (o `.visor` define `--cp-editor-surface`), pra aba ativa,
+       sub-barra e código serem a MESMA cor — é isso que faz o cabeçalho e o código lerem como
+       uma peça só. Sem o hospedeiro, cai no fundo opaco do app. */
+    background: var(--cp-editor-surface, var(--bg-base));
   }
 </style>

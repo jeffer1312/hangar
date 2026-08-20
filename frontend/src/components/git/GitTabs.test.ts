@@ -92,7 +92,7 @@ describe('GitTabs — aba Arquivos no celular (Task 12)', () => {
     expect(visor).not.toBeNull();
 
     // fechar pelo proprio FileViewer (o ×) -> volta a arvore
-    clica(visor?.querySelector('.fechar'));
+    clica(visor?.querySelector('.fechar-aba'));
     await tick();
     await tick();
     expect(el.querySelector('.files-panel')).not.toBeNull();
@@ -245,7 +245,7 @@ describe('GitTabs — aba Arquivos no celular (Task 12)', () => {
     await tick();
     expect(el.querySelector('.visor')).not.toBeNull();
     expect(document.activeElement).not.toBe(document.body);   // foco entrou no visor
-    clica(el.querySelector('.visor .fechar'));
+    clica(el.querySelector('.visor .fechar-aba'));
     await tick();
     await tick();
     await tick();
@@ -296,7 +296,7 @@ describe('GitTabs — aba Arquivos no celular (Task 12)', () => {
     const alerta = visor?.querySelector('[role="alert"]');
     expect(alerta).not.toBeNull();
     expect(alerta?.textContent).toContain('arquivo binario');
-    clica(visor?.querySelector('.fechar'));
+    clica(visor?.querySelector('.fechar-aba'));
     await tick();
     await tick();
     await tick();
