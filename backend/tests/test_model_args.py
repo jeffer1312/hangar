@@ -91,3 +91,31 @@ def test_ultracode_nao_e_valor_de_effort():
 
 def test_nivel_do_pi_aceita_off():
     assert ma.validar("pi", "kimi-coding/k3", "off")[1] == "off"
+
+
+def test_modos_permissao_const_existe():
+    assert ma.MODOS_PERMISSAO_CLAUDE == ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
+
+
+def test_permissao_modo_valido_passa():
+    for modo in ma.MODOS_PERMISSAO_CLAUDE:
+        ma.validar("claude", None, None, permission_mode=modo)
+
+
+def test_permissao_modo_none_passa():
+    ma.validar("claude", None, None, permission_mode=None)
+    ma.validar("claude", None, None)
+
+
+def test_permissao_modo_invalido_rejeita():
+    with pytest.raises(ValueError):
+        ma.validar("claude", None, None, permission_mode="invalido")
+
+
+def test_permissao_args_de_claude_acrescenta_flag():
+    assert ma.args_de("claude", None, None, permission_mode="plan") == ["--permission-mode", "plan"]
+
+
+def test_permissao_args_de_none_nao_acrescenta():
+    assert ma.args_de("claude", None, None, permission_mode=None) == []
+    assert ma.args_de("claude", None, None) == []

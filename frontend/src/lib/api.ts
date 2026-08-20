@@ -319,13 +319,16 @@ export function createSession(
   engine?: string | null,
   model?: string | null,
   effort?: string | null,
+  permissionMode?: string | null,
 ): Promise<SessionInfo> {
-  // `model`/`effort` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
+  // `model`/`effort`/`permissionMode` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
   // no padrão, byte por byte (o backend valida None = comportamento de hoje).
+  const body: Record<string, unknown> = { name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null,
+                           model: model ?? null, effort: effort ?? null };
+  if (permissionMode) body.permission_mode = permissionMode;
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null,
-                           model: model ?? null, effort: effort ?? null }),
+    body: JSON.stringify(body),
   });
 }
 

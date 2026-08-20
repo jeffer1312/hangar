@@ -1311,6 +1311,8 @@
   "criar_conta_nova_aria": "New account name",
   "criar_claude_sua_conta": "Claude (your account)",
   "criar_padrao": "Default",
+  "criar_permissao": "Permission",
+  "criar_permissao_padrao": "default (account setting)",
   "criar_lista_reduzida": "Shortened list — open a session on this account once for the app to learn its models.",
   "criar_abre_padrao": "{erro} — the session opens with the default.",
   "criar_raciocinio": "Reasoning",

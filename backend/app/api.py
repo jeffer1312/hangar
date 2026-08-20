@@ -1004,6 +1004,8 @@ class CreateBody(_StrictBody):
     # aqui, nunca no front: o valor entra num comando de shell.
     model: str | None = None
     effort: str | None = None
+    # Modo de permissão do Claude Code. None = padrão da conta (comportamento de hoje).
+    permission_mode: str | None = None
 
 
 class TtsBody(_StrictBody):
@@ -1285,12 +1287,19 @@ async def create_session(body: CreateBody):
             raise HTTPException(400, detail=erro("erro_motor_sem_claude", "motor so vale para provider claude"))
         if body.engine not in await asyncio.to_thread(engines.listar):
             raise HTTPException(400, detail=erro("erro_motor_invalido", "motor invalido"))
+    # permission_mode só vale para claude
+    if body.permission_mode is not None and body.provider != "claude":
+        raise HTTPException(409, detail=erro("erro_permissao_so_claude", "modo de permissao so vale para claude"))
     # Mesma regra das linhas acima, pro model/effort: recusa ANTES de qualquer efeito no disco,
     # inclusive pro provedor fora de escopo (codex/kimi) quando alguem pedir escolha — o valor
     # entraria num comando de shell montado por concatenacao.
     try:
-        model_args.validar(body.provider, body.model, body.effort)
+        model_args.validar(body.provider, body.model, body.effort, body.permission_mode)
     except ValueError as e:
+        # permission_mode fora da lista deve ser 409 com código específico, não 400 genérico
+        msg = str(e)
+        if "permission_mode" in msg:
+            raise HTTPException(409, detail=erro("erro_permissao_invalida", msg)) from None
         raise HTTPException(400, str(e)) from None
 
     # Janela do modelo escolhido, pra entrar no env do motor (Task 3). O número já está no cache do
@@ -1344,10 +1353,11 @@ async def create_session(body: CreateBody):
                     for aviso in avisos:
                         _log.warning("conta %s: %s", alvo.name, aviso)
                     try:
-                        return await asyncio.to_thread(
-                            registry.create, body.name, body.cwd, body.config_dir,
-                            provider=body.provider, engine=body.engine,
-                            model=body.model, effort=body.effort, context_window=janela)
+                        _kw = dict(provider=body.provider, engine=body.engine, model=body.model,
+                                   effort=body.effort, context_window=janela)
+                        if body.permission_mode is not None:
+                            _kw["permission_mode"] = body.permission_mode
+                        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
                     except ValueError as e:
                         raise HTTPException(409, str(e))
                 finally:
@@ -1359,9 +1369,11 @@ async def create_session(body: CreateBody):
     try:
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
-        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
-                                       provider=body.provider, engine=body.engine,
-                                       model=body.model, effort=body.effort, context_window=janela)
+        _kw2 = dict(provider=body.provider, engine=body.engine, model=body.model,
+                     effort=body.effort, context_window=janela)
+        if body.permission_mode is not None:
+            _kw2["permission_mode"] = body.permission_mode
+        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw2)
     except ValueError as e:
         raise HTTPException(409, str(e))
 

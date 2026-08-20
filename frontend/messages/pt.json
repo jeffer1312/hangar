@@ -1311,6 +1311,8 @@
   "criar_conta_nova_aria": "Nome da conta nova",
   "criar_claude_sua_conta": "Claude (sua conta)",
   "criar_padrao": "Padrão",
+  "criar_permissao": "Permissão",
+  "criar_permissao_padrao": "padrão (como está na conta)",
   "criar_lista_reduzida": "Lista reduzida — abra uma sessão nesta conta uma vez para o app aprender os modelos dela.",
   "criar_abre_padrao": "{erro} — a sessão abre no padrão.",
   "criar_raciocinio": "Raciocínio",

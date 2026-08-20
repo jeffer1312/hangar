@@ -16,7 +16,8 @@
     servers: Server[];
     onClose: () => void;
     onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: Provider,
-               engine?: string | null, model?: string | null, effort?: string | null) => Promise<void>;
+               engine?: string | null, model?: string | null, effort?: string | null,
+               permissionMode?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
@@ -86,6 +87,10 @@
     claude: ['low', 'medium', 'high', 'xhigh', 'max'],
     pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   };
+
+  // Modos de permissão do Claude Code (--permission-mode), mesma lista do backend (model_args.py).
+  const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+  let permissao = $state('');
 
   // `targetServer` (acima) é o servidor de destino. Ele entra na chave porque MOTOR É POR SERVIDOR
   // (comentário do loadConfigs): sem isso o app lembraria um modelo de motor que o outro servidor
@@ -370,7 +375,7 @@
       // anterior sobrevive à reabertura quando o fetch de contas falha — o reset de carregarModelos
       // fica atrás dele e não roda. Escolha de Pi indo pro create do Claude é pane no ar e erro no
       // primeiro turno, calado.
-      modelo = ''; esforco = '';
+      modelo = ''; esforco = ''; permissao = '';
       modelos = []; listaReduzida = false; erroModelos = '';
       // Feedback da criação de conta não pode vazar entre aberturas: o botão liberado, o aviso
       // limpo e a conta criada esquecida — o cfgSeq do loadConfigs abaixo invalida qualquer
@@ -440,7 +445,8 @@
       if (esforco) localStorage.setItem(chaveMemoria() + ':effort', esforco);
       else localStorage.removeItem(chaveMemoria() + ':effort');
       await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
-                     provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null);
+                     provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
+                     provider === 'claude' ? (permissao || null) : null);
       onClose();
     } catch (err) {
       error = err instanceof Error ? err.message : m.criar_sessao_erro();
@@ -657,8 +663,18 @@
           <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()}</label>
           <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
             opcoes={[{ value: '', label: m.criar_padrao() },
-                     ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
+                     ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]} 
             onchange={(v) => (esforco = v)} />
+        </div>
+      {/if}
+
+      {#if provider === 'claude'}
+        <div class="field">
+          <label class="field-label" for="perm-pick">{m.criar_permissao()}</label>
+          <Select id="perm-pick" class="field-input" ariaLabel={m.criar_permissao()} value={permissao}
+            opcoes={[{ value: '', label: m.criar_permissao_padrao() },
+                     ...MODOS_PERMISSAO.map((n) => ({ value: n, label: n }))]} 
+            onchange={(v) => (permissao = v)} />
         </div>
       {/if}
 
