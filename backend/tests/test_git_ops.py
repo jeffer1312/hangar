@@ -807,3 +807,58 @@ def test_area_interna_do_git_recusada(tmp_path):
     (tmp_path / "trab" / ".github" / "ci.yml").write_text("on: push\n")
     assert "node_modules" in git_ops.path_diff(d, ".gitignore", "nao_commitado")["diff"]
     assert "on: push" in git_ops.path_diff(d, ".github/ci.yml", "nao_commitado")["diff"]
+
+
+def test_base_ignora_origin_head_antigo_quando_a_branch_rastreia_develop(tmp_path):
+    """O caso real (20/08/2026): branch rastreando `origin/develop`, `origin/HEAD` apontando pra
+    `master` de anos atras. A base saia do master antigo e um arquivo criado depois dele aparecia
+    INTEIRO como adicao — a arvore de arquivos dizia +24 e o diff aberto dizia +414."""
+    origem = tmp_path / "origem"; origem.mkdir(); o = str(origem)
+    git_ops._run(o, "init", "-q", "-b", "master", ".")
+    git_ops._run(o, "config", "user.email", "t@t"); git_ops._run(o, "config", "user.name", "t")
+    (origem / "velho.txt").write_text("raiz\n")
+    git_ops._run(o, "add", "velho.txt"); git_ops._run(o, "commit", "-q", "-m", "raiz no master")
+    # develop segue adiante e é quem CRIA o arquivo
+    git_ops._run(o, "checkout", "-q", "-b", "develop")
+    (origem / "a.txt").write_text("um\n")
+    git_ops._run(o, "add", "a.txt"); git_ops._run(o, "commit", "-q", "-m", "a.txt nasce na develop")
+
+    git_ops._run(str(tmp_path), "clone", "-q", "-b", "develop", "origem", "trab")
+    d = str(tmp_path / "trab")
+    git_ops._run(d, "config", "user.email", "t@t"); git_ops._run(d, "config", "user.name", "t")
+    git_ops._run(d, "remote", "set-head", "origin", "master")   # origin/HEAD -> master antigo
+    (tmp_path / "trab" / "a.txt").write_text("um\ndois\n")     # a mudança real, sem commitar
+
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    # Sem commit próprio nesta branch, o certo é dizer isso — nunca comparar com o master antigo,
+    # que faria o arquivo inteiro (o `um` que já estava na develop) contar como adição.
+    assert r["escopo_usado"] == "nao_commitado", r
+    assert r["motivo"] == "arq_motivo_sem_commit_proprio", r
+    assert "+dois" in r["diff"] and "+um" not in r["diff"], r["diff"]
+
+
+def test_base_da_branch_pushada_usa_a_mainline_mais_proxima(tmp_path):
+    """Contra-exemplo do teste acima: a branch TEM commit próprio e já foi pushada (upstream é a
+    cópia dela). Aí a mainline ainda é a base certa — e a escolhida é a mais RECENTE, não o
+    `origin/HEAD`."""
+    origem = tmp_path / "origem"; origem.mkdir(); o = str(origem)
+    git_ops._run(o, "init", "-q", "-b", "master", ".")
+    git_ops._run(o, "config", "user.email", "t@t"); git_ops._run(o, "config", "user.name", "t")
+    (origem / "a.txt").write_text("um\n")
+    git_ops._run(o, "add", "a.txt"); git_ops._run(o, "commit", "-q", "-m", "raiz")
+    git_ops._run(o, "checkout", "-q", "-b", "develop")
+    (origem / "a.txt").write_text("um\ndois\n")
+    git_ops._run(o, "add", "a.txt"); git_ops._run(o, "commit", "-q", "-m", "dois na develop")
+
+    git_ops._run(str(tmp_path), "clone", "-q", "-b", "develop", "origem", "trab")
+    d = str(tmp_path / "trab")
+    git_ops._run(d, "config", "user.email", "t@t"); git_ops._run(d, "config", "user.name", "t")
+    git_ops._run(d, "remote", "set-head", "origin", "master")
+    git_ops._run(d, "checkout", "-q", "-b", "tarefa")
+    (tmp_path / "trab" / "a.txt").write_text("um\ndois\ntres\n")
+    git_ops._run(d, "add", "a.txt"); git_ops._run(d, "commit", "-q", "-m", "tres")
+
+    r = git_ops.path_diff(d, "a.txt", "branch")
+    assert r["escopo_usado"] == "branch", r
+    # A base é a develop (mais recente), então só o `tres` é novo — o `dois` não entra.
+    assert "+tres" in r["diff"] and "+dois" not in r["diff"], r["diff"]

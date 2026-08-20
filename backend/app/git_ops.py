@@ -416,6 +416,14 @@ def commit_file_diff(cwd: str, sha: str, path: str) -> dict:
     return {"path": path, "diff": p.stdout}
 
 
+# Referencias que valem como MAINLINE ao procurar onde a branch nasceu. `origin/HEAD` sozinho nao
+# serve: ele aponta pra branch padrao do remoto (master, tipicamente), e num fluxo que trabalha em
+# develop a base com master fica anos atras do que a branch mudou de fato — foi assim que um
+# arquivo criado na develop apareceu INTEIRO como adicao (medido 20/08/2026: a arvore de arquivos
+# dizia +24 e o diff aberto dizia +414, no mesmo arquivo).
+_MAINLINES = ("origin/HEAD", "origin/develop", "origin/main", "origin/master")
+
+
 def _base_da_branch(cwd: str) -> tuple[str | None, str | None]:
     """Onde esta branch nasceu, e o PORQUE quando nao da pra saber.
 
@@ -425,21 +433,47 @@ def _base_da_branch(cwd: str) -> tuple[str | None, str | None]:
     if cabeca.returncode != 0:
         return None, "arq_motivo_sem_commit"
     atual = cabeca.stdout.strip()
-    igual_ao_head = False
-    for ref in ("@{upstream}", "origin/HEAD"):
+
+    up = _run(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    upstream = up.stdout.strip() if up.returncode == 0 else ""
+
+    candidatas: list[str] = [r for r in (upstream,) if r] + list(_MAINLINES)
+    melhor, em_cima_da_mainline = None, False
+    for ref in candidatas:
         b = _run(cwd, "merge-base", "HEAD", ref)
-        if b.returncode != 0 or not b.stdout.strip():
+        base = b.stdout.strip() if b.returncode == 0 else ""
+        if not base:
             continue
-        base = b.stdout.strip()
         if base == atual:
-            # Branch ja pushada: `@{upstream}` e a COPIA dela, nao a mainline -> merge-base = HEAD.
-            # Nao serve de base; tenta a proxima referencia antes de desistir.
-            igual_ao_head = True
+            # HEAD e ancestral desta ref. Se a ref for uma MAINLINE, a branch nao tem nada
+            # proprio: o que ela mostraria "desde que nasceu" seria a historia da mainline
+            # inteira. O upstream que e copia da propria branch (branch pushada, nada novo desde
+            # o push) nao conta aqui — ali a mainline ainda da a base certa.
+            if ref in _MAINLINES or (upstream and ref == upstream and _e_mainline(cwd, ref)):
+                em_cima_da_mainline = True
             continue
-        return base, None
-    if igual_ao_head:
+        # "Mais proxima" por ANCESTRALIDADE, nao por data: dois commits podem ter o mesmo
+        # segundo (e num teste tem), e ai a data escolheria pela ordem da lista.
+        if melhor is None or _run(cwd, "merge-base", "--is-ancestor", melhor, base).returncode == 0:
+            melhor = base
+
+    if em_cima_da_mainline:
+        return None, "arq_motivo_sem_commit_proprio"
+    if melhor:
+        return melhor, None
+    if upstream:
         return None, "arq_motivo_sem_commit_proprio"
     return None, "arq_motivo_sem_base_conhecida"
+
+
+def _e_mainline(cwd: str, ref: str) -> bool:
+    """A ref e uma linha principal, e nao a copia remota DESTA branch?
+
+    Comparacao por nome curto: `origin/develop` rastreado por uma branch `tarefa-x` e mainline;
+    `origin/tarefa-x` e a copia dela. Sem isso, uma branch pushada (upstream = copia, merge-base
+    = HEAD) seria lida como "esta em cima da mainline" e perderia o diff de branch que tem."""
+    nome = _run(cwd, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    return not ref.endswith("/" + nome) if nome else True
 
 
 def path_diff(cwd: str, path: str, escopo: str) -> dict:
