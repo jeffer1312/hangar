@@ -1622,6 +1622,7 @@
   "permissao_so_criacao": "só na criação — recrie a sessão para usar este modo",
   "permissao_so_criacao_curto": "só criação",
   "permissao_dica": "Shift+Tab no terminal também troca — a lista aqui é o que esta sessão pode percorrer",
+  "permissao_dontask_sem_volta": "esta sessão nasceu em dontAsk; sair dele é irreversível — use Shift+Tab no terminal, ou recrie a sessão",
   "erro_rota_so_pi": "esta rota só existe pra sessões Pi",
   "erro_catalogo_pi_indisponivel": "catálogo do Pi indisponível — rode ./scripts/install-claude-wrapper.sh e reinicie a sessão (extensão cp-state.ts desatualizada)",
   "erro_model_effort_faltando": "informe model (com provider) e/ou effort",

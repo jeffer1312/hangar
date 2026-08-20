@@ -3768,34 +3768,50 @@ def _guard_perm(name: str, info) -> None:
         raise HTTPException(e.status, e.detail)
 
 @app.get("/api/sessions/{name}/permission-modes", dependencies=[Depends(require_auth)])
-async def permission_modes(name: str):
-    """Lista viva dos modos alcançáveis via BTab nesta sessão + o atual.
+async def permission_modes(name: str, sondar: bool = False):
+    """Lista dos modos de permissão.
 
-    Dá uma volta completa de BTab uma vez, anota os modos, volta ao original e devolve.
-    Cacheado por sessão enquanto ela viver (o ciclo não muda sem recriar).
+    Sem sondar (default): só lê o modo atual via capture-pane (zero teclas) e devolve
+    o cache de `modes` se já existir, ou [] — não sonda. Com `?sondar=1`: dá a volta
+    completa de BTab, anota os modos, volta ao original e cacheia. `sondavel` diz se
+    a sessão pode ser sondada (false quando current == dontAsk, que não tem volta).
     """
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     _guard_perm(name, info)
     key = _cache_key_perm(name, info)
+    # leitura do atual sem tecla (bloqueador 1)
+    try:
+        cur_now = await asyncio.to_thread(perm_mode.ler_modo, name)
+    except Exception:
+        cur_now = None
+    if cur_now is None:
+        raise HTTPException(409, detail=erro("erro_permissao_leitura", "não consegui ler o modo atual no rodapé"))
+    sondavel = cur_now != "dontAsk"
+    if not sondar:
+        # sem sondar: devolver cache se houver, ou []
+        hit = _perm_modes_cache.get(key)
+        if hit is not None:
+            _, modos_cached = hit
+            # revalida current mas mantém modos do cache
+            return {"current": cur_now, "modes": modos_cached, "sondavel": sondavel}
+        return {"current": cur_now, "modes": [], "sondavel": sondavel}
+    # com sondar=1: comportamento de antes (listar_modos + cache)
+    # se não sondável (dontAsk), não chamar listar_modos (bloqueador 2)
+    if not sondavel:
+        return {"current": cur_now, "modes": [], "sondavel": False}
     hit = _perm_modes_cache.get(key)
     if hit is not None:
-        cur_cached, modos_cached = hit
-        # revalida o atual (pode ter mudado via POST)
-        try:
-            cur_now = await asyncio.to_thread(perm_mode.ler_modo, name)
-        except Exception:
-            cur_now = cur_cached
-        if cur_now is None:
-            cur_now = cur_cached
-        return {"current": cur_now, "modes": modos_cached}
+        _, modos_cached = hit
+        return {"current": cur_now, "modes": modos_cached, "sondavel": sondavel}
     try:
         cur, modos = await asyncio.to_thread(perm_mode.listar_modos, name)
     except RuntimeError as e:
         raise HTTPException(409, detail=erro("erro_permissao_leitura", str(e)))
     _perm_modes_cache[key] = (cur, modos)
-    return {"current": cur, "modes": modos}
+    # cur de listar_modos deve ser == cur_now (voltou ao original), mas devolver o que ficou
+    return {"current": cur, "modes": modos, "sondavel": cur != "dontAsk"}
 
 @app.post("/api/sessions/{name}/permission-mode", dependencies=[Depends(require_auth)])
 async def permission_mode_set(name: str, body: PermissionModeBody):

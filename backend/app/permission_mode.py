@@ -144,11 +144,10 @@ def trocar_modo(name: str, alvo: str) -> str:
 def listar_modos(name: str) -> tuple[str, list[str]]:
     """Descobre o ciclo ao vivo dando a volta completa de BTab.
 
-    Devolve (atual, modos) onde `atual` é o modo no momento da chamada e `modos`
-    é a lista de modos que aparecem no ciclo, começando pelo atual (orig) quando
-    ele faz parte do ciclo. Volta ao modo original se possível; se original é
-    dontAsk (que sai do ciclo e nunca retorna), a sessão fica no último modo do
-    ciclo e não há como voltar — documentado.
+    Devolve (ficou, modos) onde `ficou` é o modo em que a sessão FICOU após a
+    descoberta (igual ao atual se conseguiu voltar, ou o último do ciclo) e `modos`
+    é a lista de modos que aparecem no ciclo. Volta ao modo original se possível;
+    se original é dontAsk, não sonda — dontAsk não tem volta (spec 5b).
     Levanta RuntimeError se não conseguir ler o modo inicial.
     """
     from app.terminal_input import _send_lock
@@ -157,6 +156,9 @@ def listar_modos(name: str) -> tuple[str, list[str]]:
         orig = ler_modo(name)
         if orig is None:
             raise RuntimeError("não consegui ler o modo atual no rodapé")
+        # dontAsk não tem volta: não sondar nunca ali (bloqueador 2)
+        if orig == "dontAsk":
+            return orig, []
 
         # ciclo começa com o original incluído, para preservar ordem natural
         vistos: list[str] = [orig]
@@ -176,31 +178,12 @@ def listar_modos(name: str) -> tuple[str, list[str]]:
                 # voltou ao original: ciclo fechou, sem duplicar
                 break
             if cur in vistos_set:
-                # sub-ciclo sem voltar ao orig (ex.: dontAsk → manual → ... → manual)
-                # ciclo de 4 fechou em repetição; não adiciona duplicado
+                # sub-ciclo sem voltar ao orig — ciclo de 4 fechou em repetição
                 break
             vistos.append(cur)
             vistos_set.add(cur)
 
-        # se orig é dontAsk, ele é isolado: não volta. O ciclo descoberto inclui dontAsk
-        # como primeiro elemento, mas o ciclo futuro sem ele são os 4 restantes. Para a
-        # semântica da API, queremos que `modos` seja o ciclo que a sessão pode percorrer
-        # *a partir de agora* via BTab, que para dontAsk é os 4 sem ele. Porém, para
-        # preservar a informação de que orig existiu, mantemos vistos com dontAsk e deixamos
-        # o caller decidir. Aqui, se orig == dontAsk, removemos orig da lista de modos
-        # retornada, deixando só o ciclo de 4, e mantemos atual=orig separado — assim o
-        # frontend desabilita dontAsk corretamente quando não está mais nele, e quando ainda
-        # está nele, ele aparece como atual mas não como parte do ciclo futuro (o que reflete
-        # a realidade: sair de dontAsk é irreversível).
-        if orig == "dontAsk":
-            # vistos = [dontAsk, manual, acceptEdits, plan, auto] → modos = 4 sem dontAsk
-            modos = [m for m in vistos if m != "dontAsk"]
-            # já estamos em `cur` que é o último do ciclo (manual repetido → cur=manual)
-            # não tenta voltar ao dontAsk (impossível)
-            return orig, modos
-
-        # caso normal (orig participa do ciclo e já estamos nele após fechar)
-        # se cur != orig, tenta voltar (caso tenha quebrado por repetição sem incluir orig)
+        # se cur != orig, tenta voltar ao original (pane ilegível no meio etc.)
         if cur != orig and orig in vistos_set:
             for _ in range(TETO_TECLAS + 1):
                 tmux.send_keys(name, "BTab")
@@ -213,4 +196,5 @@ def listar_modos(name: str) -> tuple[str, list[str]]:
                 cur = novo
                 if cur == orig:
                     break
-        return orig, vistos
+        # bloqueador 3: devolver o que FICOU, não o de antes
+        return cur, vistos

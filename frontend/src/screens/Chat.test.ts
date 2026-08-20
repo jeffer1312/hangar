@@ -67,7 +67,7 @@ vi.mock('../lib/api', () => ({
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   isTimeoutError: vi.fn(() => false),
   errorDetail: vi.fn(async () => ''),
-  getHistory: vi.fn(async () => ({ events: [], total: 0 })),
+  getHistory: vi.fn(async () => []),
   openEventStream: vi.fn(() => ({
     onmessage: () => {}, onerror: () => {}, close: () => {},
     readyState: 0,
@@ -110,7 +110,7 @@ vi.mock('../lib/history', () => ({ appendTail: vi.fn(), hasSeam: vi.fn(), prepen
 vi.mock('../lib/activity', () => ({
   createActivityFolder: vi.fn(() => ({
     snapshot: () => ({ tasks: [], inProgress: 0, running: 0, agents: [], writeEvents: [] }),
-    push: () => {}, save: () => {}, attach: () => {},
+    push: () => {}, save: () => {}, attach: () => {}, reset: () => {},
   })),
 }));
 vi.mock('../lib/workspaceCommands', () => ({}) );

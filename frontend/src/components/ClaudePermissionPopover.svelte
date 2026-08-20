@@ -19,10 +19,12 @@
     anchor: HTMLElement | null;
     current: string | null;
     modes: string[]; // ciclo vivo (4 ou 5) devolvido pelo GET
+    sondavel?: boolean;
+    carregando?: boolean;
     onApply: (modo: string) => Promise<void>;
     onClose: () => void;
   }
-  let { open, anchor, current, modes, onApply, onClose }: Props = $props();
+  let { open, anchor, current, modes, sondavel = true, carregando = false, onApply, onClose }: Props = $props();
 
   let err = $state<string | null>(null);
   let aplicando = $state<string | null>(null);
@@ -57,46 +59,56 @@
     <p class="err" role="alert">{err}</p>
   {/if}
 
-  <ul class="lista">
-    {#each MODOS_TODOS as modo (modo)}
-      {@const habilitado = habilitados.has(modo)}
-      {@const ativo = current === modo}
-      <li>
-        <button
-          class="linha"
-          class:ativa={ativo}
-          class:desabilitado={!habilitado}
-          aria-pressed={ativo}
-          aria-disabled={!habilitado}
-          disabled={!!aplicando || !habilitado}
-          data-foco={ativo ? true : undefined}
-          onclick={() => escolher(modo)}
-          title={!habilitado ? m.permissao_so_criacao() : undefined}
-        >
-          <span class="nome">{rotulo(modo)}</span>
+  {#if carregando}
+    <p class="vazio">{m.comum_carregando()}</p>
+  {:else if !sondavel}
+    <div class="vazio" style="padding: 10px;">
+      <p style="margin:0 0 6px; font-size: var(--text-sm);"><strong>{current ?? m.composer_permissao()}</strong> — {m.permissao_dontask_sem_volta()}</p>
+      <p class="dica" style="border:none; padding:0;">{m.permissao_dica()}</p>
+    </div>
+  {:else}
+    <ul class="lista">
+      {#each MODOS_TODOS as modo (modo)}
+        {@const habilitado = habilitados.has(modo)}
+        {@const ativo = current === modo}
+        <li>
+          <button
+            class="linha"
+            class:ativa={ativo}
+            class:desabilitado={!habilitado}
+            aria-pressed={ativo}
+            aria-disabled={!habilitado}
+            disabled={!!aplicando || !habilitado}
+            data-foco={ativo ? true : undefined}
+            onclick={() => escolher(modo)}
+            title={!habilitado ? m.permissao_so_criacao() : undefined}
+          >
+            <span class="nome">{rotulo(modo)}</span>
+            {#if !habilitado}
+              <span class="dica-desab" aria-hidden="true">{m.permissao_so_criacao_curto()}</span>
+            {:else if aplicando === modo}
+              <span class="tick" aria-hidden="true">…</span>
+            {:else if ativo}
+              <svg class="tick" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                stroke-linejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            {/if}
+          </button>
           {#if !habilitado}
-            <span class="dica-desab" aria-hidden="true">{m.permissao_so_criacao_curto()}</span>
-          {:else if aplicando === modo}
-            <span class="tick" aria-hidden="true">…</span>
-          {:else if ativo}
-            <svg class="tick" width="16" height="16" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
-              stroke-linejoin="round" aria-hidden="true">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
+            <span class="motivo">{m.permissao_so_criacao()}</span>
           {/if}
-        </button>
-        {#if !habilitado}
-          <span class="motivo">{m.permissao_so_criacao()}</span>
-        {/if}
-      </li>
-    {/each}
-  </ul>
-  <p class="dica">{m.permissao_dica()}</p>
+        </li>
+      {/each}
+    </ul>
+    <p class="dica">{m.permissao_dica()}</p>
+  {/if}
 </Popover>
 
 <style>
   .err { color: var(--error); font-size: var(--text-xs); margin: 8px 10px 0; }
+  .vazio { color: var(--text-muted); font-size: var(--text-sm); text-align: center; padding: 14px 0; }
   .lista { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
 
   .linha {

@@ -64,15 +64,31 @@ def _info_kimi(name="sess"):
     return SessionInfo(name=name, cwd="/tmp", provider="kimi", jsonl="/tmp/k.jsonl")
 
 def test_perm_get_ok():
+    # sem sondar (default): não chama listar_modos, devolve current de ler_modo e modes []
     info = _info_claude()
     with patch("app.api._cached_info", return_value=info), \
          patch("app.api.terminal._require_drivable"), \
          patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.permission_mode.listar_modos", return_value=("plan", ["plan", "auto", "manual", "acceptEdits"])):
+         patch("app.permission_mode.ler_modo", return_value="plan") as mock_ler, \
+         patch("app.permission_mode.listar_modos") as mock_listar:
         r = _client().get("/api/sessions/sess/permission-modes", headers=AUTH)
     assert r.status_code == 200
     assert r.json()["current"] == "plan"
-    assert r.json()["modes"] == ["plan", "auto", "manual", "acceptEdits"]
+    assert r.json()["modes"] == []
+    assert r.json()["sondavel"] is True
+    assert mock_ler.call_count == 1
+    assert mock_listar.call_count == 0
+    # com sondar=1: chama listar_modos uma vez
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api.terminal._require_drivable"), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.permission_mode.ler_modo", return_value="plan"), \
+         patch("app.permission_mode.listar_modos", return_value=("plan", ["plan", "auto", "manual", "acceptEdits"])) as mk2:
+        r2 = _client().get("/api/sessions/sess/permission-modes?sondar=1", headers=AUTH)
+    assert r2.status_code == 200
+    assert r2.json()["current"] == "plan"
+    assert r2.json()["modes"] == ["plan", "auto", "manual", "acceptEdits"]
+    assert mk2.call_count == 1
 
 def test_perm_get_nao_claude_409():
     info = _info_kimi()
@@ -88,11 +104,11 @@ def test_perm_get_cache_usa_mesma_lista():
     with patch("app.api._cached_info", return_value=info), \
          patch("app.api.terminal._require_drivable"), \
          patch("app.api._recusa_se_painel_aberto"), \
-         patch("app.permission_mode.listar_modos", return_value=("plan", ["plan", "auto", "manual", "acceptEdits"])) as mk, \
-         patch("app.permission_mode.ler_modo", return_value="plan"):
-        r1 = _client().get("/api/sessions/sess-cache/permission-modes", headers=AUTH)
+         patch("app.permission_mode.ler_modo", return_value="plan"), \
+         patch("app.permission_mode.listar_modos", return_value=("plan", ["plan", "auto", "manual", "acceptEdits"])) as mk:
+        r1 = _client().get("/api/sessions/sess-cache/permission-modes?sondar=1", headers=AUTH)
         assert r1.status_code == 200
-        r2 = _client().get("/api/sessions/sess-cache/permission-modes", headers=AUTH)
+        r2 = _client().get("/api/sessions/sess-cache/permission-modes?sondar=1", headers=AUTH)
         assert r2.status_code == 200
         # segunda chamada usou cache: listar_modos só uma vez
         assert mk.call_count == 1

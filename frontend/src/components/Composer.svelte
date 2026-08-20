@@ -458,22 +458,38 @@
   let permCurrent = $state<string | null>(null);
   let permModes = $state<string[]>([]);
   let permError = $state<string | null>(null);
+  let permSondavel = $state(true);
+  let permCarregando = $state(false);
   const isClaude = $derived(!isCodex && !isPi && !isKimi);
   $effect(() => { if (permPopOpen) permError = null; });
   $effect(() => {
     if (!isClaude) return;
     const sn = sessionName;
-    // carrega ciclo vivo; 409 = sessão não-claude / painel aberto / trabalhando -> pill sem dado
-    getPermissionModes(sn)
+    // só lê o atual (zero teclas); ciclo só ao abrir a pílula (bloqueador 1)
+    getPermissionModes(sn, false)
       .then((res) => {
         permCurrent = res.current;
         permModes = res.modes;
+        permSondavel = res.sondavel;
       })
       .catch(() => {
         permCurrent = null;
         permModes = [];
+        permSondavel = false;
       });
   });
+  async function abrirPermissao() {
+    permPopOpen = true;
+    if (!permSondavel || permModes.length > 0 || permCarregando) return;
+    permCarregando = true;
+    try {
+      const res = await getPermissionModes(sessionName, true);
+      permCurrent = res.current;
+      permModes = res.modes;
+      permSondavel = res.sondavel;
+    } catch {}
+    permCarregando = false;
+  }
   // Reconciliação otimista: se a statusline um dia trouxer permissão, solta; hoje não traz,
   // mas mantém o padrão do thinking do Pi (devolver o que FICOU).
   async function handlePermApply(modo: string): Promise<void> {
@@ -1396,7 +1412,7 @@
             <button
               class="model-pill"
               bind:this={permPillEl}
-              onclick={() => (permPopOpen = true)}
+              onclick={abrirPermissao}
               aria-haspopup="dialog"
               aria-expanded={permPopOpen}
               aria-label={m.composer_permissao()}
@@ -1538,6 +1554,8 @@
     anchor={permPillEl}
     current={permCurrent}
     modes={permModes}
+    sondavel={permSondavel}
+    carregando={permCarregando}
     onApply={handlePermApply}
     onClose={() => (permPopOpen = false)}
   />
@@ -1768,7 +1786,7 @@
   @media (max-width: 819px) {
     /* 8px entre controles (era 4): com 4px o vão entre as peças ficava MENOR que o padding de
      dentro delas, e a fileira lia como um bloco único em vez de cinco controles. */
-  .control-left { gap: var(--space-2); }       /* fileira mais apertada no celular */
+  .control-left { gap: var(--space-2); flex-wrap: wrap; }       /* com três pílulas a fileira não cabe em 390px e quem encolhe é sempre o nome do modelo, porque as irmãs têm flex-shrink 0 */
     .pill-duo {
       display: inline-flex;
       align-items: center;

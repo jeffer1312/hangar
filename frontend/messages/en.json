@@ -1622,6 +1622,7 @@
   "permissao_so_criacao": "only at creation — recreate the session to use this mode",
   "permissao_so_criacao_curto": "creation only",
   "permissao_dica": "Shift+Tab in the terminal also cycles — this list is what this session can reach",
+  "permissao_dontask_sem_volta": "this session was born in dontAsk; leaving it is irreversible — use Shift+Tab in the terminal, or recreate the session",
   "erro_rota_so_pi": "this route only exists for Pi sessions",
   "erro_catalogo_pi_indisponivel": "Pi catalog unavailable — run ./scripts/install-claude-wrapper.sh and restart the session (outdated cp-state.ts extension)",
   "erro_model_effort_faltando": "provide model (with provider) and/or effort",
