@@ -33,7 +33,7 @@
            { defaultKeymap, history, historyKeymap, indentWithTab },
            { searchKeymap, highlightSelectionMatches, search },
            { syntaxHighlighting, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, bracketMatching },
-           { oneDark },
+           { oneDarkHighlightStyle },
            { unifiedMergeView }] = await Promise.all([
       import('@codemirror/view'),
       import('@codemirror/state'),
@@ -47,7 +47,10 @@
 
     const tema = EV.theme({
       '&': { height: '100%', fontSize: '12.5px', backgroundColor: 'transparent', color: 'var(--text-primary)' },
-      '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.55', overflow: 'auto' },
+      '.cm-scroller > .cm-content': { paddingBottom: '12px' },
+      '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.7', overflow: 'auto' },
+      '.cm-line': { padding: '0 16px' },
+      '.cm-gutterElement': { paddingLeft: '10px' },
       '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--text-muted)' },
       '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
       '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--text-secondary)' },
@@ -62,8 +65,12 @@
       // vermelho que o pacote traz. Os seletores levam o `&dark`/`&light` porque é assim que o
       // próprio pacote escreve os dele — sem isso a regra tem menos especificidade e perde, e a
       // marca de palavra continua saindo como aquela faixa de 2px que parece sublinhado.
-      '.cm-changedLine': { backgroundColor: 'color-mix(in srgb, var(--success) 12%, transparent)' },
-      '.cm-deletedChunk': { backgroundColor: 'color-mix(in srgb, var(--error) 12%, transparent)' },
+      // Faixa de 2px na borda ALÉM da cor de fundo: cor sozinha não informa quem não distingue
+      // verde de vermelho.
+      '.cm-changedLine': { backgroundColor: 'color-mix(in srgb, var(--success) 12%, transparent)',
+                           boxShadow: 'inset 2px 0 0 var(--success)' },
+      '.cm-deletedChunk': { backgroundColor: 'color-mix(in srgb, var(--error) 12%, transparent)',
+                            boxShadow: 'inset 2px 0 0 var(--error)' },
       // `&.cm-merge-b` é o seletor VÁLIDO em `theme()` (o `&dark`/`&light` que o pacote usa só
       // existe no baseTheme dele — passá-lo aqui levanta "Unsupported selector" e o editor não
       // monta). Precisa dessa especificidade pra vencer a faixa de 2px que parece sublinhado.
@@ -73,7 +80,15 @@
         { background: 'color-mix(in srgb, var(--error) 24%, transparent)', borderRadius: '2px' },
       // `ins`/`del` são as tags que o pacote usa; sem isto o navegador risca e sublinha o código.
       '.cm-insertedLine, .cm-deletedLine': { textDecoration: 'none' },
-      '.cm-collapsedLines': { color: 'var(--text-muted)', backgroundColor: 'var(--surface-raised)', padding: '3px 8px', fontSize: '11px' },
+      // A dobra vem clara por padrão (o estilo do pacote assume tema claro). Sem isto ela vira
+      // uma faixa branca no meio do código escuro.
+      '.cm-collapsedLines': {
+        color: 'var(--text-muted)', backgroundColor: 'var(--fill-subtle)',
+        padding: '4px 8px 4px 64px', fontSize: '11px',
+        borderTop: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)',
+      },
+      '.cm-collapsedLines:hover': { backgroundColor: 'var(--bg-hover)' },
+      '.cm-collapsedLines::before, .cm-collapsedLines::after': { content: "'⋯'", opacity: '0.6' },
     });
 
     const teclas = [...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab, ...foldKeymap];
@@ -100,6 +115,10 @@
           search({ top: true }),
           indentOnInput(),
           bracketMatching(),
+          // SÓ as cores de sintaxe do one-dark, nunca o tema inteiro: o `oneDark` pinta o fundo
+          // do editor e da calha de #282c34 e ganha do nosso tema, e era isso que punha o código
+          // dentro de uma segunda moldura, com a cor errada, sobre a superfície do app.
+          syntaxHighlighting(oneDarkHighlightStyle),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           ...(linguagem ? [linguagem] : []),
           // O diff mora DENTRO do editor. `mergeControls: false` porque aceitar/rejeitar trecho
@@ -117,7 +136,6 @@
           // dele, e é o que mantém a regra do projeto (texto de interface sai de `m.*`).
           EditorState.phrases.of({ '$ unchanged lines': m.arq_linhas_sem_mudanca() }),
           keymap.of(teclas),
-          oneDark,
           tema,
           EV.lineWrapping,
           EV.editable.of(editavel),

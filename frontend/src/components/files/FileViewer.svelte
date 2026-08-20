@@ -132,6 +132,16 @@
   const ultimaBarra = $derived(path.lastIndexOf('/'));
   const nomeArquivo = $derived(ultimaBarra === -1 ? path : path.slice(ultimaBarra + 1));
   const dirParte = $derived(ultimaBarra === -1 ? '' : path.slice(0, ultimaBarra + 1));
+  // "backend / app" — separadores com folga, sem a barra final. O nome do arquivo não entra:
+  // ele já está na aba, e repeti-lo aqui foi uma das coisas que o refino tirou.
+  // No mock, o texto à direita é a BASE ("desde 9139ad7") — o que a tela está comparando, não o
+  // nome do modo. O nome do escopo fica no title, junto do convite pra trocar.
+  const rotuloEscopo = $derived(
+    diffDoArquivo?.base && diffDoArquivo.base.trim() !== ''
+      ? m.arq_escopo_desde({ base: diffDoArquivo.base.slice(0, 7) })
+      : (diffDoArquivo?.escopo_usado === 'branch' ? m.arq_escopo_branch() : m.arq_escopo_nao_commitado()),
+  );
+  const dirLegivel = $derived(dirParte === '' ? '.' : dirParte.replace(/\/$/, '').split('/').join(' / '));
 
   // "desde 721d1a0" chega inteiro da tradução; a barra mostra o "desde" com peso 500.
   // Split na primeira palavra cobre pt ("desde") e en ("since").
@@ -233,21 +243,19 @@
 </script>
 
 <div class="visor" role="region" tabindex="-1" aria-label={path} aria-busy={loading || destacando || destacandoArquivo}>
-  <!-- Faixa de abas (desenho C, escolhido em 20/08/2026): a aba ATIVA tem a cor do editor e a
-       faixa em volta é mais escura, então o cabeçalho e o código leem como uma peça só. Antes a
-       barra era o fundo do painel e o editor tinha o seu — pareciam dois componentes empilhados. -->
+  <!-- Faixa de abas — desenho C, transportado do mock aprovado em 20/08/2026
+       (docs: mock-refino-C.png). Ordem, tamanhos e cores vêm de lá; o que mudar aqui deixa de
+       casar com o que foi aprovado. -->
   <div class="abas">
     <span class="aba">
-      <span class="aba-nome" title={path}>{nomeArquivo}</span>
+      <span class="aba-nome" title={metaArquivo ? `${path} · ${metaArquivo}` : path}>{nomeArquivo}</span>
       {#if sujo}<span class="ponto" title={m.arq_nao_salvo()}></span>{/if}
       <button class="fechar-aba" aria-label={m.arq_fechar()} onclick={onFechar}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </span>
     <span class="empurra"></span>
     {#if temDiff && diffDoArquivo && !editando}
-      <!-- Segmentado no lugar do antigo "Nesta branch ▾": ele nunca escolheu branch — escolhe o
-           que a tela mostra. O escopo do diff (branch × não commitado) mora na sub-barra. -->
       <span class="seg" role="group" aria-label={m.arq_ver_como()}>
         <button class:on={!verArquivo} onclick={() => (verArquivo = false)}>{m.arq_ver_alteracoes()}</button>
         <button class:on={verArquivo} onclick={() => (verArquivo = true)}>{m.arq_ver_arquivo()}</button>
@@ -260,15 +268,16 @@
           {salvando ? m.arq_salvando() : m.arq_salvar()}
         </button>
       {:else}
-        <button class="acao" onclick={abrirEdicao}>{m.arq_editar()}</button>
+        <button class="icone-acao" aria-label={m.arq_editar()} title={m.arq_editar()} onclick={abrirEdicao}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
       {/if}
     {/if}
     {#if salvoAgora}<span class="salvo">✓ {m.arq_salvo()}</span>{/if}
   </div>
 
-  <!-- Sub-barra: a PASTA (o nome já está na aba) e os números. -->
   <div class="subbarra">
-    <span class="caminho">{dirParte || '.'}</span>
+    <span class="caminho">{dirLegivel}</span>
     {#if diffDoArquivo && !loading && !destacando && (estat.add || estat.del)}
       <span class="stat"><span class="stat-add">+{estat.add}</span><span class="stat-del">−{estat.del}</span></span>
     {/if}
@@ -280,11 +289,11 @@
         disabled={caiu}
         title={m.arq_trocar_escopo()}
         onclick={() => onEscopo(d.escopo_usado === 'branch' ? 'nao_commitado' : 'branch')}
-      >{d.escopo_usado === 'branch' ? m.arq_escopo_branch() : m.arq_escopo_nao_commitado()}</button>
+      >{rotuloEscopo}</button>
       {#if motivoVisivel}<span class="motivo">{motivoVisivel}</span>{/if}
     {/if}
-    {#if doArquivo}<span class="meta">{metaArquivo}</span>{/if}
-    <span class="empurra"></span>
+    <!-- Saída em TEXTO só no celular: lá o ✕ de 20px da aba é alvo apertado e o caminho de volta
+         precisa estar escrito. No desktop ele sai (o mock aprovado não tem) e o ✕ basta. -->
     <button class="voltar" onclick={onFechar}>← {rotuloVoltar}</button>
   </div>
 
@@ -348,36 +357,33 @@
        degrau acima. Em tema escuro elevação é luz, então a peça da frente é a mais clara —
        sem isso a faixa e a aba saíam com a MESMA cor e o degrau do desenho não existia. */
     background: var(--bg-base);
-    --cp-editor-surface: color-mix(in srgb, var(--bg-elevated) 45%, var(--bg-base));
+    --cp-editor-surface: color-mix(in srgb, var(--bg-elevated) 75%, var(--bg-base));
   }
-  /* ── faixa de abas ──────────────────────────────────────────────────────────────────────
-     A cor é o ponto do desenho: a FAIXA é mais escura que o editor e a ABA ATIVA tem a cor
-     dele. Em tema escuro, elevação é luz — a peça da frente é a mais clara. */
+  /* ── faixa de abas (valores do mock C) ────────────────────────────────────────────────── */
   .abas {
-    display: flex; align-items: center; gap: var(--space-1);
+    display: flex; align-items: center; gap: 4px;
     padding: 6px 8px 0;
-    background: var(--bg-base);
+    background: var(--bg-base);          /* a faixa é o fundo mais escuro */
     flex: none;
   }
   .aba {
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 8px 8px 8px 14px;
+    padding: 8px 14px;
     border-radius: 10px 10px 0 0;
-    background: var(--cp-editor-surface);
-    font-size: 12.5px; color: var(--text-primary); font-weight: 500;
-    min-width: 0; max-width: 60%;
+    background: var(--cp-editor-surface);  /* a aba ATIVA tem a cor do editor */
+    font-size: 12.5px; font-weight: 500; color: var(--text-primary);
+    min-width: 0; max-width: 55%;
   }
   .aba-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ponto { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
   .fechar-aba {
-    /* 24px de alvo real, num ícone de 13px: dedo no celular alcança sem precisar mirar. */
-    width: 24px; height: 24px; flex: none;
+    width: 20px; height: 20px; flex: none;
     display: grid; place-items: center;
     border: 0; background: none; color: var(--text-muted);
     border-radius: 6px; cursor: pointer;
     transition: transform 160ms var(--ease-out), background 120ms ease, color 120ms ease;
   }
-  .fechar-aba svg { width: 13px; height: 13px; }
+  .fechar-aba svg { width: 12px; height: 12px; }
   .fechar-aba:active { transform: scale(0.94); }
   @media (hover: hover) and (pointer: fine) {
     .fechar-aba:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -385,7 +391,7 @@
   .empurra { flex: 1; }
 
   .seg {
-    display: flex; gap: 2px; flex: none;
+    display: flex; gap: 2px; flex: none; margin-bottom: 6px;
     background: var(--fill-subtle); border-radius: 8px; padding: 2px;
   }
   .seg button {
@@ -395,8 +401,21 @@
   }
   .seg button.on { background: var(--surface-raised); color: var(--text-primary); font-weight: 500; }
 
+  .icone-acao {
+    width: 28px; height: 28px; flex: none; margin-bottom: 6px;
+    display: grid; place-items: center;
+    border: 0; background: none; color: var(--text-muted);
+    border-radius: 8px; cursor: pointer;
+    transition: transform 160ms var(--ease-out), background 120ms ease, color 120ms ease;
+  }
+  .icone-acao svg { width: 14px; height: 14px; }
+  .icone-acao:active { transform: scale(0.94); }
+  @media (hover: hover) and (pointer: fine) {
+    .icone-acao:hover { background: var(--bg-hover); color: var(--text-primary); }
+  }
+
   .acao {
-    padding: 5px 12px; border-radius: 8px; flex: none;
+    padding: 5px 12px; border-radius: 8px; flex: none; margin-bottom: 6px;
     border: 1px solid var(--border-subtle); background: transparent;
     color: var(--text-secondary); font: inherit; font-size: 12px; font-weight: 500;
     cursor: pointer;
@@ -404,54 +423,53 @@
   }
   .acao:active:not(:disabled) { transform: scale(0.97); }
   .acao:disabled { opacity: 0.5; cursor: default; }
-  /* Salvar é o ÚNICO elemento tingido da tela — é a ação com consequência. */
   .acao.primaria { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
   @media (hover: hover) and (pointer: fine) {
     .acao:hover:not(:disabled) { color: var(--text-primary); }
   }
-  .salvo { font-size: var(--text-xs); color: var(--success); flex: none; }
+  .salvo { font-size: var(--text-xs); color: var(--success); flex: none; margin-bottom: 6px; }
 
-  /* ── sub-barra: a pasta e os números ───────────────────────────────────────────────────── */
+  /* ── sub-barra ─────────────────────────────────────────────────────────────────────────── */
   .subbarra {
-    display: flex; align-items: center; gap: var(--space-2);
+    display: flex; align-items: center; gap: 16px;
     padding: 8px 16px;
     background: var(--cp-editor-surface);
     border-bottom: 1px solid var(--border-subtle);
     flex: none;
   }
   .caminho {
+    flex: 1; min-width: 0;
     font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted);
-    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* O número é o dado (peso), a contagem de linhas é rótulo (apagada). */
   .stat { font-family: var(--font-mono); font-size: 12px; font-weight: 600; flex: none; display: flex; gap: 8px; }
   .stat .stat-add { color: var(--success); }
   .stat .stat-del { color: var(--error); }
-  .divisor { width: 1px; height: 13px; background: var(--border-subtle); flex: none; }
+  .divisor { width: 1px; height: 14px; background: var(--border-subtle); flex: none; }
   .escopo {
     background: none; border: 0; padding: 0;
-    font: inherit; font-size: 11.5px; color: var(--text-secondary);
+    font: inherit; font-size: 11px; color: var(--text-muted);
     cursor: pointer; flex: none;
-    border-bottom: 1px dotted var(--border-subtle);
     transition: color 120ms ease;
   }
-  .escopo:disabled { cursor: default; opacity: 0.55; border-bottom-color: transparent; }
+  .escopo:disabled { cursor: default; opacity: 0.55; }
   @media (hover: hover) and (pointer: fine) {
     .escopo:hover:not(:disabled) { color: var(--text-primary); }
   }
-  .meta { font-size: 11.5px; color: var(--text-muted); min-width: 0; }
-  /* Motivo do escopo caído: TEXTO ao lado do botão (title em botão desabilitado não é lido).
-     --warning é o token que o DiffView já usa para o aviso de corte — mesma família visual. */
-  .motivo { font-size: 11.5px; color: var(--warning); min-width: 0; }
+  .motivo { font-size: 11px; color: var(--warning); min-width: 0; }
   .voltar {
     display: inline-flex; align-items: center; gap: 5px; flex: none;
-    background: none; border: 0; color: var(--accent); font: inherit; font-size: 11.5px;
+    background: none; border: 0; color: var(--accent); font: inherit; font-size: 11px;
     cursor: pointer; padding: 0;
   }
+  @media (min-width: 820px) { .voltar { display: none; } }
 
   .corpo {
     background: var(--cp-editor-surface);
-    padding: 14px 16px 18px;
+    /* SEM padding lateral: o código vai de ponta a ponta, como no editor de verdade. O padding
+       daqui punha o bloco de código dentro de uma segunda moldura, com margem — foi a diferença
+       mais visível entre a tela e o mock. Os avisos, que precisam de recuo, trazem o seu. */
+    padding: 0;
     /* Task 14: o corpo NAO rola — quem rola e a caixa do diff/conteudo (height: fit-content +
        max-height: 100% no .git-diff e no .conteudo). Flex column para a caixa ocupar a altura
        disponivel depois do cabecalho fixo. */

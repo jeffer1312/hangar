@@ -42,12 +42,15 @@ describe('FileViewer', () => {
   });
 
   it('pluraliza a meta: 1 linha no singular', () => {
+    // A meta (tamanho + linhas) saiu da sub-barra e vive no title da aba: o desenho aprovado
+    // deixa ali só a pasta e os números do diff. A regra do plural continua valendo.
     const { el, comp } = montar({
       diff: null,
       conteudo: { path: 'a.py', text: 'print(1)\n', size: 9, truncated: false, digest: 'abc' },
     });
-    expect(el.textContent).toContain('1 linha');
-    expect(el.textContent).not.toContain('1 linhas');
+    const titulo = el.querySelector('.aba-nome')?.getAttribute('title') ?? '';
+    expect(titulo).toContain('1 linha');
+    expect(titulo).not.toContain('1 linhas');
     unmount(comp);
   });
 
