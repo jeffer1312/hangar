@@ -75,6 +75,22 @@ Aprovado o plano novo:
    anterior que for continuar recebe kick-off novo; a que não couber no time novo é aposentada
    com o de sempre (transcript lido, trabalho recuperado).
 
+## Replanejamento PREVISTO no plano — a miniatura deste procedimento
+
+Plano pode declarar que a receita de uma Task só fecha no meio da execução ("a Task N depende do
+que a medição da Task N-1 provar"). Isso é legítimo — e é **planejamento, não condução**: quem
+fecha a receita é a sessão **planejadora** (ou uma sessão nova de planejamento, com a spec e o
+documento da medição anexados), nunca o árbitro por gravidade. O árbitro entrega os insumos,
+recebe a receita pronta e a recorta pro kick-off, como faria com qualquer Task. E a receita
+fechada no meio passa pelo formato de Step da fase 1 (os três desfechos de request, o gatilho de
+quem digita — `planejamento.md`), porque ela É plano.
+
+Medido em 19–20/08/2026: o plano dizia "o árbitro fecha a receita da T5 depois da T4"; o árbitro
+— sem o contexto do planejamento — fechou-a sem dizer QUANDO a chamada dispara, e dessa lacuna
+nasceu o bloqueador mais sério do trabalho (a sonda que digita rodando no mount de toda conversa
+aberta). A miniatura não exige o portão de 12 itens de novo: exige só o dono certo e o formato de
+Step.
+
 ## O que o replanejamento NÃO é
 
 - **Não é auditoria da execução** — isso é a retrospectiva (fase 5), que continua no fim.

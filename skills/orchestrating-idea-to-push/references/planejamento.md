@@ -70,7 +70,9 @@ plano declarou a falha e calou o pendente (fail-open valendo para request em voo
 árbitro mandou "levantar a lista ao vivo" sem dizer quando (a sonda que digita rodou no mount de
 toda conversa — o bloqueador mais sério do trabalho); a receita do revisor fechou sucesso e
 "carregando" e calou a falha (pedido falho virou afirmação na tela). Com executor de receita
-literal, o desfecho não declarado é o desfecho não implementado.
+literal, o desfecho não declarado é o desfecho não implementado. E se o plano declara que a
+receita de uma Task fecha DEPOIS de outra (replanejamento previsto), ele nomeia QUEM fecha — e
+esse quem é planejador, nunca o árbitro por gravidade (`replanejar.md`, "a miniatura").
 
 **Modelo do time que ainda não tem ficha:** antes de escrever o plano, faça uma varredura curta em
 **duas** fontes — o guia do fabricante e, principalmente, **a comunidade** (skill `last30days`:

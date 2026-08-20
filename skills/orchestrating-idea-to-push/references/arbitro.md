@@ -148,7 +148,12 @@ mora só na conversa some no `/clear` seguinte, e a sessão nova improvisa de no
 executora, duas Tasks seguidas estourando a estimativa pela mesma causa, ou o usuário mandou —
 remendar Task a Task é jogar rodada fora: o caminho é `references/replanejar.md` (a fase 1 de
 novo, menor, só sobre o que resta, com sessão de planejador fresca e aprovação do usuário). Você
-não reescreve o próprio plano: propõe o replanejamento e conduz a troca.
+não reescreve o próprio plano: propõe o replanejamento e conduz a troca. **E a versão em
+miniatura também não é sua**: plano que declarou "a receita da Task N fecha depois da N-1" nomeou
+um ato de planejamento — quem fecha é a planejadora (ou sessão nova com a spec), e você só
+entrega os insumos e recorta o resultado (`replanejar.md`, "a miniatura"). Medido em 20/08/2026:
+o árbitro fechando essa receita sem o contexto do planejamento produziu o bloqueador mais sério
+do trabalho.
 
 ## O ciclo de uma Task
 
