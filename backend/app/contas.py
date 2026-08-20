@@ -296,14 +296,13 @@ def _semear_settings(dir_conta: Path) -> str | None:
     elif destino.exists():
         # Cópia da conta já existe (ou o CLI criou uma local): as chaves do compartilhado são
         # espelhadas por cima; o que só existe na cópia fica.
-        _espelhar_do_principal(alvo, destino)
-        return None
+        return _espelhar_do_principal(alvo, destino)
     if alvo.is_file():
         shutil.copyfile(alvo, destino)
     return aviso
 
 
-def _espelhar_do_principal(alvo: Path, destino: Path) -> None:
+def _espelhar_do_principal(alvo: Path, destino: Path) -> str | None:
     """Espelha TODAS as chaves do settings.json compartilhado pra cópia da conta.
 
     É o que devolve a propagação que a cópia tirou: mexer no principal (outputStyle, plugin,
@@ -316,12 +315,17 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> None:
     desfeito na próxima abertura dela. Chave que só existe na cópia fica — ausência no
     compartilhado não apaga nada, porque ausência é justamente o sintoma daquele acidente e
     espelhá-la desligaria os plugins das contas de novo.
+
+    Devolve aviso quando o espelho DESFAZ algo — chave que a conta tinha com outro valor (o
+    `/model` dela, tipicamente). Sem isso o modelo da conta mudava sozinho na abertura e não
+    sobrava rastro nenhum de por quê. Chave só ADICIONADA não vira aviso: não desfaz nada.
     """
     try:
         de = json.loads(alvo.read_text(encoding="utf-8"))
         para = json.loads(destino.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return
+        # Máquina nova: o principal ainda não tem settings.json, então não há o que espelhar.
+        return None
     except (OSError, ValueError) as e:
         # Truncado por escrita concorrente, sem permissão, JSON inválido: engolir deixaria a
         # conta divergir do principal em silêncio — mesma regra do _semear_claude_json.
@@ -329,13 +333,18 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> None:
     if not isinstance(de, dict) or not isinstance(para, dict):
         raise ContaError(500, "settings.json não é um objeto JSON — não dá pra espelhar pra conta")
     if all(para.get(k) == v for k, v in de.items()):
-        return
+        return None
+    desfeitas = sorted(k for k, v in de.items() if k in para and para[k] != v)
     para.update(de)
     # tmp+rename com pid+uuid, como o _ligar: um CLI vivo da conta lendo o arquivo no meio da
     # escrita receberia JSON truncado.
     tmp = destino.with_name(f"{destino.name}.hangar-novo.{os.getpid()}.{uuid.uuid4().hex[:8]}")
     tmp.write_text(json.dumps(para, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(tmp, destino)
+    if desfeitas:
+        return ("settings.json: o principal sobrescreveu "
+                + ", ".join(desfeitas) + " na cópia desta conta")
+    return None
 
 
 def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:

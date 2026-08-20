@@ -142,6 +142,19 @@ def test_chaves_do_compartilhado_espelham_pra_conta(casa):
     assert d["model"] == "opus"          # chave que só a conta tem sobrevive
 
 
+def test_espelho_avisa_quando_desfaz_chave_da_conta(casa):
+    """O principal manda, mas desfazer o /model da conta sem rastro deixava o modelo mudar
+    sozinho na abertura sem ninguém saber por quê. Chave só ADICIONADA não vira aviso."""
+    p = contas.criar("conta2")
+    (casa / ".claude" / "settings.json").write_text(
+        '{"theme":"dark","outputStyle":"Concise"}', encoding="utf-8")
+    (p / "settings.json").write_text('{"theme":"light"}', encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    assert [a for a in avisos if "theme" in a], avisos
+    assert not [a for a in avisos if "outputStyle" in a], avisos
+    assert not contas.reconciliar("conta2")   # nada mudou: sem aviso repetido
+
+
 def test_espelhamento_nao_apaga_chave_que_o_compartilhado_perdeu(casa):
     """Ausência da chave no compartilhado é o sintoma do acidente de 2026-08-19 (clobber);
     espelhar a ausência desligaria os plugins das contas de novo."""
