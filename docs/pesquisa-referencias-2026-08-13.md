@@ -598,19 +598,19 @@ cabe aqui.
 > fim**. A ordem abaixo já reflete isso; o texto de análise de cada item continua no lugar, nas
 > Partes 1 a 4 e no backlog da Parte 5.
 
-1. **Frases de indisponibilidade** no Git, no lugar de botão cinza mudo (D1). *O mais barato e mais
-   valioso da varredura; cabe numa tarde.*
-2. **Três vazios por causa**, no Arquivo e nas listas (D2).
-3. **Agendamento** reusando o `TickCtx`, com o "pulou, não acumula" do Paseo (B2).
-4. **Modo de permissão** como pílula no composer (4.6) — o único que não dá para estimar sem medir,
+1. **Agendamento** reusando o `TickCtx`, com o "pulou, não acumula" do Paseo (B2).
+2. **Modo de permissão** como pílula no composer (4.6) — o único que não dá para estimar sem medir,
    porque depende de como cada provedor expõe os modos.
-5. **Agrupar por estado + preferências de exibição** (A4).
+3. **Agrupar por estado + preferências de exibição** (A4).
+4. **Três vazios por causa**, no Arquivo e nas listas (D2). *Pulado em 19/08/2026 a pedido do
+   usuário; volta quando chegar a vez.*
 
-**Adiados pelo usuário em 16/08/2026** — ficam no fim até ele pedir:
+**Adiados pelo usuário (16 e 19/08/2026)** — ficam no fim até ele pedir:
 
 - **A1 — última mensagem + tempo na terceira linha.** Era o nº 1 da ordem original.
 - **A2 — não-lido / "pronto para revisar" como estado**, com "falhou" junto. Era o nº 2.
 - **B1 — presença antes do push.** Era o nº 3, e a análise o chama de melhor achado da varredura.
+- **D1 — frases de indisponibilidade no Git.** Adiado em 19/08/2026; era o nº 1 da ordem revisada.
 
 Nenhum dos três perdeu valor por isto; a decisão foi de ordem, não de mérito. **A3 continua depois de
 B3** (a linha só mostra o `+N −M` quando o backend souber calcular), e essa amarra não mudou.

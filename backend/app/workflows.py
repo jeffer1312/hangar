@@ -257,6 +257,8 @@ def get_agent(jsonl: str, run_id: str, agent_id: str) -> dict | None:
     # Prompt (1ª msg user) + contagem de tools do transcript do agente.
     prompt = None
     tools: dict[str, int] = {}
+    lastToolName = None
+    lastToolTarget = None
     af = rundir / f"agent-{agent_id}.jsonl"
     has_transcript = af.is_file()
     if has_transcript:
@@ -277,17 +279,64 @@ def get_agent(jsonl: str, run_id: str, agent_id: str) -> dict | None:
                         if isinstance(b, dict) and b.get("type") == "tool_use":
                             n = b.get("name") or "?"
                             tools[n] = tools.get(n, 0) + 1
+                            lastToolName = n
+                            # alvo real da última chamada (não repetir o nome)
+                            inp = b.get("input") or {}
+                            if isinstance(inp, dict):
+                                # ordem de relevância por ferramenta
+                                cand = (
+                                    inp.get("file_path")
+                                    or inp.get("pattern")
+                                    or inp.get("command")
+                                    or inp.get("path")
+                                    or inp.get("query")
+                                    or inp.get("code")
+                                )
+                                if isinstance(cand, str) and cand.strip():
+                                    lastToolTarget = cand.strip()[:120]
+                                else:
+                                    # fallback: primeiro valor string do input
+                                    for v in inp.values():
+                                        if isinstance(v, str) and v.strip():
+                                            lastToolTarget = v.strip()[:120]
+                                            break
         except OSError:
             pass
 
     if not has_transcript and not meta:
         return None
 
+    # Estado vivo: journal tem started sem result → progress (preserva state persistido se já houver)
+    journal_state = None
+    if jf.is_file():
+        try:
+            started = False
+            result_ev = False
+            for line in jf.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    ev = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if ev.get("agentId") != agent_id:
+                    continue
+                if ev.get("type") == "started":
+                    started = True
+                elif ev.get("type") == "result":
+                    result_ev = True
+            if started and not result_ev:
+                journal_state = "progress"
+            elif result_ev:
+                journal_state = meta.get("state") or "done"
+        except OSError:
+            pass
+
+    state = meta.get("state") or journal_state
+
     return {
         "agentId": agent_id,
         "label": meta.get("label") or agent_id[:8],
         "phaseTitle": meta.get("phaseTitle"),
-        "state": meta.get("state"),
+        "state": state,
         "model": meta.get("model"),
         "tokens": meta.get("tokens") or 0,
         "durationMs": meta.get("durationMs") or 0,
@@ -295,4 +344,6 @@ def get_agent(jsonl: str, run_id: str, agent_id: str) -> dict | None:
         "prompt": prompt or meta.get("promptPreview"),
         "result": result or meta.get("resultPreview"),
         "tools": [{"name": n, "count": c} for n, c in tools.items()],
+        "lastToolName": lastToolName,
+        "lastToolTarget": lastToolTarget,
     }

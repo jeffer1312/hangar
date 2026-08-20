@@ -14,6 +14,10 @@ const onApplied = vi.hoisted(() => vi.fn());
 const onClose = vi.hoisted(() => vi.fn());
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
   getPiModels: vi.fn(),
   setPiModel: vi.fn(),
   modelOptions: vi.fn(),

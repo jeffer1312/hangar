@@ -235,6 +235,11 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_motor_ausente: (p) => m.erro_motor_ausente({ nome: String(p.nome) }),
   erro_provedor_offline: (p) => m.erro_provedor_offline({ nome: String(p.nome), erro: String(p.erro) }),
   erro_modelo_fora_catalogo: (p) => m.erro_modelo_fora_catalogo({ motor: String(p.motor), modelo: String(p.modelo) }),
+  erro_permissao_so_claude: () => m.erro_permissao_so_claude(),
+  erro_permissao_invalida: () => m.erro_permissao_invalida(),
+  erro_permissao_leitura: () => m.erro_permissao_leitura(),
+  erro_permissao_teto: (p) => m.erro_permissao_teto({ alvo: String(p.alvo), ficou: String(p.ficou) }),
+  erro_sessao_trabalhando: () => m.erro_sessao_trabalhando(),
 
   // Capacidade ausente: extensao do Pi, catalogo, resposta que nao veio
   erro_sem_pergunta_pi: () => m.erro_sem_pergunta_pi(),

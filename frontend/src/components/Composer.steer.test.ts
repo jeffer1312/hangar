@@ -10,6 +10,10 @@ import Composer from './Composer.svelte';
 import * as m from '../paraglide/messages';
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
   getCommands: vi.fn().mockResolvedValue([]),
   setModelEffort: vi.fn(),
   uploadFile: vi.fn(),

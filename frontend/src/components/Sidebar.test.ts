@@ -23,6 +23,11 @@ const storeState = vi.hoisted(() => ({
 }));
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
+  errorDetail: vi.fn(async () => ''),
   createSession: vi.fn(), deleteSession: vi.fn(),
   // Contrato real do renameSession: devolve { ok, name } (o doRename lê r.name).
   renameSession: vi.fn(async (_old: string, nv: string) => ({ ok: true, name: nv })),

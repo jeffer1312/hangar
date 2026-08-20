@@ -3,7 +3,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import Select from './Select.svelte';
   import FolderScanner from './FolderScanner.svelte';
-  import { getSessions, listClaudeConfigs, getEngines, criarConta, apagarConta,
+  import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
            modelOptions, type ModelOption, type Motor } from '../lib/api';
   import { basename, providerName } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
@@ -16,7 +16,8 @@
     servers: Server[];
     onClose: () => void;
     onCreate: (name: string, cwd?: string, configDir?: string | null, provider?: Provider,
-               engine?: string | null, model?: string | null, effort?: string | null) => Promise<void>;
+               engine?: string | null, model?: string | null, effort?: string | null,
+               permissionMode?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
   }
   let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
@@ -26,6 +27,8 @@
   // Claude com 400, entao os dois pickers abaixo seguem Claude-only).
   const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
   let provider = $state<Provider>('claude');
+  let providers = $state<Record<string, { disponivel: boolean; motivo: string | null }>>({});
+  let providersCarregando = $state(true);
 
   // Servidor-alvo da nova sessão. Como o scanner/dedupe/criação leem o servidor ATIVO, escolher
   // aqui = selectServer(id): todas as chamadas seguintes do sheet caem nesse backend.
@@ -37,6 +40,7 @@
     // sem isto a lista ficava a do servidor da ABERTURA e o create mandava um config_dir de outra
     // maquina -> 400 "config_dir invalido" no backend de destino).
     loadConfigs();
+    carregarProviders();
   }
 
   // Fluxo em dois passos: 1) escolher a pasta (scanner) -> 2) criar uma sessao nova com nome UNICO
@@ -84,6 +88,10 @@
     pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   };
 
+  // Modos de permissão do Claude Code (--permission-mode), mesma lista do backend (model_args.py).
+  const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
+  let permissao = $state('');
+
   // `targetServer` (acima) é o servidor de destino. Ele entra na chave porque MOTOR É POR SERVIDOR
   // (comentário do loadConfigs): sem isso o app lembraria um modelo de motor que o outro servidor
   // não tem — a sessão subiria com --model de um id que aquele provedor não conhece.
@@ -101,6 +109,25 @@
   // Pi rejeita bare id que casa em mais de um provider). Nos outros formatos (motor, cache do
   // Claude, aliases reduzidos) não há provider e o id já é único — o valor é o id puro, como hoje.
   const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
+
+  let provSeq = 0;
+  async function carregarProviders() {
+    const seq = ++provSeq;
+    const srv = targetServer;
+    const aberta = open;
+    providersCarregando = true;
+    providers = {};
+    try {
+      const res = await getProviders();
+      if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
+      providers = res;
+    } catch {
+      if (seq !== provSeq || !aberta || targetServer !== srv || !open) return;
+      providers = {};
+    } finally {
+      if (seq === provSeq && aberta && targetServer === srv && open) providersCarregando = false;
+    }
+  }
 
   async function carregarModelos() {
     const seq = ++modSeq;
@@ -348,7 +375,7 @@
       // anterior sobrevive à reabertura quando o fetch de contas falha — o reset de carregarModelos
       // fica atrás dele e não roda. Escolha de Pi indo pro create do Claude é pane no ar e erro no
       // primeiro turno, calado.
-      modelo = ''; esforco = '';
+      modelo = ''; esforco = ''; permissao = '';
       modelos = []; listaReduzida = false; erroModelos = '';
       // Feedback da criação de conta não pode vazar entre aberturas: o botão liberado, o aviso
       // limpo e a conta criada esquecida — o cfgSeq do loadConfigs abaixo invalida qualquer
@@ -359,8 +386,11 @@
       contaErro = false;
       const cur = getActiveId();
       const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
-      if (target) pickTarget(target);      // pickTarget ja carrega configs E motores do alvo
-      else loadConfigs();                  // sem lista de servidores: carrega do ativo mesmo
+      if (target) pickTarget(target);      // pickTarget ja carrega configs, motores e providers do alvo
+      else {
+        loadConfigs();
+        carregarProviders();
+      }
     });
   });
 
@@ -399,6 +429,8 @@
 
   async function create() {
     if (!picked || !name.trim()) return;
+    if (providersCarregando) return;
+    if (providers[provider] && !providers[provider].disponivel) return;
     loading = true;
     error = '';
     try {
@@ -413,7 +445,8 @@
       if (esforco) localStorage.setItem(chaveMemoria() + ':effort', esforco);
       else localStorage.removeItem(chaveMemoria() + ':effort');
       await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
-                     provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null);
+                     provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
+                     provider === 'claude' ? (permissao || null) : null);
       onClose();
     } catch (err) {
       error = err instanceof Error ? err.message : m.criar_sessao_erro();
@@ -518,10 +551,14 @@
               class="provider-btn"
               class:on={provider === p}
               aria-pressed={provider === p}
+              disabled={providers[p] ? !providers[p].disponivel : false}
               onclick={() => { provider = p; carregarModelos(); }}
             >{providerName(p)}</button>
           {/each}
         </div>
+      {#if providers[provider] && !providers[provider].disponivel}
+        <p class="hint" role="alert">{m.criar_provider_ausente({ p: provider })}</p>
+      {/if}
       </div>
 
       {#if provider === 'claude'}
@@ -626,8 +663,18 @@
           <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()}</label>
           <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
             opcoes={[{ value: '', label: m.criar_padrao() },
-                     ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
+                     ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]} 
             onchange={(v) => (esforco = v)} />
+        </div>
+      {/if}
+
+      {#if provider === 'claude'}
+        <div class="field">
+          <label class="field-label" for="perm-pick">{m.criar_permissao()}</label>
+          <Select id="perm-pick" class="field-input" ariaLabel={m.criar_permissao()} value={permissao}
+            opcoes={[{ value: '', label: m.criar_permissao_padrao() },
+                     ...MODOS_PERMISSAO.map((n) => ({ value: n, label: n }))]} 
+            onchange={(v) => (permissao = v)} />
         </div>
       {/if}
 
@@ -635,7 +682,7 @@
         <p class="error-msg" role="alert">{error}</p>
       {/if}
 
-      <button class="primary-btn" onclick={create} disabled={loading || !name.trim()}>
+      <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
         {loading ? m.criar_criando() : m.sessao_nova()}
       </button>
       <button class="ghost-btn" onclick={reset}>{m.criar_outra_pasta()}</button>
@@ -708,6 +755,10 @@
   .provider-btn.on {
     border-color: var(--accent);
     color: var(--text-primary);
+  }
+  .provider-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   /* ── Escape hatch: digitar caminho ─────────────────────────────────────── */

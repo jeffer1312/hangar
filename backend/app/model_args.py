@@ -42,6 +42,10 @@ def _e_flag(valor: str) -> bool:
 EFFORT_CLAUDE = ("low", "medium", "high", "xhigh", "max")
 EFFORT_PI = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
+# Modos de permissão do Claude Code, do `claude --help` (medido em 19/08/2026).
+# choices: "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"
+MODOS_PERMISSAO_CLAUDE = ("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
+
 # Quem aceita ESCOLHA DE MODELO no arranque: os três têm --model (o do Kimi aceita o alias
 # `provider/id` do config.toml, medido no --help do Kimi Code 0.37.2). Esforço é separado: o Kimi
 # NÃO tem flag de esforço no CLI (mora no [thinking] do config.toml), então não entra nos mapas
@@ -51,15 +55,16 @@ _FLAG_ESFORCO = {"claude": "--effort", "pi": "--thinking"}
 _NIVEIS = {"claude": EFFORT_CLAUDE, "pi": EFFORT_PI}
 
 
-def validar(provider: str, model: str | None, effort: str | None) -> tuple[str | None, str | None]:
+def validar(provider: str, model: str | None, effort: str | None, permission_mode: str | None = None) -> tuple[str | None, str | None]:
     """Devolve (model, effort) ou estoura ValueError.
 
     Nada pedido passa direto, seja qual for o provider: criar sessão Codex é caminho vivo e não pode
     virar 400 por causa de uma feature que ninguém acionou.
+    permission_mode só é validado contra a lista fechada; o 409 de provider errado é da API.
     """
-    if model is None and effort is None:
+    if model is None and effort is None and permission_mode is None:
         return None, None
-    if provider not in _ACEITA_MODELO:
+    if (model is not None or effort is not None) and provider not in _ACEITA_MODELO:
         raise ValueError(f"provider {provider!r} não aceita escolha de modelo aqui")
     if model is not None and (not ID_OK.match(model) or _e_flag(model)):
         raise ValueError("model: use letras, números e . _ : / - ~ [ ] (até 128 caracteres, sem começar com -)")
@@ -68,16 +73,20 @@ def validar(provider: str, model: str | None, effort: str | None) -> tuple[str |
             raise ValueError(f"provider {provider!r} não aceita escolha de esforço aqui")
         if effort not in _NIVEIS[provider]:
             raise ValueError(f"effort: use um de {', '.join(_NIVEIS[provider])}")
+    if permission_mode is not None and permission_mode not in MODOS_PERMISSAO_CLAUDE:
+        raise ValueError(f"permission_mode: use um de {', '.join(MODOS_PERMISSAO_CLAUDE)}")
     return model, effort
 
 
-def args_de(provider: str, model: str | None, effort: str | None) -> list[str]:
+def args_de(provider: str, model: str | None, effort: str | None, permission_mode: str | None = None) -> list[str]:
     """Argumentos prontos pro spawn_command. Revalida — barato, e fecha o caminho de quem chamar
     sem passar por validar()."""
-    model, effort = validar(provider, model, effort)
+    model, effort = validar(provider, model, effort, permission_mode)
     out: list[str] = []
     if model:
         out += ["--model", model]
     if effort:
         out += [_FLAG_ESFORCO[provider], effort]
+    if permission_mode and provider == "claude":
+        out += ["--permission-mode", permission_mode]
     return out

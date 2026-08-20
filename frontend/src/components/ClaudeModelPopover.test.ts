@@ -10,6 +10,10 @@ import ClaudeModelPopover from './ClaudeModelPopover.svelte';
 import * as api from '../lib/api';
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
   getModelOptions: vi.fn(),
   setEngineModel: vi.fn(),
 }));

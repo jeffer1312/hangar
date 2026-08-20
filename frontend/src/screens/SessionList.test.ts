@@ -12,6 +12,10 @@ import * as api from '../lib/api';
 function stubDe() { return { default: createRawSnippet(() => ({ render: () => '<div />' })) }; }
 
 vi.mock('../lib/api', () => ({
+  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
   getSessions: vi.fn(async () => []),
   createSession: vi.fn(), deleteSession: vi.fn(), renameSession: vi.fn(),
   resumeSession: vi.fn(), broadcast: vi.fn(),

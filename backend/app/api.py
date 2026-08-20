@@ -32,6 +32,7 @@ from app import filesearch, filetree, git_ops
 from app.filesearch import SearchError
 from app.filetree import FileError
 from app import pi_catalog
+from app import cli_probe
 from app import pi_models
 from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
@@ -1003,6 +1004,8 @@ class CreateBody(_StrictBody):
     # aqui, nunca no front: o valor entra num comando de shell.
     model: str | None = None
     effort: str | None = None
+    # Modo de permissão do Claude Code. None = padrão da conta (comportamento de hoje).
+    permission_mode: str | None = None
 
 
 class TtsBody(_StrictBody):
@@ -1284,12 +1287,19 @@ async def create_session(body: CreateBody):
             raise HTTPException(400, detail=erro("erro_motor_sem_claude", "motor so vale para provider claude"))
         if body.engine not in await asyncio.to_thread(engines.listar):
             raise HTTPException(400, detail=erro("erro_motor_invalido", "motor invalido"))
+    # permission_mode só vale para claude
+    if body.permission_mode is not None and body.provider != "claude":
+        raise HTTPException(409, detail=erro("erro_permissao_so_claude", "modo de permissao so vale para claude"))
     # Mesma regra das linhas acima, pro model/effort: recusa ANTES de qualquer efeito no disco,
     # inclusive pro provedor fora de escopo (codex/kimi) quando alguem pedir escolha — o valor
     # entraria num comando de shell montado por concatenacao.
     try:
-        model_args.validar(body.provider, body.model, body.effort)
+        model_args.validar(body.provider, body.model, body.effort, body.permission_mode)
     except ValueError as e:
+        # permission_mode fora da lista deve ser 409 com código específico, não 400 genérico
+        msg = str(e)
+        if "permission_mode" in msg:
+            raise HTTPException(409, detail=erro("erro_permissao_invalida", msg)) from None
         raise HTTPException(400, str(e)) from None
 
     # Janela do modelo escolhido, pra entrar no env do motor (Task 3). O número já está no cache do
@@ -1343,10 +1353,11 @@ async def create_session(body: CreateBody):
                     for aviso in avisos:
                         _log.warning("conta %s: %s", alvo.name, aviso)
                     try:
-                        return await asyncio.to_thread(
-                            registry.create, body.name, body.cwd, body.config_dir,
-                            provider=body.provider, engine=body.engine,
-                            model=body.model, effort=body.effort, context_window=janela)
+                        _kw = dict(provider=body.provider, engine=body.engine, model=body.model,
+                                   effort=body.effort, context_window=janela)
+                        if body.permission_mode is not None:
+                            _kw["permission_mode"] = body.permission_mode
+                        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
                     except ValueError as e:
                         raise HTTPException(409, str(e))
                 finally:
@@ -1358,9 +1369,11 @@ async def create_session(body: CreateBody):
     try:
         if body.provider == "codex":
             return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
-        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir,
-                                       provider=body.provider, engine=body.engine,
-                                       model=body.model, effort=body.effort, context_window=janela)
+        _kw2 = dict(provider=body.provider, engine=body.engine, model=body.model,
+                     effort=body.effort, context_window=janela)
+        if body.permission_mode is not None:
+            _kw2["permission_mode"] = body.permission_mode
+        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw2)
     except ValueError as e:
         raise HTTPException(409, str(e))
 
@@ -2668,6 +2681,11 @@ def _motores_para_cliente() -> dict[str, dict]:
     return out
 
 
+@app.get("/api/providers", dependencies=[Depends(require_auth)])
+async def get_providers():
+    return await asyncio.to_thread(cli_probe.sondar_providers)
+
+
 @app.get("/api/engines", dependencies=[Depends(require_auth)])
 def get_engines():
     # arquivo_corrompido: distingue "ninguém configurou motor" de "engines.json existe mas não
@@ -3714,6 +3732,132 @@ def model_effort(name: str, body: ModelEffortBody):
         raise HTTPException(e.status, e.detail)
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+# ── Modo de permissão em sessão viva (Task 5) ─────────────────────────────────────────
+# Leitura pelo rodapé do pane (⏸/⏵⏵) e troca via BTab (Shift+Tab). Medido em
+# 2026-08-20: stdin da statusline não traz o modo, /permissions não aceita arg,
+# BTab cicla 4 (plan/auto/manual/acceptEdits) ou 5 com bypassPermissions no arranque,
+# dontAsk só no arranque e sai do ciclo. Ver docs/superpowers/specs/2026-08-19-medicao-permissao-viva.md
+import app.permission_mode as perm_mode
+
+class PermissionModeBody(_StrictBody):
+    mode: str | None = None
+    permission_mode: str | None = None
+
+# Cache da lista viva por sessão (enquanto ela viver). Chave = "nome::jsonl" ou
+# "nome::sem-jsonl" quando ainda sem transcript; valor = (current, modos).
+_perm_modes_cache: dict[str, tuple[str, list[str]]] = {}
+
+def _cache_key_perm(name: str, info) -> str:
+    j = getattr(info, "jsonl", None) if info else None
+    return f"{name}::{j or 'sem-jsonl'}"
+
+def _guard_perm(name: str, info, escrita: bool) -> None:
+    """409 quando sessão não é claude, painel aberto, ou estado recusa digitação."""
+    if info is None:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+    if getattr(info, "provider", "claude") not in (None, "claude"):
+        raise HTTPException(409, detail=erro("erro_permissao_so_claude", "modo de permissao so vale para claude"))
+    _recusa_se_painel_aberto(name)
+    if escrita:
+        try:
+            terminal._require_drivable(name)
+        except terminal.NaoDigitou as e:
+            raise HTTPException(e.status, e.detail)
+        except PickerError as e:
+            raise HTTPException(e.status, e.detail)
+    else:
+        from app import tmux
+        from app.state import is_overlay
+        if not tmux.has_session(name):
+            raise HTTPException(409, "sessao nao esta viva")
+        try:
+            pane = tmux.capture_pane(name)
+        except Exception:
+            pane = ""
+        if pane and is_overlay(pane):
+            raise HTTPException(409, "ha um menu aberto no terminal da sessao")
+
+@app.get("/api/sessions/{name}/permission-modes", dependencies=[Depends(require_auth)])
+async def permission_modes(name: str, sondar: bool = False):
+    """Lista dos modos de permissão.
+
+    Sem sondar (default): só lê o modo atual via capture-pane (zero teclas) e devolve
+    o cache de `modes` se já existir, ou [] — não sonda. Com `?sondar=1`: dá a volta
+    completa de BTab, anota os modos, volta ao original e cacheia. `sondavel` diz se
+    a sessão pode ser sondada (false quando current == dontAsk, que não tem volta).
+    """
+    info = await _cached_info(name)
+    if not info:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+    _guard_perm(name, info, escrita=sondar)
+    key = _cache_key_perm(name, info)
+    # leitura do atual sem tecla (bloqueador 1)
+    try:
+        cur_now = await asyncio.to_thread(perm_mode.ler_modo, name)
+    except Exception:
+        cur_now = None
+    if cur_now is None:
+        raise HTTPException(409, detail=erro("erro_permissao_leitura", "não consegui ler o modo atual no rodapé"))
+    sondavel = cur_now != "dontAsk"
+    if not sondar:
+        # sem sondar: devolver cache se houver, ou []
+        hit = _perm_modes_cache.get(key)
+        if hit is not None:
+            _, modos_cached = hit
+            # revalida current mas mantém modos do cache
+            return {"current": cur_now, "modes": modos_cached, "sondavel": sondavel}
+        return {"current": cur_now, "modes": [], "sondavel": sondavel}
+    # com sondar=1: comportamento de antes (listar_modos + cache)
+    # se não sondável (dontAsk), não chamar listar_modos (bloqueador 2)
+    if not sondavel:
+        return {"current": cur_now, "modes": [], "sondavel": False}
+    hit = _perm_modes_cache.get(key)
+    if hit is not None:
+        _, modos_cached = hit
+        return {"current": cur_now, "modes": modos_cached, "sondavel": sondavel}
+    try:
+        cur, modos = await asyncio.to_thread(perm_mode.listar_modos, name)
+    except RuntimeError as e:
+        raise HTTPException(409, detail=erro("erro_permissao_leitura", str(e)))
+    _perm_modes_cache[key] = (cur, modos)
+    # cur de listar_modos deve ser == cur_now (voltou ao original), mas devolver o que ficou
+    return {"current": cur, "modes": modos, "sondavel": cur != "dontAsk"}
+
+@app.post("/api/sessions/{name}/permission-mode", dependencies=[Depends(require_auth)])
+async def permission_mode_set(name: str, body: PermissionModeBody):
+    """Troca o modo de permissão via BTab até casar o alvo (teto 6 teclas).
+
+    Devolve SEMPRE o modo que FICOU, nunca o pedido. Teto estourado ou alvo fora do
+    ciclo → 409 com o modo que ficou. 409 também quando sessão não é claude,
+    painel aberto, ou estado recusa digitação.
+    """
+    alvo = body.mode if body.mode is not None else body.permission_mode
+    if not alvo:
+        raise HTTPException(422, detail=erro("erro_permissao_invalida", "informe o modo desejado"))
+    # valida contra lista fechada antes de qualquer efeito
+    if alvo not in model_args.MODOS_PERMISSAO_CLAUDE:
+        raise HTTPException(409, detail=erro("erro_permissao_invalida", f"permission_mode: use um de {', '.join(model_args.MODOS_PERMISSAO_CLAUDE)}"))
+    info = await _cached_info(name)
+    if not info:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+    _guard_perm(name, info, escrita=True)
+    try:
+        ficou = await asyncio.to_thread(perm_mode.trocar_modo, name, alvo)
+    except RuntimeError as e:
+        raise HTTPException(409, detail=erro("erro_permissao_leitura", str(e)))
+    except ValueError as e:
+        raise HTTPException(409, detail=erro("erro_permissao_invalida", str(e)))
+    # cache da lista pode ter ficado com current velho; atualiza o current mas mantém modos
+    key = _cache_key_perm(name, info)
+    hit = _perm_modes_cache.get(key)
+    if hit is not None:
+        _, modos_cached = hit
+        _perm_modes_cache[key] = (ficou, modos_cached)
+    if ficou != alvo:
+        raise HTTPException(status_code=409, detail=erro("erro_permissao_teto", f"não alcançou {alvo!r} em {perm_mode.TETO_TECLAS} teclas — ficou em {ficou!r}", alvo=alvo, ficou=ficou, mode=ficou))
+    return {"mode": ficou, "current": ficou}
 
 
 # ── Catalogo de modelos de uma sessao Claude Code ───────────────────────────────────────────────

@@ -62,8 +62,10 @@ class PiAdapter:
         return await asyncio.to_thread(ti.deliverable, name)
 
     def spawn_command(self, cwd: str, session_id: str,
-                      model: str | None = None, effort: str | None = None) -> list[str]:
+                      model: str | None = None, effort: str | None = None,
+                      permission_mode: str | None = None) -> list[str]:
         # `--thinking`, não `--effort`: o binário do Pi não conhece a outra flag.
+        # permission_mode é ignorado (assinatura uniforme).
         return ["pi", "--session-id", session_id] + model_args.args_de("pi", model, effort)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:

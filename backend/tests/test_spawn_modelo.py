@@ -22,9 +22,33 @@ def test_codex_spawn_continua_recusando_com_a_assinatura_nova():
     """Sem os kwargs novos isso daria TypeError de argumento inesperado; com eles, a recusa de
     hoje é preservada. O teste prova as duas coisas de uma vez."""
     with pytest.raises(NotImplementedError):
-        get_adapter("codex").spawn_command("/tmp", "sid", model=None, effort=None)
+        get_adapter("codex").spawn_command("/tmp", "sid", None, None, None)
+    with pytest.raises(NotImplementedError):
+        get_adapter("codex").spawn_command("/tmp", "sid", None, None, "plan")
 
 
 def test_id_hostil_nao_chega_no_comando():
     with pytest.raises(ValueError):
         get_adapter("claude").spawn_command("/tmp", "sid", model="k3; touch /tmp/x", effort=None)
+
+
+def test_claude_spawn_com_permissao_plan():
+    assert get_adapter("claude").spawn_command("/tmp", "sid", None, None, permission_mode="plan") == [
+        "claude", "--session-id", "sid", "--permission-mode", "plan"]
+
+
+def test_claude_spawn_sem_permissao_identico_ao_de_hoje():
+    assert get_adapter("claude").spawn_command("/tmp", "sid", None, None, permission_mode=None) == [
+        "claude", "--session-id", "sid"]
+    assert get_adapter("claude").spawn_command("/tmp", "sid", None, None) == [
+        "claude", "--session-id", "sid"]
+
+
+def test_pi_spawn_ignora_permissao():
+    base = get_adapter("pi").spawn_command("/tmp", "sid", None, None)
+    assert get_adapter("pi").spawn_command("/tmp", "sid", None, None, permission_mode="plan") == base
+
+
+def test_kimi_spawn_ignora_permissao():
+    base = get_adapter("kimi").spawn_command("/tmp", "sid", None, None)
+    assert get_adapter("kimi").spawn_command("/tmp", "sid", None, None, permission_mode="plan") == base

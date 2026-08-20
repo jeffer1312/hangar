@@ -1153,7 +1153,8 @@ class SessionRegistry:
     def create(self, name: str, cwd: str, config_dir: str | None = None,
                resume_session_id: str | None = None, provider: str = "claude",
                engine: str | None = None, model: str | None = None,
-               effort: str | None = None, context_window: int | None = None) -> SessionInfo:
+               effort: str | None = None, context_window: int | None = None,
+               permission_mode: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
@@ -1218,6 +1219,7 @@ class SessionRegistry:
                 sid = resume_session_id
                 # Retomada de conversa MORTA (vinda do Arquivo): nao existe sessao antiga nem pid
                 # pra consultar. A escolha que vale e a que este create() recebeu.
+                # permission_mode NÃO entra no resume (a sessão retoma no estado dela).
                 cmd = shlex.join(["claude", "--resume", sid]
                                  + model_args.args_de(provider, model, effort))
         else:
@@ -1225,7 +1227,7 @@ class SessionRegistry:
             # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
             # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
             from app.adapters import get_adapter
-            cmd = shlex.join(get_adapter(provider).spawn_command(cwd, sid, model, effort))
+            cmd = shlex.join(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
         if engine:
             # `cp-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do

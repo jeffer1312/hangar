@@ -229,6 +229,8 @@ export interface WorkflowAgentDetail {
   prompt: string | null;
   result: string | null;
   tools: { name: string; count: number }[];
+  lastToolName: string | null;
+  lastToolTarget: string | null;
 }
 
 export interface WorkflowDetail {

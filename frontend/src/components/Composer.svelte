@@ -32,6 +32,7 @@
   import ContextRing from './ContextRing.svelte';
   import ClaudeModelPopover from './ClaudeModelPopover.svelte';
   import ClaudeEffortPopover from './ClaudeEffortPopover.svelte';
+  import ClaudePermissionPopover from './ClaudePermissionPopover.svelte';
   import CodexModelSheet from './CodexModelSheet.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
   import KimiModelPopover from './KimiModelPopover.svelte';
@@ -42,7 +43,7 @@
   import ConfirmSheet from './ConfirmSheet.svelte';
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
   import type { State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
@@ -446,6 +447,76 @@
   function handlePiModelApplied(model: string, effort: string | null) {
     piModel = model || piModel;
     piEffort = effort;
+  }
+
+  // ── Pílula de permissão (Task 5): terceira pill só em sessão Claude ─────────
+  // Lista viva via GET /permission-modes (ciclo 4 ou 5 lido ao vivo), troca via POST
+  // com BTab. Modos fora do ciclo (dontAsk isolado, bypass sem ter nascido nele)
+  // aparecem desabilitados com motivo "só na criação".
+  let permPopOpen = $state(false);
+  let permPillEl = $state<HTMLElement | null>(null);
+  let permCurrent = $state<string | null>(null);
+  let permModes = $state<string[]>([]);
+  let permError = $state<string | null>(null);
+  let permSondavel = $state(true);
+  let permCarregando = $state(false);
+  const isClaude = $derived(!isCodex && !isPi && !isKimi);
+  $effect(() => { if (permPopOpen) permError = null; });
+  $effect(() => {
+    if (!isClaude) return;
+    void sessionState;
+    const sn = sessionName;
+    // só lê o atual (zero teclas); ciclo só ao abrir a pílula (bloqueador 1)
+    getPermissionModes(sn, false)
+      .then((res) => {
+        permCurrent = res.current;
+        permModes = res.modes;
+        permSondavel = res.sondavel;
+      })
+      .catch(() => {
+        permCurrent = null;
+        permModes = [];
+      });
+  });
+  async function abrirPermissao() {
+    permPopOpen = true;
+    if (!permSondavel || permModes.length > 0 || permCarregando) return;
+    permCarregando = true;
+    try {
+      const res = await getPermissionModes(sessionName, true);
+      permCurrent = res.current;
+      permModes = res.modes;
+      permSondavel = res.sondavel;
+    } catch (e) {
+      permError = e instanceof Error ? e.message : String(e);
+    }
+    permCarregando = false;
+  }
+  // Reconciliação otimista: se a statusline um dia trouxer permissão, solta; hoje não traz,
+  // mas mantém o padrão do thinking do Pi (devolver o que FICOU).
+  async function handlePermApply(modo: string): Promise<void> {
+    permError = null;
+    try {
+      const res = await setPermissionMode(sessionName, modo);
+      // backend devolve o que FICOU (pode ser diferente do pedido se houve clamp/teto)
+      const ficou = res.mode ?? res.current ?? modo;
+      permCurrent = ficou;
+    } catch (e) {
+      // 409 com modo que ficou: backend devolveu {mode: ficou} mas jogou 409.
+      // Tenta extrair o modo que ficou da mensagem, senão mantém o atual.
+      const msg = e instanceof Error ? e.message : String(e);
+      permError = msg;
+      // tenta re-ler o atual para refletir o que ficou de verdade
+      try {
+        const cur = await getPermissionModes(sessionName);
+        permCurrent = cur.current;
+        permModes = cur.modes;
+      } catch (e2) {
+        // mantém permError do POST; releitura falhou mas 409 já está na tela
+        if (!permError) permError = e2 instanceof Error ? e2.message : String(e2);
+      }
+      throw e;
+    }
   }
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
@@ -1240,6 +1311,9 @@
     {#if modelError}
       <div class="send-error" role="alert">{modelError}</div>
     {/if}
+    {#if permError}
+      <div class="send-error" role="alert">{permError}</div>
+    {/if}
 
     <div class="control-row">
       <div class="control-left">
@@ -1339,6 +1413,19 @@
                 </span>
               </button>
             {/if}
+            <!-- Permissão: terceira pill só em Claude, fora do duo (chip próprio). -->
+            <button
+              class="model-pill"
+              bind:this={permPillEl}
+              onclick={abrirPermissao}
+              aria-haspopup="dialog"
+              aria-expanded={permPopOpen}
+              aria-label={m.composer_permissao()}
+            >
+              <span class="pill-label">
+                <span class="pill-model">{permCurrent ?? m.composer_permissao()}</span>
+              </span>
+            </button>
           </span>
         {:else}
           <button
@@ -1465,6 +1552,17 @@
     currentEffort={pillEffort}
     onApply={handleApply}
     onClose={() => (claudeEffortOpen = false)}
+  />
+
+  <ClaudePermissionPopover
+    open={permPopOpen}
+    anchor={permPillEl}
+    current={permCurrent}
+    modes={permModes}
+    sondavel={permSondavel}
+    carregando={permCarregando}
+    onApply={handlePermApply}
+    onClose={() => (permPopOpen = false)}
   />
 
   <CodexModelSheet
@@ -1693,7 +1791,7 @@
   @media (max-width: 819px) {
     /* 8px entre controles (era 4): com 4px o vão entre as peças ficava MENOR que o padding de
      dentro delas, e a fileira lia como um bloco único em vez de cinco controles. */
-  .control-left { gap: var(--space-2); }       /* fileira mais apertada no celular */
+  .control-left { gap: var(--space-2); flex-wrap: wrap; }       /* com três pílulas a fileira não cabe em 390px e quem encolhe é sempre o nome do modelo, porque as irmãs têm flex-shrink 0 */
     .pill-duo {
       display: inline-flex;
       align-items: center;

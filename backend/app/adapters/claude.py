@@ -38,8 +38,9 @@ class ClaudeAdapter:
         return await asyncio.to_thread(ti.deliverable, name)
 
     def spawn_command(self, cwd: str, session_id: str,
-                      model: str | None = None, effort: str | None = None) -> list[str]:
-        return ["claude", "--session-id", session_id] + model_args.args_de("claude", model, effort)
+                      model: str | None = None, effort: str | None = None,
+                      permission_mode: str | None = None) -> list[str]:
+        return ["claude", "--session-id", session_id] + model_args.args_de("claude", model, effort, permission_mode)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
         return str(Path(settings.projects_dir) / _SANITIZE_RE.sub("-", cwd) / f"{session_id}.jsonl")

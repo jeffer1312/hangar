@@ -319,13 +319,16 @@ export function createSession(
   engine?: string | null,
   model?: string | null,
   effort?: string | null,
+  permissionMode?: string | null,
 ): Promise<SessionInfo> {
-  // `model`/`effort` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
+  // `model`/`effort`/`permissionMode` no FIM de propósito: chamador antigo com 5 argumentos continua válido e abre
   // no padrão, byte por byte (o backend valida None = comportamento de hoje).
+  const body: Record<string, unknown> = { name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null,
+                           model: model ?? null, effort: effort ?? null };
+  if (permissionMode) body.permission_mode = permissionMode;
   return apiFetch<SessionInfo>('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ name, cwd, config_dir: configDir ?? null, provider, engine: engine ?? null,
-                           model: model ?? null, effort: effort ?? null }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -829,6 +832,10 @@ export interface EnginesResponse {
 
 export function getEngines(): Promise<EnginesResponse> {
   return apiFetch('/api/engines');
+}
+
+export function getProviders(): Promise<Record<string, { disponivel: boolean; motivo: string | null }>> {
+  return apiFetch('/api/providers');
 }
 
 export function getEnginesForServer(s: Server): Promise<EnginesResponse> {
@@ -1436,6 +1443,23 @@ export function setKimiModel(
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/kimi/model`, {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+// ── Modo de permissão do Claude (Task 5) ────────────────────────────────────────
+// Leitura pelo rodapé (⏸/⏵⏵) e troca via BTab. 409 = sessão não é claude, terminal
+// aberto, sessão trabalhando, ou alvo fora do ciclo / teto de 6 teclas.
+// GET devolve o ciclo vivo (4 ou 5) + o atual; POST devolve o que FICOU.
+
+export function getPermissionModes(name: string, sondar = false): Promise<{ current: string; modes: string[]; sondavel: boolean }> {
+  const qs = sondar ? "?sondar=1" : "";
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/permission-modes${qs}`);
+}
+
+export function setPermissionMode(name: string, mode: string): Promise<{ mode: string; current: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/permission-mode`, {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
   });
 }
 
