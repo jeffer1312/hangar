@@ -317,7 +317,10 @@
     const el = promptEl;
     if (!el) return;
     const check = () => { promptOverflows = el.scrollHeight > 136; };
-    void tick().then(() => requestAnimationFrame(check));
+    void tick().then(() => {
+      check();
+      requestAnimationFrame(check);
+    });
     promptObserver = new ResizeObserver(check);
     promptObserver.observe(el);
     return () => { promptObserver?.disconnect(); promptObserver = null; };
@@ -600,7 +603,7 @@
                   <div class="fala md">
                     {@html renderMarkdown(agentDetail.result)}
                   </div>
-                {:else if agentDetail.state === 'progress'}
+                {:else if agentDetail.state === 'progress' && agentDetail.toolCalls === 0}
                   <span class="rotulo">{m.atividade_resultado()}</span>
                   <div class="fala fala--vazia">
                     <span class="spin">◐</span> {m.atividade_pensando()}

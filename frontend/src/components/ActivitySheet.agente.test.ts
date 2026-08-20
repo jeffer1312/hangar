@@ -125,6 +125,144 @@ describe('ActivitySheet — detalhe do agente (T6)', () => {
     expect(agora).toContain('grep -rn ctx-menu');
     // não deve repetir o nome como alvo falso
     expect(agora).not.toMatch(/Bash — Bash$/);
+    // bloqueador 1 (r2): com 3 chamadas, NÃO pode mostrar "nenhuma ferramenta chamada"
+    expect(document.querySelector('.fala--vazia')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/nenhuma ferramenta|no tool/i);
+    unmount(t.comp);
+  });
+
+  it('detalhe vivo sem ferramentas mostra "Ainda pensando"', async () => {
+    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', status: 'running', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: true }]);
+    api.getWorkflow.mockResolvedValue({
+      runId: 'wf1', name: 'Test', status: 'running', totalTokens: 0, durationMs: 0, summary: null,
+      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'progress', model: null, tokens: 0, durationMs: 0, toolCalls: 0, lastToolName: null, lastToolSummary: null, resultPreview: null }],
+    });
+    api.getWorkflowAgent.mockResolvedValue({
+      agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'progress', model: null, tokens: 0, durationMs: 0, toolCalls: 0,
+      prompt: 'prompt vivo vazio', result: null, tools: [], lastToolName: null, lastToolTarget: null,
+    });
+    const t = montar();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-card')!.click();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-agent')!.click();
+    await tick(); await tick(); await tick();
+    expect(document.querySelector('.fala--vazia')).not.toBeNull();
+    // contém a frase de "pensando" (pt ou en)
+    expect(document.body.textContent).toMatch(/Ainda pensando|Still thinking/);
+    unmount(t.comp);
+  });
+
+  it('prompt longo colapsa com botão mostrar o prompt inteiro e expande ao clicar', async () => {
+    // happy-dom não tem layout: scrollHeight é sempre 0 -> precisa mockar para simular overflow
+    const longPrompt = 'Você é um revisor **adversarial** de plano de implementação. '.repeat(30)
+      + '\n\n1. **Ordem e dependências:** a sequência T1→T5 se sustenta? '.repeat(10);
+    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', status: 'completed', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: false }]);
+    api.getWorkflow.mockResolvedValue({
+      runId: 'wf1', name: 'Test', status: 'completed', totalTokens: 0, durationMs: 0, summary: null,
+      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: 'claude-sonnet', tokens: 100, durationMs: 1000, toolCalls: 3, lastToolName: 'Grep', lastToolSummary: null, resultPreview: null }],
+    });
+    api.getWorkflowAgent.mockResolvedValue({
+      agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: 'claude-sonnet', tokens: 100, durationMs: 1000, toolCalls: 3,
+      prompt: longPrompt, result: 'resultado ok', tools: [{ name: 'Bash', count: 1 }], lastToolName: 'Bash', lastToolTarget: 'test',
+    });
+    // força overflow: bubble com scrollHeight 400 (>136)
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(400);
+    const t = montar();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-card')!.click();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-agent')!.click();
+    await tick(); await tick(); await tick();
+    // o check roda via tick().then(check) + requestAnimationFrame: espera os dois
+    await tick();
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    await tick(); await tick();
+    const bubble = document.querySelector('.bubble') as HTMLElement | null;
+    expect(bubble).not.toBeNull();
+    expect(bubble!.classList.contains('clamp')).toBe(true);
+    const btn = document.querySelector<HTMLButtonElement>('.ver-tudo');
+    expect(btn).not.toBeNull();
+    expect(btn!.textContent).toMatch(/mostrar o prompt inteiro|show full prompt/i);
+    // clicar expande
+    btn!.click();
+    await tick(); await tick();
+    expect(bubble!.classList.contains('clamp')).toBe(false);
+    expect(document.querySelector('.ver-tudo')).toBeNull();
+    spy.mockRestore();
+    unmount(t.comp);
+  });
+
+  it('prompt curto não mostra botão de expandir', async () => {
+    const shortPrompt = 'prompt curto';
+    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', status: 'completed', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: false }]);
+    api.getWorkflow.mockResolvedValue({
+      runId: 'wf1', name: 'Test', status: 'completed', totalTokens: 0, durationMs: 0, summary: null,
+      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: null, tokens: 0, durationMs: 1000, toolCalls: 0, lastToolName: null, lastToolSummary: null, resultPreview: null }],
+    });
+    api.getWorkflowAgent.mockResolvedValue({
+      agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: null, tokens: 0, durationMs: 1000, toolCalls: 0,
+      prompt: shortPrompt, result: 'r', tools: [], lastToolName: null, lastToolTarget: null,
+    });
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(20);
+    const t = montar();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-card')!.click();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-agent')!.click();
+    await tick(); await tick(); await tick();
+    await tick();
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    await tick();
+    expect(document.querySelector('.ver-tudo')).toBeNull();
+    expect(document.querySelector('.bubble')?.classList.contains('clamp')).toBe(false);
+    spy.mockRestore();
+    unmount(t.comp);
+  });
+
+  it('prompt longo responde a ResizeObserver em troca de largura 1280→390→1280', async () => {
+    const longPrompt = 'linha longa '.repeat(80);
+    api.getWorkflows.mockResolvedValue([{ runId: 'wf1', name: 'Test', status: 'completed', agentCount: 1, phaseCount: 0, totalTokens: 0, durationMs: 0, startTime: 0, running: false }]);
+    api.getWorkflow.mockResolvedValue({
+      runId: 'wf1', name: 'Test', status: 'completed', totalTokens: 0, durationMs: 0, summary: null,
+      phases: [], agents: [{ agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: null, tokens: 0, durationMs: 1000, toolCalls: 0, lastToolName: null, lastToolSummary: null, resultPreview: null }],
+    });
+    api.getWorkflowAgent.mockResolvedValue({
+      agentId: 'a1', label: 'Agente', phaseTitle: null, state: 'done', model: null, tokens: 0, durationMs: 1000, toolCalls: 0,
+      prompt: longPrompt, result: 'r', tools: [], lastToolName: null, lastToolTarget: null,
+    });
+    // captura callback do ResizeObserver para simular resize
+    let roCb: ResizeObserverCallback | null = null;
+    const RealRO = globalThis.ResizeObserver;
+    class MockRO {
+      constructor(cb: ResizeObserverCallback) { roCb = cb; }
+      observe(_target: Element) {}
+      disconnect() {}
+      unobserve(_target: Element) {}
+    }
+    (globalThis as unknown as { ResizeObserver: typeof MockRO }).ResizeObserver = MockRO as unknown as typeof RealRO;
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(300);
+    const t = montar();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-card')!.click();
+    await tick(); await tick(); await tick();
+    document.querySelector<HTMLButtonElement>('.wf-agent')!.click();
+    await tick(); await tick(); await tick();
+    await tick();
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    await tick();
+    expect(document.querySelector('.bubble')?.classList.contains('clamp')).toBe(true);
+    expect(document.querySelector('.ver-tudo')).not.toBeNull();
+    // simula resize estreito -> ainda overflow (mantém clamp)
+    if (roCb) (roCb as unknown as () => void)();
+    await tick();
+    expect(document.querySelector('.bubble')?.classList.contains('clamp')).toBe(true);
+    // volta largo -> ainda overflow (prompt continua longo)
+    if (roCb) (roCb as unknown as () => void)();
+    await tick();
+    expect(document.querySelector('.bubble')?.classList.contains('clamp')).toBe(true);
+    spy.mockRestore();
+    (globalThis as unknown as { ResizeObserver: typeof RealRO }).ResizeObserver = RealRO;
     unmount(t.comp);
   });
 });
