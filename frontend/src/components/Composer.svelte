@@ -464,6 +464,7 @@
   $effect(() => { if (permPopOpen) permError = null; });
   $effect(() => {
     if (!isClaude) return;
+    void sessionState;
     const sn = sessionName;
     // só lê o atual (zero teclas); ciclo só ao abrir a pílula (bloqueador 1)
     getPermissionModes(sn, false)

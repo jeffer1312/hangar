@@ -670,12 +670,6 @@
     padding: var(--space-4) var(--space-5);
     padding-top: calc(env(safe-area-inset-top) + var(--space-4));
     border-bottom: 1px solid var(--border-subtle);
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--glass-panel);
-    backdrop-filter: blur(12px);
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
   @media (min-width: 720px) { .modal-head { padding-top: var(--space-4); } }
   .modal-title {

@@ -67,8 +67,10 @@ def test_perm_get_ok():
     # sem sondar (default): não chama listar_modos, devolve current de ler_modo e modes []
     info = _info_claude()
     with patch("app.api._cached_info", return_value=info), \
-         patch("app.api.terminal._require_drivable"), \
          patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.tmux.has_session", return_value=True), \
+         patch("app.tmux.capture_pane", return_value=""), \
+         patch("app.state.is_overlay", return_value=False), \
          patch("app.permission_mode.ler_modo", return_value="plan") as mock_ler, \
          patch("app.permission_mode.listar_modos") as mock_listar:
         r = _client().get("/api/sessions/sess/permission-modes", headers=AUTH)
@@ -89,6 +91,32 @@ def test_perm_get_ok():
     assert r2.json()["current"] == "plan"
     assert r2.json()["modes"] == ["plan", "auto", "manual", "acceptEdits"]
     assert mk2.call_count == 1
+
+def test_perm_get_sessao_trabalhando_200_le_o_modo():
+    # leitura (sem sondar) com sessão trabalhando: deve devolver 200 e o current lido, sem 409
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.tmux.has_session", return_value=True), \
+         patch("app.tmux.capture_pane", return_value="pane sem overlay mas com spinner"), \
+         patch("app.state.is_overlay", return_value=False), \
+         patch("app.permission_mode.ler_modo", return_value="plan") as mock_ler, \
+         patch("app.permission_mode.listar_modos") as mock_listar:
+        r = _client().get("/api/sessions/sess/permission-modes", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["current"] == "plan"
+    assert mock_ler.call_count == 1
+    assert mock_listar.call_count == 0
+
+def test_perm_get_sondar_com_sessao_trabalhando_409():
+    # com sondar=1 e sessão trabalhando: o guard de escrita deve recusar com 409
+    from app.terminal_input import TerminalInput
+    info = _info_claude()
+    with patch("app.api._cached_info", return_value=info), \
+         patch("app.api._recusa_se_painel_aberto"), \
+         patch("app.api.terminal._require_drivable", side_effect=TerminalInput.NaoDigitou(409, "a sessao esta trabalhando — espere ela terminar")):
+        r = _client().get("/api/sessions/sess/permission-modes?sondar=1", headers=AUTH)
+    assert r.status_code == 409
 
 def test_perm_get_nao_claude_409():
     info = _info_kimi()

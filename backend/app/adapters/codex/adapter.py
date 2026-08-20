@@ -823,7 +823,8 @@ class CodexAdapter:
         return {"model": None, "effort": None}
 
     def spawn_command(self, cwd: str, session_id: str,
-                      model: str | None = None, effort: str | None = None) -> list[str]:
+                      model: str | None = None, effort: str | None = None,
+                      permission_mode: str | None = None) -> list[str]:
         # Assinatura aceita model/effort so pra conformar com o Protocol — o caminho Codex e morto
         # (registry.create recusa provider codex antes da montagem) e a recusa e o comportamento.
         # Sessao Codex NAO nasce de um comando tmux -- nasce de thread/start no app-server

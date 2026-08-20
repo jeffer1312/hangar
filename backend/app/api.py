@@ -3753,19 +3753,31 @@ def _cache_key_perm(name: str, info) -> str:
     j = getattr(info, "jsonl", None) if info else None
     return f"{name}::{j or 'sem-jsonl'}"
 
-def _guard_perm(name: str, info) -> None:
+def _guard_perm(name: str, info, escrita: bool) -> None:
     """409 quando sessão não é claude, painel aberto, ou estado recusa digitação."""
     if info is None:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if getattr(info, "provider", "claude") not in (None, "claude"):
         raise HTTPException(409, detail=erro("erro_permissao_so_claude", "modo de permissao so vale para claude"))
     _recusa_se_painel_aberto(name)
-    try:
-        terminal._require_drivable(name)
-    except terminal.NaoDigitou as e:
-        raise HTTPException(e.status, e.detail)
-    except PickerError as e:
-        raise HTTPException(e.status, e.detail)
+    if escrita:
+        try:
+            terminal._require_drivable(name)
+        except terminal.NaoDigitou as e:
+            raise HTTPException(e.status, e.detail)
+        except PickerError as e:
+            raise HTTPException(e.status, e.detail)
+    else:
+        from app import tmux
+        from app.state import is_overlay
+        if not tmux.has_session(name):
+            raise HTTPException(409, "sessao nao esta viva")
+        try:
+            pane = tmux.capture_pane(name)
+        except Exception:
+            pane = ""
+        if pane and is_overlay(pane):
+            raise HTTPException(409, "ha um menu aberto no terminal da sessao")
 
 @app.get("/api/sessions/{name}/permission-modes", dependencies=[Depends(require_auth)])
 async def permission_modes(name: str, sondar: bool = False):
@@ -3779,7 +3791,7 @@ async def permission_modes(name: str, sondar: bool = False):
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    _guard_perm(name, info)
+    _guard_perm(name, info, escrita=sondar)
     key = _cache_key_perm(name, info)
     # leitura do atual sem tecla (bloqueador 1)
     try:
@@ -3830,7 +3842,7 @@ async def permission_mode_set(name: str, body: PermissionModeBody):
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    _guard_perm(name, info)
+    _guard_perm(name, info, escrita=True)
     try:
         ficou = await asyncio.to_thread(perm_mode.trocar_modo, name, alvo)
     except RuntimeError as e:

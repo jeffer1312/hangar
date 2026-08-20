@@ -22,7 +22,9 @@ def test_codex_spawn_continua_recusando_com_a_assinatura_nova():
     """Sem os kwargs novos isso daria TypeError de argumento inesperado; com eles, a recusa de
     hoje é preservada. O teste prova as duas coisas de uma vez."""
     with pytest.raises(NotImplementedError):
-        get_adapter("codex").spawn_command("/tmp", "sid", model=None, effort=None)
+        get_adapter("codex").spawn_command("/tmp", "sid", None, None, None)
+    with pytest.raises(NotImplementedError):
+        get_adapter("codex").spawn_command("/tmp", "sid", None, None, "plan")
 
 
 def test_id_hostil_nao_chega_no_comando():
