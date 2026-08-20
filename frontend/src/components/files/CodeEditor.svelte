@@ -45,13 +45,17 @@
     ]);
     const linguagem = await gramatica(path);
 
+    // `{dark: true}` não é enfeite: é o que faz o CodeMirror (e o baseTheme do merge) aplicar os
+    // seletores `&dark`. Sem isso ele assume tema CLARO e a dobra vinha com um gradiente #f3f3f3
+    // — a faixa branca atravessando o código escuro.
     const tema = EV.theme({
-      '&': { height: '100%', fontSize: '12.5px', backgroundColor: 'transparent', color: 'var(--text-primary)' },
+      '&': { height: '100%', fontSize: '13px', backgroundColor: 'transparent', color: 'var(--text-primary)' },
       '.cm-scroller > .cm-content': { paddingBottom: '12px' },
       '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.7', overflow: 'auto' },
       '.cm-line': { padding: '0 16px' },
-      '.cm-gutterElement': { paddingLeft: '10px' },
-      '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--text-muted)' },
+      '.cm-gutterElement': { padding: '0 8px 0 6px' },
+      '.cm-gutters': { backgroundColor: 'transparent', border: 'none', color: 'var(--text-muted)',
+                       minWidth: '34px', fontSize: '11.5px' },
       '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
       '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--text-secondary)' },
       '.cm-content': { caretColor: 'var(--accent)' },
@@ -82,14 +86,17 @@
       '.cm-insertedLine, .cm-deletedLine': { textDecoration: 'none' },
       // A dobra vem clara por padrão (o estilo do pacote assume tema claro). Sem isto ela vira
       // uma faixa branca no meio do código escuro.
+      // Quase da cor do código: a dobra é uma costura entre dois trechos, não uma barra.
       '.cm-collapsedLines': {
-        color: 'var(--text-muted)', backgroundColor: 'var(--fill-subtle)',
-        padding: '4px 8px 4px 64px', fontSize: '11px',
+        // `background`, não `background-color`: o pacote pinta com um gradiente, e trocar só a
+        // cor deixava o gradiente por baixo.
+        color: 'var(--text-muted)', background: 'transparent',
+        padding: '3px 8px 3px 50px', fontSize: '11px',
         borderTop: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)',
       },
-      '.cm-collapsedLines:hover': { backgroundColor: 'var(--bg-hover)' },
+      '.cm-collapsedLines:hover': { background: 'var(--fill-subtle)' },
       '.cm-collapsedLines::before, .cm-collapsedLines::after': { content: "'⋯'", opacity: '0.6' },
-    });
+    }, { dark: true });
 
     const teclas = [...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab, ...foldKeymap];
     if (onSalvar) {

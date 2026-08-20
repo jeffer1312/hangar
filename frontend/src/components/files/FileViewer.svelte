@@ -359,6 +359,10 @@
     background: var(--bg-base);
     --cp-editor-surface: color-mix(in srgb, var(--bg-elevated) 75%, var(--bg-base));
   }
+  /* Cartão só no desktop: no celular o visor é a tela inteira e um raio ali fica solto. */
+  @media (min-width: 820px) {
+    .visor { border: 1px solid var(--border-subtle); border-radius: 12px; }
+  }
   /* ── faixa de abas (valores do mock C) ────────────────────────────────────────────────── */
   .abas {
     display: flex; align-items: center; gap: 4px;
@@ -396,10 +400,13 @@
   }
   .seg button {
     border: 0; background: transparent; color: var(--text-muted);
-    font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+    font: inherit; font-size: 11.5px; line-height: 1.35; padding: 3px 11px;
+    border-radius: 6px; cursor: pointer;
     transition: background 120ms ease, color 120ms ease;
   }
-  .seg button.on { background: var(--surface-raised); color: var(--text-primary); font-weight: 500; }
+  /* Tinta sobre o vidro, não uma superfície opaca: `--surface-raised` deixava o botão ativo com
+     mais peso do que o mock e engordava a faixa inteira. */
+  .seg button.on { background: rgba(255, 248, 244, 0.09); color: var(--text-primary); font-weight: 500; }
 
   .icone-acao {
     width: 28px; height: 28px; flex: none; margin-bottom: 6px;
@@ -445,7 +452,8 @@
   .stat { font-family: var(--font-mono); font-size: 12px; font-weight: 600; flex: none; display: flex; gap: 8px; }
   .stat .stat-add { color: var(--success); }
   .stat .stat-del { color: var(--error); }
-  .divisor { width: 1px; height: 14px; background: var(--border-subtle); flex: none; }
+  /* `--border-subtle` (7% de alfa) some num traço de 1px — some mesmo, foi o que aconteceu. */
+  .divisor { width: 1px; height: 14px; background: rgba(255, 248, 244, 0.16); flex: none; }
   .escopo {
     background: none; border: 0; padding: 0;
     font: inherit; font-size: 11px; color: var(--text-muted);
