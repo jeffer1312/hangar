@@ -231,19 +231,98 @@ Cada `BTab` grava **um** `{"type":"permission-mode","permissionMode":"<modo>"}` 
 
 ---
 
-## Recomendação para a Task 5
+## Step 5 — modo de arranque entra no ciclo? (adendo 20/08)
 
-**Caminho recomendado: (b) Shift+Tab com leitura de confirmação — único caminho seguro hoje.**
+Hipótese do usuário: `bypassPermissions` seria alcançável por `BTab` se a sessão tivesse nascido com ele.
 
-- **Leitura:** `tmux capture-pane -p -t '=nome:'` + parse da última linha que casa `⏸|⏵⏵ .+ (mode on|accept edits on)` (mesma família de `terminal_input.py:_READY_MARKERS`). Exige **duas capturas** no gate de "posso digitar?" (precedente `model_picker`), para não confundir spinner com prompt.
+**Sessão `t4-bypass` (`permission_mode=bypassPermissions`):**
+
+```bash
+curl -s -H "Authorization: Bearer $CP_AUTH_TOKEN" -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8765/api/sessions \
+  -d '{"name":"t4-bypass","cwd":"/home/jefferson/pessoal/hangar","provider":"claude","config_dir":"/home/jefferson/.claude-t4","permission_mode":"bypassPermissions"}'
+# → {"name":"t4-bypass", ... "jsonl":".../574a1900-c9d1-4b51-b80d-a82bdba2538a.jsonl"}
+
+pane=$(tmux display -p -t '=t4-bypass:' '#{pane_pid}')  # → 1884781
+tr '\0' ' ' < /proc/$pane/cmdline
+# → claude --session-id 574a1900-c9d1-4b51-b80d-a82bdba2538a --permission-mode bypassPermissions
+
+tmux capture-pane -p -t '=t4-bypass:' | grep "mode on"
+# → ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+```
+
+Ciclo completo a partir de `bypass` (10 `BTab`):
+
+```
+bypass permissions on
+→ BTab → auto mode on
+→ BTab → manual mode on
+→ BTab → accept edits on
+→ BTab → plan mode on
+→ BTab → bypass permissions on   # volta
+→ BTab → auto mode on
+→ BTab → manual mode on
+→ BTab → accept edits on
+→ BTab → plan mode on
+→ BTab → bypass permissions on
+```
+
+Prova:
+
+```bash
+for i in $(seq 1 10); do tmux send-keys -t '=t4-bypass:' BTab; sleep 1; tmux capture-pane -p -t '=t4-bypass:' | grep -E "mode on|accept edits|bypass"; done
+# 1: auto, 2: manual, 3: accept edits, 4: plan, 5: bypass, 6: auto, 7: manual, 8: accept edits, 9: plan, 10: bypass
+```
+
+**Resposta 5a (bypass):**
+- (a) **SIM**, o ciclo **inclui** `bypassPermissions` quando a sessão nasceu com ele.
+- (b) **SIM**, dá para voltar — após sair de `bypass`, 4 `BTab` o trazem de volta.
+- (c) **5 posições**, não substituição: `bypass → auto → manual → acceptEdits → plan → bypass` (os 4 comuns + bypass).
+
+**Sessão `t4-dontask` (`permission_mode=dontAsk`):**
+
+```bash
+curl -s -H "Authorization: Bearer $CP_AUTH_TOKEN" -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:8765/api/sessions \
+  -d '{"name":"t4-dontask","cwd":"/home/jefferson/pessoal/hangar","provider":"claude","config_dir":"/home/jefferson/.claude-t4","permission_mode":"dontAsk"}'
+# → claude --session-id 14ce138d-... --permission-mode dontAsk
+tmux capture-pane -p -t '=t4-dontask:' | grep "mode on"
+# → ⏵⏵ don't ask on (shift+tab to cycle) · ← for agents
+
+for i in $(seq 1 10); do tmux send-keys -t '=t4-dontask:' BTab; sleep 1; tmux capture-pane -p -t '=t4-dontask:' | grep -E "mode on|accept edits|bypass|dont"; done
+# Start: don't ask on
+# 1: manual, 2: accept edits, 3: plan, 4: auto, 5: manual, 6: accept edits, 7: plan, 8: auto, 9: manual, 10: accept edits
+# → dontAsk NUNCA volta
+```
+
+**Resposta 5b (dontAsk):**
+- (a) **Só como inicial** — aparece como `don't ask on` no arranque.
+- (b) **NÃO dá para voltar** por `BTab`: após o primeiro `BTab` sai para `manual` e o ciclo vira `manual → acceptEdits → plan → auto` (4), sem `dontAsk` e sem `bypass`.
+- (c) **1 + 4, depois 4**: inicial isolado, depois ciclo fixo de 4 sem ele.
+
+```bash
+curl -s -H "Authorization: Bearer $CP_AUTH_TOKEN" -X DELETE http://127.0.0.1:8765/api/sessions/t4-bypass   # → {"ok":true}
+curl -s -H "Authorization: Bearer $CP_AUTH_TOKEN" -X DELETE http://127.0.0.1:8765/api/sessions/t4-dontask  # → {"ok":true}
+```
+
+---
+
+## Recomendação para a Task 5 (corrigida)
+
+**Caminho recomendado: (b) Shift+Tab com leitura de confirmação — único caminho seguro hoje, com nuance por modo de arranque.**
+
+- **Leitura:** `tmux capture-pane -p -t '=nome:'` + parse da última linha que casa `⏸|⏵⏵ .+ (mode on|accept edits on|bypass permissions on|don't ask on)` (mesma família de `terminal_input.py:_READY_MARKERS`). Exige **duas capturas** no gate de "posso digitar?" (precedente `model_picker`), para não confundir spinner com prompt.
 - **Escrita:** `tmux send-keys -t '=nome:' BTab` **N vezes** até o rodapé casar o modo pedido, com **confirmação por string** (`permissionMode` desejado está contido na linha do rodapé) — nunca contar `Down` cego. À semelhança do `model_picker`, esperar o rodapé após cada `BTab` (até 2 s) antes de parsear.
-- **Limitação conhecida e aceita:** o ciclo cobre **4 de 6** modos (`plan`, `auto`, `manual`, `acceptEdits`). `bypassPermissions` e `dontAsk` **não são alcançáveis por `BTab`** — só no arranque (`--permission-mode`) ou editando `~/.claude/settings.json` (`permissions.defaultMode`). A T5, se seguir este caminho, deve oferecer **só os 4 no popover** e documentar que os outros 2 exigem recriar a sessão (Task 3 já cobre).
-- **Rastro aceitável:** sem poluição de scrollback; jsonl grava `permission-mode`/`system` mas não como `user_msg` — o app não mostra. Teto igual ao do `model_picker` (sem `❯ /model` empilhado).
+- **Limitação corrigida:**
+  - `plan`/`auto`/`manual`/`acceptEdits`: **sempre no ciclo** (4). T5 pode oferecer os 4 sem restrição.
+  - `bypassPermissions`: **no ciclo só se a sessão nasceu com ele** — aí o ciclo vira **5** (`bypass → auto → manual → acceptEdits → plan → bypass`) e é reversível. Se a sessão nasceu em outro modo, `bypass` **não é alcançável por `BTab`** (só recriando, Task 3).
+  - `dontAsk`: **só inicial, sem retorno** — `BTab` sai para `manual` e nunca volta; T5 não pode reacessá-lo em sessão viva. Documentar como "requer recriar".
+- **Rastro aceitável:** sem poluição de scrollback; jsonl grava `permission-mode`/`system` mas não como `user_msg` — o app não mostra. Teto igual ao do `model_picker`.
 - **Caminhos descartados:**
-  - **(a) sidecar/comando direto:** inexistentes — stdin da statusline não traz `permissionMode` (provado acima, JSON sem campo), e `/permissions` não aceita argumento.
-  - **(c) parar:** desnecessário — (b) é seguro para os 4 modos, com rastro mínimo.
+  - **(a) sidecar/comando direto:** inexistentes — stdin da statusline não traz `permissionMode` (provado no Step 1, JSON sem campo), e `/permissions` não aceita argumento.
+  - **(c) parar:** desnecessário para os 4 (+ bypass quando aplicável); para `dontAsk` e `bypass` fora do caso acima, **(c) vale** — T5 deve expor só o alcançável e avisar que os demais exigem recriar.
 
-**Se a T5 exigir os 6 modos em sessão viva:** então a resposta cai em **(c) "nenhum caminho seguro — parar"** para os 2 faltantes, e a T5 deve ser reescrita para só trocar entre os 4 via `BTab`, ou gravar `permissions.defaultMode` em `settings.json` e pedir `reload` (não coberto por esta medição).
+**Se a T5 exigir os 6 modos em qualquer sessão viva:** então para `dontAsk` (e `bypass` sem ter nascido nele) a resposta cai em **(c) "nenhum caminho seguro — parar"**, e a T5 deve ser reescrita para só trocar entre os alcançáveis via `BTab`, ou gravar `permissions.defaultMode` em `settings.json` e pedir `reload` (não coberto).
 
 ---
 
