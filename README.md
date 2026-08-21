@@ -36,6 +36,19 @@ Hangar is a self-hosted PWA that lets you keep an eye on agent sessions without 
 
 ## See it in action
 
+<p align="center">
+  <img src="docs/img/hangar-chat-pairing.png" width="410" alt="Live chat with a paired-session message and the session context panel" />
+  <img src="docs/img/hangar-shared-contract.png" width="410" alt="Working group sheet with the shared contract two agents negotiated" />
+</p>
+<p align="center">
+  <img src="docs/img/hangar-split-terminal.png" width="410" alt="Two sessions side by side with the embedded real terminal" />
+  <img src="docs/img/hangar-board.png" width="410" alt="Kanban board with Claude, Pi, and Kimi sessions by state" />
+</p>
+<p align="center">
+  <img src="docs/img/hangar-new-session.png" width="410" alt="New session sheet: folder, provider, account, model" />
+  <img src="docs/img/hangar-settings.png" width="410" alt="Appearance settings over a live chat, with the system wallpaper showing through" />
+</p>
+
 ### One cockpit for different agents
 
 <p align="center">
