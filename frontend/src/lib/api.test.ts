@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { overwriteGetLocale as overwriteFront } from '../paraglide/runtime';
 import { configureLocale } from '@hangar/core';
 function overwriteGetLocale(fn: () => 'en' | 'pt') {
-  overwriteFront(fn as unknown as () => string);
+  overwriteFront(fn);
   configureLocale({ getLocale: fn });
 }
 
