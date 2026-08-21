@@ -93,9 +93,15 @@ function Instale-ClaudeCode {
     # NAO vai por winget. O pacote 'Anthropic.ClaudeCode' de la depende de alguem atualizar o
     # manifesto da comunidade, e fica pra tras das versoes que a Anthropic publica - o usuario
     # instalava e ja nascia velho. O instalador oficial baixa do canal de releases deles, confere
-    # o SHA256 do binario e chama `claude.exe install`, que resolve o PATH sozinho.
+    # o SHA256 do binario e chama `claude.exe install`.
     # Conferido em 06/08/2026: claude.ai/install.ps1 redireciona pra
     # downloads.claude.ai/claude-code-releases/bootstrap.ps1.
+    # O PATH ele NAO resolve - medido em 21/08/2026 num Windows 11 limpo (Claude Code 2.1.238): o
+    # binario cai em ~\.local\bin\claude.exe e o proprio instalador avisa "is not in your PATH",
+    # mandando editar nas Propriedades do Sistema. Sem ninguem fazer isso o `Tem 'claude'` abaixo
+    # falhava e a instalacao inteira parava no passo 1 com "feche e abra o terminal", que nao
+    # resolveria nada. Quem poe no PATH do usuario e este script (mesmo diretorio que o 7b ja usa
+    # pro cp-send).
     $rotulo = 'Claude Code'
     if (Tem 'claude') { Ok $rotulo; return $true }
     if ($SoChecar) { Falta "$rotulo - e o que o app pilota"; $script:pendencias += $rotulo; return $false }
@@ -114,10 +120,17 @@ function Instale-ClaudeCode {
         $script:pendencias += $rotulo
         return $false
     }
+    $binClaude = Join-Path $HOME '.local\bin'
+    if (Test-Path (Join-Path $binClaude 'claude.exe')) {
+        $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
+        if ($pathUsuario -notlike "*$binClaude*") {
+            [Environment]::SetEnvironmentVariable('Path', "$pathUsuario;$binClaude", 'User')
+            Nota "$binClaude adicionado ao PATH do usuario (o instalador da Anthropic nao faz isso)"
+        }
+    }
     Atualiza-Path
     if (Tem 'claude') { Ok "$rotulo instalado"; return $true }
-    # O instalador escreve o PATH no perfil; sessao ja aberta as vezes nao pega nem com o reload.
-    Erro 'Claude Code instalou mas o comando nao aparece nesta sessao'
+    Erro "Claude Code instalou mas o comando nao aparece (esperado em $binClaude\claude.exe)"
     Nota 'feche e abra o terminal, e rode o install de novo'
     $script:pendencias += $rotulo
     return $false
@@ -269,7 +282,11 @@ $modulos = "$raiz\frontend\node_modules"
 $marcaArq = "$raiz\frontend\dist\.cp-build-stamp"
 
 $marca = $null
-if (Tem 'git') {
+# Test-Path .git ANTES de chamar o git: sem repositorio, o `rev-parse` escreve "fatal: not a git
+# repository" no stderr, e com $ErrorActionPreference='Stop' isso e excecao TERMINANTE mesmo com
+# `2>$null` - medido em 21/08/2026 numa copia sem historico: o instalador morria aqui, no passo 4,
+# em vez de cair no "sem git nao da pra saber o que mudou" logo abaixo, que existe pra este caso.
+if ((Tem 'git') -and (Test-Path "$raiz\.git")) {
     $commit = (& git -C $raiz rev-parse HEAD 2>$null)
     $sujo = (& git -C $raiz status --porcelain -- frontend 2>$null) -join "`n"
     if ($commit) { $marca = "$commit`n$sujo" }
@@ -633,91 +650,97 @@ if (-not (Test-Path $slJs)) {
 Titulo '5d/8 Publicar o backend no Tailscale'
 $script:cpPublicUrl = $null
 $portaBack = Porta-Do-Env 'CP_PORT' 8765
-if (-not (Tem 'tailscale')) {
-    Nota 'tailscale nao instalado - pulando (o acesso de fora fica por sua conta)'
-} else {
-    $eapAnt = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'   # chamada nativa: stderr nao pode virar excecao
-    try {
-        $tsJson = $null
-        # Com timeout: este passo roda tambem DESATENDIDO (-Update, via o hook post-merge - ver o
-        # comentario do passo 5d) e um tailscaled travado nao pode pendurar um `git pull` pra
-        # sempre. Achado MINOR da revisao final.
-        $jobTs = Start-Job -ScriptBlock { & tailscale status --json 2>$null }
-        if (Wait-Job $jobTs -Timeout 5) {
-            try { $tsJson = (Receive-Job $jobTs | Out-String | ConvertFrom-Json) } catch { }
-        } else {
-            Stop-Job $jobTs -ErrorAction SilentlyContinue
-            Nota 'tailscale status nao respondeu em 5s - pulando deteccao'
-        }
-        Remove-Job $jobTs -Force -ErrorAction SilentlyContinue
-        $dns = $null
-        if ($tsJson -and $tsJson.Self -and $tsJson.Self.DNSName) { $dns = $tsJson.Self.DNSName.TrimEnd('.') }
-        if (-not $dns) {
-            Nota 'tailscale sem nome de no (nao logado?) - rode `tailscale up` e re-rode este instalador'
-        } else {
-            # FILTRA por :443. O `Web` do serve status e um mapa "host:porta" -> Handlers, e esta
-            # maquina pode ter OUTRO slot publicado — o preview de projeto usa o 10000
-            # (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo `/` faria o proxy do 10000
-            # passar por "ja publica o backend", e o 443 nunca ser configurado. O mesmo filtro existe
-            # em tunnel.py:71-73, e e por isso que ele existe la.
-            $proxy443 = $null
-            try {
-                $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
-                if ($sv -and $sv.Web) {
-                    foreach ($p in $sv.Web.PSObject.Properties) {
-                        if ($p.Name -notmatch ':443$') { continue }
-                        foreach ($h in $p.Value.Handlers.PSObject.Properties) {
-                            if ($h.Name -eq '/') { $proxy443 = $h.Value.Proxy }
+# Em FUNCAO, nao inline: o passo 6 chama de novo depois de instalar/logar o Tailscale, pra que
+# quem instalou por aqui nao termine com o QR em 127.0.0.1 e precise lembrar de re-rodar tudo.
+# Le $portaBack/$envFile do escopo do script e grava $script:cpPublicUrl - mesmo contrato de antes.
+function Publica-Tailscale {
+    if (-not (Tem 'tailscale')) {
+        Nota 'tailscale nao instalado - pulando (o acesso de fora fica por sua conta)'
+    } else {
+        $eapAnt = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'   # chamada nativa: stderr nao pode virar excecao
+        try {
+            $tsJson = $null
+            # Com timeout: este passo roda tambem DESATENDIDO (-Update, via o hook post-merge - ver o
+            # comentario do passo 5d) e um tailscaled travado nao pode pendurar um `git pull` pra
+            # sempre. Achado MINOR da revisao final.
+            $jobTs = Start-Job -ScriptBlock { & tailscale status --json 2>$null }
+            if (Wait-Job $jobTs -Timeout 5) {
+                try { $tsJson = (Receive-Job $jobTs | Out-String | ConvertFrom-Json) } catch { }
+            } else {
+                Stop-Job $jobTs -ErrorAction SilentlyContinue
+                Nota 'tailscale status nao respondeu em 5s - pulando deteccao'
+            }
+            Remove-Job $jobTs -Force -ErrorAction SilentlyContinue
+            $dns = $null
+            if ($tsJson -and $tsJson.Self -and $tsJson.Self.DNSName) { $dns = $tsJson.Self.DNSName.TrimEnd('.') }
+            if (-not $dns) {
+                Nota 'tailscale sem nome de no (nao logado?) - rode `tailscale up` e re-rode este instalador'
+            } else {
+                # FILTRA por :443. O `Web` do serve status e um mapa "host:porta" -> Handlers, e esta
+                # maquina pode ter OUTRO slot publicado — o preview de projeto usa o 10000
+                # (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo `/` faria o proxy do 10000
+                # passar por "ja publica o backend", e o 443 nunca ser configurado. O mesmo filtro existe
+                # em tunnel.py:71-73, e e por isso que ele existe la.
+                $proxy443 = $null
+                try {
+                    $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
+                    if ($sv -and $sv.Web) {
+                        foreach ($p in $sv.Web.PSObject.Properties) {
+                            if ($p.Name -notmatch ':443$') { continue }
+                            foreach ($h in $p.Value.Handlers.PSObject.Properties) {
+                                if ($h.Name -eq '/') { $proxy443 = $h.Value.Proxy }
+                            }
                         }
                     }
-                }
-            } catch { }
-            # Compara PORTA, nao string: o tailscale normaliza o alvo, entao "localhost:8765" e
-            # "http://127.0.0.1:8765" descrevem a mesma coisa e uma comparacao literal diria que
-            # precisa reconfigurar a cada rodada. Mesmo criterio do tunnel._port_from_proxy.
-            $portaAtual = $null
-            if ($proxy443 -match ':(\d+)/?$') { $portaAtual = [int]$Matches[1] }
-            if ($portaAtual -eq $portaBack) {
-                Ok "tailscale ja publica o backend (porta $portaBack)"
-                $script:cpPublicUrl = "https://$dns"
-            } elseif ($proxy443 -and $portaAtual -ne 5173) {
-                # Handler que NAO fomos nos que criamos: avisa e nao toca. E NUNCA `serve reset`,
-                # que derrubaria o slot do preview de projeto e o que o dono tenha feito a mao.
-                Falta "tailscale ja publica '$proxy443' na raiz - NAO vou sobrescrever; ajuste na mao se quiser o backend ali"
-            } else {
-                $saida = (& tailscale serve --bg --https=443 "localhost:$portaBack" 2>&1 | Out-String)
-                if ($LASTEXITCODE -eq 0) {
-                    Ok "tailscale publicando o backend (localhost:$portaBack)"
+                } catch { }
+                # Compara PORTA, nao string: o tailscale normaliza o alvo, entao "localhost:8765" e
+                # "http://127.0.0.1:8765" descrevem a mesma coisa e uma comparacao literal diria que
+                # precisa reconfigurar a cada rodada. Mesmo criterio do tunnel._port_from_proxy.
+                $portaAtual = $null
+                if ($proxy443 -match ':(\d+)/?$') { $portaAtual = [int]$Matches[1] }
+                if ($portaAtual -eq $portaBack) {
+                    Ok "tailscale ja publica o backend (porta $portaBack)"
                     $script:cpPublicUrl = "https://$dns"
+                } elseif ($proxy443 -and $portaAtual -ne 5173) {
+                    # Handler que NAO fomos nos que criamos: avisa e nao toca. E NUNCA `serve reset`,
+                    # que derrubaria o slot do preview de projeto e o que o dono tenha feito a mao.
+                    Falta "tailscale ja publica '$proxy443' na raiz - NAO vou sobrescrever; ajuste na mao se quiser o backend ali"
                 } else {
-                    # A saida diz a causa real (permissao, HTTPS nao habilitado no tailnet); sem ela
-                    # sobraria chutar numa lista de tres. Se for permissao, o caminho e o mesmo que o
-                    # bloco de firewall ja ensina: abrir um PowerShell como Administrador.
-                    Falta "tailscale serve falhou: $($saida.Trim())"
-                    Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                    $saida = (& tailscale serve --bg --https=443 "localhost:$portaBack" 2>&1 | Out-String)
+                    if ($LASTEXITCODE -eq 0) {
+                        Ok "tailscale publicando o backend (localhost:$portaBack)"
+                        $script:cpPublicUrl = "https://$dns"
+                    } else {
+                        # A saida diz a causa real (permissao, HTTPS nao habilitado no tailnet); sem ela
+                        # sobraria chutar numa lista de tres. Se for permissao, o caminho e o mesmo que o
+                        # bloco de firewall ja ensina: abrir um PowerShell como Administrador.
+                        Falta "tailscale serve falhou: $($saida.Trim())"
+                        Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                    }
+                }
+                if ($script:cpPublicUrl) {
+                    # E isto que conserta o QR do BACKEND tambem: com public_url preenchido, pairing_url
+                    # (backend/app/config.py:211) ignora porta e bind e usa este endereco.
+                    #
+                    # So GRAVA se o valor mudou. Sem este check, a rodada idempotente (linha "tailscale
+                    # ja publica") reescrevia o .env e dizia "gravado" toda vez, mesmo sem nada ter
+                    # mudado - sugeria uma escrita que nao aconteceu. Mesmo padrao Select-String -Quiet
+                    # de $temToken acima.
+                    $jaTinhaEsseValor = (Test-Path $envFile) -and (Select-String -Path $envFile `
+                        -Pattern "^CP_PUBLIC_URL=$([regex]::Escape($script:cpPublicUrl))\s*$" -Quiet)
+                    if ($jaTinhaEsseValor) {
+                        Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) ja registrado em backend\.env"
+                    } else {
+                        Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $script:cpPublicUrl
+                        Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) gravado em backend\.env"
+                    }
                 }
             }
-            if ($script:cpPublicUrl) {
-                # E isto que conserta o QR do BACKEND tambem: com public_url preenchido, pairing_url
-                # (backend/app/config.py:211) ignora porta e bind e usa este endereco.
-                #
-                # So GRAVA se o valor mudou. Sem este check, a rodada idempotente (linha "tailscale
-                # ja publica") reescrevia o .env e dizia "gravado" toda vez, mesmo sem nada ter
-                # mudado - sugeria uma escrita que nao aconteceu. Mesmo padrao Select-String -Quiet
-                # de $temToken acima.
-                $jaTinhaEsseValor = (Test-Path $envFile) -and (Select-String -Path $envFile `
-                    -Pattern "^CP_PUBLIC_URL=$([regex]::Escape($script:cpPublicUrl))\s*$" -Quiet)
-                if ($jaTinhaEsseValor) {
-                    Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) ja registrado em backend\.env"
-                } else {
-                    Set-EnvKey -Chave 'CP_PUBLIC_URL' -Valor $script:cpPublicUrl
-                    Ok "CP_PUBLIC_URL=$($script:cpPublicUrl) gravado em backend\.env"
-                }
-            }
-        }
-    } finally { $ErrorActionPreference = $eapAnt }
+        } finally { $ErrorActionPreference = $eapAnt }
+    }
 }
+Publica-Tailscale
 
 # -- 6/8 Acesso pelo celular -------------------------------------------------
 Titulo '6/8 Acesso pelo celular'
@@ -820,20 +843,59 @@ if (-not $script:cpPublicUrl) {
     }
 }
 
+# Login + publicacao na MESMA rodada. `tailscale up` e INTERATIVO (imprime um link, abre o
+# navegador e bloqueia ate a pessoa autenticar) - nao ha como automatizar, so esperar. Por isso
+# e pergunta, e no -Sim nao roda (desatendido nao pode ficar parado esperando login). Teto de 5 min
+# pra um login abandonado nao segurar o instalador pra sempre. Depois chama o passo 5d de novo
+# (Publica-Tailscale), que grava CP_PUBLIC_URL e deixa o QR do final ja com o endereco do tailnet.
+# Antes disto, quem instalava o Tailscale por aqui terminava com o QR em 127.0.0.1 e precisava
+# lembrar de rodar o instalador inteiro de novo.
+function Loga-E-Publica-Tailscale {
+    if ($Sim) {
+        Nota 'Falta logar: rode `tailscale up` e depois este instalador de novo (o passo 5d grava o endereco sozinho).'
+        return
+    }
+    if (-not (Pergunte '  Logar no Tailscale agora? (abre o navegador; o instalador espera voce autenticar)')) {
+        Nota 'Depois: `tailscale up` e este instalador de novo - o passo 5d grava CP_PUBLIC_URL sozinho.'
+        return
+    }
+    $eapAnt = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'   # nativo: o link de login sai no stderr
+    try {
+        # Em job, pelo timeout - e a saida e mostrada na hora em que chega, porque o link de login
+        # e o que a pessoa precisa ver ANTES de o comando terminar.
+        $job = Start-Job -ScriptBlock { & tailscale up 2>&1 }
+        $fim = (Get-Date).AddMinutes(5)
+        while ($job.State -eq 'Running' -and (Get-Date) -lt $fim) {
+            Receive-Job $job | ForEach-Object { Nota "  $_" }
+            Start-Sleep -Milliseconds 500
+        }
+        Receive-Job $job | ForEach-Object { Nota "  $_" }
+        if ($job.State -eq 'Running') {
+            Stop-Job $job -ErrorAction SilentlyContinue
+            Falta 'tailscale up nao concluiu em 5 min - termine o login e rode este instalador de novo'
+        }
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
+    } finally { $ErrorActionPreference = $eapAnt }
+    # O proprio 5d diz "sem nome de no" se o login nao aconteceu; nao ha o que checar antes.
+    Publica-Tailscale
+    if (-not $script:cpPublicUrl) {
+        Nota 'Ainda sem endereco do tailnet - depois de logar, rode este instalador de novo.'
+    }
+}
+
 if (Tem 'tailscale') {
     Ok 'Tailscale ja instalado'
     if (-not $script:cpPublicUrl) {
-        Nota 'CP_PUBLIC_URL nao gravado ainda (veja o passo 5d acima) - se falta `tailscale up`,'
-        Nota 'rode-o e re-rode este instalador; o passo 5d grava o endereco sozinho.'
+        Nota 'CP_PUBLIC_URL nao gravado ainda (veja o passo 5d acima) - provavelmente falta `tailscale up`.'
+        Loga-E-Publica-Tailscale
     }
 } elseif (Pergunte '  Instalar o Tailscale? (VPN pessoal - acesso de fora de casa)') {
     # Id com MAIUSCULAS: o `--exact` do winget diferencia caixa, e 'tailscale.tailscale' nao casa
     # nada. Medido: os outros seis ids do instalador estavam certos, so este errado.
     if (Instale 'Tailscale' 'tailscale' 'Tailscale.Tailscale' 'acesso remoto') {
-        # Estas instrucoes so fazem sentido se a instalacao DEU CERTO. Antes elas saiam mesmo apos
-        # a falha, mandando o usuario rodar `tailscale up` de um programa que nao existia.
-        Nota 'Falta logar: rode `tailscale up` e instale o Tailscale tambem no celular.'
-        Nota 'Depois rode este instalador de novo - o passo 5d grava CP_PUBLIC_URL sozinho.'
+        Nota 'Instale o Tailscale tambem no celular (mesma conta).'
+        Loga-E-Publica-Tailscale
     }
 }
 
@@ -1451,10 +1513,10 @@ if ($qrMostrado) { $linhaQr = "`n  O QR acima ja leva o token: ler com a camera 
 Write-Host @"
   Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build que este
   instalador gerou, entao ali tem tela e API no mesmo endereco.
-  O http://localhost:5173 tambem sobe: e o `vite preview` servindo o MESMO build (a tarefa
+  O http://localhost:5173 tambem sobe: e o 'vite preview' servindo o MESMO build (a tarefa
   agendada roda preview, nao dev - sem recarga ao vivo). Ele escuta SO em 127.0.0.1
   (vite.config.ts) - do celular se chega pelo Tailscale, nao pelo IP da LAN direto.
-  Pra mexer no layout com recarga ao vivo: pare a tarefa hangar-frontend e rode `npm run dev`.
+  Pra mexer no layout com recarga ao vivo: pare a tarefa hangar-frontend e rode 'npm run dev'.
 
   Rodar na mao (se voce pulou o passo 7):
       cd backend  ; `$env:CP_LAN_BIND_IP='0.0.0.0' ; uv run python -m app.main
