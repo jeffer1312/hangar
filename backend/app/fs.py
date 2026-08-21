@@ -26,9 +26,20 @@ def _within(child: Path, root: Path) -> bool:
     return child == root or child.is_relative_to(root)
 
 
+def _nome_de_raiz(r: Path) -> str:
+    # name = basename do caminho real, EXCETO na raiz de um drive: `Path("C:\\").name` e string
+    # VAZIA (as partes sao só `('C:\\',)`), e o chip aparecia sem rótulo nenhum na tela. Ali o
+    # nome util e o proprio drive. `os.path.splitdrive` cobre tambem o compartilhamento UNC
+    # (`\\servidor\share`), que tem o mesmo problema.
+    if r.name:
+        return r.name
+    drive = os.path.splitdrive(str(r))[0]
+    return drive or str(r)
+
+
 def list_roots() -> list[FsRoot]:
-    # So as raizes da allowlist viram chips. name = basename do caminho real.
-    return [FsRoot(name=r.name, path=str(r)) for r in resolve_scan_roots(settings)]
+    # So as raizes da allowlist viram chips.
+    return [FsRoot(name=_nome_de_raiz(r), path=str(r)) for r in resolve_scan_roots(settings)]
 
 
 def scan_dir(root: str, path: str | None = None) -> FsScanResult:

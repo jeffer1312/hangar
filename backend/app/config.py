@@ -93,7 +93,27 @@ def _default_projects_dir() -> Path:
 # Allowlist padrao do scanner de pastas: estas raizes sao o PERIMETRO DE SEGURANCA da
 # varredura. Editavel via CP_SCAN_ROOTS (lista separada por virgula, ~ expandido). Edicao
 # das raizes dentro do app fica pra depois: por ora o env e a superficie editavel.
-_DEFAULT_SCAN_ROOTS = "~/pessoal,~/sistemas"
+#
+# O padrao muda por SISTEMA porque `~/pessoal,~/sistemas` sao pastas do dono deste repo, que so
+# existem no Linux dele. Num Windows recem-instalado nenhuma das duas existe, e o
+# resolve_scan_roots abaixo descarta raiz inexistente de proposito (um typo nunca pode alargar o
+# perimetro) — resultado medido nesta VM: a lista resolvia pra VAZIA, `GET /api/fs/roots` devolvia
+# `[]` e TODO `GET /api/fs/scan` respondia 403 "root not allowed". Ou seja, o seletor de pasta do
+# modal de sessao nova nascia inutil, sem nada na tela explicando por que.
+#
+# E o padrao, nao um fallback: cair pra `~` quando a lista resolve vazia seria o app ALARGANDO
+# sozinho o perimetro que o usuario configurou, que e exatamente o que o descarte acima existe
+# pra impedir. Quem apontar CP_SCAN_ROOTS pra caminho errado continua com lista vazia.
+def _default_scan_roots() -> str:
+    if os.name == "nt":
+        # As tres que existem em toda instalacao do Windows e onde projeto de fato mora. Sem `C:\`:
+        # a raiz do drive lista Windows/, Program Files/ e ProgramData/ — ruido pra um seletor de
+        # projeto, e perimetro grande demais pra vir ligado por padrao.
+        return "~,~/Documents,~/Desktop"
+    return "~/pessoal,~/sistemas"
+
+
+_DEFAULT_SCAN_ROOTS = _default_scan_roots()
 
 
 class Settings(BaseSettings):
