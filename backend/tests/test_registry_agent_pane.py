@@ -43,8 +43,10 @@ def test_list_resolve_pelo_pane_do_agente_com_janela_extra(sessao, tmp_path, mon
     _segunda_janela(sessao, str(tmp_path))
 
     monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: pid == agente["pid"])
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda pid: f"claude --session-id {_UUID}" if pid == agente["pid"] else "bash")
+    def _cmd(pid):
+        return f"claude --session-id {_UUID}" if pid == agente["pid"] else "bash"
+    monkeypatch.setattr(registry, "_cmdline", _cmd)
+    monkeypatch.setattr(registry, "_argv", lambda pid: _cmd(pid).split())
 
     reg = registry.SessionRegistry(projects_dir=tmp_path)
     info = {i.name: i for i in reg.list()}[sessao]
@@ -147,8 +149,10 @@ def test_pane_info_resolve_pelo_pane_do_agente_com_split(sessao, tmp_path, monke
     _segunda_janela(sessao, str(tmp_path))     # 2o pane, fica ATIVO -- o agente perde o "ativo"
 
     monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: pid == agente["pid"])
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda pid: "pi --whatever" if pid == agente["pid"] else "bash")
+    def _cmd(pid):
+        return "pi --whatever" if pid == agente["pid"] else "bash"
+    monkeypatch.setattr(registry, "_cmdline", _cmd)
+    monkeypatch.setattr(registry, "_argv", lambda pid: _cmd(pid).split())
 
     provider, pane_id = api_mod._pane_info(sessao)
 

@@ -10,6 +10,8 @@ from app import procinfo
 def _pane(monkeypatch, cmd: str):
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: cmd)
+    # _argv junto: provider_of_pane le o argv SEPARADO (procinfo._argv), nao a string.
+    monkeypatch.setattr(registry, "_argv", lambda p: cmd.split())
 
 
 def test_detects_pi_from_the_process_command(monkeypatch):
@@ -41,12 +43,14 @@ def test_provider_of_pane_reads_proc_not_a_pane_field(monkeypatch):
     # _repl_sid ja faz. Este teste trava esse contrato — se alguem "simplificar" pra ler um campo
     # inexistente do pane, todo pane vira "claude" calado.
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11, 12])
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda p: {11: "fish", 12: "pi --session-id x"}.get(p, ""))
+    _cmds = {11: "fish", 12: "pi --session-id x"}
+    monkeypatch.setattr(registry, "_cmdline", lambda p: _cmds.get(p, ""))
+    monkeypatch.setattr(registry, "_argv", lambda p: _cmds.get(p, "").split())
     assert registry.provider_of_pane(99) == "pi"
 
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda p: {11: "fish", 12: "claude --session-id x"}.get(p, ""))
+    _cmds2 = {11: "fish", 12: "claude --session-id x"}
+    monkeypatch.setattr(registry, "_cmdline", lambda p: _cmds2.get(p, ""))
+    monkeypatch.setattr(registry, "_argv", lambda p: _cmds2.get(p, "").split())
     assert registry.provider_of_pane(99) == "claude"
 
 
@@ -66,6 +70,7 @@ def test_provider_of_pane_defaults_to_claude_when_nothing_matches(monkeypatch):
     # Claude, como antes desta task existir.
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "vim")
+    monkeypatch.setattr(registry, "_argv", lambda p: ["vim"])
     assert registry.provider_of_pane(99) == "claude"
 
 
@@ -272,6 +277,7 @@ def test_pi_pane_does_not_inherit_a_claude_transcript(monkeypatch, tmp_path):
                                            "active": True}]})
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
+    monkeypatch.setattr(registry, "_argv", lambda p: ["pi"])
     monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)
 
     infos = registry.SessionRegistry().list()
@@ -293,6 +299,7 @@ def _pane_pi_sem_transcript(monkeypatch, tmp_path):
                                            "active": True}]})
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
+    monkeypatch.setattr(registry, "_argv", lambda p: ["pi"])
     monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)
 
 

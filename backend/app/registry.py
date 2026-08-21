@@ -33,7 +33,7 @@ from app.planprog import plan_progress, plano_escondido
 # monkeypatch delas neste modulo, e o binding local preserva isso.
 from app import model_args
 from app import procinfo
-from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cmdline,
+from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cmdline, _argv,
                          _config_dir_of, _proc_start_time, _engine_of)
 # _proc_environ_path/_proc_stat_path saem de proposito da lista acima: existem SO como ponto de
 # injecao de teste e sao chamadas de dois lados (aqui e de dentro do procinfo). Importadas por
@@ -243,6 +243,38 @@ def _kimi_corrige_ocioso(info, marker):
 # transcript do Claude do mesmo cwd (medido no e2e de 19/08/2026).
 _EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi"}
 
+# Windows: o argv0 vem com extensao (`claude.exe`), que nao casa em _EXEC_PROVIDER; e um CLI
+# instalado por `npm -g` nao aparece com o nome dele nenhuma vez — o processo e o
+# `node.exe <...>\<pacote>\dist\cli.js`. Medido nesta VM em 21/08/2026, com o pi 0.84.2 aberto num
+# pane: os descendentes eram `powershell.exe -NoLogo -Command pi` e
+# `node.exe C:\...\npm/node_modules/@earendil-works/pi-coding-agent/dist/cli.js`. Nenhum dos dois
+# casava, entao TODA sessao Pi era classificada como Claude — e dai o app nem procurava o bilhete
+# da extensao, resolvia um jsonl do layout do Claude e caia no scrape do pane pra statusline.
+# So o que foi MEDIDO entra aqui: kimi e codex no Windows ainda nao foram verificados, e chutar o
+# nome de pacote deles seria pior que a ausencia (viraria deteccao errada em vez de nenhuma).
+_PKG_PROVIDER = {"pi-coding-agent": "pi"}
+
+
+def _provider_do_argv(argv: list[str]) -> Optional[str]:
+    """Provider a partir do argv JA separado, ou None. Nao recebe string: ver procinfo._argv."""
+    if not argv:
+        return None
+    base = os.path.basename(argv[0])
+    if os.name == "nt":
+        base = os.path.splitext(base)[0]      # claude.exe -> claude
+    prov = _EXEC_PROVIDER.get(base)
+    if prov:
+        return prov
+    # Lancado por node: quem diz qual agente e o CAMINHO do script, nao o interpretador. Normaliza
+    # a barra porque o npm do Windows monta o shim com `/` no meio de um caminho com `\`.
+    if base in ("node", "node.exe"):
+        for arg in argv[1:]:
+            partes = arg.replace("\\", "/").split("/")
+            for pkg, p in _PKG_PROVIDER.items():
+                if pkg in partes:
+                    return p
+    return None
+
 
 def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> str:
     """Qual agente roda neste pane, lido do /proc dos descendentes.
@@ -259,10 +291,10 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
         cmd = _cmdline(p)
         if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
             continue        # mesma exclusao do _repl_sid: subprocesso nao e o REPL dono
-        argv0 = cmd.strip().split()[:1]   # o pi reescreve o argv -> "pi" + NUL virado espaco
-        if not argv0:
-            continue
-        prov = _EXEC_PROVIDER.get(os.path.basename(argv0[0]))
+        # _argv e nao `cmd.split()`: no Windows o caminho do executavel tem espaco
+        # (`C:\Program Files\nodejs\node.exe`) e o split devolvia `C:\Program` como argv0. O `cmd`
+        # acima segue servindo pra exclusao por substring, que e o uso dele.
+        prov = _provider_do_argv(_argv(p))
         if prov:
             return prov
     return "claude"

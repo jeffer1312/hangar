@@ -127,6 +127,32 @@ def _cmdline(pid: int) -> str:
         return ""
 
 
+def _argv(pid: int) -> list[str]:
+    """cmdline com as FRONTEIRAS preservadas — irmao do _cmdline, nao substituto dele.
+
+    O `_cmdline` junta tudo com espaco (o lado /proc troca o NUL por espaco, e o psutil faz
+    `" ".join` de proposito pra os dois sistemas darem o mesmo formato). Quem faz busca de
+    substring continua usando ele. Mas quem precisa do argv0 nao pode reconstrui-lo com `.split()`:
+    no Windows o caminho do executavel tem espaco na esmagadora maioria das instalacoes
+    (`C:\\Program Files\\nodejs\\node.exe`), e o split devolve `C:\\Program` como argv0 — medido
+    nesta VM, era o que fazia a deteccao de provider olhar pra "Program" e nao reconhecer nada. No
+    Linux o mesmo codigo nunca falhou porque `/usr/bin/node` nao tem espaco; e a mesma armadilha
+    que o comentario do _model_of ja descreve.
+    """
+    if not _TEM_PROC:
+        try:
+            return list(psutil.Process(pid).cmdline())
+        except psutil.Error:
+            return []
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            bruto = fh.read()
+    except OSError:
+        return []
+    # O /proc termina a lista com um NUL, entao o ultimo pedaco vem vazio — descarta.
+    return [a.decode("utf-8", "replace") for a in bruto.split(b"\x00") if a]
+
+
 def _config_dir_of(pid: int) -> Optional[Path]:
     if not _TEM_PROC:
         v = _env_psutil(pid).get("CLAUDE_CONFIG_DIR")
