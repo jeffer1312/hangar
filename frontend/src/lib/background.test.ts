@@ -336,3 +336,15 @@ describe("vidro do fundo 'desktop'", () => {
     expect(document.documentElement.dataset.desktopGlass).toBeUndefined();
   });
 });
+
+describe('rebuscar wallpaper ao focar não pisca com a mesma foto', () => {
+  it('mesmosBytes: igual, diferente, tamanho diferente e primeiro carregamento', async () => {
+    const { mesmosBytes } = await import('./background');
+    const a = new Uint8Array([1, 2, 3]);
+    expect(mesmosBytes(new Uint8Array([1, 2, 3]), a)).toBe(true);
+    expect(mesmosBytes(new Uint8Array([1, 2, 4]), a)).toBe(false);
+    expect(mesmosBytes(new Uint8Array([1, 2]), a)).toBe(false);
+    // null = nenhuma foto aplicada ainda: primeiro carregamento sempre pinta.
+    expect(mesmosBytes(null, a)).toBe(false);
+  });
+});

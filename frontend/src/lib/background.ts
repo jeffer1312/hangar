@@ -185,12 +185,23 @@ export function setDesktopGlass(v: boolean): void {
 // A blob URL da foto do desktop. Guardada pra ser REVOGADA na troca: sem isto cada recarga da
 // imagem (troca de papel de parede, volta do foco) deixa a anterior presa na memoria do processo.
 let urlDesktop: string | null = null;
+// Os bytes da foto APLICADA: o rebuscar-ao-focar roda a cada volta de foco, e trocar a blob URL
+// com a MESMA foto repintava o fundo inteiro — a tela piscava toda vez que o mouse voltava pra
+// janela. Guardar ~poucos MB compra o "só mexe na tela quando a foto mudou de verdade".
+let bytesDesktop: Uint8Array | null = null;
 
 function soltarWallpaperDoDesktop(): void {
   if (urlDesktop) {
     URL.revokeObjectURL(urlDesktop);
     urlDesktop = null;
   }
+  bytesDesktop = null;
+}
+
+export function mesmosBytes(a: Uint8Array | null, b: Uint8Array): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 // `fetch` + blob, e nao a URL do endpoint direto no `url()` do CSS: requisicao de imagem feita pelo
@@ -208,12 +219,24 @@ async function carregarWallpaperDoDesktop(): Promise<void> {
       headers: { Authorization: `Bearer ${s.token}` },
     });
     if (!r.ok) return;
-    const url = URL.createObjectURL(await r.blob());
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    // Mesma foto que já está na tela: NÃO troca a blob URL — trocar repinta o fundo inteiro e é
+    // exatamente a piscada que o rebuscar-ao-focar causava a cada volta do mouse pra janela.
+    if (mesmosBytes(bytesDesktop, bytes)) return;
+    const url = URL.createObjectURL(new Blob([bytes]));
+    // Pré-decodifica ANTES do swap: setar a property com a imagem ainda por decodificar deixa um
+    // frame sem fundo — a mesma piscada, agora só na troca real de papel de parede.
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+    } catch { /* formato que o decode() recusa: segue com o swap direto */ }
     // Confere que a preferencia ainda vale: entre o pedido e a resposta o usuario pode ter trocado
     // de fundo, e pintar a foto depois disso seria mudar a tela sozinho.
     if (getBgPref() !== 'desktop' || !getDesktopGlass()) { URL.revokeObjectURL(url); return; }
     soltarWallpaperDoDesktop();
     urlDesktop = url;
+    bytesDesktop = bytes;
     document.documentElement.style.setProperty('--cp-wallpaper', `url("${url}")`);
   } catch { /* rede/backend fora: segue sem foto */ }
 }
