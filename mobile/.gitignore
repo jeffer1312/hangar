@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# lockfile do app é o da raiz (workspace) — este é órfão e nunca é lido
+package-lock.json
