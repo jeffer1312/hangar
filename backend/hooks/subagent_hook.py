@@ -118,7 +118,9 @@ def _trava(alvo: Path):
 
 def main() -> None:
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
+        # bytes + utf-8 explicito: em modo texto o Windows usa o locale (cp1252) e o prompt do
+        # subagente chega corrompido na ActivitySheet. Ver preview_hook.py.
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "{}")
     except ValueError:
         return
     if not isinstance(payload, dict):

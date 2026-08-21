@@ -218,7 +218,10 @@ def _registrar(motivo: str) -> None:
 
 
 try:
-    entrada = json.loads(sys.stdin.read())
+    # bytes + utf-8 explicito (ver preview_hook.py). Aqui vale por um motivo a mais: este hook
+    # falha ABERTO, entao um decode que estoura vira comando liberado. Com "replace" o comando
+    # segue parseavel e `perigosos()` ainda casa os padroes, que sao ASCII.
+    entrada = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     if entrada.get("tool_name") == "Bash":
         bruto = entrada.get("tool_input", {}).get("command", "")
         if bruto and not isinstance(bruto, str):

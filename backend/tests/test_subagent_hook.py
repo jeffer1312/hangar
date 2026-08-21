@@ -46,10 +46,26 @@ def casa(tmp_path, monkeypatch):
     return tmp_path
 
 
+class _StdinFalso:
+    """stdin de mentira COM `.buffer`, como o de verdade.
+
+    O hook lê `sys.stdin.buffer` e decodifica utf-8 na mão — um `io.StringIO` não tem `.buffer` e,
+    pior, entregaria texto já decodificado, que é exatamente o passo onde o defeito morava (no
+    Windows o modo texto usa cp1252; ver hooks/preview_hook.py). Fingir com bytes é o que faz este
+    teste exercitar o caminho real.
+    """
+
+    def __init__(self, texto: str):
+        import io
+        self.buffer = io.BytesIO(texto.encode("utf-8"))
+
+    def read(self) -> str:
+        return self.buffer.read().decode("utf-8")
+
+
 def _rodar(payload: dict, monkeypatch):
-    """Executa o hook como ele roda de verdade: payload no stdin."""
-    import io
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    """Executa o hook como ele roda de verdade: payload no stdin, em BYTES."""
+    monkeypatch.setattr("sys.stdin", _StdinFalso(json.dumps(payload, ensure_ascii=False)))
     hook.main()
 
 
@@ -140,10 +156,17 @@ def test_chave_e_o_stem_do_transcript_nao_o_session_id(casa, monkeypatch):
     assert nomes == ["55ccea64-756b-4883-813e-de7679e19973.json"]
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="sem fcntl no Windows a trava e no-op (subagent_hook.py:111): a corrida "
+                           "abaixo REALMENTE perde atualizacao — o teste falharia por dizer a verdade")
 def test_dois_hooks_ao_mesmo_tempo_nao_perdem_atualizacao(casa, monkeypatch):
     """Dois subagentes de um mesmo lote terminam quase juntos: são dois PROCESSOS de hook fazendo
     ler→mudar→gravar no mesmo arquivo. Sem a trava, o segundo grava por cima da alteração do
     primeiro e um agente some da lista — em silêncio, porque tudo aqui é fail-soft.
+
+    No Windows não há `fcntl` e `_trava` devolve None de propósito, então a proteção que este caso
+    exercita não existe lá. É lacuna conhecida, não teste ruim — o equivalente é `msvcrt.locking`,
+    que `app/contas.py:149` já usa.
 
     O teste roda em THREADS (o hook é um processo, mas a trava é de arquivo e a corrida a proteger
     é a mesma) com uma pausa injetada entre a leitura e a escrita, que é a janela do defeito.

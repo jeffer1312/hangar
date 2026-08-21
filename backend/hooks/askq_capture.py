@@ -6,7 +6,9 @@ import json
 import os
 import sys
 try:
-    raw = sys.stdin.read()
+    # bytes + utf-8 explicito: em modo texto o Windows decodifica com o locale (cp1252) e o
+    # acento da pergunta/das opcoes chega corrompido na folha. Ver preview_hook.py.
+    raw = sys.stdin.buffer.read().decode("utf-8", "replace")
     o = json.loads(raw)
     if o.get("tool_name") != "AskUserQuestion":
         sys.exit(0)

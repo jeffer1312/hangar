@@ -75,7 +75,8 @@ def _write_marker(base: str, subdir: str, key: str, payload: dict) -> None:
 base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
 try:
-    o = json.loads(sys.stdin.read())
+    # bytes + utf-8 explicito: em modo texto o Windows usa o locale (cp1252). Ver preview_hook.py.
+    o = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     event = o.get("hook_event_name")
     sid = o.get("session_id")
 
