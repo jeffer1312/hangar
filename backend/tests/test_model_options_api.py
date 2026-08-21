@@ -14,6 +14,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+
+@pytest.fixture(autouse=True)
+def _models_cache_isolado(models_cache_em_tmp):
+    """Liga o redirecionamento do cache de modelos em disco (ver tests/conftest.py)."""
+    yield
+
+
 from app import api
 from app import engines as eng
 from app.api import app

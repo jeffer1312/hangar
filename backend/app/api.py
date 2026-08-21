@@ -3910,11 +3910,45 @@ _engine_models_cache: dict[str, tuple[float, list[dict]]] = {}
 # o `⎿ Kept model as …` (o Esc de saida) ficam no scrollback do tmux pra sempre. Nao aparece no chat
 # do app (entra no jsonl como `type: system`, que o transcript ignora), mas aparece pra quem estiver
 # com aquele terminal aberto: foi o que pareceu bug quando 5 leituras seguidas empilharam ali.
-# Uma hora, e nao dez minutos, porque a lista muda quando a Anthropic lanca modelo ou o plano do
-# usuario muda — nao de minuto em minuto. A chave e o config dir, nao a sessao: a lista vem da
-# CONTA, e a mesma pra todas as sessoes dela.
-_CLAUDE_MODELS_TTL = 3600.0
+# Sete dias, porque a lista muda quando a Anthropic lanca modelo ou o plano do usuario muda —
+# eventos de semanas, nao de horas. Uma hora (o valor antigo) fazia o `/model` reaparecer no
+# terminal do usuario "sozinho" no meio de sessoes longas, e cada restart do backend zerava o
+# cache em memoria e relia tudo de novo — dai o espelho em DISCO, dentro do proprio config dir
+# (`.claude-pocket-models.json`): a leitura dirigida do picker vira acontecimento raro.
+# A chave e o config dir, nao a sessao: a lista vem da CONTA, e a mesma pra todas as sessoes dela.
+_CLAUDE_MODELS_TTL = 7 * 24 * 3600.0
 _claude_models_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _models_cache_path(chave: str) -> Path:
+    return Path(chave) / ".claude-pocket-models.json"
+
+
+def _models_cache_get(chave: str) -> dict | None:
+    hit = _claude_models_cache.get(chave)
+    if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
+        return hit[1]
+    try:
+        bruto = json.loads(_models_cache_path(chave).read_text(encoding="utf-8"))
+        resp = bruto["resp"]
+        if not isinstance(resp, dict) or time.time() - float(bruto["ts"]) >= _CLAUDE_MODELS_TTL:
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    _claude_models_cache[chave] = (time.monotonic(), resp)
+    return resp
+
+
+def _models_cache_put(chave: str, resp: dict) -> None:
+    _claude_models_cache[chave] = (time.monotonic(), resp)
+    alvo = _models_cache_path(chave)
+    tmp = alvo.with_name(f"{alvo.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps({"ts": time.time(), "resp": resp}), encoding="utf-8")
+        os.replace(tmp, alvo)
+    except OSError:
+        # Config dir somente-leitura ou inexistente: o cache em memoria segue valendo.
+        tmp.unlink(missing_ok=True)
 
 
 def _chave_config(p) -> str:
@@ -3968,9 +4002,9 @@ async def model_options(name: str):
     # nao entra no transcript e nao gasta token.
     _recusa_se_painel_aberto(name)
     chave = _chave_config(_session_config_dir(name))
-    hit = _claude_models_cache.get(chave)
-    if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
-        return hit[1]
+    cacheado = _models_cache_get(chave)
+    if cacheado is not None:
+        return cacheado
     try:
         lido = await asyncio.to_thread(terminal.list_model_options, name)
     except PickerError as e:
@@ -3980,7 +4014,7 @@ async def model_options(name: str):
             # `opus` ("Opus" e "Opus (1M context)"), e id repetido derrubava a lista na tela.
             "models": [{"id": r["id"], "name": r["name"], "desc": r["desc"],
                         "active": r["active"]} for r in lido["models"]]}
-    _claude_models_cache[chave] = (time.monotonic(), resp)
+    _models_cache_put(chave, resp)
     return resp
 
 
@@ -4015,9 +4049,9 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
         return {"kind": "engine", "reduced": False,
                 "models": [{"id": m["id"], "context_length": m.get("context_length"),
                             "vision": m.get("vision")} for m in modelos]}
-    hit = _claude_models_cache.get(_chave_config(config_dir))
-    if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
-        return {**hit[1], "reduced": False}
+    cacheado = _models_cache_get(_chave_config(config_dir))
+    if cacheado is not None:
+        return {**cacheado, "reduced": False}
     return {"kind": "claude", "reduced": True,
             "models": [{"id": a} for a in ("opus", "sonnet", "haiku")]}
 
