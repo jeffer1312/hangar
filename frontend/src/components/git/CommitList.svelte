@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
-  import type { GitCommit } from '../../lib/api';
+  import type { GitCommit } from '@hangar/core';
 
   interface Props {
     commits: GitCommit[];

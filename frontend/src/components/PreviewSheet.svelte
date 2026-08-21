@@ -2,7 +2,7 @@
 import BottomSheet from './BottomSheet.svelte';
 import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
-  import { getPreview, startPreview, stopPreview } from '../lib/api';
+  import { getPreview, startPreview, stopPreview } from '@hangar/core';
 
   interface Props {
     open: boolean;

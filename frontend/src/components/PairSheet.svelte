@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import { renderMarkdown } from '../lib/markdown';
-  import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '../lib/api';
+  import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '@hangar/core';
   import { formataErro } from '@hangar/core';
   import { rotuloEstado, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '@hangar/core';
   import { getActiveId } from '../lib/auth';

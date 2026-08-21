@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import Login from './Login.svelte';
 import * as auth from '../lib/auth';
-import * as api from '../lib/api';
+import * as api from '@hangar/core';
 import * as sync from '../lib/sync';
 import { overwriteGetLocale } from '../paraglide/runtime';
 
@@ -17,7 +17,10 @@ vi.mock('../lib/auth', () => ({
   getBaseUrl: vi.fn(() => ''),
   validarPareamento: vi.fn(),
 }));
-vi.mock('../lib/api', () => ({ getSessions: vi.fn(async () => []) }));
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
+  getSessions: vi.fn(async () => [])
+}));
 vi.mock('../lib/sync', () => ({
   syncStatus: vi.fn(async () => ({ enabled: false })),
   register: vi.fn(),

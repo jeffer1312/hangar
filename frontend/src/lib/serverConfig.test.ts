@@ -12,7 +12,8 @@ const store = new Map<string, string>();
   removeItem: (k: string) => store.delete(k),
 };
 
-vi.mock('./api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getConfig: vi.fn(),
   getConfigForServer: vi.fn(),
   patchConfig: vi.fn(),
@@ -20,7 +21,7 @@ vi.mock('./api', () => ({
 }));
 
 const { criarConfigServidor } = await import('./serverConfig.svelte');
-const api = await import('./api');
+const api = await import('@hangar/core');
 
 const apiMock = vi.mocked(api);
 const A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'x' } as Server;

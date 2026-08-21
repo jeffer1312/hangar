@@ -2,7 +2,7 @@
   import { onMount, untrack } from 'svelte';
   import { DropdownMenu } from 'bits-ui';
   import * as m from '../paraglide/messages';
-  import { getPushSettings, setSessionMute, getBranches, openEditor, gitAction, setThenLink, clearThenLink } from '../lib/api';
+  import { getPushSettings, setSessionMute, getBranches, openEditor, gitAction, setThenLink, clearThenLink } from '@hangar/core';
   import { withServer } from '../lib/auth';
   import { copyText } from '../lib/clipboard';
 

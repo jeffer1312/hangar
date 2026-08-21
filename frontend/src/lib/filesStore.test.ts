@@ -2,14 +2,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SvelteSet } from 'svelte/reactivity';
 import * as m from '../paraglide/messages';
-import { listFiles, readFile, searchFiles, pathDiff } from './api';
+import { listFiles, readFile, searchFiles, pathDiff } from '@hangar/core';
 import { FilesStore, filesStores } from './filesStore.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
 import type { TreeEntry } from '@hangar/core';
 
 // Mock de módulo é `vi.mock`, NUNCA `vi.spyOn` num export: o namespace de um módulo ES é
 // somente leitura, e o spy estoura "Cannot redefine property".
-vi.mock('./api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   listFiles: vi.fn(),
   readFile: vi.fn(),
   searchFiles: vi.fn(),

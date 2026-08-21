@@ -7,7 +7,7 @@ import { mount, unmount, tick } from 'svelte';
 import DesktopSessionContext from './DesktopSessionContext.svelte';
 import { ctxPanel, LARGURA_MIN, LARGURA_ABERTO } from '../lib/ctxPanel.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
-import { listFiles } from '../lib/api';
+import { listFiles } from '@hangar/core';
 
 // Stubs dos componentes internos pesados (PlanRing/PlanPanel renderizam SVG/estado de plano).
 vi.mock('./PlanRing.svelte', () => ({ default: class { $destroy() {} } }));
@@ -15,7 +15,8 @@ vi.mock('./PlanPanel.svelte', () => ({ default: class { $destroy() {} } }));
 
 // A aba Arquivos (FilesPanel) fala com a rede no mount — sem o mock o teste montaria o
 // componente com fetch de verdade.
-vi.mock('../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   isTimeoutError: vi.fn(() => false),

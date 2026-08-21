@@ -3,7 +3,7 @@
 // mascarada; este módulo só exibe. Módulo próprio porque o cliente da casa (lib/api.ts) está
 // fechado para as Tasks deste plano — cada uma cria o seu, no mesmo padrão.
 import { dropActiveServer, getBaseUrl, getToken, type Server } from './auth';
-import { errorDetail } from './api';
+import { errorDetail } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
 /** Peer como o backend devolve: `token` é SEMPRE a máscara (conferível, não copiável). */

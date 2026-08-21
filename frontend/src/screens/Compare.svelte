@@ -3,7 +3,8 @@
 import * as m from '../paraglide/messages';
   import NavBar from '../components/NavBar.svelte';
   import AssistantBubble from '../components/AssistantBubble.svelte';
-  import { openEventStreamForServer, getHistoryTailForServer } from '../lib/api';
+  import type { EventSourceLike } from '@hangar/core';
+import { openEventStreamForServer, getHistoryTailForServer } from '@hangar/core';
   import { listServers, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { ChatEvent, StateEvent } from '@hangar/core';
@@ -36,7 +37,7 @@ import * as m from '../paraglide/messages';
   // Bookkeeping puro (não precisa ser reativo) — mesmo padrão do idIndex do Chat.svelte: um Map
   // dentro de $state não ajuda em nada aqui (só o array `events` precisa disparar re-render).
   const idIndexes: Map<string, number>[] = [];
-  const streams: EventSource[] = [];
+  const streams: EventSourceLike[] = [];
 
   // Browser capa ~6 conexões HTTP/1.1 por host — SSE ao vivo só pras primeiras MAX_LIVE sessões de
   // CADA servidor (sobra folga pro stream de lista da Sidebar + fetches). A 7ª conexão não "falha":
@@ -58,7 +59,7 @@ import * as m from '../paraglide/messages';
     const es = openEventStreamForServer(server, cards[i].name);
     streams.push(es);
 
-    es.addEventListener('message', (e: MessageEvent) => {
+    es.addEventListener('message', (e) => {
       try {
         const ev = JSON.parse(e.data) as ChatEvent;
         const idx = idIndexes[i].get(ev.id);
@@ -71,11 +72,11 @@ import * as m from '../paraglide/messages';
       } catch { /* linha inválida do SSE -> ignora, o próximo evento corrige */ }
     });
 
-    es.addEventListener('state', (e: MessageEvent) => {
+    es.addEventListener('state', (e) => {
       try { cards[i] = { ...cards[i], stateEvent: JSON.parse(e.data) as StateEvent, offline: false }; } catch { /* ignora */ }
     });
 
-    es.addEventListener('preview', (e: MessageEvent) => {
+    es.addEventListener('preview', (e) => {
       try {
         const t = (JSON.parse(e.data) as { text?: string }).text ?? '';
         cards[i] = { ...cards[i], previewText: t };

@@ -4,7 +4,7 @@
 // obrigatoriamente no ativo. lib/api.ts é fechado neste plano; este módulo nasce novo.
 
 import * as m from '../paraglide/messages';
-import { errorDetail } from './api';
+import { errorDetail } from '@hangar/core';
 import type { Server } from './auth';
 
 // Os QUATRO estados nomeados da linha. O backend manda ok/falhou/nao_configurado; o

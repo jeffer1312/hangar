@@ -2,9 +2,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import Harness from './Composer.permission.harness.svelte';
-import * as api from '../lib/api';
+import * as api from '@hangar/core';
 
-vi.mock('../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: [], sondavel: true }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   getCommands: vi.fn().mockResolvedValue([]),

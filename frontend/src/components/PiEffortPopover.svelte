@@ -8,7 +8,7 @@
   import { untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
-  import { getPiModels, setPiModel } from '../lib/api';
+  import { getPiModels, setPiModel } from '@hangar/core';
 
   interface Props {
     open: boolean;

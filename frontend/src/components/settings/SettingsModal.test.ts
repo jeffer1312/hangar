@@ -4,13 +4,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import SettingsModal from './SettingsModal.svelte';
-import * as api from '../../lib/api';
+import * as api from '@hangar/core';
 import * as auth from '../../lib/auth';
 import * as m from '../../paraglide/messages';
 import type { Server } from '../../lib/auth';
 import type { TelaConfig } from '../../lib/configRoute';
 
-vi.mock('../../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   getConfig: vi.fn(),

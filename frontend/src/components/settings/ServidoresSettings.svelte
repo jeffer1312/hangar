@@ -1,7 +1,7 @@
 <script lang="ts">
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
-  import { getSessions } from '../../lib/api';
+  import { getSessions } from '@hangar/core';
   import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeer,
            type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';

@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
-  import { getLoopForServer, createLoopForServer, stopLoopForServer, resolveLoopForServer, refineLoopForServer } from '../lib/api';
+  import { getLoopForServer, createLoopForServer, stopLoopForServer, resolveLoopForServer, refineLoopForServer } from '@hangar/core';
   import { listServers, getActiveId } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import { loopBadge, LOOP_TONE_COLOR, type LoopState } from '@hangar/core';

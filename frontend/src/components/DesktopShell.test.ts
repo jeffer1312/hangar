@@ -13,7 +13,8 @@ import { navMode } from '../lib/navMode.svelte';
 
 function stubDe() { return { default: createRawSnippet(() => ({ render: () => '<div />' })) }; }
 
-vi.mock('../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   isTimeoutError: vi.fn(() => false),
@@ -27,6 +28,24 @@ vi.mock('../lib/api', () => ({
   getPushSettings: vi.fn(async () => ({ muted: [] })),
   setSessionMute: vi.fn(), getBranches: vi.fn(), openEditor: vi.fn(),
   setThenLink: vi.fn(), clearThenLink: vi.fn(),
+  loopBadge: () => null,
+  LOOP_TONE_COLOR: {},
+  rotuloEstado: () => '',
+  stateColors: {},
+  countAwaiting: () => 0,
+  groupSelectedByServer: () => [],
+  initials: (n: string) => n.slice(0, 2),
+  projectKey: () => '',
+  projectLabel: () => '',
+  effectiveGroupBy: () => 'server',
+  fmtWhen: () => '',
+  sortSessions: (s: unknown[]) => s,
+  latestAssistantEvent: () => null,
+  clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
+  untrackedReason: () => '',
+  providerName: () => 'claude',
+  providerTag: () => null,
+  planBadge: () => null,
 }));
 vi.mock('../lib/auth', () => ({
   getActiveId: vi.fn(() => 'srv-a'),
@@ -49,27 +68,7 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
     byServer: [], rows: [], servers: [], loading: false,
   },
 }));
-vi.mock('@hangar/core', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@hangar/core')>()),
-  loopBadge: () => null,
-  LOOP_TONE_COLOR: {},
-  rotuloEstado: () => '',
-  stateColors: {},
-  countAwaiting: () => 0,
-  groupSelectedByServer: () => [],
-  initials: (n: string) => n.slice(0, 2),
-  projectKey: () => '',
-  projectLabel: () => '',
-  effectiveGroupBy: () => 'server',
-  fmtWhen: () => '',
-  sortSessions: (s: unknown[]) => s,
-  latestAssistantEvent: () => null,
-  clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
-  untrackedReason: () => '',
-  providerName: () => 'claude',
-  providerTag: () => null,
-  planBadge: () => null,
-}));
+
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));

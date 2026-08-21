@@ -6,7 +6,7 @@
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
-           modelOptions, type ModelOption, type Motor } from '../lib/api';
+           modelOptions, type ModelOption, type Motor } from '@hangar/core';
   import { basename, providerName } from '@hangar/core';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';

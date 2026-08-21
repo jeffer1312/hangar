@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
-  import { fileUrl } from '../lib/api';
+  import { fileUrl } from '@hangar/core';
   import { zoomable } from '../lib/zoomable';
   import type { FileRef } from '@hangar/core';
 

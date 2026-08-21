@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, tick, unmount } from 'svelte';
 import PushQuietHarness from './PushQuietHarness.svelte';
 import PushQuiet from './PushQuiet.svelte';
-import * as api from '../lib/api';
+import * as api from '@hangar/core';
 import type { PushTarget } from '../lib/quietHours';
 import type { Server } from '../lib/auth';
 import { overwriteGetLocale } from '../paraglide/runtime';
@@ -15,7 +15,8 @@ import { overwriteGetLocale } from '../paraglide/runtime';
 beforeEach(() => overwriteGetLocale(() => 'pt'));
 
 
-vi.mock('../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   isTimeoutError: vi.fn(() => false),

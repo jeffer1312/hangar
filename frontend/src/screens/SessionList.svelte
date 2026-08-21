@@ -20,7 +20,7 @@ import { intlLocale } from '../lib/locale';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
-  import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
+  import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '@hangar/core';
   import { focusFirstInvalid } from '../lib/focusCycle';
   import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, ResumeCandidate, Provider } from '@hangar/core';

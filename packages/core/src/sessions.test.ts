@@ -1,18 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Slot } from './sessions';
-import type { Server } from './auth';
-import type { SessionInfo } from '@hangar/core';
-
-// sessions.ts importa auth.ts, que toca localStorage no load via migrate(); vitest env=node nao tem
-// localStorage. Stub minimo ANTES do import dinamico — mesmo padrao do auth.test.ts (import estatico
-// de aggregateSessions rodaria migrate() antes do stub).
-const store = new Map<string, string>();
-(globalThis as any).localStorage = {
-  getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-  setItem: (k: string, v: string) => store.set(k, String(v)),
-  removeItem: (k: string) => store.delete(k),
-};
-const { aggregateSessions, sweepHidden } = await import('./sessions');
+import type { Server } from './servers';
+import type { SessionInfo } from './types';
+import { aggregateSessions, sweepHidden } from './sessions';
 
 const srv = (id: string): Server => ({ id, label: `srv-${id}`, baseUrl: `http://${id}`, token: 't' });
 const sess = (name: string, extra: Partial<SessionInfo> = {}): SessionInfo =>

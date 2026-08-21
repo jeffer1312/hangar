@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
 import * as m from '../paraglide/messages';
-  import { getSessions, sendInput } from '../lib/api';
+  import { getSessions, sendInput } from '@hangar/core';
   import { rotuloEstado, stateColors } from '@hangar/core';
   import type { SessionInfo } from '@hangar/core';
 

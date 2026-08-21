@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import TerminalPanel from './TerminalPanel.svelte';
 import * as auth from '../lib/auth';
-import * as api from '../lib/api';
+import * as api from '@hangar/core';
 import * as term from '../lib/term';
 
 // ── dublês de I/O ────────────────────────────────────────────────────────────

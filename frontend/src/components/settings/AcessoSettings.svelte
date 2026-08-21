@@ -3,7 +3,7 @@
   import { tick } from 'svelte';
   import { getActiveId, listServers, type Server } from '../../lib/auth';
   import { parseConfig } from '../../lib/configRoute';
-  import { isTimeoutError } from '../../lib/api';
+  import { isTimeoutError } from '@hangar/core';
   import { alcanceDoServidor, fraseDeEstado, pareamentoDoServidor, type EnderecoAlcance, type EstadoEndereco, type TipoEndereco } from '../../lib/alcance';
   import { copyText } from '../../lib/clipboard';
 

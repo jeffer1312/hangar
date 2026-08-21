@@ -6,9 +6,10 @@
 // fica montada o tempo todo segurando 1 retain — não há fecha-e-reabre de streams. Se um dia nenhum
 // consumidor ficar permanentemente montado, considerar um keep-alive com delay no release.
 import * as m from '../paraglide/messages';
-import { openSessionsStream } from './api';
+import type { EventSourceLike } from '@hangar/core';
+import { openSessionsStream } from '@hangar/core';
 import { listServers, onServersChanged, type Server } from './auth';
-import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from './sessions';
+import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from '@hangar/core';
 
 function createSessionsStore() {
   let servers = $state<Server[]>([]);
@@ -18,7 +19,7 @@ function createSessionsStore() {
   // views não re-renderiza os cards dos outros servidores).
   let agg = $state.raw<Aggregate>({ rows: [], byServer: [], loading: false });
   const slots = new Map<string, Slot>();
-  const streams = new Map<string, EventSource>();
+  const streams = new Map<string, EventSourceLike>();
   // Watchdog por stream (mesmo padrão do Chat): o backend emite `ping` a cada ~10s no stream de
   // lista justamente pra isto — suspend/VPN flap deixa a conexão MEIO-ABERTA sem onerror e as 4
   // views congelavam em silêncio até um reconnect manual. Sem sinal por 25s -> fecha e reabre.
@@ -87,7 +88,7 @@ function createSessionsStore() {
         arm();
         retryDelays.delete(s.id);   // sinal de vida: proximo erro recomeca do backoff minimo
         try {
-          slots.set(s.id, { sessions: JSON.parse((e as MessageEvent).data), error: null });
+          slots.set(s.id, { sessions: JSON.parse(e.data), error: null });
         } catch {
           // Frame malformado: sem isto o throw sobe no dispatch do EventSource e o slot congela em
           // silêncio (onerror não dispara pra erro de parse). Mantém a última lista boa e avisa.

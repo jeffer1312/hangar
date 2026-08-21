@@ -523,9 +523,9 @@ export interface TreeListing { entries: TreeEntry[]; truncated: boolean }
 export interface FileContent { path: string; text: string; size: number; truncated: boolean; digest: string | null }
 
 // Um achado da busca (GET /api/sessions/{name}/files/search). No modo `names`, line e text vem null.
-export interface SearchHit { path: string; line: number | null; text: string | null }
+export interface FileSearchHit { path: string; line: number | null; text: string | null }
 
-export interface SearchResult { hits: SearchHit[]; truncated: boolean; mode: 'names' | 'contents' }
+export interface SearchResult { hits: FileSearchHit[]; truncated: boolean; mode: 'names' | 'contents' }
 
 // Diff de UM arquivo (POST /api/sessions/{name}/git/path-diff). `escopo_usado` pode divergir do
 // pedido: `branch` cai pra `nao_commitado` quando a base nao da pra achar (base/motivo dizem o porque).

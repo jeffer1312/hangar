@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
   import OptionButtons from './OptionButtons.svelte';
-  import { selectOption } from '../lib/api';
+  import { selectOption } from '@hangar/core';
   import { getActiveId, selectServer } from '../lib/auth';
   import { attentionFeed } from '@hangar/core';
   import type { AggSession } from '@hangar/core';

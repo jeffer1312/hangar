@@ -8,7 +8,7 @@
   // Haiku nao usa esforco — por isso a pill some quando o modelo atual e Haiku (ver Composer).
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
-  import type { ModelEffortBody } from '../lib/api';
+  import type { ModelEffortBody } from '@hangar/core';
 
   const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
 

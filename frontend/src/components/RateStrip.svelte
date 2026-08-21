@@ -1,6 +1,6 @@
 <script lang="ts">
   import { parseStatusLine, type StatusFields } from '../lib/statusline';
-  import type { ServerBucket } from '../lib/sessions';
+  import type { ServerBucket } from '@hangar/core';
 
   // Faixa de rate-limit no topo do Board/Canvas: as janelas ⚡5h e 📅7d são POR CONTA (servidor),
   // não por sessão — qualquer statusline de qualquer sessão do servidor carrega o mesmo valor,

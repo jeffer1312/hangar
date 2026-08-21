@@ -15,8 +15,8 @@
   import { untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
-  import { getModelOptions, setEngineModel } from '../lib/api';
-  import type { ModelEffortBody, ModelOption } from '../lib/api';
+  import { getModelOptions, setEngineModel } from '@hangar/core';
+  import type { ModelEffortBody, ModelOption } from '@hangar/core';
 
   interface Props {
     open: boolean;

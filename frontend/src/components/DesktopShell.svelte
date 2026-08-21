@@ -14,7 +14,7 @@ import * as m from '../paraglide/messages';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { getConfig } from '../lib/api';
+  import { getConfig } from '@hangar/core';
   import { getActiveId, selectServer } from '../lib/auth';
   import { navMode } from '../lib/navMode.svelte';
   import type { AggSession } from '@hangar/core';

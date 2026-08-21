@@ -22,22 +22,20 @@ const storeState = vi.hoisted(() => ({
   servers: [] as unknown[],
 }));
 
-vi.mock('../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   isTimeoutError: vi.fn(() => false),
   isAbortError: vi.fn(() => false),
   errorDetail: vi.fn(async () => ''),
   createSession: vi.fn(), deleteSession: vi.fn(),
-  // Contrato real do renameSession: devolve { ok, name } (o doRename lê r.name).
   renameSession: vi.fn(async (_old: string, nv: string) => ({ ok: true, name: nv })),
   gitAction: vi.fn(), checkoutBranch: vi.fn(), resumeSession: vi.fn(),
   broadcast: vi.fn(), getHistoryTailForServer: vi.fn(async () => []),
-  // Imports do SessionContextMenu REAL (não stubado): o onMount chama getPushSettings.
   getPushSettings: vi.fn(async () => ({ muted: [] })),
   setSessionMute: vi.fn(), openEditor: vi.fn(),
   setThenLink: vi.fn(), clearThenLink: vi.fn(),
-  // Git REAL montado nos testes de filesInContext (abaixo): o store faz refresh no load.
   getBranches: vi.fn(async () => ({ branches: [], current: null, remotes: [], dirty: false })),
   getChangedFiles: vi.fn(async () => ({ files: [], sequencer: null })),
   getGitLog: vi.fn(async () => ({ commits: [], truncated: false })),
@@ -48,23 +46,6 @@ vi.mock('../lib/api', () => ({
     path: 'a.txt', diff: '', truncated: false,
     escopo_pedido: 'branch', escopo_usado: 'branch', base: null, motivo: null,
   })),
-}));
-vi.mock('../lib/auth', () => ({
-  getActiveId: vi.fn(() => null),
-  selectServer: vi.fn(() => true),
-  serverColor: () => '#fff',
-  withServer: vi.fn(async (_id: string, fn: () => Promise<unknown>) => fn()),
-}));
-vi.mock('../lib/sessionsStore.svelte', () => ({
-  sessionsStore: {
-    retain: vi.fn(), release: vi.fn(),
-    markDeleting: vi.fn(), unmarkDeleting: vi.fn(),
-    byServer: storeState.byServer, rows: storeState.rows, servers: storeState.servers,
-    loading: false,
-  },
-}));
-vi.mock('@hangar/core', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@hangar/core')>()),
   loopBadge: () => null,
   LOOP_TONE_COLOR: {},
   rotuloEstado: (s: string) => ({ working: 'em execução', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' })[s] ?? '',
@@ -84,6 +65,21 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   providerTag: () => null,
   planBadge: () => null,
 }));
+vi.mock('../lib/auth', () => ({
+  getActiveId: vi.fn(() => null),
+  selectServer: vi.fn(() => true),
+  serverColor: () => '#fff',
+  withServer: vi.fn(async (_id: string, fn: () => Promise<unknown>) => fn()),
+}));
+vi.mock('../lib/sessionsStore.svelte', () => ({
+  sessionsStore: {
+    retain: vi.fn(), release: vi.fn(),
+    markDeleting: vi.fn(), unmarkDeleting: vi.fn(),
+    byServer: storeState.byServer, rows: storeState.rows, servers: storeState.servers,
+    loading: false,
+  },
+}));
+
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
@@ -115,7 +111,7 @@ import { sidebarPin } from '../lib/sidebarPin.svelte';
 import { sidebarBridge } from '../lib/sidebarBridge';
 import { navMode } from '../lib/navMode.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
-import * as api from '../lib/api';
+import * as api from '@hangar/core';
 import type { AggSession } from '@hangar/core';
 
 beforeEach(() => {

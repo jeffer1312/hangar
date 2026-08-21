@@ -8,7 +8,7 @@
 // O fetch segue o mesmo par do contaEstado.ts: `null` = servidor ATIVO (401 desloga), Server
 // explícito = máquina do ?srv= (401 de outra máquina não pode apagar a credencial ativa).
 import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
-import { errorDetail } from './api';
+import { errorDetail } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import type { EstadoLogin } from './contaEstado';
 import type { JanelaCota, EstadoCota } from './contaEstado';

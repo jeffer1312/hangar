@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getWorkflows, getWorkflow, getWorkflowAgent, getSubagents, getSubagent } from '../lib/api';
+  import { getWorkflows, getWorkflow, getWorkflowAgent, getSubagents, getSubagent } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import PlanPanel from './PlanPanel.svelte';

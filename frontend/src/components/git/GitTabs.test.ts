@@ -10,10 +10,11 @@ import GitTabs from './GitTabs.svelte';
 import GitTabsHarness from './GitTabsHarness.svelte';
 import { createGitStore } from '../../lib/gitStore.svelte';
 import { filesStores } from '../../lib/filesStore.svelte';
-import { readFile } from '../../lib/api';
+import { readFile } from '@hangar/core';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 
-vi.mock('../../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   listFiles: vi.fn(async () => ({

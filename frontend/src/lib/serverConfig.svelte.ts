@@ -5,7 +5,7 @@
 import * as m from '../paraglide/messages';
 import {
   getConfig, getConfigForServer, patchConfig, patchConfigForServer, type CampoConfig,
-} from './api';
+} from '@hangar/core';
 import { serverIdentidade, type Server } from './auth';
 
 export type ValorCampo = string | number | boolean;

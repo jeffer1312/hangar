@@ -7,7 +7,7 @@ import {
   gitRevert, gitCherryPick, gitReset, gitCreateBranch, gitCreateTag,
   getFileDiff, getCommitFileDiff, getCommitDiff, getCommitDiffVsWorktree,
   type GitAction, type ChangedFile, type GitCommit, type GitResetMode,
-} from './api';
+} from '@hangar/core';
 // `import type` some na compilacao: o Shiki continua entrando so pelo import() dinamico la embaixo.
 import type { DiffRow } from './highlight';
 

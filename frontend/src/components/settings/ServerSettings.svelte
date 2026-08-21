@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
 import { intlLocale } from '../../lib/locale';
-  import { listarVozesTts, saldoTts, type TtsVoz } from '../../lib/api';
+  import { listarVozesTts, saldoTts, type TtsVoz } from '@hangar/core';
   import Select from '../Select.svelte';
   import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
   import { ouvirAmostra } from '../../lib/ouvir';

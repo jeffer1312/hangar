@@ -4,7 +4,7 @@
   import NavBar from '../components/NavBar.svelte';
   import Select from '../components/Select.svelte';
   import { listServers, onServersChanged, type Server } from '../lib/auth';
-  import { fetchCostsForServer } from '../lib/api';
+  import { fetchCostsForServer } from '@hangar/core';
   import {
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
     custoSemCacheDe, equivalenteDe, isFree,

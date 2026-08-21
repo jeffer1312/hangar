@@ -3,7 +3,7 @@
 // seu fetch no padrão de servidor explícito (mesmo de lib/peers.ts). Este módulo é a ÚNICA
 // porta do front pro login: a tela (ContasSettings.svelte) não chama fetch direto.
 import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
-import { errorDetail, isTimeoutError } from './api';
+import { errorDetail, isTimeoutError } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
 // Erros de rede: "Failed to fetch" cru nao chega a tela (regra da casa: e.message cru e

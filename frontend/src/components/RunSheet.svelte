@@ -1,6 +1,6 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
-  import { getRunners, startRun, stopRun, getRunPane } from '../lib/api';
+  import { getRunners, startRun, stopRun, getRunPane } from '@hangar/core';
   import type { Runner, RunInfo } from '@hangar/core';
   import * as m from '../paraglide/messages';
 

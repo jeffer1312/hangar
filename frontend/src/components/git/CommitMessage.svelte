@@ -3,7 +3,7 @@
   // proprio — quem limita altura agora e o empilhado da aba, senao dois paineis brigariam pelo
   // mesmo 52vh e a soma estouraria a tela.
   import * as m from '../../paraglide/messages';
-  import type { GitCommit } from '../../lib/api';
+  import type { GitCommit } from '@hangar/core';
 import { intlLocale } from '../../lib/locale';
 
   interface Props { commit: GitCommit }

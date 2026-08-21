@@ -2,9 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import ActivitySheet from './ActivitySheet.svelte';
-import * as apiLib from '../lib/api';
+import * as apiLib from '@hangar/core';
 
-vi.mock('../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: [] }),
   setPermissionMode: vi.fn(),
   isTimeoutError: vi.fn(() => false),

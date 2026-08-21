@@ -5,7 +5,7 @@ import * as m from '../paraglide/messages';
   import BackgroundToggle from './BackgroundToggle.svelte';
   import { relativeTime, rotuloEstado, stateColors } from '@hangar/core';
   import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
-  import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '../lib/api';
+  import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '@hangar/core';
   import type { SessionInfo, State } from '@hangar/core';
 
   // Troca de sessao sem voltar pra home. Dois modos: "sessoes" (lista das outras sessoes vivas +

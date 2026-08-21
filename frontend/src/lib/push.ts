@@ -3,7 +3,7 @@
 // servidor com o label/id locais, pra notif mostrar "Casa · sessao" e linkar certo.
 import * as m from '../paraglide/messages';
 import { listServers } from './auth';
-import { getVapidKey, subscribePush } from './api';
+import { getVapidKey, subscribePush } from '@hangar/core';
 
 function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   const padding = '='.repeat((4 - (base64.length % 4)) % 4);

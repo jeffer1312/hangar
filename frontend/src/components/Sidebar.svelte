@@ -3,7 +3,7 @@
 import * as m from '../paraglide/messages';
   import HangarMark from './icons/HangarMark.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
-  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
+  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '@hangar/core';
   import { getActiveId, selectServer, serverColor, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { abrirConfig } from '../lib/configNav';

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { selectOption } from '../lib/api';
+  import { selectOption } from '@hangar/core';
   import { getActiveId, selectServer } from '../lib/auth';
   import { attentionFeed } from '@hangar/core';
   import type { AggSession } from '@hangar/core';

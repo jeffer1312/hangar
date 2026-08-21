@@ -5,7 +5,7 @@
 // ensureOk com 401 → dropActiveServer + reload), sem tocar no arquivo. `errorDetail` vem de
 // api.ts, que é exportado — importar não é editar.
 import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
-import { errorDetail } from './api';
+import { errorDetail } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
 export type EstadoLogin = {

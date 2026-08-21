@@ -15,7 +15,7 @@
   import { filesStores } from '../../lib/filesStore.svelte';
   import { getActiveId } from '../../lib/auth';
   import type { FilesStore } from '../../lib/filesStore.svelte';
-  import type { GitCommit } from '../../lib/api';
+  import type { GitCommit } from '@hangar/core';
   import type { GitStore } from '../../lib/gitStore.svelte';
   import { tick } from 'svelte';
 

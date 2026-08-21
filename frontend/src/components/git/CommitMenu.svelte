@@ -1,8 +1,8 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
-  import type { GitCommit } from '../../lib/api';
+  import type { GitCommit } from '@hangar/core';
 import { intlLocale } from '../../lib/locale';
-  import { getCommitFiles, getCommitBranches } from '../../lib/api';
+  import { getCommitFiles, getCommitBranches } from '@hangar/core';
   import { portal } from '../../lib/portal';
   import { cleanErr, type GitStore } from '../../lib/gitStore.svelte';
   import { focusableElements, nextFocusIndex } from '../../lib/focusCycle';

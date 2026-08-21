@@ -6,7 +6,7 @@
   // que so recebe o resultado via onApplied pra atualizar o pill otimista.
   import BottomSheet from './BottomSheet.svelte';
   import * as m from '../paraglide/messages';
-  import { getCodexModels, setCodexModel } from '../lib/api';
+  import { getCodexModels, setCodexModel } from '@hangar/core';
   import type { CodexModel } from '@hangar/core';
 
   interface Props {

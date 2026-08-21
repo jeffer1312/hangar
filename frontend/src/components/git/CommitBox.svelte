@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
   import type { GitStore } from '../../lib/gitStore.svelte';
-  import { getLastCommitMessage } from '../../lib/api';
+  import { getLastCommitMessage } from '@hangar/core';
   import Select from '../Select.svelte';
 
   // `chosen` vem de fora: a lista de arquivos (com a selecao) e da aba Mudancas, que a desenha uma

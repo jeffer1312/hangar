@@ -9,7 +9,7 @@
   import CommitFiles from './CommitFiles.svelte';
   import LogSearch from './LogSearch.svelte';
   import DiffView from './DiffView.svelte';
-  import type { GitCommit } from '../../lib/api';
+  import type { GitCommit } from '@hangar/core';
   import type { GitStore } from '../../lib/gitStore.svelte';
 
   interface Props {

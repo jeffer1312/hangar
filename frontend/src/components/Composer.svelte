@@ -44,7 +44,7 @@
   import ConfirmSheet from './ConfirmSheet.svelte';
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '@hangar/core';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
 

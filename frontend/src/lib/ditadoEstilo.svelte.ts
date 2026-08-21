@@ -1,4 +1,4 @@
-import { getConfig, patchConfig } from './api';
+import { getConfig, patchConfig } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
 // Estilo do ditado, vivendo perto do microfone e nao enterrado nas Configuracoes: a decisao "isto

@@ -9,7 +9,8 @@ import type { Server } from './auth';
 import {
   openShell, openNativeTerminal, getConfigForServer, patchConfigForServer,
   getEnginesForServer, getConfig,
-} from './api';
+  configureApi,
+} from '@hangar/core';
 
 const SRV_A: Server = { id: 'srv-a', label: 'A', baseUrl: 'http://a.local:8765', token: 't-a' };
 const SRV_B: Server = { id: 'srv-b', label: 'B', baseUrl: 'http://b.local:8765', token: 't-b' };
@@ -22,6 +23,13 @@ beforeEach(() => {
   // aparece com o host do A e o teste cai.
   localStorage.setItem('cp_servers', JSON.stringify([SRV_A, SRV_B]));
   localStorage.setItem('cp_active', 'srv-a');
+  configureApi({
+    getBaseUrl: () => SRV_A.baseUrl,
+    getToken: () => SRV_A.token,
+    onUnauthorized: () => {},
+    origin: 'http://a.local:8765',
+    createEventSource: () => ({ addEventListener() {}, removeEventListener() {}, close() {}, onerror: null, onopen: null, readyState: 0 }) as unknown as import('@hangar/core').EventSourceLike,
+  });
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const h = new Headers(init?.headers as HeadersInit);
     chamadas.push({

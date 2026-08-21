@@ -4,7 +4,7 @@
 // indicador `⚠ N offline`. Testável no vitest node (sem svelte).
 import { sortSessions } from '@hangar/core';
 import type { AggSession } from '@hangar/core';
-import type { ServerBucket } from './sessions';
+import type { ServerBucket } from '@hangar/core';
 
 export interface SessionTab { session: AggSession; boundary: boolean }
 export interface SessionTabsModel { tabs: SessionTab[]; offlineLabels: string[] }

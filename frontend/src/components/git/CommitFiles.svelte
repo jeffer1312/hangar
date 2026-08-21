@@ -2,7 +2,7 @@
   import * as m from '../../paraglide/messages';
   // Metade de baixo do que era o CommitDetail: os arquivos do commit. SEM max-height proprio —
   // quem limita altura e o empilhado da aba.
-  import { getCommitFiles, type GitCommit, type ChangedFile } from '../../lib/api';
+  import { getCommitFiles, type GitCommit, type ChangedFile } from '@hangar/core';
 
   interface Props {
     commit: GitCommit;

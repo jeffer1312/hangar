@@ -7,24 +7,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import SessionList from './SessionList.svelte';
 import * as auth from '../lib/auth';
-import * as api from '../lib/api';
+import * as api from '@hangar/core';
 
 function stubDe() { return { default: createRawSnippet(() => ({ render: () => '<div />' })) }; }
 
-vi.mock('../lib/api', () => ({
-  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
-  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
-  isTimeoutError: vi.fn(() => false),
-  isAbortError: vi.fn(() => false),
-  getSessions: vi.fn(async () => []),
-  createSession: vi.fn(), deleteSession: vi.fn(), renameSession: vi.fn(),
-  resumeSession: vi.fn(), broadcast: vi.fn(),
-  // Imports do AccountMenu REAL (não stubado): onMount do SessionContextMenu não roda aqui, mas o
-  // PushQuiet/ServerManager montam no drawer — api de push/sessão precisa existir.
-  getPushSettings: vi.fn(async () => ({ muted: [] })),
-  setSessionMute: vi.fn(), getBranches: vi.fn(), openEditor: vi.fn(),
-  setThenLink: vi.fn(), clearThenLink: vi.fn(),
-}));
+
 vi.mock('../lib/auth', () => ({
   listServers: vi.fn(() => []),
   getActiveId: vi.fn(() => null),
@@ -47,7 +34,19 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
 }));
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
-  countAwaiting: () => 0,
+getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+  setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
+  isTimeoutError: vi.fn(() => false),
+  isAbortError: vi.fn(() => false),
+  getSessions: vi.fn(async () => []),
+  createSession: vi.fn(), deleteSession: vi.fn(), renameSession: vi.fn(),
+  resumeSession: vi.fn(), broadcast: vi.fn(),
+  // Imports do AccountMenu REAL (não stubado): onMount do SessionContextMenu não roda aqui, mas o
+  // PushQuiet/ServerManager montam no drawer — api de push/sessão precisa existir.
+  getPushSettings: vi.fn(async () => ({ muted: [] })),
+  setSessionMute: vi.fn(), getBranches: vi.fn(), openEditor: vi.fn(),
+  setThenLink: vi.fn(), clearThenLink: vi.fn(),
+countAwaiting: () => 0,
   groupSelectedByServer: () => [],
   initials: (n: string) => n.slice(0, 2),
   projectKey: () => '',

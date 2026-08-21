@@ -1,6 +1,6 @@
 import * as m from '../paraglide/messages';
 import { ttsPlayer } from './ttsPlayer.svelte';
-import { sintetizarTts, ttsAudioUrl } from './api';
+import { sintetizarTts, ttsAudioUrl } from '@hangar/core';
 
 /**
  * Toca um texto. `confirmar` e chamado quando o servidor responde 409 (acima do limite de aviso):

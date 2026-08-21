@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { getPane, sendKey, sendTermInput, type NavKey } from '../lib/api';
+  import { getPane, sendKey, sendTermInput, type NavKey } from '@hangar/core';
   import ModalDialog from './ModalDialog.svelte';
   import * as m from '../paraglide/messages';
 

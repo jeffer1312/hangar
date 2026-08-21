@@ -7,7 +7,7 @@
     deleteEngine, deleteEngineForServer,
     engineModelos, engineModelosForServer,
     type Motor, type ModeloProvedor,
-  } from '../../lib/api';
+  } from '@hangar/core';
   import type { Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
 

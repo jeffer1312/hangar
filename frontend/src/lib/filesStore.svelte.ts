@@ -7,10 +7,10 @@
 // $effect o RECRIA quando a sessao muda — o padrao contrario, que faz a regua "pasta aberta
 // continua aberta ao voltar" falhar sem erro nenhum.
 import * as m from '../paraglide/messages';
-import { listFiles, readFile, searchFiles, pathDiff, writeFile } from './api';
+import { listFiles, readFile, searchFiles, pathDiff, writeFile } from '@hangar/core';
 import { cleanErr } from './gitStore.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import type { FileContent, PathDiff, SearchHit, TreeEntry } from '@hangar/core';
+import type { FileContent, PathDiff, FileSearchHit, TreeEntry } from '@hangar/core';
 
 export class FilesStore {
   // Pastas expandidas na arvore (caminho absoluto dentro do repo). SvelteSet, nao Set: `$state`
@@ -26,7 +26,7 @@ export class FilesStore {
   // Escopo do diff: desde a base da branch (soma dos turnos) ou so o nao-commitado.
   escopo = $state<'branch' | 'nao_commitado'>('branch');
   // Achados da ultima busca; no modo `names`, line e text vem null.
-  resultados = $state<SearchHit[]>([]);
+  resultados = $state<FileSearchHit[]>([]);
   // Erro legivel da ultima operacao (nulo quando a operacao foi limpa).
   erro = $state<string | null>(null);
   // Listar so arquivos modificados (a arvore inteira quando false).

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getRoots, scanDir } from '../lib/api';
+  import { getRoots, scanDir } from '@hangar/core';
   import { relativeTime } from '@hangar/core';
   import type { FsRoot, FsEntry, FsScanError } from '@hangar/core';
   import * as m from '../paraglide/messages';

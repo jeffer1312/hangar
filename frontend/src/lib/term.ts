@@ -1,6 +1,6 @@
 // getBaseUrl/getToken vivem em auth.ts; o api.ts so as IMPORTA (api.ts:1) e nao reexporta.
 import type { Server } from './auth';
-import { fetchSessionsForServer } from './api';
+import { fetchSessionsForServer } from '@hangar/core';
 
 // Coalescencia do resize: arrastar a borda emite dezenas de eventos, e cada um redesenha a janela do
 // tmux inteira — o capture-pane concorrente devolveria quadros meio-pintados pro preview e pro

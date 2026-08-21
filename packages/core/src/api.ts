@@ -1,7 +1,8 @@
-import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
-import * as m from '../paraglide/messages';
-import { localeAtual } from './locale';
-import { mensagemDeErro, formataErro, type EnvelopeErro } from '@hangar/core';
+import { apiEnv, type EventSourceLike } from './apiEnv';
+import type { Server } from './servers';
+import * as m from './paraglide/messages';
+import { localeAtual } from './i18n';
+import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 import type {
   SessionInfo,
   Provider,
@@ -30,38 +31,38 @@ import type {
   FileContent,
   SearchResult,
   PathDiff,
-} from '@hangar/core';
+} from './types';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque a tag img
 // não manda header Authorization e cross-origin (multi-PC) não leva cookie — o backend aceita ?token.
 export function transcriptImageUrl(name: string, id: string, idx: number): string {
-  const t = getToken() ?? '';
-  return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
+  const t = apiEnv().getToken() ?? '';
+  return `${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
 }
 
 // URL pra servir um arquivo CITADO na conversa (video/html/pdf/img por caminho). `?token` p/ <img>/
 // <video>/<iframe> (sem header). O backend so serve se o path estiver no transcript da sessao.
 export function fileUrl(name: string, path: string): string {
-  const t = getToken() ?? '';
-  return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}`;
+  const t = apiEnv().getToken() ?? '';
+  return `${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}`;
 }
 
 // URL de uma imagem ENVIADA do phone (upload), servida por <cwd>/.claude-pocket-uploads/<basename>.
 // `?token` igual as de cima: <img> nao manda header Authorization e cross-origin nao leva cookie.
 export function uploadUrl(name: string, filename: string): string {
-  const t = getToken() ?? '';
-  return `${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}`;
+  const t = apiEnv().getToken() ?? '';
+  return `${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}`;
 }
 
 // URL do mp3 gerado. `?token` porque <audio> nao manda header Authorization e o front vem de outra
 // origem (PWA servido pela VPS, backend no Tailscale) — cookie tambem nao viaja.
 export function ttsAudioUrl(path: string): string {
-  const t = getToken() ?? '';
-  return `${getBaseUrl()}${path}?token=${encodeURIComponent(t)}`;
+  const t = apiEnv().getToken() ?? '';
+  return `${apiEnv().getBaseUrl()}${path}?token=${encodeURIComponent(t)}`;
 }
 
 function authHeaders(): HeadersInit {
-  const token = getToken();
+  const token = apiEnv().getToken();
   if (!token) return {};
   return { Authorization: `Bearer ${token}` };
 }
@@ -95,12 +96,11 @@ export async function errorDetail(res: Response): Promise<string> {
 
 // Trata a resposta compartilhada por apiFetch e uploadFile. Self-heal de token invalido/rotacionado:
 // isAuthenticated() so checa se EXISTE token, nao se vale. Num 401 COM token salvo, limpamos a
-// credencial e recarregamos -> cai no Login pra re-parear (QR). O guard getToken() evita loop quando
+// credencial e recarregamos -> cai no Login pra re-parear (QR). O guard apiEnv().getToken() evita loop quando
 // ja estamos deslogados (Login nao chama a API). Qualquer outro !ok vira erro com o corpo.
 async function ensureOk(res: Response): Promise<void> {
-  if (res.status === 401 && getToken()) {
-    dropActiveServer();
-    if (typeof window !== 'undefined') window.location.reload();
+  if (res.status === 401 && apiEnv().getToken()) {
+    apiEnv().onUnauthorized();
     throw Object.assign(new Error(m.sessao_expirada()), { status: 401 });
   }
   // `status` no proprio erro: sem ele quem chama (ex: ouvir.ts) nao consegue distinguir um 409
@@ -111,7 +111,7 @@ async function ensureOk(res: Response): Promise<void> {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = getBaseUrl();
+  const base = apiEnv().getBaseUrl();
   const url = `${base}${path}`;
   const res = await fetch(url, {
     ...init,
@@ -395,7 +395,7 @@ export async function getVapidKey(s: Server): Promise<string> {
     headers: { Authorization: `Bearer ${s.token}` },
   });
   if (!res.ok) throw new Error(`vapid ${res.status}`);
-  return ((await res.json()).key ?? '') as string;
+  return ((await res.json() as { key?: string }).key ?? '') as string;
 }
 
 // Registra a inscricao push do celular NESTE servidor, com label + id locais (pra notif e deep-link)
@@ -625,8 +625,8 @@ export function getArchiveHistory(project: string, sid: string): Promise<ChatEve
 
 // URL de imagem colada no terminal, versão arquivo (mesmo ?token das outras URLs de <img>).
 export function archiveImageUrl(project: string, sid: string, id: string, idx: number): string {
-  const t = getToken() ?? '';
-  return `${getBaseUrl()}/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
+  const t = apiEnv().getToken() ?? '';
+  return `${apiEnv().getBaseUrl()}/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/transcript-image/${encodeURIComponent(id)}/${idx}?token=${encodeURIComponent(t)}`;
 }
 
 // ── Busca de conteudo cross-session (feature #10): grep (rg) em todos os transcripts do servidor ──
@@ -655,7 +655,7 @@ export async function askHistoryForServer(
     signal: AbortSignal.timeout(90000),
   });
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json();
+  return res.json() as Promise<{ answer: string; hits: SearchHit[] }>;
 }
 
 export async function searchTranscriptsForServer(s: Server, q: string): Promise<SearchHit[]> {
@@ -771,7 +771,7 @@ export function patchConfigForServer(s: Server, mudancas: Record<string, unknown
 // chamador (PlanPanel) trata null como "nada pra mostrar", não como falha. Por isso um fetch cru
 // em vez de apiFetch/apiFetchForServer: as duas lançam pra qualquer !ok, inclusive 404.
 export async function getPlan(name: string): Promise<PlanDetail | null> {
-  const res = await fetch(`${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/plan`, {
+  const res = await fetch(`${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/plan`, {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
   });
   if (res.status === 404) return null;
@@ -892,7 +892,7 @@ export async function uploadFile(
   name: string,
   file: File,
 ): Promise<{ path: string; frames?: string[]; transcript?: string }> {
-  const base = getBaseUrl();
+  const base = apiEnv().getBaseUrl();
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/upload`, {
     method: 'POST',
     headers: {
@@ -922,7 +922,7 @@ export async function transcribeFile(
   file: File,
   opts?: OpcoesTranscribe,
 ): Promise<{ path: string; text: string; raw?: string; aviso?: string | null }> {
-  const base = getBaseUrl();
+  const base = apiEnv().getBaseUrl();
   const qs = queryTranscribe(opts);
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/transcribe${qs}`, {
     method: 'POST',
@@ -1355,44 +1355,47 @@ export async function narrarSelecao(
 // cria um novo (para o auto-retry nativo não virar uma 2ª máquina de retry em paralelo), e o
 // watchdog de 25s faz o mesmo. Objeto novo nasce sem memória de id, então sem este param a retomada
 // exata jamais dispararia no uso real, e toda queda voltaria a custar o backfill cego de 200 linhas.
-export function openEventStream(name: string, lastEventId?: string | null): EventSource {
-  const base = getBaseUrl();
-  const token = getToken();
+export function openEventStream(name: string, lastEventId?: string | null): EventSourceLike {
+  const base = apiEnv().getBaseUrl();
+  const token = apiEnv().getToken();
   const path = `/api/sessions/${encodeURIComponent(name)}/events`;
 
   // Use ?token param only in dev (different origin) or when no cookie is set
-  const isSameOrigin = !base || base === window.location.origin;
+  const o = apiEnv().origin;
+  const isSameOrigin = !!o && (!base || base === o);
   const params = new URLSearchParams();
   if (!isSameOrigin) params.set('token', token ?? '');
   if (lastEventId) params.set('last_event_id', lastEventId);
   const qs = params.toString();
   const url = `${base}${path}${qs ? `?${qs}` : ''}`;
 
-  return new EventSource(url, { withCredentials: isSameOrigin });
+  return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });
 }
 
 // EventSource da LISTA de UM servidor (baseUrl/token explícitos). ?token cross-origin (EventSource
 // não manda header e cross-origin não leva cookie); withCredentials same-origin. Por-servidor:
 // cada um tem o seu, falha isolada.
-export function openSessionsStream(s: Server): EventSource {
-  const isSameOrigin = !s.baseUrl || s.baseUrl === window.location.origin;
+export function openSessionsStream(s: Server): EventSourceLike {
+  const o = apiEnv().origin;
+  const isSameOrigin = !!o && (!s.baseUrl || s.baseUrl === o);
   const url = isSameOrigin
     ? `${s.baseUrl}/api/sessions/events`
     : `${s.baseUrl}/api/sessions/events?token=${encodeURIComponent(s.token)}`;
-  return new EventSource(url, { withCredentials: isSameOrigin });
+  return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });
 }
 
 // EventSource de UMA sessão de um servidor ESPECÍFICO (baseUrl/token explícitos, sem tocar no
 // ativo) — usado pela grade de comparação (feature #11), que pode misturar sessões de servidores
 // diferentes no mesmo relance. Mesma convenção de openSessionsStream (?token cross-origin,
 // withCredentials same-origin).
-export function openEventStreamForServer(s: Server, name: string): EventSource {
+export function openEventStreamForServer(s: Server, name: string): EventSourceLike {
   const path = `/api/sessions/${encodeURIComponent(name)}/events`;
-  const isSameOrigin = !s.baseUrl || s.baseUrl === window.location.origin;
+  const o = apiEnv().origin;
+  const isSameOrigin = !!o && (!s.baseUrl || s.baseUrl === o);
   const url = isSameOrigin
     ? `${s.baseUrl}${path}`
     : `${s.baseUrl}${path}?token=${encodeURIComponent(s.token)}`;
-  return new EventSource(url, { withCredentials: isSameOrigin });
+  return apiEnv().createEventSource(url, { withCredentials: isSameOrigin });
 }
 
 // ── Preview: expõe um projeto local (porta) via `tailscale serve` da máquina do backend, pra ver
@@ -1571,7 +1574,7 @@ export async function refineLoopForServer(
     signal: AbortSignal.timeout(60000),
   });
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
-  return res.json();
+  return res.json() as Promise<{ goal: string }>;
 }
 
 export async function stopLoopForServer(s: Server, name: string): Promise<{ loop: LoopState }> {

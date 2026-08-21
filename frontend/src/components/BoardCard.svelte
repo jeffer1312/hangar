@@ -5,7 +5,7 @@ import * as m from '../paraglide/messages';
   import {
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
     uploadFileForServer, transcribeFileForServer,
-  } from '../lib/api';
+  } from '@hangar/core';
   import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
   import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '@hangar/core';
   import { parseStatusLine } from '../lib/statusline';

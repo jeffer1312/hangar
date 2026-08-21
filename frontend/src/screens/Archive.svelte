@@ -7,7 +7,7 @@ import { intlLocale } from '../lib/locale';
   import {
     getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
     getEngines, type ArchiveFolder, type ArchiveEntry, type Motor,
-  } from '../lib/api';
+  } from '@hangar/core';
   import type { ChatEvent } from '@hangar/core';
   import { selectServer, listServers, getActiveId, serverColor } from '../lib/auth';
 

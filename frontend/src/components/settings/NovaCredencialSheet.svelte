@@ -15,7 +15,7 @@
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import * as m from '../../paraglide/messages';
   import { engineModelos, engineModelosForServer, putEngine, putEngineForServer,
-           criarConta, type ModeloProvedor } from '../../lib/api';
+           criarConta, type ModeloProvedor } from '@hangar/core';
   import { sincronizarNosAgentes, type ResultadoSync } from '../../lib/credenciais';
   import type { Server } from '../../lib/auth';
 

@@ -4,11 +4,19 @@ import App from './App.svelte';
 import { applyTheme, getThemePref, getTextoDoDesktop } from './lib/theme';
 import { buscarPaleta, aplicarPaleta, ligarAtualizacaoAoFocar } from './lib/desktopTheme';
 import { applyBg, applyAppearance } from './lib/background';
-import { ensureCookie } from './lib/auth';
+import { ensureCookie, getBaseUrl, getToken, dropActiveServer } from './lib/auth';
 import { localeAtual } from './lib/locale';
-import { configureLocale } from '@hangar/core';
+import { configureApi, configureLocale } from '@hangar/core';
 
 configureLocale({ getLocale: localeAtual });
+configureApi({
+  getBaseUrl,
+  getToken,
+  onUnauthorized: () => { dropActiveServer(); window.location.reload(); },
+  origin: window.location.origin,
+  createEventSource: (url, { withCredentials }) =>
+    new EventSource(url, { withCredentials }) as unknown as import('@hangar/core').EventSourceLike,
+});
 
 // Resolve o tema (escolha do usuario ou prefers-color-scheme) ANTES de montar -> sem flash do default.
 applyTheme();

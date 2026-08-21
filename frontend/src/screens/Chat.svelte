@@ -28,7 +28,7 @@
   import { filesStores } from '../lib/filesStore.svelte';
   import {
     loopBadge, LOOP_TONE_COLOR, appendTail, hasSeam, prependOlder, especificidade, donoDaLinha,
-    type ChatEvent, type StateEvent, type StatsEvent, type State, type SessionInfo, type AskQuestionPayload, type AnswerItem, type Provider, type PlanDetail,
+    type ChatEvent, type StateEvent, type StatsEvent, type State, type SessionInfo, type AskQuestionPayload, type AnswerItem, type Provider, type PlanDetail, type EventSourceLike
   } from '@hangar/core';
   import {
     getHistory,
@@ -47,7 +47,7 @@
     isAbortError,
     isTimeoutError,
     getPlan,
-  } from '../lib/api';
+  } from '@hangar/core';
   import { formataErro } from '@hangar/core';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
@@ -257,7 +257,7 @@
   let statsEvent = $state<StatsEvent | null>(null);
   let loading = $state(true);
   let error = $state('');
-  let es: EventSource | null = null;
+  let es: EventSourceLike | null = null;
   let watchdog: ReturnType<typeof setTimeout> | undefined;     // liveness: reconecta se a conexao morrer calada
   // Última posição recebida do transcript; reenviada no reconnect pra retomar exatamente dali.
   let lastEventId: string | null = null;
@@ -1040,7 +1040,7 @@
     es = openEventStream(sessionName, lastEventId);
     armWatchdog();
 
-    es.addEventListener('message', (e: MessageEvent) => {
+    es.addEventListener('message', (e) => {
       noteAlive();
       // Guarda a posição de retomada. Só o transcript carrega id ("<stem>:<offset>"); state/preview/
       // ping vêm sem, de propósito — o último id visto tem que ser sempre o do transcript, senão a
@@ -1118,7 +1118,7 @@
       } catch {}
     });
 
-    es.addEventListener('state', (e: MessageEvent) => {
+    es.addEventListener('state', (e) => {
       noteAlive();
       try {
         stateEvent = JSON.parse(e.data) as StateEvent;
@@ -1136,7 +1136,7 @@
     });
 
     // Faixa de estatísticas da sessão (app/stats.py). Full-replace; ausência de evento = sem faixa.
-    es.addEventListener('stats', (e: MessageEvent) => {
+    es.addEventListener('stats', (e) => {
       try { statsEvent = JSON.parse(e.data) as StatsEvent; } catch {}
     });
 
@@ -1144,13 +1144,13 @@
     es.addEventListener('ping', () => noteAlive());
 
     // Stepper nativo AskUserQuestion: abre o sheet com as perguntas recebidas via SSE
-    es.addEventListener('ask_question', (e: MessageEvent) => {
+    es.addEventListener('ask_question', (e) => {
       try { askPayload = JSON.parse(e.data); askOpen = true; } catch {}
     });
 
     // Preview ao vivo (best-effort) do bloco de assistente em voo. Full-replace; tambem e prova de
     // vida (mas NAO a unica — entre turnos nao ha preview, por isso o ping ancora o watchdog).
-    es.addEventListener('preview', (e: MessageEvent) => {
+    es.addEventListener('preview', (e) => {
       noteAlive();
       try {
         const ev = JSON.parse(e.data) as { text?: string; md?: boolean; full?: boolean };

@@ -62,8 +62,17 @@ const sseCtl = vi.hoisted(() => {
 
 // API: só o que o mount do Chat toca precisa responder; o resto nunca chega a ser chamado
 // com os filhos stubados.
-vi.mock('../lib/api', () => ({
-  getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
+
+vi.mock('../lib/auth', () => ({
+  listServers: vi.fn(() => [{ id: 'srv-test', label: 'T', baseUrl: 'http://x', token: 't' }]),
+  getActiveId: vi.fn(() => 'srv-test'),
+}));
+vi.mock('../lib/ttsPlayer.svelte', () => ({ ttsPlayer: { active: false, loading: false } }));
+vi.mock('../lib/ouvir', () => ({ ouvirTexto: vi.fn() }));
+vi.mock('../lib/speakable', () => ({ textoFalavelComCodigo: vi.fn(() => '') }));
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
+getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   isTimeoutError: vi.fn(() => false),
   errorDetail: vi.fn(async () => ''),
@@ -96,17 +105,7 @@ vi.mock('../lib/api', () => ({
   createSession: vi.fn(),
   answerQuestions: vi.fn(),
   isAbortError: vi.fn(() => false),
-}));
-vi.mock('../lib/auth', () => ({
-  listServers: vi.fn(() => [{ id: 'srv-test', label: 'T', baseUrl: 'http://x', token: 't' }]),
-  getActiveId: vi.fn(() => 'srv-test'),
-}));
-vi.mock('../lib/ttsPlayer.svelte', () => ({ ttsPlayer: { active: false, loading: false } }));
-vi.mock('../lib/ouvir', () => ({ ouvirTexto: vi.fn() }));
-vi.mock('../lib/speakable', () => ({ textoFalavelComCodigo: vi.fn(() => '') }));
-vi.mock('@hangar/core', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@hangar/core')>()),
-  loopBadge: vi.fn(() => null),
+loopBadge: vi.fn(() => null),
   LOOP_TONE_COLOR: {},
   appendTail: vi.fn(),
   hasSeam: vi.fn(),
@@ -260,7 +259,7 @@ describe('Chat — visor de arquivo (Task 11, B5: foco e inert)', () => {
     const t = montar();
     await tick();
     await tick();
-    await import('../lib/api');   // estabiliza o mock do SSE: sem o import explicito, o registro
+    await import('@hangar/core');   // estabiliza o mock do SSE: sem o import explicito, o registro
     // dos handlers pode nao estar visivel ao sseCtl na suite completa (medido: falha intermitente).
     sseCtl.state({ state: 'dead' });   // a sessao encerrou
     await tick();

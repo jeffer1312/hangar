@@ -1,4 +1,4 @@
-import { narrarSelecao } from './api';
+import { narrarSelecao } from '@hangar/core';
 import { ehInstrucaoDigitada } from './ttsPresets';
 
 // Narracao guiada (fase 2 do TTS): pede pra Groq tratar o texto falavel de uma selecao ANTES de

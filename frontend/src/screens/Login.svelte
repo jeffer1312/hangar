@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { addServerWithRollback, getBaseUrl, validarPareamento } from '../lib/auth';
-  import { getSessions } from '../lib/api';
+  import { getSessions } from '@hangar/core';
   import { focusFirstInvalid } from '../lib/focusCycle';
   import { syncStatus, register as syncRegister, login as syncLogin } from '../lib/sync';
   import QrScanner from '../components/QrScanner.svelte';

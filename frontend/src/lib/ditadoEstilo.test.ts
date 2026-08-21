@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getConfig = vi.fn();
 const patchConfig = vi.fn();
-vi.mock('./api', () => ({ getConfig, patchConfig }));
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
+  getConfig, patchConfig
+}));
 
 const { ditadoEstilo } = await import('./ditadoEstilo.svelte');
 

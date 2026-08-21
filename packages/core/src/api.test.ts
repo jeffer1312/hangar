@@ -1,27 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { overwriteGetLocale as overwriteFront } from '../paraglide/runtime';
-import { configureLocale } from '@hangar/core';
+import { overwriteGetLocale as overwriteFront } from './paraglide/runtime';
+import { configureLocale } from './i18n';
 function overwriteGetLocale(fn: () => 'en' | 'pt') {
   overwriteFront(fn);
   configureLocale({ getLocale: fn });
 }
-
-const store = new Map<string, string>();
-(globalThis as any).localStorage = {
-  getItem: (k: string) => store.get(k) ?? null,
-  setItem: (k: string, v: string) => store.set(k, String(v)),
-  removeItem: (k: string) => store.delete(k),
-};
-(globalThis as any).document = { cookie: '' };
-(globalThis as any).window = { location: { origin: 'https://app.test' } };
-
-const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel } = await import('./api');
-const { mensagemDeErro, formataErro } = await import('@hangar/core');
-const { listServers, getActiveId } = await import('./auth');
+import { configureApi } from './apiEnv';
+import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel } from './api';
+import { mensagemDeErro, formataErro } from './errosApi';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
-
+let onUnauthorizedSpy: ReturnType<typeof vi.fn>;
+function stubEventSource() {
+  return { addEventListener() {}, removeEventListener() {}, close() {}, onerror: null, onopen: null, readyState: 0 } as unknown as import('./apiEnv').EventSourceLike;
+}
 beforeEach(() => {
   vi.restoreAllMocks();
+  onUnauthorizedSpy = vi.fn<() => void>();
+  configureApi({
+    getBaseUrl: () => 'https://a.test',
+    getToken: () => 'token-a',
+    onUnauthorized: onUnauthorizedSpy as unknown as () => void,
+    origin: 'https://app.test',
+    createEventSource: () => stubEventSource(),
+  });
 });
 
 describe('explicit server settings API', () => {
@@ -37,15 +38,7 @@ describe('explicit server settings API', () => {
     }));
   });
 
-  it('401 explícito vira erro e não recarrega nem remove credencial global', async () => {
-    // O cenário que importa: o servidor ATIVO é OUTRA máquina. Sem montá-lo, o teste passaria
-    // mesmo que apiFetchForServer chamasse dropActiveServer — não haveria credencial pra derrubar.
-    const outra = { id: 'b', label: 'Servidor B', baseUrl: 'https://b.test', token: 'token-b' };
-    store.set('cp_servers', JSON.stringify([outra]));
-    store.set('cp_active', outra.id);
-
-    const reload = vi.fn();
-    (globalThis as any).window.location.reload = reload;
+  it('401 explícito vira erro e não chama onUnauthorized nem remove credencial global', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ detail: 'token inválido' }), { status: 401 }),
     );
@@ -53,9 +46,15 @@ describe('explicit server settings API', () => {
     await expect(patchConfigForServer(server, { automations: false }))
       .rejects.toThrow('401: token inválido');
 
-    expect(reload).not.toHaveBeenCalled();
-    expect(listServers()).toEqual([outra]);   // a credencial da outra máquina segue intacta
-    expect(getActiveId()).toBe(outra.id);
+    expect(onUnauthorizedSpy).not.toHaveBeenCalled();
+  });
+
+  it('401 global chama onUnauthorized', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'não autorizado' }), { status: 401 }),
+    );
+    await expect(getConfig()).rejects.toThrow();
+    expect(onUnauthorizedSpy).toHaveBeenCalled();
   });
 
   // 502 de infra (proxy Tailscale) sem corpo JSON e sem statusText (comum atras de HTTP/2): sem o
@@ -100,10 +99,6 @@ describe('chamada a outro servidor tem prazo', () => {
 // Round 4: o caminho GLOBAL (servidor ativo) também tinha o mesmo buraco do ForServer — servidor
 // atrás de VPN não recusa conexão e o socket pendurava a folha de Configurações pra sempre.
 describe('config global tem prazo (round 4)', () => {
-  beforeEach(() => {
-    store.set('cp_servers', JSON.stringify([server]));
-    store.set('cp_active', server.id);
-  });
 
   it('getConfig e patchConfig globais mandam signal por padrão', async () => {
     // Response nova por chamada: reusar o MESMO objeto faria o 2º res.json() estourar
@@ -129,11 +124,6 @@ describe('getHistory', () => {
       }),
     );
   }
-
-  beforeEach(() => {
-    store.set('cp_servers', JSON.stringify([server]));
-    store.set('cp_active', server.id);
-  });
 
   it('abortar cancela o fetch de verdade e NÃO vira erro de tela', async () => {
     const fetchMock = fetchQueRespeitaOSignal();
@@ -169,8 +159,6 @@ describe('createSession', () => {
   // com provider != claude. O sheet manda engine/config_dir nulos fora do Claude — aqui garantimos que
   // o provider viaja LITERAL (a versao anterior tipava 'claude' | 'codex' e uma sessao Pi nem compilava).
   it('manda o provider escolhido no corpo, sem motor', async () => {
-    store.set('cp_servers', JSON.stringify([server]));
-    store.set('cp_active', server.id);
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ name: 'x', state: 'idle' }), { status: 200 }),
     );
@@ -183,8 +171,6 @@ describe('createSession', () => {
   });
 
   it('manda provider kimi literal no corpo (quarto provider)', async () => {
-    store.set('cp_servers', JSON.stringify([server]));
-    store.set('cp_active', server.id);
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ name: 'x', state: 'idle' }), { status: 200 }),
     );
@@ -202,8 +188,6 @@ describe('createSession', () => {
 // cru na tela.
 describe('errorDetail (Task 10)', () => {
   beforeEach(() => {
-    store.set('cp_servers', JSON.stringify([server]));
-    store.set('cp_active', server.id);
     overwriteGetLocale(() => 'pt'); // mensagens m.* traduzidas no idioma fixado
   });
 
@@ -269,10 +253,6 @@ describe('mensagemDeErro (parecer task 10)', () => {
 // so pode acender `limpar=1` no pedido do mic. Este e o elo mais barato de quebrar (um `{ditado:
 // true}` esquecido no caminho do anexo manda audio de 10min pro LLM) e o unico sem teste algum.
 describe('transcribeFile', () => {
-  beforeEach(() => {
-    store.set('cp_servers', JSON.stringify([server]));
-    store.set('cp_active', server.id);
-  });
 
   it('so manda ?limpar=1 quando pedido explicitamente', async () => {
     // Response.json() so le o corpo uma vez — mockResolvedValue reusaria a MESMA Response nas 3
@@ -390,10 +370,6 @@ describe('transcribeFileForServer', () => {
 // contrato do _catalogo. Nomes de sessão únicos por teste: o cache é module-level e sobrevive
 // entre os its deste arquivo.
 describe('cache curto dos catálogos dos seletores', () => {
-  beforeEach(() => {
-    store.set('cp_servers', JSON.stringify([server]));
-    store.set('cp_active', server.id);
-  });
 
   it('segunda leitura dentro do TTL sai do cache — um fetch só', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(

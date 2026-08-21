@@ -1,6 +1,6 @@
 <script lang="ts">
   import { TermSocket, termUrlForServer, sessionExistsOnServer } from '../lib/term';
-  import { openShell, openNativeTerminal } from '../lib/api';
+  import { openShell, openNativeTerminal } from '@hangar/core';
   import { listServers, onServersChanged } from '../lib/auth';
   import type { Server } from '../lib/auth';
   // `import type`: some no build (nao vira require), entao NAO desfaz o import dinamico logo abaixo

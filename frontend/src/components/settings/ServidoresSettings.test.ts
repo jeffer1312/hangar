@@ -8,7 +8,7 @@ import ServidoresSettings from './ServidoresSettings.svelte';
 import { criarProps } from './props-reativas.svelte';
 import * as m from '../../paraglide/messages';
 import * as auth from '../../lib/auth';
-import * as api from '../../lib/api';
+import * as api from '@hangar/core';
 import type { Server } from '../../lib/auth';
 
 let mudouCb: (() => void) | null = null;
@@ -35,7 +35,8 @@ vi.mock('../../lib/auth', async (importOriginal) => {
 vi.mock('../../lib/sessionsStore.svelte', () => ({
   sessionsStore: { refreshServers: vi.fn(), reconnect: vi.fn() },
 }));
-vi.mock('../../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   getSessions: vi.fn(async () => []),

@@ -12,7 +12,7 @@
   // que é o nome no disco. Trocar os dois faz o Entrar e o Apagar mirarem uma conta que não
   // existe assim que a pessoa renomear a primeira.
   import { onDestroy, untrack } from 'svelte';
-import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, deleteEngineForServer, isAbortError, isTimeoutError } from '../../lib/api';
+import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, deleteEngineForServer, isAbortError, isTimeoutError } from '@hangar/core';
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';

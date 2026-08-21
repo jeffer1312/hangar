@@ -1,5 +1,5 @@
 import * as m from '../paraglide/messages';
-import { errorDetail } from './api';
+import { errorDetail } from '@hangar/core';
 import type { Server } from './auth';
 
 // Zero-knowledge: the password never leaves the browser. From PBKDF2(masterKey) we split two HKDF

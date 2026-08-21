@@ -15,7 +15,7 @@
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths, parsePeerMessage } from '@hangar/core';
-  import { transcriptImageUrl, uploadUrl } from '../lib/api';
+  import { transcriptImageUrl, uploadUrl } from '@hangar/core';
   import { windowStartFor, nextWindowEnd, precisaPreencher } from '../lib/window';
 
   interface Props {

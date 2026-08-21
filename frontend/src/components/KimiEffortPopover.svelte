@@ -7,7 +7,7 @@
   import { untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
-  import { getKimiModels, setKimiModel } from '../lib/api';
+  import { getKimiModels, setKimiModel } from '@hangar/core';
 
   interface Props {
     open: boolean;

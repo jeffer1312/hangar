@@ -13,11 +13,12 @@ import * as m from '../paraglide/messages';
 // Harness, não o sheet: segura `open` e alterna por clique (o $set do mount é bloqueado em DEV no
 // Svelte 5 — component_api_changed), reproduzindo o ciclo fechar/reabrir do app real.
 import Harness from './CreateSessionSheet.harness.svelte';
-import * as api from '../lib/api';
+import * as api from '@hangar/core';
 
 const onCreate = vi.hoisted(() => vi.fn(async () => {}));
 
-vi.mock('../lib/api', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
   isTimeoutError: vi.fn(() => false),
