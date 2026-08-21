@@ -21,6 +21,7 @@ def _models_cache_isolado(models_cache_em_tmp):
     yield
 
 
+
 from app import api
 from app import engines as eng
 from app.api import app

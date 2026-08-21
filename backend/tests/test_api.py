@@ -16,6 +16,7 @@ def _models_cache_isolado(models_cache_em_tmp):
 
 
 
+
 @pytest.fixture
 def client():
     settings.auth_token = "secret"
