@@ -373,13 +373,20 @@
   // create falha com o erro normal de cwd invalido.
   const pickNativo = (window as { hangar?: { pickFolder?: () => Promise<string | null> } }).hangar?.pickFolder;
   let nativoErro = $state('');
+  // Mesma disciplina dos outros handlers async do arquivo: clique duplo não abre dois diálogos
+  // nativos concorrentes (o que resolvesse por último sobrescreveria `picked` calado).
+  let nativoOcupado = $state(false);
   async function escolherNativa() {
+    if (nativoOcupado) return;
+    nativoOcupado = true;
     nativoErro = '';
     try {
       const p = await pickNativo!();
       if (p) handlePick(p);
     } catch (e) {
       nativoErro = e instanceof Error ? e.message : String(e);
+    } finally {
+      nativoOcupado = false;
     }
   }
 
@@ -525,7 +532,7 @@
       <div class="cs-rodape">
         {#if pickNativo}
           <!-- Só no shell Electron (window.hangar): dialog nativo de diretório do sistema. -->
-          <button class="abrir-btn" onclick={escolherNativa}>{m.criar_pasta_computador()}</button>
+          <button class="abrir-btn" onclick={escolherNativa} disabled={nativoOcupado}>{m.criar_pasta_computador()}</button>
         {/if}
         <button class="advanced-toggle" class:sozinho={!pickNativo} onclick={() => (manualOpen = !manualOpen)}>
           <span>{m.criar_avancado()}</span>

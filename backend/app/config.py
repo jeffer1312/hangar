@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 from pathlib import Path
@@ -67,8 +68,8 @@ def list_config_dirs() -> list[ConfigDirInfo]:
         found.sort(key=_projects_mtime, reverse=True)
         entries = [(_label_for(p), p) for p in found]
     # Apelido da aba Contas (id `claude:<path>`) vence o nome derivado do disco — é o mesmo nome
-    # que a faixa de cota e a lista de contas mostram. Import local: apelidos→contas importam
-    # este módulo indiretamente.
+    # que a faixa de cota e a lista de contas mostram. Import local só porque apenas esta função
+    # usa (não há ciclo hoje: apelidos→contas não voltam pra cá — conferido no review).
     from app import apelidos
     nomes = apelidos.ler()
     out, seen = [], set()
@@ -194,6 +195,11 @@ def resolve_scan_roots(s: "Settings") -> list[Path]:
     from app import runtime_config
     raw = runtime_config.get("scan_roots")
     if not isinstance(raw, str) or not raw.strip():
+        # Tipo errado só acontece com o runtime-config.json editado na mão; cair no env é a
+        # decisão (nunca derrubar o backend), mas calado não — esta é a fronteira do fs-scan.
+        if raw is not None and not isinstance(raw, str):
+            logging.getLogger("claude_pocket.config").warning(
+                "scan_roots do runtime-config tem tipo %s; ignorando e usando o env", type(raw).__name__)
         raw = s.scan_roots
     out: list[Path] = []
     seen: set[Path] = set()

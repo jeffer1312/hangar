@@ -358,6 +358,7 @@ import { intlLocale } from '../../lib/locale';
             autocapitalize="off"
             spellcheck={false}
             placeholder={m.config_server_raiz_placeholder()}
+            aria-label={m.config_server_raiz_nova_aria()}
             bind:value={novaRaiz}
           />
           <button type="submit" class="btn" disabled={!novaRaiz.trim()}>{m.config_server_raiz_adicionar()}</button>

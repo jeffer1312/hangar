@@ -884,6 +884,7 @@
   "config_server_raizes": "Mapped folders",
   "config_server_raizes_ajuda": "The folders the \"New session\" picker lists. Applies immediately, no server restart.",
   "config_server_raiz_placeholder": "/home/you/projects",
+  "config_server_raiz_nova_aria": "Folder path to add",
   "config_server_raiz_adicionar": "Add",
   "config_server_raiz_remover": "Remove {p}",
   "config_server_raizes_vazio": "No mapped folders — the New session picker will be empty.",

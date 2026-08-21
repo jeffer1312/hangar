@@ -884,6 +884,7 @@
   "config_server_raizes": "Pastas mapeadas",
   "config_server_raizes_ajuda": "As pastas que o seletor de \"Nova sessão\" lista. Vale na hora, sem reiniciar o servidor.",
   "config_server_raiz_placeholder": "/home/voce/projetos",
+  "config_server_raiz_nova_aria": "Caminho da pasta a adicionar",
   "config_server_raiz_adicionar": "Adicionar",
   "config_server_raiz_remover": "Remover {p}",
   "config_server_raizes_vazio": "Nenhuma pasta mapeada — o seletor de Nova sessão fica vazio.",
