@@ -121,6 +121,49 @@ def test_chave_que_nao_tem_a_rota_nao_vira_credencial_vencida(monkeypatch):
         assert (estado, janelas, motivo) == ("indisponivel", [], f"http-{codigo}")
 
 
+# ------------------------------------------------------------------------------ CommandCode
+
+# Cópia da resposta real de 21/08/2026, com os detalhes que quebram parser ingênuo: `used`/`cap`
+# em USD (float), `resetAt` em epoch-MILISSEGUNDOS e 0 quando a janela nem abriu.
+_USAGE_COMMANDCODE = {
+    "credits": {"belowThreshold": False, "creditThreshold": 0,
+                "monthlyCredits": 52.2129667955, "purchasedCredits": 0, "freeCredits": 0},
+    "windowLimits": {"limited": True, "exceeded": None,
+                     "fiveHour": {"used": 0, "cap": 14, "exceeded": False, "resetAt": 0},
+                     "weekly": {"used": 17.7870332045, "cap": 35, "exceeded": False,
+                                "resetAt": 1787564008022}},
+}
+
+
+def test_commandcode_janelas_em_usd_e_reset_em_ms(monkeypatch):
+    monkeypatch.setattr(cotas, "_get_json", lambda url, headers: (200, _USAGE_COMMANDCODE))
+    estado, janelas, motivo = cotas._ler_commandcode("user_4f-x")
+    assert (estado, motivo) == ("lida", None)
+    assert [(j.rotulo, round(j.pct, 1)) for j in janelas] == [("5h", 0.0), ("7d", 50.8)]
+    assert janelas[0].reset_ts is None                       # resetAt 0 = sem reset marcado
+    assert janelas[1].reset_ts == 1787564008.022             # milissegundos -> segundos
+
+
+def test_commandcode_manda_ua_de_navegador(monkeypatch):
+    """Sem UA de navegador o Cloudflare da rota devolve 403 1010 — o header é parte do contrato."""
+    vistos = []
+    monkeypatch.setattr(cotas, "_get_json",
+                        lambda url, headers: (vistos.append((url, headers)),
+                                              (200, _USAGE_COMMANDCODE))[1])
+    cotas._ler_commandcode("user_4f-x")
+    url, headers = vistos[0]
+    assert url == cotas._URL_COMMANDCODE
+    assert headers["Authorization"] == "Bearer user_4f-x"
+    assert headers["User-Agent"].startswith("Mozilla/5.0")
+
+
+def test_base_do_motor_kimi_ganha_v1_so_na_cota():
+    """O motor usa `/coding` (formato Anthropic); o `/usages` mora sob `/v1` — 404 sem ele."""
+    assert cotas._base_usages_kimi("https://api.kimi.com/coding") == "https://api.kimi.com/coding/v1"
+    assert cotas._base_usages_kimi("https://api.kimi.com/coding/v1") == "https://api.kimi.com/coding/v1"
+    assert cotas._base_usages_kimi("https://outro.com/api") == "https://outro.com/api"
+
+
 def test_rotulo_vem_da_duracao_do_provedor():
     assert cotas._rotulo_janela(300) == "5h"
     assert cotas._rotulo_janela("10080") == "7d"

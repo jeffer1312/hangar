@@ -90,7 +90,7 @@ export interface CotaConta {
   label: string;
   // União do backend (backend/app/cotas.py, `Provedor`). Em 21/08 o front dizia só 'claude' |
   // 'kimi' e a conta OpenCode real derrubou o glifo do popover — a união agora espelha a fonte.
-  provedor: 'claude' | 'kimi' | 'opencode';
+  provedor: 'claude' | 'kimi' | 'opencode' | 'commandcode';
   ativa: boolean;
   estado: EstadoCota;
   janelas: JanelaCota[];

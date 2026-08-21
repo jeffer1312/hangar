@@ -19,6 +19,11 @@ Fontes, todas verificadas contra a API real em 18/08/2026:
  - OpenCode Zen: fora, de propósito. `/v1/usage`, `/v1/usages`, `/v1/me`, `/v1/balance` e
    `/v1/account` respondem 404 (só `/v1/models` existe) — faltar a linha é melhor que inventar
    número.
+ - CommandCode: GET https://api.commandcode.ai/alpha/billing/credits com a `api_key` do engine
+   (verificado 21/08/2026). Rota NÃO documentada (a doc oficial não expõe usage; quem a usa é o
+   painel do site e o CodexBar) e fora do prefixo `/provider` do base_url — por isso a URL é
+   fixa. Devolve `windowLimits.fiveHour`/`weekly` com `used`/`cap` em USD e `resetAt` em
+   epoch-MILISSEGUNDOS, mais `credits` (sem teto na resposta, então não vira janela).
 
 Token expirado NÃO é renovado aqui. O refresh token da Anthropic rotaciona: gravar o par novo por
 baixo de um CLI vivo derrubaria a sessão dele. `expiresAt` no passado vira estado `expirada` sem
@@ -60,7 +65,7 @@ _URL_CLAUDE = "https://api.anthropic.com/api/oauth/usage"
 _BETA_CLAUDE = "oauth-2025-04-20"
 
 Estado = Literal["lida", "sem_credencial", "expirada", "indisponivel"]
-Provedor = Literal["claude", "kimi", "opencode"]
+Provedor = Literal["claude", "kimi", "opencode", "commandcode"]
 
 
 class JanelaCota(BaseModel):
@@ -275,6 +280,13 @@ def _rotulo_janela(minutos: object) -> str:
     return f"{int(n)}min"
 
 
+def _base_usages_kimi(base: str) -> str:
+    """Base do `api.kimi.com` sem `/v1` ganha o `/v1` — só pra cota, nunca pro motor."""
+    if "api.kimi.com" in base and not base.rstrip("/").endswith("/v1"):
+        return base.rstrip("/") + "/v1"
+    return base
+
+
 def _ler_kimi(api_key: str, base_url: str) -> _Leitura:
     """Forma do Kimi (`GET <base>/usages`), tentada em qualquer provedor de chave.
 
@@ -304,6 +316,47 @@ def _ler_kimi(api_key: str, base_url: str) -> _Leitura:
     longa = _janela_kimi(j.get("usage"), "7d")
     if longa is not None:
         janelas.append(longa)
+    if not janelas:
+        return "indisponivel", [], "formato-desconhecido"
+    return "lida", janelas, None
+
+
+# ------------------------------------------------------------------------------ CommandCode
+
+_URL_COMMANDCODE = "https://api.commandcode.ai/alpha/billing/credits"
+# O Cloudflare desta rota devolve 403 (error code 1010) pro User-Agent de lib HTTP — medido
+# 21/08/2026: urllib puro 403, o mesmo GET com UA de navegador 200. O UA não é fingir browser
+# por esporte: sem ele a rota simplesmente não responde.
+_UA_NAVEGADOR = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                 "Chrome/126.0.0.0 Safari/537.36")
+
+
+def _janela_commandcode(o: object, rotulo: str) -> JanelaCota | None:
+    """`used`/`cap` em USD -> pct. `resetAt` vem em epoch-MILISSEGUNDOS; 0 = sem reset marcado."""
+    if not isinstance(o, dict):
+        return None
+    usado, teto = _num(o.get("used")), _num(o.get("cap"))
+    if usado is None or teto is None or teto <= 0:
+        return None
+    reset = _num(o.get("resetAt"))
+    return JanelaCota(rotulo=rotulo, pct=max(0.0, min(100.0, usado / teto * 100.0)),
+                      reset_ts=reset / 1000 if reset else None)
+
+
+def _ler_commandcode(api_key: str) -> _Leitura:
+    """CommandCode (`GET /alpha/billing/credits`). Mesma semântica de erro do `_ler_kimi`: nada
+    aqui vira `expirada` — um 403 nesta rota costuma ser o Cloudflare, não chave vencida."""
+    status, j = _get_json(_URL_COMMANDCODE, {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "User-Agent": _UA_NAVEGADOR,
+    })
+    if not isinstance(j, dict):
+        return "indisponivel", [], (f"http-{status}" if status else "sem-resposta")
+    limites = j.get("windowLimits")
+    limites = limites if isinstance(limites, dict) else {}
+    janelas = [w for w in (_janela_commandcode(limites.get("fiveHour"), "5h"),
+                           _janela_commandcode(limites.get("weekly"), "7d")) if w is not None]
     if not janelas:
         return "indisponivel", [], "formato-desconhecido"
     return "lida", janelas, None
@@ -384,8 +437,14 @@ def _fontes() -> list[_Fonte]:
             out.append(_Fonte(f"claude:{c.path}", c.label, "claude",
                               lambda p=p, at=bool(c.active): _ler_claude(p, at), bool(c.active)))
     for nome, key, base in _providers_kimi():
-        out.append(_Fonte(f"kimi:{nome}", nome, "kimi",
-                          lambda k=key, b=base: _ler_kimi(k, b)))
+        # CommandCode plugado como provider do Kimi Code: o `<base>/usages` dele é 403 — a rota
+        # de cota é a do CommandCode, escolhida pela base_url, igual ao ramo das chaves abaixo.
+        if "commandcode.ai" in base:
+            out.append(_Fonte(f"kimi:{nome}", nome, "commandcode",
+                              lambda k=key: _ler_commandcode(k)))
+        else:
+            out.append(_Fonte(f"kimi:{nome}", nome, "kimi",
+                              lambda k=key, b=base: _ler_kimi(k, b)))
     # Chaves cadastradas no app (engines.json). O id casa com o da lista unificada
     # (`chave:<nome>`) de propósito: é a MESMA credencial nas duas telas, e ids diferentes fariam
     # a tela mostrar a linha sem cota enquanto a faixa mostra a cota, sem ninguém entender.
@@ -403,8 +462,15 @@ def _fontes() -> list[_Fonte]:
         if cfg is not None:
             out.append(_Fonte(cid, rotulo, "opencode",
                               lambda c=cfg: _ler_opencode(c)))
+        elif "commandcode.ai" in base:
+            out.append(_Fonte(cid, rotulo, "commandcode",
+                              lambda k=key: _ler_commandcode(k)))
         else:
-            out.append(_Fonte(cid, rotulo, "kimi", lambda k=key, b=base: _ler_kimi(k, b)))
+            # Motor Kimi aponta pro endpoint formato-Anthropic (`/coding`, sem `/v1`) — é o certo
+            # pra RODAR a sessão, mas o `/usages` só existe sob `/v1` (medido 21/08/2026: a mesma
+            # chave lia cota pelo config.toml, que traz `/coding/v1`, e dava 404 pelo motor).
+            out.append(_Fonte(cid, rotulo, "kimi",
+                              lambda k=key, b=_base_usages_kimi(base): _ler_kimi(k, b)))
     return out
 
 
