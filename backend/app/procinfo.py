@@ -25,7 +25,17 @@ _log = logging.getLogger("claude_pocket.procinfo")
 # Escolha da implementacao: por CAPACIDADE, uma vez, na importacao. Nao por nome de sistema —
 # "e unix?" responde SIM pro macOS, que nao tem /proc, e mandaria o Mac ler /proc/<pid>/fd pra
 # sempre falhar em silencio (era exatamente o que acontecia antes deste modulo existir).
-_TEM_PROC = Path("/proc").is_dir()
+#
+# O `os.name == "posix"` na frente NAO desfaz isso: macOS e posix e continua caindo no ramo
+# psutil pelo is_dir(), que e quem responde a pergunta de verdade. Ele existe porque no Windows
+# "/proc" nem sequer e um caminho absoluto — e relativo ao DRIVE corrente, entao a pergunta que
+# se estava fazendo era "existe C:\proc?" (ou D:\proc, conforme o cwd de quem subiu o backend).
+# Medido em 21/08/2026: um teste criou C:\proc nesta VM e, a partir dali, TODA execucao pulava o
+# `import psutil` e mandava o Windows pelo ramo /proc — onde cada leitura levanta OSError, e
+# todas sao engolidas de proposito. Nao ha erro, nao ha log: cmdline vazio, mapa de filhos vazio,
+# environ None. Na pratica o app perde provider do pane, --session-id, CLAUDE_CONFIG_DIR e
+# CP_ENGINE de uma vez, e a sessao viva aparece como tracked=False.
+_TEM_PROC = os.name == "posix" and Path("/proc").is_dir()
 
 if not _TEM_PROC:
     # Importado SO fora do Linux. No Linux o psutil nem esta instalado (marcador
