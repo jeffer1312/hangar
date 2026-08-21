@@ -208,7 +208,19 @@ export function mesmosBytes(a: Uint8Array | null, b: Uint8Array): boolean {
 // navegador NAO carrega o header de autorizacao, entao apontar pra rota daria 401 e a foto sumia
 // calada. Falha (sem rice, backend fora, servidor remoto) deixa o modo como esta hoje — janela
 // transparente — em vez de tela sem fundo nenhum.
-async function carregarWallpaperDoDesktop(): Promise<void> {
+// Single-flight: focus e visibilitychange disparam praticamente JUNTOS na volta pra janela. Duas
+// cargas concorrentes passavam ambas do teste de bytes (nenhuma tinha comitado ainda), criavam
+// duas blob URLs e a segunda revogava a que a primeira acabara de pôr no CSS — a piscada de volta
+// pelo próprio caminho que o fix fechou (achado HIGH do review).
+let cargaEmVoo: Promise<void> | null = null;
+
+function carregarWallpaperDoDesktop(): Promise<void> {
+  if (cargaEmVoo) return cargaEmVoo;
+  cargaEmVoo = _carregarWallpaperDoDesktop().finally(() => { cargaEmVoo = null; });
+  return cargaEmVoo;
+}
+
+async function _carregarWallpaperDoDesktop(): Promise<void> {
   try {
     // Servidor da ORIGEM, nao o ativo: a foto e da maquina onde esta janela esta aberta. Mesmo
     // motivo (e mesma funcao) da paleta em desktopTheme.ts.
