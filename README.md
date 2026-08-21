@@ -1,8 +1,8 @@
 # Hangar
 
-**A private control panel for live Claude Code, Pi, and Codex sessions** — from your phone or desktop, over your own LAN/VPN.
+**A private control panel for live Claude Code, Codex, Kimi, and Pi sessions** — from your phone or desktop, over your own LAN/VPN.
 
-> Third-party tool. Not affiliated with or endorsed by Anthropic, OpenAI, or the Pi project.
+> Third-party tool. Not affiliated with or endorsed by Anthropic, OpenAI, Moonshot AI, or the Pi project.
 
 <p align="center">
   <img src="docs/img/mobile-chat-demo.png" width="220" alt="Mobile chat with synthetic demo data" />
@@ -10,7 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="docs/demo/hangar-overview.webm">▶ Watch the 40-second demo</a>
+  <a href="https://github.com/jeffer1312/hangar/releases/download/demos/hangar-demo-en.mp4">▶ Watch the 70-second demo</a>
+  ·
+  <a href="https://github.com/jeffer1312/hangar/releases/download/demos/hangar-tour-en.mp4">▶ App tour: new sessions, terminal↔app continuity, diffs</a>
+  ·
+  <a href="docs/demo/hangar-overview.webm">▶ 40-second overview (webm)</a>
 </p>
 
 > **Screenshots and video use synthetic demo data.** Session names, prompts, states, and costs are synthetic; provider/model labels are either synthetic demo labels or representative public identifiers, never data from a user's account.
@@ -20,9 +24,9 @@
 Hangar is a self-hosted PWA that lets you keep an eye on agent sessions without having to stay at the terminal.
 
 - **Phone chat:** follow live output, send prompts, answer interactive questions, interrupt work, and keep drafts per session.
-- **Desktop board:** see Claude Code, Pi, and Codex sessions grouped by *needs you*, *working*, and *ready*.
+- **Desktop board:** see Claude Code, Codex, Kimi, and Pi sessions grouped by *needs you*, *working*, and *ready*.
 - **Free-form canvas:** arrange floating session tiles by project, topic, or priority and resize them independently.
-- **Mixed agent workflows:** keep Claude Code, Pi, and Codex conversations visible from the same cockpit.
+- **Mixed agent workflows:** keep Claude Code, Codex, Kimi, and Pi conversations visible from the same cockpit.
 - **Live status:** streaming previews, model/context badges, plans, workflows, notifications, uploads, and session history.
 - **Pi controls:** choose a Pi model and thinking level for the active session.
 - **Alternative Claude engines:** run a session through another compatible provider while keeping its skills and history in the same Claude environment.
@@ -135,7 +139,7 @@ npm install
 npm run dev
 ```
 
-Open the frontend URL shown by Vite, enter the backend URL and token on the login screen, then start Claude Code, Pi, or Codex through the installed wrappers.
+Open the frontend URL shown by Vite, enter the backend URL and token on the login screen, then start Claude Code, Codex, Kimi, or Pi through the installed wrappers.
 
 Run the backend tests with:
 
@@ -154,6 +158,7 @@ Phone or desktop PWA
 FastAPI backend
    ├── Claude Code: JSONL transcript + tmux state/input
    ├── Pi: JSONL transcript + Pi extension sidecars
+   ├── Kimi Code: wire.jsonl transcript + state hooks
    └── Codex: local app-server events + managed tmux TUI
         ▼
 Your local agent sessions
