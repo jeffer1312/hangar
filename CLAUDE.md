@@ -144,7 +144,19 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - `preview` — live in-flight assistant text (full-replace; dropped when the real block commits).
 - `ask_question` — opens the native AskUserQuestion sheet.
 - `ping` — liveness heartbeat; resets a 25s watchdog that reconnects on half-open connections.
-- `reset` — transcript swapped (e.g. `/clear`) → wipe and reload history.
+- `reset` — transcript swapped (e.g. `/clear`) → wipe and reload history. **Também** quando o
+  *provider* da sessão muda debaixo de um stream já aberto: uma sessão Pi/Kimi recém-criada leva
+  ~15s até a extensão publicar o bilhete do pane, e nesse intervalo o registry a classifica como
+  `claude` e resolve um caminho no layout do Claude, que nunca vai existir (medido 21/08/2026:
+  `sse: abriu name=hangar provider=claude jsonl=a05ee4a8-….jsonl` às 16:01:14, com o `.jsonl` do Pi
+  nascendo às 16:01:31 em `~/.pi/agent/sessions/`). Rebindar só o arquivo não bastava — o adapter
+  (parser do transcript, monitor de estado, fonte da prévia) era escolhido **uma vez**, na abertura,
+  então o tailer lia o arquivo certo com o parser errado e o chat ficava mudo até sair e voltar.
+  Hoje o `jsonl_watcher` vigia `provider` junto do `jsonl` e emite `__reprovider__`, que refaz as
+  quatro tarefas dependentes de adapter. Duas regras: a troca de provider **não** espera os 2 polls
+  de confirmação que a troca de arquivo exige (ela não oscila — é a sessão terminando de se
+  identificar), e o `drain` da fila passou a resolver o adapter na hora, porque drenar pela TUI
+  errada digita teclas que aquela TUI não espera.
 
 ## Conventions & gotchas (read before touching UI / backend lifecycle)
 

@@ -192,3 +192,58 @@ def test_status_sig_linha_do_claude_intacta():
     from app.sse import _status_sig
     # 2+ pares sem rotulo: o ULTIMO continua sendo o contexto (regra de sempre).
     assert _status_sig("🤖 Opus5 (high✦) │ 💬 156k/2 160k/1M │ ⚡5h:11% │ 📅7d:2%")[1] == 3
+
+
+class _AdapterPorProvider:
+    """Dois adapters de mentira: o do provider errado nunca emite bolha, o certo emite uma."""
+
+    def __init__(self, provider):
+        self.provider = provider
+
+    def transcript_stream(self, path, start_offset=None):
+        if self.provider == "claude":
+            return _empty_agen()          # parser errado pro arquivo: nada sai
+        return _one_chat_event()
+
+    def state_monitor(self, name, sid_get, **kw):
+        return _empty_agen()
+
+    async def drain(self, name, path):
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_troca_de_provider_refaz_o_stream(monkeypatch):
+    """Sessao Pi/Kimi recem-criada nasce classificada como "claude" (a extensao leva ~15s pra
+    publicar o bilhete do pane). O provider era escolhido UMA vez, na abertura: o chat ficava mudo
+    ate o usuario sair e voltar, porque so um stream novo pegava o adapter certo. Agora o watcher
+    ve a troca, o stream se refaz e o front recebe `reset` pra reler o history pelo caminho certo.
+    """
+    monkeypatch.setattr("app.sse.get_adapter", lambda provider: _AdapterPorProvider(provider))
+
+    class _Info:
+        name = "s1"
+        jsonl = "/pi/2026_a.jsonl"
+        provider = "pi"
+
+    async def _lista():
+        return [_Info()]
+
+    monkeypatch.setattr("app.sse._cached_list", _lista)
+    monkeypatch.setattr("app.sse.PreviewBroker", type("_B", (), {
+        "get": staticmethod(lambda *a, **k: type("_S", (), {
+            "subscribe": lambda self: _empty_agen(), "reset": lambda self: None})()),
+    }))
+    vistos = []
+
+    async def _consumir():
+        async for ev in merged_events("s1", "/claude/a.jsonl", provider="claude"):
+            vistos.append(ev["event"])
+            if ev["event"] == "message":
+                return
+
+    # O watcher poda a cada 2s (nao e patchado: o mesmo sleep serve o ping_loop, e zerar ele aqui
+    # vira loop quente). 15s de teto = folga larga pra uma troca que leva um poll.
+    await asyncio.wait_for(_consumir(), timeout=15)
+    # `reset` primeiro (o front tem que reler o history), a bolha do adapter certo depois.
+    assert "reset" in vistos and vistos.index("reset") < vistos.index("message")

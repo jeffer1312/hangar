@@ -356,16 +356,20 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                         start_offset: int | None = None):
     # provider: default "claude" preserva o comportamento de hoje pros callers que ainda nao passam
     # (api.py so passa quando uma tarefa futura ligar o seletor de provider no endpoint).
-    adapter = get_adapter(provider)
+    current_provider = provider    # atualizado no __reprovider__ (ver jsonl_watcher)
     current_jsonl = jsonl          # atualizado no __reset__ (ex: /clear abre novo transcript)
     # Ancora de hook do estado: o monitor le o marcador do sid VIVO (a closure acompanha o rebind
     # do /clear, que troca o current_jsonl -> sid novo).
     # transcript_get so vai pro adapter que o aceita (hoje o Kimi): fecha sobre `current_jsonl` pelo
     # mesmo motivo do sid_get — o /clear troca o transcript, e um caminho congelado leria o mtime do
     # arquivo da sessao anterior.
-    _monitor_kw = ({"transcript_get": lambda: current_jsonl} if provider == "kimi" else {})
-    monitor_stream = adapter.state_monitor(
-        name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None, **_monitor_kw)
+    def _monitor_de(prov):
+        adap = get_adapter(prov)
+        kw = {"transcript_get": lambda: current_jsonl} if prov == "kimi" else {}
+        return adap.state_monitor(
+            name, sid_get=lambda: session_key(current_jsonl) if current_jsonl else None, **kw)
+
+    monitor_stream = _monitor_de(provider)
     pqueue = PromptQueue(name)
     # Fonte do preview ao vivo ramifica por provider: Claude nao tem push (o app-server manda os
     # deltas, o TUI do Claude nao) -> continua no PreviewBroker (poll do pane). Codex nao tem pane
@@ -376,9 +380,12 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # stem_get: chave do sidecar de previa (o agente publica o texto em voo por conta propria — hoje
     # so a extensao do Pi). Fecha sobre `current_jsonl` pelo mesmo motivo do monitor: o /clear troca
     # o transcript, e um stem congelado leria o marcador da sessao anterior.
-    broker = (CodexPreviewSource.get(name) if provider == "codex"
-              else PreviewBroker.get(name, provider,
-                                     lambda: session_key(current_jsonl) if current_jsonl else None))
+    def _broker_de(prov):
+        return (CodexPreviewSource.get(name) if prov == "codex"
+                else PreviewBroker.get(name, prov,
+                                       lambda: session_key(current_jsonl) if current_jsonl else None))
+
+    broker = _broker_de(provider)
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
     start_ts = _transcript_start_ts(jsonl)
     queue: asyncio.Queue = asyncio.Queue()
@@ -431,7 +438,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # que e exatamente o que o preview mostra, LIMPA o preview na hora (sem esperar o broker mudar).
         # Recebe o path (em vez de fechar sobre um tailer fixo) pra poder ser recriado no rebind do /clear.
         try:
-            async for ev in adapter.transcript_stream(path, start_offset):
+            async for ev in get_adapter(current_provider).transcript_stream(path, start_offset):
                 if ev.kind == "assistant_msg" and ev.text:
                     committed["text"] = _norm(ev.text)
                     if _already_committed(preview_slot["text"]):
@@ -458,7 +465,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # do transcript, IO no threadpool. FEATURE, não núcleo: diferente dos outros pumps, erro
         # aqui NUNCA derruba o stream (regra do incidente 2026-07-23) — loga e a faixa some.
         try:
-            acc = StatsAccumulator.for_provider(provider, path)
+            acc = StatsAccumulator.for_provider(current_provider, path)
             if acc is None:
                 return                       # provider sem fold (codex, por ora) -> sem faixa
             last = None
@@ -480,15 +487,36 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # IMPORTANTE: usa a MESMA resolucao do endpoint /events (registry.list -> resolve()): cmdline
         # --session-id, depois fd aberto, depois btime, depois newest-by-mtime. Espelhar o endpoint
         # garante que o watcher dispare exatamente quando um reconnect mudaria de transcript.
+        # E vigia o PROVIDER junto, porque ele tambem muda debaixo de um stream ja aberto: uma
+        # sessao Pi/Kimi recem-criada leva ~15s ate a extensao publicar o bilhete do pane, e nesse
+        # meio-tempo o registry a classifica como "claude" e resolve um caminho no layout do Claude,
+        # que nunca vai existir. Medido 21/08/2026: `sse: abriu name=hangar provider=claude
+        # jsonl=a05ee4a8-….jsonl` as 16:01:14, com o .jsonl do Pi nascendo as 16:01:31 noutro
+        # diretorio. Rebindar SO o arquivo nao bastava — o adapter (parser, monitor, previa) e
+        # escolhido na abertura, entao o tailer lia o arquivo certo com o parser errado e o chat
+        # ficava mudo ate o usuario sair e voltar (era o unico jeito de abrir um stream novo).
         current = jsonl
+        current_prov = provider
         pending = None       # candidato a nova resolucao, aguardando confirmar persistencia
         pending_n = 0
         while True:
             await asyncio.sleep(2)
             try:
-                live = next((s.jsonl for s in await _cached_list() if s.name == name), None)
+                viva = next((s for s in await _cached_list() if s.name == name), None)
             except Exception:
-                live = None
+                viva = None
+            live = viva.jsonl if viva else None
+            live_prov = (viva.provider if viva else None) or current_prov
+            if live and live_prov != current_prov:
+                # Troca de provider NAO espera os 2 polls do jsonl: ela nao oscila como a resolucao
+                # por mtime — e a sessao terminando de se identificar. Segurar aqui e deixar o chat
+                # mudo mais tempo, sem nada em troca.
+                current_prov = live_prov
+                current = live
+                pending = None
+                pending_n = 0
+                queue.put_nowait(("__reprovider__", (live_prov, live)))
+                continue
             if not live or live == current:
                 pending = None
                 pending_n = 0
@@ -503,7 +531,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 pending_n = 0
                 queue.put_nowait(("__reset__", live))
 
-    async def preview_pump():
+    async def preview_pump(fonte):
         # Assina a fonte COMPARTILHADA da sessao (1 broker pra N conexoes: PreviewBroker faz 1 loop
         # de capture do pane; CodexPreviewSource so guarda o ultimo push, sem loop). Coalesce (slot +
         # 1 marcador). SUPRIME texto JA COMMITADO no .jsonl (gap entre blocos) -> manda "" pra nao
@@ -512,7 +540,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             # A fonte emite o TRIO: `md` diz se aquele texto e markdown cru (sidecar do agente) ou
             # ja pintado pela TUI (pane); `full` diz se e incremental (seguro sem teto — ver
             # PreviewEvent). Vem junto de proposito — ver o docstring do subscribe().
-            async for text, md, full in broker.subscribe():
+            async for text, md, full in fonte.subscribe():
                 _enqueue_preview("" if _already_committed(text) else text, md, full)
         except Exception as exc:  # surface, never swallow
             await queue.put(("__error__", exc))
@@ -526,15 +554,21 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # /clear abaixo recria sem ele: o transcript e outro arquivo, o offset antigo nao significa nada.
     tail_task = asyncio.create_task(tail_pump(jsonl, start_offset))
     stats_task = asyncio.create_task(stats_pump(jsonl))
+    # Nomeadas porque as quatro sao refeitas quando o provider muda no meio do stream
+    # (__reprovider__): cada uma carrega o adapter antigo dentro de si (parser do transcript, fold
+    # das estatisticas, monitor de estado, fonte da previa) e trocar so uma deixaria o stream meio
+    # num provider e meio no outro.
+    state_task = asyncio.create_task(pump("state", monitor_stream))
+    preview_task = asyncio.create_task(preview_pump(broker))
     tasks = [
         tail_task,
         stats_task,
         # Fila duravel: user_msg sinteticos (id "queued-") pras msgs enfileiradas. O front faz o
         # dedup cruzado (queued- vs real) por texto.
         asyncio.create_task(pump("message", pqueue.follow(min_ts=start_ts))),
-        asyncio.create_task(pump("state", monitor_stream)),
+        state_task,
         asyncio.create_task(ping_loop()),
-        asyncio.create_task(preview_pump()),
+        preview_task,
         asyncio.create_task(jsonl_watcher()),
     ]
     # NUCLEO (conexao): instrumentacao do CICLO DE VIDA do stream. O sintoma relatado é "a conversa
@@ -556,6 +590,33 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             if event == "__error__":
                 _why = f"erro no pump: {type(data).__name__}: {data}"
                 raise data
+            if event == "__reprovider__":
+                # A sessao terminou de se identificar (ex: nasceu como "claude" e e Pi). Refaz TUDO
+                # que depende do adapter — transcript, estatisticas, estado e previa — e manda
+                # `reset` pro front recarregar o history pelo caminho certo. Sem o reset, o que ja
+                # estava no arquivo antes desta troca nunca apareceria: o tailer novo entra pelo
+                # TAIL, e o history que o front leu foi lido do provider errado.
+                novo_prov, novo_jsonl = data
+                _log.info("sse: provider mudou name=%s %s -> %s jsonl=%s",
+                          name, current_provider, novo_prov,
+                          Path(novo_jsonl).name if novo_jsonl else None)
+                for t in (tail_task, stats_task, state_task, preview_task):
+                    tasks.remove(t)
+                    t.cancel()
+                current_provider = novo_prov
+                current_jsonl = novo_jsonl
+                committed["text"] = ""
+                _enqueue_preview("")
+                broker = _broker_de(novo_prov)
+                broker.reset()
+                ask_q_emitted = False
+                tail_task = asyncio.create_task(tail_pump(novo_jsonl))
+                stats_task = asyncio.create_task(stats_pump(novo_jsonl))
+                state_task = asyncio.create_task(pump("state", _monitor_de(novo_prov)))
+                preview_task = asyncio.create_task(preview_pump(broker))
+                tasks += [tail_task, stats_task, state_task, preview_task]
+                yield {"event": "reset", "data": "{}"}
+                continue
             if event == "__reset__":
                 # Troca de transcript (ex: /clear). Re-binda o tailer no jsonl novo, zera o estado de
                 # suppress/preview, e manda 'reset' pro front recarregar o history do zero.
@@ -615,7 +676,10 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                     # fire-and-forget (adapter.drain ja roda no threadpool internamente) — nunca await
                     # no loop SSE. FORA de `tasks`: deixar um drain em voo terminar apos o phone
                     # desconectar e correto (entrega duravel nao depende do phone ficar conectado).
-                    dt = asyncio.create_task(adapter.drain(name, current_jsonl))
+                    # get_adapter na hora, e nao um `adapter` fixado na abertura: o provider da
+                    # sessao pode ter trocado no meio do stream (__reprovider__), e drenar a fila
+                    # pelo adapter errado digitaria no terminal de um jeito que aquela TUI nao espera.
+                    dt = asyncio.create_task(get_adapter(current_provider).drain(name, current_jsonl))
                     drain_tasks.add(dt)
                     dt.add_done_callback(drain_tasks.discard)
                 prev_deliverable = deliverable_now
