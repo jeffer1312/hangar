@@ -28,7 +28,7 @@ describe('trava de string crua', () => {
   // CHAVE na cara do usuario. Nenhuma das outras camadas da trava pega isso.
   it('pt.json e en.json tem exatamente as mesmas chaves', () => {
     const chaves = (arq: string) => {
-      const j = JSON.parse(readFileSync(join(RAIZ, 'messages', arq), 'utf8'));
+      const j = JSON.parse(readFileSync(join(RAIZ, '..', 'messages', arq), 'utf8'));
       return Object.keys(j).filter((k) => k !== '$schema').sort();
     };
     const en = chaves('en.json');
@@ -60,7 +60,7 @@ describe('trava de string crua', () => {
   // tambem casam o teste de literal — e a suite fecharia em vermelho justo quando o problema foi
   // consertado. Cor nao e idioma; so o mapa de ROTULO e vigiado aqui.
   it('lib/format.ts nao tem mapa de rotulo com valor literal', () => {
-    const fonte = readFileSync(join(SRC, 'lib', 'format.ts'), 'utf8');
+    const fonte = readFileSync(join(RAIZ, '..', 'packages', 'core', 'src', 'format.ts'), 'utf8');
     const mapa = /stateLabels\s*:\s*Record<\s*State\s*,\s*string\s*>\s*=\s*\{([^}]*)\}/.exec(fonte);
     expect(mapa?.[1] ?? '', 'stateLabels deve chamar mensagem, nao carregar literal').not.toMatch(/['"][^'"]{3,}['"]/);
   });

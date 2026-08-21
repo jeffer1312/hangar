@@ -1,7 +1,7 @@
 <script lang="ts">
   import { extractEdits, extractFilePath, pseudoCaminhoPorConteudo, type ChatEvent } from '@hangar/core';
   import * as m from '../paraglide/messages';
-  import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase } from '../lib/format';
+  import { parseFilePaths, summarizeToolInput, summarizeToolResult, toolPhase } from '@hangar/core';
   import { toolLook } from '../lib/toolLook.svelte';
   import { caminhoDeCodigoNoComando } from '../lib/codeFromBash';
   import { rolagemSoAoClicar } from '../lib/rolagemSoAoClicar';

@@ -4,7 +4,7 @@
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
   import { getLimits } from '../lib/api';
-  import { resetsIn } from '../lib/format';
+  import { resetsIn } from '@hangar/core';
   import type { SessionLimits, RateLimitWindow } from '@hangar/core';
 
   interface Props {

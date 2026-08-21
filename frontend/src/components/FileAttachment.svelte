@@ -3,7 +3,7 @@
   import ModalDialog from './ModalDialog.svelte';
   import { fileUrl } from '../lib/api';
   import { zoomable } from '../lib/zoomable';
-  import type { FileRef } from '../lib/format';
+  import type { FileRef } from '@hangar/core';
 
   interface Props {
     sessionName: string;

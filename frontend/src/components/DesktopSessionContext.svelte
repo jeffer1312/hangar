@@ -9,8 +9,8 @@ import * as m from '../paraglide/messages';
   import StateChip from './StateChip.svelte';
   import type { State, SessionInfo, PlanDetail } from '@hangar/core';
   import type { StatusFields } from '../lib/statusline';
-  import { ctxWindow, providerName } from '../lib/format';
-  import { planBadge } from '../lib/plan';
+  import { ctxWindow, providerName } from '@hangar/core';
+  import { planBadge } from '@hangar/core';
 
   interface Props {
     state: State;

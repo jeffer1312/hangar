@@ -7,7 +7,7 @@ import * as m from '../paraglide/messages';
   import { listServers, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { ChatEvent, StateEvent } from '@hangar/core';
-  import { rotuloEstado, stateColors, latestAssistantEvent, type CompareId } from '../lib/format';
+  import { rotuloEstado, stateColors, latestAssistantEvent, type CompareId } from '@hangar/core';
 
   // Grade de comparação (feature #11): abre UM EventSource leve por sessão selecionada (reusa o
   // mesmo stream do Chat, só que apontado pro SERVIDOR DONO de cada uma — sessões de servidores

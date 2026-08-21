@@ -2,7 +2,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import * as m from '../paraglide/messages';
   import { listUploads, uploadUrl } from '../lib/api';
-  import { fileKind, fmtBytes, relativeTime } from '../lib/format';
+  import { fileKind, fmtBytes, relativeTime } from '@hangar/core';
   import { zoomable } from '../lib/zoomable';
   import type { UploadFile } from '@hangar/core';
 

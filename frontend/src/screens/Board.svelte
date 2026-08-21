@@ -16,7 +16,7 @@
   import RateStrip from '../components/RateStrip.svelte';
   import { serverColor } from '../lib/auth';
   import { type State } from '@hangar/core';
-  import { stateColors } from '../lib/format';
+  import { stateColors } from '@hangar/core';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
 
   interface Props { onOpenSession: (name: string, serverId: string) => void }

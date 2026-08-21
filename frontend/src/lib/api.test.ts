@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { overwriteGetLocale } from '../paraglide/runtime';
+import { overwriteGetLocale as overwriteFront } from '../paraglide/runtime';
+import { configureLocale } from '@hangar/core';
+function overwriteGetLocale(fn: () => 'en' | 'pt') {
+  overwriteFront(fn as unknown as () => string);
+  configureLocale({ getLocale: fn });
+}
 
 const store = new Map<string, string>();
 (globalThis as any).localStorage = {
@@ -11,7 +16,7 @@ const store = new Map<string, string>();
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
 const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel } = await import('./api');
-const { mensagemDeErro, formataErro } = await import('./errosApi');
+const { mensagemDeErro, formataErro } = await import('@hangar/core');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 

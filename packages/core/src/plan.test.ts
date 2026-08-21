@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { planBadge } from './plan';
-import type { SessionInfo } from '@hangar/core';
-import { overwriteGetLocale } from '../paraglide/runtime';
+import type { SessionInfo } from './types';
+import { overwriteGetLocale } from './paraglide/runtime';
 
 beforeEach(() => overwriteGetLocale(() => 'pt'));
 

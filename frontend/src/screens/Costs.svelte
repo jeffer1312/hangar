@@ -15,7 +15,7 @@
     brutos, contaInflada, serieComparada, totaisComparados, valorDe, type Metrica,
   } from '../lib/comparar';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
-  import { projectLabel } from '../lib/format';
+  import { projectLabel } from '@hangar/core';
 
   interface Props { onBack: () => void; }
   let { onBack }: Props = $props();

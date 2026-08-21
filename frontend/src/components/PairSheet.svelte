@@ -2,8 +2,8 @@
   import BottomSheet from './BottomSheet.svelte';
   import { renderMarkdown } from '../lib/markdown';
   import { getSessions, pairSession, unpairSession, getHistory, getPairContract } from '../lib/api';
-  import { formataErro } from '../lib/errosApi';
-  import { rotuloEstado, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
+  import { formataErro } from '@hangar/core';
+  import { rotuloEstado, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '@hangar/core';
   import { getActiveId } from '../lib/auth';
   import type { SessionInfo, State } from '@hangar/core';
   import * as m from '../paraglide/messages';

@@ -1,7 +1,7 @@
 <script lang="ts">
   // Barra de progresso do plano. Segmentada por Task quando cabe; única quando não cabe. A escolha é
   // do componente, não do chamador — três caminhos de render, zero configuração.
-  import { planBadge } from '../lib/plan';
+  import { planBadge } from '@hangar/core';
   import type { SessionInfo } from '@hangar/core';
 
   interface Props {

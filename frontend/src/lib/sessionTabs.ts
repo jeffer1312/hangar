@@ -2,7 +2,7 @@
 // topo. Ordem: buckets na ordem de `servers`, e `sortSessions` dentro de cada bucket (mesma ordem
 // das listas). Bucket com erro/offline não gera aba acionável — só o rótulo do servidor entra no
 // indicador `⚠ N offline`. Testável no vitest node (sem svelte).
-import { sortSessions } from './format';
+import { sortSessions } from '@hangar/core';
 import type { AggSession } from '@hangar/core';
 import type { ServerBucket } from './sessions';
 

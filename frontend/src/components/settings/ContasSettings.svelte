@@ -16,7 +16,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   import { formatarIntervalo } from '../../lib/contaEstado';
   import { listarCredenciais, definirApelido, definirCookie, type Credencial } from '../../lib/credenciais';
   import { iniciarLogin, passoLogin, confirmarLogin, cancelarLogin, type PassoLogin } from '../../lib/loginConta';
-  import { initials } from '../../lib/format';
+  import { initials } from '@hangar/core';
   import { nivelDePct, VELHA_APOS_S, motivoParado, motivoSessaoViva } from '../../lib/cota';
   import NovaCredencialSheet from './NovaCredencialSheet.svelte';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';

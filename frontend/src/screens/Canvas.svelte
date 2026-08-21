@@ -8,7 +8,7 @@ import * as m from '../paraglide/messages';
   import type { BoardRow, PendingMsg } from './Board.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { serverColor } from '../lib/auth';
-  import { pairColor } from '../lib/format';
+  import { pairColor } from '@hangar/core';
   import { placeNew, resizeBox, PAD, GAP, CARD_W, CARD_H, type CanvasLayout, type CardBox } from '../lib/canvasLayout';
 
   interface Props { onOpenSession: (name: string, serverId: string) => void }

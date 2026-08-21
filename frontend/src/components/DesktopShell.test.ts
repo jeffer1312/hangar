@@ -49,17 +49,28 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
     byServer: [], rows: [], servers: [], loading: false,
   },
 }));
-vi.mock('../lib/format', () => ({
-  rotuloEstado: () => '', stateColors: {}, countAwaiting: () => 0,
-  groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
-  projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',
-  fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
+  loopBadge: () => null,
+  LOOP_TONE_COLOR: {},
+  rotuloEstado: () => '',
+  stateColors: {},
+  countAwaiting: () => 0,
+  groupSelectedByServer: () => [],
+  initials: (n: string) => n.slice(0, 2),
+  projectKey: () => '',
+  projectLabel: () => '',
+  effectiveGroupBy: () => 'server',
+  fmtWhen: () => '',
+  sortSessions: (s: unknown[]) => s,
+  latestAssistantEvent: () => null,
   clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
-  untrackedReason: () => '', providerName: () => 'claude', providerTag: () => null,
+  untrackedReason: () => '',
+  providerName: () => 'claude',
+  providerTag: () => null,
+  planBadge: () => null,
 }));
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
-vi.mock('@hangar/core', async (importOriginal) => ({ ...(await importOriginal<typeof import('@hangar/core')>()), loopBadge: () => null, LOOP_TONE_COLOR: {} }));
-vi.mock('../lib/plan', () => ({ planBadge: () => null }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
 

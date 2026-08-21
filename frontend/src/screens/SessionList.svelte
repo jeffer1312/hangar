@@ -26,7 +26,7 @@ import { intlLocale } from '../lib/locale';
   import type { AggSession, ResumeCandidate, Provider } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';
+  import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '@hangar/core';
   import { updateBadge } from '../lib/badge';
 
   interface Props {

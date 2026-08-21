@@ -6,7 +6,7 @@
   import { renderMarkdown } from '../lib/markdown';
   import MessageList from './MessageList.svelte';
   import { onDestroy, tick } from 'svelte';
-  import type { Activity, TaskStatus } from '../lib/activity';
+  import type { Activity, TaskStatus } from '@hangar/core';
   import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail } from '@hangar/core';
 
   interface Props {

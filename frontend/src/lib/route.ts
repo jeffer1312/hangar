@@ -1,4 +1,4 @@
-import { parseCompareIds, type CompareId } from './format';
+import { parseCompareIds, type CompareId } from '@hangar/core';
 
 // ── Hash-based Router ────────────────────────────────────────────────
 export type Route =

@@ -1,7 +1,7 @@
 import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
 import * as m from '../paraglide/messages';
 import { localeAtual } from './locale';
-import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
+import { mensagemDeErro, formataErro, type EnvelopeErro } from '@hangar/core';
 import type {
   SessionInfo,
   Provider,

@@ -3,7 +3,7 @@
 import * as m from '../paraglide/messages';
   import ThemeToggle from './ThemeToggle.svelte';
   import BackgroundToggle from './BackgroundToggle.svelte';
-  import { relativeTime, rotuloEstado, stateColors } from '../lib/format';
+  import { relativeTime, rotuloEstado, stateColors } from '@hangar/core';
   import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
   import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '../lib/api';
   import type { SessionInfo, State } from '@hangar/core';

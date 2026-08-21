@@ -147,7 +147,7 @@ export default defineConfig({
     apiCorsPreflight(),
     devServiceWorker(),
     paraglideVitePlugin({
-      project: './project.inlang',
+      project: '../project.inlang',
       outdir: './src/paraglide',
       emitTsDeclarations: true,
       // Cadeia de resolucao: escolha manual (localStorage) manda; sem escolha, segue o idioma do

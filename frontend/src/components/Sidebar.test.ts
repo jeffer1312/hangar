@@ -63,22 +63,28 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
     loading: false,
   },
 }));
-vi.mock('../lib/format', () => ({
-  // Rótulo REAL de estado (agora funcao): o trilho original anuncia estado no aria-label/title.
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
+  loopBadge: () => null,
+  LOOP_TONE_COLOR: {},
   rotuloEstado: (s: string) => ({ working: 'em execução', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' })[s] ?? '',
-  stateColors: {}, countAwaiting: () => 0,
-  groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
-  projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',
-  fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,
-  // Mesmo shape do real: itens do cluster são {session} (ou {kind:'header',...}); o template lê
-  // item.session — sessão crua no lugar certo quebraria na chave do each.
+  stateColors: {},
+  countAwaiting: () => 0,
+  groupSelectedByServer: () => [],
+  initials: (n: string) => n.slice(0, 2),
+  projectKey: () => '',
+  projectLabel: () => '',
+  effectiveGroupBy: () => 'server',
+  fmtWhen: () => '',
+  sortSessions: (s: unknown[]) => s,
+  latestAssistantEvent: () => null,
   clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
-  untrackedReason: () => '', providerName: () => 'claude',
+  untrackedReason: () => '',
+  providerName: () => 'claude',
   providerTag: () => null,
+  planBadge: () => null,
 }));
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
-vi.mock('@hangar/core', async (importOriginal) => ({ ...(await importOriginal<typeof import('@hangar/core')>()), loopBadge: () => null, LOOP_TONE_COLOR: {} }));
-vi.mock('../lib/plan', () => ({ planBadge: () => null }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
 

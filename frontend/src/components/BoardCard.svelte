@@ -7,10 +7,10 @@ import * as m from '../paraglide/messages';
     uploadFileForServer, transcribeFileForServer,
   } from '../lib/api';
   import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
-  import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '../lib/format';
+  import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '@hangar/core';
   import { parseStatusLine } from '../lib/statusline';
   import { loopBadge, LOOP_TONE_COLOR, type ChatEvent } from '@hangar/core';
-  import { planBadge } from '../lib/plan';
+  import { planBadge } from '@hangar/core';
   import PlanBar from './PlanBar.svelte';
   import StateChip from './StateChip.svelte';
   import type { Server } from '../lib/auth';

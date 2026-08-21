@@ -10,7 +10,7 @@
   //
   // `stateColors` (lib/format.ts) continua existindo pra quem precisa da cor CRUA num style
   // inline (o anel do PlanRing, a bolinha de um grafico) — aqui nao se usa.
-  import { rotuloEstado } from '../lib/format';
+  import { rotuloEstado } from '@hangar/core';
   import type { State } from '@hangar/core';
 
   interface Props {

@@ -24,9 +24,9 @@ export function resetsIn(ts: number | null | undefined): string {
 
 // Vocabulário único de estado (label pt-BR + cor) — compartilhado por SessionCard, Sidebar e
 // SessionSwitcherSheet pra mesma sessão nunca aparecer com nomes/cores divergentes.
-import type { State, ChatEvent, SessionInfo } from '@hangar/core';
-import { intlLocale } from './locale';
-import * as m from '../paraglide/messages';
+import type { State, ChatEvent, SessionInfo } from './types';
+import { intlLocale } from './i18n';
+import * as m from './paraglide/messages';
 
 // Nome humano do provider da sessão. Existe porque cada tela escrevia o próprio ternário
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { loopBadge, LOOP_TONE_COLOR, type SessionInfo } from '@hangar/core';
 import * as m from '../paraglide/messages';
-  import { rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '../lib/format';
-  import { planBadge } from '../lib/plan';
+  import { rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '@hangar/core';
+  import { planBadge } from '@hangar/core';
   import PlanBar from './PlanBar.svelte';
   import StateChip from './StateChip.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';

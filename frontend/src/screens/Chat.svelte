@@ -48,12 +48,12 @@
     isTimeoutError,
     getPlan,
   } from '../lib/api';
-  import { formataErro } from '../lib/errosApi';
+  import { formataErro } from '@hangar/core';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
-  import { createActivityFolder } from '../lib/activity';
+  import { createActivityFolder } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
-  import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '../lib/format';
+  import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '@hangar/core';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';

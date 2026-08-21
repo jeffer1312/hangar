@@ -45,11 +45,14 @@ vi.mock('../lib/sessionsStore.svelte', () => ({
     rows: [], byServer: [], servers: [], loading: false,
   },
 }));
-vi.mock('../lib/format', () => ({
-  countAwaiting: () => 0, groupSelectedByServer: () => [],
-  initials: (n: string) => n.slice(0, 2), projectKey: () => '',
-  projectLabel: () => '', sortSessions: (s: unknown[]) => s,
-  // Mesmo shape do real: itens do cluster são {session} (ou {kind:'header',...}).
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
+  countAwaiting: () => 0,
+  groupSelectedByServer: () => [],
+  initials: (n: string) => n.slice(0, 2),
+  projectKey: () => '',
+  projectLabel: () => '',
+  sortSessions: (s: unknown[]) => s,
   clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
 }));
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));

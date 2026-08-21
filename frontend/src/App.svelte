@@ -5,7 +5,7 @@
   import { vaultPush } from './lib/vaultPush.svelte';
   import { ttsPlayer } from './lib/ttsPlayer.svelte';
   import { ttsSelection } from './lib/ttsSelection.svelte';
-  import { encodeCompareIds, type CompareId } from './lib/format';
+  import { encodeCompareIds, type CompareId } from '@hangar/core';
   import { peekStep, initialPeek } from '@hangar/core';
   import { parseHash, type Route } from './lib/route';
   import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';

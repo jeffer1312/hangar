@@ -1,4 +1,4 @@
-import * as m from '../paraglide/messages';
+import * as m from './paraglide/messages';
 
 // Reconstrução da lista de tarefas do agente a partir do transcript.
 //
@@ -12,7 +12,7 @@ import * as m from '../paraglide/messages';
 // Ou seja: nenhum evento sozinho carrega a lista. Ela é o resultado de dobrar o fluxo na ordem,
 // pegando o id no texto do RESULTADO do create e aplicando os updates por cima. Por isso isto é
 // uma função pura testável, e não um `$derived` escondido dentro do componente.
-import type { ChatEvent } from '@hangar/core';
+import type { ChatEvent } from './types';
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed';
 

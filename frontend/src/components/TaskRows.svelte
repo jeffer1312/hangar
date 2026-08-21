@@ -7,7 +7,7 @@
   //
   // Medidas do original (computed style): cápsula de 44px, respiro 10px, gap 10px entre os itens,
   // raio 22px fechada e 14px aberta, distintivo de 24px, rótulo 13px/500, etiqueta 22px.
-  import type { Task } from '../lib/tasks';
+  import type { Task } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   interface Props {

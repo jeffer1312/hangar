@@ -1,6 +1,6 @@
 <script module lang="ts">
   import { type CommandInfo, type State, type StatsEvent } from '@hangar/core';
-  import { stateColors, abbrevNum } from '../lib/format';
+  import { stateColors, abbrevNum } from '@hangar/core';
   // Cache de comandos por sessao: sobrevive a remontagens do Composer (ex: voltar de
   // awaiting_input) pra buscar a lista so uma vez por sessao.
   const commandCache = new Map<string, CommandInfo[]>();

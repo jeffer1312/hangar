@@ -1,6 +1,3 @@
-// @vitest-environment happy-dom
-// format.ts importa locale.ts (getLocale do Paraglide com estrategia localStorage) — o
-// formato de data/hora e numero passa a depender do idioma escolhido, e o teste precisa do DOM.
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
@@ -11,9 +8,9 @@ import {
   rotuloEstado,
   splitTodoBlock, parseImageMessage,
 } from './format';
-import type { ChatEvent, State } from '@hangar/core';
-import { overwriteGetLocale } from '../paraglide/runtime';
-import { intlLocale } from './locale';
+import type { ChatEvent, State } from './types';
+import { overwriteGetLocale } from './paraglide/runtime';
+import { intlLocale } from './i18n';
 
 // Default dos testes antigos: eles foram escritos esperando pt-BR. Quem troca de idioma seta
 // o locale DENTRO do teste e o beforeEach repoe o pt a cada it — nenhum estado vaza entre tests.

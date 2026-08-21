@@ -6,8 +6,8 @@
 import * as m from '../paraglide/messages';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { buildSessionTabs, focusedTabKey, tabKeyOf } from '../lib/sessionTabs';
-  import { stateColors, rotuloEstado } from '../lib/format';
-  import { planBadge } from '../lib/plan';
+  import { stateColors, rotuloEstado } from '@hangar/core';
+  import { planBadge } from '@hangar/core';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
   import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';

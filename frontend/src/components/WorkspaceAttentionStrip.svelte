@@ -1,7 +1,7 @@
 <script lang="ts">
   import { selectOption } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
-  import { attentionFeed } from '../lib/format';
+  import { attentionFeed } from '@hangar/core';
   import type { AggSession } from '@hangar/core';
   import * as m from '../paraglide/messages';
 

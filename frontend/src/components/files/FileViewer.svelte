@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
-  import { mensagemDeErro } from '../../lib/errosApi';
+  import { mensagemDeErro } from '@hangar/core';
   import type { PathDiff, FileContent } from '@hangar/core';
   import { highlightDiff, highlightCodeLines, type DiffRow, type DiffToken } from '../../lib/highlight';
   import { dec } from '../../lib/fmt';

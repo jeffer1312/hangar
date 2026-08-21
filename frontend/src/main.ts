@@ -6,6 +6,9 @@ import { buscarPaleta, aplicarPaleta, ligarAtualizacaoAoFocar } from './lib/desk
 import { applyBg, applyAppearance } from './lib/background';
 import { ensureCookie } from './lib/auth';
 import { localeAtual } from './lib/locale';
+import { configureLocale } from '@hangar/core';
+
+configureLocale({ getLocale: localeAtual });
 
 // Resolve o tema (escolha do usuario ou prefers-color-scheme) ANTES de montar -> sem flash do default.
 applyTheme();

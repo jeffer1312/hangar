@@ -6,7 +6,7 @@
   import * as m from '../paraglide/messages';
   import { renderMarkdown } from '../lib/markdown';
   import { getPlans, setPlanPin, type PlanListItem } from '../lib/api';
-  import { planBadge } from '../lib/plan';
+  import { planBadge } from '@hangar/core';
   import type { PlanDetail, SessionInfo } from '@hangar/core';
 
   interface Props {

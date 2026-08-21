@@ -13,7 +13,7 @@ import * as m from '../../paraglide/messages';
 import * as contaEstadoLib from '../../lib/contaEstado';
 import * as apiLib from '../../lib/api';
 import * as loginLib from '../../lib/loginConta';
-import { mensagemDeErro } from '../../lib/errosApi';
+import { mensagemDeErro } from '@hangar/core';
 import * as credLib from '../../lib/credenciais';
 import type { Credencial } from '../../lib/credenciais';
 import type { Server } from '../../lib/auth';

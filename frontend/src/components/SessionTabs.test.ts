@@ -18,11 +18,12 @@ vi.mock('../lib/sessionsStore.svelte', async () => ({
   sessionsStore: (await import('./sessionTabs.test-store.svelte')).fixtureStore,
 }));
 import { fixtureByServer } from './sessionTabs.test-store.svelte';
-vi.mock('../lib/format', () => ({
+vi.mock('@hangar/core', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@hangar/core')>()),
   stateColors: {}, rotuloEstado: () => '', sortSessions: (s: unknown[]) => s,
+  planBadge: vi.fn(),
 }));
-vi.mock('../lib/plan', () => ({ planBadge: vi.fn() }));
-import { planBadge } from '../lib/plan';
+import { planBadge } from '@hangar/core';
 
 function montar(over: { ctxDisponivel?: boolean } = {}) {
   const el = document.createElement('div');

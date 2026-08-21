@@ -7,7 +7,7 @@
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
            modelOptions, type ModelOption, type Motor } from '../lib/api';
-  import { basename, providerName } from '../lib/format';
+  import { basename, providerName } from '@hangar/core';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { SessionInfo, ConfigDirInfo, Provider } from '@hangar/core';

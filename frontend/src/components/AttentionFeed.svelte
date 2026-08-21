@@ -3,7 +3,7 @@
   import OptionButtons from './OptionButtons.svelte';
   import { selectOption } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
-  import { attentionFeed } from '../lib/format';
+  import { attentionFeed } from '@hangar/core';
   import type { AggSession } from '@hangar/core';
 
   // "Precisa de você" (feature #6): seção FIXA no topo da lista (mobile + desktop), com TODA sessão

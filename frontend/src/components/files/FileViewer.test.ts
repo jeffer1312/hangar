@@ -3,7 +3,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import FileViewer from './FileViewer.svelte';
 import * as m from '../../paraglide/messages';
-import { overwriteGetLocale } from '../../paraglide/runtime';
+import { overwriteGetLocale as overwriteFront } from '../../paraglide/runtime';
+import { configureLocale } from '@hangar/core';
+function overwriteGetLocale(fn: () => 'en' | 'pt') {
+  overwriteFront(fn as unknown as () => string);
+  configureLocale({ getLocale: fn });
+}
 
 // Todos os props obrigatórios entram no base como null/vi.fn() (padrão do BottomSheet.test):
 // o spread de `props` só adiciona, e o svelte-check fecha o merge sem cast.

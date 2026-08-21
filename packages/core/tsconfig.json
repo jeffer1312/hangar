@@ -6,6 +6,8 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
+    "allowJs": true,
+    "checkJs": false,
     "types": ["vitest/globals", "node"],
     "lib": ["ES2022"]
   },

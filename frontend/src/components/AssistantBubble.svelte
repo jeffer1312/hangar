@@ -2,7 +2,7 @@
   import { renderMarkdown } from '../lib/markdown';
   import { intlLocale } from '../lib/locale';
   import * as m from '../paraglide/messages';
-  import { parseFilePaths, parseMediaUrls, splitTodoBlock } from '../lib/format';
+  import { parseFilePaths, parseMediaUrls, splitTodoBlock } from '@hangar/core';
   import { copyText } from '../lib/clipboard';
   import { textoFalavelComCodigo } from '../lib/speakable';
   import { abrirComTexto } from '../lib/ttsSelection.svelte';

@@ -1,8 +1,8 @@
 // Helpers puros do progresso do plano (app/planprog.py no backend). Espelha lib/loop.ts: o rótulo e
 // a porcentagem são montados aqui, os componentes só renderizam.
 
-import * as m from '../paraglide/messages';
-import type { SessionInfo } from '@hangar/core';
+import * as m from './paraglide/messages';
+import type { SessionInfo } from './types';
 
 export interface PlanBadge {
   label: string;

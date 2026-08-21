@@ -7,7 +7,7 @@
 // Paraglide, que e metade da trava deste mecanismo. Code fora do mapa devolve `undefined`
 // e o errorDetail cai no `msg` — backend mais novo que o front mostra texto legivel em vez
 // de um codigo cru na tela.
-import * as m from '../paraglide/messages';
+import * as m from './paraglide/messages';
 
 type Parametros = Record<string, unknown>;
 

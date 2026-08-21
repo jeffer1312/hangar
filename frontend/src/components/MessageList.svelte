@@ -7,14 +7,14 @@
   import ToolCard from './ToolCard.svelte';
   import ToolGroup from './ToolGroup.svelte';
   import TaskRows from './TaskRows.svelte';
-  import { foldTasks } from '../lib/tasks';
+  import { foldTasks } from '@hangar/core';
   import { taskRows } from '../lib/taskRows.svelte';
   import OptionButtons from './OptionButtons.svelte';
   import AskQuestionCard from './AskQuestionCard.svelte';
   import Spinner from './Spinner.svelte';
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
-  import { parseImageMessage, parseFilePaths, parsePeerMessage } from '../lib/format';
+  import { parseImageMessage, parseFilePaths, parsePeerMessage } from '@hangar/core';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
   import { windowStartFor, nextWindowEnd, precisaPreencher } from '../lib/window';
 
