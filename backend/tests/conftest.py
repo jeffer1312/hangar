@@ -1,4 +1,44 @@
+import os
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _home_isolado_no_windows(monkeypatch):
+    """No Windows, `monkeypatch.setenv("HOME", tmp)` NAO isola nada — e a suite escreve no perfil
+    REAL de quem roda.
+
+    `ntpath.expanduser` (logo, `Path.home()` e todo `expanduser("~")`) le USERPROFILE e, na falta
+    dele, HOMEDRIVE+HOMEPATH. HOME nao entra na conta em NENHUM ramo. Medido em 21/08/2026 nesta
+    VM: os 14 `setenv("HOME", ...)` da suite (test_contas, test_commands, test_costs_sources,
+    test_tmux, test_contas_api, test_conta_estado_api) resolviam pro C:\\Users\\<user> de verdade,
+    e `test_contas` chegou a criar SEIS pastas `~/.claude-*` cheias de symlinks apontando pro
+    ~/.claude real. Nao e so teste falhando: e a suite mexendo na casa de quem a roda.
+
+    Em vez de reescrever os 14 pontos (e ter de lembrar do detalhe no 15o), o vinculo mora aqui:
+    enquanto o teste roda, `setenv("HOME", v)` leva junto o trio que o Windows de fato consulta.
+    No POSIX o fixture nao faz nada — HOME ja e a fonte, e o ramo fica byte-identico ao de hoje.
+    """
+    if os.name != "nt":
+        yield
+        return
+    original = monkeypatch.setenv
+
+    def setenv(name, value, prepend=None):
+        original(name, value, prepend)
+        if name == "HOME":
+            # USERPROFILE e o 1o ramo do ntpath.expanduser; HOMEDRIVE+HOMEPATH e o 2o. Os dois
+            # precisam ir: deixar o par velho de pe faria o fallback apontar pro perfil real caso
+            # algum codigo (ou uma lib) limpe USERPROFILE.
+            original("USERPROFILE", value)
+            drive, resto = os.path.splitdrive(value)
+            original("HOMEDRIVE", drive)
+            original("HOMEPATH", resto or "\\")
+
+    # Instancia (nao a classe): o proprio objeto e descartado no fim do teste, entao nao ha o que
+    # desfazer — e o `monkeypatch` que o teste recebe por argumento e ESTE mesmo objeto.
+    monkeypatch.setenv = setenv
+    yield
 
 
 @pytest.fixture(autouse=True)
