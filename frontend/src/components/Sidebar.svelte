@@ -27,7 +27,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { navMode } from '../lib/navMode.svelte';
-  import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
+  import { ctxPanel } from '../lib/ctxPanel.svelte';
 
   const DEFAULT_BRANCHES = new Set(['main', 'master']);
 
@@ -1162,22 +1162,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       </svg>
       {#if expanded}<span class="fold-label">{m.sessao_recolher()}</span>{/if}
     </button>
-    <!-- Toggle do painel de contexto no rodapé do RAIL (follow-up visual): no modo Barra lateral
-         o controle vive aqui, como a referência do usuário — último item do rodapé. No modo
-         'tabs' ele fica no extremo direito da SessionTabs e este não existe (sem duplicação). -->
-    {#if sidebarPin.collapsed}
-      <button class="fold-btn rail-ctx" disabled={!ctxDisponivel}
-        onclick={alternarCtxPanel}
-        aria-label={!ctxDisponivel ? m.ctx_sem_painel()
-          : (ctxPanel.recolhido ? m.ctx_expandir_painel() : m.ctx_recolher_painel())}
-        title={!ctxDisponivel ? m.ctx_sem_painel()
-          : (ctxPanel.recolhido ? m.ctx_expandir_painel() : m.ctx_recolher_painel())}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <rect x="3" y="4" width="18" height="16" rx="2"/>
-          <line x1="15" y1="4" x2="15" y2="20"/>
-        </svg>
-      </button>
-    {/if}
   </div>
 
   <!-- Drag na borda direita pra redimensionar: so expandida (no trilho de 56px o handle de 6px
