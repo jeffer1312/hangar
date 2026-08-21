@@ -66,9 +66,10 @@ class SessionInfo(BaseModel):
     # Motor de modelo desta sessao (nome no engines.json). None = conta Anthropic. Lido do
     # /proc/<pid>/environ (CP_ENGINE) — ver registry._engine_of.
     engine: Optional[str] = None
-    # Conta da sessão como ID do /api/cotas ("claude:<config_dir>", "chave:<motor>") — a pílula
-    # de cota do topo mostra o uso da conta da sessão ATIVA a partir daqui. None quando não dá
-    # pra saber (kimi/pi sem motor): a pílula cai no pior-geral (smart).
+    # Conta da sessão como ID do /api/cotas ("claude:<config_dir>", "chave:<motor>",
+    # "kimi:<provider do default_model>") — a pílula de cota do topo mostra o uso da conta da
+    # sessão ATIVA a partir daqui. None quando não dá pra saber (pi, ou kimi sem provider com
+    # chave): a pílula cai no pior-geral (smart).
     conta: Optional[str] = None
     state: State = "idle"
     last_activity: Optional[float] = None

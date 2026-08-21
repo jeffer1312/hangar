@@ -336,6 +336,38 @@ def _providers_kimi() -> list[tuple[str, str, str]]:
     return out
 
 
+# Provider do default_model do Kimi ("apikey/k3" -> "apikey") — a conta que uma sessão Kimi sem
+# motor gasta. Cache por mtime: a registry chama por sessão a cada varredura de lista, e reler o
+# config a cada poll seria I/O por sessão por tick sem ganho nenhum.
+_padrao_kimi: tuple[float, str | None] | None = None
+
+
+def provider_padrao_kimi() -> str | None:
+    global _padrao_kimi
+    cfg = kimi_sessions.kimi_home() / "config.toml"
+    try:
+        mt = cfg.stat().st_mtime
+    except OSError:
+        return None
+    if _padrao_kimi and _padrao_kimi[0] == mt:
+        return _padrao_kimi[1]
+    try:
+        dados = tomllib.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError, ValueError):
+        # Falha também cacheia (por mtime): sem isto um config ruim era relido por sessão por tick.
+        _padrao_kimi = (mt, None)
+        return None
+    modelo = dados.get("default_model")
+    prov = modelo.split("/", 1)[0] if isinstance(modelo, str) and "/" in modelo else None
+    # O id "kimi:<nome>" só existe pra provider COM chave (type kimi + api_key + base_url, ver
+    # _providers_kimi): default_model apontando pra OAuth/sem-chave não tem cota — None, e a
+    # pílula cai no pior-geral em vez de carregar um id que nunca casa.
+    if prov is not None and prov not in {nome for nome, _, _ in _providers_kimi()}:
+        prov = None
+    _padrao_kimi = (mt, prov)
+    return prov
+
+
 # ------------------------------------------------------------------------- fontes e cache
 
 _cache: dict[str, tuple[float, CotaConta]] = {}

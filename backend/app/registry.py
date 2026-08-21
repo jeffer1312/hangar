@@ -957,7 +957,14 @@ class SessionRegistry:
             # degradava calada pro pior-geral.
             if info.engine:
                 info.conta = f"chave:{info.engine}"
-            elif prov not in ("pi", "kimi"):
+            elif prov == "kimi":
+                # Sessão Kimi sem motor gasta o provider do default_model do config dela
+                # ("apikey/k3" -> conta "kimi:apikey"). Cache por mtime dentro de cotas — isto
+                # roda por sessão a cada varredura.
+                from app import cotas
+                padrao = cotas.provider_padrao_kimi()
+                info.conta = f"kimi:{padrao}" if padrao else None
+            elif prov != "pi":
                 cdir = (_config_dir_of(p["pid"]) if p.get("pid") else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
             out.append(info)
