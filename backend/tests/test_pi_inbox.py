@@ -311,12 +311,24 @@ def test_endpoint_bind_0000_ainda_aponta_pro_loopback(tmp_path, monkeypatch):
     assert d["url"].startswith("ws://127.0.0.1:")
 
 
-def test_endpoint_ilegivel_nao_derruba_a_subida(monkeypatch):
-    """Disco cheio / diretório só-leitura vira log, nunca exceção na subida do backend."""
+def test_endpoint_ilegivel_nao_derruba_a_subida(monkeypatch, tmp_path):
+    """Disco cheio / diretório só-leitura vira log, nunca exceção na subida do backend.
+
+    O caminho impossível é uma pasta DENTRO de um arquivo comum (NotADirectoryError nos dois
+    sistemas), e não o `/proc/...` de antes: no Windows `/proc` é relativo ao drive corrente, então
+    aquele caminho era `C:\\proc\\...` — perfeitamente gravável. O teste não só passava pelo motivo
+    errado como CRIAVA `C:\\proc`, e a partir daí `procinfo._TEM_PROC` (que decide /proc vs psutil
+    por `Path("/proc").is_dir()`) respondia True na máquina inteira, desligando calada toda a
+    leitura de processo do backend. Caminho impossível em teste não pode ser específico de um SO —
+    e muito menos deixar rastro fora do tmp_path.
+    """
     from app import pi_inbox
 
+    arquivo = tmp_path / "isto-e-um-arquivo"
+    arquivo.write_text("x", encoding="utf-8")
+    impossivel = str(arquivo / "nao-da-pra-escrever")
     monkeypatch.setattr("app.config.list_config_dirs",
-                        lambda: [ConfigDirInfo(path="/proc/nao-da-pra-escrever", label="X", active=True)])
+                        lambda: [ConfigDirInfo(path=impossivel, label="X", active=True)])
     assert pi_inbox.escrever_endpoint() == []
 
 
