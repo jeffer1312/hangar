@@ -133,7 +133,10 @@ if (-not (Tem 'winget')) {
 Titulo '1/8 Dependencias'
 Instale 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'     'sem ele nao existe sessao' | Out-Null
 Instale-ClaudeCode | Out-Null
-Instale 'Python'                'py'     'Python.Python.3.13'   'o backend e Python'        | Out-Null
+Instale 'Python'                'py'     'Python.Python.3.14'   'o backend e Python'        | Out-Null
+# 3.14, nao 3.13: backend/pyproject.toml exige >=3.14 (e .python-version = 3.14). Com o 3.13 o
+# `uv sync` ate funcionava - baixava um 3.14 gerenciado por conta propria - mas o Python do winget
+# virava peso morto, servindo so ao shim python3 do cp-send. Um Python so pros dois papeis.
 Instale 'Node 20+'              'node'   'OpenJS.NodeJS.LTS'    'o frontend e Svelte'       | Out-Null
 Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv do backend' | Out-Null
 
@@ -1175,16 +1178,23 @@ if (-not $bash) {
         Ok "lancador cp-send.cmd criado em $binUsuario"
     } else { Ok 'lancador cp-send.cmd ja atualizado' }
 
-    # (2b) mesmo lancador pro cp-conta (helper de contas do claude-conta): sem ele o
-    # claude-conta.ps1 falha com "cp-conta nao e reconhecido" antes de abrir o Claude.
+    # (2b) lancador pro cp-conta (helper de contas do claude-conta): sem ele o claude-conta.ps1
+    # falha com "cp-conta nao e reconhecido" antes de abrir o Claude.
+    # Pelo PYTHON, nao pelo bash: o cp-conta e um script Python (`#!/usr/bin/env python3`), e
+    # `bash arquivo` NAO honra shebang - le o arquivo como shell e estoura no docstring. Foi assim
+    # que este lancador nasceu quebrado (copia do cp-send.cmd, que e bash de verdade). O mesmo
+    # $pyExe/$arg do shim acima, que ja descarta o atalho da Store.
     $lancadorConta = Join-Path $binUsuario 'cp-conta.cmd'
-    $conteudoConta = "@echo off`r`n" +
-                     "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                     "`"$bash`" `"$raiz\scripts\cp-conta`" %*`r`n"
-    if (-not (Test-Path $lancadorConta) -or (Get-Content $lancadorConta -Raw) -ne $conteudoConta) {
-        Set-Content -Path $lancadorConta -Value $conteudoConta -Encoding ASCII -NoNewline
-        Ok "lancador cp-conta.cmd criado em $binUsuario"
-    } else { Ok 'lancador cp-conta.cmd ja atualizado' }
+    if (-not $pyExe) {
+        Falta 'cp-conta.cmd nao criado - precisa de um Python real (ver acima)'
+    } else {
+        $conteudoConta = "@echo off`r`n" +
+                         "`"$pyExe`"$arg `"$raiz\scripts\cp-conta`" %*`r`n"
+        if (-not (Test-Path $lancadorConta) -or (Get-Content $lancadorConta -Raw) -ne $conteudoConta) {
+            Set-Content -Path $lancadorConta -Value $conteudoConta -Encoding ASCII -NoNewline
+            Ok "lancador cp-conta.cmd criado em $binUsuario"
+        } else { Ok 'lancador cp-conta.cmd ja atualizado' }
+    }
 
     # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -1441,9 +1451,10 @@ if ($qrMostrado) { $linhaQr = "`n  O QR acima ja leva o token: ler com a camera 
 Write-Host @"
   Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build que este
   instalador gerou, entao ali tem tela e API no mesmo endereco.
-  O http://localhost:5173 tambem sobe: e o dev server do vite, com recarga ao vivo, util
-  so pra mexer no layout. Ele escuta SO em 127.0.0.1 (vite.config.ts) - do celular se chega
-  pelo Tailscale, nao pelo IP da LAN direto.
+  O http://localhost:5173 tambem sobe: e o `vite preview` servindo o MESMO build (a tarefa
+  agendada roda preview, nao dev - sem recarga ao vivo). Ele escuta SO em 127.0.0.1
+  (vite.config.ts) - do celular se chega pelo Tailscale, nao pelo IP da LAN direto.
+  Pra mexer no layout com recarga ao vivo: pare a tarefa hangar-frontend e rode `npm run dev`.
 
   Rodar na mao (se voce pulou o passo 7):
       cd backend  ; `$env:CP_LAN_BIND_IP='0.0.0.0' ; uv run python -m app.main
@@ -1454,8 +1465,11 @@ $linhaQr
   Guia completo (Tailscale, instalar como PWA, cada tela): docs\USAGE.md
 
   O que este Windows ainda NAO tem:
-  - wrappers do `codex` e do `pi`, e a extensao cp-state.ts do Pi. Sessao Codex ou Pi aberta
-    por voce no terminal nao aparece; criada pelo app, funciona.
+  - wrappers do `codex`, do `pi` e do `kimi`, e a extensao cp-state.ts do Pi. Sessao Codex, Pi
+    ou Kimi aberta por voce no terminal nao aparece; criada pelo app, funciona.
+  - motores de modelo (tela Motores / `CP_ENGINE`): o cp-engine aplica o ambiente por execvpe,
+    que no Windows nao substitui o processo - o pane morreria na largada. Sessao em motor, so
+    no Linux/macOS por enquanto; a conta Anthropic e o claude-conta funcionam normalmente.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
     psmux nao roda plugin de tmux. Fechou o Windows, as sessoes se foram.
 "@

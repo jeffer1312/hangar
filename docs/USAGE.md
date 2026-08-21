@@ -59,9 +59,11 @@ o token, libera o firewall, oferece Tailscale e registra o backend pra subir no 
 com uma checagem que prova que o backend sobe de verdade.
 
 Lá o multiplexador é o [psmux](https://github.com/psmux/psmux) (tmux nativo de Windows, sobre
-ConPTY) — não existe `tmux` no Windows, e o WSL não é necessário. Três coisas **não** vão junto,
-porque são shell script: `cp-send` (recado/pareamento entre sessões), o wrapper do `codex`, e os
-plugins de persistência entre reboots. Sessão do Codex, só criada pelo app.
+ConPTY) — não existe `tmux` no Windows, e o WSL não é necessário. O `cp-send` (recado/pareamento
+entre sessões) e o `claude-conta` vão junto, via o bash do Git for Windows. Três coisas **não**
+vão: os wrappers do `codex`, `pi` e `kimi` (sessão deles, só criada pelo app), os motores de modelo
+(tela Motores — o `cp-engine` depende de `execvpe`, que no Windows não substitui o processo) e os
+plugins de persistência entre reboots.
 
 ## 2. Subir (3 partes)
 
