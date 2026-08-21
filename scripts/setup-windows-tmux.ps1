@@ -273,7 +273,17 @@ Write-Host ''
 Write-Step 'Verificacao (lendo do servidor, nao do arquivo)'
 $esperado = @{ 'mouse' = 'on'; 'cursor-blink' = 'off'; 'automatic-rename' = 'off'; 'status' = 'off' }
 $falhou = @()
-if (Get-Command tmux -ErrorAction SilentlyContinue) {
+# Primeiro: TEM servidor? Sem ele o `show -g` sai != 0 com "no server running" no stderr, e o
+# Invoke-Nativo devolve esse texto embrulhado em ErrorRecord - a ultima palavra era
+# 'NativeCommandError', e o loop abaixo imprimia XX "mouse = 'NativeCommandError'" quatro vezes,
+# como se a config tivesse falhado. Medido em 21/08/2026 num Windows limpo, rodando pelo
+# install.ps1 antes de qualquer sessao existir. Servidor ausente nao e falha: a config e lida na
+# criacao da proxima sessao - e aviso, nao erro.
+$sondaServidor = $null
+if (Get-Command tmux -ErrorAction SilentlyContinue) { $sondaServidor = Invoke-Nativo { tmux show -g mouse } }
+if ($sondaServidor -ne $null -and $global:UltimoExit -ne 0) {
+    Write-Warn 'sem servidor psmux de pe - nada a ler agora; a config vale na PROXIMA sessao que abrir.'
+} elseif (Get-Command tmux -ErrorAction SilentlyContinue) {
     foreach ($k in $esperado.Keys) {
         $lido = Invoke-Nativo { tmux show -g $k }
         $val  = ($lido -split '\s+')[-1]
