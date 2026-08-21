@@ -45,15 +45,24 @@ achou=0
 while read -r _localref localsha _remoteref remotesha; do
     [[ "$localsha" == "$ZERO" ]] && continue          # delete de branch: nada sai
     if [[ "$remotesha" == "$ZERO" ]]; then
+        # ponytail: --not --remotes exclui contra TODOS os remotos; com múltiplos remotes, commit
+        # já buscado de outro remote escapa da varredura mesmo sendo novo pro alvo. Teto aceito.
         intervalo="$localsha --not --remotes"          # branch nova: só o que o remoto ainda não tem
     else
         intervalo="$remotesha..$localsha"
     fi
     # Só linhas ADICIONADAS pelos commits que vão sair; a própria trava fica de fora (precisa
     # conter os padrões pra procurá-los — mesmo motivo do pre-commit).
-    adicionado="$(git log -p --unified=0 --no-color $intervalo -- . \
-        ':(exclude)scripts/hooks' ':(exclude)scripts/install-hooks.sh' \
-        | grep '^+' | grep -v '^+++' || true)"
+    # O git log roda SEPARADO do grep de propósito: num pipe, o `|| true` engolia o erro dele
+    # (clone raso, SHA ausente) e "não consegui varrer" virava "nada a escanear" — a trava se
+    # desligando calada justamente no clone incompleto. Numa trava, erro de varredura recusa.
+    log_saida="$(git log -p --unified=0 --no-color $intervalo -- . \
+        ':(exclude)scripts/hooks' ':(exclude)scripts/install-hooks.sh')"
+    if (( $? != 0 )); then
+        echo "pre-push: não consegui varrer $intervalo — trava incompleta, push recusado." >&2
+        exit 1
+    fi
+    adicionado="$(printf '%s\n' "$log_saida" | grep '^+' | grep -v '^+++' || true)"
     [[ -z "$adicionado" ]] && continue
     for entrada in "${PADROES[@]}"; do
         casadas="$(printf '%s\n' "$adicionado" | grep -Ei "${entrada#*::}" || true)"
