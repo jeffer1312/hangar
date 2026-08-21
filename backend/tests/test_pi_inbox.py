@@ -4,6 +4,8 @@ import os
 import tempfile
 import threading
 
+import pytest
+
 from app.config import ConfigDirInfo
 from app.pi_inbox import PiInbox
 
@@ -251,9 +253,15 @@ def test_endpoint_vai_pra_todos_os_config_dirs(tmp_path, monkeypatch):
     assert len(escritos) == 2
     d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://127.0.0.1:")
-    assert (a / ".claude-pocket-conn.json").stat().st_mode & 0o777 == 0o600, "tem token dentro"
+    if os.name == "posix":
+        # So o resto do caso vale no Windows: la nao ha bit de modo (o st_mode volta 0o666 e quem
+        # decide acesso e a ACL), entao a asserção testaria o os.stat, nao o pi_inbox. A protecao
+        # do token PRECISA existir la tambem — mas por ACL, e isso ainda nao esta implementado;
+        # esconder a lacuna atras de um assert que nao roda seria pior que deixa-la visivel.
+        assert (a / ".claude-pocket-conn.json").stat().st_mode & 0o777 == 0o600, "tem token dentro"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="modo 0600 nao existe no Windows (quem manda e a ACL)")
 def test_endpoint_tmp_nunca_nasce_com_permissao_frouxa(tmp_path, monkeypatch):
     """mkstemp cria o arquivo JÁ em 0600 (é o open() com O_EXCL que fixa o modo na criação, não
     um chmod depois) — nunca existe instante com o token num arquivo de modo mais frouxo.

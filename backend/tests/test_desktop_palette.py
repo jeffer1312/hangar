@@ -139,7 +139,13 @@ def test_falha_repetida_com_o_mesmo_motivo_avisa_uma_vez_so(monkeypatch, caplog)
     assert len(avisos) == 1
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignora permissoes de diretorio")
+# `os.geteuid` NAO existe no Windows, e como o skipif e avaliado no import do modulo, o
+# AttributeError derrubava a COLETA do arquivo inteiro — 0 testes deste modulo rodavam ali. O
+# `os.name != "posix"` na frente resolve os dois casos em que o teste nao faz sentido: no Windows
+# `mkdir(mode=0o000)` e no-op (quem manda e a ACL, a pasta sai legivel) e o root do Linux ignora o
+# bit. Curto-circuito do `or` e o que impede o geteuid de ser chamado onde ele nao existe.
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                    reason="permissao de diretorio exige POSIX e usuario nao-root")
 def test_permissao_negada_loga_diferente_de_arquivo_ausente(tmp_path, monkeypatch, caplog):
     # O comentario velho tratava "nao existe" e "sem permissao" como o mesmo silencio. Sao
     # diferentes: o primeiro e a maioria das maquinas (sem rice), o segundo e sempre uma pista.

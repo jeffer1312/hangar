@@ -166,7 +166,11 @@ def test_scan_not_a_directory_400(tmp_path):
     assert ei.value.status == 400
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignora permissoes de diretorio")
+# Mesmo motivo do gemeo em test_desktop_palette.py: `os.geteuid` nao existe no Windows e o skipif
+# roda no import, entao o AttributeError derrubava a coleta do arquivo TODO. O curto-circuito do
+# `or` cobre os dois casos sem sentido — Windows (chmod 0 e no-op, a ACL manda) e root.
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0,
+                    reason="permissao de diretorio exige POSIX e usuario nao-root")
 def test_scan_permission_denied_soft(tmp_path):
     root = tmp_path / "pessoal"
     root.mkdir()

@@ -470,6 +470,8 @@ def test_criar_com_claude_json_nao_objeto_falha(casa):
     assert not (casa / ".claude-conta2").exists()
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="chmod(0) e no-op no Windows: o arquivo segue legivel (quem nega e a ACL)")
 def test_criar_com_claude_json_sem_permissao_falha(casa):
     (casa / ".claude.json").chmod(0)
     try:
