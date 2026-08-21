@@ -59,8 +59,18 @@ def list_config_dirs() -> list[ConfigDirInfo]:
             if not item:
                 continue
             label, sep, path = item.partition(":")
+            # No Windows um caminho SEM rótulo já tem ':' dentro — o do drive. `C:\Users\x` era
+            # partido em label="C" e path="\Users\x": o rótulo virava a letra do drive E o caminho
+            # perdia o drive, então o resolve() abaixo o reancorava no drive do cwd. Duas linhas
+            # erradas de uma vez, caladas. Rótulo de UMA letra seguido de barra é sempre drive:
+            # rótulo de verdade com esse formato não existe, e se existisse o caminho depois dele
+            # não começaria com barra. Só no `nt` — no POSIX `t:/home/u` é rótulo `t`, e este ramo
+            # fica byte-idêntico ao de sempre.
+            if os.name == "nt" and sep and len(label) == 1 and label.isalpha() \
+                    and path[:1] in ("\\", "/"):
+                sep = ""
             if not sep:
-                path, label = label, ""
+                path, label = item, ""
             p = Path(os.path.expanduser(path)).resolve()
             entries.append((label.strip() or _label_for(p), p))
     else:
