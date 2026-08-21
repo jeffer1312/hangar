@@ -339,14 +339,8 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     expect(aside?.querySelector('.initials')).not.toBeNull();
     expect(aside?.querySelector('.rail-iniciais')).toBeNull();
     expect(aside?.querySelector('.rail-state-dot')).toBeNull();
-    // Rodapé: engrenagem + Nova + kebab + fold + toggle do painel de contexto (referência)
-    const ctx = aside?.querySelector<HTMLButtonElement>('.rail-ctx');
-    expect(ctx).not.toBeNull();
-    expect(ctx?.getAttribute('aria-label')).toBe('Recolher painel de contexto');
-    // clique no toggle alterna o estado do painel
-    ctx!.click();
-    await tick();
-    expect(ctx?.getAttribute('aria-label')).toBe('Expandir painel de contexto');
+    // Rodapé sem o toggle do painel de contexto: ele vive só na barra superior (SessionTabs)
+    expect(aside?.querySelector('.rail-ctx')).toBeNull();
     sidebarPin.setForced(null);
     unmount(t.comp);
   });
@@ -566,26 +560,7 @@ describe('Sidebar — trilho original no modo rail', () => {
     unmount(t.comp);
   });
 
-  it('rail-ctx desabilita sem painel disponível', async () => {
-    navMode.mode = 'rail';
-    sidebarPin.setUser(true);
-    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
-    const t = montar({ ctxDisponivel: false });
-    await tick();
-    expect(document.querySelector('.rail-ctx')!.hasAttribute('disabled')).toBe(true);
-    unmount(t.comp);
-  });
 
-  it('rail-ctx e fold-btn não têm o mesmo desenho', async () => {
-    navMode.mode = 'rail';
-    sidebarPin.setUser(true);
-    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
-    const t = montar();
-    await tick();
-    expect(document.querySelector('.rail-ctx svg')!.innerHTML)
-      .not.toBe(document.querySelector('.fold-btn:not(.rail-ctx) svg')!.innerHTML);
-    unmount(t.comp);
-  });
 
   it('fold sob override fica desabilitado no atributo', async () => {
     // sidebarPin.setUser(false) + setForced(true) = Quadro/Canvas forçando o recolhimento
@@ -602,16 +577,6 @@ describe('Sidebar — trilho original no modo rail', () => {
     unmount(t.comp);
   });
 
-  it('rail-ctx sem painel fica desabilitado no atributo', async () => {
-    // montar com ctxDisponivel={false}
-    navMode.mode = 'rail';
-    sidebarPin.setUser(true);
-    comStore([{ id: 'srv-a', label: 'Servidor A', sessions: [sess('hangar', 'srv-a', 'idle')] }]);
-    const t = montar({ ctxDisponivel: false });
-    await tick();
-    expect(document.querySelector('.rail-ctx')!.hasAttribute('disabled')).toBe(true);
-    unmount(t.comp);
-  });
 });
 
 // Task 15, item 1 + REGISTRADO 1 do parecer da Task 14 (arv-review19): das TRÊS expressões de
