@@ -9,7 +9,7 @@
     "allowJs": true,
     "checkJs": false,
     "types": ["vitest/globals", "node"],
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "lib": ["ES2022"]
   },
   "include": ["src"]
 }

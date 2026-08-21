@@ -61,7 +61,7 @@ export function ttsAudioUrl(path: string): string {
   return `${apiEnv().getBaseUrl()}${path}?token=${encodeURIComponent(t)}`;
 }
 
-function authHeaders(): HeadersInit {
+function authHeaders(): Record<string, string> {
   const token = apiEnv().getToken();
   if (!token) return {};
   return { Authorization: `Bearer ${token}` };
@@ -396,6 +396,13 @@ export async function getVapidKey(s: Server): Promise<string> {
   });
   if (!res.ok) throw new Error(`vapid ${res.status}`);
   return ((await res.json() as { key?: string }).key ?? '') as string;
+}
+
+// Shape do PushSubscription.toJSON() do navegador — local pra nao puxar a lib DOM inteira no core.
+export interface PushSubscriptionJSON {
+  endpoint?: string;
+  expirationTime?: number | null;
+  keys?: Record<string, string>;
 }
 
 // Registra a inscricao push do celular NESTE servidor, com label + id locais (pra notif e deep-link)
