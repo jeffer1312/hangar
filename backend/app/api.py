@@ -2641,7 +2641,6 @@ def get_config():
             "lan_bind_ip": settings.lan_bind_ip,
             "server_id": settings.server_id,
             "public_url": settings.public_url,
-            "scan_roots": settings.scan_roots,
             "terminal_panel": os.name == "posix",   # `pty` e POSIX-only; sem ele o painel nao existe
         },
     }

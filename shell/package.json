@@ -1,7 +1,7 @@
 {
   "name": "hangar-shell",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Janela nativa transparente do hangar",
   "main": "main.cjs",
   "author": "Jefferson Felizardo",
@@ -21,6 +21,7 @@
     "artifactName": "hangar-${version}-${arch}.${ext}",
     "files": [
       "main.cjs",
+      "preload.cjs",
       "settings.cjs",
       "package.json"
     ],

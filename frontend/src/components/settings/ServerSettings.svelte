@@ -79,9 +79,27 @@ import { intlLocale } from '../../lib/locale';
 
   const ROTULO_LEITURA: Record<string, string> = {
     port: m.config_server_porta(), lan_bind_ip: m.config_server_ip_bind(), server_id: m.config_server_id(),
-    public_url: m.config_server_url_publica(), scan_roots: m.config_server_raizes(),
+    public_url: m.config_server_url_publica(),
     terminal_panel: m.config_server_painel_terminal(),
   };
+
+  // Pastas mapeadas do seletor de pasta (scan_roots): o valor no runtime_config é a string "a,b"
+  // (mesmo formato do CP_SCAN_ROOTS); a tela edita como lista de linhas.
+  const raizes = $derived(String(store.valorAtual('scan_roots') ?? '')
+    .split(',').map((s) => s.trim()).filter(Boolean));
+  let novaRaiz = $state('');
+  function raizesGravar(lista: string[]) {
+    store.setRascunho('scan_roots', lista.join(','));
+  }
+  function raizAdicionar() {
+    const p = novaRaiz.trim();
+    if (!p || raizes.includes(p)) return;
+    raizesGravar([...raizes, p]);
+    novaRaiz = '';
+  }
+  function raizRemover(p: string) {
+    raizesGravar(raizes.filter((r) => r !== p));
+  }
 
   // Vozes e saldo: sob demanda, no botao. As duas chamadas batem no provedor (ElevenLabs) e custam
   // latencia — abrir a tela de config nao pode disparar rede pra fora so por estar aberta.
@@ -318,6 +336,34 @@ import { intlLocale } from '../../lib/locale';
     {/if}
 
     {#if secao === 'avancado'}
+      <div class="raizes">
+        <h3>
+          {m.config_server_raizes()}
+          {#if store.campos['scan_roots']?.origem === 'app'}<span class="tag">{m.config_server_editado()}</span>{/if}
+        </h3>
+        <p class="ajuda">{m.config_server_raizes_ajuda()}</p>
+        {#if raizes.length === 0}
+          <p class="aviso">{m.config_server_raizes_vazio()}</p>
+        {/if}
+        {#each raizes as r (r)}
+          <div class="raiz-linha">
+            <span class="raiz-caminho">{r}</span>
+            <button class="raiz-x" onclick={() => raizRemover(r)} aria-label={m.config_server_raiz_remover({ p: r })}>✕</button>
+          </div>
+        {/each}
+        <form class="raiz-add" onsubmit={(e) => { e.preventDefault(); raizAdicionar(); }}>
+          <input
+            type="text"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck={false}
+            placeholder={m.config_server_raiz_placeholder()}
+            bind:value={novaRaiz}
+          />
+          <button type="submit" class="btn" disabled={!novaRaiz.trim()}>{m.config_server_raiz_adicionar()}</button>
+        </form>
+      </div>
+
       <div class="somente-leitura">
         <h3>{m.config_server_so_servidor()}</h3>
         <p class="ajuda">
@@ -438,6 +484,27 @@ import { intlLocale } from '../../lib/locale';
   .ajuste-slider .ponta {
     font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; flex-shrink: 0;
   }
+
+  .raizes { margin-top: var(--space-5); }
+  .raizes h3 {
+    display: flex; align-items: center; gap: var(--space-2);
+    margin: 0 0 4px; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
+  }
+  .raiz-linha {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+    padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle);
+  }
+  .raiz-caminho {
+    font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+  }
+  .raiz-x {
+    flex-shrink: 0; background: none; border: none; padding: 2px 6px;
+    color: var(--text-muted); font-size: var(--text-sm);
+  }
+  .raiz-x:hover { color: var(--error); }
+  .raiz-add { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+  .raiz-add input { flex: 1; }
 
   .somente-leitura { margin-top: var(--space-5); }
   .somente-leitura h3 {

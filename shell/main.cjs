@@ -1,5 +1,6 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
-const { app, BrowserWindow, dialog, screen, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron');
+const path = require('path');
 const { ler, gravar } = require('./settings.cjs');
 
 // MEDIDO 05/08/2026 (Hyprland/Wayland, Electron 43.3.0): o switch `enable-transparent-visuals`
@@ -115,7 +116,8 @@ async function criarJanela() {
     // aparece preta. O front também não recebe a marca de fundo nesse caso (ver abaixo).
     backgroundColor: fundo.transparente ? '#00000000' : '#1a181d',
     ...fundo.extra,
-    webPreferences: { contextIsolation: true },
+    // O preload expõe SÓ window.hangar.pickFolder (seletor nativo de pasta) — ver preload.cjs.
+    webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.cjs') },
   });
   win.removeMenu();
 
@@ -258,6 +260,16 @@ function abrirJanela(origem) {
     dialog.showErrorBox('Hangar', `Não consegui abrir a janela.\n\n${err && err.message ? err.message : err}`);
   });
 }
+
+// Seletor nativo de pasta (window.hangar.pickFolder, via preload.cjs). Registrado UMA vez, fora
+// do criarJanela — handler duplicado por janela é erro do ipcMain. O diálogo ancora na janela que
+// pediu, senão ele nasce solto e pode cair atrás do app.
+ipcMain.handle('hangar:pick-folder', async (ev) => {
+  const win = BrowserWindow.fromWebContents(ev.sender);
+  const r = await (win ? dialog.showOpenDialog(win, { properties: ['openDirectory'] })
+                       : dialog.showOpenDialog({ properties: ['openDirectory'] }));
+  return r.canceled ? null : (r.filePaths[0] ?? null);
+});
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();

@@ -61,6 +61,10 @@ EDITAVEIS: dict[str, type] = {
     # Quanto o ditado pode mexer no que voce falou: "limpar" | "prosa" | "briefing".
     # Ver narrar.ESTILOS_DITADO — cada um e um prompt E um conjunto de travas diferente.
     "ditado_estilo": str,
+    # Raizes do seletor de pasta (fs-scanner), no MESMO formato "a,b" do CP_SCAN_ROOTS.
+    # Override vale por inteiro (nao soma com o env); vazio = volta ao env. Ver
+    # config.resolve_scan_roots, que le daqui primeiro.
+    "scan_roots": str,
 }
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você
@@ -142,6 +146,14 @@ def _coagir(campo: str, valor: Any) -> Any:
             raise ValueError(
                 f"ditado_estilo: '{texto}' nao existe. Use um de: {', '.join(ESTILOS_DITADO)}."
             )
+    if campo == "scan_roots" and texto:
+        # resolve_scan_roots descarta calado entrada que nao e diretorio (um typo no env nunca
+        # alarga o perimetro). Vindo da TELA, o descarte calado vira "adicionei a pasta, salvou,
+        # e o chip nunca apareceu" — recusa aqui, nomeando a entrada ruim.
+        for entrada in texto.split(","):
+            entrada = entrada.strip()
+            if entrada and not Path(os.path.realpath(os.path.expanduser(entrada))).is_dir():
+                raise ValueError(f"scan_roots: '{entrada}' nao e um diretorio nesta maquina")
     if campo == "ditado_vocabulario" and texto:
         # Import LOCAL: transcribe importa este modulo, entao um import no topo fecharia o ciclo —
         # mesmo motivo (e mesma solucao) de config.automations_enabled.

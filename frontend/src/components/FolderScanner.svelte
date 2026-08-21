@@ -10,8 +10,14 @@
   // nivel (re-scan). Breadcrumb de uma linha pra subir. A allowlist e validada no backend.
   interface Props {
     onPick: (path: string) => void;
+    /** Painel desktop do CreateSessionSheet: o scanner vira coluna flex que PREENCHE a altura
+     *  do pane e a lista rola sozinha (sem o teto de 46vh do fluxo mobile). */
+    fill?: boolean;
+    /** Caminho já escolhido (desktop de dois painéis): a linha fica marcada — é ELA que diz qual
+     *  pasta o formulário à direita está configurando. */
+    selected?: string | null;
   }
-  let { onPick }: Props = $props();
+  let { onPick, fill = false, selected = null }: Props = $props();
 
   const LAST_ROOT_KEY = 'cp:last-root';
 
@@ -111,7 +117,7 @@
   };
 </script>
 
-<div class="scanner">
+<div class="scanner" class:scanner--fill={fill}>
   <!-- Chips de raiz -->
   {#if rootsLoading}
     <div class="chips">
@@ -182,8 +188,8 @@
         </p>
       {:else}
         {#each filtered as e (e.path)}
-          <div class="row" role="listitem">
-            <button class="row-body" onclick={() => onPick(e.path)}>
+          <div class="row" class:row--sel={selected === e.path} role="listitem">
+            <button class="row-body" aria-pressed={selected === e.path} onclick={() => onPick(e.path)}>
               <span class="row-name">{e.name}</span>
               <span class="row-path">{relPath(e.path)}</span>
               <span class="row-badges">
@@ -209,6 +215,18 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
+  }
+  .scanner--fill {
+    flex: 1;
+    min-height: 0;
+  }
+  .scanner--fill .rows {
+    flex: 1;
+    /* min-height:0 não é enfeite: sem ele a lista não encolhe abaixo do conteúdo (min-height:auto
+       do flex) e o rodapé/form de caminho é empurrado pra fora do pane, que tem overflow hidden —
+       o "Avançado" abria o form fora da tela e parecia não fazer nada. */
+    min-height: 0;
+    max-height: none;
   }
 
   /* ── Chips de raiz ─────────────────────────────────────────────────────── */
@@ -337,6 +355,11 @@
     align-items: stretch;
     gap: var(--space-1);
     border-radius: var(--radius-md);
+  }
+  /* Pasta escolhida (desktop de dois painéis): mesma tinta de seleção dos chips. */
+  .row--sel {
+    background: var(--accent-dim);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
 
   /* Corpo: acao primaria = selecionar este caminho como cwd. */

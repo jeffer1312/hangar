@@ -83,8 +83,8 @@ async function escolherNoCombo(sel: string, texto: string) {
 
 // Suja o estado com a escolha de "abertura anterior": Pi + openai-codex/gpt-5.6-luna + high.
 async function escolhaAnterior() {
-  [...(document.querySelectorAll('.provider-btn') as unknown as HTMLElement[])]
-    .find((b) => b.textContent === 'Pi')!.click();
+  [...(document.querySelectorAll('.provider-tile') as unknown as HTMLElement[])]
+    .find((b) => b.textContent!.trim().endsWith('Pi'))!.click();
   await flush();
   await escolherNoCombo('#model-pick', 'gpt-5.6-luna');
   await escolherNoCombo('#effort-pick', 'high');
@@ -235,16 +235,16 @@ describe('CreateSessionSheet — reabertura com a lista de contas fora do ar', (
     expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe(m.composer_esforco());
 
     // Pi: o rótulo visível vira "Raciocínio" e o nome acessível tem que acompanhar (Label in Name).
-    [...(document.querySelectorAll('.provider-btn') as unknown as HTMLElement[])]
-      .find((b) => b.textContent === 'Pi')!.click();
+    [...(document.querySelectorAll('.provider-tile') as unknown as HTMLElement[])]
+      .find((b) => b.textContent!.trim().endsWith('Pi'))!.click();
     await flush();
     expect(document.querySelector('#effort-pick')!.getAttribute('aria-label')).toBe(m.criar_raciocinio());
 
     // Erro de listagem: modelOptions rejeita -> aviso com role=alert (o mesmo padrão do aviso de
     // conta deste arquivo), anunciado em vez de mudo.
     vi.mocked(api.modelOptions).mockRejectedValueOnce(new Error('provedor fora do ar'));
-    [...(document.querySelectorAll('.provider-btn') as unknown as HTMLElement[])]
-      .find((b) => b.textContent === 'Claude')!.click();
+    [...(document.querySelectorAll('.provider-tile') as unknown as HTMLElement[])]
+      .find((b) => b.textContent!.trim().endsWith('Claude'))!.click();
     await flush();
     const erro = [...document.querySelectorAll('.model-hint')]
       .find((p) => p.textContent?.includes(m.criar_abre_padrao({ erro: 'x' }).slice(m.criar_abre_padrao({ erro: 'x' }).indexOf('—'))));
@@ -416,7 +416,7 @@ describe('CreateSessionSheet — provider sonda (C5)', () => {
     const { comp } = montar();
     await flush();
     await escolherPasta();
-    const claudeBtn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === 'Claude')!;
+    const claudeBtn = [...document.querySelectorAll('.provider-tile') as unknown as HTMLButtonElement[]].find(b => b.textContent!.trim().endsWith('Claude'))!;
     expect(claudeBtn.disabled).toBe(true);
     expect(document.body.textContent).toContain(m.criar_provider_ausente({ p: 'claude' }));
     const primary = document.querySelector('.primary-btn') as HTMLButtonElement;
@@ -433,7 +433,7 @@ describe('CreateSessionSheet — provider sonda (C5)', () => {
     await flush();
     await escolherPasta();
     for (const name of ['Claude', 'Codex', 'Pi', 'Kimi']) {
-      const btn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === name)!;
+      const btn = [...document.querySelectorAll('.provider-tile') as unknown as HTMLButtonElement[]].find(b => b.textContent!.trim().endsWith(name))!;
       expect(btn.disabled).toBe(false);
     }
     expect(document.body.textContent).not.toContain('não encontrado');
@@ -484,7 +484,7 @@ describe('CreateSessionSheet — provider sonda (C5)', () => {
     await flush();
     resolveVelha({ claude: { disponivel: false, motivo: 'nao_encontrado' }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
     await flush();
-    const claudeBtn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === 'Claude')!;
+    const claudeBtn = [...document.querySelectorAll('.provider-tile') as unknown as HTMLButtonElement[]].find(b => b.textContent!.trim().endsWith('Claude'))!;
     // A resposta velha (ausente) não deve vencer
     expect(claudeBtn.disabled).toBe(false);
     unmount(comp);
@@ -515,7 +515,7 @@ describe('CreateSessionSheet — provider sonda (C5)', () => {
     await flush();
     resolveVelha({ claude: { disponivel: false, motivo: 'nao_encontrado' }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
     await flush();
-    const claudeBtn = [...document.querySelectorAll('.provider-btn') as unknown as HTMLButtonElement[]].find(b => b.textContent === 'Claude')!;
+    const claudeBtn = [...document.querySelectorAll('.provider-tile') as unknown as HTMLButtonElement[]].find(b => b.textContent!.trim().endsWith('Claude'))!;
     expect(claudeBtn.disabled).toBe(false);
     unmount(comp);
   });
@@ -538,6 +538,54 @@ describe('CreateSessionSheet — provider sonda (C5)', () => {
     resolve({ claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } });
     await flush();
     expect((document.querySelector('.primary-btn') as HTMLButtonElement).disabled).toBe(false);
+    unmount(comp);
+  });
+});
+
+describe('CreateSessionSheet — seletor nativo de pasta (shell Electron)', () => {
+  it('com window.hangar.pickFolder: botão "Abrir pasta…" aparece e escolher preenche o passo 2', async () => {
+    const pickFolder = vi.fn().mockResolvedValue('/home/jefferson/pasta-do-dialog');
+    (window as unknown as { hangar?: unknown }).hangar = { pickFolder };
+    try {
+      const { comp } = montar();
+      await flush();
+      const abrir = document.querySelector('.abrir-btn') as HTMLButtonElement;
+      expect(abrir).not.toBeNull();
+      expect(abrir.textContent).toContain(m.criar_pasta_computador());
+      // O toggle de digitar caminho continua existindo ao lado (fallback universal).
+      expect(document.querySelector('.advanced-toggle')).not.toBeNull();
+      abrir.click();
+      await flush();
+      expect(pickFolder).toHaveBeenCalledOnce();
+      // desktop mostra .form-caminho; mobile, .picked-path — o que importa é o caminho na tela
+      const caminho = document.querySelector('.picked-path') ?? document.querySelector('.form-caminho');
+      expect((caminho as HTMLElement).textContent).toBe('/home/jefferson/pasta-do-dialog');
+      unmount(comp);
+    } finally {
+      delete (window as unknown as { hangar?: unknown }).hangar;
+    }
+  });
+
+  it('cancelar o dialog (null) não sai do passo 1', async () => {
+    (window as unknown as { hangar?: unknown }).hangar = { pickFolder: vi.fn().mockResolvedValue(null) };
+    try {
+      const { comp } = montar();
+      await flush();
+      (document.querySelector('.abrir-btn') as HTMLButtonElement).click();
+      await flush();
+      expect(document.querySelector('.picked-path')).toBeNull();
+      expect(document.querySelector('.form-caminho')).toBeNull();
+      unmount(comp);
+    } finally {
+      delete (window as unknown as { hangar?: unknown }).hangar;
+    }
+  });
+
+  it('sem window.hangar (navegador/celular): sem botão, toggle ocupa a linha', async () => {
+    const { comp } = montar();
+    await flush();
+    expect(document.querySelector('.abrir-btn')).toBeNull();
+    expect(document.querySelector('.advanced-toggle')!.classList.contains('sozinho')).toBe(true);
     unmount(comp);
   });
 });

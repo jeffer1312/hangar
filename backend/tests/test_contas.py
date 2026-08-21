@@ -546,3 +546,17 @@ def test_drift_poda_por_nome_e_nao_pela_gaveta_inteira(casa):
     # e o teto continua valendo DENTRO do proprio nome
     skills = [p for p in (dir_conta / ".drift").iterdir() if p.name.startswith("skills.")]
     assert len(skills) <= contas.DRIFT_TETO
+
+
+def test_apelidos_nao_viram_atalho_nem_sobem_de_copia_velha(casa):
+    """O arquivo de apelidos é do APP, lido/gravado só pelo caminho compartilhado. Symlink dentro
+    da conta não serve pra nada, e uma cópia real antiga fazia _resolver_colisao copiá-la POR CIMA
+    do compartilhado — foi o que apagou os apelidos em 19/08 (mesma janela do settings.json)."""
+    apelidos = casa / ".claude" / ".claude-pocket-apelidos.json"
+    apelidos.write_text('{"claude:/x": "Nome Bom"}', encoding="utf-8")
+    p = contas.criar("conta2")
+    assert not (p / ".claude-pocket-apelidos.json").exists()          # nem atalho, nem cópia
+    # Cópia VELHA deixada na conta não pode subir pro compartilhado na reconciliação.
+    (p / ".claude-pocket-apelidos.json").write_text('{"claude:/x": "velho"}', encoding="utf-8")
+    contas.reconciliar("conta2")
+    assert json.loads(apelidos.read_text(encoding="utf-8")) == {"claude:/x": "Nome Bom"}

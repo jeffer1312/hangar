@@ -154,3 +154,23 @@ def test_vocabulario_no_limite_passa():
     from app.transcribe import VOCAB_USUARIO_MAX
     texto = "x" * VOCAB_USUARIO_MAX
     assert rc._coagir("ditado_vocabulario", texto) == texto
+
+
+def test_scan_roots_recusa_entrada_que_nao_e_diretorio(tmp_path):
+    """Vindo da tela, o descarte calado do resolve_scan_roots viraria "salvei e o chip nunca
+    apareceu" — a gravacao recusa nomeando a entrada ruim."""
+    ok = tmp_path / "projetos"
+    ok.mkdir()
+    with pytest.raises(ValueError) as ei:
+        rc.aplicar({"scan_roots": f"{ok},{tmp_path / 'nao-existe'}"})
+    assert "nao-existe" in str(ei.value)
+    assert rc.get("scan_roots") is None or "nao-existe" not in str(rc.get("scan_roots"))
+
+
+def test_scan_roots_aceita_diretorios_e_vazio(tmp_path):
+    a = tmp_path / "a"
+    a.mkdir()
+    rc.aplicar({"scan_roots": str(a)})
+    assert rc.get("scan_roots") == str(a)
+    rc.aplicar({"scan_roots": ""})       # vazio = volta ao env (resolve_scan_roots cai no CP_SCAN_ROOTS)
+    assert rc.get("scan_roots") == ""

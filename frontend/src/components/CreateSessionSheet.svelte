@@ -3,6 +3,8 @@
   import BottomSheet from './BottomSheet.svelte';
   import Select from './Select.svelte';
   import FolderScanner from './FolderScanner.svelte';
+  import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
            modelOptions, type ModelOption, type Motor } from '../lib/api';
   import { basename, providerName } from '../lib/format';
@@ -356,6 +358,31 @@
   let manualOpen = $state(false);
   let manualPath = $state('');
 
+  // No desktop a folha vira MODAL centrado (mesma decisao do SettingsModal: config/opcao nao
+  // doca; ver CLAUDE.md "Config e opção moram em MODAL").
+  let isDesktop = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(min-width: 820px)');
+    const on = () => (isDesktop = mq.matches); on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
+
+  // Seletor NATIVO de pasta — so existe quando o app roda dentro do shell Electron (preload expoe
+  // window.hangar.pickFolder). A pasta escolhida e da maquina do shell; num servidor remoto o
+  // create falha com o erro normal de cwd invalido.
+  const pickNativo = (window as { hangar?: { pickFolder?: () => Promise<string | null> } }).hangar?.pickFolder;
+  let nativoErro = $state('');
+  async function escolherNativa() {
+    nativoErro = '';
+    try {
+      const p = await pickNativo!();
+      if (p) handlePick(p);
+    } catch (e) {
+      nativoErro = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   // Zera tudo a cada abertura. Fixa o servidor-alvo (ativo atual ou o 1º) e o seleciona, pra o
   // scanner do passo 1 já varrer o backend certo.
   // IMPORTANTE: o reset depende SO de `open`. O corpo le `servers`/getActiveId DENTRO de untrack
@@ -462,43 +489,50 @@
 
 </script>
 
-<BottomSheet {open} {onClose} ariaLabel={m.sessao_nova()}>
-  <h2 class="sheet-title">{m.sessao_nova()}</h2>
-
-  {#if servers.length > 1}
-    <div class="server-select">
-      <span class="server-select-label">{m.lista_agrupar_servidor()}</span>
-      <div class="server-chips">
-        {#each servers as s (s.id)}
-          <button
-            type="button"
-            class="server-chip"
-            class:on={targetServer === s.id}
-            style="--chip: {serverColor(s.id)};"
-            onclick={() => pickTarget(s.id)}
-            disabled={contaOcupada}
-          >
-            <span class="chip-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-            {s.label}
-          </button>
-        {/each}
+<!-- Snippets FORA do BottomSheet: declarados como filhos diretos de um componente eles viram
+     PROPS dele (regra do Svelte 5) — aqui são só blocos reusados pelos dois layouts. -->
+{#snippet chipsServidor()}
+    {#if servers.length > 1}
+      <div class="server-select">
+        <span class="server-select-label">{m.lista_agrupar_servidor()}</span>
+        <div class="server-chips">
+          {#each servers as s (s.id)}
+            <button
+              type="button"
+              class="server-chip"
+              class:on={targetServer === s.id}
+              style="--chip: {serverColor(s.id)};"
+              onclick={() => pickTarget(s.id)}
+              disabled={contaOcupada}
+            >
+              <span class="chip-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
+              {s.label}
+            </button>
+          {/each}
+        </div>
       </div>
-    </div>
-  {/if}
+    {/if}
+  {/snippet}
 
-  {#if !picked}
-    <!-- Passo 1: escolher a pasta -->
+  {#snippet escolha()}
     <!-- Remonta ao trocar de servidor: o scanner busca roots/pastas do server ATIVO só no onMount;
          sem o key ele ficava com as pastas do server anterior até fechar o app. -->
     {#key targetServer}
-      <FolderScanner onPick={handlePick} />
+      <FolderScanner onPick={handlePick} fill={isDesktop} selected={picked} />
     {/key}
 
     <div class="advanced">
-      <button class="advanced-toggle" onclick={() => (manualOpen = !manualOpen)}>
-        <span>{m.criar_avancado()}</span>
-        <span class="chevron" class:chevron--open={manualOpen} aria-hidden="true">›</span>
-      </button>
+      <div class="cs-rodape">
+        {#if pickNativo}
+          <!-- Só no shell Electron (window.hangar): dialog nativo de diretório do sistema. -->
+          <button class="abrir-btn" onclick={escolherNativa}>{m.criar_pasta_computador()}</button>
+        {/if}
+        <button class="advanced-toggle" class:sozinho={!pickNativo} onclick={() => (manualOpen = !manualOpen)}>
+          <span>{m.criar_avancado()}</span>
+          <span class="chevron" class:chevron--open={manualOpen} aria-hidden="true">›</span>
+        </button>
+      </div>
+      {#if nativoErro}<p class="error-msg" role="alert">{nativoErro}</p>{/if}
       {#if manualOpen}
         <form class="manual-form" onsubmit={submitManual}>
           <input
@@ -516,14 +550,22 @@
         </form>
       {/if}
     </div>
-  {:else}
-    <!-- Passo 2: pasta escolhida -->
-    <div class="picked">
-      <div class="picked-head">
-        <span class="picked-name">{basename(picked)}</span>
+  {/snippet}
+
+  {#snippet formulario()}
+    {#if isDesktop}
+      <!-- O nome grande e o card duplicavam o que a lista à esquerda já mostra (a linha escolhida
+           fica marcada). Sobra só o caminho, numa linha discreta — que também cobre pasta vinda
+           do dialog nativo ou do caminho digitado, que não está na lista. -->
+      <p class="form-caminho" title={picked}>{picked}</p>
+    {:else}
+      <div class="picked">
+        <div class="picked-head">
+          <span class="picked-name">{basename(picked ?? '')}</span>
+        </div>
+        <span class="picked-path">{picked}</span>
       </div>
-      <span class="picked-path">{picked}</span>
-    </div>
+    {/if}
 
     {#if checking}
       <p class="hint">{m.criar_verificando()}</p>
@@ -549,16 +591,19 @@
 
       <div class="field">
         <span class="field-label">{m.comum_provider()}</span>
-        <div class="provider-toggle" role="group" aria-label={m.criar_provider_aria()}>
+        <div class="provider-grid" role="group" aria-label={m.criar_provider_aria()}>
           {#each PROVIDERS as p (p)}
             <button
               type="button"
-              class="provider-btn"
+              class="provider-tile"
               class:on={provider === p}
               aria-pressed={provider === p}
               disabled={providers[p] ? !providers[p].disponivel : false}
               onclick={() => { provider = p; carregarModelos(); }}
-            >{providerName(p)}</button>
+            >
+              <ProviderGlyph provider={p} size={18} />
+              <span>{providerName(p)}</span>
+            </button>
           {/each}
         </div>
       {#if erroProviders}
@@ -686,14 +731,50 @@
         </div>
       {/if}
 
-      {#if error}
-        <p class="error-msg" role="alert">{error}</p>
-      {/if}
+      <div class="form-acao">
+        {#if error}
+          <p class="error-msg" role="alert">{error}</p>
+        {/if}
+        <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
+          {loading ? m.criar_criando() : m.sessao_nova()}
+        </button>
+        {#if !isDesktop}
+          <!-- No desktop o painel da esquerda continua visível: trocar de pasta é clicar nela. -->
+          <button class="ghost-btn" onclick={reset}>{m.criar_outra_pasta()}</button>
+        {/if}
+      </div>
+    {/if}
+{/snippet}
 
-      <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
-        {loading ? m.criar_criando() : m.sessao_nova()}
-      </button>
-      <button class="ghost-btn" onclick={reset}>{m.criar_outra_pasta()}</button>
+<BottomSheet {open} {onClose} ariaLabel={m.sessao_nova()} wide={isDesktop} centered={isDesktop} split={isDesktop}>
+  {#if isDesktop}
+    <!-- Dois painéis (referência: fluxo "New Project" da Vercel): escolher a pasta à esquerda,
+         configurar a sessão à direita. Escolher já preenche o formulário — sem troca de passo. -->
+    <div class="cs-split">
+      <aside class="cs-pane cs-esq">
+        <h2 class="sheet-title">{m.sessao_nova()}</h2>
+        {@render chipsServidor()}
+        {@render escolha()}
+      </aside>
+      <section class="cs-pane cs-dir">
+        {#if picked}
+          {@render formulario()}
+        {:else}
+          <div class="cs-vazio">
+            <span class="cs-vazio-ico"><IconFolder size={26} /></span>
+            <p class="cs-vazio-t">{m.criar_vazio_titulo()}</p>
+            <p class="cs-vazio-s">{m.criar_vazio_sub()}</p>
+          </div>
+        {/if}
+      </section>
+    </div>
+  {:else}
+    <h2 class="sheet-title">{m.sessao_nova()}</h2>
+    {@render chipsServidor()}
+    {#if !picked}
+      {@render escolha()}
+    {:else}
+      {@render formulario()}
     {/if}
   {/if}
 </BottomSheet>
@@ -744,27 +825,34 @@
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   }
 
-  /* Toggle de provider (mesmo visual dos chips de servidor). */
-  .provider-toggle {
-    display: flex;
+  /* Provider em tiles com a marca (ProviderGlyph) — mesma seleção por borda dos chips de
+     servidor, mas retangular: o ícone precisa de canto, não de pílula. */
+  .provider-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
     gap: var(--space-2);
   }
-  .provider-btn {
-    height: 34px;
-    padding: 0 var(--space-4);
-    border-radius: var(--radius-full);
+  .provider-tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    height: 44px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-md);
     border: 1px solid var(--border-default);
-    background: var(--bg-surface);
+    background: var(--surface-raised, var(--bg-surface));
     color: var(--text-secondary);
     font-size: var(--text-sm);
     font-weight: 500;
-    transition: border-color 160ms ease-out, color 160ms ease-out;
+    transition: border-color 160ms ease-out, color 160ms ease-out, background 160ms ease-out;
   }
-  .provider-btn.on {
+  .provider-tile.on {
     border-color: var(--accent);
+    background: var(--accent-dim);
     color: var(--text-primary);
   }
-  .provider-btn:disabled {
+  .provider-tile:disabled {
     opacity: 0.45;
     cursor: default;
   }
@@ -776,15 +864,41 @@
     padding-top: var(--space-3);
   }
 
+  /* Rodapé da escolha: botão "Abrir pasta…" (dialog nativo, só shell) + "digitar caminho". */
+  .cs-rodape {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .abrir-btn {
+    flex-shrink: 0;
+    height: 40px;
+    padding: 0 var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--accent-dim);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+  .abrir-btn:active {
+    background: var(--bg-hover);
+  }
+
   .advanced-toggle {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     height: 44px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
+    gap: var(--space-1);
     padding: 0 var(--space-1);
     color: var(--text-secondary);
     font-size: var(--text-sm);
+  }
+  /* Sem o botão nativo (navegador/celular), o toggle volta a ocupar a linha como antes. */
+  .advanced-toggle.sozinho {
+    justify-content: space-between;
   }
 
   .chevron {
@@ -818,6 +932,20 @@
   }
 
   /* ── Pasta escolhida ───────────────────────────────────────────────────── */
+  /* Desktop: só o caminho, mono e discreto (o destaque mora na linha marcada da lista). */
+  .form-caminho {
+    margin: 0 0 var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    /* overflow:hidden zera o min-height:auto do flex — no pane lotado este era o ÚNICO filho
+       encolhível e sumia (altura 0, medido). */
+    flex-shrink: 0;
+  }
+
   .picked {
     display: flex;
     flex-direction: column;
@@ -976,5 +1104,77 @@
   }
   .ghost-btn:active {
     background: var(--bg-hover);
+  }
+
+  /* ── Desktop: dois painéis (escolher · configurar) ─────────────────────── */
+  /* O BottomSheet em `split` dá altura DEFINIDA (min(680px, …)) — o grid herda dela e cada
+     pane rola sozinho. Divisor por borda, como o .st-nav do SettingsModal. */
+  .cs-split {
+    display: grid;
+    grid-template-columns: minmax(360px, 5fr) 6fr;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100%;
+  }
+  .cs-pane {
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .cs-esq {
+    padding-right: var(--space-5);
+    border-right: 1px solid var(--border-subtle);
+  }
+  .cs-dir {
+    padding-left: var(--space-5);
+  }
+  /* No pane a lista do scanner é quem rola; o pane em si fica travado. */
+  .cs-esq { overflow: hidden; }
+
+  /* CTA sempre à vista no desktop: os campos rolam, a ação cola no fundo do pane.
+     Fundo sólido de propósito (chrome funcional, mesmo precedente do .rodape do ServerSettings):
+     com token de véu o texto do formulário atravessaria o botão. */
+  .cs-dir .form-acao {
+    position: sticky;
+    bottom: 0;
+    margin-top: auto;
+    padding-top: var(--space-3);
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  /* Estado vazio do painel direito: ensina o fluxo sem gritar. */
+  .cs-vazio {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    text-align: center;
+    padding: var(--space-6);
+  }
+  .cs-vazio-ico {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-lg);
+    color: var(--text-muted);
+    background: var(--surface-raised, var(--bg-elevated));
+    margin-bottom: var(--space-2);
+  }
+  .cs-vazio-t {
+    margin: 0;
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .cs-vazio-s {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    max-width: 34ch;
+    line-height: 1.5;
   }
 </style>

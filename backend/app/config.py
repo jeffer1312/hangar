@@ -66,13 +66,18 @@ def list_config_dirs() -> list[ConfigDirInfo]:
         found = [p.resolve() for p in Path.home().glob(".claude*") if p.is_dir() and _is_config_dir(p)]
         found.sort(key=_projects_mtime, reverse=True)
         entries = [(_label_for(p), p) for p in found]
+    # Apelido da aba Contas (id `claude:<path>`) vence o nome derivado do disco — é o mesmo nome
+    # que a faixa de cota e a lista de contas mostram. Import local: apelidos→contas importam
+    # este módulo indiretamente.
+    from app import apelidos
+    nomes = apelidos.ler()
     out, seen = [], set()
     for label, p in entries:
         s = str(p)
         if s in seen:
             continue
         seen.add(s)
-        out.append(ConfigDirInfo(path=s, label=label, active=(p == active_base)))
+        out.append(ConfigDirInfo(path=s, label=nomes.get(f"claude:{s}") or label, active=(p == active_base)))
     return out
 
 
@@ -181,10 +186,18 @@ def resolve_scan_roots(s: "Settings") -> list[Path]:
     """Allowlist resolvida do scanner: cada entrada de CP_SCAN_ROOTS vira expanduser +
     realpath. Entradas inexistentes ou que nao sao diretorio sao descartadas (um typo
     nunca alarga o perimetro), e duplicatas (apos realpath) sao colapsadas. ESTA lista
-    e a fronteira de seguranca: o fs-scan so lista dentro dela."""
+    e a fronteira de seguranca: o fs-scan so lista dentro dela.
+
+    O override do app (runtime_config, editavel pela tela) GANHA do env quando nao-vazio;
+    vazio volta ao CP_SCAN_ROOTS. Import local pelo mesmo motivo de automations_enabled:
+    o runtime_config importa este modulo."""
+    from app import runtime_config
+    raw = runtime_config.get("scan_roots")
+    if not isinstance(raw, str) or not raw.strip():
+        raw = s.scan_roots
     out: list[Path] = []
     seen: set[Path] = set()
-    for entry in s.scan_roots.split(","):
+    for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
             continue
