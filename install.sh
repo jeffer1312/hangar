@@ -205,7 +205,7 @@ else
 # Só rebuilda se houver motivo: dist ausente, ou alguma fonte/lockfile mais novo que ele. Num
 # re-run logo após um `git pull` sem mudança de front, isso economiza o `npm ci` inteiro.
 DIST=frontend/dist/index.html
-if [ -f "$DIST" ] && [ -z "$(find frontend/src frontend/package-lock.json frontend/index.html \
+if [ -f "$DIST" ] && [ -z "$(find frontend/src package-lock.json frontend/index.html \
                               frontend/vite.config.* -newer "$DIST" -print -quit 2>/dev/null)" ]; then
   ok "frontend já buildado e atualizado (nada mudou desde o último build)"
 else

@@ -47,7 +47,7 @@ fi
 cd "$REPO/frontend"
 
 # node_modules em dia so quando o lock mudou (ci e lento; roda so quando precisa).
-if ! git diff --quiet "$LOCAL" HEAD -- package-lock.json 2>/dev/null; then
+if ! git -C "$REPO" diff --quiet "$LOCAL" HEAD -- package-lock.json 2>/dev/null; then
   log "package-lock.json mudou -> npm ci"
   npm ci
 fi
