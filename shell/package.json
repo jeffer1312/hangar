@@ -1,7 +1,7 @@
 {
   "name": "hangar-shell",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Janela nativa transparente do hangar",
   "main": "main.cjs",
   "author": "Jefferson Felizardo",
@@ -16,7 +16,7 @@
     "electron-builder": "26.15.3"
   },
   "build": {
-    "appId": "com.claudecockpit.shell",
+    "appId": "com.hangar.shell",
     "productName": "Hangar",
     "artifactName": "hangar-${version}-${arch}.${ext}",
     "files": [
