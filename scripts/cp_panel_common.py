@@ -1,7 +1,6 @@
 """Resolução de servidor/token compartilhada pelos scripts do painel (cp-panel-data,
 cp-panel-action). Módulo em vez de copiar: é o ponto que lê CREDENCIAL e monta a URL — duas
 cópias divergindo aqui viraria bug de auth silencioso."""
-import fcntl
 import json
 import os
 import tempfile
@@ -9,6 +8,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:      # Windows: sem flock, a trava vira no-op — mesmo padrão de peers.py/contas.py
+    fcntl = None
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 TIMEOUT = 8
@@ -94,7 +98,8 @@ def set_peer_enabled(pid: str, on: bool, path: Path | None = None) -> None:
         raise PanelError(f"não consegui abrir o lock do peers.json: {e}") from e
 
     with lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
 
         # Sob o lock, qualquer .tmp que sobrou é órfão de um processo morto entre o write e o
         # replace (kill -9/OOM não roda except nenhum). Contém a malha inteira de tokens, então
