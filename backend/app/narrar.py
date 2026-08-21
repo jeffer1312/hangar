@@ -67,8 +67,14 @@ def prompt_narrar(texto: str, blocos: list[str], instrucao: str) -> str:
     )
 
 
-def _provedor() -> tuple[str, str, str]:
+def _provedor(perfil: str = "padrao") -> tuple[str, str, str]:
     """(base_url, api_key, modelo) efetivos. Vazio significa "o de sempre".
+
+    `perfil="briefing"` le um SEGUNDO conjunto de campos (`llm_briefing_*`), e existe porque os dois
+    usos nao pedem o mesmo modelo: limpar e prosa querem rapidez (a pessoa esta esperando o texto
+    aparecer no campo), enquanto o briefing quer o modelo que estrutura melhor, e pode levar mais
+    tempo. Endpoint de briefing VAZIO = cai no provedor de sempre, entao quem nao configurar nada
+    segue com o comportamento antigo.
 
     `llm_api_key` so vale com endpoint proprio (base != PADRAO_BASE_URL) — endpoint padrao usa
     SEMPRE `groq_api_key`, sem fallback pra `llm_api_key`. Sem essa amarra, uma `llm_api_key` de
@@ -79,6 +85,13 @@ def _provedor() -> tuple[str, str, str]:
     vazia quando ja ha valor (:137-140), entao ela nao pode ser esvaziada pela tela. Presa ao
     base_url, apagar o endpoint ja devolve o comportamento padrao: a chave de outro provedor para
     de ser lida, mesmo que continue salva."""
+    if perfil == "briefing":
+        base = (runtime_config.get("llm_briefing_base_url") or "").strip().rstrip("/")
+        if base:
+            # Mesma amarra do perfil padrao: chave presa ao endpoint. Apagar o endpoint do briefing
+            # ja devolve tudo pro provedor de sempre, mesmo com a chave ainda salva.
+            return (base, (runtime_config.get("llm_briefing_api_key") or "").strip(),
+                    (runtime_config.get("llm_briefing_model") or "").strip() or PADRAO_MODELO)
     base = (runtime_config.get("llm_base_url") or "").strip().rstrip("/") or PADRAO_BASE_URL
     if base == PADRAO_BASE_URL:
         chave = (runtime_config.get("groq_api_key") or "").strip()
@@ -103,7 +116,8 @@ def _esforco_raciocinio() -> str:
     return (runtime_config.get("llm_reasoning_effort") or "").strip()
 
 
-def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int) -> str:
+def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int,
+                perfil: str = "padrao") -> str:
     """Chat completions no formato da OpenAI. Compartilhada pela narracao guiada e pela limpeza do
     ditado — o que muda entre elas e so o prompt, a temperatura e o timeout.
 
@@ -111,7 +125,7 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int) -
 
     Levanta NarrarError(status, detail): 503 sem chave, 502 falha/erro do provedor ou resposta sem o
     texto esperado."""
-    base_url, api_key, modelo = _provedor()
+    base_url, api_key, modelo = _provedor(perfil)
     if not api_key:
         # A mensagem tem que apontar pro campo que _provedor() realmente le nesse ramo, senao o
         # usuario segue a instrucao e continua com 503 (achado da re-review de 2026-08-01).
@@ -119,6 +133,11 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int) -
             msg = (
                 "chave do provedor nao configurada: preencha a chave da Groq em "
                 "Configuracoes -> Anexos e transcricao (ou GROQ_API_KEY/CP_GROQ_API_KEY)"
+            )
+        elif perfil == "briefing":
+            msg = (
+                "chave do provedor nao configurada: preencha a Chave do LLM do briefing em "
+                "Configuracoes -> Avancado"
             )
         else:
             msg = (
@@ -304,12 +323,18 @@ def estilo_ditado() -> str:
     return e if e in _SYSTEM_POR_ESTILO else ESTILO_PADRAO
 
 
-def _estilo_efetivo(cru: str) -> str:
-    """O estilo que o texto vai receber DE FATO. Rebaixa briefing pra prosa em ditado curto (ver
+def _estilo_efetivo(cru: str, pedido: str | None = None) -> str:
+    """O estilo que o texto vai receber DE FATO. `pedido` e o estilo que a TELA mostrava na hora
+    de falar, e ele ganha da config: o app le a config uma vez por carga de pagina, entao uma troca
+    feita noutra aba/aparelho deixava a pill dizendo "So limpar" enquanto o servidor ja guardava
+    "briefing" — e o ditado voltava estruturado sem ninguem ter pedido (visto ao vivo 21/08/2026).
+    Valor desconhecido/ausente cai na config, que segue valendo pra quem nao manda nada.
+
+    Rebaixa briefing pra prosa em ditado curto (ver
     _MIN_PALAVRAS_BRIEFING). Rebaixar em silencio e de proposito: a pessoa escolheu 'briefing' pro
     dia dela, nao pra cada frase — pedir confirmacao ou avisar 'nao estruturei' em cada comando
     curto seria barulho num caminho que funcionou."""
-    estilo = estilo_ditado()
+    estilo = pedido if pedido in _SYSTEM_POR_ESTILO else estilo_ditado()
     if estilo == "briefing" and len(cru.split()) < _MIN_PALAVRAS_BRIEFING:
         return "prosa"
     return estilo
@@ -534,6 +559,11 @@ class _Travas(NamedTuple):
     # cru com "falha ao contatar o provedor". Teto e rede de seguranca contra pendurar, nao regua
     # de qualidade: quem chama espera 120s (lib/api.ts), entao a folga existe. Se um dia o
     # provedor voltar a ser rapido, isto continua correto — so deixa de ser exercitado.
+    #
+    # SUBIDOS DE NOVO em 21/08/2026 (60/90/120s) pelo mesmo motivo, agora com provedor trocavel: o
+    # muse-spark-1.2-contributor-free (OpenCode Zen) levou 16,4s pra limpar UMA frase — os tetos
+    # antigos matavam a limpeza no relogio antes de ela ter chance. Quem chama espera 300s
+    # (lib/api.ts), e a soma do pior caso (120s de Whisper + 120s de briefing) cabe la dentro.
     timeout: int
 
 
@@ -544,14 +574,14 @@ _TRAVAS_POR_ESTILO = {
     # "limpar" nao reordena nem corta ideia, entao pode exigir cobertura ALTA: perder 15% do que a
     # pessoa falou, aqui, e defeito, nao servico.
     "limpar": _Travas(inflacao_max=1.5, encolhe_min=0.5, cobertura_min=0.80,
-                      cobra_invencao=True, timeout=20),
+                      cobra_invencao=True, timeout=60),
     # Prosa CORTA repeticao, entao o piso de encolhimento cai: o ditado de 79s do usuario repetia
     # "nao sei se e possivel" 3x e "PWA" 4x — encolher pra 0,45x ali e o servico funcionando.
     "prosa": _Travas(inflacao_max=1.3, encolhe_min=0.3, cobertura_min=0.60,
-                     cobra_invencao=True, timeout=45),
+                     cobra_invencao=True, timeout=90),
     # Briefing acrescenta titulos e hifens, entao infla um pouco mesmo cortando repeticao.
     "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.3, cobertura_min=0.45,
-                        cobra_invencao=False, timeout=60),
+                        cobra_invencao=False, timeout=120),
 }
 
 
@@ -577,18 +607,19 @@ def _normalizar_saida(bruto: str) -> str:
     return "\n".join(saida).strip()
 
 
-def limpar_ditado(texto: str) -> tuple[str, str | None]:
+def limpar_ditado(texto: str, estilo_pedido: str | None = None) -> tuple[str, str | None]:
     """Devolve (texto_final, erro). Erro nao-None significa "ficou o cru, e por isto" — quem chama
     mostra pro usuario. NUNCA levanta: perder o ditado da pessoa por erro de LLM seria pior que
     entregar o texto cru."""
     cru = texto.strip()
     if not cru or cru.startswith("/") or len(cru.split()) < _MIN_PALAVRAS:
         return texto, None
-    estilo = _estilo_efetivo(cru)
+    estilo = _estilo_efetivo(cru, estilo_pedido)
     travas = _TRAVAS_POR_ESTILO[estilo]
     try:
         limpo = _normalizar_saida(
-            chamar_chat(_SYSTEM_POR_ESTILO[estilo], cru, temperature=0, timeout=travas.timeout))
+            chamar_chat(_SYSTEM_POR_ESTILO[estilo], cru, temperature=0, timeout=travas.timeout,
+                        perfil="briefing" if estilo == "briefing" else "padrao"))
     except NarrarError as e:
         return texto, e.detail
     except Exception as e:

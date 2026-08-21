@@ -20,7 +20,14 @@
   // Zera junto com o erro: fechar com pedido em voo travava a lista na reabertura (mesmo cuidado
   // do popover de esforço).
   $effect(() => {
-    if (open) { err = null; aplicando = null; }
+    if (open) {
+      err = null;
+      aplicando = null;
+      // Rele do servidor: sem isto a lista mostra o valor da hora em que a pagina carregou, e uma
+      // troca feita noutra aba/aparelho nunca aparecia aqui. Falha de leitura fica calada (o store
+      // trata) — o que importa e nao mentir quando da certo.
+      void ditadoEstilo.revalidar();
+    }
   });
 
   async function escolher(v: EstiloDitado) {

@@ -2862,7 +2862,7 @@ async def upload(name: str, request: Request):
 
 
 @app.post("/api/sessions/{name}/transcribe", dependencies=[Depends(require_auth)])
-async def transcribe_audio(name: str, request: Request, limpar: bool = False):
+async def transcribe_audio(name: str, request: Request, limpar: bool = False, estilo: str | None = None):
     # Salva o audio (pra anexar o path no chat) E transcreve via Groq num round-trip. Mesmo padrao
     # de upload (raw body + X-Filename). Devolve {path, text} -> o front monta "texto — 📎 audio: path".
     # `limpar` so o microfone manda: audio ANEXADO (arquivo de ate 10min) nao pode pagar a limpeza.
@@ -2889,7 +2889,9 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False):
         raise HTTPException(e.status, e.detail)
     if not limpar:
         return {"path": path, "text": text}
-    texto_limpo, aviso = await asyncio.to_thread(narrar.limpar_ditado, text)
+    # `estilo` = o que a PILL do composer mostrava quando a pessoa falou. Vence a config do
+    # servidor (narrar._estilo_efetivo); ausente/desconhecido, a config manda como sempre.
+    texto_limpo, aviso = await asyncio.to_thread(narrar.limpar_ditado, text, estilo)
     return {"path": path, "text": texto_limpo, "raw": text, "aviso": aviso}
 
 

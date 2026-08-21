@@ -338,7 +338,7 @@ def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypat
     # temperature ou timeout dentro de limpar_ditado passaria batido. Este captura de verdade.
     captured = {}
 
-    def fake_chamar_chat(system, prompt, *, temperature, timeout):
+    def fake_chamar_chat(system, prompt, *, temperature, timeout, perfil="padrao"):
         captured["system"] = system
         captured["prompt"] = prompt
         captured["temperature"] = temperature
@@ -350,12 +350,12 @@ def test_limpar_ditado_manda_o_system_a_temperatura_e_o_timeout_certos(monkeypat
     narrar.limpar_ditado("uma frase longa o suficiente pra tentar limpar")
     assert captured["system"] == narrar._SYSTEM_POR_ESTILO["limpar"]
     assert captured["temperature"] == 0
-    # O teto que impede o celular preso em "transcrevendo…". Subiu de 8 pra 20 em 18/08/2026: o
-    # provedor ficou lento (medido 3,9-10,6s no MESMO modelo e texto que davam ~1,2s em 14/08) e o
-    # teto antigo derrubava a limpeza pelo relogio. Vem da tabela, nao de um numero solto aqui —
-    # duplicar o valor faria o teste passar com a tabela errada.
+    # O teto que impede o celular preso em "transcrevendo…". Subiu de 8 pra 20 em 18/08/2026 e de
+    # 20 pra 60 em 21/08/2026 (provedor trocavel: o muse-spark-1.2-contributor-free levou 16,4s
+    # numa frase). Vem da tabela, nao de um numero solto aqui — duplicar o valor faria o teste
+    # passar com a tabela errada.
     assert captured["timeout"] == narrar._TRAVAS_POR_ESTILO["limpar"].timeout
-    assert captured["timeout"] == 20
+    assert captured["timeout"] == 60
 
 
 def test_cada_estilo_manda_o_proprio_prompt_e_o_proprio_timeout(monkeypatch):
@@ -363,7 +363,7 @@ def test_cada_estilo_manda_o_proprio_prompt_e_o_proprio_timeout(monkeypatch):
     salvo e o ditado sairia igual — que e exatamente a reclamacao que originou os estilos."""
     captured = {}
     monkeypatch.setattr(narrar, "chamar_chat",
-                        lambda system, prompt, *, temperature, timeout:
+                        lambda system, prompt, *, temperature, timeout, perfil="padrao":
                         captured.update(system=system, timeout=timeout) or "texto limpo")
     # Texto LONGO de proposito: com um curto, briefing e rebaixado pra prosa (ver o teste abaixo) e
     # esta assercao falharia por um motivo que nao e o que ela mede.
@@ -679,3 +679,64 @@ def test_troca_de_genero_ainda_e_palavra_nova():
     assert narrar._conteudo_novo("ele foi no posto de gasolina", "Ele foi na posta de gasolina.")
     assert narrar._conteudo_novo("a conta do cliente atrasou", "O conto do cliente atrasou.")
     assert narrar._cobertura("a medica atendeu o paciente", "O medico atendeu o paciente.") < 1.0
+
+
+def test_estilo_pedido_pela_tela_vence_a_config(monkeypatch):
+    """A pill dizia "So limpar" e o ditado voltava em briefing: o app le a config uma vez por carga
+    de pagina, e a troca feita noutra aba nunca chegava na tela. Quem manda agora e o estilo que a
+    pessoa LEU antes de falar; a config so vale quando a tela nao manda nada."""
+    captured = {}
+
+    def fake_chamar_chat(system, prompt, *, temperature, timeout, perfil="padrao"):
+        captured["system"] = system
+        return "texto limpo com o estilo certo"
+
+    monkeypatch.setattr(narrar, "chamar_chat", fake_chamar_chat)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    frase = "uma frase longa o suficiente pra tentar limpar de verdade"
+
+    narrar.limpar_ditado(frase, "limpar")
+    assert captured["system"] == narrar._SYSTEM_POR_ESTILO["limpar"]
+
+    # Estilo desconhecido (query adulterada, front velho) NAO vira erro nem estilo novo: cai na
+    # config, o comportamento de antes desta mudanca.
+    narrar.limpar_ditado(frase, "inventado")
+    assert captured["system"] == narrar._SYSTEM_POR_ESTILO["prosa"]   # briefing curto -> prosa
+
+    narrar.limpar_ditado(frase, None)
+    assert captured["system"] == narrar._SYSTEM_POR_ESTILO["prosa"]
+
+
+def test_briefing_pode_ter_provedor_proprio(monkeypatch):
+    """Limpar e prosa querem rapidez; o briefing quer o modelo que estrutura melhor, e pode demorar
+    mais. Endpoint de briefing VAZIO tem que continuar caindo no provedor de sempre — senao quem
+    nunca configurou isso perderia a limpeza."""
+    cfg = {"llm_briefing_base_url": "https://opencode.ai/zen/v1",
+           "llm_briefing_api_key": "sk-briefing",
+           "llm_briefing_model": "muse-spark-1.2-contributor-free",
+           "groq_api_key": "sk-groq"}
+    monkeypatch.setattr(narrar.runtime_config, "get", lambda campo: cfg.get(campo))
+    assert narrar._provedor() == (narrar.PADRAO_BASE_URL, "sk-groq", narrar.PADRAO_MODELO)
+    assert narrar._provedor("briefing") == (
+        "https://opencode.ai/zen/v1", "sk-briefing", "muse-spark-1.2-contributor-free")
+
+    cfg["llm_briefing_base_url"] = ""
+    assert narrar._provedor("briefing") == narrar._provedor()
+
+
+def test_so_o_briefing_usa_o_perfil_de_briefing(monkeypatch):
+    """O perfil sai do ESTILO, nao de uma config a parte: escolher 'limpar' e ver a conta do outro
+    provedor sendo gasta seria a mesma classe de erro do estilo que nao chegava no backend."""
+    vistos = []
+    monkeypatch.setattr(narrar, "chamar_chat",
+                        lambda system, prompt, *, temperature, timeout, perfil="padrao":
+                        (vistos.append(perfil), "texto limpo o suficiente pra passar")[1])
+    frase = ("uma frase bem longa pra sobreviver as travas de cobertura e de tamanho sem ser "
+             "rejeitada por nada")
+    for estilo in ("limpar", "prosa", "briefing"):
+        narrar.limpar_ditado(frase, estilo)
+    assert vistos == ["padrao", "padrao", "padrao"]   # briefing curto -> rebaixado pra prosa
+
+    vistos.clear()
+    narrar.limpar_ditado(" ".join(["palavra"] * 60), "briefing")
+    assert vistos == ["briefing"]

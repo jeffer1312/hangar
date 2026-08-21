@@ -255,6 +255,16 @@ export async function uploadFileForServer(s: Server, name: string, file: File): 
   return res.json() as Promise<{ path: string }>;
 }
 
+// Opções do ditado que viajam na query do /transcribe. `estilo` é o que a PILL mostrava na hora de
+// falar: o backend só lê a config quando ele não vem, e sem isso uma troca feita noutra aba/aparelho
+// fazia o ditado voltar em briefing com a tela dizendo "Só limpar".
+export type OpcoesTranscribe = { limpar?: boolean; estilo?: string };
+
+function queryTranscribe(opts?: OpcoesTranscribe): string {
+  if (!opts?.limpar) return '';   // áudio anexado: nem limpeza, nem estilo
+  return opts.estilo ? `?limpar=1&estilo=${encodeURIComponent(opts.estilo)}` : '?limpar=1';
+}
+
 // `limpar` monta a MESMA query do transcribeFile (?limpar=1), de propósito: é o mesmo botão de
 // microfone, e ditar num card não pode devolver texto pior que ditar no chat. Só o mic manda o
 // flag — áudio anexado (arquivo de até 10min) não paga a limpeza, mesma regra do backend.
@@ -264,9 +274,9 @@ export async function transcribeFileForServer(
   s: Server,
   name: string,
   file: File,
-  opts?: { limpar?: boolean },
+  opts?: OpcoesTranscribe,
 ): Promise<{ path: string; text: string; raw?: string; aviso?: string | null }> {
-  const qs = opts?.limpar ? '?limpar=1' : '';
+  const qs = queryTranscribe(opts);
   const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/transcribe${qs}`, {
     method: 'POST',
     headers: {
@@ -275,7 +285,7 @@ export async function transcribeFileForServer(
       'X-Filename': encodeURIComponent(file.name || 'audio.webm'),
     },
     body: file,
-    signal: AbortSignal.timeout(120_000),   // mesmo teto do transcribeFile: sem "transcrevendo…" eterno
+    signal: AbortSignal.timeout(300_000),   // mesmo teto do transcribeFile (ver o comentário lá)
   });
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
   return res.json() as Promise<{ path: string; text: string; raw?: string; aviso?: string | null }>;
@@ -910,10 +920,10 @@ export async function uploadFile(
 export async function transcribeFile(
   name: string,
   file: File,
-  opts?: { limpar?: boolean },
+  opts?: OpcoesTranscribe,
 ): Promise<{ path: string; text: string; raw?: string; aviso?: string | null }> {
   const base = getBaseUrl();
-  const qs = opts?.limpar ? '?limpar=1' : '';
+  const qs = queryTranscribe(opts);
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/transcribe${qs}`, {
     method: 'POST',
     headers: {
@@ -922,9 +932,12 @@ export async function transcribeFile(
       'X-Filename': encodeURIComponent(file.name || 'audio.webm'),
     },
     body: file,
-    // timeout (mesmo teto do backend): rede travada rejeita em vez de deixar o composer preso em
-    // "transcrevendo…" pra sempre (transcribing nunca voltaria a false).
-    signal: AbortSignal.timeout(120_000),
+    // Teto de 5 MINUTOS, não de 2: o backend pode gastar 120s na Whisper MAIS 120s na limpeza do
+    // briefing (narrar._TRAVAS_POR_ESTILO), e o teto antigo de 120s abortava a requisição com o
+    // trabalho ainda em curso — a pessoa perdia o ditado inteiro por causa do relógio do navegador.
+    // Continua havendo teto: sem ele, rede caída deixa o composer preso em "transcrevendo…" pra
+    // sempre. Quem estourar aqui ainda tem o áudio guardado pra tentar de novo (Composer).
+    signal: AbortSignal.timeout(300_000),
   });
   await ensureOk(res);
   return res.json() as Promise<{ path: string; text: string; raw?: string; aviso?: string | null }>;

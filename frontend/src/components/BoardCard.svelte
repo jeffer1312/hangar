@@ -6,6 +6,7 @@ import * as m from '../paraglide/messages';
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
     uploadFileForServer, transcribeFileForServer,
   } from '../lib/api';
+  import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
   import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -245,7 +246,8 @@ import * as m from '../paraglide/messages';
           // diferentes conforme a tela.
           const { path, text: tx, aviso } = await transcribeFileForServer(
             server, session.name, new File([blob], 'audio.webm', { type: blob.type || 'audio/webm' }),
-            { limpar: true },
+            // Mesmo contrato do Composer: o estilo que a pill mostra vence a config do servidor.
+            { limpar: true, estilo: ditadoEstilo.pronto ? ditadoEstilo.valor : undefined },
           );
           // Gravação sem fala (silêncio, ruído) volta com texto vazio e SEM aviso — a limpeza rodou
           // certo, só não havia o que limpar. Sem esta guarda o card montava um rascunho

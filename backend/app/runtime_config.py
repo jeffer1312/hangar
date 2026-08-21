@@ -49,6 +49,12 @@ EDITAVEIS: dict[str, type] = {
     # raciocinio ("none") num modelo que raciocina: a limpeza do ditado tem timeout de 8s e um
     # modelo pensando estoura isso. Ver narrar._esforco_raciocinio.
     "llm_reasoning_effort": str,
+    # Provedor SO do estilo "briefing" do ditado. Vazio = usa o mesmo do resto. Existe porque
+    # limpar/prosa querem rapidez (a pessoa espera o texto no campo) e o briefing quer o modelo que
+    # estrutura melhor, que costuma ser mais lento. Ver narrar._provedor(perfil="briefing").
+    "llm_briefing_base_url": str,
+    "llm_briefing_api_key": str,
+    "llm_briefing_model": str,
     # Palavras que a Whisper tem que grafar direito (nome de projeto, de sessao, jargao do seu
     # dia). Somadas a transcribe.VOCAB_BASE. Ver transcribe.vocabulario.
     "ditado_vocabulario": str,
@@ -59,7 +65,7 @@ EDITAVEIS: dict[str, type] = {
 
 # Campos que NUNCA voltam inteiros pro cliente: o app devolve mascarado (gsk_••••1234) pra você
 # conferir QUAL chave está lá sem poder copiá-la de volta.
-SEGREDOS = {"groq_api_key", "elevenlabs_api_key", "llm_api_key"}
+SEGREDOS = {"groq_api_key", "elevenlabs_api_key", "llm_api_key", "llm_briefing_api_key"}
 
 _ARQUIVO = "runtime-config.json"
 
@@ -152,10 +158,10 @@ def _coagir(campo: str, valor: Any) -> Any:
                 f"ditado_vocabulario: {len(texto)} caracteres, o maximo e {VOCAB_USUARIO_MAX} "
                 "(a Whisper ignora o resto). Tire os termos que voce menos erra."
             )
-    if campo == "llm_base_url" and texto and not (texto.startswith("http://") or texto.startswith("https://")):
+    if campo in ("llm_base_url", "llm_briefing_base_url") and texto and not (texto.startswith("http://") or texto.startswith("https://")):
         # Mesmo argumento do editor: antes so o dono da maquina escolhia o endpoint (env), agora o
         # celular escreve. Aceita vazio (volta ao padrao) ou uma URL http(s) de verdade.
-        raise ValueError("llm_base_url: use vazio ou uma URL http(s)://")
+        raise ValueError(f"{campo}: use vazio ou uma URL http(s)://")
     return texto
 
 

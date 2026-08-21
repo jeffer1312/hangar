@@ -1282,9 +1282,15 @@ def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_
     info = SessionInfo(name="cc", cwd=str(tmp_path))
     monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
     monkeypatch.setattr(api_mod, "transcribe", lambda data, fn: "ola mundo cru")
-    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", lambda texto: ("Olá, mundo.", "aviso teste"))
+    visto = {}
+
+    def fake_limpar(texto, estilo_pedido=None):
+        visto["estilo"] = estilo_pedido
+        return "Olá, mundo.", "aviso teste"
+
+    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", fake_limpar)
     r = api_client.post(
-        "/api/sessions/cc/transcribe?limpar=1",
+        "/api/sessions/cc/transcribe?limpar=1&estilo=briefing",
         content=b"audio",
         headers={**_h(), "X-Filename": "a.webm"},
     )
@@ -1293,6 +1299,9 @@ def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_
     assert body["text"] == "Olá, mundo."
     assert body["raw"] == "ola mundo cru"
     assert body["aviso"] == "aviso teste"
+    # O estilo da query e o que a pill mostrava na hora de falar, e ele chega inteiro na limpeza:
+    # sem isso o backend voltava a decidir pela config, que e o bug do "So limpar" que sai briefing.
+    assert visto["estilo"] == "briefing"
 
 
 def test_push_mute_route(api_client, monkeypatch, tmp_path):

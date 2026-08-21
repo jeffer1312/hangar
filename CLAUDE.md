@@ -395,6 +395,36 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     14,9s, contra 2,3–3,2s desligado. Num teste anterior o modelo pensando ainda comeu o "não o
     redis" de "usa o postgres não o redis", lendo negação como autocorreção. Pensar sobre um texto
     vira interpretar o texto, e aqui interpretar é o defeito.
+  - **Quem manda no estilo é a PILL, não a config** (`?estilo=` no `/transcribe` →
+    `narrar._estilo_efetivo(cru, pedido)`). O estilo mora no servidor, mas o app o lê **uma vez por
+    carga de página** (`lib/ditadoEstilo.svelte.ts`): uma troca feita noutra aba ou noutro aparelho
+    nunca chegava na tela aberta, e em 21/08/2026 a pill dizia "Só limpar" enquanto o servidor
+    guardava `briefing` — o ditado voltou estruturado sem ninguém ter pedido. O front manda junto o
+    rótulo que a pessoa **leu antes de falar**, e ele vence; ausente ou desconhecido, a config
+    decide como sempre. Duas amarras: o front só manda quando o store já leu o servidor
+    (`ditadoEstilo.pronto` — mandar o padrão chutado seria o app sobrescrevendo a escolha dela com
+    palpite), e o popover **revalida** ao abrir, pra a lista parar de exibir valor de horas atrás.
+  - **O teto de tempo é rede contra pendurar, e ele mora nas DUAS pontas.** O do navegador era
+    120s (`lib/api.ts`) enquanto o backend podia gastar 120s de Whisper **mais** a limpeza: a
+    requisição era abortada com o trabalho em curso e a pessoa perdia o ditado inteiro por causa do
+    relógio do cliente. Hoje: 300s no cliente, e 60/90/120s por estilo no servidor (subidos em
+    21/08/2026 — o `muse-spark-1.2-contributor-free` do OpenCode Zen levou 16,4s pra limpar UMA
+    frase, contra ~1,2s do `gpt-oss-120b` na Groq). Quem estoura ainda **não perde o áudio**: o
+    `Composer` guarda o `File` da tentativa que falhou e oferece "Transcrever de novo" ao lado do
+    erro — o áudio já existe, mandar a pessoa repetir dois minutos de fala é que era o defeito.
+  - **O provedor da limpeza é trocável pela tela, e não só a Groq** (Configurações → Servidor →
+    Avançado: Endpoint / Chave / Modelo / Raciocínio do LLM → `llm_*` em
+    `~/.claude/runtime-config.json`). `_provedor()` só lê `llm_api_key` quando há `llm_base_url`
+    próprio; endpoint vazio = Groq com a `groq_api_key`. E o **briefing tem provedor próprio**
+    (`llm_briefing_*`, `_provedor("briefing")`), porque os dois usos não pedem o mesmo modelo:
+    limpar e prosa querem rapidez — a pessoa está olhando o campo esperando o texto —, o briefing
+    quer quem estrutura melhor e pode demorar. Medido aqui: Groq/`gpt-oss-120b` 2,1s no limpar,
+    OpenCode Zen/`muse-spark-1.2-contributor-free` 9,0s no briefing. O perfil sai do **estilo**,
+    nunca de um flag à parte, e endpoint de briefing vazio cai no provedor de sempre. Provedor
+    lento muda o que as travas veem:
+    medido no muse-spark, um ditado com autocorreção longa cai pra 62% de cobertura e o estilo
+    `limpar` (piso 0,80) devolve o cru com aviso — o modelo apagou a versão corrigida, que é a
+    regra funcionando, mas o piso de `limpar` não foi calibrado nele.
 - **Statusline por sidecar, não pelo pane** (`app/statusline.py` + `scripts/omniroute-statusline.js`
   + `scripts/pi/rich-status-line.ts` + `~/.kimi-code/statusline.js`): a linha que o app mostra
   (modelo, contexto, ⚡5h/📅7d, custo)

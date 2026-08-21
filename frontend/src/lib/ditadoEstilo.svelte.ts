@@ -46,6 +46,21 @@ let escritas = 0;
 export const ditadoEstilo = {
   get valor(): EstiloDitado { return atual; },
 
+  /** true quando `valor` ja veio do SERVIDOR (ou foi trocado por aqui). Existe porque o estilo
+   *  agora viaja no /transcribe e VENCE a config do servidor: mandar o padrao chutado, antes do
+   *  primeiro GET responder, seria o app sobrescrevendo a escolha da pessoa com um palpite. Quem
+   *  nao esta pronto simplesmente nao manda estilo — e o backend le a config, como sempre fez. */
+  get pronto(): boolean { return carregado; },
+
+  /** Le do servidor DE NOVO, mesmo ja tendo lido. A pill mostrava valor velho por horas: o app le
+   *  a config uma vez por carga de pagina, e uma troca feita noutra aba/aparelho nunca chegava —
+   *  a tela dizia "So limpar" e o ditado voltava em briefing (visto ao vivo 21/08/2026). Chamado
+   *  ao ABRIR o popover: e o instante em que a pessoa vai olhar a lista, e o custo e um GET. */
+  revalidar(): Promise<void> {
+    carregado = false;
+    return this.carregar();
+  },
+
   /** Le do servidor UMA vez. Chamadas concorrentes compartilham a mesma promessa — o Composer monta
    *  em varias telas (chat, peek do quadro) e cada uma chamaria isto ao mesmo tempo. */
   carregar(): Promise<void> {

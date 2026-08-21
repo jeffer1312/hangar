@@ -706,6 +706,12 @@
   // ditado=true pede `limpar=1`: a resposta ja vem com o texto limpo (`text`), o cru (`raw`, pro
   // desfazer) e um `aviso` quando a limpeza nao valeu -- sem corrida, a troca acontece ANTES da
   // resposta chegar na tela.
+  // Ultimo audio que falhou, guardado pra tentar de novo SEM regravar: o audio ja existe (o
+  // navegador gravou, o backend ate salvou no cwd antes de transcrever), e mandar a pessoa repetir
+  // dois minutos de fala por causa de um timeout ou de um 502 do provedor e perder trabalho dela.
+  // So o File — o Blob vive na memoria da aba e nao paga nada; sai da tela no proximo sucesso.
+  let audioFalhou = $state<{ file: File; ditado: boolean; avisoTeto: boolean } | null>(null);
+
   async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean }) {
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
     // (ex: multi-selecao no picker) cai aqui e avisa em vez de correr concorrente e pisar no estado
@@ -713,8 +719,14 @@
     if (transcribing) { recError = m.composer_aguarde_transcricao(); return; }
     transcribing = true;
     recError = '';
+    audioFalhou = null;
     try {
-      const { text, raw, aviso } = await transcribeFile(sessionName, file, { limpar: !!opts?.ditado });
+      const { text, raw, aviso } = await transcribeFile(sessionName, file, {
+        limpar: !!opts?.ditado,
+        // O estilo vai JUNTO, e nao e lido da config no servidor: e este rotulo que a pessoa leu na
+        // pill antes de falar. Ver queryTranscribe em lib/api.ts.
+        estilo: ditadoEstilo.pronto ? ditadoEstilo.valor : undefined,
+      });
       const t = text.trim();
       if (!t) {
         recError = m.composer_transcricao_vazia();
@@ -770,9 +782,18 @@
       // Mesmo aviso sonoro do ditado que termina sem texto -- inclui o 503 de chave da Groq
       // ausente. So ditado (nao anexo de audio pelo 📎, que nunca teve bipe).
       if (opts?.ditado) { somRecusa(); setTimeout(fecharBipes, 400); }
+      // O audio fica de pe: a falha aqui e de rede/provedor, nao do que a pessoa falou.
+      audioFalhou = { file, ditado: !!opts?.ditado, avisoTeto: !!opts?.avisoTeto };
     } finally {
       transcribing = false;
     }
+  }
+
+  // Reenvia o MESMO audio. Nada de regravar: e o mesmo File que ja estava na mao.
+  function tentarTranscreverDeNovo() {
+    const alvo = audioFalhou;
+    if (!alvo || transcribing) return;
+    void transcribeIntoComposer(alvo.file, { ditado: alvo.ditado, avisoTeto: alvo.avisoTeto });
   }
 
   // Limpa a oferta de desfazer (timeout, edicao do campo, ou envio).
@@ -1396,7 +1417,14 @@
       </div>
     {/if}
     {#if recError}
-      <div class="send-error" role="alert">{recError}</div>
+      <div class="send-error" role="alert">
+        <span>{recError}</span>
+        {#if audioFalhou && !transcribing}
+          <button type="button" class="undo-btn" onclick={tentarTranscreverDeNovo}>
+            {m.composer_transcrever_de_novo()}
+          </button>
+        {/if}
+      </div>
     {/if}
     {#if sendError}
       <div class="send-error" role="alert">{sendError}</div>
@@ -2292,6 +2320,9 @@
   }
 
   .send-error {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
     font-size: var(--text-xs);
     color: var(--error);
     padding: 0 var(--space-1);
