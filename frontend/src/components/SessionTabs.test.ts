@@ -30,7 +30,7 @@ function montar(over: { ctxDisponivel?: boolean } = {}) {
   const comp = mount(SessionTabs, {
     target: el,
     props: {
-      currentKey: 'srv-a::sess-1', onSelect: vi.fn(), onOpenConfig: vi.fn(),
+      currentKey: 'srv-a::sess-1', onSelect: vi.fn(), onOpenConfig: vi.fn(), onIrParaContas: vi.fn(),
       ...(over.ctxDisponivel !== undefined ? { ctxDisponivel: over.ctxDisponivel } : {}),
     },
   });

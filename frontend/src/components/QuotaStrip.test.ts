@@ -10,6 +10,7 @@ import { mount, unmount, tick } from 'svelte';
 import QuotaStrip from './QuotaStrip.svelte';
 import * as m from '../paraglide/messages';
 import * as contaEstadoLib from '../lib/contaEstado';
+import { quotaFeed } from '../lib/quotaFeed.svelte';
 import type { CotaConta } from '../lib/contaEstado';
 
 vi.mock('../lib/contaEstado', async (importOriginal) => {
@@ -50,7 +51,8 @@ function montar(contas: CotaConta[], onIrParaContas = vi.fn()) {
   return { el, comp: comp as never, onIrParaContas };
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+// O feed é singleton: sem o reset, as contas de um teste ainda estariam na tela do próximo.
+beforeEach(() => { vi.clearAllMocks(); quotaFeed.resetParaTeste(); });
 afterEach(() => { document.body.innerHTML = ''; });
 
 describe('QuotaStrip — o que aparece', () => {

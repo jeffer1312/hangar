@@ -9,6 +9,7 @@ import * as m from '../paraglide/messages';
   import WorkspaceAttentionStrip from './WorkspaceAttentionStrip.svelte';
   import TerminalPanel from './TerminalPanel.svelte';
   import QuotaStrip from './QuotaStrip.svelte';
+  import { quotaBarra } from '../lib/quotaBarra.svelte';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
@@ -332,6 +333,7 @@ import * as m from '../paraglide/messages';
          Ações delegam à bridge da Sidebar, que segue montada mesmo escondida no modo abas. -->
     <SessionTabs {currentKey} onSelect={openSession}
                  onOpenConfig={() => abrirConfig('root', getActiveId())}
+                 onIrParaContas={() => abrirConfig('contas', getActiveId())}
                  {ctxDisponivel} />
   {/if}
 
@@ -413,6 +415,7 @@ import * as m from '../paraglide/messages';
             topInset={hasAttention ? 52 : 0}
             onOpenWorkspacePalette={() => (commandOpen = true)}
             showContextPanel={splitSessions.length === 0}
+            splitTab={splitSessions.length > 0}
             ctxToggleExterno={toggleExterno}
             publishWorkspaceActions={true}
             onWorkspaceActionsChange={handleChatActionsChange}
@@ -420,12 +423,13 @@ import * as m from '../paraglide/messages';
         </div>
       {/key}
       {#each splitSessions as split (split)}
-        <div class="pane pane--split">
-          <button class="split-close" onclick={() => (splitSessions = splitSessions.filter((s) => s !== split))}
-                  aria-label={`${m.shell_fechar_painel_de()} ${split}`} title={m.shell_fechar_painel()}>×</button>
+        <div class="pane">
+          <!-- O ✕ mora na aba fina do Chat (splitTab) — sem botão flutuante por cima do conteúdo. -->
           <Chat
             sessionName={split}
             desktop={true}
+            splitTab={true}
+            onCloseSplit={() => (splitSessions = splitSessions.filter((s) => s !== split))}
             onBack={() => (splitSessions = splitSessions.filter((s) => s !== split))}
             onNavigateToChat={onNavigateToChat}
             onOpenTerminalPanel={() => abrirTerminal(split, getActiveId() ?? '')}
@@ -458,14 +462,18 @@ import * as m from '../paraglide/messages';
   </div><!-- /.shell-linha -->
 
   <!-- Faixa de cota (Task 9): irmã de .shell-linha dentro de .desktop-shell — base absoluta
-       da janela, ABAIXO do painel de terminal. Só existe com >=2 contas legíveis (decisão
-       dentro do componente). Leva à aba Contas por rota, nunca importando o componente da aba
-       (contrato de posse do lote). serverKey = currentKey do App ("<serverId>::<nome>"): a
-       troca de sessão/servidor no shell re-busca o estado; o endpoint é do servidor ATIVO. -->
-  <QuotaStrip
-    serverKey={currentKey ?? ''}
-    onIrParaContas={() => abrirConfig('contas', getActiveId())}
-  />
+       da janela, ABAIXO do painel de terminal. Existe com qualquer conta conhecida (a regra é
+       do faixaDeCota: sem conta nenhuma, não há faixa). Leva à aba Contas por rota, nunca
+       importando o componente da aba (contrato de posse do lote). serverKey = currentKey do App
+       ("<serverId>::<nome>"): a troca de sessão/servidor no shell re-busca o estado; o endpoint
+       é do servidor ATIVO. Desde a pílula do topo (QuotaPill) ela é o modo EXPANDIDO: nasce
+       recolhida e quem abre é o "Mostrar na barra" do popover (lib/quotaBarra). -->
+  {#if quotaBarra.aberta}
+    <QuotaStrip
+      serverKey={currentKey ?? ''}
+      onIrParaContas={() => abrirConfig('contas', getActiveId())}
+    />
+  {/if}
 
   <WorkspaceCommandPalette
     open={commandOpen}
@@ -575,11 +583,17 @@ import * as m from '../paraglide/messages';
     padding-top: 8px;
   }
   .desktop-main.has-attention .workspace-view { padding-top: 60px; }
-  /* Split: dois chats lado a lado, divisor sutil. Cada pane é um contexto próprio (NavBar/composer). */
-  .desktop-main.split { display: flex; }
+  /* Split: chats lado a lado como CARDS de uma janela só (referência 2026-08-21: cabeçalho vira
+     a aba fina do Chat, splitTab). Fundo no --glass-panel pra acompanhar o slider Transparência. */
+  .desktop-main.split { display: flex; gap: 10px; padding: 8px 10px; }
   .pane { height: 100%; position: relative; overflow: hidden; }
-  .desktop-main.split .pane { flex: 1; min-width: 0; }
-  .pane--split { border-left: 1px solid var(--border-default); }
+  .desktop-main.split .pane {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--glass-panel);
+  }
   /* Overlay: cobre só a .desktop-main (a sidebar segue viva ao lado), com o quadro montado atrás
      preservando o scroll. Sem border-left — a sidebar já tem border-right, dobraria a linha.
      Fade SEM transform de propósito: os sheets do Chat são position:fixed (BottomSheet.svelte:159) e

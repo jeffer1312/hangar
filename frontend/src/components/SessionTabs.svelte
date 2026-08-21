@@ -14,18 +14,22 @@ import * as m from '../paraglide/messages';
   import { navMode } from '../lib/navMode.svelte';
   import { getActiveId, serverColor } from '../lib/auth';
   import HangarMark from './icons/HangarMark.svelte';
+  import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import QuotaPill from './QuotaPill.svelte';
   import type { AggSession } from '../lib/types';
 
   interface Props {
     currentKey: string | null;
     onSelect: (session: AggSession) => void;
     onOpenConfig: () => void;
+    /** Leva à aba Contas (a pílula de cota abre por lá) — construído pelo DesktopShell. */
+    onIrParaContas: () => void;
     // Painel de contexto montado (o DesktopShell deriva: sessão aberta sem split, ou overlay).
     // false → botão desabilitado com tooltip (decisão do usuário) — sem painel não há o que
     // alternar. Default true: a barra fora do shell não perde o controle.
     ctxDisponivel?: boolean;
   }
-  let { currentKey, onSelect, onOpenConfig, ctxDisponivel = true }: Props = $props();
+  let { currentKey, onSelect, onOpenConfig, onIrParaContas, ctxDisponivel = true }: Props = $props();
 
   // Sem retain()/release(): DesktopShell é o owner do store (refcount do singleton SSE).
   const model = $derived(buildSessionTabs(sessionsStore.byServer));
@@ -43,6 +47,13 @@ import * as m from '../paraglide/messages';
     return lista.find((s) => s.id === id) ?? lista[0] ?? null;
   });
   const corDoServidor = $derived(servidorAtivo ? serverColor(servidorAtivo.id) : 'var(--text-muted)');
+
+  // Conta da sessão ABERTA (id do /api/cotas), pra pílula de cota mostrar o uso DELA em vez do
+  // pior-geral — pedido do usuário. Sem sessão aberta (ou sessão kimi/pi sem motor): null, e a
+  // pílula cai no smart.
+  const contaAtiva = $derived(
+    model.tabs.find((t) => tabKeyOf(t.session) === currentKey)?.session.conta ?? null,
+  );
 
   // Roving tabindex: focusedKey é a aba que o USUÁRIO focou (Tab/setas); a ÚNICA com tabindex=0
   // é a focável da vez (focusedKey válido -> currentKey -> primeira). Tudo por refs locais — nada
@@ -155,6 +166,10 @@ import * as m from '../paraglide/messages';
         }}
         title={`${tab.session.name} · ${stateName}${plano}`}>
         <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
+        <!-- Marca colorida do provider em TODA aba (referência: tab bar do super.engineering, onde
+             cada agente carrega seu ícone). Diferente do prov-chip da lista, aqui o Claude também
+             ganha glifo — pedido do usuário: na aba o ícone é o reconhecimento, não há texto. -->
+        <ProviderGlyph provider={tab.session.provider} size={14} />
         <span class="tab-name">{tab.session.name}</span>
         {#if badge}
           <span class="tab-plan" class:done={badge.complete} style:--pct={`${badge.pct}%`} title={badge.title} aria-hidden="true"></span>
@@ -175,6 +190,9 @@ import * as m from '../paraglide/messages';
 
   <button class="tab-action" onclick={() => sidebarBridge.openCreate()} aria-label={m.sessao_nova()} title={m.sessao_nova()}>+</button>
   <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label={m.tabs_mais_opcoes()} title={m.tabs_buscar_arquivo_custos()}>⋯</button>
+  <!-- Pílula de cota (o medidor do super.engineering): entre o ⋯ e a engrenagem, no espaço morto
+       da barra. Mostra a conta da sessão ativa (ou a pior, sem sessão); o clique abre o detalhe. -->
+  <QuotaPill serverKey={currentKey ?? ''} {contaAtiva} {onIrParaContas} />
   <!-- O ponto colorido veio junto com a engrenagem quando ela saiu do rodapé do trilho: ele não é
        enfeite, é a única coisa na tela que diz EM QUAL SERVIDOR você está, na mesma cor que agrupa
        as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da

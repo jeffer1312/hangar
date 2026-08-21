@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 import pytest
 from unittest.mock import patch
 from app import registry
@@ -1053,3 +1054,45 @@ async def test_list_with_state_kimi_usa_session_key_nao_o_stem(tmp_path, monkeyp
     assert "session_abc-123" in consultadas       # o session_id, nao "wire"
     assert "wire" not in consultadas
     assert out["k"].state == "working"
+
+
+def test_list_preenche_conta_da_sessao(tmp_path):
+    """A pílula de cota mostra a conta da sessão ATIVA a partir do `conta` (id do /api/cotas):
+    com motor -> chave:<motor>; Claude sem motor -> claude:<config dir do pane ou ~/.claude>."""
+    reg = SessionRegistry(projects_dir=tmp_path)
+    pane = {"name": "cc", "pid": 111, "cwd": "/home/u/p", "pane_id": "%1", "active": True}
+    with patch.object(registry.tmux, "list_panes_all", return_value={"cc": [pane]}), \
+         patch.object(reg, "resolve_tracked", return_value=("/x/s.jsonl", True)), \
+         patch.object(registry, "_config_dir_of", return_value=Path("/home/u/.claude-jefferson")), \
+         patch.object(registry, "_engine_of", return_value=None):
+        out = reg.list()
+    assert out[0].conta == "claude:/home/u/.claude-jefferson"
+
+    # Motor vence o config dir (a cota da sessão de motor é a da CHAVE, não da assinatura).
+    with patch.object(registry.tmux, "list_panes_all", return_value={"cc": [pane]}), \
+         patch.object(reg, "resolve_tracked", return_value=("/x/s.jsonl", True)), \
+         patch.object(registry, "_engine_of", return_value="deepseek"):
+        out = reg.list()
+    assert out[0].conta == "chave:deepseek"
+
+    # Sem CLAUDE_CONFIG_DIR no pane, cai no config dir default (a conta-base do app).
+    with patch.object(registry.tmux, "list_panes_all", return_value={"cc": [pane]}), \
+         patch.object(reg, "resolve_tracked", return_value=("/x/s.jsonl", True)), \
+         patch.object(registry, "_config_dir_of", return_value=None), \
+         patch.object(registry, "_engine_of", return_value=None):
+        out = reg.list()
+    assert out[0].conta == f"claude:{Path.home() / '.claude'}"
+
+
+def test_list_conta_none_em_pi_kimi(tmp_path):
+    """Pi/Kimi sem motor: conta=None e a pílula cai no pior-geral (documentado em models.py)."""
+    pane = {"name": "kk", "pid": 111, "cwd": "/home/u/p", "pane_id": "%1", "active": True}
+    for prov in ("pi", "kimi"):
+        reg = SessionRegistry(projects_dir=tmp_path)
+        with patch.object(registry.tmux, "list_panes_all", return_value={"kk": [pane]}), \
+             patch.object(registry, "provider_of_pane", return_value=prov), \
+             patch.object(registry, "pi_session_file", return_value="/x/s.jsonl"), \
+             patch.object(registry, "kimi_session_file", return_value="/x/s.jsonl"), \
+             patch.object(registry, "_engine_of", return_value=None):
+            out = reg.list()
+        assert out[0].provider == prov and out[0].conta is None

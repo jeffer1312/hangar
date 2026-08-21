@@ -14,7 +14,7 @@ from app import agentpane
 from app.config import settings
 from app import runtime_config
 from app.names import sanitize_session_name
-from app.git_ops import git_summary, branch_of
+from app.git_ops import git_summary, git_diffstat, branch_of
 from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
@@ -949,6 +949,17 @@ class SessionRegistry:
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
             # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.
             info.engine = _engine_of(p["pid"]) if p.get("pid") else None
+            # Conta pra pílula de cota (id do /api/cotas): com motor, a chave do engines.json; sem
+            # motor e Claude, o config dir do pane — ou o default (~/.claude) quando o processo não
+            # declara CLAUDE_CONFIG_DIR (o fallback é idiom dos call sites, não do _config_dir_of).
+            # O .resolve() casa com o id do /api/cotas, que sai de list_config_dirs() RESOLVIDO —
+            # com $HOME symlinkado ou path não-canônico de alias, o id cru nunca casaria e a pílula
+            # degradava calada pro pior-geral.
+            if info.engine:
+                info.conta = f"chave:{info.engine}"
+            elif prov not in ("pi", "kimi"):
+                cdir = (_config_dir_of(p["pid"]) if p.get("pid") else None) or (Path.home() / ".claude")
+                info.conta = f"claude:{Path(cdir).resolve()}"
             out.append(info)
             sids[p["name"]] = self._repl_sid(p["pid"], children)
         # Guarda de colisao: 2+ sessoes no mesmo jsonl -> so a dona mantem (mata a duplicata/cross-wire).
@@ -1141,6 +1152,12 @@ class SessionRegistry:
                     info.git_dirty = summary["dirty"]
                     info.git_ahead = summary["ahead"]
                     info.git_behind = summary["behind"]
+                # "+N -M" do card: mesmo gate/cache do summary (fork extra por cwd so no
+                # cache-miss, seguro pelo TTL de 3s contra o poll de 2s).
+                diffstat = git_diffstat(info.cwd)
+                if diffstat is not None:
+                    info.git_added = diffstat["added"]
+                    info.git_removed = diffstat["removed"]
                 # Plano vive AQUI dentro, no mesmo to_thread: le markdown do disco, e ler arquivo na
                 # corrotina e a mesma classe de erro que motivou o to_thread do git.
                 _decorate_plan(info)

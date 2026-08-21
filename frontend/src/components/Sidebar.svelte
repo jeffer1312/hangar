@@ -15,6 +15,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import StateChip from './StateChip.svelte';
+  import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
   import { rotuloEstado, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
@@ -1003,14 +1004,20 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {:else if showBranch(s.branch)}
                     <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {s.branch}</span>
                   {/if}
-                  {#if provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
+                  <!-- "+128 −24" do working tree, colado à branch/cwd (paridade com o SessionCard
+                       mobile; referência: cards do super.engineering). -->
+                  {#if s.git_added || s.git_removed}
+                    <span class="diff-stats" aria-hidden="true">{#if s.git_added}<span class="diff-add">+{s.git_added}</span>{/if}{#if s.git_removed}<span class="diff-del">−{s.git_removed}</span>{/if}</span>
+                  {/if}
+                  {#if showProviderTags || provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
-                      {#if provTag}
-                        <!-- Identidade, não estado: primeiro chip e em tinta neutra, pra não competir
-                             com o estado, o "sem id" (âmbar) nem o motor (accent). -->
-                        <span class="prov-chip" title={`${m.sessao_grupo()} ${provTag}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span>{provTag}</span>
+                      {#if showProviderTags}
+                        <!-- Glifo pra TODOS quando a lista mistura providers (pedido do usuário);
+                             o TEXTO continua só nas não-Claude — o default se reconhece pela marca.
+                             provider ausente = Claude (o campo só viaja quando não é Claude). -->
+                        <span class="prov-chip" class:prov-chip--so-icone={!provTag} title={`${m.sessao_grupo()} ${provTag ?? 'Claude'}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span><ProviderGlyph provider={s.provider} size={12} />{#if provTag}{provTag}{/if}</span>
                       {/if}
                       {#if s.limited}
                         <span
@@ -1760,6 +1767,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .branch-inline { flex-shrink: 0; margin-left: var(--space-1); }
+  /* "+128 −24" do working tree (paridade com o SessionCard): mono, cores semânticas de diff. */
+  .diff-stats {
+    flex-shrink: 0;
+    display: inline-flex;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .diff-add { color: var(--success); }
+  .diff-del { color: var(--error); }
   /* Envelope da pilula (o desenho dela vive no StateChip.svelte). */
   .state-chip { display: inline-flex; flex-shrink: 0; border-radius: var(--radius-full); }
   /* Travada (feature #7): anel âmbar sutil no chip — avisa sem gritar. Outline, e nao box-shadow
@@ -1810,7 +1827,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     color: var(--text-muted); background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     padding: 1px 6px; border-radius: var(--radius-full); white-space: nowrap;
+    /* Glifo colorido na frente do texto (mesmo chip do SessionCard): sem flex o ícone quebrava a linha de base. */
+    display: inline-flex; align-items: center; gap: 4px;
   }
+  /* Claude (só a marca, sem texto): chip só-ícone, mais compacto que os com rótulo. */
+  .prov-chip--so-icone { padding: 1px 3px; }
   /* Mesma etiqueta no rail de 56px: colada na base do avatar, absoluta (não mexe na altura da row).
      bottom: -3px e não -7px: com densidade compacta a row cai pra 34px e o avatar de 30px quase a
      preenche — a -7px a etiqueta passava da row e encostava no avatar de baixo. */

@@ -11,10 +11,12 @@
     onClose: () => void;
     /** Largura do popover; por padrao acompanha a ancora, com um minimo legivel. */
     width?: number;
+    /** Teto de altura. Padrao 380 (seletores); a pílula de cota pede mais pra lista nao rolar. */
+    maxH?: number;
     ariaLabel: string;
     children: Snippet;
   }
-  let { open, anchor, onClose, width, ariaLabel, children }: Props = $props();
+  let { open, anchor, onClose, width, maxH: maxHProp, ariaLabel, children }: Props = $props();
 
   let pos = $state<{ top: number | null; bottom: number | null; left: number; width: number; maxH: number; acima: boolean }>(
     { top: 0, bottom: null, left: 0, width: 280, maxH: 320, acima: false });
@@ -37,7 +39,7 @@
     // preferencia aqui e o INVERSO da do Select — pra cima, caindo pra baixo so quando la couber
     // mais. Mesma referencia do opencode, que abre a lista ACIMA da pill.
     const paraCima = acima >= Math.min(320, abaixo) || acima > abaixo;
-    const maxH = Math.max(120, Math.min(paraCima ? acima : abaixo, 380));
+    const maxH = Math.max(120, Math.min(paraCima ? acima : abaixo, maxHProp ?? 380));
     // Encosta a direita da ancora quando a caixa e mais larga que ela, sem sair da viewport.
     const left = Math.max(margem, Math.min(r.left, window.innerWidth - larg - margem));
     // Abrindo pra cima, quem ancora e a BASE da caixa (`bottom`), nao o topo: com `top` calculado a

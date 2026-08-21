@@ -35,6 +35,8 @@ export interface JanelaExibida {
 export interface ContaCota {
   id: string;
   label: string;
+  /** Provider da credencial ('claude' | 'kimi' | 'opencode') — a QuotaPill agrupa o popover por ele. */
+  provedor: CotaConta['provedor'];
   ativa: boolean;
   estado: EstadoCota;
   janelas: JanelaExibida[];
@@ -72,6 +74,7 @@ export function faixaDeCota(contas: CotaConta[]): ContaCota[] | null {
     linhas.push({
       id: c.id,
       label: c.label,
+      provedor: c.provedor,
       ativa: !!c.ativa,
       estado,
       janelas,
@@ -137,4 +140,23 @@ export function motivoSessaoViva(motivo?: string | null): boolean {
 
 export function motivoParado(motivo?: string | null): boolean {
   return motivo === 'renovacao-falhou';
+}
+
+/** A janela mais cheia entre TODAS as contas — o modo "smart" da pílula do topo (QuotaPill):
+ *  um relance responde "tenho com o que trabalhar?" sem ler conta por conta. Empate de %: ganha
+ *  a que RESETA ANTES (janela mais curta aperta primeiro — o rótulo é dado do provedor e "10h" <
+ *  "5h" lexicograficamente elegeria a mais LONGA, contra a regra). Sem resetTs nas duas, tanto faz. */
+export function piorJanela(linha: ContaCota[] | null): { conta: ContaCota; janela: JanelaExibida } | null {
+  if (!linha) return null;
+  let pior: { conta: ContaCota; janela: JanelaExibida } | null = null;
+  for (const conta of linha) {
+    for (const janela of conta.janelas) {
+      if (!pior || janela.pct > pior.janela.pct) { pior = { conta, janela }; continue; }
+      if (janela.pct === pior.janela.pct &&
+          janela.resetTs != null && (pior.janela.resetTs == null || janela.resetTs < pior.janela.resetTs)) {
+        pior = { conta, janela };
+      }
+    }
+  }
+  return pior;
 }

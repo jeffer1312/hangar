@@ -88,7 +88,9 @@ export interface JanelaCota {
 export interface CotaConta {
   id: string;
   label: string;
-  provedor: 'claude' | 'kimi';
+  // União do backend (backend/app/cotas.py, `Provedor`). Em 21/08 o front dizia só 'claude' |
+  // 'kimi' e a conta OpenCode real derrubou o glifo do popover — a união agora espelha a fonte.
+  provedor: 'claude' | 'kimi' | 'opencode';
   ativa: boolean;
   estado: EstadoCota;
   janelas: JanelaCota[];

@@ -69,3 +69,39 @@ describe('SessionCard: clique em sessão "sem id"', () => {
     unmount(comp);
   });
 });
+
+describe('SessionCard: diff stats e tempo (referência super.engineering)', () => {
+  it('mostra "+a −d" ao lado da branch quando o backend manda os números', () => {
+    const { el, comp } = montar(sessao({ branch: 'PM-1', git_added: 128, git_removed: 24 }));
+    const stats = el.querySelector('.diff-stats');
+    expect(stats?.textContent).toContain('+128');
+    expect(stats?.textContent).toContain('−24');
+    unmount(comp);
+  });
+
+  it('sem repo (campos null) a meta-line não ganha badge nenhum', () => {
+    const { el, comp } = montar(sessao({ branch: 'PM-1', git_added: null, git_removed: null }));
+    expect(el.querySelector('.diff-stats')).toBeNull();
+    unmount(comp);
+  });
+
+  it('tempo relativo da última atividade aparece no fim da meta-line', () => {
+    const { el, comp } = montar(sessao({ last_activity: Date.now() / 1000 - 45 * 60 }));
+    expect(el.querySelector('.ago')?.textContent).toContain('45');
+    unmount(comp);
+  });
+
+  it('chip de provider carrega o glifo colorido — texto só nas não-Claude', () => {
+    const { el, comp } = montar(sessao({ provider: 'kimi' }));
+    const chipKimi = el.querySelector('.prov-chip');
+    expect(chipKimi?.querySelector('.pg svg')).not.toBeNull();
+    expect(chipKimi?.textContent).toContain('Kimi');
+    // Claude tem a marca igual (pedido do usuário), mas sem rótulo: o default se reconhece pelo ícone.
+    const { el: el2, comp: comp2 } = montar(sessao({ provider: 'claude' }));
+    const chipClaude = el2.querySelector('.prov-chip--so-icone');
+    expect(chipClaude?.querySelector('.pg svg')).not.toBeNull();
+    expect(chipClaude?.textContent).not.toContain('Claude');
+    unmount(comp);
+    unmount(comp2);
+  });
+});

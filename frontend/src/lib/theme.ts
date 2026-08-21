@@ -2,6 +2,8 @@
 // A escolha persiste em localStorage; o tema resolvido vira data-theme no <html> (a CSS so tem
 // :root [dark] + [data-theme="light"], sem duplicar valores em media query).
 
+import { aplicarCorTema } from './corTema';
+
 export type ThemePref = 'system' | 'light' | 'dark' | 'desktop';
 
 const KEY = 'cp_theme';
@@ -35,6 +37,9 @@ export function applyTheme(pref: ThemePref = getThemePref()): void {
     }
     meta.content = bg;
   }
+  // Cor manual do tema (destaque/tinta, corTema.ts) vem DEPOIS do tema resolvido — ela lê os
+  // padrões do modo atual pra misturar. No 'desktop' ela é muda (a paleta reaplica em seguida).
+  aplicarCorTema();
 }
 
 export function setThemePref(pref: ThemePref): void {

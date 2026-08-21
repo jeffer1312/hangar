@@ -1,12 +1,13 @@
 <script lang="ts">
   import type { SessionInfo } from '../lib/types';
 import * as m from '../paraglide/messages';
-  import { rotuloEstado, stateColors, untrackedReason, providerTag } from '../lib/format';
+  import { rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
   import StateChip from './StateChip.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
+  import ProviderGlyph from './icons/ProviderGlyph.svelte';
 
   interface Props {
     session: SessionInfo;
@@ -72,6 +73,8 @@ import * as m from '../paraglide/messages';
   const planChip = $derived(planBadge(session));
   // Provider da linha — só as não-Claude ganham chip (ver providerTag em lib/format).
   const provTag = $derived(providerTag(session.provider));
+  // Tempo relativo da última atividade ("51 min atrás" — o "51m ago" do card do super.engineering).
+  const agoLabel = $derived(relativeTime(session.last_activity));
 
   // ── Swipe-to-actions ───────────────────────────────────────────────────────
   // Arrasta a linha pra esquerda revelando Git / Loop / Excluir. touch-action:pan-y deixa o scroll
@@ -282,8 +285,10 @@ import * as m from '../paraglide/messages';
         <span class="status-sub working" title={session.label}>{session.label}</span>
       {/if}
       <!-- UMA meta-line só (antes eram duas: cwd e branch). Ordem = importancia: a branch e o que
-           muda, entao vem primeiro e nunca some; o cwd fecha a linha e trunca primeiro. -->
-      {#if serverBadge || session.branch || showCwd}
+           muda, entao vem primeiro e nunca some; o cwd fecha a linha e trunca primeiro. O tempo
+           relativo ("51 min atrás") vem por último, colado à direita — informação de contexto, não
+           de identidade. -->
+      {#if serverBadge || session.branch || showCwd || agoLabel}
         <span class="meta-line">
           {#if serverBadge}
             <span class="srv" style="color: {serverBadge.color};">{serverBadge.label}</span>
@@ -293,21 +298,28 @@ import * as m from '../paraglide/messages';
             <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {session.branch}</span>
             {#if showCwd}<span class="meta-sep">·</span>{/if}
           {/if}
+          <!-- Diff do working tree (referência: cards do super.engineering, "+128 −24" ao lado da
+               branch). IRMÃO da branch, não filho: HEAD destacado (sem branch) ainda tem diff. -->
+          {#if session.git_added || session.git_removed}
+            <span class="diff-stats" aria-hidden="true">{#if session.git_added}<span class="diff-add">+{session.git_added}</span>{/if}{#if session.git_removed}<span class="diff-del">−{session.git_removed}</span>{/if}</span>
+          {/if}
           {#if showCwd}
             <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
           {/if}
+          {#if agoLabel}
+            {#if serverBadge || session.branch || showCwd}<span class="meta-sep" aria-hidden="true">·</span>{/if}
+            <span class="ago" title={fmtWhen(session.last_activity)}>{agoLabel}</span>
+          {/if}
         </span>
       {/if}
-      {#if provTag || session.pair_peers?.length || limited || loopChip || session.engine || planChip}
-        <!-- Chips informativos (🤝 grupo, ⏳ rate-limit, 🔁 loop, ⚙ motor) moram AQUI, no fluxo da
-             coluna de texto — na row-right eles esmagavam o nome e o cwd vazava por baixo (visto no iPhone). -->
-        <span class="badges-line">
-          {#if provTag}
-            <!-- Identidade, não estado: vem primeiro e em tinta neutra (nada de accent/warning, que
-                 já falam "motor" e "erro" nesta mesma linha). "Sessão Pi" pro leitor de tela, senão
-                 sairia um "Pi" solto entre os outros chips. -->
-            <span class="prov-chip" title={`${m.sessao_grupo()} ${provTag}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span>{provTag}</span>
-          {/if}
+      <!-- A linha de chips agora SEMPRE existe: o primeiro chip é a marca do provider (glifo pra
+           todos, texto só nas não-Claude) — 🤝 grupo, ⏳ rate-limit, 🔁 loop e ⚙ motor seguem na
+           mesma linha, no fluxo da coluna de texto (na row-right esmagavam o nome — visto no iPhone). -->
+      <span class="badges-line">
+          <!-- Marca do provider pra TODOS (pedido do usuário): o glifo colorido sempre; o TEXTO
+               só nas não-Claude — a exceção se nomeia, o default se reconhece pelo ícone.
+               provider ausente = Claude (o campo só viaja quando não é Claude). -->
+          <span class="prov-chip" class:prov-chip--so-icone={!provTag} title={`${m.sessao_grupo()} ${provTag ?? 'Claude'}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span><ProviderGlyph provider={session.provider} size={12} />{#if provTag}{provTag}{/if}</span>
           {#if session.pair_peers?.length}
             <span class="paired-chip" title={m.sessao_grupo_com({ n: session.pair_peers.join(', ') })}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
           {/if}
@@ -333,7 +345,6 @@ import * as m from '../paraglide/messages';
             <span class="engine-chip" title={m.sessao_motor({ n: session.engine })}>⚙&nbsp;{session.engine}</span>
           {/if}
         </span>
-      {/if}
       <PlanBar {session} />
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
            `claude --resume`): numa sessao Pi/Kimi o botao so poderia errar, entao mostramos a razao
@@ -672,6 +683,20 @@ import * as m from '../paraglide/messages';
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* "+128 −24" do working tree: mono como a branch ao lado, nas cores semânticas de sempre
+     (verde/vermelho do diff, não accent — é dado de código, não identidade). Não trunca: são 2
+     números curtos e é informação que muda; quem cede é o cwd, como sempre. */
+  .diff-stats {
+    flex-shrink: 0;
+    display: inline-flex;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+  }
+  .diff-add { color: var(--success); }
+  .diff-del { color: var(--error); }
+  /* Tempo relativo no fim da meta-line: mutado de propósito, não disputa com nome/branch. */
+  .ago { flex-shrink: 0; color: var(--text-muted); white-space: nowrap; }
 
   .untracked-badge {
     flex-shrink: 0;
@@ -748,7 +773,11 @@ import * as m from '../paraglide/messages';
     border: 1px solid var(--border-subtle);
     padding: 1px 6px; border-radius: var(--radius-full);
     white-space: nowrap; flex-shrink: 0;
+    /* O glifo colorido do provider entrou na frente do texto: sem flex ele quebrava a linha de base do chip. */
+    display: inline-flex; align-items: center; gap: 4px;
   }
+  /* Claude (sem texto, só a marca): chip só-ícone fica redondo e menor que os chips com texto. */
+  .prov-chip--so-icone { padding: 1px 3px; }
 
   .limited-chip {
     font-size: 11px;

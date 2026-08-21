@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getThemePref, setThemePref, getTextoDoDesktop, type ThemePref } from '../lib/theme';
   import { buscarPaleta, aplicarPaleta, limparPaleta, paletaEmCache } from '../lib/desktopTheme';
+  import { aplicarCorTema } from '../lib/corTema';
   import * as m from '../paraglide/messages';
 
   let { onEscolha }: { onEscolha?: (p: ThemePref) => void } = $props();
@@ -13,6 +14,10 @@
       buscarPaleta().then((pal) => { if (pal) aplicarPaleta(pal, getTextoDoDesktop()); });
     } else {
       limparPaleta();
+      // O limparPaleta remove TODOS os tokens inline (a lista dele inclui --accent/--bg-*, que a cor
+      // manual também escreve) — e ele rodou DEPOIS do applyTheme, que já tinha aplicado o desvio.
+      // Sem reaplicar aqui, trocar de "Desktop" pra "Escuro" nascia sem a cor escolhida pelo usuário.
+      aplicarCorTema();
     }
     onEscolha?.(p);
   }

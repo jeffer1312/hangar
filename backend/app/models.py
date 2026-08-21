@@ -66,6 +66,10 @@ class SessionInfo(BaseModel):
     # Motor de modelo desta sessao (nome no engines.json). None = conta Anthropic. Lido do
     # /proc/<pid>/environ (CP_ENGINE) — ver registry._engine_of.
     engine: Optional[str] = None
+    # Conta da sessão como ID do /api/cotas ("claude:<config_dir>", "chave:<motor>") — a pílula
+    # de cota do topo mostra o uso da conta da sessão ATIVA a partir daqui. None quando não dá
+    # pra saber (kimi/pi sem motor): a pílula cai no pior-geral (smart).
+    conta: Optional[str] = None
     state: State = "idle"
     last_activity: Optional[float] = None
     # Vinculo nome<->transcript e confiavel? True = resolvido por --session-id/fd/cache (determinismo).
@@ -78,6 +82,11 @@ class SessionInfo(BaseModel):
     git_dirty: Optional[int] = None
     git_ahead: Optional[int] = None
     git_behind: Optional[int] = None
+    # Adicoes/delecoes do working tree vs HEAD (staged + unstaged), decorados junto (git_diffstat,
+    # cacheado) — o "+N -M" do card. Untracked NAO conta (ver git_ops.git_diffstat). Non-repo ou
+    # repo sem commits -> None (sem badge).
+    git_added: Optional[int] = None
+    git_removed: Optional[int] = None
     # Estado vivo detalhado, pra a linha da lista ser acionável sem abrir a sessão (feature #1):
     label: Optional[str] = None          # working: texto do spinner ("Elucidating…")
     question: Optional[str] = None       # awaiting_input: a pergunta

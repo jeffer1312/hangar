@@ -40,6 +40,10 @@ export interface SessionInfo {
   // marca "sem id" e bloqueia o chat (evita mostrar/trocar a conversa errada).
   tracked?: boolean;
   branch?: string | null;   // branch git atual do cwd (mostrada na lista de sessões)
+  // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;
+  // untracked não conta). null = cwd sem repo ou repo sem commit nenhum -> sem badge.
+  git_added?: number | null;
+  git_removed?: number | null;
   // Estado vivo detalhado, pra a linha ser acionável sem abrir a sessão (feature #1):
   label?: string | null;       // working: texto do spinner
   question?: string | null;    // awaiting_input: a pergunta
@@ -78,6 +82,9 @@ export interface SessionInfo {
   plan_hidden?: boolean | null;
   // Motor de modelo desta sessão (nome no engines.json). null/undefined = conta Anthropic.
   engine?: string | null;
+  // Conta da sessão como ID do /api/cotas ("claude:<dir>", "chave:<motor>") — a pílula de cota do
+  // topo mostra o uso da conta da sessão ATIVA. null = não dá pra saber (kimi/pi sem motor).
+  conta?: string | null;
 }
 
 // Detalhe do plano (GET /api/sessions/{name}/plan, Task 5): granularidade de Task/Step que o

@@ -134,6 +134,66 @@ def git_summary(cwd: str | None) -> dict | None:
     return result
 
 
+def _parse_numstat(out: str) -> dict:
+    """Parseia `git diff --numstat HEAD`: uma linha '<added>\\t<deleted>\\t<path>' por arquivo.
+    Binario vem como '-\\t-\\t<path>' -> conta 0 (o numero nao existe). Linha malformada: ignora."""
+    added = removed = 0
+    for line in out.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) < 3 or parts[0] == "-":
+            continue
+        try:
+            added += int(parts[0])
+            removed += int(parts[1])
+        except ValueError:
+            continue
+    return {"added": added, "removed": removed}
+
+
+# Cache proprio, mesmo contrato do _summary_cache acima (por cwd, TTL curto/longo por-entrada,
+# sem lock): o diff roda por sessao na decoracao da listagem junto do git_summary e o poll e 2s.
+_diffstat_cache: dict[str, tuple[float, dict | None, float]] = {}
+
+
+def git_diffstat(cwd: str | None) -> dict | None:
+    """{added, removed} do working tree vs HEAD (staged + unstaged somados) do repo em cwd, ou
+    None (nao-repo/erro). Pro "+N -M" do card de sessao. Untracked NAO entra: `git diff HEAD` nao
+    os ve, e contar linhas lendo cada arquivo novo seria I/O por arquivo a cada poll — o badge
+    git_dirty ja sinaliza "ha coisa nao-commitada". Repo SEM commits nao tem HEAD pra comparar ->
+    None tambem. Mesmo contrato do git_summary: gate em .git, cache por cwd, timeout proprio de
+    2s, NUNCA levanta (nao pode virar 500 no /api/sessions)."""
+    if not cwd or not os.path.exists(os.path.join(cwd, ".git")):
+        return None
+    now = time.monotonic()
+    hit = _diffstat_cache.get(cwd)
+    if hit and now - hit[0] < hit[2]:
+        return hit[1]
+    ttl = _SUMMARY_TTL
+    try:
+        p = _run(cwd, "diff", "--numstat", "HEAD", timeout=_SUMMARY_TIMEOUT)
+    except GitError as e:
+        # Mesma regra do git_summary: so o timeout ganha TTL longo (30s). Falha APARECE no log.
+        _log.warning("git_diffstat timeout/erro em %s: %s (badge omitido, retry em %ss)",
+                     cwd, e.detail, _SUMMARY_TTL_NEG)
+        result = None
+        ttl = _SUMMARY_TTL_NEG
+    else:
+        if p.returncode == 0:
+            result = _parse_numstat(p.stdout)
+        elif "ambiguous argument" in (p.stderr or "") or "unknown revision" in (p.stderr or ""):
+            # Repo sem commits (HEAD nao resolve): caso ESPERADO, nao falha — sem warning pra nao
+            # spam o log a cada poll. None (sem "+N -M"), TTL curto: o 1o commit liga o badge.
+            result = None
+        else:
+            # Transiente de verdade (ex. index travado no meio de um commit concorrente): warning,
+            # TTL curto -> volta em 3s.
+            _log.warning("git_diffstat returncode=%s em %s (badge omitido, retry em %ss)",
+                         p.returncode, cwd, _SUMMARY_TTL)
+            result = None
+    _diffstat_cache[cwd] = (now, result, ttl)
+    return result
+
+
 def list_branches(cwd: str) -> dict:
     """Branches locais + remotas (sem local correspondente) + a atual + se a working tree esta
     suja (pro front avisar antes do checkout: `git switch` carrega mudancas nao-conflitantes pra

@@ -15,6 +15,8 @@
   } from '../../lib/background';
   import { getThemePref, getTextoDoDesktop, setTextoDoDesktop, type ThemePref } from '../../lib/theme';
   import { buscarPaleta, aplicarPaleta, paletaEmCache } from '../../lib/desktopTheme';
+  import { temCorTema, limparCorTema } from '../../lib/corTema';
+  import CorTemaSettings from './CorTemaSettings.svelte';
   import { sidebarPrefs, type SidebarHeight } from '../../lib/sidebarPrefs.svelte';
   import { navMode, type NavMode } from '../../lib/navMode.svelte';
   import { toolLook, type ToolLook } from '../../lib/toolLook.svelte';
@@ -85,6 +87,10 @@
   // junto pelo `{#key resetSeq}`.
   let caixas = $state(getSurfaceSolid());
   $effect(() => { resetSeq; caixas = getSurfaceSolid(); });
+  // Mesmo espelho do `caixas`: temCorTema() lê localStorage sem sinal reativo; o $state é
+  // atualizado pelo onMudanca da seção e relido no reset (efeito acima do resetSeq não cobre —
+  // mantido separado porque a fonte da mudança é outra).
+  let temCor = $state(temCorTema());
   // Mesma ideia pro fundo: getBgPref() le o localStorage, entao um {#if} direto nao rastreia nada e
   // nunca re-executa quando o BackgroundToggle troca a escolha por dentro. Espelhado em $state e
   // atualizado pelo callback onEscolha (ver BackgroundToggle) — nao por effect, porque a mudanca so
@@ -124,7 +130,7 @@
   const temAjuste = $derived(
     texto.size !== 100 || texto.lh !== 100 || texto.width !== 100 ||
     contraste !== TEXT_BOOST_PADRAO || solidez !== READ_ALPHA_PADRAO || leitura !== 'auto' ||
-    caixas !== SURFACE_SOLID_PADRAO,
+    caixas !== SURFACE_SOLID_PADRAO || temCor,
   );
   function voltarAoPadrao() {
     (['size', 'lh', 'width'] as MedidaTexto[]).forEach((m) => { texto[m] = 100; setMedidaTexto(m, 100); });
@@ -132,6 +138,9 @@
     solidez = READ_ALPHA_PADRAO; setReadAlpha(READ_ALPHA_PADRAO);
     leitura = 'auto'; setReadMode('auto');
     caixas = SURFACE_SOLID_PADRAO; setSurfaceSolid(SURFACE_SOLID_PADRAO);
+    // Cor do tema entra no reset: quem mistura tinta/destaque e se perde quer voltar ao neutro de
+    // fábrica pelo MESMO botão — e o {#key resetSeq} remonta a seção desmarcando os swatches.
+    limparCorTema(); temCor = false;
     // O slider "Solidez das caixas" vive no BackgroundToggle, que guarda o PROPRIO $state. Sem
     // remontar, o valor aplicado voltava ao padrao mas o slider de la seguia mostrando o numero
     // antigo ate reabrir a tela — a tela mentindo sobre o proprio estado.
@@ -179,6 +188,21 @@
     </div>
     <ThemeToggle onEscolha={(p) => (tema = p)} />
   </div>
+
+  <!-- Cor manual do tema (destaque + tinta de fundo), referência do "Customize Theme" do
+       super.engineering. Fora do tema Desktop: lá a paleta Material You já é a dona dos tokens e
+       um picker aqui escreveria por cima dela (gate invertido ao da "Cor do texto" abaixo). O
+       `{#key}` remonta no "Voltar ao padrão", que limpa as cores gravadas — senão os swatches
+       continuariam marcados numa cor que já não está aplicada. -->
+  {#if tema !== 'desktop'}
+    <div class="ap-row ap-row--stack">
+      <div class="ap-label">
+        <strong>{m.config_aparencia_cor_tema()}</strong>
+        <span>{m.config_aparencia_cor_tema_desc()}</span>
+      </div>
+      {#key resetSeq}<CorTemaSettings onMudanca={() => (temCor = temCorTema())} />{/key}
+    </div>
+  {/if}
 
   {#if tema === 'desktop'}
     <div class="ap-row">

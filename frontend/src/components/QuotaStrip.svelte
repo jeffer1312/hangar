@@ -1,20 +1,16 @@
 <script lang="ts">
-  // Faixa de cota do rodapé do desktop. Uma coluna por CONTA (credencial), janelas 5h/7d, cor só
-  // acima de 80% (sempre junto do número), leitura velha esmaecida com a idade ao lado. Leva à
-  // aba Contas por callback — o DesktopShell desvia pra rota (?config=contas), nunca importando
-  // o componente da aba.
+  // Faixa de cota do rodapé do desktop — o modo EXPANDIDO da pílula do topo (QuotaPill). Uma
+  // coluna por CONTA (credencial), janelas 5h/7d, cor só acima de 80% (sempre junto do número),
+  // leitura velha esmaecida com a idade ao lado. Leva à aba Contas por callback — o DesktopShell
+  // desvia pra rota (?config=contas), nunca importando o componente da aba.
   //
-  // Fonte: /api/cotas (lib/contaEstado.listarCotas), que pergunta ao PROVEDOR com a credencial de
-  // cada conta. Antes daqui a faixa parseava a linha de statusline guardada na pasta da conta —
-  // e como essa pasta é um symlink pra conta padrão nesta máquina, as três contas mostravam o
-  // MESMO número; conta sem sessão aberta não mostrava nada. Cota é da credencial, não da sessão.
-  //
-  // O backend já guarda a leitura por 5 min, então o poll daqui é barato: dentro do TTL ele nem
-  // toca a rede. A sessão que está rodando AGORA não depende deste ciclo pra parecer viva — a
-  // statusline dela continua desenhando o número dentro do chat.
+  // Fonte: o quotaFeed (lib/quotaFeed.svelte.ts), que lê /api/cotas — o backend pergunta ao
+  // PROVEDOR com a credencial de cada conta e guarda a leitura por 5 min. A sessão que está
+  // rodando AGORA não depende deste ciclo: a statusline dela desenha o número dentro do chat.
   import { onMount } from 'svelte';
   import * as m from '../paraglide/messages';
-  import { listarCotas, formatarIntervalo, type CotaConta } from '../lib/contaEstado';
+  import { formatarIntervalo, type CotaConta } from '../lib/contaEstado';
+  import { quotaFeed } from '../lib/quotaFeed.svelte';
   import { faixaDeCota, faltaPara, diaDoReset, janelaLonga, motivoParado, motivoSessaoViva } from '../lib/cota';
 
   interface Props {
@@ -26,43 +22,21 @@
   }
   let { serverKey, onIrParaContas }: Props = $props();
 
-  let contas = $state<CotaConta[]>([]);
-  // Relógio local para a idade e a contagem até o reset andarem sem bater na rede.
-  let agora = $state(Date.now() / 1000);
-
+  // A busca e o relógio moram no quotaFeed (compartilhado com a pílula do topo) — a faixa é só
+  // consumidora: mesmo número, mesmo instante, uma requisição por ciclo no app inteiro.
   const contasComIdade = $derived(
-    contas.map((c) => (c.ts == null ? c : { ...c, idade_s: Math.max(0, agora - c.ts) })),
+    quotaFeed.contas.map((c) => (c.ts == null ? c : { ...c, idade_s: Math.max(0, quotaFeed.agora - c.ts) })),
   );
   const linha = $derived(faixaDeCota(contasComIdade));
 
-  // Geração descarta resposta em voo de servidor anterior (mesmo papel do `vivo` do shell).
-  let geracao = 0;
-  async function carregar() {
-    const g = ++geracao;
-    try {
-      // `null` explícito, decisão escrita: a faixa quer mesmo o servidor ATIVO (o componente
-      // navega com getActiveId() e o endpoint é da máquina da sessão).
-      const lista = await listarCotas(null);
-      if (g !== geracao) return;
-      contas = lista;
-    } catch {
-      // Falha de rede não apaga leitura boa: o que já está na tela envelhece sozinho (o `agora`
-      // sobe e a conta vira `velha` com a idade ao lado). Zerar aqui fazia a faixa inteira
-      // desaparecer num 500 de um segundo.
-    }
-  }
+  onMount(() => {
+    quotaFeed.retain();
+    return () => quotaFeed.release();
+  });
 
   $effect(() => {
     void serverKey;
-    void carregar();
-  });
-
-  onMount(() => {
-    const t = setInterval(() => {
-      agora = Date.now() / 1000;
-      void carregar();
-    }, 60_000);
-    return () => clearInterval(t);
+    quotaFeed.setServidor(serverKey);
   });
 </script>
 
@@ -90,9 +64,9 @@
                    informação de uma cota. O formato muda com a escala — janela longa (7d) mostra o
                    DIA ("↺sáb 18h"), porque "↺4d6h" ninguém converte de cabeça; janela curta mostra
                    quanto falta ("↺2h10"), que é como se pensa em horas. -->
-              {@const reset = janelaLonga(j.resetTs, agora)
-                ? diaDoReset(j.resetTs, agora)
-                : faltaPara(j.resetTs, agora)}
+              {@const reset = janelaLonga(j.resetTs, quotaFeed.agora)
+                ? diaDoReset(j.resetTs, quotaFeed.agora)
+                : faltaPara(j.resetTs, quotaFeed.agora)}
               {#if reset}<span class="quota-reset">↺{reset}</span>{/if}
             {/each}
           {/if}

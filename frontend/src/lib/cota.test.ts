@@ -2,7 +2,7 @@
 // rede aqui — recebe o CotaConta[] de /api/cotas e devolve o quê mostrar.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { overwriteGetLocale } from '../paraglide/runtime';
-import { faixaDeCota, nivelDePct, faltaPara, diaDoReset, janelaLonga, VELHA_APOS_S } from './cota';
+import { faixaDeCota, nivelDePct, faltaPara, diaDoReset, janelaLonga, VELHA_APOS_S, piorJanela } from './cota';
 import type { CotaConta } from './contaEstado';
 
 function lida(label: string, cinco: number, sete: number, extra: Partial<CotaConta> = {}): CotaConta {
@@ -121,5 +121,24 @@ describe('janela longa — que dia volta', () => {
   it('reset ausente ou já passado não desenha nada', () => {
     expect(diaDoReset(null, agora)).toBe('');
     expect(diaDoReset(agora - 10, agora)).toBe('');
+  });
+});
+
+describe('piorJanela — o smart da pílula do topo', () => {
+  it('devolve a janela MAIS cheia entre todas as contas, com dona e janela', () => {
+    const r = piorJanela(faixaDeCota([lida('default', 13, 22), lida('200-01', 26, 87)]));
+    expect(r?.conta.label).toBe('200-01');
+    expect(r?.janela.rotulo).toBe('7d');
+    expect(r?.janela.pct).toBe(87);
+  });
+
+  it('em empate ganha a janela CURTA — a 5h derruba a sessão antes da 7d', () => {
+    const r = piorJanela(faixaDeCota([lida('default', 50, 50)]));
+    expect(r?.janela.rotulo).toBe('5h');
+  });
+
+  it('sem conta ou sem janela nenhuma: null (a pílula não inventa número)', () => {
+    expect(piorJanela(faixaDeCota([]))).toBeNull();
+    expect(piorJanela(faixaDeCota([semLeitura('jefferson')]))).toBeNull();
   });
 });
