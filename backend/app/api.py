@@ -3935,7 +3935,10 @@ def _models_cache_get(chave: str) -> dict | None:
             return None
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    _claude_models_cache[chave] = (time.monotonic(), resp)
+    # Promove pra memoria DESCONTANDO a idade que o registro ja tem no disco — carimbar com o
+    # monotonic de agora zerava o relogio e um dado de 6d23h passava a valer mais 7 dias.
+    idade = time.time() - float(bruto["ts"])
+    _claude_models_cache[chave] = (time.monotonic() - idade, resp)
     return resp
 
 
