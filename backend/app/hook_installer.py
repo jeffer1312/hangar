@@ -285,7 +285,11 @@ def _guard_path(config_dir: Path) -> str:
     link = config_dir / "hooks" / "guard_tmux.py"
     try:
         link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink() and os.readlink(link) == GUARD_HOOK:
+        # realpath nos dois lados, e nao `os.readlink(link) == GUARD_HOOK`: no Windows o readlink
+        # devolve o alvo com o prefixo de caminho estendido (\\?\C:\...), entao a igualdade por
+        # string nunca dava certo e o symlink era refeito a cada subida do backend. Mesmo motivo
+        # (e mesma correcao) do contas._aponta_para, onde o estrago era maior.
+        if link.is_symlink() and os.path.realpath(link) == os.path.realpath(GUARD_HOOK):
             return str(link)
         if link.exists() or link.is_symlink():
             link.unlink()
