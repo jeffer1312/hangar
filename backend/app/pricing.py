@@ -174,8 +174,11 @@ def _ler_json(p: Path) -> dict | None:
     """None em qualquer problema, inclusive JSON válido do tipo errado. `null` e lista não
     levantam ValueError, e um .get() em cima disso já derrubou o app inteiro uma vez."""
     try:
-        d = json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError):
+        # encoding explícito: no Windows o default é cp1252 e o cache traz nome de modelo/provedor
+        # vindo da rede. UnicodeDecodeError não é json.JSONDecodeError — sem ele no except, um byte
+        # fora do mapa cp1252 sobe em vez de virar o None que esta função promete.
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return d if isinstance(d, dict) else None
 
@@ -212,7 +215,10 @@ def gravar_override(model: str, tarifa: dict) -> None:
     atual = _ler_json(p) or {}
     atual[canonizar(model)] = {**tarifa, "provider": tarifa.get("provider", "override")}
     tmp = p.with_suffix(f".{os.getpid()}.tmp")   # pid no tmp: dois writers não se entrelaçam
-    tmp.write_text(json.dumps(atual, indent=1, ensure_ascii=False))
+    # ensure_ascii=False + encoding do locale = arquivo gravado em cp1252 no Windows (ou erro
+    # seco, pra caractere fora do mapa) e relido como utf-8 por _ler_json. Os dois lados do
+    # round-trip precisam dizer utf-8; só um deles dizendo é pior que nenhum.
+    tmp.write_text(json.dumps(atual, indent=1, ensure_ascii=False), encoding="utf-8")
     tmp.replace(p)
     invalidar_cache()
 
@@ -337,7 +343,7 @@ def _baixar() -> None:
     # O _carregar() já relê este arquivo com _rate(), que trata None -> input e marca estimado.
     payload = {"modelos": slim(bruto)}
     tmp = destino.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False))
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")   # ver gravar_override
     tmp.replace(destino)
     invalidar_cache()
     _log.info("tarifas: %d modelos atualizados do models.dev", len(cat))

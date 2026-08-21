@@ -427,7 +427,10 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     ticket = Path(base) / ".claude-pocket-pi" / f"{pane_id.lstrip('%')}.json"
     sid = _pi_sid_of(pid) if pid else None
     try:
-        data = json.loads(ticket.read_text())
+        # encoding explicito: o bilhete guarda o CAMINHO do transcript, e no Windows o default e
+        # cp1252. Uma pasta com acento (Area de trabalho) ou emoji volta corrompida daqui — e o
+        # caminho corrompido nao existe, entao a sessao Pi ficaria sem transcript sem erro nenhum.
+        data = json.loads(ticket.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return None            # ver o irmao em kimi_session_file: nao-dict derruba list() inteira
         f, ts = data.get("file"), data.get("ts")
@@ -506,7 +509,7 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
     ticket = Path(base) / ".claude-pocket-kimi" / f"{pane_id.lstrip('%')}.json"
     try:
-        data = json.loads(ticket.read_text())
+        data = json.loads(ticket.read_text(encoding="utf-8"))   # mesmo motivo do pi_session_file
         if not isinstance(data, dict):
             # JSON VALIDO do tipo errado (`null`, lista) nao levanta ValueError, entao o except
             # abaixo nao pega: `.get` num nao-dict e AttributeError, que sobe pelo loop de list()

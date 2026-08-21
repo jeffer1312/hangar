@@ -87,8 +87,15 @@ def _carregar() -> dict[str, Any]:
         with open(_caminho(), encoding="utf-8") as fh:
             d = json.load(fh)
         return d if isinstance(d, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         # Arquivo ausente/corrompido não pode derrubar o backend: sem override, vale o env.
+        #
+        # UnicodeDecodeError é a segunda forma de "corrompido", e ela NÃO é json.JSONDecodeError:
+        # o arquivo é lido como utf-8, então basta um byte que não seja utf-8 (editado à mão num
+        # editor cp1252, ou uma escrita cortada no meio de um caractere multibyte) pra exceção
+        # atravessar este except. E ela sobe num caminho quente — `get()` é quem responde
+        # `automations_enabled()` e `resolve_scan_roots()`. A promessa da linha acima já era essa;
+        # o que faltava era o except cumpri-la.
         return {}
 
 

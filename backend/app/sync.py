@@ -33,7 +33,7 @@ def _data_path() -> Path:
 
 def load_vault() -> dict | None:
     try:
-        return json.loads(_data_path().read_text())
+        return json.loads(_data_path().read_text(encoding="utf-8"))   # nunca o cp1252 do locale
     except FileNotFoundError:
         return None  # sem cadastro ainda
     except (OSError, json.JSONDecodeError):

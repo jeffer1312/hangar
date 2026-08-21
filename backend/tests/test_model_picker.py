@@ -11,8 +11,8 @@ from app.terminal_input import TerminalInput
 FIX = Path(__file__).parent / "fixtures"
 # Panes reais capturados do picker ao vivo (tmux): Opus ativo (6 niveis de esforco, cursor
 # na linha 2, esforco xHigh) e cursor sobre Haiku (esforco nao suportado).
-PANE_OPUS = (FIX / "pane_model_picker_opus.txt").read_text()
-PANE_HAIKU = (FIX / "pane_model_picker_haiku.txt").read_text()
+PANE_OPUS = (FIX / "pane_model_picker_opus.txt").read_text(encoding="utf-8")
+PANE_HAIKU = (FIX / "pane_model_picker_haiku.txt").read_text(encoding="utf-8")
 # Pane de chat parado: e o que `_require_drivable` le ANTES de digitar `/model` (a sessao
 # precisa estar livre — com o Claude trabalhando o texto viraria mensagem enfileirada).
 PANE_IDLE = "assistant: pronto\n❯ \n"
@@ -308,7 +308,7 @@ def test_set_model_effort_requires_model_or_effort():
 # Pane real capturado em 31/07/2026 (claude 2.1.220, conta Anthropic): 5 linhas, com o Fable no
 # meio. E o fixture que prova o bug que motivou a mudanca — a lista de 4 chumbada no front nao
 # mostrava o Fable e ainda dava a Sonnet/Haiku um numero de linha errado.
-PANE_FABLE = (FIX / "pane_model_picker_fable.txt").read_text()
+PANE_FABLE = (FIX / "pane_model_picker_fable.txt").read_text(encoding="utf-8")
 
 
 def test_parse_model_rows_reads_fable_and_descriptions():

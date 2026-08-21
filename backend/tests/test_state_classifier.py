@@ -112,10 +112,10 @@ def test_idle_when_no_spinner_or_widget():
 
 def test_real_fixtures():
     fx = Path(__file__).parent / "fixtures"
-    assert classify((fx / "pane_idle.txt").read_text())[0] == "idle"
-    s, lbl, *_ = classify((fx / "pane_thinking.txt").read_text())
+    assert classify((fx / "pane_idle.txt").read_text(encoding="utf-8"))[0] == "idle"
+    s, lbl, *_ = classify((fx / "pane_thinking.txt").read_text(encoding="utf-8"))
     assert s == "working" and lbl == "Elucidating…"
-    s2, _, q2, opts2 = classify((fx / "pane_awaiting_input.txt").read_text())
+    s2, _, q2, opts2 = classify((fx / "pane_awaiting_input.txt").read_text(encoding="utf-8"))
     assert s2 == "awaiting_input" and opts2 and "proceed?" in (q2 or "")
 
 
@@ -125,7 +125,7 @@ def test_quoted_menu_in_scrollback_is_idle():
     entao NAO e um widget selecionavel -> idle, nao awaiting_input (senao o app trava num menu
     fantasma). Captura real do pane que travou o claude-pocket."""
     fx = Path(__file__).parent / "fixtures" / "pane_quoted_menu_scrollback.txt"
-    state, _, _, options = classify(fx.read_text())
+    state, _, _, options = classify(fx.read_text(encoding="utf-8"))
     assert state == "idle", f"menu citado virou {state} com opcoes {options}"
 
 
@@ -133,7 +133,7 @@ def test_askuserquestion_real_fixture():
     """A AskUserQuestion (widget do assistente) capturada de verdade do pane: o classificador
     tem que extrair a pergunta e as opcoes reais, escopadas ao box do picker."""
     fx = Path(__file__).parent / "fixtures" / "pane_askuserquestion.txt"
-    state, _, question, options = classify(fx.read_text())
+    state, _, question, options = classify(fx.read_text(encoding="utf-8"))
     assert state == "awaiting_input"
     assert "Captura de formato" in (question or "")
     assert "Opção Alpha" in options

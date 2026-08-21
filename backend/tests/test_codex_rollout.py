@@ -109,7 +109,7 @@ def test_tool_call_and_result():
 
 def test_real_fixture_parses():
     p = Path(__file__).parent / "fixtures/codex/rollout_sample.jsonl"
-    evs = [e for ln in p.read_text().splitlines() if ln.strip()
+    evs = [e for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()
            for e in parse_rollout_line(ln)]
     kinds = {e.kind for e in evs}
     assert "user_msg" in kinds and "assistant_msg" in kinds

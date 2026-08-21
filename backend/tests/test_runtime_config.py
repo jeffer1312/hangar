@@ -31,7 +31,7 @@ def test_override_vence_o_env(monkeypatch):
 
 def test_campo_desconhecido_e_ignorado():
     rc.aplicar({"auth_token": "roubado", "port": 1})
-    salvo = json.loads((rc._caminho()).read_text())
+    salvo = json.loads((rc._caminho()).read_text(encoding="utf-8"))
     assert salvo == {}          # o cliente não inventa setting
 
 
@@ -103,9 +103,24 @@ def test_tipos_invalidos_sao_recusados():
 
 
 def test_arquivo_corrompido_nao_derruba(monkeypatch):
-    rc._caminho().write_text("{ isso não é json")
+    # encoding explícito: sem ele o `ã` virava cp1252 no Windows, e o que o caso exercitava lá era
+    # byte inválido, não JSON inválido — dois defeitos diferentes, um deles por acidente.
+    rc._caminho().write_text("{ isso não é json", encoding="utf-8")
     monkeypatch.setattr(rc.settings, "upload_retention_days", 30)
     assert rc.get("upload_retention_days") == 30      # cai pro env, sem exceção
+
+
+def test_arquivo_nao_utf8_nao_derruba(monkeypatch):
+    """A outra forma de corrompido, e a que o except não pegava: bytes que não são utf-8.
+
+    Acontece de verdade — arquivo salvo à mão num editor cp1252, ou escrita cortada no meio de um
+    caractere multibyte. `_carregar` lê como utf-8, então isso levanta UnicodeDecodeError, que não
+    é json.JSONDecodeError e escapava por cima de `get()` — num caminho quente
+    (`automations_enabled`, `resolve_scan_roots`).
+    """
+    rc._caminho().write_bytes(b'{"automations": "n\xe3o"}')   # 0xe3 = 'ã' em cp1252, inválido em utf-8
+    monkeypatch.setattr(rc.settings, "upload_retention_days", 30)
+    assert rc.get("upload_retention_days") == 30
 
 
 def test_nao_deixa_lixo_tmp_ao_gravar():
