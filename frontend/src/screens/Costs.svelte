@@ -8,15 +8,14 @@
   import {
     mergeReports, fillDayGaps, tarifasPorModelo, custoDesconhecido, precoParcial, partirOcultos,
     custoSemCacheDe, equivalenteDe, isFree,
-    type ServerResult, type MergedReport,
-  } from '../lib/costs';
+    type ServerResult, type MergedReport, type ComboLocal, type DimBucket,
+  } from '@hangar/core';
   import { agruparPor, aplicar, filtrar, somar, type Filtro } from '../lib/cubo';
   import {
     brutos, contaInflada, serieComparada, totaisComparados, valorDe, type Metrica,
   } from '../lib/comparar';
   import { dec, tok, money, money2, type Cur } from '../lib/fmt';
   import { projectLabel } from '../lib/format';
-  import type { ComboLocal, DimBucket } from '../lib/types';
 
   interface Props { onBack: () => void; }
   let { onBack }: Props = $props();

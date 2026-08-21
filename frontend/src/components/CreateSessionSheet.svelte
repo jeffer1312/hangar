@@ -10,7 +10,7 @@
   import { basename, providerName } from '../lib/format';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
-  import type { SessionInfo, ConfigDirInfo, Provider } from '../lib/types';
+  import type { SessionInfo, ConfigDirInfo, Provider } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   interface Props {

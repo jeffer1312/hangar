@@ -1,5 +1,5 @@
 import * as m from '../paraglide/messages';
-import type { ChatEvent } from './types';
+import type { ChatEvent } from '@hangar/core';
 
 // Painel de atividade: deriva, SÓ no cliente, a lista de tarefas (TaskCreate/TaskUpdate/TaskStop,
 // ou TodoWrite stock) + os subagentes rodando (Agent/Workflow) a partir dos eventos que já chegam

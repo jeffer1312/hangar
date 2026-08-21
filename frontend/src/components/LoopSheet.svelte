@@ -4,8 +4,7 @@
   import { getLoopForServer, createLoopForServer, stopLoopForServer, resolveLoopForServer, refineLoopForServer } from '../lib/api';
   import { listServers, getActiveId } from '../lib/auth';
   import type { Server } from '../lib/auth';
-  import type { LoopState } from '../lib/types';
-  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
+  import { loopBadge, LOOP_TONE_COLOR, type LoopState } from '@hangar/core';
   import { LOOP_GUIDE } from '../lib/loopGuide';
   import * as m from '../paraglide/messages';
 

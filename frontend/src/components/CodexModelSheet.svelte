@@ -7,7 +7,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import * as m from '../paraglide/messages';
   import { getCodexModels, setCodexModel } from '../lib/api';
-  import type { CodexModel } from '../lib/types';
+  import type { CodexModel } from '@hangar/core';
 
   interface Props {
     open: boolean;

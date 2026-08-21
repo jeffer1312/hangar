@@ -23,7 +23,7 @@ import { intlLocale } from '../lib/locale';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
   import { focusFirstInvalid } from '../lib/focusCycle';
   import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
-  import type { AggSession, ResumeCandidate, Provider } from '../lib/types';
+  import type { AggSession, ResumeCandidate, Provider } from '@hangar/core';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, sortSessions, clusterByPair } from '../lib/format';

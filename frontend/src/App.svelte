@@ -6,7 +6,7 @@
   import { ttsPlayer } from './lib/ttsPlayer.svelte';
   import { ttsSelection } from './lib/ttsSelection.svelte';
   import { encodeCompareIds, type CompareId } from './lib/format';
-  import { peekStep, initialPeek } from './lib/peek';
+  import { peekStep, initialPeek } from '@hangar/core';
   import { parseHash, type Route } from './lib/route';
   import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
   import { abrirConfig, fecharConfig } from './lib/configNav';

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest';
 import { sidebarBridge, type SidebarBridgeHandlers } from './sidebarBridge';
-import type { AggSession } from './types';
+import type { AggSession } from '@hangar/core';
 
 const session = { name: 'x', serverId: 'a' } as unknown as AggSession;
 

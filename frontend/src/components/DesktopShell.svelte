@@ -17,7 +17,7 @@ import * as m from '../paraglide/messages';
   import { getConfig } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
   import { navMode } from '../lib/navMode.svelte';
-  import type { AggSession } from '../lib/types';
+  import type { AggSession } from '@hangar/core';
   import {
     aggregateWorkspaceActions,
     resolveWorkspaceChatTarget,

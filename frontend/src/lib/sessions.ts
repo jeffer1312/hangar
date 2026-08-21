@@ -2,7 +2,7 @@
 // slots/recompute/connect copiado em Sidebar/SessionList/Board (docs/polish-backlog.md).
 // Puro de propósito: o vitest roda em env node sem plugin svelte, então o que é testável
 // mora aqui; o ciclo de vida dos EventSources mora no sessionsStore.svelte.ts.
-import type { SessionInfo, AggSession } from './types';
+import type { SessionInfo, AggSession } from '@hangar/core';
 import type { Server } from './auth';
 import { serverColor } from './auth';
 

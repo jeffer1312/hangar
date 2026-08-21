@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import type { SessionInfo, StateEvent } from './types';
+import type { SessionInfo, StateEvent } from '@hangar/core';
 
 // Svelte 5 stores using writable (compatible with Svelte 5)
 export const sessions = writable<SessionInfo[]>([]);

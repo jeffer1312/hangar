@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import * as m from '../paraglide/messages';
-  import type { AnswerItem, AskQuestionPayload } from '../lib/types';
+  import type { AnswerItem, AskQuestionPayload } from '@hangar/core';
 
   // Estado interno de cada pergunta: opção(ões), texto digitado ou "conversar"
   type PickState =

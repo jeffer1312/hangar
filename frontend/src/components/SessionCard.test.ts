@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import SessionCard from './SessionCard.svelte';
-import type { SessionInfo } from '../lib/types';
+import type { SessionInfo } from '@hangar/core';
 
 function sessao(over: Partial<SessionInfo>): SessionInfo {
   return { name: 's1', state: 'idle', ...over } as SessionInfo;

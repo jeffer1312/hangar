@@ -5,7 +5,7 @@
   import { formataErro } from '../lib/errosApi';
   import { rotuloEstado, stateColors, parsePeerMessage, relativeTime, encodeCompareIds } from '../lib/format';
   import { getActiveId } from '../lib/auth';
-  import type { SessionInfo, State } from '../lib/types';
+  import type { SessionInfo, State } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   interface Props {

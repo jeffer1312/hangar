@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { CommandInfo } from '../lib/types';
+  import type { CommandInfo } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   // Tira inline de autocomplete acima do textarea. Aparece so quando o texto comeca com '/'

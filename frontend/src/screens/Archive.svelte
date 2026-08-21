@@ -8,7 +8,7 @@ import { intlLocale } from '../lib/locale';
     getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
     getEngines, type ArchiveFolder, type ArchiveEntry, type Motor,
   } from '../lib/api';
-  import type { ChatEvent } from '../lib/types';
+  import type { ChatEvent } from '@hangar/core';
   import { selectServer, listServers, getActiveId, serverColor } from '../lib/auth';
 
   interface Props {

@@ -3,7 +3,7 @@
 import * as m from '../paraglide/messages';
   import { getSessions, sendInput } from '../lib/api';
   import { rotuloEstado, stateColors } from '../lib/format';
-  import type { SessionInfo } from '../lib/types';
+  import type { SessionInfo } from '@hangar/core';
 
   interface Props {
     open: boolean;

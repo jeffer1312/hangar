@@ -26,7 +26,10 @@
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
-  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
+  import {
+    loopBadge, LOOP_TONE_COLOR, appendTail, hasSeam, prependOlder, especificidade, donoDaLinha,
+    type ChatEvent, type StateEvent, type StatsEvent, type State, type SessionInfo, type AskQuestionPayload, type AnswerItem, type Provider, type PlanDetail,
+  } from '@hangar/core';
   import {
     getHistory,
     sendInput,
@@ -46,12 +49,9 @@
     getPlan,
   } from '../lib/api';
   import { formataErro } from '../lib/errosApi';
-  import { appendTail, hasSeam, prependOlder } from '../lib/history';
-  import { especificidade, donoDaLinha } from '../lib/covers';
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
-  import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '../lib/format';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';

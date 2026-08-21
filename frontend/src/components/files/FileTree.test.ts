@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import FileTree from './FileTree.svelte';
-import type { TreeEntry } from '../../lib/types';
+import type { TreeEntry } from '@hangar/core';
 import { overwriteGetLocale } from '../../paraglide/runtime';
 
 interface Props {

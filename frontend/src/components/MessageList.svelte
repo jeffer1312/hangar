@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { chavesUnicas } from '../lib/messageKeys';
+  import { chavesUnicas, type ChatEvent, type StateEvent, type AskQuestionPayload, type AnswerItem } from '@hangar/core';
   import { tick } from 'svelte';
   import * as m from '../paraglide/messages';
-  import type { ChatEvent, StateEvent, AskQuestionPayload, AnswerItem } from '../lib/types';
   import UserBubble from './UserBubble.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import ToolCard from './ToolCard.svelte';

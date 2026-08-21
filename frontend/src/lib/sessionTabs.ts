@@ -3,7 +3,7 @@
 // das listas). Bucket com erro/offline não gera aba acionável — só o rótulo do servidor entra no
 // indicador `⚠ N offline`. Testável no vitest node (sem svelte).
 import { sortSessions } from './format';
-import type { AggSession } from './types';
+import type { AggSession } from '@hangar/core';
 import type { ServerBucket } from './sessions';
 
 export interface SessionTab { session: AggSession; boundary: boolean }

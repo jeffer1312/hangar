@@ -2,7 +2,7 @@
   // Barra de progresso do plano. Segmentada por Task quando cabe; única quando não cabe. A escolha é
   // do componente, não do chamador — três caminhos de render, zero configuração.
   import { planBadge } from '../lib/plan';
-  import type { SessionInfo } from '../lib/types';
+  import type { SessionInfo } from '@hangar/core';
 
   interface Props {
     session: Pick<SessionInfo, 'plan_name' | 'plan_task' | 'plan_task_total' | 'plan_done' | 'plan_total' | 'plan_complete' | 'plan_tasks'>;

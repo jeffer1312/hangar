@@ -7,7 +7,7 @@
   import { renderMarkdown } from '../lib/markdown';
   import { getPlans, setPlanPin, type PlanListItem } from '../lib/api';
   import { planBadge } from '../lib/plan';
-  import type { PlanDetail, SessionInfo } from '../lib/types';
+  import type { PlanDetail, SessionInfo } from '@hangar/core';
 
   interface Props {
     session: SessionInfo;

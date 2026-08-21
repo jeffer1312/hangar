@@ -4,7 +4,7 @@
 // ("cada balde é o recorte daquela chave" e "dia parado vale zero, não some do eixo") é
 // justamente a candidata a *o total não bate*, e dentro do componente era intestável.
 import { agruparPor, type DimFiltro } from './cubo';
-import type { ComboLocal, DimBucket } from './types';
+import type { ComboLocal, DimBucket } from '@hangar/core';
 
 // Tokens é o padrão da tela, não o dinheiro: conta Anthropic e conta Kimi são assinatura/cota, e
 // o `cost` é preço de tabela (models.dev). Comparar as duas em dólar responde a pergunta errada.

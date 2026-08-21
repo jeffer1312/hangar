@@ -5,7 +5,7 @@ import * as m from '../paraglide/messages';
 import { listFiles, readFile, searchFiles, pathDiff } from './api';
 import { FilesStore, filesStores } from './filesStore.svelte';
 import { overwriteGetLocale } from '../paraglide/runtime';
-import type { TreeEntry } from './types';
+import type { TreeEntry } from '@hangar/core';
 
 // Mock de módulo é `vi.mock`, NUNCA `vi.spyOn` num export: o namespace de um módulo ES é
 // somente leitura, e o spy estoura "Cannot redefine property".

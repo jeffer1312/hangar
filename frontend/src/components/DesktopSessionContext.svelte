@@ -7,7 +7,7 @@ import * as m from '../paraglide/messages';
   import PlanRing from './PlanRing.svelte';
   import FilesPanel from './files/FilesPanel.svelte';
   import StateChip from './StateChip.svelte';
-  import type { State, SessionInfo, PlanDetail } from '../lib/types';
+  import type { State, SessionInfo, PlanDetail } from '@hangar/core';
   import type { StatusFields } from '../lib/statusline';
   import { ctxWindow, providerName } from '../lib/format';
   import { planBadge } from '../lib/plan';

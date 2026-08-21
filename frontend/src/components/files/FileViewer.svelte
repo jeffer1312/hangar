@@ -1,7 +1,7 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
   import { mensagemDeErro } from '../../lib/errosApi';
-  import type { PathDiff, FileContent } from '../../lib/types';
+  import type { PathDiff, FileContent } from '@hangar/core';
   import { highlightDiff, highlightCodeLines, type DiffRow, type DiffToken } from '../../lib/highlight';
   import { dec } from '../../lib/fmt';
   import DiffView from '../git/DiffView.svelte';

@@ -10,7 +10,7 @@ import * as m from '../paraglide/messages';
 import { listFiles, readFile, searchFiles, pathDiff, writeFile } from './api';
 import { cleanErr } from './gitStore.svelte';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-import type { FileContent, PathDiff, SearchHit, TreeEntry } from './types';
+import type { FileContent, PathDiff, SearchHit, TreeEntry } from '@hangar/core';
 
 export class FilesStore {
   // Pastas expandidas na arvore (caminho absoluto dentro do repo). SvelteSet, nao Set: `$state`

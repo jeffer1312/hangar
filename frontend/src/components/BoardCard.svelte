@@ -9,12 +9,11 @@ import * as m from '../paraglide/messages';
   import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
   import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '../lib/format';
   import { parseStatusLine } from '../lib/statusline';
-  import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
+  import { loopBadge, LOOP_TONE_COLOR, type ChatEvent } from '@hangar/core';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
   import StateChip from './StateChip.svelte';
   import type { Server } from '../lib/auth';
-  import type { ChatEvent } from '../lib/types';
   import type { BoardRow, PendingMsg } from '../screens/Board.svelte';
 
   interface Props {

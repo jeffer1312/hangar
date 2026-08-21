@@ -1,7 +1,7 @@
 <script lang="ts">
   import BottomSheet from './BottomSheet.svelte';
   import { getRunners, startRun, stopRun, getRunPane } from '../lib/api';
-  import type { Runner, RunInfo } from '../lib/types';
+  import type { Runner, RunInfo } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   interface Props {

@@ -4,7 +4,7 @@
   // tool_result) — entao o diff aparece no momento da chamada, antes do "Successfully replaced".
   // Estreito (celular) -> unificado de uma coluna, o mesmo dado em outra ordem.
   import * as m from '../paraglide/messages';
-  import { computeEditDiff, type EditDiff, type SplitRow } from '../lib/editdiff';
+  import { computeEditDiff, type EditDiff, type SplitRow } from '@hangar/core';
   import { highlightCodeLines, type DiffToken } from '../lib/highlight';
   import { toolLook } from '../lib/toolLook.svelte';
   import { rolagemSoAoClicar } from '../lib/rolagemSoAoClicar';

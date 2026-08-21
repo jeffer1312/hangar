@@ -1,7 +1,7 @@
 // Ponte tipada entre a Sidebar (dona dos workflows pesados) e o SessionTabs (que vive fora da
 // <aside> quando ela está recolhida). Sem estado reativo: só registra handlers e delega.
 // Sem handler registrado, toda chamada é no-op — nada quebra num layout que não usa as abas.
-import type { AggSession } from './types';
+import type { AggSession } from '@hangar/core';
 
 export interface SidebarBridgeHandlers {
   openCreate: () => void;

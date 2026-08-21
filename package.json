@@ -1,0 +1,15 @@
+{
+  "name": "hangar",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "frontend"
+  ],
+  "scripts": {
+    "test": "npm run test -w @hangar/core && npm run test -w frontend",
+    "check": "npm run check -w @hangar/core && npm run check -w frontend"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.11.1"
+  }
+}

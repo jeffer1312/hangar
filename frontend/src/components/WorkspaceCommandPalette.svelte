@@ -1,6 +1,6 @@
 <script lang="ts">
   import ModalDialog from './ModalDialog.svelte';
-  import type { AggSession } from '../lib/types';
+  import type { AggSession } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import {
     filterWorkspaceItems,

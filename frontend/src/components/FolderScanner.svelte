@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { getRoots, scanDir } from '../lib/api';
   import { relativeTime } from '../lib/format';
-  import type { FsRoot, FsEntry, FsScanError } from '../lib/types';
+  import type { FsRoot, FsEntry, FsScanError } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   // Scanner mobile de pastas de projeto: chips de raiz + busca + coluna tappavel de

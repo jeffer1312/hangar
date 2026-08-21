@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agruparPor, aplicar, filtrar, somar } from './cubo';
-import type { ComboLocal } from './types';
+import type { ComboLocal } from '@hangar/core';
 
 const c = (o: Partial<ComboLocal>): ComboLocal => ({
   dia: '2026-07-01', provider: 'p', source: 'claude', project: '/r', model: 'm',

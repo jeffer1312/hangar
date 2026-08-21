@@ -2,7 +2,7 @@
   import { selectOption } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
   import { attentionFeed } from '../lib/format';
-  import type { AggSession } from '../lib/types';
+  import type { AggSession } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   interface Props {

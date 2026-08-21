@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { foldTasks, contarTasks, type Task } from './tasks';
-import type { ChatEvent } from './types';
+import type { ChatEvent } from '@hangar/core';
 
 // Helpers no shape REAL medido no transcript (ver o cabeçalho de tasks.ts).
 let seq = 0;

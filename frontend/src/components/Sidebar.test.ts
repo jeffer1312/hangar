@@ -77,7 +77,7 @@ vi.mock('../lib/format', () => ({
   providerTag: () => null,
 }));
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
-vi.mock('../lib/loop', () => ({ loopBadge: () => null, LOOP_TONE_COLOR: {} }));
+vi.mock('@hangar/core', async (importOriginal) => ({ ...(await importOriginal<typeof import('@hangar/core')>()), loopBadge: () => null, LOOP_TONE_COLOR: {} }));
 vi.mock('../lib/plan', () => ({ planBadge: () => null }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
@@ -110,7 +110,7 @@ import { sidebarBridge } from '../lib/sidebarBridge';
 import { navMode } from '../lib/navMode.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
 import * as api from '../lib/api';
-import type { AggSession } from '../lib/types';
+import type { AggSession } from '@hangar/core';
 
 beforeEach(() => {
   overwriteGetLocale(() => 'pt');   // textos dos menus e dialogs sao mensagens agora

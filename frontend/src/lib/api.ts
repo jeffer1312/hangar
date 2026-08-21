@@ -30,7 +30,7 @@ import type {
   FileContent,
   SearchResult,
   PathDiff,
-} from './types';
+} from '@hangar/core';
 
 // URL da idx-ésima imagem (colada no terminal) de uma msg do transcript. `?token` porque a tag img
 // não manda header Authorization e cross-origin (multi-PC) não leva cookie — o backend aceita ?token.

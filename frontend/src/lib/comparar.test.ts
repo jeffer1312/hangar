@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { brutos, contaInflada, segundaDe, serieComparada, totaisComparados, valorDe } from './comparar';
 import { filtrar, somar } from './cubo';
-import type { ComboLocal } from './types';
+import type { ComboLocal } from '@hangar/core';
 
 const c = (o: Partial<ComboLocal>): ComboLocal => ({
   dia: '2026-08-05', provider: 'p', source: 'claude', project: '/r', model: 'm',

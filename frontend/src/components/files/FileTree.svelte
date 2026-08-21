@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
-  import type { TreeEntry } from '../../lib/types';
+  import type { TreeEntry } from '@hangar/core';
 
   interface Props {
     entries: TreeEntry[];

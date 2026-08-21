@@ -104,9 +104,8 @@ vi.mock('../lib/auth', () => ({
 vi.mock('../lib/ttsPlayer.svelte', () => ({ ttsPlayer: { active: false, loading: false } }));
 vi.mock('../lib/ouvir', () => ({ ouvirTexto: vi.fn() }));
 vi.mock('../lib/speakable', () => ({ textoFalavelComCodigo: vi.fn(() => '') }));
-vi.mock('../lib/loop', () => ({ loopBadge: vi.fn(() => null), LOOP_TONE_COLOR: {} }));
+vi.mock('@hangar/core', async (importOriginal) => ({ ...(await importOriginal<typeof import('@hangar/core')>()), loopBadge: vi.fn(() => null), LOOP_TONE_COLOR: {}, appendTail: vi.fn(), hasSeam: vi.fn(), prependOlder: vi.fn() }));
 vi.mock('../lib/statusline', () => ({ parseStatusLine: vi.fn(() => null) }));
-vi.mock('../lib/history', () => ({ appendTail: vi.fn(), hasSeam: vi.fn(), prependOlder: vi.fn() }));
 vi.mock('../lib/activity', () => ({
   createActivityFolder: vi.fn(() => ({
     snapshot: () => ({ tasks: [], inProgress: 0, running: 0, agents: [], writeEvents: [] }),

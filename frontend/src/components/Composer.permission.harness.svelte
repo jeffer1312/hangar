@@ -1,6 +1,6 @@
 <script lang="ts">
   import Composer from './Composer.svelte';
-  import type { State } from '../lib/types';
+  import type { State } from '@hangar/core';
 
   let state = $state<State>('working');
   // exposto pro teste chamar

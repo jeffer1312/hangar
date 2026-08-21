@@ -5,7 +5,7 @@ import * as m from '../paraglide/messages';
 // Os grupos das acoes sao mensagens agora: o teste fixa o pt e usa as MESMAS mensagens
 // que os componentes usam, senao a agregacao (action.group === group) nunca casa.
 beforeEach(() => overwriteGetLocale(() => 'pt'));
-import type { AggSession } from './types';
+import type { AggSession } from '@hangar/core';
 import {
   aggregateWorkspaceActions,
   filterWorkspaceItems,

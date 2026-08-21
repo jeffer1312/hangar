@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import type { CommandInfo } from '../lib/types';
+  import { type CommandInfo, type State, type StatsEvent } from '@hangar/core';
   import { stateColors, abbrevNum } from '../lib/format';
   // Cache de comandos por sessao: sobrevive a remontagens do Composer (ex: voltar de
   // awaiting_input) pra buscar a lista so uma vez por sessao.
@@ -45,7 +45,6 @@
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
-  import type { State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
 

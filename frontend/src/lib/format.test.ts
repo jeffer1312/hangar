@@ -11,7 +11,7 @@ import {
   rotuloEstado,
   splitTodoBlock, parseImageMessage,
 } from './format';
-import type { ChatEvent, State } from './types';
+import type { ChatEvent, State } from '@hangar/core';
 import { overwriteGetLocale } from '../paraglide/runtime';
 import { intlLocale } from './locale';
 

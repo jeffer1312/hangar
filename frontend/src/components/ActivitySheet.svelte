@@ -7,7 +7,7 @@
   import MessageList from './MessageList.svelte';
   import { onDestroy, tick } from 'svelte';
   import type { Activity, TaskStatus } from '../lib/activity';
-  import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail } from '../lib/types';
+  import type { WorkflowSummary, WorkflowDetail, WorkflowAgentDetail, SubagentRun, SessionInfo, PlanDetail } from '@hangar/core';
 
   interface Props {
     open: boolean;

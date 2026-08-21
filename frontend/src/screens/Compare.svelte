@@ -6,7 +6,7 @@ import * as m from '../paraglide/messages';
   import { openEventStreamForServer, getHistoryTailForServer } from '../lib/api';
   import { listServers, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
-  import type { ChatEvent, StateEvent } from '../lib/types';
+  import type { ChatEvent, StateEvent } from '@hangar/core';
   import { rotuloEstado, stateColors, latestAssistantEvent, type CompareId } from '../lib/format';
 
   // Grade de comparação (feature #11): abre UM EventSource leve por sessão selecionada (reusa o

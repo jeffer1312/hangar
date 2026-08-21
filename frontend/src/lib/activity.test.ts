@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createActivityFolder } from './activity';
-import type { ChatEvent } from './types';
+import type { ChatEvent } from '@hangar/core';
 
 let seq = 0;
 // Agent (launch bloqueante em background) -> vira uma linha no painel.

@@ -1,7 +1,7 @@
 <script lang="ts">
   import AskQuestionStepper from './AskQuestionStepper.svelte';
   import * as m from '../paraglide/messages';
-  import type { AskQuestionPayload, AnswerItem } from '../lib/types';
+  import type { AskQuestionPayload, AnswerItem } from '@hangar/core';
 
   // Container desktop: card inline no fluxo do chat (sem backdrop/modal) — o contexto acima
   // (mensagem/tabela do assistente) fica visível enquanto se escolhe. Roda o mesmo stepper do sheet.

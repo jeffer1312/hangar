@@ -27,6 +27,7 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
+    "@hangar/core": "*",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",

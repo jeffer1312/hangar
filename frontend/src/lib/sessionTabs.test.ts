@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionTabs, focusedTabKey, tabKeyOf } from './sessionTabs';
 import type { Server } from './auth';
 import type { ServerBucket } from './sessions';
-import type { AggSession, State } from './types';
+import type { AggSession, State } from '@hangar/core';
 
 function srv(id: string, label: string): Server {
   return { id, label, baseUrl: `http://${id}`, token: 't' };

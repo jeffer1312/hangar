@@ -6,7 +6,7 @@ import * as m from '../paraglide/messages';
   import { relativeTime, rotuloEstado, stateColors } from '../lib/format';
   import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
   import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '../lib/api';
-  import type { SessionInfo, State } from '../lib/types';
+  import type { SessionInfo, State } from '@hangar/core';
 
   // Troca de sessao sem voltar pra home. Dois modos: "sessoes" (lista das outras sessoes vivas +
   // "Nova sessão") e "conversas" (busca de CONTEUDO em todos os transcripts, vivos + arquivados,

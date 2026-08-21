@@ -12,7 +12,7 @@ import { mount, unmount, tick } from 'svelte';
 import ActivitySheet from './ActivitySheet.svelte';
 import * as m from '../paraglide/messages';
 import * as apiLib from '../lib/api';
-import type { SubagentRun } from '../lib/types';
+import type { SubagentRun } from '@hangar/core';
 
 vi.mock('../lib/api', () => ({
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),

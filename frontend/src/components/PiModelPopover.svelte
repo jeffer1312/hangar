@@ -7,7 +7,7 @@
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
   import { getPiModels, setPiModel, modelOptions } from '../lib/api';
-  import type { PiModel } from '../lib/types';
+  import type { PiModel } from '@hangar/core';
 
   interface Props {
     open: boolean;

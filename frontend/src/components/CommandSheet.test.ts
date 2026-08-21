@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import CommandSheet from './CommandSheet.svelte';
-import type { CommandInfo } from '../lib/types';
+import type { CommandInfo } from '@hangar/core';
 
 const COMANDOS: CommandInfo[] = [
   { name: 'model', display: '/model', source: 'builtin' },

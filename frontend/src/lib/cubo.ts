@@ -3,7 +3,7 @@
 // Os quatro agrupamentos do CostReport somam antes de mandar, e depois de somado não dá pra
 // separar "quanto daquele projeto foi de tal fonte". Aqui cada linha é uma combinação que
 // aconteceu, então qualquer recorte vira uma soma — inclusive dois ou três filtros juntos.
-import type { ComboLocal, DimBucket } from './types';
+import type { ComboLocal, DimBucket } from '@hangar/core';
 
 export type Dim = 'dia' | 'provider' | 'source' | 'project' | 'model' | 'servidor';
 

@@ -1,8 +1,7 @@
 <script lang="ts">
-  import type { ChatEvent } from '../lib/types';
+  import { computeEditDiff, extractEdits, extractFilePath, type ChatEvent } from '@hangar/core';
   import * as m from '../paraglide/messages';
   import { summarizeToolInput, toolGroupCounts, toolGroupLabel, toolPhase } from '../lib/format';
-  import { computeEditDiff, extractEdits, extractFilePath } from '../lib/editdiff';
   import { toolLook } from '../lib/toolLook.svelte';
   import ToolCard from './ToolCard.svelte';
 

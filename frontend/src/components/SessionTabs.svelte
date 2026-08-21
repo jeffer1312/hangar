@@ -16,7 +16,7 @@ import * as m from '../paraglide/messages';
   import HangarMark from './icons/HangarMark.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import QuotaPill from './QuotaPill.svelte';
-  import type { AggSession } from '../lib/types';
+  import type { AggSession } from '@hangar/core';
 
   interface Props {
     currentKey: string | null;

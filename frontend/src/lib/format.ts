@@ -24,7 +24,7 @@ export function resetsIn(ts: number | null | undefined): string {
 
 // Vocabulário único de estado (label pt-BR + cor) — compartilhado por SessionCard, Sidebar e
 // SessionSwitcherSheet pra mesma sessão nunca aparecer com nomes/cores divergentes.
-import type { State, ChatEvent, SessionInfo } from './types';
+import type { State, ChatEvent, SessionInfo } from '@hangar/core';
 import { intlLocale } from './locale';
 import * as m from '../paraglide/messages';
 

@@ -5,7 +5,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import { getLimits } from '../lib/api';
   import { resetsIn } from '../lib/format';
-  import type { SessionLimits, RateLimitWindow } from '../lib/types';
+  import type { SessionLimits, RateLimitWindow } from '@hangar/core';
 
   interface Props {
     open: boolean;

@@ -1,4 +1,4 @@
-import type { AggSession } from './types';
+import type { AggSession } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
 export type WorkspaceView = 'chat' | 'board' | 'canvas';

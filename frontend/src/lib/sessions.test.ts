@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Slot } from './sessions';
 import type { Server } from './auth';
-import type { SessionInfo } from './types';
+import type { SessionInfo } from '@hangar/core';
 
 // sessions.ts importa auth.ts, que toca localStorage no load via migrate(); vitest env=node nao tem
 // localStorage. Stub minimo ANTES do import dinamico — mesmo padrao do auth.test.ts (import estatico

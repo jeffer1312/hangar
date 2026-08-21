@@ -2,7 +2,7 @@
 // a porcentagem são montados aqui, os componentes só renderizam.
 
 import * as m from '../paraglide/messages';
-import type { SessionInfo } from './types';
+import type { SessionInfo } from '@hangar/core';
 
 export interface PlanBadge {
   label: string;

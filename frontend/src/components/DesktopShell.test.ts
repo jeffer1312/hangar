@@ -58,7 +58,7 @@ vi.mock('../lib/format', () => ({
   untrackedReason: () => '', providerName: () => 'claude', providerTag: () => null,
 }));
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
-vi.mock('../lib/loop', () => ({ loopBadge: () => null, LOOP_TONE_COLOR: {} }));
+vi.mock('@hangar/core', async (importOriginal) => ({ ...(await importOriginal<typeof import('@hangar/core')>()), loopBadge: () => null, LOOP_TONE_COLOR: {} }));
 vi.mock('../lib/plan', () => ({ planBadge: () => null }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
