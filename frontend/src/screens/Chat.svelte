@@ -53,7 +53,7 @@
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
-  import { countAwaiting, nextAwaiting, providerName, untrackedReason } from '../lib/format';
+  import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '../lib/format';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';
@@ -91,12 +91,19 @@
     // Este Chat já está DENTRO do modal do par. Corta a recursão: sem isso o par de lá é esta
     // mesma sessão, e abrir "o par num modal" empilhava modal sobre modal (3+ SSE abertos).
     nested?: boolean;
+    // Split do desktop: o pane é estreito e a NavBar inteira vira ruído de mobile — no lugar dela
+    // entra uma aba fina (bolinha de estado + nome + ✕). As ações da NavBar ficam acessíveis
+    // fechando o split (o painel de contexto volta) — decisão de 2026-08-21.
+    splitTab?: boolean;
+    // ✕ da aba (só os panes de split têm; o principal não fecha sozinho).
+    onCloseSplit?: () => void;
   }
   let {
     sessionName, onBack, onNavigateToChat, desktop = false, onOpenSplit, onOpenTerminalPanel,
     terminalPanelOpen = false, terminalPanelDisponivel = true,
     topInset = 0, onOpenWorkspacePalette, showContextPanel = false, ctxToggleExterno = false,
     publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
+    splitTab = false, onCloseSplit,
   }: Props = $props();
 
   let events = $state<ChatEvent[]>([]);
@@ -1616,14 +1623,31 @@
 <div
   class="chat-screen"
   class:desktop
+  class:split-pane={splitTab}
   class:with-context={desktop && showContextPanel}
   style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.largura}px`}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
 >
   <div class="sr-only" role="status">{stateAnnounce}</div>
+  {#if splitTab}
+    <!-- Aba fina do split: identidade + estado, nada de breadcrumb/ações (estilo "uma janela só").
+         No FLUXO, antes do navbar-mount: conteúdo rola DENTRO do underlay e nunca passa por trás
+         dela (a NavBar é overlay e paga esse preço; a aba não precisa). O mount fica vazio e mede
+         0 → --nav-h zera e a lista começa logo abaixo da aba. -->
+    <div class="split-tab">
+      <span class="split-tab-dot" style:background={stateColors[currentState]} aria-hidden="true"></span>
+      <span class="split-tab-nome">{sessionName}</span>
+      {#if onCloseSplit}
+        <button class="split-tab-fechar" onclick={onCloseSplit}
+                aria-label={`${m.shell_fechar_painel_de()} ${sessionName}`} title={m.shell_fechar_painel()}>×</button>
+      {/if}
+    </div>
+  {/if}
   <div class="navbar-mount" bind:this={navEl}>
+    {#if !splitTab}
     <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    {/if}
   </div>
 
   <!-- LoopSheet FORA do .navbar-mount: no desktop largo o mount fica display:none (a info migra
@@ -1945,6 +1969,10 @@
      virtual em desktop, o fit acima (nested || desktop) nem roda pra sobrescrever isto. */
   .chat-screen.desktop { height: 100%; }
 
+  /* Pane do split é um card de vidro (DesktopShell pinta --glass-panel): o backing sólido aqui
+     taparia a foto. O glitch do iOS que pede o sólido é mobile — este modo é desktop-only. */
+  .chat-screen.split-pane { background: transparent; }
+
   /* Navbar overlay colado no topo (nao descola): a lista rola POR BAIXO via --nav-h. pointer-events
      deixa o fade transparente passar o toque pro conteudo; a navbar reativa. */
   .navbar-mount {
@@ -1958,6 +1986,46 @@
   .navbar-mount > :global(.navbar) {
     pointer-events: auto;
   }
+
+  /* Aba fina do split (substitui a NavBar no pane estreito). No fluxo do .chat-screen, acima do
+     underlay — sem fundo próprio: quem pinta o vidro é o card do pane (DesktopShell). */
+  .split-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .split-tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .split-tab-nome {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .split-tab-fechar {
+    margin-left: auto;
+    width: 22px;
+    height: 22px;
+    /* vence o piso global de 44px de button (app.css) — senão a aba "fina" estufa pra 56px */
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .split-tab-fechar:hover { color: var(--text-primary); background: var(--bg-hover); }
 
   /* Desktop LARGO com painel de contexto: a NavBar some — info (estado/repo/modelo/limites) e
      acoes (terminal/rodar/anexos/atividade) ja migram pro DesktopSessionContext. Mesma breakpoint
