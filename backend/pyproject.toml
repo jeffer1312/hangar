@@ -18,6 +18,12 @@ dependencies = [
     # que e extensao C. Ver app/procinfo.py: no Linux o caminho continua sendo /proc direto,
     # porque psutil.open_files() e bem mais lento e esses caminhos rodam por poll.
     "psutil>=5.9.0 ; sys_platform != 'linux'",
+    # PTY do painel de terminal no Windows (ConPTY). Marcador `== win32` e nao `!= linux` como o
+    # psutil: este pacote so EXISTE pra Windows — no macOS e no Linux quem abre o pty e o `pty` da
+    # stdlib, e pedir o pywinpty la quebraria o `uv sync`. Pelo mesmo motivo ele NAO entra sem
+    # marcador no grupo dev (o psutil entra, pra o Linux conseguir testar o ramo de Windows): nao
+    # ha wheel de pywinpty pra Linux, entao o ramo dele so pode ser exercitado no Windows mesmo.
+    "pywinpty>=3.0.5 ; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

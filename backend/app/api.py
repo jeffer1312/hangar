@@ -2628,6 +2628,12 @@ def term_input(name: str, body: TermInputBody):
     return {"ok": True}
 
 
+def _painel_disponivel() -> bool:
+    # O termsock NAO importa `pty` no topo justamente pra este import funcionar no Windows.
+    from app import termsock
+    return termsock.painel_disponivel()
+
+
 @app.get("/api/config", dependencies=[Depends(require_auth)])
 def get_config():
     """Config editavel pelo app + o que e so-leitura (exige reiniciar o servico).
@@ -2641,7 +2647,11 @@ def get_config():
             "lan_bind_ip": settings.lan_bind_ip,
             "server_id": settings.server_id,
             "public_url": settings.public_url,
-            "terminal_panel": os.name == "posix",   # `pty` e POSIX-only; sem ele o painel nao existe
+            # CAPACIDADE, nao nome de sistema: "da pra abrir o painel aqui?". Ela responde False
+            # tambem num POSIX sem `pty` e True no dia em que o Windows tiver motor de I/O — o
+            # `os.name == "posix"` que estava aqui respondia outra pergunta. Import tardio pelo
+            # mesmo motivo de sempre: o termsock nao pode ser importado no topo deste modulo.
+            "terminal_panel": _painel_disponivel(),
         },
     }
 

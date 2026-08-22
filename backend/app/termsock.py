@@ -10,6 +10,7 @@ cru no topo vira `ModuleNotFoundError` la, em feature que hoje funciona.
 """
 import asyncio
 import contextlib
+import importlib
 import json
 import logging
 import os
@@ -29,6 +30,61 @@ from app.auth import _LOOPBACK, _blocked, _record_fail
 from app.config import settings
 
 _log = logging.getLogger(__name__)
+
+
+def _importavel(modulo: str) -> bool:
+    """O modulo existe E carrega AQUI? — a pergunta e de capacidade, entao a resposta e tentar.
+
+    `os.name == "posix"` responderia outra coisa. E `importlib.util.find_spec("pty")` responderia
+    ERRADO: o `pty.py` da stdlib esta presente no Windows tambem (o find_spec acha), e so estoura
+    quando ele importa `tty` -> `termios`. Medido nesta VM: `import pty` la levanta
+    `ModuleNotFoundError: No module named 'termios'`.
+    """
+    try:
+        importlib.import_module(modulo)
+        return True
+    except Exception:                            # noqa: BLE001 — qualquer falha e "nao da"
+        return False
+
+
+# Qual motor de PTY esta disponivel nesta maquina — por CAPACIDADE, nao por nome de sistema (mesmo
+# motivo do `procinfo._TEM_PROC`: "e unix?" responde SIM no macOS, que nao tem /proc).
+#
+# O do POSIX e decidido no IMPORT: `import pty` e stdlib e nao faz nada ao processo.
+# O do Windows e PREGUICOSO, e isso NAO e estilo — medido em 22/08/2026: importar o `winpty` tem
+# EFEITO COLATERAL no processo (ele carrega a DLL do ConPTY), e com esse import no topo o
+# `test_sessao_escondida_nao_muda_o_custo_da_listagem` passou a falhar quando o arquivo roda junto
+# com test_api.py — 204 passed viravam 1 failed, e o teste sozinho passava. Um import que muda o
+# comportamento de OUTRA coisa nao pode acontecer so pra responder uma pergunta que quase ninguem
+# faz: quem abre pty paga por ele, o resto do backend nao.
+_PTY_POSIX = _importavel("pty")            # pty.fork() + os.read no master
+_pty_windows: Optional[bool] = None        # ConPTY via pywinpty (dependencia so-Windows)
+
+
+def tem_pty_windows() -> bool:
+    """Da pra abrir um ConPTY aqui? Responde uma vez e guarda (o import e que e caro)."""
+    global _pty_windows
+    if _pty_windows is None:
+        _pty_windows = _importavel("winpty")
+    return _pty_windows
+
+
+def painel_disponivel() -> bool:
+    """Da pra abrir o painel de terminal NESTA maquina? (o que o /api/config publica)
+
+    Sao DUAS perguntas, e esta e a segunda: nao basta o pty abrir, tem que haver laco de leitura
+    pra ele. No Windows o pty ja abre (pywinpty 3.0.5 provado no Python 3.14 desta VM), mas o
+    `termsock` inteiro e construido sobre `loop.add_reader`, que no ProactorEventLoop levanta
+    NotImplementedError ate pra socket — oferecer o painel antes do motor seria um botao que abre
+    terminal morto.
+
+    QUANDO o motor de I/O do Windows entrar, e este `return` que muda — e so ele. A capacidade de
+    abrir o pty ja esta respondida acima, e de proposito nao e consultada aqui: chamar
+    `tem_pty_windows()` neste caminho traria o import (e o efeito colateral dele) pra dentro do
+    /api/config, que todo cliente chama.
+    """
+    return _PTY_POSIX
+
 
 _LEITURA = 65536
 # Teto da fila de saida (bytes acumulados esperando o `send_bytes`): sem isso um cliente lento
