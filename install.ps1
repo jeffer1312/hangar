@@ -471,9 +471,14 @@ if ((Tem 'git') -and (Test-Path "$raiz\.git")) {
 $precisa = $true
 if ((Test-Path $dist) -and (Test-Path $modulos)) {
     if ($marca -and (Test-Path $marcaArq)) {
-        # -Raw: sem isto o Get-Content devolve array de linhas e a comparacao com a string falha
-        # sempre - o build rodaria toda vez de novo, so que por outro motivo.
-        $precisa = ((Get-Content $marcaArq -Raw) -ne $marca)
+        # `Ler-Texto` e nao `Get-Content -Raw` (que era o que estava aqui): sem -Encoding, o 5.1
+        # decodifica arquivo sem BOM pela codepage ANSI e o 7 por UTF-8 — e a marca carrega a saida
+        # do `git status --porcelain`, onde entra nome de arquivo acentuado. Lendo errado, a
+        # comparacao diz "mudou" e o front e rebuildado a cada execucao, por um motivo que nao tem
+        # nada a ver com o git. Mesmo furo do .env e do settings.json, terceira porta.
+        # (O `-Raw` original existia porque sem ele o Get-Content devolve ARRAY de linhas e a
+        # comparacao com a string falharia sempre; `Ler-Texto` ja devolve o arquivo inteiro.)
+        $precisa = ((Ler-Texto $marcaArq) -ne $marca)
     } elseif (-not $marca) {
         # Sem git nao da pra saber o que mudou; rebuildar e a escolha segura.
         $precisa = $true
