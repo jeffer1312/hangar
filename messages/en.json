@@ -1871,5 +1871,8 @@
   "config_server_chave_llm_briefing": "Briefing LLM key",
   "config_server_chave_llm_briefing_ajuda": "Key for the service above. Required when the briefing endpoint is filled in.",
   "config_server_modelo_llm_briefing": "Briefing LLM model",
-  "config_server_modelo_llm_briefing_ajuda": "Model used only for Briefing — worth a more careful one, since it is allowed to take longer. E.g. muse-spark-1.2-contributor-free."
+  "config_server_modelo_llm_briefing_ajuda": "Model used only for Briefing — worth a more careful one, since it is allowed to take longer. E.g. muse-spark-1.2-contributor-free.",
+  "login_titulo": "Connect to a server",
+  "login_permitir_camera": "Allow camera access",
+  "login_qr": "Scan QR"
 }

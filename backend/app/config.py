@@ -244,3 +244,14 @@ def pairing_url(s: "Settings") -> str:
         host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
         base = f"http://{host}:{s.front_port}"
     return f"{base}/?token={s.auth_token}"
+
+
+def pairing_url_api(s: "Settings") -> str:
+    """QR pro app nativo. `public_url` é o endereço do FRONT (PWA), não da API — por isso, com ele
+    setado, o QR vai no formato que validarPareamento/parsePairing já entendem: front + `&api=` com
+    a API na LAN. Sem public_url, aponta direto pra API."""
+    host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
+    api = f"http://{host}:{s.port}"
+    if s.public_url:
+        return f"{s.public_url.rstrip('/')}/?token={s.auth_token}&api={api}"
+    return f"{api}/?token={s.auth_token}"

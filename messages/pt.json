@@ -1871,5 +1871,8 @@
   "config_server_chave_llm_briefing": "Chave do LLM do briefing",
   "config_server_chave_llm_briefing_ajuda": "Chave do serviço acima. Obrigatória quando o endpoint do briefing está preenchido.",
   "config_server_modelo_llm_briefing": "Modelo do LLM do briefing",
-  "config_server_modelo_llm_briefing_ajuda": "Modelo usado só no Briefing — vale trocar por um mais caprichado, já que ele pode demorar mais. Ex.: muse-spark-1.2-contributor-free."
+  "config_server_modelo_llm_briefing_ajuda": "Modelo usado só no Briefing — vale trocar por um mais caprichado, já que ele pode demorar mais. Ex.: muse-spark-1.2-contributor-free.",
+  "login_titulo": "Conectar a um servidor",
+  "login_permitir_camera": "Permitir acesso à câmera",
+  "login_qr": "Escanear QR"
 }
