@@ -77,11 +77,21 @@ set -g bold-is-bright on       # default; faz negrito render igual ao shell puro
 #   claude-code-fix-tty              (patch do TTY do Node pro Claude Code)
 #   claude-code-force-interactive    (CLAUDE_CODE_FORCE_INTERACTIVE=1)
 
-# --- CORES corretas do Claude Code (mesma logica do tmux.conf.example) -----------------
+# --- CORES corretas do Claude Code (NAO e a mesma lista do tmux.conf.example) ----------
 # TERM NAO pode comecar com "tmux"/"screen", senao o Claude pinta o fundo teal de fallback.
+# Esta linha e o que o psmux HONRA de verdade: medido em 3.3.7, com `default-terminal
+# "screen-256color"` o pane nasce com TERM=screen-256color. Sem a linha ele ja usa
+# xterm-256color (o default dele, inclusive com o chamador em TERM=dumb), entao aqui ela e
+# tranca, nao decoracao — um default diferente numa versao futura nao muda o TERM do pane.
 set -g default-terminal "xterm-256color"
-set -ga terminal-overrides ",xterm-256color:Tc"
-set -ga terminal-features ",xterm-256color:RGB"
+# As DUAS linhas de capacidade do conf do Linux (`terminal-overrides ...:Tc` e
+# `terminal-features ...:RGB`) sairam daqui, e nao por gosto — medido no psmux 3.3.7:
+#   - `terminal-features` NAO existe: cada sessao nova imprimia
+#     `psmux: unknown option 'terminal-features'` antes do primeiro prompt;
+#   - `terminal-overrides` e aceita calada e nao guarda nada (`show -g terminal-overrides`
+#     volta VAZIA depois de um `set -ga`) — no-op silencioso, que engana mais que o aviso.
+# Nada se perde: no Unix elas existem pra desfazer o downgrade pra 256 cores que o tmux faz,
+# e o ConPTY ja e 24-bit nativo. E o que o install.ps1 (5b/8) ja dizia por escrito.
 # O multiplexador nao propaga COLORTERM sozinho; sem isto o Claude comeca em 256 cores.
 set-environment -g COLORTERM truecolor
 set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
