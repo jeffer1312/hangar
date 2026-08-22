@@ -32,6 +32,26 @@ export function happyColors(t: ThemeTokens) {
       removedText: t.text.primary,
       contextBg: t.bg.surface,
       contextText: t.text.secondary,
+      // usados direto por DiffView/PierreDiffView
+      leadingSpaceDot: t.border.subtle,
+      inlineAddedBg: 'rgba(52,199,89,0.28)',
+      inlineAddedText: t.text.primary,
+      inlineRemovedBg: 'rgba(255,69,58,0.28)',
+      inlineRemovedText: t.text.primary,
+      hunkHeaderBg: t.bg.elevated,
+      hunkHeaderText: t.text.secondary,
+      lineNumberBg: t.bg.elevated,
+      lineNumberText: t.text.muted,
+    },
+    // CommandView usa theme.colors.terminal.*
+    terminal: {
+      background: '#1e1e1e',
+      prompt: '#34c759',
+      command: '#e0e0e0',
+      stdout: '#e0e0e0',
+      stderr: '#ffb86c',
+      error: '#ff5555',
+      emptyOutput: '#6272a4',
     },
   };
 }

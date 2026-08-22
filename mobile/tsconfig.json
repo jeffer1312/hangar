@@ -2,7 +2,115 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "types": ["vitest/globals", "node"]
+    "types": [
+      "vitest/globals",
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/sync/typesMessage": [
+        "./src/vendor/happy/shims/typesMessage.ts"
+      ],
+      "@/sync/storage": [
+        "./src/vendor/happy/shims/storage.ts"
+      ],
+      "@/sync/storageTypes": [
+        "./src/vendor/happy/shims/storageTypes.ts"
+      ],
+      "@/sync/ops": [
+        "./src/vendor/happy/shims/ops.ts"
+      ],
+      "@/text": [
+        "./src/vendor/happy/shims/text.ts"
+      ],
+      "@/sync/suggestionCommands": [
+        "./src/vendor/happy/sync/suggestionCommands.ts"
+      ],
+      "@/sync/suggestionFile": [
+        "./src/vendor/happy/sync/suggestionFile.ts"
+      ],
+      "@/hooks/useElapsedTime": [
+        "./src/vendor/happy/hooks/useElapsedTime.ts"
+      ],
+      "@/hooks/useAttachmentImage": [
+        "./src/vendor/happy/hooks/useAttachmentImage.ts"
+      ],
+      "@/components/CodeView": [
+        "./src/vendor/happy/components/CodeView.tsx"
+      ],
+      "@/components/CommandView": [
+        "./src/vendor/happy/components/CommandView.tsx"
+      ],
+      "@/components/diff/calculateDiff": [
+        "./src/vendor/happy/components/diff/calculateDiff.ts"
+      ],
+      "@/components/diff/DiffView": [
+        "./src/vendor/happy/components/diff/DiffView.tsx"
+      ],
+      "@/components/diff/PierreDiffView": [
+        "./src/vendor/happy/components/diff/PierreDiffView.tsx"
+      ],
+      "@/components/tools/knownTools": [
+        "./src/vendor/happy/components/tools/knownTools.tsx"
+      ],
+      "@/components/tools/ToolDiffView": [
+        "./src/vendor/happy/components/tools/ToolDiffView.tsx"
+      ],
+      "@/components/markdown/MarkdownView": [
+        "./src/vendor/happy/components/markdown/MarkdownView.tsx"
+      ],
+      "@/components/AgentInputSuggestionView": [
+        "./src/vendor/happy/components/AgentInputSuggestionView.tsx"
+      ],
+      "@/constants/Typography": [
+        "./src/vendor/happy/constants/Typography.ts"
+      ],
+      "@/utils/trimIdent": [
+        "./src/vendor/happy/utils/trimIdent.ts"
+      ],
+      "@/utils/pathUtils": [
+        "./src/vendor/happy/utils/pathUtils.ts"
+      ],
+      "@/utils/toolErrorParser": [
+        "./src/vendor/happy/utils/toolErrorParser.ts"
+      ],
+      "@/utils/toolCommand": [
+        "./src/vendor/happy/utils/toolCommand.ts"
+      ],
+      "@/utils/codexUnifiedDiff": [
+        "./src/vendor/happy/utils/codexUnifiedDiff.ts"
+      ],
+      "@/utils/responsive": [
+        "./src/vendor/happy/utils/responsive.ts"
+      ],
+      "@/utils/thumbhash": [
+        "./src/vendor/happy/utils/thumbhash.ts"
+      ],
+      "@/utils/toolDisplay": [
+        "./src/vendor/happy/utils/toolDisplay.ts"
+      ],
+      "@/utils/sync": [
+        "./src/vendor/happy/utils/sync.ts"
+      ],
+      "@/utils/time": [
+        "./src/vendor/happy/utils/time.ts"
+      ],
+      "@/utils/truncateForLogs": [
+        "./src/vendor/happy/utils/truncateForLogs.ts"
+      ],
+      "@/utils/platform": [
+        "./src/vendor/happy/utils/platform.ts"
+      ],
+      "@/*": [
+        "./src/vendor/happy/*"
+      ]
+    },
+    "ignoreDeprecations": "6.0"
   },
-  "include": ["app", "src", "babel.config.js", "metro.config.js"]
+  "include": [
+    "app",
+    "src",
+    "babel.config.js",
+    "metro.config.js"
+  ]
 }
