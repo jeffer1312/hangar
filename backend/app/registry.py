@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import re
-import shlex
 import shutil
 import threading
 import time
@@ -1311,8 +1310,8 @@ class SessionRegistry:
                 sid = resume_session_id
                 # args_de("kimi", None, None) == []: a escolha na abertura nao cobre o Kimi (e
                 # qualquer escolha pra ele e recusada pela validacao na api), e com ausencia o
-                # shlex.join e byte por byte o f-string de antes.
-                cmd = shlex.join(["kimi", "--session", sid]
+                # join_cmd e byte por byte o f-string de antes (no POSIX ele E o shlex.join).
+                cmd = tmux.join_cmd(["kimi", "--session", sid]
                                  + model_args.args_de(provider, model, effort))
             elif provider == "pi":
                 # `pi --session-id <id>` RETOMA quando o id ja existe ("creating it if missing", no
@@ -1324,7 +1323,7 @@ class SessionRegistry:
                     raise ValueError("session_id invalido")
                 sid = resume_session_id
                 from app.adapters import get_adapter
-                cmd = shlex.join(get_adapter("pi").spawn_command(cwd, sid, model, effort, None))
+                cmd = tmux.join_cmd(get_adapter("pi").spawn_command(cwd, sid, model, effort, None))
             else:
                 try:
                     uuid.UUID(resume_session_id)
@@ -1334,14 +1333,14 @@ class SessionRegistry:
                 # Retomada de conversa MORTA (vinda do Arquivo): nao existe sessao antiga nem pid
                 # pra consultar. A escolha que vale e a que este create() recebeu.
                 # permission_mode NÃO entra no resume (a sessão retoma no estado dela).
-                cmd = shlex.join(["claude", "--resume", sid]
+                cmd = tmux.join_cmd(["claude", "--resume", sid]
                                  + model_args.args_de(provider, model, effort))
         else:
             sid = str(uuid.uuid4())
             # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
             # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
             from app.adapters import get_adapter
-            cmd = shlex.join(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
+            cmd = tmux.join_cmd(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
         if engine:
             # `cp-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
@@ -1359,7 +1358,7 @@ class SessionRegistry:
                 pre += ["--model", model]
                 if context_window:
                     pre += ["--context", str(context_window)]
-            cmd = shlex.join(pre + ["--"]) + " " + cmd
+            cmd = tmux.join_cmd(pre + ["--"]) + " " + cmd
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
         # Pi tem layout PROPRIO (~/.pi/agent/sessions/<slug>/<ts>_<uuid>.jsonl) e o arquivo so nasce
         # quando a TUI grava o 1o turno -> nao ha path pra pre-semear. jsonl=None e cache INTOCADO
@@ -1697,7 +1696,7 @@ class SessionRegistry:
         # anexa ao nome. Nada aqui toca o tmux.
         # "claude" literal: esta funcao ja recusa provider nao-Claude acima
         # (_refuse_non_claude_resume), e nao ha variavel `provider` neste escopo.
-        cmd = shlex.join(["claude", "--resume", session_id]
+        cmd = tmux.join_cmd(["claude", "--resume", session_id]
                          + model_args.args_de("claude", modelo, esforco))
         if motor:
             # Prefixo remontado JUNTO com a escolha: preservar so a flag deixaria a sessao
@@ -1712,7 +1711,7 @@ class SessionRegistry:
                 pre += ["--model", modelo]
                 if janela:
                     pre += ["--context", janela]
-            cmd = shlex.join(pre + ["--"]) + " " + cmd
+            cmd = tmux.join_cmd(pre + ["--"]) + " " + cmd
         tmux.kill_session(name)
         self._forget(name)
         if not tmux.new_session(name, cwd, cmd, str(cdir) if cdir else None):

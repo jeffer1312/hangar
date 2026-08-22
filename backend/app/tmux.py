@@ -9,6 +9,42 @@ from pathlib import Path
 RUN = subprocess.run
 
 
+# Caracteres que dispensam citacao — a MESMA politica do `shlex.quote` da stdlib, copiada em vez de
+# importada porque o ramo Windows nao pode usar a citacao dele (ver `join_cmd`).
+_SEM_CITAR = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./-_")
+
+
+def _citar_psmux(arg: str) -> str:
+    """Cita UM argumento no dialeto que o psmux entende: aspas simples, apostrofo DOBRADO."""
+    if arg and all(c in _SEM_CITAR for c in arg):
+        return arg
+    return "'" + arg.replace("'", "''") + "'"
+
+
+def join_cmd(args: list[str]) -> str:
+    """Junta argv na string unica que o `new_session` executa — no dialeto do multiplexador.
+
+    O `shlex.join` e citacao POSIX, e o `sh` remonta o argumento porque entende o idioma
+    `'a'"'"'b'` pra apostrofo embutido. O psmux NAO entende esse idioma: medido, `com'apostrofo`
+    citado por shlex chega do outro lado como TRES tokens (`com`, `'`, `apostrofo`).
+
+    Medido tambem o que funciona la, com o argv real lido do outro lado:
+
+        aspas simples + apostrofo DOBRADO   -> apostrofo, espaco, `$`, e caminho `C:\\...` inteiros
+        aspas DUPLAS                        -> apostrofo e espaco passam, mas `$cifrao` e EXPANDIDO
+        `\\'`                               -> o comando nem executa
+
+    Dai a escolha: aspas simples (que e o que protege o `$`, propriedade que o shlex.join ja dava e
+    nao se pode perder) com o apostrofo dobrado no lugar do idioma POSIX.
+
+    POSIX continua no `shlex.join`, byte por byte — la o idioma funciona e trocar so arriscaria.
+    """
+    if os.name != "nt":
+        import shlex
+        return shlex.join(args)
+    return " ".join(_citar_psmux(a) for a in args)
+
+
 _SCOPE = ["systemd-run", "--user", "--scope", "--collect", "-q", "--"]
 
 # Cache do probe abaixo: None = ainda nao testado. Por processo — se o systemd voltar ao normal,
