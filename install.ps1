@@ -1374,6 +1374,12 @@ if ($registrou) {
     # PowerShell dentro de string de aspas simples.
     $vigiaPadraoCaminho = $tarefas[0].Padrao.Replace("'", "''")   # regex do checkout, ja escapado (acima)
     $vigiaExeProc = $tarefas[0].ExeProc        # 'uv|python'
+    # O front nao tem o par de criterios do backend (nao ha um `-m app.main` equivalente): o que
+    # identifica o processo dele e o caminho do checkout. Mesmo `.Replace("'","''")` do de cima,
+    # pelo mesmo motivo — o caminho entra CRU dentro de um literal de aspas simples, e um perfil
+    # com apostrofo (C:\Users\O'Brien\...) fecharia a aspa cedo e quebraria a vigia inteira.
+    $vigiaPadraoFront = $tarefas[1].Padrao.Replace("'", "''")
+    $vigiaExeFront = $tarefas[1].ExeProc       # 'node|npm|vite'
     $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
     # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_`/`$candidatos`/etc
     # sobrevivem literais sem precisar de crase nenhuma - o script so vira real quando o
@@ -1391,23 +1397,32 @@ if ($registrou) {
     # comparar nascimento de processo (install.ps1, $nascMapa). Passado o limite, dispara MESMO
     # ASSIM e registra no log que havia processo velho sem porta aberta - o problema tem que
     # aparecer, nao sumir.
+    # O FRONT tambem entra na vigia. Ate aqui ela so olhava a porta do backend e so reerguia o
+    # `hangar-backend`; o `hangar-frontend` ficava sem rede nenhuma - `RestartCount` e 0 nas tres
+    # tarefas (conferido com Get-ScheduledTask), entao o vite morto so voltava no proximo logon,
+    # e quem acessa pelo Tailscale ve a PAGINA fora do ar com a API respondendo. Mesmo criterio
+    # do backend, inclusive a heuristica de idade: processo do checkout vivo NAO prova que subiu.
+    # A funcao existe pra os dois nao virarem duas copias que divergem no proximo conserto.
     $vigiaTemplate = @'
 & {
-    $portaViva = Get-NetTCPConnection -State Listen -LocalPort __PORTA__ -ErrorAction SilentlyContinue
-    if ($portaViva) { return }
-    $candidatos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match '__APPMAIN__' -or $_.CommandLine -match '__CAMINHO__') -and $_.Name -match '__EXE__' })
-    $limite = (Get-Date).AddMinutes(-10)
-    $recentes = @($candidatos | Where-Object { $_.CreationDate -and $_.CreationDate -gt $limite })
-    if ($recentes.Count -gt 0) { return }
-    if ($candidatos.Count -gt 0) { Write-Output "$(Get-Date -Format 's') vigia: processo(s) do checkout vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim" }
-    Start-ScheduledTask -TaskName 'hangar-backend'
+    function Reergue($porta, $padrao, $exe, $tarefa) {
+        if (Get-NetTCPConnection -State Listen -LocalPort $porta -ErrorAction SilentlyContinue) { return }
+        $candidatos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -match $padrao -and $_.Name -match $exe })
+        $limite = (Get-Date).AddMinutes(-10)
+        $recentes = @($candidatos | Where-Object { $_.CreationDate -and $_.CreationDate -gt $limite })
+        if ($recentes.Count -gt 0) { return }
+        if ($candidatos.Count -gt 0) { Write-Output "$(Get-Date -Format 's') vigia: processo(s) de $tarefa vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim" }
+        Start-ScheduledTask -TaskName $tarefa
+    }
+    Reergue __PORTA__ '(__APPMAIN__|__CAMINHO__)' '__EXE__' 'hangar-backend'
+    Reergue __PORTAFRONT__ '__CAMINHOFRONT__' '__EXEFRONT__' 'hangar-frontend'
 } *>&1 | Out-File -FilePath '__LOG__' -Append -Encoding utf8
 '@
     # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
     # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
     # de linha do resto do arquivo (crase, ou deixar parentese/vírgula aberto) cobre encadeamento
     # de metodo com seguranca - a mais simples e nao quebrar.
-    $vigiaPs = $vigiaTemplate.Replace('__APPMAIN__', $vigiaPadraoAppMain).Replace('__CAMINHO__', $vigiaPadraoCaminho).Replace('__EXE__', $vigiaExeProc).Replace('__PORTA__', "$portaBack").Replace('__LOG__', $vigiaLog)
+    $vigiaPs = $vigiaTemplate.Replace('__APPMAIN__', $vigiaPadraoAppMain).Replace('__CAMINHO__', $vigiaPadraoCaminho).Replace('__EXE__', $vigiaExeProc).Replace('__PORTA__', "$portaBack").Replace('__CAMINHOFRONT__', $vigiaPadraoFront).Replace('__EXEFRONT__', $vigiaExeFront).Replace('__PORTAFRONT__', "$portaFront").Replace('__LOG__', $vigiaLog)
     $vigiaEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($vigiaPs))
     $vigiaVbs = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.vbs"   # mesmo lugar dos outros .vbs
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vigiaVbs) | Out-Null
