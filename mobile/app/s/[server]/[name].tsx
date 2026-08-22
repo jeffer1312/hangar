@@ -2,11 +2,11 @@ import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import { chatStore } from '../../../src/stores/chat';
 import { Screen } from '../../../src/ui/Screen';
 import { ChatHeader } from '../../../src/chat/ChatHeader';
 import { MessageList } from '../../../src/chat/MessageList';
+import { Composer } from '../../../src/chat/Composer';
 import * as m from '../../../src/paraglide/messages';
 
 // Tela de chat de uma sessão: histórico janelado + SSE ao vivo (store chat.ts).
@@ -31,6 +31,7 @@ export default function ChatScreen() {
   const loading = chat.use((s) => s.loading);
   const error = chat.use((s) => s.error);
   const olderFailed = chat.use((s) => s.olderFailed);
+  const pending = chat.use((s) => s.pending);
 
   return (
     <Screen>
@@ -59,13 +60,11 @@ export default function ChatScreen() {
             statusLine={statusLine}
             olderFailed={olderFailed}
             onLoadOlder={chat.loadOlder}
+            pending={pending}
           />
         )}
       </View>
-      {/* Task 9 troca pelo composer real */}
-      <KeyboardStickyView>
-        <View style={styles.composerSlot} />
-      </KeyboardStickyView>
+      <Composer serverId={serverId} name={name} />
     </Screen>
   );
 }
@@ -91,11 +90,5 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: 'center',
     minHeight: 44,
     lineHeight: 44,
-  },
-  composerSlot: {
-    height: 56,
-    borderTopWidth: 1,
-    borderTopColor: theme.tokens.border.subtle,
-    backgroundColor: theme.tokens.bg.surface,
   },
 }));

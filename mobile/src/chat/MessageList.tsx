@@ -9,6 +9,7 @@ import { PreviewBubble } from './PreviewBubble';
 import { ToolBubble } from './ToolBubble';
 import { StatusLine } from './StatusLine';
 import type { ChatEvent } from '@hangar/core';
+import type { PendingMsg } from './pending';
 import * as m from '../paraglide/messages';
 
 // Lista de bolhas do chat. A janela de render da PWA (WINDOW=120 eventos montados) aqui é
@@ -24,6 +25,7 @@ interface Props {
   statusLine: string | null;
   olderFailed: '' | 'failed' | 'unjoinable';
   onLoadOlder: () => void;
+  pending?: PendingMsg[];
 }
 
 // O que vira bolha (espelho do MessageList.svelte): tool_result nunca direto — entra no
@@ -41,6 +43,7 @@ export function MessageList({
   statusLine,
   olderFailed,
   onLoadOlder,
+  pending = [],
 }: Props) {
   const data = useMemo(() => events.filter(visivel), [events]);
   const tools = useMemo(() => pairTools(events), [events]);
@@ -83,6 +86,11 @@ export function MessageList({
           ) : olderFailed === 'unjoinable' ? (
             <Text style={styles.gap}>{m.chat_sem_historico_anterior()}</Text>
           ) : null}
+          {pending.map((p) => (
+            <View key={p.id} style={[styles.pending, p.solid && styles.pendingSolid]}>
+              <UserBubble text={p.text} />
+            </View>
+          ))}
           {preview ? <PreviewBubble text={preview} /> : null}
         </View>
       }
@@ -106,5 +114,13 @@ const styles = StyleSheet.create((theme) => ({
     paddingVertical: theme.base.space[1],
     minHeight: 44,
     lineHeight: 44,
+  },
+  pending: {
+    opacity: 0.5,
+    transform: [{ scale: 0.97 }],
+  },
+  pendingSolid: {
+    opacity: 1,
+    transform: [{ scale: 1 }],
   },
 }));
