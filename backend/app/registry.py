@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import threading
 import time
 import uuid
@@ -253,6 +254,31 @@ _EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "
 # So o que foi MEDIDO entra aqui: kimi e codex no Windows ainda nao foram verificados, e chutar o
 # nome de pacote deles seria pior que a ausencia (viraria deteccao errada em vez de nenhuma).
 _PKG_PROVIDER = {"pi-coding-agent": "pi"}
+
+
+def _exigir_cp_engine() -> None:
+    """Recusa ALTO quando o `cp-engine` nao esta no PATH. Chamado antes de montar o prefixo.
+
+    O `cp-engine --exec` vira o COMANDO do pane. Sem o lancador no PATH o pane morre no ato — e o
+    `tmux new-session` devolve 0 do mesmo jeito. Medido nesta VM (psmux 3.3.7): rc=0 na criacao e,
+    tres segundos depois, `has-session` ja responde 1. Sem esta guarda o backend responde "sessao
+    criada" pro celular e a sessao some sem deixar rastro, que e o pior modo de falha que existe
+    aqui — o usuario nao tem nem o que procurar.
+
+    Conferir ANTES em vez de verificar DEPOIS e deliberado: "o pane sobreviveu?" e uma corrida (ele
+    pode morrer a qualquer instante depois da checagem), enquanto "o lancador existe?" e uma
+    pergunta estavel, e a resposta ja diz o que fazer.
+
+    RESSALVA: o PATH consultado e o do BACKEND, e o comando roda no PATH do PANE. Onde os dois
+    divergirem isto pode recusar uma criacao que funcionaria. Recusa visivel e com instrucao e
+    melhor que sessao que evapora calada, e o conserto (instalar o lancador) serve pros dois.
+    """
+    if shutil.which("cp-engine"):
+        return
+    raise ValueError(
+        "cp-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
+        "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
+        "Windows, install.ps1.")
 
 
 def _provider_do_argv(argv: list[str]) -> Optional[str]:
@@ -1298,6 +1324,7 @@ class SessionRegistry:
             # de ANTHROPIC_MODEL (ver engines.env_de). A janela vem do catálogo do provedor, resolvida
             # no backend (api.create_session); quem passa por aqui sem ela (ex: resume do Arquivo)
             # simplesmente não exporta a var — o CLI usa o default dele.
+            _exigir_cp_engine()
             pre = ["cp-engine", "--exec", engine]
             if model:
                 pre += ["--model", model]
@@ -1647,6 +1674,10 @@ class SessionRegistry:
             # Prefixo remontado JUNTO com a escolha: preservar so a flag deixaria a sessao
             # ressuscitada com a flag num modelo e o AMBIENTE noutro (as cinco chaves ANTHROPIC_*,
             # o SUBAGENT_MODEL e a janela voltariam pro modelo do motor).
+            # Antes do kill, junto com o resto da montagem do comando — o comentario acima explica
+            # por que NADA aqui pode tocar o tmux antes de o comando inteiro estar pronto: recusar
+            # depois do kill trocaria "resume recusado" por "sessao destruida e nao relancada".
+            _exigir_cp_engine()
             pre = ["cp-engine", "--exec", motor]
             if modelo:
                 pre += ["--model", modelo]

@@ -1258,6 +1258,26 @@ if (-not $bash) {
         } else { Ok 'lancador cp-conta.cmd ja atualizado' }
     }
 
+    # (2c) lancador pro cp-engine (motores de modelo). Sem ele o backend monta o comando do pane
+    # como `cp-engine --exec <motor> -- claude ...`, o pane morre no ato e o `tmux new-session`
+    # devolve 0 assim mesmo: medido nesta VM, rc=0 na criacao e 3s depois a sessao ja nao existe.
+    # O app reportava "sessao criada" e ela sumia calada. Hoje o backend recusa alto quando este
+    # lancador falta (registry._exigir_cp_engine) — este bloco e o outro lado do conserto, o que
+    # faz o motor de fato FUNCIONAR no Windows.
+    # Pelo PYTHON e nao pelo bash, mesmo motivo do cp-conta: o cp-engine e script Python
+    # (`#!/usr/bin/env python3`) e `bash arquivo` nao honra shebang.
+    $lancadorEngine = Join-Path $binUsuario 'cp-engine.cmd'
+    if (-not $pyExe) {
+        Falta 'cp-engine.cmd nao criado - precisa de um Python real (ver acima)'
+    } else {
+        $conteudoEngine = "@echo off`r`n" +
+                          "`"$pyExe`"$arg `"$raiz\scripts\cp-engine`" %*`r`n"
+        if (-not (Test-Path $lancadorEngine) -or (Get-Content $lancadorEngine -Raw) -ne $conteudoEngine) {
+            Set-Content -Path $lancadorEngine -Value $conteudoEngine -Encoding ASCII -NoNewline
+            Ok "lancador cp-engine.cmd criado em $binUsuario"
+        } else { Ok 'lancador cp-engine.cmd ja atualizado' }
+    }
+
     # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($pathUsuario -notlike "*$binUsuario*") {
