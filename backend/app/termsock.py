@@ -143,6 +143,14 @@ def _origem_aceita(origem: str, host_req: Optional[str]) -> bool:
         return True
     if settings.public_url and alvo == urlparse(settings.public_url).netloc:
         return True
+    # Origens EXTRAS declaradas (CP_TERM_ORIGINS): o front pode ser servido de OUTRA maquina que
+    # nao e peer nenhum — o PWA da VPS carrega de la e fala com este backend pelo Tailscale, entao
+    # a Origin dele nao e mesma-origem, nao e a public_url e nao esta no peers.json. Sem isto o
+    # terminal do celular levava 403 no handshake (medido 21/08/2026).
+    for extra in settings.term_origins.split(","):
+        extra = extra.strip()
+        if extra and alvo == (urlparse(extra).netloc or extra):
+            return True
     # A MALHA inteira, nao so este backend: o app e servido de UMA maquina e fala com VARIAS (o PWA
     # do celular carrega de um host e conversa com este backend por outro endereco). Sem isto, o
     # celular abriria o painel e levaria 403 — mesma classe do bug que a `public_url` sozinha

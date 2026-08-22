@@ -700,6 +700,33 @@ def test_origem_de_qualquer_peer_da_malha_e_aceita(monkeypatch):
     assert ts._origem_aceita("https://outra-maquina.tailnet.ts.net", "127.0.0.1:8765") is False
 
 
+def test_origem_extra_declarada_e_aceita(monkeypatch):
+    # O front pode ser servido de uma maquina que NAO e peer nenhum (o PWA da VPS carrega de la e
+    # fala com este backend pelo Tailscale): a Origin dele nao e mesma-origem, nao e a public_url e
+    # nao esta no peers.json — o terminal do celular levava 403 no handshake. CP_TERM_ORIGINS e a
+    # unica forma de declarar essa origem, e sem ela nada muda.
+    from app import termsock as ts
+    monkeypatch.setattr(ts.settings, "public_url", "https://notebook.tailnet.ts.net", raising=False)
+    monkeypatch.setattr(ts, "_peers_conhecidos", lambda: [])
+    monkeypatch.setattr(ts.settings, "term_origins",
+                        "https://pocket.exemplo.com, http://127.0.0.1:5173", raising=False)
+    assert ts._origem_aceita("https://pocket.exemplo.com", "127.0.0.1:8765") is True
+    assert ts._origem_aceita("http://127.0.0.1:5173", "127.0.0.1:8765") is True
+    # Declarar uma origem nao abre as outras — inclusive o dominio colado no legitimo.
+    assert ts._origem_aceita("https://pocket.exemplo.com.evil.com", "127.0.0.1:8765") is False
+    assert ts._origem_aceita("https://evil.com", "127.0.0.1:8765") is False
+
+
+def test_sem_term_origins_nada_muda(monkeypatch):
+    # Vazio (o default) nao pode virar "aceita qualquer um": o handshake tambem autentica pelo
+    # cookie `cp_token`, entao origem arbitraria seria qualquer site abrindo um terminal na maquina.
+    from app import termsock as ts
+    monkeypatch.setattr(ts.settings, "public_url", "", raising=False)
+    monkeypatch.setattr(ts, "_peers_conhecidos", lambda: [])
+    monkeypatch.setattr(ts.settings, "term_origins", "", raising=False)
+    assert ts._origem_aceita("https://qualquer.com", "127.0.0.1:8765") is False
+
+
 def test_malha_ilegivel_nao_derruba_o_painel(monkeypatch):
     # peers.json ausente/corrompido: sobra mesma-origem + public_url, que ja cobrem a maquina local.
     from app import termsock as ts

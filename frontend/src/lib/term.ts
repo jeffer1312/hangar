@@ -41,9 +41,17 @@ export class TermSocket {
   // — indistinguivel de queda de rede. Ressalva medida: fechamento ANTES do `accept` (sessao que
   // nao existe, cols/rows invalidos) NAO chega como close frame no navegador, e sim como handshake
   // recusado (onclose 1006, reason vazio) — por isso o motivo e opcional, nunca garantido.
-  constructor(url: string, private on: { data: (b: Uint8Array) => void; close: (motivo?: string) => void }) {
+  // `open` e opcional: o painel do desktop nao precisa dele (quem digita ali ve o eco do PTY na
+  // hora), mas o terminal do celular precisa saber a HORA em que o cano abriu — antes disso as
+  // teclas da barra de resgate sairiam no vazio, sem eco nenhum pra denunciar.
+  constructor(url: string, private on: {
+    data: (b: Uint8Array) => void;
+    close: (motivo?: string) => void;
+    open?: () => void;
+  }) {
     this.ws = new WebSocket(url);
     this.ws.binaryType = 'arraybuffer';
+    this.ws.onopen = () => this.on.open?.();
     this.ws.onmessage = (e) => {
       // Quadro binario = bytes do terminal; texto = controle. Separar por TIPO de quadro evita
       // escapar bytes de controle no meio do fluxo (origem classica de bug de acento e de moldura).
@@ -60,6 +68,11 @@ export class TermSocket {
   // que consome ainda nao reagiu ao `close` no mesmo tick), cada tecla digitada jogava
   // InvalidStateError direto no console.
   send(b: Uint8Array<ArrayBuffer>) { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(b); }
+
+  // Quem CHAMA precisa poder saber que o send seria no-op: a barra de teclas do celular nao tem eco
+  // nenhum (o eco de um terminal vem do PTY), entao uma tecla mandada com o cano fechado nao deixa
+  // rastro na tela — parece que o botao nao pegou o toque.
+  get aberto() { return this.ws.readyState === WebSocket.OPEN; }
 
   resize(cols: number, rows: number) {
     this.pendente = { cols, rows };

@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { serverColor, validarPareamento } from '../lib/auth';
+  import { serverColor } from '../lib/auth';
+  import ServerEditSheet from './ServerEditSheet.svelte';
   import { vaultPush } from '../lib/vaultPush.svelte';
   import type { Server } from '../lib/auth';
   import * as m from '../paraglide/messages';
 
-  // Linhas de servidor + edição inline (renomear / trocar token) + Adicionar. Extraído do AccountMenu
-  // (Task 4a) pra ser reusado na tela Servidores das Configurações (Task 4b): mesmo markup, mesmo
-  // parse de URL de pareamento, um arquivo só.
+  // Linhas de servidor + botão de editar (abre ServerEditSheet) + Adicionar. Extraído do AccountMenu
+  // (Task 4a) pra ser reusado na tela Servidores das Configurações (Task 4b): mesmo markup nos dois.
   interface Props {
     servers: Server[];
     activeId?: string | null;
@@ -41,115 +41,20 @@
   // Quem está marcado na lista: o ALVO das configs quando o pai escolhe alvo, senão o ativo.
   const marcado = (id: string) => (onPickTarget ? id === targetId : id === activeId);
 
-  // Rename inline de servidor: id em edição + valor do input. O pai persiste (renameServer + reagrega).
-  let editingId = $state<string | null>(null);
-  let editLabel = $state('');
-  function startRename(id: string, current: string) {
-    editingId = id;
-    editLabel = current;
-  }
-  function saveRename() {
-    if (editingId) onRename(editingId, editLabel);
-    editingId = null;
-  }
+  // Edicao (nome + endereco + token) numa FOLHA, nao mais em dois editores inline dentro da linha:
+  // a linha tem 40px e tres botoes de 30px, e no celular nao dava pra ver o que estava gravado nem
+  // trocar so o token (o campo antigo nascia vazio, sem nada com que comparar).
+  let editando = $state<Server | null>(null);
+  // Le da lista viva, nao do objeto capturado no clique: com a folha aberta, um rename vindo do sync
+  // (outra aba/aparelho) deixaria os campos mostrando o valor velho.
+  const emEdicao = $derived(editando ? servers.find((s) => s.id === editando!.id) ?? null : null);
 
-  // Edicao de TOKEN, separada do rename: mesmo padrao inline, mas o campo comeca VAZIO (nunca
-  // pre-preenche com o token atual — segredo nao vai pra tela) e aceita tanto o token cru quanto a
-  // URL de pareamento inteira, pra quem cola do QR nao ter que extrair nada na mao.
-  let editingTokenId = $state<string | null>(null);
-  let editToken = $state('');
-  let tokenError = $state('');
-  let tokenInputEl = $state<HTMLInputElement | null>(null);
-  function startEditToken(id: string) {
-    editingTokenId = id;
-    editToken = '';
-    tokenError = '';
-    editingId = null;      // os dois modos usam a mesma linha; abrir um fecha o outro
-    // NAO limpa o vaultPush aqui: abrir o campo nao conserta push nenhum. Limpando no clique, um
-    // erro NAO RESOLVIDO sumia da tela so por o usuario abrir o editor de outro servidor e apertar
-    // Esc — e "o aviso sumiu" se le como "resolvido", enquanto os outros aparelhos seguem com o
-    // token velho. Some so quando ha uma tentativa NOVA (saveToken).
-  }
-  function saveToken() {
-    const id = editingTokenId;
-    const text = editToken.trim();
-    // Vazio = desistiu. Gravar string vazia desautenticaria o servidor calado, e o campo em branco
-    // e exatamente o que sobra quando o usuario abre e clica fora.
-    if (!id || !text) {
-      editingTokenId = null;
-      editToken = '';
-      tokenError = '';
-      return;
-    }
-
-    const parsed = validarPareamento(text, { aceitarTokenCru: true });
-    // RECUSA em vez de aceitar lixo como token: URL malformada (esquema torto, sem ?token=, token
-    // duplicado/espacado) ou token cru com espaço. O campo e password — o usuario nao ve o lixo que
-    // ficaria salvo; gravar aqui era o 401 sem pista que chegava depois. O campo CONTINUA aberto,
-    // com o texto, pra corrigir.
-    if (!parsed) {
-      tokenError = text.includes('://')
-        ? m.servidor_url_invalida()
-        : m.servidor_token_invalido();
-      tokenInputEl?.focus();   // erro associado ao campo (aria-describedby): foco onde corrigir
-      return;
-    }
-    // So o TOKEN. O botao diz "Trocar token": colar a URL de pareamento de outra maquina nao pode
-    // reapontar calado um servidor ja cadastrado (com label e historico) pra outro host.
-    const token = parsed.token;
-    const alvo = servers.find((s) => s.id === id);
-    const outroHost = parsed.base && alvo && parsed.base.replace(/\/+$/, '') !== alvo.baseUrl.replace(/\/+$/, '');
-
-    vaultPush.clear();                          // tentativa NOVA: agora sim zera o resultado antigo
-    const ok = onUpdateToken(id, token);
-    if (!ok) {
-      // false = o id sumiu (removido noutra aba/aparelho pelo sync entre abrir e salvar). Raro,
-      // mas indistinguivel de sucesso se ficasse calado — o campo ja teria fechado.
-      tokenError = m.servidor_nao_existe();
-      return;
-    }
-    editingTokenId = null;
-    editToken = '';
-    tokenError = outroHost
-      ? m.servidor_token_trocado({ url: alvo!.baseUrl })
-      : '';
-  }
 </script>
 
 <div class="sm-section">{m.config_modal_servidores()}</div>
 {#each servers as s (s.id)}
   <div class="sm-srv" class:on={marcado(s.id)}>
-    {#if editingTokenId === s.id}
-      <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        class="sm-srv-edit"
-        type="password"
-        autocomplete="off"
-        bind:value={editToken}
-        bind:this={tokenInputEl}
-        placeholder={m.servidor_token_placeholder()}
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => { if (e.key === 'Enter') saveToken(); if (e.key === 'Escape') { editingTokenId = null; editToken = ''; } }}
-        onblur={saveToken}
-        autofocus
-        aria-label={m.servidor_novo_token_aria({ nome: s.label })}
-        aria-invalid={tokenError ? true : undefined}
-        aria-describedby={tokenError ? 'sm-token-err' : undefined}
-      />
-    {:else if editingId === s.id}
-      <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        class="sm-srv-edit"
-        bind:value={editLabel}
-        onclick={(e) => e.stopPropagation()}
-        onkeydown={(e) => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') editingId = null; }}
-        onblur={saveRename}
-        autofocus
-        aria-label={m.servidor_novo_nome_aria()}
-      />
-    {:else if onPickTarget || onSwitchActive}
+    {#if onPickTarget || onSwitchActive}
       <button class="sm-srv-pick"
         onclick={() => (onPickTarget ? onPickTarget(s.id) : onSwitchActive!(s.id))}
         aria-pressed={onPickTarget ? s.id === targetId : undefined}
@@ -158,31 +63,21 @@
         <span class="sm-srv-label">{s.label}</span>
         {#if marcado(s.id)}<span class="sm-tag">{onPickTarget ? m.servidor_escolhido() : m.servidor_ativo()}</span>{/if}
       </button>
-      <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={m.servidor_renomear_aria({ nome: s.label })} title={m.ctx_renomear()}>✎</button>
-      <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={m.servidor_trocar_token_aria({ nome: s.label })} title={m.servidor_trocar_token()}>🔑</button>
-      {#if servers.length > 1 || podeRemoverUltimo}
-        <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={m.servidor_remover_aria({ nome: s.label })}>×</button>
-      {/if}
     {:else}
       <span class="sm-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
       <span class="sm-srv-label">{s.label}</span>
-      <button class="sm-srv-rename" onclick={() => startRename(s.id, s.label)} aria-label={m.servidor_renomear_aria({ nome: s.label })} title={m.ctx_renomear()}>✎</button>
-      <button class="sm-srv-rename" onclick={() => startEditToken(s.id)} aria-label={m.servidor_trocar_token_aria({ nome: s.label })} title={m.servidor_trocar_token()}>🔑</button>
-      {#if servers.length > 1 || podeRemoverUltimo}
-        <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={m.servidor_remover_aria({ nome: s.label })}>×</button>
-      {/if}
+    {/if}
+    <button class="sm-srv-edit-btn" onclick={() => (editando = s)}
+            aria-label={m.servidor_editar_aria({ nome: s.label })} title={m.servidor_editar_titulo()}>✎</button>
+    {#if servers.length > 1 || podeRemoverUltimo}
+      <button class="sm-srv-del" onclick={() => onRemove(s.id)} aria-label={m.servidor_remover_aria({ nome: s.label })}>×</button>
     {/if}
   </div>
 {/each}
+
 <!-- Só aparece quando o push do vault FALHOU (ou o sync está deslogado). 'idle' = ninguém
      configurou sync, e nesse caso não há o que avisar. Sucesso também não vira linha: a
      mudança já está visível na lista, confirmar cada uma seria ruído. -->
-<!-- Resultado da própria edição (recusa de URL inválida, servidor sumido, host preservado):
-     separado do aviso de sync, que é sobre o push pro hub e não sobre o que você digitou. -->
-{#if tokenError}
-  <div id="sm-token-err" class="sm-sync-warn" role="alert">{tokenError}</div>
-{/if}
-
 {#if vaultPush.estado === 'error' || vaultPush.estado === 'locked'}
   <div class="sm-sync-warn" role="status">⚠ {vaultPush.detalhe}</div>
 {/if}
@@ -191,6 +86,14 @@
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
   {m.sessao_adicionar_servidor()}
 </button>
+
+<ServerEditSheet
+  open={!!emEdicao}
+  server={emEdicao}
+  onClose={() => (editando = null)}
+  {onRename}
+  {onUpdateToken}
+/>
 
 <style>
   .sm-section {
@@ -205,8 +108,8 @@
     padding: var(--space-1) var(--space-4) var(--space-2);
   }
 
-  /* Linha de servidor: dot + label (+ tag "ativo" no desktop) + renomear + remover. */
-  .sm-srv { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) 0 var(--space-4); min-height: 40px; }
+  /* Linha de servidor: dot + label (+ tag "ativo" no desktop) + editar + remover. */
+  .sm-srv { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) 0 var(--space-4); min-height: 44px; }
   .sm-srv.on { background: var(--accent-dim); }
   .sm-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .sm-srv-pick {
@@ -215,17 +118,10 @@
   }
   .sm-srv-label { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sm-tag { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--accent); }
-  .sm-srv-rename { width: 30px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-sm); }
-  .sm-srv-rename:hover { color: var(--accent); background: var(--bg-hover); }
-  .sm-srv-del { width: 30px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-lg); line-height: 1; border-radius: var(--radius-sm); }
+  .sm-srv-edit-btn { width: 40px; height: 40px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  .sm-srv-edit-btn:hover { color: var(--accent); background: var(--bg-hover); }
+  .sm-srv-del { width: 40px; height: 40px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-lg); line-height: 1; border-radius: var(--radius-sm); }
   .sm-srv-del:hover { color: var(--error); background: var(--bg-hover); }
-  .sm-srv-edit {
-    flex: 1; min-width: 0; height: 32px; padding: 0 var(--space-2);
-    background: var(--surface-inset); border: 1px solid var(--accent); border-radius: var(--radius-sm);
-    color: var(--text-primary); font-family: var(--font-ui); font-size: 16px; outline: none;
-  }
-  .sm-srv-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-
   /* Item de menu (ícone + rótulo). */
   .sm-item {
     display: flex; align-items: center; gap: var(--space-3);

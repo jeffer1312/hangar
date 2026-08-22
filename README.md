@@ -198,6 +198,7 @@ This is a LAN/VPN-only tool and should be treated like a remote shell:
 | `CP_PORT` | `8765` | Backend port. |
 | `CP_FRONT_PORT` | `5173` | Frontend URL/QR pairing port; configure the frontend server separately when changing its dev port. |
 | `CP_PUBLIC_URL` | — | LAN/VPN base URL used for pairing links, if needed. |
+| `CP_TERM_ORIGINS` | — | Extra `Origin`s accepted by the terminal WebSocket, comma-separated (e.g. `https://pocket.example.com`). Needed when the PWA is served from a host that is neither this backend, `CP_PUBLIC_URL`, nor a peer. |
 
 ## Pair sibling sessions
 
