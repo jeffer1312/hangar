@@ -9,7 +9,8 @@
     "allowJs": true,
     "checkJs": false,
     "types": ["vitest/globals", "node"],
-    "lib": ["ES2022"]
+    "lib": ["ES2022"],
+    "resolveJsonModule": true
   },
   "include": ["src"]
 }

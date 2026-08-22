@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
+  import { kindOf, isPermission as isPermissionFn } from '@hangar/core';
   interface Props {
     question: string;
     options: string[];
@@ -8,21 +9,8 @@
   }
   let { question, options, onSelect, onCancel }: Props = $props();
 
-  // Menu de PERMISSAO do Claude Code (tool use): "Yes…" / "Yes, and don't ask again…" / "No…".
-  // Deteccao TOLERANTE por assinatura das opcoes (en/pt); nao casou -> lista generica de sempre.
-  // ponytail: heuristica textual; se o Claude Code mudar o texto do menu, degrada pro generico.
-  function kindOf(o: string): 'allow' | 'always' | 'deny' | 'other' {
-    const l = o.toLowerCase();
-    if (/don'?t ask again|always|sempre|n[aã]o perguntar/.test(l)) return 'always';
-    if (/^(yes|sim)\b/.test(l)) return 'allow';
-    if (/^(no|n[aã]o)\b/.test(l)) return 'deny';
-    return 'other';
-  }
   const kinds = $derived(options.map(kindOf));
-  const isPermission = $derived(
-    options.length >= 2 && options.length <= 4 &&
-    kinds.includes('allow') && kinds.includes('deny')
-  );
+  const isPermission = $derived(isPermissionFn(options));
 </script>
 
 <div class="options-wrap">

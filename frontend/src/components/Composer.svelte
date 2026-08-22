@@ -45,7 +45,7 @@
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '@hangar/core';
-  import type { StatusFields } from '../lib/statusline';
+  import type { StatusFields } from '@hangar/core';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
 
   interface Props {

@@ -11,7 +11,7 @@ import {
   donoDaLinha,
   sendInput,
 } from '@hangar/core';
-import type { ChatEvent, StateEvent } from '@hangar/core';
+import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { reconcilePending, type PendingMsg } from '../chat/pending';
 
@@ -37,6 +37,12 @@ export interface ChatState {
   // Prévia do bloco em voo (texto cru/markdown). Full-replace; some quando o assistant_msg
   // real chega ou quando a sessão sai de working.
   preview: string;
+  previewMd: boolean;
+  previewFull: boolean;
+  askPayload: AskQuestionPayload | null;
+  askOpen: boolean;
+  askPiId: string | null;
+  askPiDismissed: string | null;
   statusLine: string | null;
   loading: boolean;
   error: string;
@@ -62,6 +68,9 @@ export interface ChatApi {
   // Recarrega o histórico depois de falha da primeira carga (o SSE segue vivo por conta
   // própria — onerror reconecta —, então retry é só a parte REST).
   retry: () => void;
+  openAsk: (payload: AskQuestionPayload, piId?: string | null) => void;
+  closeAsk: () => void;
+  markAskDismissed: () => void;
 }
 
 function criarChatStore(serverId: string, name: string): ChatApi {
@@ -69,6 +78,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     events: [],
     stateEvent: null,
     preview: '',
+    previewMd: false,
+    previewFull: false,
+    askPayload: null,
+    askOpen: false,
+    askPiId: null,
+    askPiDismissed: null,
     statusLine: null,
     loading: true,
     error: '',
@@ -231,7 +246,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         if (ev.kind === 'assistant_msg' && ev.text && useChatStore.getState().preview) {
           previewMd = false;
           previewFull = false;
-          useChatStore.setState({ preview: '' });
+          useChatStore.setState({ preview: '', previewMd: false, previewFull: false });
         }
       } catch {
         // evento ilegível não derruba o stream
@@ -258,7 +273,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         useChatStore.setState({
           stateEvent: ev,
           statusLine: ev.status_line ?? null,
-          ...(limparPreview ? { preview: '' } : {}),
+          ...(limparPreview ? { preview: '', previewMd: false, previewFull: false } : {}),
           ...solidPatch,
         });
       } catch {
@@ -268,7 +283,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
 
     es.addEventListener('preview', (e) => {
       try {
-        const ev = JSON.parse(e.data as string) as { text?: string; md?: boolean; full?: boolean };
+        const ev = JSON.parse(e.data as string) as PreviewEvent;
         const t = ev.text ?? '';
         const atual = useChatStore.getState().preview;
         // Frame transitório do pane às vezes chega como PREFIXO do texto já mostrado:
@@ -288,9 +303,20 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         if (!t && useChatStore.getState().stateEvent?.state === 'working') return;
         previewMd = !!ev.md;
         previewFull = !!ev.full;
-        useChatStore.setState({ preview: t });
+        useChatStore.setState({ preview: t, previewMd: !!ev.md, previewFull: !!ev.full });
       } catch {
         // frame ilegível: mantém o último bom
+      }
+    });
+
+    // Stepper nativo (Claude): o hook askq_capture.py publica a pergunta e o SSE a entrega.
+    es.addEventListener('ask_question', (e) => {
+      try {
+        const payload = JSON.parse(e.data as string) as AskQuestionPayload;
+        if (!Array.isArray(payload.questions) || !payload.questions.length) return;
+        useChatStore.setState({ askPayload: payload, askOpen: true, askPiId: null });
+      } catch {
+        // payload ilegível: o OptionButtons cru segue como saída
       }
     });
 
@@ -303,6 +329,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         stateEvent: null,
         statusLine: null,
         preview: '',
+        previewMd: false,
+        previewFull: false,
+        askPayload: null,
+        askOpen: false,
+        askPiId: null,
+        askPiDismissed: null,
         loading: true,
       });
       void loadHistory();
@@ -340,6 +372,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       }
     },
     release() {
+      if (refs === 0) return;
       refs--;
       if (refs > 0) return;
       alive = false;
@@ -355,6 +388,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         events: [],
         stateEvent: null,
         preview: '',
+        previewMd: false,
+        previewFull: false,
+        askPayload: null,
+        askOpen: false,
+        askPiId: null,
+        askPiDismissed: null,
         statusLine: null,
         loading: true,
         error: '',
@@ -365,6 +404,19 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     loadOlder,
     retry: () => {
       void loadHistory();
+    },
+    openAsk(payload: AskQuestionPayload, piId: string | null = null) {
+      useChatStore.setState({ askPayload: payload, askOpen: true, askPiId: piId });
+    },
+    // Fechar SEM responder: pergunta do Pi/Kimi fica marcada pra não reabrir sozinha (Chat.svelte:728).
+    closeAsk() {
+      const { askPiId } = useChatStore.getState();
+      useChatStore.setState({ askOpen: false, ...(askPiId ? { askPiDismissed: askPiId, askPiId: null } : {}) });
+    },
+    // Respondida com sucesso: mesma marcação — o tool_result demora ~1s a aterrissar (Chat.svelte:1622-1626).
+    markAskDismissed() {
+      const { askPiId } = useChatStore.getState();
+      useChatStore.setState({ askOpen: false, askPayload: null, ...(askPiId ? { askPiDismissed: askPiId, askPiId: null } : {}) });
     },
     async send(text: string) {
       const trimmed = text.trim();

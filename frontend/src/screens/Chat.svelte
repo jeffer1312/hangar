@@ -29,7 +29,8 @@
   import { filesStores } from '../lib/filesStore.svelte';
   import {
     loopBadge, LOOP_TONE_COLOR, appendTail, hasSeam, prependOlder, especificidade, donoDaLinha,
-    type ChatEvent, type StateEvent, type StatsEvent, type State, type SessionInfo, type AskQuestionPayload, type AnswerItem, type Provider, type PlanDetail, type EventSourceLike
+    type ChatEvent, type StateEvent, type StatsEvent, type State, type SessionInfo, type AskQuestionPayload, type AnswerItem, type Provider, type PlanDetail, type EventSourceLike,
+    pendingAskFromEvents, askPayloadFromToolUse
   } from '@hangar/core';
   import {
     getHistory,
@@ -51,7 +52,7 @@
     getConfig,
   } from '@hangar/core';
   import { formataErro } from '@hangar/core';
-  import { parseStatusLine } from '../lib/statusline';
+  import { parseStatusLine } from '@hangar/core';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
@@ -654,71 +655,23 @@
   // abre o sheet/card nativo; o /answer do backend ramifica por provider e dirige o picker do Pi.
   // Pendente = tool_use 'question' sem tool_result com o mesmo id. (2026-08-04)
   // Kimi: mesmo desenho, mas o parser emite tool_name 'AskUserQuestion' com tool_input JA no shape
-  // do Claude ({questions: [{question, header, options, multi_select}]}) — o mapeamento abaixo
+  // do Claude ({questions: [{question, header, options, multiSelect}]}) — o mapeamento abaixo
   // ramifica por provider. (2026-08-11)
-  const pendingPiQuestion = $derived.by(() => {
-    const toolName = sessionProvider === 'pi' ? 'question'
-      : sessionProvider === 'kimi' ? 'AskUserQuestion' : null;
-    if (!toolName) return null;
-    // Varredura UNICA: coleciona os resultados e lembra o ultimo tool_use question; pendente =
-    // esse ultimo sem resultado. O(n) por evento novo, loop simples (o fold caro que o projeto
-    // baniu era o deriveActivity; aqui e so Set+ultimo — se pesar, medir antes de otimizar).
-    const answered = new Set<string>();
-    let last: ChatEvent | null = null;
-    for (const ev of events) {
-      if (ev.kind === 'tool_result' && ev.tool_use_id) answered.add(ev.tool_use_id);
-      else if (ev.kind === 'tool_use' && ev.tool_name === toolName && ev.tool_use_id) last = ev;
-    }
-    return last && !answered.has(last.tool_use_id ?? '') ? last : null;
-  });
+  const pendingPiQuestion = $derived.by(() => pendingAskFromEvents(events, sessionProvider));
 
   $effect(() => {
     const q = pendingPiQuestion;
     if (!q) {
-      // A resposta aterrissou no transcript (pelo app ou pelo terminal) -> fecha o sheet se foi
-      // uma pergunta do Pi/Kimi que o abriu.
       if (askPiId) { askPiId = null; askOpen = false; }
       return;
     }
     if (askOpen || askPiDismissed === q.id) return;
-    const args = (q.tool_input ?? {}) as Record<string, unknown>;
-    const mapOpts = (opts: unknown) => (Array.isArray(opts) ? opts : []).map((o) => ({
-      label: String((o as Record<string, unknown> | null)?.label ?? ''),
-      description: String((o as Record<string, unknown> | null)?.description ?? ''),
-    })).filter((o) => o.label);
-    if (sessionProvider === 'kimi') {
-      // Shape do Claude: lista de perguntas pronta, so falta snake_case -> camelCase.
-      const qs = (Array.isArray(args.questions) ? args.questions : []).map((item) => {
-        const it = item as Record<string, unknown> | null;
-        return {
-          header: String(it?.header ?? ''),
-          question: String(it?.question ?? ''),
-          multiSelect: it?.multi_select === true,
-          options: mapOpts(it?.options),
-        };
-      }).filter((item) => item.question && item.options.length);
-      if (!qs.length) {
-        console.warn(m.chat_kimi_payload(), args);
-        return;
-      }
-      askPayload = { questions: qs };
-    } else {
-      const options = mapOpts(args.options);
-      if (!options.length || !args.question) {
-        // Shape inesperado (o Pi mudou o tool?) — sem o warn o sheet simplesmente parava de abrir um
-        // dia, calado. O OptionButtons cru segue como saida.
-        console.warn(m.chat_pi_payload(), args);
-        return;
-      }
-      askPayload = {
-        questions: [{
-          header: String(args.header ?? ''),
-          question: String(args.question),
-          multiSelect: args.multiSelect === true,
-          options,
-        }],
-      };
+    const payload = askPayloadFromToolUse(q, sessionProvider as Provider);
+    if (!payload) {
+      console.warn(sessionProvider === 'kimi' ? m.chat_kimi_payload() : m.chat_pi_payload(), q.tool_input);
+      return;
     }
+    askPayload = payload;
     askPiId = q.id;
     askOpen = true;
   });

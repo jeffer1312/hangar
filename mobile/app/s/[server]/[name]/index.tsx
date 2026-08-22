@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
-import { chatStore } from '../../../src/stores/chat';
-import { useServers } from '../../../src/stores/servers';
-import { Screen } from '../../../src/ui/Screen';
-import { ChatHeader } from '../../../src/chat/ChatHeader';
-import { MessageList } from '../../../src/chat/MessageList';
-import { Composer } from '../../../src/chat/Composer';
-import * as m from '../../../src/paraglide/messages';
+import { chatStore } from '../../../../src/stores/chat';
+import { useServers } from '../../../../src/stores/servers';
+import { Screen } from '../../../../src/ui/Screen';
+import { ChatHeader } from '../../../../src/chat/ChatHeader';
+import { MessageList } from '../../../../src/chat/MessageList';
+import { Composer } from '../../../../src/chat/Composer';
+import { MoreSheet } from '../../../../src/chat/MoreSheet';
+import * as m from '../../../../src/paraglide/messages';
 
 // Tela de chat de uma sessão: histórico janelado + SSE ao vivo (store chat.ts).
 // O composer real entra na Task 9; aqui só o placeholder sticky de 56px.
@@ -21,21 +22,36 @@ export default function ChatScreen() {
 
   const chat = chatStore(serverId, name);
   const [servidorSumiu, setServidorSumiu] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const existe = useServers((s) => s.servers.some((x) => x.id === serverId));
+  const ready = useServers((s) => s.ready);
+  const retido = useRef(false); // só quem reteve solta; zera nos dois caminhos
   useEffect(() => {
-    // Garante que o servidor da rota é o ativo (precedente: App.svelte:78-79, selectServer(routed)).
+    if (!ready) return; // SecureStore ainda não respondeu: nem julga, nem retém (final-r2, reg. 2)
     if (!useServers.getState().ensureActive(serverId)) {
       setServidorSumiu(true);
       return;
     }
     setServidorSumiu(false);
     chat.retain();
-    return () => chat.release();
+    retido.current = true;
+    return () => {
+      if (retido.current) {
+        chat.release();
+        retido.current = false;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, name]);
+  }, [ready, serverId, name]);
   useEffect(() => {
-    if (!existe) setServidorSumiu(true);
-  }, [existe]);
+    if (!ready || existe) return;
+    setServidorSumiu(true);
+    if (retido.current) {
+      chat.release();
+      retido.current = false;
+    } // solta o SSE: senão ele reconecta contra o ativo NOVO (final-r2, reg. 1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, existe]);
 
   const events = chat.use((s) => s.events);
   const stateEvent = chat.use((s) => s.stateEvent);
@@ -55,7 +71,9 @@ export default function ChatScreen() {
           if (router.canGoBack()) router.back();
           else router.replace('/');
         }}
+        onMore={() => setMoreOpen(true)}
       />
+      <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} />
       {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         <View style={styles.inner}>

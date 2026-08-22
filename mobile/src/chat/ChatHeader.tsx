@@ -10,10 +10,16 @@ export function ChatHeader({
   name,
   state,
   onBack,
+  onMore,
+  chipLoop,
+  chipPlan,
 }: {
   name: string;
   state: State | null;
   onBack: () => void;
+  onMore: () => void;
+  chipLoop?: React.ReactNode;
+  chipPlan?: React.ReactNode;
 }) {
   const { theme } = useUnistyles();
   return (
@@ -31,6 +37,17 @@ export function ChatHeader({
         {name}
       </Text>
       {state ? <StatePill state={state} /> : null}
+      {chipPlan}
+      {chipLoop}
+      <Pressable
+        onPress={onMore}
+        hitSlop={8}
+        style={styles.more}
+        accessibilityRole="button"
+        accessibilityLabel={m.navbar_mais_acoes()}
+      >
+        <Ionicons name="ellipsis-horizontal" size={20} color={theme.tokens.text.primary} />
+      </Pressable>
     </View>
   );
 }
@@ -57,5 +74,13 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: '600',
     flexShrink: 1,
     minWidth: 0,
+    flex: 1,
+  },
+  more: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 'auto',
   },
 }));

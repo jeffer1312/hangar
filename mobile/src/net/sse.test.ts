@@ -67,6 +67,31 @@ test('watchdog não fecha com ping a cada 10s por 60s', () => {
   vi.useRealTimers();
 });
 
+test('ask_question chega como {data,lastEventId} e rearma watchdog como ping', () => {
+  vi.useFakeTimers();
+  ultimo = null;
+  const es = createEventSource('http://x/api/sessions/a/events?token=t', { withCredentials: false });
+  const got: { data: string; lastEventId?: string }[] = [];
+  es.addEventListener('ask_question', (e) => got.push(e));
+  const mock = ultimo as unknown as {
+    listeners: Record<string, Function[]>;
+    close: ReturnType<typeof vi.fn>;
+  };
+  const onErr = vi.fn();
+  es.onerror = onErr;
+  mock.listeners.open[0]({});
+  // manda ask_question a cada 10s por 60s — watchdog não pode fechar
+  for (let i = 0; i < 6; i++) {
+    vi.advanceTimersByTime(10_000);
+    mock.listeners.ask_question[0]({ data: '{"questions":[]}', lastEventId: `id-${i}` });
+  }
+  expect(got).toHaveLength(6);
+  expect(got[0]).toEqual({ data: '{"questions":[]}', lastEventId: 'id-0' });
+  expect(mock.close).not.toHaveBeenCalled();
+  expect(onErr).not.toHaveBeenCalled();
+  vi.useRealTimers();
+});
+
 test('watchdog fecha após 25s de silêncio e avisa onerror com type timeout', () => {
   vi.useFakeTimers();
   const es = createEventSource('http://x/api/sessions/a/events?token=t', { withCredentials: false });

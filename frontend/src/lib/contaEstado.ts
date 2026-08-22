@@ -18,7 +18,7 @@ export type EstadoLogin = {
 
 export type EstadoLimite = {
   estado: 'lido' | 'sem_leitura';
-  linha?: string | null; // linha inteira da statusline — a Task 9 parseia com lib/statusline
+  linha?: string | null; // linha inteira da statusline — a Task 9 parseia com parseStatusLine do core
   ts?: number | null;
   idade_s?: number | null;
 };

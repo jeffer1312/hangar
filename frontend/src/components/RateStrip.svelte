@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseStatusLine, type StatusFields } from '../lib/statusline';
+  import { parseStatusLine, type StatusFields } from '@hangar/core';
   import type { ServerBucket } from '@hangar/core';
 
   // Faixa de rate-limit no topo do Board/Canvas: as janelas ⚡5h e 📅7d são POR CONTA (servidor),

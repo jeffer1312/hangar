@@ -2,7 +2,7 @@
   import RateChips from './RateChips.svelte';
   import StateChip from './StateChip.svelte';
   import * as m from '../paraglide/messages';
-  import type { StatusFields } from '../lib/statusline';
+  import type { StatusFields } from '@hangar/core';
   import type { State } from '@hangar/core';
 
   interface Props {

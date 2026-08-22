@@ -16,7 +16,8 @@
           "NSAllowsArbitraryLoads": true
         },
         "NSLocalNetworkUsageDescription": "Conecta ao seu servidor Hangar na rede local.",
-        "NSCameraUsageDescription": "Lê o QR de pareamento do servidor."
+        "NSCameraUsageDescription": "Lê o QR de pareamento do servidor.",
+        "NSMicrophoneUsageDescription": "Grava o ditado pro composer."
       }
     },
     "android": {
@@ -28,7 +29,10 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": ["CAMERA"],
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -45,7 +49,13 @@
         }
       ],
       "expo-secure-store",
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Grava o ditado pro composer."
+        }
+      ]
     ]
   }
 }

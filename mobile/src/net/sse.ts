@@ -66,7 +66,9 @@ export function createEventSource(
   return {
     addEventListener(type, fn) {
       // emenda 2: só eventos de dados passam por wrapData
-      const isData = type === 'message' || type === 'state' || type === 'preview' || type === 'reset' || type === 'ping';
+      const isData =
+        type === 'message' || type === 'state' || type === 'preview' || type === 'reset' ||
+        type === 'ping' || type === 'ask_question';
       const w = isData ? wrapData(fn as never) : wrapRaw(fn as never);
       getMap(type as string).set(fn as Function, w as unknown as Function);
       es.addEventListener(type as never, w as never);

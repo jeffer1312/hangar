@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { StatusFields } from '../lib/statusline';
+  import type { StatusFields } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   interface Props {

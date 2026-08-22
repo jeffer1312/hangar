@@ -362,6 +362,46 @@ test('onopen reseta backoff para 3s (B5)', async () => {
   }
 });
 
+test('ask_question via SSE abre o stepper', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  const payload = { questions: [{ header: 'H', question: 'Q?', multiSelect: false, options: [{ label: 'A', description: 'desc' }] }] };
+  created[0].trigger('ask_question', JSON.stringify(payload));
+  await tick();
+  const s = chat.use.getState();
+  expect(s.askOpen).toBe(true);
+  expect(s.askPayload?.questions).toHaveLength(1);
+});
+
+test('preview md flag espelha no store', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  created[0].trigger('preview', JSON.stringify({ text: 'a', md: true }));
+  await tick();
+  expect(chat.use.getState().previewMd).toBe(true);
+  expect(chat.use.getState().preview).toBe('a');
+});
+
+test('closeAsk marca askPiDismissed', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  const payload = { questions: [{ header: 'H', question: 'Q?', multiSelect: false, options: [{ label: 'A', description: '' }] }] };
+  chat.openAsk(payload as never, 't1');
+  expect(chat.use.getState().askPiId).toBe('t1');
+  expect(chat.use.getState().askOpen).toBe(true);
+  chat.closeAsk();
+  const s = chat.use.getState();
+  expect(s.askOpen).toBe(false);
+  expect(s.askPiDismissed).toBe('t1');
+  expect(s.askPiId).toBeNull();
+});
+
 async function tick(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
 }

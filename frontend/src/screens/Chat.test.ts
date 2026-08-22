@@ -118,8 +118,8 @@ loopBadge: vi.fn(() => null),
     reset: () => {},
   })),
   formataErro: vi.fn(() => ''),
+  parseStatusLine: vi.fn(() => null),
 }));
-vi.mock('../lib/statusline', () => ({ parseStatusLine: vi.fn(() => null) }));
 vi.mock('../lib/workspaceCommands', () => ({}));
 
 function montar() {

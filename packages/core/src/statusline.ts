@@ -11,7 +11,7 @@ export interface StatusFields {
   model?: string;        // "Opus4.8·1M"
   effort?: string;       // "high" | "med" | "low"
   ctxUsed?: number;      // tokens in context
-  ctxTotal?: number;     // model window
+  ctxTotal?: number;     // janela do modelo
   ctxPct?: number;       // 0..100, clamped
   turnIn?: number;       // tokens do TURNO: entrada (1º par do 💬)
   turnOut?: number;      // tokens do TURNO: saída

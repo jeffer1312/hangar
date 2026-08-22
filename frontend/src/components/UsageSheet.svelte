@@ -2,7 +2,7 @@
   import BottomSheet from './BottomSheet.svelte';
   import * as m from '../paraglide/messages';
 import { intlLocale } from '../lib/locale';
-  import type { StatusFields } from '../lib/statusline';
+  import type { StatusFields } from '@hangar/core';
 
   interface Props {
     open: boolean;

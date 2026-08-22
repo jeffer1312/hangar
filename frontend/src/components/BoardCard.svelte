@@ -8,7 +8,7 @@ import * as m from '../paraglide/messages';
   } from '@hangar/core';
   import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
   import { relativeTime, bubblesFromTail, pairColor, parsePeerMessage, providerTag } from '@hangar/core';
-  import { parseStatusLine } from '../lib/statusline';
+  import { parseStatusLine } from '@hangar/core';
   import { loopBadge, LOOP_TONE_COLOR, type ChatEvent } from '@hangar/core';
   import { planBadge } from '@hangar/core';
   import PlanBar from './PlanBar.svelte';

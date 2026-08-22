@@ -8,7 +8,7 @@ import * as m from '../paraglide/messages';
   import FilesPanel from './files/FilesPanel.svelte';
   import StateChip from './StateChip.svelte';
   import type { State, SessionInfo, PlanDetail } from '@hangar/core';
-  import type { StatusFields } from '../lib/statusline';
+  import type { StatusFields } from '@hangar/core';
   import { ctxWindow, providerName } from '@hangar/core';
   import { planBadge } from '@hangar/core';
 
