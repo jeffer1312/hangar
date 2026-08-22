@@ -74,6 +74,48 @@ function Escrever-Texto($caminho, $texto, [switch]$ComBom) {
     [System.IO.File]::WriteAllText($caminho, $texto, (New-Object System.Text.UTF8Encoding $ComBom.IsPresent))
 }
 
+function Escrever-Lancador($caminho, $texto, [ValidateSet('cmd','sh','vbs')][string]$Tipo) {
+    <#
+      Escreve um lancador (.cmd/.sh/.vbs) no encoding que o INTERPRETADOR dele entende, e devolve
+      $true se o arquivo mudou (pra quem chama dizer "criado" ou "ja atualizado").
+
+      Todos estes arquivos carregam CAMINHO dentro — o do checkout, o do python, o do log em
+      %LOCALAPPDATA% (que tem o nome do usuario). Todos eram gravados com `-Encoding ASCII`, e
+      ASCII transforma qualquer acento em `?`: num "C:\Users\Joao\..." (com til) o lancador nasce
+      apontando pra um caminho que nao existe, roda, e diz "o sistema nao pode encontrar o
+      caminho". Falha silenciosa de instalador, que e a classe de bug que este trabalho persegue.
+
+      Qual encoding serve NAO e opiniao — medido em 22/08/2026, cada arquivo executado de verdade
+      com um caminho contendo "Joao" com til (console em codepage 850):
+
+        .cmd (cmd.exe)      ASCII FALHOU | ANSI 1252 FALHOU | UTF-8 FALHOU | OEM 850 OK | UTF-8+chcp OK
+        .vbs (wscript)      ASCII FALHOU | ANSI 1252 OK     | OEM FALHOU   | UTF-16LE c/ BOM OK
+        .sh  (bash do Git)  ASCII FALHOU | ANSI 1252 OK     | UTF-8 sem BOM OK
+
+      Escolhas: `.cmd` vai na codepage OEM do console (o `chcp 65001` tambem funciona, mas ele muda
+      a codepage do console DE QUEM CHAMA — efeito colateral visivel num terminal interativo);
+      `.vbs` vai em UTF-16LE com BOM, que o WSH detecta sozinho e nao depende da codepage ANSI da
+      regiao; `.sh` vai em UTF-8 sem BOM, o padrao do bash (e um BOM antes do `#!` quebra o
+      shebang, como o proprio install.ps1 ja documenta mais abaixo).
+
+      Conteudo 100% ASCII sai byte a byte igual ao de antes nos tres casos.
+    #>
+    $enc = switch ($Tipo) {
+        'cmd' { [System.Text.Encoding]::GetEncoding([Console]::OutputEncoding.CodePage) }
+        'vbs' { New-Object System.Text.UnicodeEncoding $false, $true }   # UTF-16LE + BOM
+        'sh'  { New-Object System.Text.UTF8Encoding $false }
+    }
+    $bytes = $enc.GetBytes($texto)
+    if (Test-Path $caminho) {
+        $atual = [System.IO.File]::ReadAllBytes($caminho)
+        if ($atual.Length -eq $bytes.Length -and -not (Compare-Object $atual $bytes)) { return $false }
+    }
+    $pai = Split-Path -Parent $caminho
+    if ($pai) { New-Item -ItemType Directory -Force -Path $pai | Out-Null }
+    [System.IO.File]::WriteAllBytes($caminho, $bytes)
+    return $true
+}
+
 function Ler-Texto($caminho) {
     <#
       Le respeitando o que o arquivo E, nao o que a versao do PowerShell chuta. `Get-Content` sem
@@ -1237,7 +1279,9 @@ if ($registrou) {
             $vbs = Join-Path (Split-Path -Parent $log) "$($t.Nome).vbs"
             $linhaVbs = 'CreateObject("WScript.Shell").Run "powershell -NoProfile ' +
                         "-ExecutionPolicy Bypass -EncodedCommand $b64" + '", 0, False'
-            Set-Content -Path $vbs -Value $linhaVbs -Encoding ASCII
+            # O .vbs carrega o caminho do LOG, que fica em %LOCALAPPDATA% — ou seja, no perfil do
+            # usuario, que pode ter acento no nome. Ver Escrever-Lancador.
+            Escrever-Lancador $vbs ($linhaVbs + "`r`n") 'vbs' | Out-Null
             $acao = New-ScheduledTaskAction -Execute 'wscript.exe' `
                 -Argument "`"$vbs`"" -WorkingDirectory $t.Dir
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
@@ -1362,9 +1406,9 @@ if ($registrou) {
     $vigiaEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($vigiaPs))
     $vigiaVbs = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.vbs"   # mesmo lugar dos outros .vbs
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vigiaVbs) | Out-Null
-    Set-Content -Path $vigiaVbs -Encoding ASCII -Value @"
+    Escrever-Lancador $vigiaVbs @"
 CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $vigiaEnc", 0, False
-"@
+"@ 'vbs' | Out-Null
     # NAO e -AtLogOn puro (era a versao anterior) - MEDIDO na maquina real em 09/08/2026 que a
     # Repetition so comeca a CONTAR a partir do disparo do gatilho, e registrar a tarefa nao
     # dispara nada sozinho: registrada as 02:28, com o ultimo logon interativo as 19:53 do dia
@@ -1469,10 +1513,8 @@ if (-not $bash) {
         $corpoShim = "#!/bin/sh`n" +
                      "# Gerado por hangar/install.ps1 - o cp-send chama python3.`n" +
                      "exec '$pyMsys'$arg `"`$@`"`n"
-        if (-not (Test-Path $shim) -or (Get-Content $shim -Raw) -ne $corpoShim) {
-            Set-Content -Path $shim -Encoding ASCII -NoNewline -Value $corpoShim
-            Ok "atalho python3 -> $pyExe$arg"
-        } else { Ok 'atalho python3 ja atualizado' }
+        if (Escrever-Lancador $shim $corpoShim 'sh') { Ok "atalho python3 -> $pyExe$arg" }
+        else { Ok 'atalho python3 ja atualizado' }
     }
 
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
@@ -1485,10 +1527,8 @@ if (-not $bash) {
     $conteudo = "@echo off`r`n" +
                 "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
                 "`"$bash`" `"$raiz\scripts\cp-send`" %*`r`n"
-    if (-not (Test-Path $lancador) -or (Get-Content $lancador -Raw) -ne $conteudo) {
-        Set-Content -Path $lancador -Value $conteudo -Encoding ASCII -NoNewline
-        Ok "lancador cp-send.cmd criado em $binUsuario"
-    } else { Ok 'lancador cp-send.cmd ja atualizado' }
+    if (Escrever-Lancador $lancador $conteudo 'cmd') { Ok "lancador cp-send.cmd criado em $binUsuario" }
+    else { Ok 'lancador cp-send.cmd ja atualizado' }
 
     # (2b) lancador pro cp-conta (helper de contas do claude-conta): sem ele o claude-conta.ps1
     # falha com "cp-conta nao e reconhecido" antes de abrir o Claude.
@@ -1502,10 +1542,8 @@ if (-not $bash) {
     } else {
         $conteudoConta = "@echo off`r`n" +
                          "`"$pyExe`"$arg `"$raiz\scripts\cp-conta`" %*`r`n"
-        if (-not (Test-Path $lancadorConta) -or (Get-Content $lancadorConta -Raw) -ne $conteudoConta) {
-            Set-Content -Path $lancadorConta -Value $conteudoConta -Encoding ASCII -NoNewline
-            Ok "lancador cp-conta.cmd criado em $binUsuario"
-        } else { Ok 'lancador cp-conta.cmd ja atualizado' }
+        if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador cp-conta.cmd criado em $binUsuario" }
+        else { Ok 'lancador cp-conta.cmd ja atualizado' }
     }
 
     # (2c) lancador pro cp-engine (motores de modelo). Sem ele o backend monta o comando do pane
@@ -1522,10 +1560,8 @@ if (-not $bash) {
     } else {
         $conteudoEngine = "@echo off`r`n" +
                           "`"$pyExe`"$arg `"$raiz\scripts\cp-engine`" %*`r`n"
-        if (-not (Test-Path $lancadorEngine) -or (Get-Content $lancadorEngine -Raw) -ne $conteudoEngine) {
-            Set-Content -Path $lancadorEngine -Value $conteudoEngine -Encoding ASCII -NoNewline
-            Ok "lancador cp-engine.cmd criado em $binUsuario"
-        } else { Ok 'lancador cp-engine.cmd ja atualizado' }
+        if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador cp-engine.cmd criado em $binUsuario" }
+        else { Ok 'lancador cp-engine.cmd ja atualizado' }
     }
 
     # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
@@ -1565,8 +1601,7 @@ if (-not $bash) {
                    "# Gerado por hangar/install.ps1 - ver comentario no instalador.`n" +
                    "PATH='$binMsys':`$PATH; export PATH`n" +
                    "exec '$rota/scripts/cp-send' `"`$@`"`n"
-        if (-not (Test-Path $cpSendSh) -or (Get-Content $cpSendSh -Raw) -ne $corpoCp) {
-            Set-Content -Path $cpSendSh -Encoding ASCII -NoNewline -Value $corpoCp
+        if (Escrever-Lancador $cpSendSh $corpoCp 'sh') {
             Ok 'cp-send do ~/.local/bin aponta pro script do repo'
         }
         Ok 'cp-send + skills instalados'
