@@ -2647,10 +2647,12 @@ def get_config():
             "lan_bind_ip": settings.lan_bind_ip,
             "server_id": settings.server_id,
             "public_url": settings.public_url,
-            # CAPACIDADE, nao nome de sistema: "da pra abrir o painel aqui?". Ela responde False
-            # tambem num POSIX sem `pty` e True no dia em que o Windows tiver motor de I/O — o
-            # `os.name == "posix"` que estava aqui respondia outra pergunta. Import tardio pelo
-            # mesmo motivo de sempre: o termsock nao pode ser importado no topo deste modulo.
+            # CAPACIDADE, nao nome de sistema: "da pra abrir o painel aqui?". O
+            # `os.name == "posix"` que estava aqui respondia outra pergunta — e a diferenca deixou
+            # de ser teorica em 22/08/2026, quando o Windows ganhou motor (ConPTY): a resposta la
+            # virou True sem ninguem tocar nesta linha, que e o ponto de perguntar por capacidade.
+            # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
+            # sempre: o termsock nao pode ser importado no topo deste modulo.
             "terminal_panel": _painel_disponivel(),
         },
     }

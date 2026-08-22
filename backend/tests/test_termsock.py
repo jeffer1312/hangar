@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -23,18 +24,21 @@ SESS = "cp-test-termsock"
 # no Linux (o mesmo caminho de antes) e o Temp do perfil no Windows.
 DIR_NEUTRO = tempfile.gettempdir()
 
-# Marcador dos casos que ANEXAM o painel de verdade (websocket -> pty). O `termsock` abre o pty com
-# `pty`/`termios`/`fcntl`, que so existem no POSIX — e nao e descuido: o painel inteiro e gated por
-# `config.somente_leitura.terminal_panel` (`os.name == "posix"`), e o botao nem aparece no Windows.
-# Ali o import estoura em `tty.py: No module named 'termios'`, que e ausencia de objeto de teste, nao
-# falha. O que NAO depende de pty (guardas do 409, shell escondido, rename, kill, origem) continua
-# rodando aqui e passou a valer no Windows.
+# O painel tem DOIS motores desde 22/08/2026 (pty.fork no POSIX, ConPTY no Windows), entao sao
+# dois marcadores, e a diferenca entre eles importa:
 #
-# Se um dia o painel ganhar um motor de I/O pro Windows (ver a secao 13.4 do relatorio da VM: hoje
-# ele esta PARADO de proposito, porque o `%N`/detach do psmux nao permite desmontar com seguranca),
-# e este marcador que sai — os casos ja estao escritos.
+# `com_painel` — o caso vale nos DOIS sistemas e roda onde houver painel. Era o que o comentario
+#   antigo daqui prometia ("se um dia o painel ganhar motor pro Windows, e este marcador que sai —
+#   os casos ja estao escritos"), e e o que aconteceu.
+# `so_com_pty` — o caso e do MOTOR POSIX, nao do painel: ele afirma coisa que so existe la (fd
+#   herdavel do `pty.fork`, zumbi/`waitpid`, repor o tamanho da janela no desmonte). Nao e "o
+#   Windows nao chegou la": no Windows aquilo nao tem contraparte, e forcar uma seria inventar
+#   afirmacao. Onde ha contraparte de verdade, ela esta escrita como caso proprio no fim do arquivo.
+com_painel = pytest.mark.skipif(not termsock.painel_disponivel(),
+                                reason="esta maquina nao abre painel de terminal")
 so_com_pty = pytest.mark.skipif(os.name != "posix",
-                                reason="o painel usa pty/termios (POSIX); ele nem e oferecido no Windows")
+                                reason="afirma coisa do motor POSIX (fd do pty.fork, waitpid, "
+                                       "repor tamanho) — no Windows nao ha contraparte")
 
 
 def _emulador_falso(tmp_path, nome, exit_code=0, mensagem=None):
@@ -73,6 +77,36 @@ def _client(host="127.0.0.1"):
     return TestClient(app, client=(host, 12345))
 
 
+@contextlib.contextmanager
+def _um_laco_so(c):
+    """Poe TODAS as conexoes deste cliente no MESMO laco de eventos — que e o que a producao tem.
+
+    Sem `with`, o `TestClient` cria um portal (thread + laco de eventos) POR `websocket_connect`.
+    Com uma conexao so isso e invisivel; com DUAS ao mesmo tempo, os dois handlers passam a viver
+    em lacos DIFERENTES, e a derrubada (que mexe em objetos do handler antigo: `cancel()` na task
+    escritora, `pause_reading()` no transporte) vira chamada cross-thread. O que ela agenda e um
+    `call_soon`, que enfileira no laco do outro sem ACORDAR o IOCP dele — e o handler derrubado so
+    volta a rodar quando algo mais o acorda. Medido em 22/08/2026 com marcadores de tempo: a thread
+    do desmonte dele terminava em 1ms e a corrotina ficava 550ms parada num `await` (ate num
+    `asyncio.sleep(0)`), ate o `with` do teste sair e cancelar tudo — e ai o future do portal volta
+    CANCELADO e o teste falha em 2 de 3 corridas, sem que nada do caminho de producao esteja errado.
+    No Linux o mesmo desenho passa por sorte de plataforma: a morte do pty gera evento no fd que o
+    handler antigo ainda observa, entao o laco dele acorda sozinho.
+
+    Um uvicorn tem UM laco pra todas as conexoes. Compartilhar o portal aqui e o teste ficando mais
+    parecido com producao, nao menos: `TestClient.portal` e o mesmo atributo que o `__enter__` dele
+    preenche — a diferenca e que aqui nao roda o lifespan (ver `_client`).
+    """
+    import anyio.from_thread
+
+    with anyio.from_thread.start_blocking_portal(**c.async_backend) as portal:
+        c.portal = portal
+        try:
+            yield c
+        finally:
+            c.portal = None
+
+
 @pytest.fixture
 def sessao():
     matar_sessao(SESS)
@@ -100,6 +134,35 @@ def _tam(nome):
 def _clientes(nome):
     return subprocess.run(["tmux", "list-clients", "-t", f"={nome}"],
                           capture_output=True, text=True).stdout.strip()
+
+
+def _anexado(nome):
+    """Tem cliente anexado? — a pergunta que vale nos DOIS multiplexadores.
+
+    `_clientes()` NAO serve pra isso fora do Linux: medido no psmux 3.3.7 (22/08/2026), com a
+    sessao comprovadamente sem ninguem anexado (`#{session_attached}` = 0) o `list-clients -t =S`
+    ainda devolve rc=0 e UMA LINHA — `/dev/pts/0: <sessao>: powershell [200x50] (utf8)` —, um
+    cliente que nao existe, com o tty ficticio de sempre. Um `assert _clientes(x) == ""` la nao
+    falha por regressao: falha porque a pergunta nao tem resposta naquele comando (o que o psmux
+    de fato marca no cliente vivo e o sufixo `[activity=...]`, e nas sessoes o `(attached)`).
+    `#{session_attached}` responde certo nos dois.
+    """
+    cp = subprocess.run(["tmux", "display", "-p", "-t", f"={nome}:", "#{session_attached}"],
+                        capture_output=True, text=True)
+    return cp.stdout.strip() not in ("", "0")
+
+
+def _tam_bate(nome, cols, rows):
+    """A janela ficou do tamanho do painel? — com a linha de status descontada onde ela existe.
+
+    A largura e exata nos dois multiplexadores. A ALTURA nao: o psmux reserva uma linha pra barra
+    de status, entao um cliente de 80x24 deixa a janela em 80x23 (medido), enquanto o tmux desta
+    suite relata 80x24. Cobrar `rows` cravado seria cobrar do Windows uma linha que a barra dele
+    ocupa — falha de contabilidade, nao de redimensionamento. Aceita `rows` ou `rows-1` e continua
+    exigindo a largura exata, que e o que de fato prova que o resize chegou.
+    """
+    atual = _tam(nome).split()[0] if _tam(nome) else ""
+    return atual in (f"{cols}x{rows}", f"{cols}x{rows - 1}")
 
 
 def _esperar(condicao, timeout=5.0, passo=0.1):
@@ -145,15 +208,43 @@ def test_sessao_desconhecida_recusa(sessao):
             pass
 
 
-@so_com_pty
-def test_anexa_recebe_bytes_e_repoe_tamanho_ao_sair(sessao):
+@com_painel
+def test_anexa_recebe_bytes_e_solta_a_sessao_ao_sair(sessao):
+    """A metade do caso que vale nos dois motores: anexa, pinta, encolhe a janela, e SOLTA.
+
+    A outra metade (repor 200x50 + `window-size latest` no desmonte) virou caso proprio logo
+    abaixo, marcado `so_com_pty`, porque no Windows ela nao existe — ver o motivo la.
+    """
     c = _client()
     assert _tam(sessao).startswith("200x50")
     with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
         assert len(ws.receive_bytes()) > 0          # tmux pintou a tela
-        time.sleep(1.0)
-        assert _tam(sessao).startswith("80x24")     # encolheu, como desenhado
+        _esperar(lambda: _tam_bate(sessao, 80, 24))          # encolheu, como desenhado
         assert sessao in termsock.clientes_ativos()
+        assert _anexado(sessao)
+        ws.close()
+        # Esperar AINDA DENTRO do `with`, mesmo motivo do caso de baixo: o `__exit__` do
+        # WebSocketTestSession so ENFILEIRA o disconnect e cancela o servidor em seguida.
+        _esperar(lambda: not _anexado(sessao))
+        assert termsock.clientes_ativos() == set()
+
+
+@so_com_pty
+def test_desmonte_repoe_o_tamanho_da_janela(sessao):
+    """So no motor POSIX, e a ausencia do outro lado e MEDIDA, nao pendencia (22/08/2026):
+
+    no psmux o tamanho da janela acompanha o cliente anexado no momento — o painel sai deixando
+    80x23 gravado, o proximo cliente anexa a 200x50 e a janela vira 200x49 sozinha. Nao ha o que
+    repor. E nem daria: `resize-window` e `setw window-size latest` voltam rc=0 la e nao fazem
+    NADA. Escrever este caso pros dois seria exigir do Windows um passo que, se existisse, seria
+    um par de comandos mentindo que funcionou.
+    """
+    c = _client()
+    assert _tam(sessao).startswith("200x50")
+    with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
+        assert len(ws.receive_bytes()) > 0
+        time.sleep(1.0)
+        assert _tam(sessao).startswith("80x24")
         ws.close()
         # Fechar e conferir AINDA DENTRO do `with`: o `__exit__` do WebSocketTestSession do
         # Starlette so ENFILEIRA o disconnect (nao espera o handler processar) e cancela a
@@ -170,11 +261,12 @@ def test_anexa_recebe_bytes_e_repoe_tamanho_ao_sair(sessao):
         assert _clientes(sessao) == ""
 
 
-@so_com_pty
+@com_painel
 def test_segunda_conexao_derruba_a_primeira(sessao):
-    c = _client()
     url = f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24"
-    with c.websocket_connect(url) as a:
+    # O unico caso do arquivo com DUAS conexoes vivas ao mesmo tempo, e por isso o unico que precisa
+    # do laco compartilhado — ver `_um_laco_so`.
+    with _um_laco_so(_client()) as c, c.websocket_connect(url) as a:
         a.receive_bytes()
         with c.websocket_connect(url) as b:
             # B tem que receber bytes DE VERDADE depois de derrubar A — nao so existir. Sem isso
@@ -184,27 +276,37 @@ def test_segunda_conexao_derruba_a_primeira(sessao):
             assert len(b.receive_bytes()) > 0
             # `clientes_ativos()` e chaveado por NOME: contar 1 seria verdade mesmo sem derrubar
             # ninguem (achado do pass). Quem prova e o tmux: um cliente anexado, uma linha.
-            _esperar(lambda: len(_clientes(sessao).splitlines()) == 1)
+            # O `_anexado` entra junto porque a CONTAGEM sozinha nao distingue 1 de 0 no psmux —
+            # com ninguem anexado o `list-clients` ainda devolve uma linha fantasma (ver `_anexado`).
+            _esperar(lambda: _anexado(sessao) and len(_clientes(sessao).splitlines()) == 1)
             # E A tem que ter sido FECHADO de verdade (I1) — sem aviso, quem foi derrubado ficava
             # com o terminal congelado pra sempre em vez de ver a desconexao (achado da revisao).
-            # Loop com teto (nao so a proxima chamada): pode ainda sobrar no ar um pedaco legitimo
-            # de tela que o PTY mandou pra A antes do close tomar efeito.
-            with pytest.raises(Exception):
-                for _ in range(10):
+            # Drena com PRAZO, nao com numero fixo de mensagens: pode sobrar no ar um pedaco
+            # legitimo de tela que o PTY mandou pra A antes do close tomar efeito, e o ConPTY
+            # entrega essa tela inicial em bem mais pedacos que o pty do Linux — um
+            # `for _ in range(10)` esgotava as iteracoes ainda dentro do conteudo legitimo e nunca
+            # alcancava o quadro de close (medido no Windows, 22/08/2026).
+            fechou = False
+            limite = time.monotonic() + 15.0
+            while time.monotonic() < limite:
+                try:
                     _receive_bytes_com_teto(a, segundos=2.0)
+                except Exception:
+                    fechou = True
+                    break
+            assert fechou, "a conexao derrubada nunca recebeu o aviso de fechamento (I1)"
 
 
-@so_com_pty
+@com_painel
 def test_resize_chega_no_pty(sessao):
     c = _client()
     with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
         ws.receive_bytes()
         ws.send_text(json.dumps({"t": "resize", "cols": 100, "rows": 30}))
-        time.sleep(1.0)
-        assert _tam(sessao).startswith("100x30")
+        _esperar(lambda: _tam_bate(sessao, 100, 30))
 
 
-@so_com_pty
+@com_painel
 def test_frame_de_controle_torto_nao_derruba_o_terminal(sessao):
     """Achado da revisao: JSON valido que nao e OBJETO (`5`, `null`, `[1,2]`) levantava
     AttributeError no `.get`, e `cols` com lista levantava TypeError no `int()` — nenhum dos dois
@@ -219,7 +321,7 @@ def test_frame_de_controle_torto_nao_derruba_o_terminal(sessao):
                       json.dumps({"t": "resize", "rows": 30})):
             ws.send_text(torto)
         ws.send_text(json.dumps({"t": "resize", "cols": 100, "rows": 30}))
-        _esperar(lambda: _tam(sessao).startswith("100x30"))
+        _esperar(lambda: _tam_bate(sessao, 100, 30))
 
 
 @so_com_pty
@@ -302,8 +404,15 @@ def test_pty_morto_fecha_o_socket(sessao):
                 _receive_bytes_com_teto(ws)
 
 
-@so_com_pty
+@com_painel
 def test_fechamento_feio_nao_deixa_zumbi_nem_trava_a_listagem(sessao):
+    """Vale nos dois motores, por motivos diferentes — e e por isso que ele roda nos dois.
+
+    No POSIX o risco e o `waitpid` bloqueante prendendo um worker do threadpool pra sempre; no
+    Windows e o `WaitForSingleObject` do `ConPty.encerrar()`, que roda no mesmo `to_thread` e tem
+    o mesmo prazo. A afirmacao final e a mesma nos dois: cinco desmontes feios e a listagem ainda
+    responde.
+    """
     c = _client()
     for _ in range(5):
         with c.websocket_connect(
@@ -313,13 +422,13 @@ def test_fechamento_feio_nao_deixa_zumbi_nem_trava_a_listagem(sessao):
             # Espera DENTRO do with, mesmo motivo do teste anterior: o `__exit__` do
             # WebSocketTestSession cancela o servidor logo depois de enfileirar o disconnect, sem
             # esperar o `_desmontar` terminar.
-            _esperar(lambda: _clientes(sessao) == "")
+            _esperar(lambda: not _anexado(sessao))
     # A regressao do threadpool: se as bombas de bytes tivessem sido to_thread, os workers ficariam
     # parqueados e este GET seria o que trava.
     r = c.get("/api/sessions", headers={"Authorization": "Bearer secret"})
     assert r.status_code == 200
     assert termsock.clientes_ativos() == set()
-    assert _clientes(sessao) == ""
+    assert not _anexado(sessao)
 
 
 def test_selecionar_opcao_recusa_com_painel_aberto(sessao, monkeypatch):
@@ -651,13 +760,21 @@ def test_rename_mata_o_shell_quando_o_nome_novo_ja_esta_ocupado(sessao):
 
 
 def test_config_expoe_capacidade_do_painel_de_terminal():
-    # Step 8: `pty` e POSIX-only -- sem o gate, o botao apareceria no Windows e abriria painel
-    # morto. A chave entra em `somente_leitura` porque o app nunca decide isto sozinho (exige
-    # reiniciar o servico noutro SO).
+    """A chave e CAPACIDADE ("da pra abrir painel aqui?"), nao nome de sistema.
+
+    A afirmacao antiga era `== (os.name == "posix")`, que descrevia o gate de quando so havia
+    motor POSIX — e virou MENTIRA no dia em que o ConPTY entrou (22/08/2026). Trocar por
+    `== painel_disponivel()` seria tautologia (a rota devolve exatamente essa funcao); o que vale
+    afirmar e o fato: nas duas plataformas em que este projeto roda existe motor, entao a chave e
+    True nas duas, e continua sendo um booleano em `somente_leitura` porque o app nunca decide
+    isto sozinho.
+    """
     c = _client()
     r = c.get("/api/config", headers={"Authorization": "Bearer secret"})
     assert r.status_code == 200
-    assert r.json()["somente_leitura"]["terminal_panel"] == (os.name == "posix")
+    valor = r.json()["somente_leitura"]["terminal_panel"]
+    assert isinstance(valor, bool)
+    assert valor is True
 
 
 def test_origem_mesma_do_host_e_aceita_mesmo_com_public_url_diferente(monkeypatch):
@@ -739,3 +856,126 @@ def test_malha_ilegivel_nao_derruba_o_painel(monkeypatch):
     except OSError:
         ok = "explodiu"
     assert ok is True, "mesma-origem tem que passar ANTES de tocar na malha"
+
+
+# ===========================================================================================
+# Contrapartes do MOTOR DO WINDOWS. Cada uma existe porque o caso POSIX equivalente afirma algo
+# que la nao tem contraparte (fd herdavel, `waitpid`, `detach-client`), e nao porque o painel
+# seja diferente — o que o usuario ve e o mesmo.
+# ===========================================================================================
+so_windows = pytest.mark.skipif(os.name != "nt", reason="motor de ConPTY (Windows)")
+
+
+@so_windows
+def test_win_conpty_nao_herda_o_stdio_do_backend(tmp_path):
+    """A ARMADILHA de quem segue o exemplo oficial da Microsoft. Guarda de regressao do achado.
+
+    Sem `STARTF_USESTDHANDLES`, o `CreateProcess` propaga os std handles do PAI pro filho: num
+    backend rodando como servico (stdout indo pro log) o filho escreve NO LOG e o pseudoconsole
+    renderiza tela VAZIA. O sintoma aponta pro lugar errado — dentro do filho o `mode con` ja diz
+    o tamanho certo, ou seja, o attach estava correto o tempo todo. Limpar `HANDLE_FLAG_INHERIT`
+    dos nossos std handles NAO resolve (medido); o que resolve e ligar o flag com os TRES NULOS.
+
+    O caso roda o ConPTY num processo FILHO cujo stdout e um pipe nosso — que e exatamente a forma
+    do backend em producao — e cobra as DUAS metades: a marca sai pelo ConPTY **e** nao sai pelo
+    stdout. So a primeira metade passaria verde com o bug, porque um `cmd /c echo` escrevendo no
+    stdout herdado tambem "funciona" — do ponto de vista de quem so olha o processo.
+    """
+    import sys
+
+    # A pasta do `backend`, tirada do proprio modulo importado — nao do cwd, que o pytest pode
+    # mudar entre invocacoes.
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(termsock.__file__)))
+    corpo = '''
+import os, sys, time, _winapi
+sys.path.insert(0, RAIZ)
+from app import conpty
+env = {k: v for k, v in os.environ.items() if k != "PSMUX_SESSION"}
+p = conpty.abrir("cmd.exe /c echo MARCA_NO_CONPTY", 120, 30, env)
+lido = b""
+fim = time.monotonic() + 8.0
+while time.monotonic() < fim and b"MARCA_NO_CONPTY" not in lido:
+    try:
+        d = _winapi.ReadFile(p.saida, 4096)[0]
+    except OSError:
+        break
+    if not d:
+        break
+    lido += d
+p.encerrar()
+# O veredito vai pelo STDERR de proposito: o stdout deste processo e justamente a superficie
+# que o teste inspeciona, e escrever nele aqui misturaria a prova com o que ela mede.
+sys.stderr.write("CONPTY_VIU=%d" % (b"MARCA_NO_CONPTY" in lido))
+'''.replace("RAIZ", repr(raiz))
+    script = tmp_path / "roda_conpty.py"
+    script.write_text(corpo, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=90)
+    assert "CONPTY_VIU=1" in r.stderr, f"a marca nao saiu pelo ConPTY (stderr={r.stderr[:400]!r})"
+    # A metade que pega o bug: com o stdio herdado, o `echo` do filho aterrissa AQUI.
+    assert "MARCA_NO_CONPTY" not in r.stdout, (
+        "o filho escreveu no stdout do processo pai — e o stdio herdado; num servico isso vai "
+        f"pro log e o painel fica em branco (stdout={r.stdout[:400]!r})")
+
+
+@so_windows
+def test_win_attach_morto_fecha_o_socket(sessao):
+    """Contraparte do `test_pty_morto_fecha_o_socket`.
+
+    La o gatilho e `detach-client -s`, que no psmux nao serve: com o alvo exato ele responde
+    `no session '=<nome>'` (rc=1) — o `=` nao e honrado por esse comando, mesma familia do
+    `kill-session` —, e sem o `=` derrubaria TODOS os clientes da sessao, inclusive um `tmux
+    attach` nativo do dono. Aqui o gatilho e matar o NOSSO processo de attach, que e o unico
+    desmonte que aquele multiplexador permite com seguranca, e e o mesmo que o `_desmontar_windows`
+    usa em producao.
+    """
+    c = _client()
+    with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
+        ws.receive_bytes()
+        termsock._ativos[sessao].pty.encerrar()
+        with pytest.raises(Exception):
+            for _ in range(50):
+                _receive_bytes_com_teto(ws)
+
+
+@so_windows
+def test_win_saida_acima_do_teto_reata_a_leitura(sessao, monkeypatch):
+    """Contraparte do `test_saida_acima_do_teto_reata_o_reader_depois_de_drenar`.
+
+    A invariante e a mesma — quem PAUSA marca o flag, e o escritor so reata depois de drenar —, mas
+    aqui a pausa e `transporte.pause_reading()` em vez de `remove_reader`, e a rajada tem que sair
+    de um PowerShell (o pane do psmux nao e bash). Sem `_LEITURA`: no Windows quem decide o tamanho
+    de cada leitura e o transporte do Proactor, nao a gente.
+    """
+    monkeypatch.setattr(termsock, "_SAIDA_MAX", 200)
+    original = WebSocket.send_bytes
+
+    async def _lento(self, data):
+        await asyncio.sleep(0.03)
+        await original(self, data)
+
+    monkeypatch.setattr(WebSocket, "send_bytes", _lento)
+
+    c = _client()
+    with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
+        ws.receive_bytes()
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "-l",
+                        "1..400 | ForEach-Object { 'XXXXXXXXXXXXXXXXXXXX' }"], check=True)
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "Enter"], check=True)
+        limite = time.monotonic() + 8.0
+        while time.monotonic() < limite:
+            try:
+                _receive_bytes_com_teto(ws, segundos=0.5)
+            except Exception:
+                break
+        # PROVA: a sessao ainda responde depois da rajada — a leitura foi reatada de verdade.
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "-l", "echo PASSOU_DO_TETO"],
+                       capture_output=True)
+        subprocess.run(["tmux", "send-keys", "-t", f"={sessao}:", "Enter"], capture_output=True)
+        acumulado = b""
+        limite = time.monotonic() + 15.0
+        while time.monotonic() < limite and b"PASSOU_DO_TETO" not in acumulado:
+            try:
+                acumulado += _receive_bytes_com_teto(ws, segundos=2.0)
+            except Exception:
+                break
+        assert b"PASSOU_DO_TETO" in acumulado
