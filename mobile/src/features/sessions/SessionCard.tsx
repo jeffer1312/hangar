@@ -1,6 +1,7 @@
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { relativeTime, providerTag, untrackedReason } from '@hangar/core';
+import * as m from '../../paraglide/messages';
 import type { AggSession } from '@hangar/core';
 import { StatePill } from './StatePill';
 
@@ -50,7 +51,7 @@ export function SessionCard({
         ) : null}
         {isUntracked ? (
           <View style={styles.untracked}>
-            <Text style={styles.untrackedTxt}>sem id</Text>
+            <Text style={styles.untrackedTxt}>{m.sessao_sem_id()}</Text>
           </View>
         ) : null}
         <View style={styles.spacer} />

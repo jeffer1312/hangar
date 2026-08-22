@@ -24,6 +24,7 @@ export interface ServersState {
   setActive(id: string): void;
   active(): Server | null;
   markInvalid(id: string): void;
+  ensureActive(id: string): boolean;
 }
 
 export const useServers = create<ServersState>((set, get) => ({
@@ -66,6 +67,11 @@ export const useServers = create<ServersState>((set, get) => ({
   },
   markInvalid(id) {
     get().remove(id);
+  },
+  ensureActive(id) {
+    if (!get().servers.some((s) => s.id === id)) return false;
+    if (get().activeId !== id) get().setActive(id);
+    return true;
   },
 }));
 

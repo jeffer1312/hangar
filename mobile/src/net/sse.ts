@@ -18,11 +18,19 @@ export function createEventSource(
   const errHandlers = new Set<(ev: unknown) => void>();
   let curOnError: ((ev: unknown) => void) | null = null;
   let curOnOpen: ((ev: unknown) => void) | null = null;
+  const fechar = () => {
+    if (vigia) clearTimeout(vigia);
+    estado = 2;
+    // A lib agenda _pollAgain DEPOIS de despachar 'error' (EventSource.js:121-134); um close
+    // síncrono de dentro do handler só limpa o timer anterior. Este mata o que nasce em seguida.
+    es.removeAllEventListeners();
+    es.close();
+    setTimeout(() => es.close(), 0);
+  };
   const rearmar = () => {
     if (vigia) clearTimeout(vigia);
     vigia = setTimeout(() => {
-      estado = 2;
-      es.close();
+      fechar();
       errHandlers.forEach((f) => f({ type: 'timeout' }));
     }, 25_000);
   };
@@ -68,9 +76,7 @@ export function createEventSource(
       if (w) es.removeEventListener(type as never, w as never);
     },
     close() {
-      if (vigia) clearTimeout(vigia);
-      estado = 2;
-      es.close();
+      fechar();
     },
     get readyState() {
       return estado;

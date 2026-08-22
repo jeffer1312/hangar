@@ -8,6 +8,7 @@ import type { AggSession } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import { useSessions } from '../../stores/sessions';
 import { SessionCard } from './SessionCard';
+import * as m from '../../paraglide/messages';
 
 export function SessionList() {
   const router = useRouter();
@@ -71,7 +72,7 @@ export function SessionList() {
   if (!ready) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyTxt}>Carregando…</Text>
+        <Text style={styles.emptyTxt}>{m.comum_carregando()}</Text>
       </View>
     );
   }
@@ -79,8 +80,8 @@ export function SessionList() {
   if (servers.length === 0) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyTitle}>Nenhum servidor</Text>
-        <Text style={styles.emptyTxt}>Pareie com o QR do hangar para listar as sessões.</Text>
+        <Text style={styles.emptyTitle}>{m.lista_nenhum_servidor()}</Text>
+        <Text style={styles.emptyTxt}>{m.lista_pareie_qr()}</Text>
       </View>
     );
   }
@@ -88,7 +89,7 @@ export function SessionList() {
   if (loading && ordered.length === 0) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyTxt}>Carregando sessões…</Text>
+        <Text style={styles.emptyTxt}>{m.lista_carregando()}</Text>
       </View>
     );
   }
@@ -96,8 +97,8 @@ export function SessionList() {
   if (ordered.length === 0) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyTitle}>Nenhuma sessão ativa</Text>
-        <Text style={styles.emptyTxt}>Toque em + para criar</Text>
+        <Text style={styles.emptyTitle}>{m.lista_nenhuma_ativa()}</Text>
+        <Text style={styles.emptyTxt}>{m.lista_toque_criar()}</Text>
       </View>
     );
   }

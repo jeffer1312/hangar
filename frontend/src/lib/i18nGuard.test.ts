@@ -5,10 +5,21 @@ import { escanearArquivo, escanearArvore, carregarPermitidas } from '../../scrip
 
 const RAIZ = join(import.meta.dirname, '..', '..');
 const SRC = join(RAIZ, 'src');
+const CORE = join(RAIZ, '..', 'packages', 'core', 'src');
+const MOBILE_SRC = join(RAIZ, '..', 'mobile', 'src');
+const MOBILE_APP = join(RAIZ, '..', 'mobile', 'app');
 const base: Record<string, number> = JSON.parse(readFileSync(join(RAIZ, 'i18n-baseline.json'), 'utf8'));
 
 describe('trava de string crua', () => {
-  const achados = escanearArvore(SRC, carregarPermitidas(RAIZ));
+  const permitidas = carregarPermitidas(RAIZ);
+  const achadosFront = escanearArvore(SRC, permitidas);
+  const achadosCoreRaw = escanearArvore(CORE, permitidas);
+  const achadosCore = Object.fromEntries(Object.entries(achadosCoreRaw).map(([k, v]) => [`core/${k}`, v]));
+  const achadosMobileSrcRaw = escanearArvore(MOBILE_SRC, permitidas);
+  const achadosMobileSrc = Object.fromEntries(Object.entries(achadosMobileSrcRaw).map(([k, v]) => [`mobile/src/${k}`, v]));
+  const achadosMobileAppRaw = escanearArvore(MOBILE_APP, permitidas);
+  const achadosMobileApp = Object.fromEntries(Object.entries(achadosMobileAppRaw).map(([k, v]) => [`mobile/app/${k}`, v]));
+  const achados = { ...achadosFront, ...achadosCore, ...achadosMobileSrc, ...achadosMobileApp };
 
   it('nenhum arquivo passa do seu limite na linha de base', () => {
     const piorou: string[] = [];

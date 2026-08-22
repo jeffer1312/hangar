@@ -83,6 +83,14 @@ export function escanearArquivo(caminho, fonte, permitidas = new Set()) {
       if (t) achados.push(t);
     }
   }
+  // .tsx: texto solto dentro de JSX (<Text>...</Text>) não está em literal — extrai só o que está entre > e <.
+  // Não usa o split genérico acima (que engole código TypeScript entre as tags e gera falsos positivos como "as AggSession,").
+  if (caminho.endsWith('.tsx')) {
+    for (const m of fonte.matchAll(/>\s*([^<>{}\n]{3,}?)\s*</g)) {
+      const t = pareceTexto(m[1], permitidas);
+      if (t) achados.push(t);
+    }
+  }
   const corpos = caminho.endsWith('.svelte') ? scripts : [fonte];
   for (const corpo of corpos) {
     const semImport = corpo.replace(/^\s*import .*$/gm, '');
@@ -119,11 +127,11 @@ export function escanearArvore(raizSrc, permitidas = new Set()) {
     for (const nome of readdirSync(dir)) {
       const p = join(dir, nome);
       if (statSync(p).isDirectory()) {
-        if (nome === 'paraglide' || nome === 'node_modules') continue; // gerado / dependencia
+        if (nome === 'paraglide' || nome === 'node_modules' || nome === 'vendor') continue; // gerado / dependencia / vendor copiado
         anda(p);
         continue;
       }
-      if (!/\.(svelte|ts)$/.test(nome) || /\.test\.(svelte\.)?ts$/.test(nome)) continue;
+      if (!/\.(svelte|tsx?)$/.test(nome) || /\.test\.(svelte\.)?tsx?$/.test(nome)) continue;
       const rel = relative(raizSrc, p);
       const achados = escanearArquivo(p, readFileSync(p, 'utf8'), permitidas);
       if (achados.length) fora[rel] = achados;

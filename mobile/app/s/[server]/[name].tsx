@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { chatStore } from '../../../src/stores/chat';
+import { useServers } from '../../../src/stores/servers';
 import { Screen } from '../../../src/ui/Screen';
 import { ChatHeader } from '../../../src/chat/ChatHeader';
 import { MessageList } from '../../../src/chat/MessageList';
@@ -19,11 +20,22 @@ export default function ChatScreen() {
   const name = Array.isArray(params.name) ? params.name[0] : (params.name ?? '');
 
   const chat = chatStore(serverId, name);
+  const [servidorSumiu, setServidorSumiu] = useState(false);
+  const existe = useServers((s) => s.servers.some((x) => x.id === serverId));
   useEffect(() => {
+    // Garante que o servidor da rota é o ativo (precedente: App.svelte:78-79, selectServer(routed)).
+    if (!useServers.getState().ensureActive(serverId)) {
+      setServidorSumiu(true);
+      return;
+    }
+    setServidorSumiu(false);
     chat.retain();
     return () => chat.release();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, name]);
+  useEffect(() => {
+    if (!existe) setServidorSumiu(true);
+  }, [existe]);
 
   const events = chat.use((s) => s.events);
   const stateEvent = chat.use((s) => s.stateEvent);
@@ -47,7 +59,21 @@ export default function ChatScreen() {
       {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         <View style={styles.inner}>
-          {loading && !error ? (
+          {servidorSumiu ? (
+            <View style={styles.erro}>
+              <Text style={styles.hint}>{m.chat_servidor_removido()}</Text>
+              <Text
+                style={styles.retry}
+                onPress={() => {
+                  if (router.canGoBack()) router.back();
+                  else router.replace('/');
+                }}
+                accessibilityRole="button"
+              >
+                {m.comum_voltar()}
+              </Text>
+            </View>
+          ) : loading && !error ? (
             <Text style={styles.hint}>{m.chat_carregando_historico()}</Text>
           ) : error ? (
             <View style={styles.erro}>
@@ -67,7 +93,7 @@ export default function ChatScreen() {
             />
           )}
         </View>
-        <Composer serverId={serverId} name={name} />
+        {!servidorSumiu ? <Composer serverId={serverId} name={name} /> : null}
       </KeyboardAvoidingView>
     </Screen>
   );

@@ -13,6 +13,7 @@ vi.mock('react-native-sse', () => ({
     opts: Record<string, unknown>;
     listeners: Record<string, Function[]> = {};
     close = vi.fn();
+    removeAllEventListeners = vi.fn();
     constructor(url: string, opts: Record<string, unknown>) {
       this.url = url;
       this.opts = opts;

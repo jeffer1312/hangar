@@ -9,7 +9,9 @@
       "anthropic.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
       "kimi.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
       "deepseek.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
-      "groq.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com."
+      "groq.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
+      "System": "core/theme.ts:97 — nome de família de fonte passado ao CSS/RN, não é texto exibido",
+      "Deseja continuar?": "mobile/src/features/sessions/SessionList.tsx:41 — pergunta sintética em __DEV__ para garantir 3 estados na prova visual, não é texto de produção"
     }
   },
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
@@ -189,5 +191,7 @@
   "anthropic.com",
   "kimi.com",
   "deepseek.com",
-  "groq.com"
+  "groq.com",
+  "System",
+  "Deseja continuar?"
 ]
