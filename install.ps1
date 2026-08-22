@@ -684,9 +684,24 @@ Titulo '5/8 Wrapper do claude (sessao aberta por voce aparece no app)'
 $marca = '# >>> hangar >>>'
 $marcaFim = '# <<< hangar <<<'
 
+# Marcadores de blocos NOSSOS que ficaram pra tras em instalacoes antigas. Sao os dois nomes que
+# este projeto ja teve; qualquer outro marcador no perfil da pessoa NAO entra nesta lista e nao e
+# tocado. Nao e faxina: hoje o bloco legado tambem faz `. claude.ps1`, entao um perfil com os dois
+# carrega o wrapper DUAS vezes a cada terminal novo.
+$MarcasLegadas = @(
+    @{ Ini = '# >>> claude-cockpit >>>'; Fim = '# <<< claude-cockpit <<<' },
+    @{ Ini = '# >>> claude-pocket >>>';  Fim = '# <<< claude-pocket <<<'  }
+)
+
 function Instalar-Bloco-No-Perfil($perfil) {
     <#
       Poe (ou atualiza) o bloco do wrapper NUM perfil. Devolve um texto curto pro log.
+
+      MESMA FORMA do scripts/setup-windows-tmux.ps1, de proposito: regex em modo singleline com os
+      marcadores escapados, remove TODAS as ocorrencias (nossas e as legadas conhecidas) e reescreve
+      uma so. Dois jeitos diferentes de fazer isto no mesmo repo seria pior que qualquer um dos dois.
+      O que esta FORA dos nossos marcadores nao e tocado — o perfil e da pessoa e pode ter meia vida
+      de configuracao ali.
 
       O encoding e UTF-8 COM BOM, e essa e a unica escolha que funciona nas DUAS versoes. Medido
       aqui em 22/08/2026 com um caminho de repo contendo acento (C:\...\Joao com til), fazendo cada
@@ -702,39 +717,47 @@ function Instalar-Bloco-No-Perfil($perfil) {
       OUTRA nao le. Aqui o BOM e desejado; no .env e no settings.json ele e veneno (install.ps1:241).
     #>
     $texto = Ler-Texto $perfil
+    if ($null -eq $texto) { $texto = '' }
     $bloco = @($marca,
                ". `"$raiz\scripts\shell\claude.ps1`"",
                ". `"$raiz\scripts\shell\claude-conta.ps1`"",
                $marcaFim) -join "`r`n"
 
-    if ($null -ne $texto -and $texto.Contains($marca)) {
-        # Bloco antigo (instalado antes do claude-conta existir) nao pode ficar pra tras: reescreve
-        # o conteudo ENTRE as marcas e preserva o resto do arquivo.
-        $linhas = $texto -split "`r?`n"
-        $ini = [Array]::IndexOf($linhas, $marca)
-        $fim = [Array]::IndexOf($linhas, $marcaFim)
-        $precisa = -not ($texto -match 'claude-conta\.ps1')
-        if ($ini -ge 0 -and $fim -gt $ini) {
-            if ($ini -gt 0) { $antes = @($linhas[0..($ini - 1)]) } else { $antes = @() }
-            if ($fim -lt ($linhas.Count - 1)) { $depois = @($linhas[($fim + 1)..($linhas.Count - 1)]) } else { $depois = @() }
-            $novoTexto = (@($antes) + @($bloco) + @($depois)) -join "`r`n"
-            # Reescreve mesmo quando o CONTEUDO ja esta certo: o arquivo pode estar em ANSI ou em
-            # UTF-8 sem BOM (escrito por uma versao anterior deste instalador, ou pela outra versao
-            # do PowerShell), e ai o bloco existe mas o terminal nao consegue LER o caminho.
-            Escrever-Texto $perfil $novoTexto -ComBom
-            if ($precisa) { return 'atualizado (claude-conta incluido)' }
-            return 'ja presente (encoding normalizado)'
-        }
-        # Marca de abertura sem a de fechamento: arquivo mexido na mao. Nao adivinha onde o bloco
-        # termina — dizer isso e melhor que reescrever o perfil de alguem por palpite.
+    # Marca de abertura SEM a de fechamento: arquivo mexido na mao. Nao adivinha onde o bloco
+    # termina — o regex abaixo tambem nao casaria, e ai o bloco novo entraria embaixo do meio-bloco
+    # velho. Dizer isso e melhor que reescrever o perfil de alguem por palpite.
+    if ($texto.Contains($marca) -and -not $texto.Contains($marcaFim)) {
         return 'MEXIDO NA MAO (marca de fim ausente) - nao toquei'
     }
 
-    $prefixo = ''
-    if ($null -ne $texto -and $texto.Trim()) { $prefixo = $texto.TrimEnd() + "`r`n`r`n" }
-    Escrever-Texto $perfil ($prefixo + $bloco + "`r`n") -ComBom
+    $padrao = '(?s)' + [regex]::Escape($marca) + '.*?' + [regex]::Escape($marcaFim) + '\r?\n?'
+    $nossos = ([regex]::Matches($texto, $padrao)).Count
+    $limpo = [regex]::Replace($texto, $padrao, '')
+
+    $legados = 0
+    foreach ($m in $MarcasLegadas) {
+        $pl = '(?s)' + [regex]::Escape($m.Ini) + '.*?' + [regex]::Escape($m.Fim) + '\r?\n?'
+        $legados += ([regex]::Matches($limpo, $pl)).Count
+        $limpo = [regex]::Replace($limpo, $pl, '')
+    }
+
+    # Cauda normalizada antes de concatenar (mesma nota do setup-windows-tmux): depois de arrancar
+    # os blocos o texto ja pode terminar em quebra de linha, e somar outra deixaria linha em branco
+    # acumulando a cada execucao — que e como se descobre que a funcao nao e idempotente.
+    $limpo = $limpo.TrimEnd("`r", "`n")
+    $novoTexto = if ($limpo) { $limpo + "`r`n`r`n" + $bloco + "`r`n" } else { $bloco + "`r`n" }
+
+    # Reescreve mesmo quando o CONTEUDO ja esta certo: o arquivo pode estar em ANSI ou em UTF-8 sem
+    # BOM (escrito por uma versao anterior deste instalador, ou pela outra versao do PowerShell), e
+    # ai o bloco existe mas o terminal nao consegue LER o caminho.
+    Escrever-Texto $perfil $novoTexto -ComBom
+
+    if ($legados -gt 0) { return "bloco no lugar; $legados bloco(s) legado(s) colapsado(s)" }
+    if ($nossos -gt 1)  { return "bloco no lugar; $nossos copias colapsadas em 1" }
+    if ($nossos -eq 1)  { return 'ja presente (encoding normalizado)' }
     return 'bloco adicionado'
 }
+
 
 $perfis = Perfis-Do-Usuario
 $jaTem = $false
