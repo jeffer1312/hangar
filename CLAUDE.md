@@ -597,6 +597,39 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     user's own native `attach` included. This is why the terminal panel's Windows teardown is
     **killing our own `tmux attach` process**: measured, it releases just that client, a client of
     another session stays attached, and the session keeps running.
+- **Where psmux and tmux disagree about CONFIGURATION — and how to tell a real setting from one it
+  merely stored** (measured on psmux 3.3.7, 22/08/2026, on a throwaway `-L` socket). The section
+  above is about commands that address the wrong thing; this one is about `bind`/`set` **accepting
+  everything**. Same family as the `terminal-features` it once ignored in silence, except here
+  reading the value back does not catch it either.
+  - **`set -g <anything> <value>` returns 0 and the invented option comes back from `show -g`.**
+    So "it accepted it, and I read it back" proves nothing about a psmux option — the read is just
+    your own string. What proves a setting is real is it appearing in the **default `show -g`
+    listing** (58 entries here) *before* anyone sets it. Use that as the test.
+  - **No mouse key name can be bound.** `bind -T root WheelUpPane …` returns rc=0 and is **silently
+    discarded** — `list-keys -T root` never shows it, in the plain form or in the nested `if -F`
+    one. It is not the table and not `list-keys`: `NPage`, `Home`, `F5`, `C-a`, `M-v` and a prefix
+    `bind X` all store fine, while `WheelUpPane`, `WheelDownPane`, `WheelUpStatus`, `MouseDown1Pane`
+    and `MouseDrag1Pane` behave exactly like a `TeclaQueNaoExiste`. The consequence: the wheel
+    recipe from the user's Linux `~/.tmux.conf` (`bind -T root WheelUpPane` + nested `if -F`)
+    **cannot be ported**, and a future attempt will get rc=0 the whole way and look like it worked.
+  - **`#{mouse_any_flag}` does not exist**; `#{alternate_on}` and `#{pane_in_mode}` do. Measured
+    against an app holding the alternate screen and asking for mouse (`?1049h` + `?1000h` +
+    `?1006h`): `alternate_on` went `0` → `1`, `pane_in_mode` answered `0`, and `mouse_any_flag` came
+    back **empty** — same as an invented variable — even while the app was requesting mouse. So the
+    "app that asks for mouse" branch of that recipe has no condition to test, either.
+  - **The wheel-into-copy-mode behaviour is OUR option, not a psmux law.** psmux carries three
+    settings tmux has no equivalent for — `scroll-enter-copy-mode` (default `on`), `mouse-selection`
+    and `pwsh-mouse-selection` — and `docs/tmux.conf.windows.example` already writes
+    `set -g scroll-enter-copy-mode on`. That line is what sends the wheel into copy mode; the lever
+    is one word, and it is in our own managed block.
+  - **Synthetic wheel events could not be delivered** (two attempts, both dead ends worth not
+    repeating): writing the SGR sequence (`ESC [ < 64 ; x ; y M`) into a ConPTY's input measures the
+    **ConPTY**, which translates input before the client sees it; and a `MOUSE_WHEELED`
+    `INPUT_RECORD` posted with `WriteConsoleInput` into a console the client inherited never reached
+    it either. Neither triggered copy mode even with the option `on`, which is the behaviour a real
+    wheel produces every day — so the result is about the injection, not about psmux. Wheel
+    behaviour here is verified by a human scrolling, not by a probe.
 - **The pane's environment comes from the SERVER on tmux and from the CALLER on psmux — which is
   why `CLAUDE_CONFIG_DIR` cannot be exported unconditionally** (measured on psmux 3.3.7,
   22/08/2026). tmux gives a new session the env of whoever started the *server*, so `new_session`
