@@ -28,14 +28,20 @@
 
   // Repoe os campos a cada abertura E a cada troca de servidor: a folha fica montada, entao sem isto
   // o texto digitado numa edicao abandonada reaparecia na proxima — no campo de TOKEN, com cara de
-  // valor gravado.
+  // valor gravado. A chave e so o `id`: mudanca vinda do SYNC (outro aparelho renomeou ou trocou o
+  // token com a folha aberta) NAO pode puxar o tapete de quem esta digitando aqui.
   let ultimo = '';
+  // O que a folha carregou. E contra ISTO que o salvar compara, nunca contra o `server` atual: se o
+  // sync renomeou "Casa" pra "Casa nova" enquanto a folha estava aberta, comparar com o prop novo
+  // fazia o Salvar (mesmo sem ninguem mexer no campo) reescrever "Casa" por cima, calado.
+  let baseLabel = '';
+  let baseToken = '';
   $effect(() => {
-    const chave = open && server ? `${server.id}:${server.token}` : '';
+    const chave = open && server ? server.id : '';
     if (chave === ultimo) return;
     ultimo = chave;
-    label = server?.label ?? '';
-    token = server?.token ?? '';
+    label = baseLabel = server?.label ?? '';
+    token = baseToken = server?.token ?? '';
     revelado = false;
     erro = '';
     aviso = '';
@@ -56,7 +62,7 @@
 
     let tokenFinal = texto;
     let outroHost = false;
-    if (texto !== server.token) {
+    if (texto !== baseToken) {
       // Aceita a URL de pareamento inteira (quem cola do QR nao extrai nada na mao) e RECUSA lixo:
       // URL torta, sem ?token=, token com espaco. Gravar aqui era o 401 sem pista que chegava depois.
       const parsed = validarPareamento(texto, { aceitarTokenCru: true });
@@ -71,8 +77,10 @@
         && parsed.base.replace(/\/+$/, '') !== server.baseUrl.replace(/\/+$/, '');
     }
 
-    if (nome !== server.label) onRename(server.id, nome);
-    if (tokenFinal !== server.token) {
+    // Grava so o que MUDOU NESTA FOLHA (base = valor carregado ao abrir). Comparar com o `server`
+    // atual mandava de volta o valor velho por cima do que o sync tinha acabado de trazer.
+    if (nome !== baseLabel) onRename(server.id, nome);
+    if (tokenFinal !== baseToken) {
       vaultPush.clear();                        // tentativa NOVA: zera o resultado do push antigo
       if (!onUpdateToken(server.id, tokenFinal)) {
         // false = o id sumiu (removido noutra aba/aparelho entre abrir e salvar). Raro, mas
@@ -81,6 +89,8 @@
         return;
       }
     }
+    baseLabel = nome;
+    baseToken = tokenFinal;
     if (outroHost) {
       // Salvou, mas o endereco NAO mudou: fica aberta pra o usuario ler o que aconteceu com a URL
       // que ele colou. Fechar aqui esconderia justamente a parte que ele nao esperava.

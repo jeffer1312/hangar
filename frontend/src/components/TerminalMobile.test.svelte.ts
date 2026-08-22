@@ -114,6 +114,21 @@ describe('TerminalMobile', () => {
     unmount(t.comp);
   });
 
+  it('conexao caida: NAO limpa o campo (o texto sumia sem nunca chegar no PTY)', async () => {
+    const t = montar();
+    await socketPronto();
+    FakeWS.ultimo!.readyState = 3;                 // CLOSED: o TermSocket.send vira no-op
+    const campo = document.querySelector<HTMLInputElement>('.tx-input')!;
+    campo.value = 'comando importante';
+    campo.dispatchEvent(new Event('input'));
+    await tick();
+    campo.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await tick();
+    expect(enviados()).toEqual([]);
+    expect(campo.value).toBe('comando importante');   // continua ali pra reenviar
+    unmount(t.comp);
+  });
+
   it('enviar SEM Enter nao acrescenta o \\r (picker/filtro submeteria antes da hora)', async () => {
     const t = montar();
     await socketPronto();

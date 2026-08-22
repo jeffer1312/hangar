@@ -61,6 +61,11 @@ export class TermSocket {
   // InvalidStateError direto no console.
   send(b: Uint8Array<ArrayBuffer>) { if (this.ws.readyState === WebSocket.OPEN) this.ws.send(b); }
 
+  // Quem CHAMA precisa saber que o send seria no-op: o terminal do celular limpava o campo de texto
+  // logo depois de enviar, entao com a conexao caida a mensagem sumia da tela sem nunca chegar no
+  // PTY -- o mesmo defeito que o `send` silencioso evita no console e devolve na cara do usuario.
+  get aberto() { return this.ws.readyState === WebSocket.OPEN; }
+
   resize(cols: number, rows: number) {
     this.pendente = { cols, rows };
     clearTimeout(this.timer);

@@ -207,7 +207,10 @@
   let draft = $state('');
   function enviar(comEnter: boolean) {
     const valor = draft;
-    if (!valor || !sock) return;
+    // `sock.aberto`, nao so `sock`: com a conexao caida o TermSocket.send e no-op de proposito
+    // (senao cada tecla joga InvalidStateError no console), e o `draft = ''` abaixo rodava do mesmo
+    // jeito — o texto sumia da tela sem nunca chegar no PTY. Nao enviou, nao limpa.
+    if (!valor || !sock?.aberto) return;
     // Texto e Enter no MESMO envio: dois sends separados abriam janela pra a TUI processar a linha
     // antes do texto inteiro chegar.
     sock.send(enc.encode(comEnter ? valor + '\r' : valor));

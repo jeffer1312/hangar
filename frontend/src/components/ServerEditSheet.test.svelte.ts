@@ -93,6 +93,28 @@ describe('ServerEditSheet', () => {
     unmount(t.comp);
   });
 
+  it('rename vindo do sync com a folha aberta não é reescrito ao salvar', async () => {
+    // Outro aparelho renomeia enquanto esta folha está aberta. Salvar sem ninguém ter tocado no
+    // campo comparava o texto local com o `server` NOVO e mandava o nome VELHO de volta, calado.
+    const onRename = vi.fn();
+    const props = $state({
+      open: true, server: SRV, onClose: vi.fn(),
+      onRename, onUpdateToken: () => true,
+    });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(ServerEditSheet, { target: el, props });
+    await tick();
+    props.server = { ...SRV, label: 'Casa nova' };   // chega pelo sync
+    await tick();
+    // Salva sem tocar em nada (o aria-label do campo já é o do nome NOVO, então busca pelo tipo).
+    document.querySelector<HTMLInputElement>('input[type="password"]')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(onRename).not.toHaveBeenCalled();
+    unmount(comp);
+  });
+
   it('URL inválida recusa sem chamar onUpdateToken e mostra erro ligado ao campo', async () => {
     authMock.validarPareamento.mockReturnValue(null);
     const onUpdateToken = vi.fn(() => true);
