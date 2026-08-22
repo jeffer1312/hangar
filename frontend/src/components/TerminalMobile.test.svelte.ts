@@ -157,6 +157,35 @@ describe('TerminalMobile', () => {
     unmount(t.comp);
   });
 
+  it('um salto grande num toque so nao despacha uma rajada de teclas', async () => {
+    const t = montar();
+    await socketPronto();
+    doPty('\x1b[?1049h');
+    await quadros(20);
+    // Aba que volta do segundo plano, gesto atropelado: sem teto, 4000px / passo de 40px viravam
+    // 100 PageUp de uma vez na TUI.
+    arrastar(document.querySelector('.tx-screen')!, [0, 4000]);
+    expect(enviados().length).toBeLessThanOrEqual(2);
+    unmount(t.comp);
+  });
+
+  it('cano fechado: o arrasto nao e engolido (deixa a rolagem nativa passar)', async () => {
+    FakeWS.autoAbrir = false;
+    const t = montar();
+    await ate(() => FakeWS.ultimo !== null);
+    const tela = document.querySelector('.tx-screen')!;
+    const mv = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(mv, 'touches', { value: [{ clientY: 100 }] });
+    const ini = new Event('touchstart', { bubbles: true });
+    Object.defineProperty(ini, 'touches', { value: [{ clientY: 400 }] });
+    tela.dispatchEvent(ini);
+    tela.dispatchEvent(mv);
+    // preventDefault com a tecla nao saindo mataria a rolagem nativa em troca de nada.
+    expect(mv.defaultPrevented).toBe(false);
+    expect(enviados()).toEqual([]);
+    unmount(t.comp);
+  });
+
   it('com scrollback de verdade (buffer normal) o arrasto NAO e sequestrado', async () => {
     const t = montar();
     await socketPronto();

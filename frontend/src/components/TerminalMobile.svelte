@@ -76,6 +76,15 @@
     sock?.resize(term.cols, term.rows);
   });
 
+  // Cano fechado tranca a digitacao do proprio xterm, do mesmo jeito que a barra de teclas fica
+  // desabilitada. Sem isto o usuario digitava uma frase inteira no vazio: `TermSocket.send` e no-op
+  // fora do OPEN e terminal nao tem eco local (quem ecoa e o PTY) — a frase nao aparecia em lugar
+  // nenhum nem chegava do outro lado.
+  $effect(() => {
+    const ok = pronto;
+    if (term) term.options.disableStdin = !ok;
+  });
+
   // Servidor da sessao. No celular a rota ja aponta o ATIVO pra sessao aberta (App.applyRouteServer)
   // — o mesmo servidor que o resto do Chat usa nos fetches desta tela.
   function servidorAtivo() {
@@ -126,6 +135,10 @@
       const r = novoTerminal(hostEl, Terminal, FitAddon, fontPx);
       term = r.term; fit = r.fit;
       const t = r.term;   // copia local nao-nula: `term` e reatribuido e zerado no cleanup
+      // Nasce trancado: o efeito de `pronto` destranca quando o cano abre. `term` nao e $state, e
+      // por isso o efeito nao acorda sozinho com a criacao — quem cobre a janela inicial e esta
+      // linha, nao ele.
+      t.options.disableStdin = true;
 
       mo = new MutationObserver(() => { t.options.theme = temaDe(hostEl); });
       mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
@@ -242,7 +255,9 @@
   }
 
   function toqueMove(e: TouchEvent) {
-    if (!emTuiSemHistorico() || !host) return;
+    // Cano fechado: NAO engole o gesto. O preventDefault abaixo mata a rolagem nativa, e como a
+    // tecla nao seria enviada o arrasto sumiria sem fazer nada — pior que nao ter o recurso.
+    if (!sock?.aberto || !emTuiSemHistorico() || !host) return;
     const y = e.touches[0]?.clientY;
     if (y == null) return;
     acumulado += y - toqueY;
@@ -251,8 +266,13 @@
     // rola por baixo — por isso o listener e registrado com { passive: false }, la no efeito.
     e.preventDefault();
     const passo = Math.max(40, host.clientHeight / 3);
-    while (acumulado >= passo) { tecla('PageUp'); acumulado -= passo; }
-    while (acumulado <= -passo) { tecla('PageDown'); acumulado += passo; }
+    // Teto por evento: um salto grande de clientY num unico touchmove (aba que volta do segundo
+    // plano, gesto atropelado) despacharia dezenas de teclas de uma vez na TUI. Duas paginas por
+    // quadro ja e mais rapido do que qualquer dedo, e o resto do delta e descartado junto.
+    let restantes = 2;
+    while (acumulado >= passo && restantes-- > 0) { tecla('PageUp'); acumulado -= passo; }
+    while (acumulado <= -passo && restantes-- > 0) { tecla('PageDown'); acumulado += passo; }
+    if (restantes <= 0) acumulado = 0;
   }
 
   // Botao de barra de ferramentas nao pode levar o foco junto: no celular, tirar o foco da textarea
