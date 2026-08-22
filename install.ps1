@@ -168,6 +168,25 @@ if (-not (Tem 'git')) {
     }
 } else { Ok 'git' }
 
+# ripgrep tambem e OPCIONAL, e o preco de nao ter e ESPECIFICO: quem chama o `rg` e a busca por
+# conteudo entre sessoes (a lupa; backend/app/search.py), e sem o binario ela devolve lista VAZIA -
+# a tela diz "nenhum resultado" pra uma busca que nunca rodou. No Linux o ripgrep costuma ja estar
+# ai; no Windows nao vem com o sistema, e foi assim que a busca ficou muda nesta VM. O backend
+# agora tambem registra o aviso no log, mas quem resolve de verdade e instalar.
+# NAO usa `Instale`: aquele empurra pra $pendencias e a linha seguinte aborta a instalacao inteira -
+# desproporcional pra uma ferramenta que so a lupa usa.
+if (-not (Tem 'rg')) {
+    Falta 'ripgrep ausente - a busca por conteudo entre sessoes (a lupa) volta sempre vazia'
+    if (-not $SoChecar -and (Pergunte '      Instalar o ripgrep agora?')) {
+        Write-Host '  .. instalando ripgrep (BurntSushi.ripgrep.MSVC)'
+        Nativo winget install --id BurntSushi.ripgrep.MSVC --exact --silent `
+            --accept-package-agreements --accept-source-agreements | Out-Null
+        Atualiza-Path
+        if (Tem 'rg') { Ok 'ripgrep instalado' }
+        else { Erro 'ripgrep nao instalou - so a lupa fica vazia; o resto do app funciona' }
+    }
+} else { Ok 'ripgrep' }
+
 if ($SoChecar) {
     if ($pendencias.Count -eq 0) { Titulo 'Nada faltando.'; exit 0 }
     Titulo "Faltam: $($pendencias -join ', ')"

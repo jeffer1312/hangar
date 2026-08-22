@@ -8,6 +8,7 @@ interpolada). A query e tratada como STRING LITERAL (-F fixed-string) e passada 
 -> nunca chega a um shell nem e interpretada como regex/flag. Caps HARD impedem que uma query ampla
 despeje o mundo."""
 import json
+import logging
 import os
 import re
 import shutil
@@ -30,8 +31,34 @@ _MAX_Q = 200             # comprimento maximo da query (excedente e truncado)
 # Sobe se um dia um transcript legitimo passar disso e some da busca.
 _MAX_FILESIZE = "64M"
 
-# Resolve o binario uma vez; "rg" puro se nao achar (Popen entao levanta FileNotFoundError -> []).
-_RG = shutil.which("rg") or "rg"
+_log = logging.getLogger("claude_pocket.search")
+_rg_avisado = False
+
+
+def _rg() -> str:
+    """Caminho do `rg`, resolvido A CADA BUSCA — e nao uma vez no import.
+
+    Duas razoes, as duas medidas no Windows (21/08/2026, onde o ripgrep nao vem com o sistema):
+
+    1. resolver no import congela a resposta pela vida do processo. Instalar o ripgrep com o
+       backend de pe deixava a busca vazia ate alguem reiniciar o servico — e no Windows esse e o
+       caminho NORMAL, porque o instalador roda com o app ja no ar.
+    2. sem o binario, o `Popen` levanta FileNotFoundError e a rota devolve `[]` — indistinguivel de
+       "procurei e nao achei nada". Aqui a ausencia passa a deixar rastro no log, uma vez por
+       processo (a busca e chamada por digito no celular; um aviso por tecla entupiria o journal).
+
+    O `[]` continua sendo a resposta: a rota devolve `list[SearchHit]` e transformar isto em erro
+    HTTP mudaria o contrato dela e a tela do celular junto. O que muda e ter onde olhar.
+    """
+    global _rg_avisado
+    achado = shutil.which("rg")
+    if achado:
+        return achado
+    if not _rg_avisado:
+        _rg_avisado = True
+        _log.warning("ripgrep (rg) nao esta no PATH: a busca por conteudo entre sessoes vai "
+                     "devolver vazio ate ele ser instalado")
+    return "rg"
 
 
 class SearchHit(BaseModel):
@@ -88,7 +115,7 @@ def search(q: str, live_names: dict[str, str], limit: int = _MAX_HITS) -> list[S
     # LISTA de argumentos (sem shell). -F: q e string literal. -e q: q vai como VALOR da flag (mesmo
     # comecando com '-' nao vira flag). --no-ignore: nao pular transcript por um .gitignore/ignore.
     argv = [
-        _RG, "--json", "-F", "--no-messages", "--no-ignore",
+        _rg(), "--json", "-F", "--no-messages", "--no-ignore",
         "-m", str(_MAX_PER_FILE),
         "--max-filesize", _MAX_FILESIZE,
         "-g", "*.jsonl",
