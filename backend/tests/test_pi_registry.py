@@ -278,7 +278,6 @@ def test_session_file_falls_back_to_the_wrapper_env(monkeypatch, tmp_path):
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     sid = "019fa3d5-f074-707b-92a8-1ca7f1d99ec9"
     _fake_env(monkeypatch, tmp_path, {"PATH": "/bin", "CP_PI_SESSION": sid})
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%123", pid=7, cwd="/w") == f"/s/2026_{sid}.jsonl"
 

@@ -7,6 +7,13 @@ import pytest
 
 import app.cli_probe as cli_probe
 
+# Plataforma REAL, lida no import. `test_windows_path_com_drive_e_pathext` falsifica `os.name` pra
+# exercitar o ramo Windows da sonda, e qualquer `os.name` consultado DEPOIS disso responde "nt" ate
+# no Linux — foi assim que a criacao dos dubles passou a fazer `.cmd` la e quebrou. Quem decide
+# COMO criar um executavel e a maquina de verdade, nunca o estado global que o proprio teste
+# falsificou.
+_NT_REAL = os.name == "nt"
+
 
 def _make_script(tmp_path, name, content):
     p = tmp_path / name
@@ -28,7 +35,7 @@ def _make_sh(tmp_path, name, exit_code=0, sleep=None):
     O `sleep` vira `ping` porque o `timeout` do Windows recusa stdin redirecionado (e a sonda
     roda com capture_output).
     """
-    if os.name == "nt":
+    if _NT_REAL:
         corpo = f"@echo off\nping -n {int(sleep) + 1} 127.0.0.1 > nul\n" if sleep is not None else "@echo off\n"
         return _make_script(tmp_path, name + ".cmd", corpo + f"exit /b {exit_code}\n")
     if sleep is not None:
@@ -103,9 +110,9 @@ def test_sem_permissao_pula_pro_proximo_candidato(tmp_path, monkeypatch):
     # ha bit de exec: o equivalente e um arquivo de texto com nome executavel, que a sonda tenta
     # rodar e recebe WinError 193 (ENOEXEC). Os dois caem no mesmo ramo do `except` e provam a
     # mesma coisa: candidato ruim NAO encerra a busca, a sonda segue pro proximo diretorio.
-    p1 = dir1 / ("claude.EXE" if os.name == "nt" else "claude")
+    p1 = dir1 / ("claude.EXE" if _NT_REAL else "claude")
     p1.write_bytes(b"\x7fELF nao sou executavel deste sistema\n")
-    if os.name != "nt":
+    if not _NT_REAL:
         p1.chmod(0o644)  # sem exec
     # d2/claude é bom
     _make_sh(dir2, "claude", exit_code=0)
@@ -147,7 +154,7 @@ def test_windows_path_com_drive_e_pathext(tmp_path, monkeypatch):
     # No Linux o shebang roda com qualquer extensao, entao `.EXE`/`.CMD` sao so nomes. No Windows
     # eles precisam ser mesmo executaveis do sistema — `_make_sh` ja cuida disso e cria `.cmd`,
     # que esta no PATHEXT forjado abaixo.
-    if os.name == "nt":
+    if _NT_REAL:
         _make_sh(dir1, "claude")
         _make_sh(dir1, "codex")
     else:
