@@ -22,7 +22,7 @@ export function QrScanner({ onScan, onClose }: { onScan: (texto: string) => void
           <Text style={styles.btnText}>{m.login_permitir_camera()}</Text>
         </Pressable>
         <Pressable style={styles.btnGhost} onPress={onClose}>
-          <Text style={styles.btnGhostText}>Fechar</Text>
+          <Text style={styles.btnGhostText}>{m.login_fechar()}</Text>
         </Pressable>
       </View>
     );

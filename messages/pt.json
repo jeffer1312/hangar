@@ -1874,5 +1874,6 @@
   "config_server_modelo_llm_briefing_ajuda": "Modelo usado só no Briefing — vale trocar por um mais caprichado, já que ele pode demorar mais. Ex.: muse-spark-1.2-contributor-free.",
   "login_titulo": "Conectar a um servidor",
   "login_permitir_camera": "Permitir acesso à câmera",
-  "login_qr": "Escanear QR"
+  "login_qr": "Escanear QR",
+  "login_fechar": "Fechar"
 }
