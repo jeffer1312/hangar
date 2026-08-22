@@ -1,10 +1,12 @@
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import subprocess
 import tempfile
 import time
+import types
 import anyio
 import pytest
 from fastapi.testclient import TestClient
@@ -979,3 +981,70 @@ def test_win_saida_acima_do_teto_reata_a_leitura(sessao, monkeypatch):
             except Exception:
                 break
         assert b"PASSOU_DO_TETO" in acumulado
+
+
+# ===========================================================================================
+# `ConPty.encerrar` com FALSOS — roda nos dois sistemas de proposito. O bug que estes casos
+# guardam nao precisa de Windows pra existir: `TerminateProcess` e `restype = BOOL`, entao falha
+# volta como 0 e nunca como excecao, e era um `except OSError` (codigo morto) que fingia trata-la.
+# ===========================================================================================
+class _FalsoPI:
+    dwProcessId = 4242
+    hProcess = 11
+    hThread = 12
+
+
+class _FalsoK32:
+    def __init__(self, mata=True):
+        self._mata = mata
+        self.fechou_pseudoconsole = False
+
+    def TerminateProcess(self, h, code):
+        return 1 if self._mata else 0
+
+    def ClosePseudoConsole(self, hpc):
+        self.fechou_pseudoconsole = True
+
+
+class _FalsoWinapi:
+    WAIT_OBJECT_0 = 0
+
+    def __init__(self, saiu=True):
+        self._saiu = saiu
+
+    def WaitForSingleObject(self, h, ms):
+        return 0 if self._saiu else 0x102        # WAIT_TIMEOUT
+
+    def CloseHandle(self, h):
+        pass
+
+
+def _conpty_falso(monkeypatch, *, mata, saiu):
+    from app import conpty as mod
+    k = _FalsoK32(mata=mata)
+    monkeypatch.setattr(mod, "_k32", lambda: k)
+    monkeypatch.setattr(mod, "_winapi", _FalsoWinapi(saiu=saiu), raising=False)
+    monkeypatch.setattr(mod, "ctypes", types.SimpleNamespace(
+        WinError=lambda e: OSError(e, "falso"), get_last_error=lambda: 5), raising=False)
+    return mod.ConPty(hpc=1, pi=_FalsoPI(), saida=0, entrada=0), k
+
+
+def test_conpty_encerrar_fecha_o_pseudoconsole_quando_o_filho_sai(monkeypatch):
+    pty_, k = _conpty_falso(monkeypatch, mata=True, saiu=True)
+    pty_.encerrar()
+    assert k.fechou_pseudoconsole
+
+
+def test_conpty_encerrar_nao_fecha_o_pseudoconsole_com_o_filho_vivo(monkeypatch, caplog):
+    """`ClosePseudoConsole` TRAVA esperando o cliente sair (microsoft/terminal#17716).
+
+    Esta thread e um worker do `to_thread` do backend inteiro, entao pendurar aqui custa mais do
+    que vazar um `conhost.exe`. No codigo velho, a falha do `TerminateProcess` passava batida
+    (retorno ignorado, `except OSError` inalcancavel) e o fechamento acontecia assim mesmo.
+    """
+    pty_, k = _conpty_falso(monkeypatch, mata=False, saiu=False)
+    with caplog.at_level(logging.WARNING):
+        pty_.encerrar()
+    assert not k.fechou_pseudoconsole
+    assert "TerminateProcess falhou" in caplog.text
+    assert "nao saiu em 3s" in caplog.text

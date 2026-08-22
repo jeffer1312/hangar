@@ -17,9 +17,12 @@ preguicoso no `_k32()`. Isso e regra, nao estilo — o import do `winpty` tinha 
 (carregava a DLL do ConPTY) e derrubava `test_sessao_escondida_nao_muda_o_custo_da_listagem`
 quando rodava junto com o test_api. Quem abre pty paga por ele; o resto do backend nao.
 """
+import logging
 import os
 import sys
 from typing import Optional
+
+_log = logging.getLogger(__name__)
 
 # `ctypes.wintypes` NAO importa fora do Windows (ele depende de `ctypes.HRESULT`, que so existe
 # la). Mesmo motivo do `pty`/`termios` no termsock, so que ao contrario — por isso o guarda e de
@@ -160,15 +163,24 @@ class ConPty:
             return
         self._encerrado = True
         k = _k32()
+        # `TerminateProcess` e `restype = BOOL`: falha volta como 0, nunca como excecao. Um
+        # `except OSError` aqui seria codigo morto, e a falha passaria batida ate o
+        # `ClosePseudoConsole` — que trava esperando um cliente que continua vivo.
+        if not k.TerminateProcess(self._pi.hProcess, 1):
+            _log.warning("conpty: TerminateProcess falhou no pid=%s: %s",
+                         self.pid, ctypes.WinError(ctypes.get_last_error()))
+        saiu = False
         try:
-            k.TerminateProcess(self._pi.hProcess, 1)
+            saiu = _winapi.WaitForSingleObject(self._pi.hProcess, 3000) == _winapi.WAIT_OBJECT_0
         except OSError:
             pass
-        try:
-            _winapi.WaitForSingleObject(self._pi.hProcess, 3000)
-        except OSError:
-            pass
-        k.ClosePseudoConsole(self._hpc)
+        if saiu:
+            k.ClosePseudoConsole(self._hpc)
+        else:
+            # Vazar o pseudoconsole (um `conhost.exe`) e o mal menor: fechar com o filho vivo
+            # pendura esta thread pra sempre, e ela e um worker do `to_thread` do backend inteiro.
+            _log.warning("conpty: filho pid=%s nao saiu em 3s; pseudoconsole nao foi fechado",
+                         self.pid)
         for h in (self._pi.hProcess, self._pi.hThread):
             try:
                 _winapi.CloseHandle(h)
@@ -204,16 +216,29 @@ def abrir(cmdline: str, cols: int, rows: int, env: dict) -> ConPty:
     _winapi.CloseHandle(saida_conpty)
     _winapi.CloseHandle(entrada_conpty)
 
+    def _falhou(erro):
+        # O `erro` chega pronto do chamador: `ClosePseudoConsole`/`CloseHandle` sobrescrevem o
+        # last-error da thread, e o que sobraria pra mensagem seria "operacao concluida".
+        k.ClosePseudoConsole(hpc)
+        for h in (saida_nossa, entrada_nossa):
+            try:
+                _winapi.CloseHandle(h)
+            except OSError:
+                pass
+        return erro
+
     tam = ctypes.c_size_t(0)
     k.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(tam))   # 1a chamada: so o tamanho
     lista = ctypes.create_string_buffer(tam.value)
     if not k.InitializeProcThreadAttributeList(lista, 1, 0, ctypes.byref(tam)):
-        raise ctypes.WinError(ctypes.get_last_error())
+        raise _falhou(ctypes.WinError(ctypes.get_last_error()))   # lista ainda nao vale um Delete
     # `lpValue` e o HPCON POR VALOR, nao um ponteiro pra ele (medido: com `byref` o filho nasce
     # fora do pseudoconsole e o conhost morre sem emitir um byte).
     if not k.UpdateProcThreadAttribute(lista, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, hpc,
                                        ctypes.sizeof(HPCON), None, None):
-        raise ctypes.WinError(ctypes.get_last_error())
+        erro = ctypes.WinError(ctypes.get_last_error())
+        k.DeleteProcThreadAttributeList(lista)
+        raise _falhou(erro)
 
     si = STARTUPINFOEXW()
     si.StartupInfo.cb = ctypes.sizeof(STARTUPINFOEXW)
