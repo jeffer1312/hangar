@@ -31,8 +31,22 @@ function Nota($m)   { Write-Host "      $m" -ForegroundColor DarkGray }
 function Falta($m)  { Write-Host "  --  $m" -ForegroundColor Yellow }
 function Erro($m)   { Write-Host "  X   $m" -ForegroundColor Red }
 
+# Da pra PERGUNTAR alguma coisa nesta execucao? Medido em 21/08/2026 nesta VM: com o stdin vindo
+# de um pipe — que e o caso de `irm ... | iex` chamado por outro processo, e de qualquer execucao
+# por SSH/tarefa — `[Console]::IsInputRedirected` volta True e o `Read-Host` responde STRING VAZIA
+# na hora, sem esperar ninguem. Era assim que o passo 3/8 gerava um token aleatorio "porque o
+# usuario apertou Enter" e seguia adiante sem nunca mostrar o token: a pessoa terminava a
+# instalacao sem a credencial. Ler do console real (CONIN$) nao e caminho: o File.Open recusa o
+# dispositivo ("FileStream foi solicitado a abrir um dispositivo que nao era um arquivo") e a
+# alternativa seria P/Invoke de CreateFile dentro de um instalador.
+$script:Interativo = -not [Console]::IsInputRedirected
+
 function Pergunte($texto) {
     if ($Sim) { return $true }
+    # Sem entrada interativa nao ha o que perguntar. Antes disto o Read-Host devolvia '' e o valor
+    # DEFAULT (sim) valia do mesmo jeito — o comportamento nao muda, o que muda e ele ser escolha
+    # escrita em vez de efeito colateral de uma pergunta que ninguem viu.
+    if (-not $script:Interativo) { Nota "$texto -> sim (sem entrada interativa, assumindo o padrao)"; return $true }
     $r = Read-Host "$texto [S/n]"
     return ($r -eq '' -or $r -match '^[SsYy]')
 }
@@ -265,11 +279,34 @@ function Token-Aleatorio {
     return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
 }
 
+function Token-Do-Env {
+    # -Encoding UTF8 pelo mesmo motivo do Set-EnvKey: sem ele o Get-Content do PS 5.1 decodifica
+    # arquivo sem BOM pela codepage ANSI, e um token acentuado ("cafezinho" com acento) voltaria
+    # corrompido — o resumo do fim mostraria uma credencial que nao e a que esta no arquivo.
+    if (-not (Test-Path $envFile)) { return $null }
+    foreach ($l in @(Get-Content -Path $envFile -Encoding UTF8)) {
+        if ($l -match '^\s*CP_AUTH_TOKEN=(.*)$') { return $Matches[1].Trim() }
+    }
+    return $null
+}
+
 if ($temToken) {
     Ok 'backend\.env ja tem CP_AUTH_TOKEN (mantido)'
 } elseif ($Sim) {
     Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor (Token-Aleatorio)
     Ok 'CP_AUTH_TOKEN aleatorio gerado (modo -Sim nao pergunta)'
+} elseif (-not $script:Interativo) {
+    # Sem stdin interativo nao da pra perguntar, e o silencio aqui era o pior dos mundos: token
+    # sorteado, gravado, e a pessoa terminando a instalacao sem saber qual e. Gera e MOSTRA — aqui
+    # e de novo no resumo do fim, que e onde quem rolou a tela vai olhar.
+    $novoToken = Token-Aleatorio
+    Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor $novoToken
+    Falta 'entrada nao-interativa (o stdin vem de um pipe): nao da pra perguntar o token'
+    Nota 'gerei um aleatorio. ANOTE — ele aparece de novo no fim, e e o que voce digita no celular:'
+    Write-Host ""
+    Write-Host "      $novoToken" -ForegroundColor Yellow
+    Write-Host ""
+    Nota 'pra escolher um token que voce lembre, rode o instalador num terminal aberto por voce.'
 } else {
     Write-Host '  Voce vai DIGITAR este token no celular, entao escolha algo que lembre.'
     Write-Host '  Enter em branco = gera um aleatorio de 48 caracteres (seguro, chato de digitar).'
@@ -1522,8 +1559,21 @@ if ($vivo -and -not $Update) {
 # hostil. try/catch porque $ErrorActionPreference='Stop' (install.ps1:24) transformaria "sem
 # navegador padrao" em aborto do ultimo passo.
 if ($vivo -and -not $Update) {
-    $abrir = if ($script:cpPublicUrl) { $script:cpPublicUrl } else { "http://127.0.0.1:$portaBack" }
-    try { Start-Process $abrir | Out-Null; Ok "abri $abrir no navegador" } catch { Nota "abra na mao: $abrir" }
+    # Com o TOKEN na URL, o mesmo mecanismo do QR: o app le o `?token=`, grava a credencial (e o
+    # cookie cp_token que o SSE usa) e APAGA o parametro do historico da aba. Sem isto o instalador
+    # abria a tela de login e mandava digitar na mao um token de 48 caracteres no proprio PC onde
+    # ele acabou de ser gerado.
+    #
+    # O token continua OBRIGATORIO em todo acesso, inclusive no loopback: nao ha isencao por IP e
+    # nao e isso que este bloco faz. O motivo de nao ter isencao esta em auth.py — este backend cria
+    # sessao que roda comando na maquina, e QUALQUER pagina aberta no navegador consegue falar com
+    # 127.0.0.1. O que muda aqui e so a conveniencia de nao digitar no PC; o celular segue digitando
+    # (ou lendo o QR).
+    $tokenAgora = Token-Do-Env
+    $base = if ($script:cpPublicUrl) { $script:cpPublicUrl } else { "http://127.0.0.1:$portaBack" }
+    $abrir = if ($tokenAgora) { "$base/?token=$([uri]::EscapeDataString($tokenAgora))" } else { $base }
+    try { Start-Process $abrir | Out-Null; Ok "abri $base no navegador (ja autenticado)" }
+    catch { Nota "abra na mao: $abrir" }
 }
 
 # -- Fim ---------------------------------------------------------------------
@@ -1568,9 +1618,37 @@ $linhaQr
   O que este Windows ainda NAO tem:
   - wrappers do `codex`, do `pi` e do `kimi`, e a extensao cp-state.ts do Pi. Sessao Codex, Pi
     ou Kimi aberta por voce no terminal nao aparece; criada pelo app, funciona.
-  - motores de modelo (tela Motores / `CP_ENGINE`): o cp-engine aplica o ambiente por execvpe,
-    que no Windows nao substitui o processo - o pane morreria na largada. Sessao em motor, so
-    no Linux/macOS por enquanto; a conta Anthropic e o claude-conta funcionam normalmente.
+  - resurrect/continuum abaixo, e mais nada desta lista: motor de modelo (tela Motores /
+    `CP_ENGINE`) PASSOU a funcionar aqui - o cp-engine roda o comando por subprocess no Windows
+    (o exec com env crasha la, medido) e o passo 7b instala o cp-engine.cmd.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
     psmux nao roda plugin de tmux. Fechou o Windows, as sessoes se foram.
 "@
+
+# -- Resumo (o que a pessoa precisa ter na mao quando a janela fechar) --------
+# A janela do instalador FECHA sozinha quando ele foi aberto com duplo clique ou por
+# `irm ... | iex` num processo proprio, e ate aqui a unica copia do token era uma linha no meio da
+# saida. Este bloco existe pra ser a ULTIMA coisa na tela: token, endereco local e endereco do
+# Tailscale, os tres juntos.
+$tokenFim = Token-Do-Env
+Write-Host ""
+Write-Host "  ---------------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "   RESUMO" -ForegroundColor Cyan
+if ($tokenFim) {
+    Write-Host "   token   : " -NoNewline; Write-Host $tokenFim -ForegroundColor Yellow
+    Write-Host "             (e o que voce digita no celular; fica em backend\.env)"
+} else {
+    Write-Host "   token   : nao consegui ler de backend\.env - veja o passo 3/8 acima" -ForegroundColor Red
+}
+Write-Host "   local   : http://127.0.0.1:$portaBack"
+if ($script:cpPublicUrl) { Write-Host "   celular : $($script:cpPublicUrl)" }
+else { Write-Host "   celular : nao publicado no Tailscale (passo 6/8 pulado ou 'so nesta maquina')" }
+Write-Host "  ---------------------------------------------------------------" -ForegroundColor Cyan
+Write-Host ""
+
+# Pausa SO com console interativo: com o stdin vindo de um pipe (irm|iex chamado por outro
+# processo, SSH, tarefa agendada) o Read-Host voltaria na hora e a pausa nao seguraria nada; e no
+# -Update ela travaria um `git pull` esperando por uma tecla que ninguem vai apertar.
+if ($script:Interativo -and -not $Update) {
+    Read-Host '  Enter pra fechar' | Out-Null
+}
