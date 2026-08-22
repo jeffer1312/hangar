@@ -31,7 +31,9 @@ export default function Layout() {
   return (
     <KeyboardProvider>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <Stack screenOptions={{ headerShown: false }} />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="create" options={{ presentation: 'formSheet', headerShown: false, sheetAllowedDetents: [0.92], sheetGrabberVisible: true }} />
+        </Stack>
       </GestureHandlerRootView>
     </KeyboardProvider>
   );
