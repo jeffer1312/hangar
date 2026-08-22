@@ -292,8 +292,14 @@ def list_panes_of(name: str) -> list[dict]:
     # (I2 da revisao final): com 2+ panes de agente, os dois tem que escolher o MESMO. Campo
     # ausente (multiplexador que nao interpola) -> active=False em todos e a ordem e a da
     # varredura, exatamente o que era antes.
+    #
+    # `#{window_index}`/`#{pane_index}` entraram por causa do `alvo_de_pane` (ver la): no Windows o
+    # `%N` NAO serve como alvo, e o unico endereco que o psmux resolve certo e `=<sessao>:<w>.<p>`.
+    # Parse DEFENSIVO como o do `list_panes_all`: multiplexador que nao interpolar os dois campos
+    # novos custa o ALVO PRECISO (cai na janela ativa, o comportamento de antes do agentpane), nunca
+    # a lista de panes — que alimenta o agentpane inteiro.
     cp = _run(["tmux", "list-panes", "-s", "-t", f"={name}:", "-F",
-               "#{pane_id}\t#{pane_pid}\t#{pane_active}"])
+               "#{pane_id}\t#{pane_pid}\t#{pane_active}\t#{window_index}\t#{pane_index}"])
     if cp.returncode != 0:
         return []
     out = []
@@ -303,9 +309,43 @@ def list_panes_of(name: str) -> list[dict]:
             continue
         pane_id, pid = partes[0], partes[1]
         if pane_id.startswith("%") and pid.isdigit():
+            janela = partes[3] if len(partes) > 3 and partes[3].isdigit() else None
+            indice = partes[4] if len(partes) > 4 and partes[4].isdigit() else None
             out.append({"pane_id": pane_id, "pid": int(pid),
-                        "active": len(partes) > 2 and partes[2] == "1"})
+                        "active": len(partes) > 2 and partes[2] == "1",
+                        "window_index": janela, "pane_index": indice})
     return out
+
+
+def alvo_de_pane(name: str, pane: dict) -> str | None:
+    """Endereco MIRAVEL de um pane especifico (send-keys, capture-pane). None = nao da pra mirar
+    este pane com precisao; quem chama cai no alvo antigo (`=<sessao>:`, a janela ativa).
+
+    No POSIX e o proprio `%N`, byte-identico ao que sempre foi: o tmux numera pane por SERVIDOR e
+    `-t %3` resolve exatamente aquele pane.
+
+    No Windows nao. Medido no psmux 3.3.7 em 22/08/2026, e este e o pior achado do dia:
+
+        sessoes zzX e zzY, cada uma com um pane -> as DUAS tem `%1` (o psmux numera por SESSAO)
+        $ tmux send-keys -t %1 "echo MARCA_ZZ_ALVO" Enter      rc=0
+        -> o texto NAO foi pra nenhuma das duas: foi parar numa TERCEIRA sessao, a do cliente
+           corrente (a minha, com o agente rodando dentro)
+
+    Ou seja, `-t %N` no psmux nao erra o pane: ele erra a SESSAO, e digita numa conversa alheia.
+    Quem chega aqui e o `agentpane.resolve_target`, que so devolve `%N` quando a sessao tem 2+ panes
+    (janela extra aberta pelo usuario, split, ou a aba Shell) — o caminho normal de 1 pane sempre
+    devolveu None e por isso nunca esbarrou nisto. O comentario do resolve_target ja avisava que o
+    `%N` "nao esta medido" no psmux; agora esta, e o veredito e o pior.
+
+    O endereco que o psmux resolve certo e `=<sessao>:<window_index>.<pane_index>` — medido: um
+    send-keys nele chega no pane pedido e o capture-pane do OUTRO pane nao ve o texto.
+    """
+    if os.name == "posix":
+        return pane.get("pane_id")
+    janela, indice = pane.get("window_index"), pane.get("pane_index")
+    if janela is None or indice is None:
+        return None
+    return f"={name}:{janela}.{indice}"
 
 
 def is_hidden(name: str) -> bool:

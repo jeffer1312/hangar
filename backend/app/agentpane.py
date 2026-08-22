@@ -120,7 +120,12 @@ def resolve_target(name: str) -> Optional[str]:
         children = _proc_children_map()
         for p in panes:
             if _pane_do_agente(p["pid"], children):
-                alvo = p["pane_id"]
+                # `tmux.alvo_de_pane`, nao `p["pane_id"]` cru: no POSIX os dois sao a MESMA string
+                # (o `%N`), mas no Windows o `%N` nao enderece pane nenhum — ele cai na sessao do
+                # cliente corrente e digita numa conversa alheia (medido; ver o docstring de la).
+                # None = nao da pra mirar com precisao -> cai na janela ativa, como antes desta
+                # funcao existir, que e degradacao e nao estrago.
+                alvo = tmux.alvo_de_pane(name, p)
                 break
         if alvo is None and name not in _AVISADAS:
             # Falha aparece, nao some — mas UMA vez por sessao ate mudar (politica do api.py:237-244):
