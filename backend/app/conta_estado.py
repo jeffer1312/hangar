@@ -123,6 +123,29 @@ def _auth_status(dir_conta: Path) -> dict | None:
     return bruto
 
 
+def _texto_legivel(valor, campo: str) -> str | None:
+    """String da CLI, ou None se ela veio com U+FFFD — o carimbo do `errors="replace"`.
+
+    O `errors="replace"` acima existe pra a leitura não morrer num byte que não é utf-8 (medido:
+    sem ele, no Windows, o erro estoura DENTRO da thread leitora do subprocess, o `run()` não
+    levanta nada e o `stdout` volta `None` — o chamador leva um TypeError longe da causa). O preço
+    é que o byte ruim vira `�` e segue como se fosse texto.
+
+    Só que aqui o dado é o e-mail da conta: mostrar `jo�o@exemplo.com` como se fosse o
+    endereço da pessoa é dado ruim carimbado como bom. `loggedIn` é bool e não sofre disso (byte
+    ruim dentro da estrutura quebraria o `json.loads`, que já vira `indisponivel`), então derrubar
+    a conta inteira pra `indisponivel` custaria o botão Entrar por causa de um campo de texto. A
+    conta continua `ok`; o campo ilegível some, e o front já trata e-mail ausente (não renderiza a
+    sub-linha).
+    """
+    if not isinstance(valor, str):
+        return None
+    if "�" in valor:
+        _log.warning("auth status: campo %s veio com byte que nao decodifica — descartado", campo)
+        return None
+    return valor
+
+
 def _estado_login(bruto: dict | None) -> EstadoLogin:
     """Decisão de estado em volta do dict da CLI (lógica pura, teste direto)."""
     if bruto is None:
@@ -132,13 +155,11 @@ def _estado_login(bruto: dict | None) -> EstadoLogin:
     # Afirmar "nunca entrou" sem prova é o mesmo defeito do front (ver parecer 17/08).
     if not isinstance(logado, bool):
         return EstadoLogin(estado="indisponivel", motivo="formato-desconhecido")
-    email = bruto.get("email")
-    plano = bruto.get("subscriptionType")
     return EstadoLogin(
         estado="ok",
         loggedIn=logado,
-        email=email if isinstance(email, str) else None,
-        plano=plano if isinstance(plano, str) else None,
+        email=_texto_legivel(bruto.get("email"), "email"),
+        plano=_texto_legivel(bruto.get("subscriptionType"), "subscriptionType"),
     )
 
 

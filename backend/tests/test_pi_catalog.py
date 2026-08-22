@@ -68,3 +68,27 @@ def test_falha_nao_fica_no_cache(monkeypatch):
     monkeypatch.setattr(pi_catalog.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, SAIDA, ""))
     assert len(pi_catalog.listar()) == 3
+
+
+def test_id_com_byte_ilegivel_e_falha_do_provedor(monkeypatch):
+    """`errors="replace"` troca byte ruim por `�` — e o `id` daqui é DIGITADO na TUI depois
+    (`/cp-model <provider> <id>`), então um id com `�` é troca de modelo que falha sem explicação.
+
+    Vale a mesma doutrina da tabela irreconhecível: erro visível, e sem cachear.
+    """
+    ruim = SAIDA.replace("k3", "k�3")
+    monkeypatch.setattr(pi_catalog.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, ruim, ""))
+    pi_catalog._cache = None
+    with pytest.raises(RuntimeError, match="ilegivel"):
+        pi_catalog.listar()
+    assert pi_catalog._cache is None
+
+
+def test_rotulo_ilegivel_em_coluna_de_leitura_nao_derruba_a_lista(monkeypatch):
+    """`�` em coluna que só se lê (contexto) é feio, não errado — seletor vazio seria pior."""
+    ruim = SAIDA.replace("200K", "20�K")
+    monkeypatch.setattr(pi_catalog.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, ruim, ""))
+    pi_catalog._cache = None
+    assert len(pi_catalog.listar()) == 3

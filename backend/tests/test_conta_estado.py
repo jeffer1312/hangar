@@ -115,3 +115,25 @@ def test_limite_nao_quebra_com_sidecar_lixo(tmp_path):
     limite = conta_estado._limite(tmp_path)
     assert limite.estado == "lido"
     assert limite.linha == "⚡5h:3%"
+
+
+def test_email_ilegivel_nao_e_carimbado_como_bom():
+    """`errors="replace"` na leitura da CLI transforma byte ruim em `�` — e o campo seguia como se
+    fosse o endereço da pessoa, com a conta marcada `ok`.
+
+    Some o campo, não a conta: `loggedIn` é bool e não sofre do problema (byte ruim DENTRO da
+    estrutura quebraria o `json.loads`, que já vira `indisponivel`), e derrubar tudo pra
+    `indisponivel` custaria o botão Entrar por causa de um campo de texto.
+    """
+    login = conta_estado._estado_login(
+        {"loggedIn": True, "email": "jo�o@exemplo.com", "subscriptionType": "max"})
+    assert login.estado == "ok"
+    assert login.loggedIn is True
+    assert login.email is None
+    assert login.plano == "max"          # o campo bom ao lado do ruim continua valendo
+
+
+def test_plano_ilegivel_some_sozinho():
+    login = conta_estado._estado_login(
+        {"loggedIn": True, "email": "dev@example.com", "subscriptionType": "m�x"})
+    assert (login.email, login.plano) == ("dev@example.com", None)

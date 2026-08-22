@@ -49,5 +49,17 @@ def listar(fresco: bool = False) -> list[dict]:
         # já sabe dar, e NÃO cacheia: senão o erro dura 10 min depois de o pi voltar.
         primeira = (r.stdout.strip().splitlines() or [""])[0][:120]
         raise RuntimeError(f"pi --list-models nao devolveu modelo nenhum (1a linha: {primeira!r})")
+    # O `errors="replace"` acima e rede contra byte que nao decodifica (sem ele, medido no
+    # Windows, o erro morre DENTRO da thread leitora do subprocess, o `run()` nao levanta nada e o
+    # `stdout` volta None — o TypeError cai longe da causa). O preco e o byte ruim virar `�` e
+    # seguir como texto. Aqui isso importa mais que num rotulo: o `id` e DIGITADO na TUI depois
+    # (`/cp-model <provider> <id>`), entao um `�` no meio dele vira uma troca de modelo que falha
+    # sem ninguem entender por que. Mesma doutrina do bloco acima — tabela em que nao da pra
+    # confiar e falha do provedor: 502 e NAO cacheia. Rotulo ilegivel em coluna que so se le
+    # (contexto, max_out) passa: ali `�` e feio, nao errado.
+    ruins = [m["id"] for m in modelos if "�" in m["id"] or "�" in m["provider"]]
+    if ruins:
+        raise RuntimeError(
+            f"pi --list-models devolveu {len(ruins)} id/provider com byte ilegivel (ex: {ruins[:3]})")
     _cache = (time.monotonic(), modelos)
     return modelos
