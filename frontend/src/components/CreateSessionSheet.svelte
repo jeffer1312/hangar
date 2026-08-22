@@ -14,6 +14,7 @@
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { SessionInfo, ConfigDirInfo, Provider } from '../lib/types';
+  import { criarSeletorNativo } from '../lib/pastaNativa.svelte';
   import * as m from '../paraglide/messages';
 
   interface Props {
@@ -372,26 +373,9 @@
   });
 
   // Seletor NATIVO de pasta — so existe quando o app roda dentro do shell Electron (preload expoe
-  // window.hangar.pickFolder). A pasta escolhida e da maquina do shell; num servidor remoto o
-  // create falha com o erro normal de cwd invalido.
-  const pickNativo = (window as { hangar?: { pickFolder?: () => Promise<string | null> } }).hangar?.pickFolder;
-  let nativoErro = $state('');
-  // Mesma disciplina dos outros handlers async do arquivo: clique duplo não abre dois diálogos
-  // nativos concorrentes (o que resolvesse por último sobrescreveria `picked` calado).
-  let nativoOcupado = $state(false);
-  async function escolherNativa() {
-    if (nativoOcupado) return;
-    nativoOcupado = true;
-    nativoErro = '';
-    try {
-      const p = await pickNativo!();
-      if (p) handlePick(p);
-    } catch (e) {
-      nativoErro = e instanceof Error ? e.message : String(e);
-    } finally {
-      nativoOcupado = false;
-    }
-  }
+  // window.hangar.pickFolder). A trava de clique duplo e o erro moram no modulo compartilhado
+  // (lib/pastaNativa.svelte), que "Pastas mapeadas" tambem usa: era daqui que ele saiu.
+  const nativo = criarSeletorNativo();
 
   // Zera tudo a cada abertura. Fixa o servidor-alvo (ativo atual ou o 1º) e o seleciona, pra o
   // scanner do passo 1 já varrer o backend certo.
@@ -643,16 +627,16 @@
 
     <div class="advanced">
       <div class="cs-rodape">
-        {#if pickNativo}
+        {#if nativo.disponivel}
           <!-- Só no shell Electron (window.hangar): dialog nativo de diretório do sistema. -->
-          <button class="abrir-btn" onclick={escolherNativa} disabled={nativoOcupado}>{m.criar_pasta_computador()}</button>
+          <button class="abrir-btn" onclick={() => nativo.escolher(handlePick)} disabled={nativo.ocupado}>{m.criar_pasta_computador()}</button>
         {/if}
-        <button class="advanced-toggle" class:sozinho={!pickNativo} onclick={() => (manualOpen = !manualOpen)}>
+        <button class="advanced-toggle" class:sozinho={!nativo.disponivel} onclick={() => (manualOpen = !manualOpen)}>
           <span>{m.criar_avancado()}</span>
           <span class="chevron" class:chevron--open={manualOpen} aria-hidden="true">›</span>
         </button>
       </div>
-      {#if nativoErro}<p class="error-msg" role="alert">{nativoErro}</p>{/if}
+      {#if nativo.erro}<p class="error-msg" role="alert">{nativo.erro}</p>{/if}
       {#if manualOpen}
         <form class="manual-form" onsubmit={submitManual}>
           <input
