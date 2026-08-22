@@ -179,7 +179,41 @@ def test_proprio_backend_nao_conta_como_uso(tmp_path, monkeypatch):
     d = _conta(tmp_path, "eu")
     monkeypatch.setattr(renova_token.procinfo, "_pids_com_config_dir",
                         lambda alvo: ([os.getpid()], True))
+    monkeypatch.setattr(renova_token.procinfo, "_argv", lambda pid: ["claude", "--resume", "x"])
     assert renova_token.esta_em_uso(d) is False
+
+
+def test_so_o_cli_claude_conta_como_uso(tmp_path, monkeypatch):
+    """A var é herdada por tudo que nasce dentro da sessão (tmux, backend, MCP, pi) e esses vivem
+    depois dela. Medido 22/08: 30 herdeiros, zero `claude`, conta nunca renovava."""
+    d = _conta(tmp_path, "herdeiros")
+    argvs = {
+        11: ["/usr/bin/tmux", "new-session", "-d"],
+        12: ["/usr/bin/uv", "run", "python", "-m", "app.main"],
+        13: ["node", "/x/chrome-devtools-mcp"],
+    }
+    monkeypatch.setattr(renova_token.procinfo, "_pids_com_config_dir",
+                        lambda alvo: (list(argvs), True))
+    monkeypatch.setattr(renova_token.procinfo, "_argv", lambda pid: argvs.get(pid, []))
+    assert renova_token.esta_em_uso(d) is False
+
+    argvs[14] = ["claude", "--session-id", "abc"]
+    assert renova_token.esta_em_uso(d) is True
+
+    argvs[14] = ["C:\\Users\\x\\AppData\\Local\\claude\\claude.exe", "--resume"]
+    assert renova_token.esta_em_uso(d) is True
+
+    argvs[14] = ["C:\\Program Files\\nodejs\\node.exe",
+                 "C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"]
+    assert renova_token.esta_em_uso(d) is True
+
+
+def test_argv_ilegivel_de_herdeiro_conta_como_em_uso(tmp_path, monkeypatch):
+    """Mesmo lado da varredura que falhou: "não consegui ver o que é" nunca libera a conta."""
+    d = _conta(tmp_path, "opaca")
+    monkeypatch.setattr(renova_token.procinfo, "_pids_com_config_dir", lambda alvo: ([7], True))
+    monkeypatch.setattr(renova_token.procinfo, "_argv", lambda pid: [])
+    assert renova_token.esta_em_uso(d) is True
 
 
 # ---------------------------------------------------------------------------------- renovar
@@ -231,6 +265,7 @@ def test_renovar_pula_conta_em_uso_sem_abrir_janela(tmp_path, monkeypatch):
     repo.mkdir()
     d = _conta(tmp_path, "ocupada", expira_em_s=-3600, confiada=repo)
     monkeypatch.setattr(renova_token.procinfo, "_pids_com_config_dir", lambda alvo: ([4242], True))
+    monkeypatch.setattr(renova_token.procinfo, "_argv", lambda pid: ["claude", "--session-id", "x"])
     fake = _Tmux().instalar(monkeypatch)
 
     assert renova_token.renovar(d) == (False, "em-uso")
@@ -266,6 +301,7 @@ def test_rodada_relata_renovada_pulada_e_falha(tmp_path, monkeypatch, catalogo):
     catalogo(boa, ocupada, travada)
     monkeypatch.setattr(renova_token.procinfo, "_pids_com_config_dir",
                         lambda alvo: ([9], True) if Path(alvo) == ocupada else ([], True))
+    monkeypatch.setattr(renova_token.procinfo, "_argv", lambda pid: ["claude", "--session-id", "x"])
     _Tmux(ao_submeter=lambda: _grava_credencial(boa, 8 * 3600)).instalar(monkeypatch)
     # A rodada chama `renovar` com o padrão de 45s; a espera curta é a única diferença.
     original = renova_token.renovar
