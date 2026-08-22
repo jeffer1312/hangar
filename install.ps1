@@ -444,9 +444,52 @@ if ((Test-Path $dist) -and (Test-Path $modulos)) {
 # nao mexe em frontend/ pula o ramo, e a chamada do passo 7 estourava CommandNotFound no meio do
 # registro das tarefas, com o backend ja registrado e nao reiniciado.
 # `npm ci`. Ver o comentario naquele passo.
+$script:wmiMorto = $false
+
+function Tabela-De-Processos([int]$TimeoutSeg = 20) {
+    <#
+      A tabela de processos (pid, pai, nome, cmdline, nascimento) COM TETO DE TEMPO. `$null` = nao
+      consegui ler; quem chama tem que tratar isso como "nao sei quem e quem" e nao matar nada.
+
+      Existe porque o `Get-CimInstance Win32_Process` pode simplesmente NAO VOLTAR. Medido nesta VM
+      em 22/08/2026: `Get-CimInstance Win32_Process`, `Get-WmiObject Win32_Process` e ate
+      `Get-CimInstance Win32_OperatingSystem` estouraram 25s sem responder, enquanto `Get-Process`
+      (que nao passa pelo WMI) devolveu os 438 processos na hora — WMI degradado, nao volume.
+      O instalador ficava PENDURADO no passo 4/8, com o front ja derrubado, sem nada na tela: duas
+      execucoes travadas em 18 e 26 minutos ate serem mortas na mao. O `-ErrorAction
+      SilentlyContinue` que ja estava ali cobre erro, e erro nao era o problema — silencio era.
+
+      UMA varredura por chamada de Pare-Servico (antes eram tres identicas) e nada de cache entre
+      passos: a tabela muda enquanto o instalador roda, e decidir matar por uma foto velha e como
+      matar por pid reciclado.
+    #>
+    if ($script:wmiMorto) { return $null }
+    $j = Start-Job -ScriptBlock {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate
+    }
+    if (Wait-Job $j -Timeout $TimeoutSeg) {
+        $tabela = @(Receive-Job $j)
+        Remove-Job $j -Force -ErrorAction SilentlyContinue
+        if ($tabela.Count -gt 0) { return $tabela }
+        return $null
+    }
+    Stop-Job $j -ErrorAction SilentlyContinue
+    Remove-Job $j -Force -ErrorAction SilentlyContinue
+    $script:wmiMorto = $true      # falhou uma vez, nao paga o teto de novo a cada passo
+    Erro "o WMI desta maquina nao respondeu em ${TimeoutSeg}s (Win32_Process)"
+    Nota 'sem a tabela de processos eu NAO derrubo nada — servico velho pode continuar de pe e'
+    Nota 'segurar porta ou arquivo. Se algum passo falhar por isso, feche o processo na mao.'
+    Nota 'pra consertar o WMI:  winmgmt /verifyrepository   (e, se preciso, /salvagerepository)'
+    return $null
+}
+
 function Pare-Servico {
     param([string]$Nome, [int]$Porta, [string]$Padrao, [string]$Exe)
     $alvos = @()
+    # UMA leitura da tabela pros tres usos abaixo (linhagem, casamento por padrao e BFS dos
+    # descendentes). $null = o WMI nao respondeu; o `if` de cada uso degrada pro caminho seguro.
+    $tabela = Tabela-De-Processos
     # ANCESTRAIS do instalador, jamais alvos. Medido em 08/08/2026: quem edita um arquivo do front e
     # chama o instalador no MESMO comando deixa o caminho do checkout na cmdline do proprio shell —
     # o casamento por substring pegava esse shell, e como o BFS abaixo desce nos descendentes, matar
@@ -456,7 +499,8 @@ function Pare-Servico {
     # processo atual, nunca a linhagem dele.
     $paisMapa = @{}
     $nascMapa = @{}
-    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+    foreach ($p in @($tabela)) {
+        if ($null -eq $p) { continue }
         $paisMapa[[int]$p.ProcessId] = [int]$p.ParentProcessId
         $nascMapa[[int]$p.ProcessId] = $p.CreationDate
     }
@@ -499,8 +543,8 @@ function Pare-Servico {
     # se roda o instalador (quem editou um arquivo do front no mesmo comando), um editor aberto, um
     # grep. Casando tambem o nome do processo, sobra quem de fato executa o front.
     if ($Padrao) {
-        $alvos += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                   Where-Object { $_.CommandLine -and $_.CommandLine -match $Padrao -and
+        $alvos += (@($tabela) |
+                   Where-Object { $_ -and $_.CommandLine -and $_.CommandLine -match $Padrao -and
                                   (-not $Exe -or $_.Name -match $Exe) } |
                    Select-Object -ExpandProperty ProcessId)
     }
@@ -512,7 +556,8 @@ function Pare-Servico {
     # nova colidia igual. Varredura unica da tabela de processos + BFS, em vez de um Get-CimInstance
     # por nivel.
     $mapa = @{}
-    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+    foreach ($p in @($tabela)) {
+        if ($null -eq $p) { continue }
         if (-not $mapa.ContainsKey([int]$p.ParentProcessId)) { $mapa[[int]$p.ParentProcessId] = @() }
         $mapa[[int]$p.ParentProcessId] += [int]$p.ProcessId
     }
