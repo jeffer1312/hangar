@@ -117,10 +117,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   pending: {
     opacity: 0.5,
-    transform: [{ scale: 0.97 }],
   },
   pendingSolid: {
     opacity: 1,
-    transform: [{ scale: 1 }],
   },
 }));
