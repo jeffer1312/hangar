@@ -92,8 +92,33 @@ def main(argv: list[str]) -> int:
             return 2
         # execvpe substitui este processo: o pane do tmux passa a ser o próprio claude (dono do tty),
         # que é o que faz o send-keys do app chegar nele. Um wrapper que ficasse no meio quebraria isso.
+        #
+        # No Windows nenhuma variante de exec serve, e as duas falham de jeitos DIFERENTES. Medido
+        # em 21/08/2026 neste Windows 11 (Python 3.14.6), 20 execuções de cada:
+        #     os.execve  (com env)  crash 14/20   0xC0000005 ACCESS_VIOLATION
+        #     os.execvpe (com env)  crash 17/20   idem
+        #     os.execv   (sem env)  crash  0/20
+        #     os.execvp  (sem env)  crash  0/20
+        # O crash é sem stdout, sem stderr e sem traceback: o pane simplesmente morre. Não é
+        # tamanho de ambiente — um dict de duas chaves crasha 16/20 igual.
+        #
+        # As variantes sem env não crasham, mas QUEBRAM O ARGV: elas remontam a linha de comando e
+        # o filho a reparseia. Medido com `["um dois", "tres;quatro", "cinco"]`, o filho recebeu o
+        # primeiro argumento partido no espaço. Num comando com caminho ou prompt com espaço isso é
+        # silencioso e destrutivo.
+        #
+        # `subprocess.run` preserva as fronteiras (mesma medição: devolveu os três argumentos
+        # intactos) e roda 10/10 sem crash. O preço é um processo a mais no pane — e ele NÃO custa
+        # aqui: a razão de o POSIX usar exec é o filho ficar dono do tty, e no Windows o psmux roda
+        # o comando direto no ConPTY, sem shell no meio (é por isso que o `new_session` já omite o
+        # `exec` lá). A resolução por descendentes do registry atravessa esse nível sem mudança.
+        #
+        # O ramo POSIX fica byte-idêntico ao que está em produção.
+        if os.name == "nt":
+            import subprocess
+            return subprocess.run(cmd, env={**os.environ, **env}).returncode
         os.execvpe(cmd[0], cmd, {**os.environ, **env})
-        return 127  # inalcançável; execvpe só retorna levantando OSError
+        return 127  # inalcançável; o execvpe só retorna levantando OSError
 
     print(__doc__, file=sys.stderr)
     return 2

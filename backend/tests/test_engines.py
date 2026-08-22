@@ -165,6 +165,10 @@ def test_remover_devolve_se_existia():
     assert eng.remover("kimi") is False
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="nao ha bit de modo no Windows (st_mode volta 0o666 e quem decide e a "
+                           "ACL) — e o engines.json guarda CHAVE DE API, entao la ele fica sem a "
+                           "protecao que este caso cobra; lacuna conhecida, nao teste ruim")
 def test_arquivo_nasce_0600():
     eng.salvar("kimi", _kimi())
     assert (eng.caminho().stat().st_mode & 0o777) == 0o600
@@ -289,9 +293,17 @@ def test_listar_pula_nome_invalido_sem_derrubar_os_outros():
 
 
 def _cli(*args, cfg=None):
-    env = {**os.environ, "CP_ENGINES_FILE": str(cfg or eng.caminho())}
+    # PYTHONIOENCODING + encoding no decode: os dois lados FIXADOS, senao o teste depende do locale
+    # de quem roda. No Windows o filho escreveria stderr em cp1252 (ou em utf-8, se quem chamou por
+    # acaso tivesse a variavel no ambiente) e o pai decodificaria com o locale — e um assert por
+    # substring com acento passava a depender do ambiente, nao do codigo. Foi assim que
+    # "opção desconhecida" virou "opÃ§Ã£o desconhecida" aqui. No Linux nao muda nada: ja era utf-8
+    # dos dois lados.
+    env = {**os.environ, "CP_ENGINES_FILE": str(cfg or eng.caminho()),
+           "PYTHONIOENCODING": "utf-8"}
     return subprocess.run([sys.executable, str(CLI), *args],
-                          capture_output=True, text=True, env=env)
+                          capture_output=True, text=True, env=env,
+                          encoding="utf-8", errors="replace")
 
 
 def test_cli_env_imprime_chave_igual_valor():
@@ -329,6 +341,8 @@ def test_cli_exec_aplica_o_env_no_processo_filho():
     assert r.stdout.strip() == "k3 kimi"
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="le /proc/<pid>/cmdline pra provar que a key nao vaza; no Windows nao ha /proc, e a propriedade equivalente (cmdline legivel por outro usuario) tem outro mecanismo")
 def test_cli_exec_nao_deixa_o_segredo_no_cmdline():
     # /proc/<pid>/cmdline é legível por qualquer usuário da máquina. Depois do execvpe o cmdline é o
     # do comando alvo; a key só existe no environ.
