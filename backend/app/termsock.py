@@ -51,39 +51,34 @@ def _importavel(modulo: str) -> bool:
 # motivo do `procinfo._TEM_PROC`: "e unix?" responde SIM no macOS, que nao tem /proc).
 #
 # O do POSIX e decidido no IMPORT: `import pty` e stdlib e nao faz nada ao processo.
-# O do Windows e PREGUICOSO, e isso NAO e estilo — medido em 22/08/2026: importar o `winpty` tem
-# EFEITO COLATERAL no processo (ele carrega a DLL do ConPTY), e com esse import no topo o
-# `test_sessao_escondida_nao_muda_o_custo_da_listagem` passou a falhar quando o arquivo roda junto
-# com test_api.py — 204 passed viravam 1 failed, e o teste sozinho passava. Um import que muda o
-# comportamento de OUTRA coisa nao pode acontecer so pra responder uma pergunta que quase ninguem
-# faz: quem abre pty paga por ele, o resto do backend nao.
+# O do Windows e PREGUICOSO, e isso NAO e estilo — medido em 22/08/2026: importar o `winpty` tinha
+# EFEITO COLATERAL no processo (carregava a DLL do ConPTY), e com esse import no topo o
+# `test_sessao_escondida_nao_muda_o_custo_da_listagem` passava a falhar quando o arquivo roda junto
+# com test_api.py — 204 passed viravam 1 failed, e o teste sozinho passava. O `winpty` saiu (o
+# motor de hoje e `app/conpty.py`, ctypes puro), mas a REGRA fica: importar `conpty` nao carrega
+# DLL nenhuma, e mesmo assim quem responde a pergunta e quem vai abrir o pty, nao o /api/config.
 _PTY_POSIX = _importavel("pty")            # pty.fork() + os.read no master
-_pty_windows: Optional[bool] = None        # ConPTY via pywinpty (dependencia so-Windows)
 
 
 def tem_pty_windows() -> bool:
-    """Da pra abrir um ConPTY aqui? Responde uma vez e guarda (o import e que e caro)."""
-    global _pty_windows
-    if _pty_windows is None:
-        _pty_windows = _importavel("winpty")
-    return _pty_windows
+    """Da pra abrir um ConPTY aqui? Responde uma vez e guarda (dentro do proprio `conpty`)."""
+    from app import conpty
+    return conpty.disponivel()
 
 
 def painel_disponivel() -> bool:
     """Da pra abrir o painel de terminal NESTA maquina? (o que o /api/config publica)
 
-    Sao DUAS perguntas, e esta e a segunda: nao basta o pty abrir, tem que haver laco de leitura
-    pra ele. No Windows o pty ja abre (pywinpty 3.0.5 provado no Python 3.14 desta VM), mas o
-    `termsock` inteiro e construido sobre `loop.add_reader`, que no ProactorEventLoop levanta
-    NotImplementedError ate pra socket — oferecer o painel antes do motor seria um botao que abre
-    terminal morto.
+    Sao DUAS perguntas: o pty tem que abrir E tem que haver laco de leitura pra ele. Hoje as duas
+    sao SIM nos dois sistemas — no POSIX por `pty.fork()` + `add_reader`, no Windows por ConPTY +
+    `connect_read_pipe` do Proactor (`_motor_windows`). Enquanto faltou o segundo, este `return`
+    era so `_PTY_POSIX`: oferecer o painel antes do motor seria um botao que abre terminal morto.
 
-    QUANDO o motor de I/O do Windows entrar, e este `return` que muda — e so ele. A capacidade de
-    abrir o pty ja esta respondida acima, e de proposito nao e consultada aqui: chamar
-    `tem_pty_windows()` neste caminho traria o import (e o efeito colateral dele) pra dentro do
-    /api/config, que todo cliente chama.
+    A pergunta do Windows e feita por ULTIMO de proposito. Ela e barata (o `conpty` nao carrega
+    DLL no import, e a resposta e cacheada la dentro), mas o `or` curto-circuita e o caminho POSIX
+    — que e o de producao do Linux — nem chega a tocar no modulo.
     """
-    return _PTY_POSIX
+    return _PTY_POSIX or tem_pty_windows()
 
 
 _LEITURA = 65536
@@ -299,7 +294,28 @@ def _desmontar(s: "Sessao") -> None:
 
 
 async def term_ws(ws: WebSocket, name: str) -> None:
-    loop = asyncio.get_running_loop()
+    """Porta de entrada compartilhada -> motor da plataforma.
+
+    DOIS MOTORES, nao um compartilhado. O que muda entre os sistemas nao e detalhe de chamada: no
+    POSIX o pty e um fd que o `add_reader` observa e o `os.read` puxa; no Windows e um ConPTY cujo
+    transporte EMPURRA os bytes por callback, e o desmonte nao tem identidade de cliente pra
+    esperar (o psmux ignora `list-clients -F`). Espremer os dois num motor so daria um denominador
+    comum pior que qualquer um deles — e o Linux nao pode piorar em nada.
+    O que e MESMO nos dois — autenticacao, Origin, sessao existe, clamp de cols/rows — fica aqui em
+    cima, uma vez so: e o caminho que abre um shell completo, e duplica-lo seria duplicar a trava.
+    """
+    prep = await _porta_de_entrada(ws, name)
+    if prep is None:
+        return                                   # ja fechou o ws com o codigo certo
+    cols, rows = prep
+    if _PTY_POSIX:
+        await _motor_posix(ws, name, cols, rows)
+    else:
+        await _motor_windows(ws, name, cols, rows)
+
+
+async def _porta_de_entrada(ws: WebSocket, name: str) -> Optional[tuple[int, int]]:
+    """Trava e validacao, iguais nos dois motores. Devolve (cols, rows) ou None se ja recusou."""
     host = ws.client.host if ws.client else ""
     agora = time.time()
     tok = ws.query_params.get("token", "")
@@ -334,7 +350,17 @@ async def term_ws(ws: WebSocket, name: str) -> None:
         rows = max(5, min(200, int(ws.query_params.get("rows", "24"))))
     except ValueError:
         await ws.close(code=1008, reason="cols/rows invalidos")
-        return
+        return None
+    return cols, rows
+
+
+async def _motor_posix(ws: WebSocket, name: str, cols: int, rows: int) -> None:
+    """Motor POSIX: `pty.fork()` + `add_reader`/`add_writer` no fd do mestre.
+
+    Movido INTEIRO de dentro do `term_ws`, sem uma linha mudada — o caminho do Linux sai
+    byte-identico ao que estava aqui antes do Windows existir.
+    """
+    loop = asyncio.get_running_loop()
 
     if anterior := _ativos.pop(name, None):
         # Remove o reader ANTES de fechar o fd: senao o epoll larga o descritor com o handler
@@ -592,3 +618,278 @@ async def term_ws(ws: WebSocket, name: str) -> None:
         except RuntimeError:
             pass
         _log.info("termsock: %r desanexado", name)
+
+
+# ===========================================================================================
+# Motor do Windows: ConPTY + transportes do Proactor. Mesma FORMA do motor POSIX de proposito —
+# fila de saida unica, uma task escritora, contrapressao por teto de bytes — porque o
+# `pause_reading()`/`resume_reading()` do `_ProactorReadPipeTransport` e substituto um-para-um do
+# `remove_reader`/`add_reader` (parar de ler enche o buffer do pipe e bloqueia o filho). Nao ha
+# thread nem fila entre os dois lados: o Proactor le por I/O sobreposto e entrega por callback.
+# ===========================================================================================
+
+
+class SessaoWindows:
+    """O que o motor do Windows guarda por conexao viva. Espelha a `Sessao` do POSIX.
+
+    Nao ha `master`/`tty` aqui, e a ausencia e a diferenca de fundo entre os dois motores: no
+    psmux nao existe identidade de cliente (`list-clients -F` e ignorado e todo cliente aparece
+    com o mesmo tty ficticio), entao nada do desmonte pode ser "espere o NOSSO tty sumir da lista".
+    O que faz as vezes disso e o pid do nosso proprio processo de attach, que e conhecido porque e
+    nosso.
+    """
+
+    def __init__(self, name: str, pty, ws: WebSocket):
+        self.name, self.pty, self.ws = name, pty, ws
+        self.desmontada = False
+        self.tarefa_escritor: Optional[asyncio.Task] = None
+        self.transporte_leitura = None
+        self.transporte_escrita = None
+
+    def pausar_leitura(self) -> None:
+        """Equivalente do `remove_reader` do POSIX no caminho de derrubada."""
+        try:
+            if self.transporte_leitura is not None:
+                self.transporte_leitura.pause_reading()
+        except (RuntimeError, OSError):
+            pass
+
+    def fechar_transportes(self) -> None:
+        """Fecha os dois transportes — e, com eles, os handles do nosso lado do pipe.
+
+        Roda NO LACO DE EVENTOS, nunca em `to_thread`: transporte e objeto do loop. E por isto que
+        o `ConPty.encerrar()` (que roda em thread, porque espera o filho morrer) NAO fecha esses
+        dois handles — a posse deles passou pro `PipeHandle` de cada transporte, e fechar dos dois
+        lados seria double-close num numero que o processo ja pode ter reusado.
+        """
+        for t in (self.transporte_leitura, self.transporte_escrita):
+            try:
+                if t is not None:
+                    t.close()
+            except (RuntimeError, OSError):
+                pass
+
+
+def _abrir_conpty(name: str, cols: int, rows: int):
+    """`tmux attach` na SESSAO dentro de um ConPTY novo. Bloqueante — chame em `to_thread`."""
+    import subprocess
+
+    from app import conpty
+    env = dict(os.environ)
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+    env["CLAUDE_CODE_TMUX_TRUECOLOR"] = "1"
+    # O psmux RECUSA `tmux attach` de dentro de um pane, e ele descobre isso por esta variavel. O
+    # backend normalmente roda fora de pane e nao esbarra — mas quem o subir de dentro de uma
+    # sessao veria TODO painel falhar por um motivo que nao aparece em lugar nenhum.
+    env.pop("PSMUX_SESSION", None)
+    # Mira a SESSAO (`={name}:`), NAO o pane — mesma razao do motor POSIX (invariante 2): `attach`
+    # troca a janela/pane ativo pra TODOS os clientes anexados.
+    # `list2cmdline` porque no Windows a linha de comando e UMA string: montar na mao quebraria em
+    # nome de sessao com espaco.
+    linha = subprocess.list2cmdline(["tmux", "attach", "-t", f"={name}:"])
+    return conpty.abrir(linha, cols, rows, env)
+
+
+def _desmontar_windows(s: "SessaoWindows") -> None:
+    """Idempotente (via lock, igual ao POSIX). Bloqueante: espera o filho morrer.
+
+    NAO ha o passo de repor o tamanho da janela que o `_desmontar` do POSIX tem no fim, e isso foi
+    MEDIDO, nao esquecido (22/08/2026): no psmux o tamanho da janela acompanha o cliente que esta
+    anexado no momento — o painel sai deixando 120x29 gravado, o proximo cliente anexa a 80x24 e a
+    janela vira 80x23 sozinha. Nao ha o que repor. E nem daria: `resize-window` e
+    `setw window-size latest` voltam rc=0 no psmux e nao fazem NADA (tambem medido), entao copiar o
+    passo do POSIX seria um par de comandos que mente que funcionou.
+    """
+    with _lock_desmontagem:
+        if s.desmontada:
+            return
+        s.desmontada = True
+    s.pty.encerrar()
+
+
+async def _motor_windows(ws: WebSocket, name: str, cols: int, rows: int) -> None:
+    loop = asyncio.get_running_loop()
+
+    if anterior := _ativos.pop(name, None):
+        # Mesma ordem do POSIX e pelos mesmos motivos: para de ler ANTES de mexer no resto, para a
+        # task escritora e ESPERA ela (senao ela pode estar no meio de um `send_bytes` quando o
+        # `close()` abaixo roda, e o Starlette levanta RuntimeError numa task que ninguem espera),
+        # e so entao fecha o ws antigo — sem isso quem foi derrubado fica com terminal congelado
+        # pra sempre, sem aviso de desconexao.
+        anterior.pausar_leitura()
+        if anterior.tarefa_escritor is not None:
+            anterior.tarefa_escritor.cancel()
+            with contextlib.suppress(BaseException):
+                await anterior.tarefa_escritor
+        try:
+            await anterior.ws.close(code=1000, reason="outra conexao assumiu")
+        except RuntimeError:
+            pass
+        # Os transportes fecham DEPOIS do `ws.close()`, e a ordem foi corrigida por medicao: no
+        # POSIX o `remove_reader` nao produz EOF, entao o handler derrubado fica parado no
+        # `asyncio.wait` ate o close chegar — quem o encerra e o close, sempre. Fechando o
+        # transporte ANTES, o `connection_lost` resolvia o `fim` e o handler velho corria pra
+        # fechar o proprio ws ao mesmo tempo que este aqui: o cliente derrubado as vezes perdia o
+        # quadro de close e via a conexao sumir sem aviso — que e exatamente o sintoma que a
+        # invariante I1 existe pra impedir (terminal congelado, sem "desconectado · reconectar").
+        anterior.fechar_transportes()
+        await asyncio.to_thread(_desmontar_windows, anterior)
+
+    await ws.accept()
+    try:
+        pty = await asyncio.to_thread(_abrir_conpty, name, cols, rows)
+    except OSError as e:
+        # Falhar aqui e visivel pro usuario, nao silencioso: sem o `close` com motivo, o painel
+        # ficaria em branco esperando bytes que nunca vem.
+        _log.warning("termsock: %r nao consegui abrir o ConPTY: %r", name, e)
+        with contextlib.suppress(RuntimeError):
+            await ws.close(code=1011, reason="nao consegui abrir o terminal")
+        return
+
+    s = SessaoWindows(name, pty, ws)
+    _ativos[name] = s
+    _log.info("termsock: %r anexado (%dx%d, conpty pid %d)", name, cols, rows, pty.pid)
+
+    fim: asyncio.Future = loop.create_future()
+    saida: deque[bytes] = deque()
+    saida_bytes = 0
+    saida_pausada = False
+    tem_saida = asyncio.Event()
+
+    class Leitor(asyncio.Protocol):
+        def connection_made(self, transport) -> None:
+            # Guardado AQUI, nao no retorno do `connect_read_pipe`: o `connect_read_pipe` tem um
+            # `await` dentro, e o laco pode entregar `data_received` antes de devolver o
+            # transporte pra gente — o `connection_made` e o unico ponto garantidamente anterior.
+            s.transporte_leitura = transport
+
+        def data_received(self, dados: bytes) -> None:
+            nonlocal saida_bytes, saida_pausada
+            saida.append(dados)
+            saida_bytes += len(dados)
+            tem_saida.set()
+            if saida_bytes >= _SAIDA_MAX and not saida_pausada:
+                # Quem PAUSA marca o flag, nao quem drena — mesma corrida do motor POSIX: isto
+                # pode disparar no MEIO do `await ws.send_bytes` do escritor, e se ele so
+                # recalculasse "pausado" no topo do proprio laco, uma pausa cruzada durante o
+                # dreno nunca seria vista e a leitura pararia pra sempre.
+                saida_pausada = True
+                s.transporte_leitura.pause_reading()
+
+        def connection_lost(self, exc: Optional[BaseException]) -> None:
+            # EOF do ConPTY = o filho (`tmux attach`) saiu. Equivale ao `os.read` devolvendo b"".
+            if not fim.done():
+                fim.set_result(None)
+            tem_saida.set()
+
+    try:
+        await loop.connect_read_pipe(Leitor, _pipe_handle(pty.saida))
+        transporte_escrita, _ = await loop.connect_write_pipe(
+            asyncio.BaseProtocol, _pipe_handle(pty.entrada))
+        s.transporte_escrita = transporte_escrita
+    except OSError as e:
+        _log.warning("termsock: %r nao consegui ligar os pipes do ConPTY: %r", name, e)
+        s.fechar_transportes()
+        if _ativos.get(name) is s:
+            del _ativos[name]
+        await asyncio.to_thread(_desmontar_windows, s)
+        with contextlib.suppress(RuntimeError):
+            await ws.close(code=1011, reason="nao consegui abrir o terminal")
+        return
+
+    async def escritor():
+        # UMA task escritora, mesmo motivo do POSIX: um `ensure_future(send_bytes)` por leitura
+        # embaralha os bytes sob carga.
+        nonlocal saida_bytes, saida_pausada
+        while True:
+            await tem_saida.wait()
+            tem_saida.clear()
+            while saida:
+                b = saida.popleft()
+                saida_bytes -= len(b)
+                await ws.send_bytes(b)
+            if saida_pausada and not fim.done():
+                saida_pausada = False
+                with contextlib.suppress(RuntimeError, OSError):
+                    s.transporte_leitura.resume_reading()
+            if fim.done() and not saida:
+                return
+
+    tarefa_escritor = asyncio.ensure_future(escritor())
+    s.tarefa_escritor = tarefa_escritor
+
+    avisou_frame_torto = False
+
+    async def leitor_do_socket():
+        nonlocal avisou_frame_torto
+        while True:
+            try:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    return
+                if (b := msg.get("bytes")) is not None:
+                    # Sem `_drenar_entrada`/`add_writer` como no POSIX: o
+                    # `_ProactorWritePipeTransport` JA enfileira internamente e escreve por I/O
+                    # sobreposto, entao `write()` nunca bloqueia o laco de eventos — que era a
+                    # restricao que obrigou aquele desenho la (um `time.sleep` no laco travava o
+                    # backend inteiro). Reimplementar a fila aqui seria duas filas.
+                    transporte_escrita.write(b)
+                elif (t := msg.get("text")) is not None:
+                    try:
+                        ctl = json.loads(t)
+                        if isinstance(ctl, dict) and ctl.get("t") == "resize":
+                            c = max(20, min(500, int(ctl["cols"])))
+                            r = max(5, min(200, int(ctl["rows"])))
+                            s.pty.redimensionar(c, r)
+                    except (ValueError, TypeError, KeyError, OSError) as e:
+                        if not avisou_frame_torto:
+                            avisou_frame_torto = True
+                            _log.warning("termsock: %r mandou quadro de controle invalido (%s): "
+                                         "%.80r — descartado, aviso unico nesta conexao",
+                                         name, e, t)
+            except (WebSocketDisconnect, RuntimeError, ValueError, KeyError):
+                return
+
+    tarefa_leitor = asyncio.ensure_future(leitor_do_socket())
+    try:
+        await asyncio.wait({fim, tarefa_leitor, tarefa_escritor},
+                           return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        tarefa_leitor.cancel()
+        if fim.done():
+            # ConPTY morreu sozinho (o usuario deu `exit`): deixa o escritor escoar o que sobrou
+            # antes de cancelar, senao a ultima tela se perde.
+            with contextlib.suppress(BaseException):
+                await asyncio.wait_for(tarefa_escritor, timeout=1.0)
+        tarefa_escritor.cancel()
+        for tarefa in (tarefa_leitor, tarefa_escritor):
+            try:
+                await tarefa
+            except asyncio.CancelledError:
+                pass
+            except BaseException:
+                _log.exception("termsock: %r — task terminou com excecao", name)
+        if not s.desmontada:
+            s.fechar_transportes()
+        # Identidade, nao nome: um `pop(name)` cru removeria a Sessao NOVA de uma reconexao que ja
+        # tomou o lugar desta.
+        if _ativos.get(name) is s:
+            del _ativos[name]
+        await asyncio.to_thread(_desmontar_windows, s)
+        try:
+            await ws.close()
+        except RuntimeError:
+            pass
+        _log.info("termsock: %r desanexado", name)
+
+
+def _pipe_handle(h: int):
+    """Embrulha um handle cru no `PipeHandle` que os transportes do Proactor esperam.
+
+    Import tardio pelo mesmo motivo do `pty`/`fcntl` no motor POSIX (C1): `asyncio.windows_utils`
+    so importa no Windows (puxa `_winapi` e `msvcrt`), e este modulo e importado tambem pelo
+    caminho da guarda de 409, que roda nos dois sistemas.
+    """
+    from asyncio.windows_utils import PipeHandle
+    return PipeHandle(h)

@@ -199,8 +199,29 @@ def test_new_session_falls_back_to_backend_config_dir(monkeypatch):
     assert "CLAUDE_CONFIG_DIR=/home/u/.claude-work" in captured["args"]
 
 
-def test_new_session_sempre_manda_config_dir(monkeypatch, tmp_path):
-    """SEM config_dir e SEM a variavel, o -e tem que sair mesmo assim, com o ~/.claude explicito.
+def _casa_home(monkeypatch, tmp_path):
+    """Home falsa nos DOIS sistemas. `HOME` sozinho nao move o `Path.home()` no Windows (o
+    `ntpath.expanduser` olha `USERPROFILE`, medido), e era por isso que o caso do config dir padrao
+    vinha vermelho aqui desde sempre: ele comparava com a home de VERDADE da maquina."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    return tmp_path / ".claude"
+
+
+def _args_de_new_session(monkeypatch, **kw):
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x", **kw)
+    return captured["args"]
+
+
+def _valores_de_config_dir(args):
+    return [a for a in args if str(a).startswith("CLAUDE_CONFIG_DIR=")]
+
+
+def test_new_session_sempre_manda_config_dir_no_tmux(monkeypatch, tmp_path):
+    """No TMUX, SEM config_dir e SEM a variavel, o -e tem que sair mesmo assim, com o ~/.claude
+    explicito — e este caso e o que prende o comportamento do Linux, byte por byte.
 
     O ambiente do pane e o global do SERVIDOR tmux somado ao da sessao, e o global vem de quem
     subiu o servidor. Se foi um `claude-conta contaA`, uma sessao aberta depois sem -e nasce na
@@ -210,14 +231,86 @@ def test_new_session_sempre_manda_config_dir(monkeypatch, tmp_path):
         -> /tmp/conta-a
     """
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    captured = {}
-    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
-        tmux.new_session("s", "/tmp", "claude --session-id x")
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: False)
     # `tmp_path / ".claude"` e nao um f-string com `/`: o tmux.py monta o valor com
     # `str(Path.home() / ".claude")`, que no Windows sai com `\`. No Linux o resultado e
     # identico ao de antes — o caso continua valendo nos dois sistemas em vez de virar skip.
-    assert f"CLAUDE_CONFIG_DIR={tmp_path / '.claude'}" in captured["args"]
+    assert f"CLAUDE_CONFIG_DIR={padrao}" in _args_de_new_session(monkeypatch)
+
+
+def test_new_session_omite_config_dir_padrao_no_psmux(monkeypatch, tmp_path):
+    """No psmux o pane herda o ambiente de QUEM CHAMA, entao o -e com o valor PADRAO nao defende de
+    vazamento nenhum — e exportar a variavel e o proprio bug: pro Claude Code, config dir setado
+    (mesmo apontando pro ~/.claude) significa ler o `.claude.json` de DENTRO dele, que nasce vazio.
+    Sintoma: toda sessao criada pelo app no Windows caia na tela de boas-vindas, com a credencial
+    intacta."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    assert _valores_de_config_dir(_args_de_new_session(monkeypatch)) == []
+
+
+def test_new_session_manda_conta_escolhida_no_psmux(monkeypatch, tmp_path):
+    """A guarda que fica de pe: conta ESCOLHIDA (valor != padrao) vai sempre, nos dois
+    multiplexadores — e o unico jeito de a conta chegar no pane."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    conta = str(tmp_path / ".claude-work")
+    assert f"CLAUDE_CONFIG_DIR={conta}" in _args_de_new_session(monkeypatch, config_dir=conta)
+
+
+def test_new_session_manda_padrao_no_psmux_quando_o_backend_tem_a_variavel(monkeypatch, tmp_path):
+    """Backend com CLAUDE_CONFIG_DIR proprio -> o -e vai mesmo valendo o padrao: o pane herda o
+    ambiente do backend, entao OMITIR nao apaga a variavel de la — mandar explicito e o que garante
+    que valeu o valor pedido, e nao o que o backend calhava de ter."""
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude-outra"))
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    args = _args_de_new_session(monkeypatch, config_dir=str(padrao))
+    assert f"CLAUDE_CONFIG_DIR={padrao}" in args
+
+
+def test_e_config_dir_compara_pasta_e_nao_string(monkeypatch, tmp_path):
+    """A comparacao com o padrao e por PASTA (normpath+normcase), nao por string crua: o mesmo
+    ~/.claude escrito de outro jeito (`.` no meio, barra final) e o mesmo diretorio, e mandar o -e
+    por causa da grafia traria o bug de volta."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    assert tmux._e_config_dir(os.path.join(str(tmp_path), ".", ".claude")) == []
+    assert tmux._e_config_dir(str(padrao) + os.sep) == []
+    assert tmux._e_config_dir(str(tmp_path / ".claude2")) != []
+
+
+def test_new_hidden_shell_segue_a_mesma_regra_do_config_dir(monkeypatch, tmp_path):
+    """A janela escondida (login de conta, renovacao de token) usa o MESMO `_e_config_dir`: pedir a
+    pasta PADRAO no psmux nasce sem a variavel — que e o que "conta padrao" quer dizer la — e a
+    credencial cai no mesmo `~/.claude/.credentials.json`. Conta de verdade continua indo."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+
+    capturado = []
+
+    def _run_falso(args, **k):
+        cp = _CP()
+        if "has-session" in args:
+            cp = MagicMock(returncode=1, stdout="", stderr="")   # nao existe -> cria
+        elif "new-session" in args:
+            capturado.append(args)
+        return cp
+
+    with patch.object(tmux, "RUN", _run_falso):
+        assert tmux.new_hidden_shell("s", "/tmp", config_dir=str(padrao)) == "term-s"
+    assert _valores_de_config_dir(capturado[-1]) == []
+
+    capturado.clear()
+    conta = str(tmp_path / ".claude-work")
+    with patch.object(tmux, "RUN", _run_falso):
+        tmux.new_hidden_shell("s", "/tmp", config_dir=conta)
+    assert f"CLAUDE_CONFIG_DIR={conta}" in capturado[-1]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sem olhar o env")
