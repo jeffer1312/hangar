@@ -681,6 +681,26 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     field carrying U+FFFD is dropped (`conta_estado`, so the account keeps working) or refused
     (`pi_catalog`, where the `id` is later TYPED into the TUI). Note also that `encoding="utf-8"`
     **alone** already fixes the cp1252 mojibake; `errors=` covers a different failure.
+- **`monkeypatch.setattr(os, "name", …)` in a test takes `pathlib` with it — and it does NOT blow up
+  where you patched.** This is how `test_script_ao_lado_do_projeto_nao_e_acusado_de_inexistente`
+  shipped green on Windows and could not even start on Linux (fixed in `b4d97790`): forcing
+  `os.name = "nt"` to exercise a Windows branch made the test's own helper raise
+  `UnsupportedOperation: cannot instantiate 'WindowsPath' on your system` before it asserted
+  anything. Measured on 3.14 (win) and confirmed by the Linux run, the mechanism is worth knowing
+  because none of it is where you would look:
+  - The guard is a subclass `__new__` installed **at import time** by the REAL `os.name`
+    (`class PosixPath: if os.name == 'nt': def __new__… raise`). Patching the attribute later never
+    moves it, so the raising class is fixed for the whole process.
+  - `Path(...)` itself **does not raise** — `Path.__new__` calls `object.__new__(cls)` and skips
+    that guard, while still picking the class from the PATCHED `os.name`. So you get a `PosixPath`
+    on Windows (or a `WindowsPath` on Linux) and nothing complains yet.
+  - The blow-up lands on the first operation that RE-instantiates: `/`, `.parent`, `.with_suffix`
+    (all go through `type(self)(...)`). And it is not uniform — measured, `PosixPath("a").is_file()`
+    on Windows answers `False` instead of raising, so the wrong-class path can also just lie.
+  So: in a test that patches `os.name`, use **`os.path`** (`join`/`isfile`), which is chosen at
+  import and does not change class under you. Patching `os.name` is still the right way to exercise
+  a `if os.name == "nt"` branch on both systems — it is the `pathlib` in the test's own scaffolding
+  that has to go. Sibling cases only escaped by mocking `shutil.which` with a constant lambda.
 - **`stop_command` on Windows: the return code cannot be read as failure, and the shell won't tell
   you in a language you can parse** (`projects.py`, measured against the real `cmd.exe`).
   `taskkill /F /IM x` with no such process answers **128**, the Windows sibling of the `pkill`
