@@ -485,6 +485,11 @@ def test_send_prompt_pi_composer_vazio_envia(monkeypatch):
 
 
 def test_send_prompt_texto_longo_com_comeco_visivel_e_cauda_cortada_envia(monkeypatch):
+    # Este caso exercita o caminho de COLAGEM DIRETA (paste_text), que e o do POSIX: no
+    # Windows + claude o send_prompt vai pelo clipboard (Alt+V), que tem casos proprios
+    # logo abaixo/ao lado. Fixar o `os.name` aqui e o espelho do que aqueles ja fazem com
+    # "nt" — assim os DOIS ramos rodam nos dois sistemas, em vez de cada um so na sua casa.
+    monkeypatch.setattr(terminal_input.os, "name", "posix")
     # Reproduz a forma do log real: [Image #1] no comeco, texto que o composer so desenha ATE certo
     # ponto, e a cauda (fim do caminho da imagem colada) nunca aparece na tela. Antes do conserto isto
     # devolvia "partial" sem mandar Enter; agora o COMECO prova a entrega.
@@ -536,6 +541,11 @@ def test_send_prompt_texto_longo_com_comeco_visivel_e_cauda_cortada_envia(monkey
 
 
 def test_send_prompt_multilinha_com_falha_confirmada_no_meio_vira_partial(monkeypatch, caplog):
+    # Este caso exercita o caminho de COLAGEM DIRETA (paste_text), que e o do POSIX: no
+    # Windows + claude o send_prompt vai pelo clipboard (Alt+V), que tem casos proprios
+    # logo abaixo/ao lado. Fixar o `os.name` aqui e o espelho do que aqueles ja fazem com
+    # "nt" — assim os DOIS ramos rodam nos dois sistemas, em vez de cada um so na sua casa.
+    monkeypatch.setattr(terminal_input.os, "name", "posix")
     clock = [1000.0]
 
     def fake_sleep(s):
