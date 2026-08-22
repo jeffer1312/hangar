@@ -10,6 +10,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from app import atomico
+
 MAX_ENTRADAS = 1000
 MAX_BYTES = 512 * 1024
 
@@ -301,12 +303,20 @@ def write_file(cwd: str, path: str, texto: str, digest_lido: str | None) -> dict
         # ponytail: teto conhecido, um flock aqui só protegeria contra nós mesmos.
         if _digest(alvo.read_bytes()) != digest_lido:
             raise FileError(409, "erro_arq_mudou_no_disco", "o arquivo mudou no disco")
-        os.replace(tmp, alvo)
+        atomico.substituir(tmp, alvo)
     except FileError:
         os.unlink(tmp)
         raise
     except PermissionError as e:
         os.unlink(tmp)
+        # No Windows o MESMO errno cobre duas coisas diferentes, e so uma delas e permissao:
+        # `os.replace` levanta PermissionError quando outro processo esta com o destino ABERTO,
+        # ainda que so pra leitura (medido — no POSIX o rename por cima de arquivo aberto sempre
+        # funciona). Dizer "sem permissao" ali manda a pessoa conferir o ACL de um arquivo que ela
+        # pode escrever: diagnostico errado, e o `atomico.substituir` ja retentou antes de chegar
+        # aqui, entao quem sobrou e um processo segurando o arquivo de verdade.
+        if atomico.em_uso(e):
+            raise FileError(409, "erro_arq_em_uso", "arquivo aberto por outro programa") from e
         raise FileError(403, "erro_arq_sem_permissao", "sem permissao de escrita") from e
     except OSError as e:
         # Disco cheio, sistema de arquivos diferente, arquivo sumido: erro do app, com envelope,

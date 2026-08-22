@@ -1623,6 +1623,7 @@
   "erro_arq_nao_e_arquivo": "Isso não é um arquivo comum.",
   "erro_arq_binario": "Arquivo binário — não dá pra mostrar aqui.",
   "erro_arq_sem_permissao": "Sem permissão para ler esse arquivo.",
+  "erro_arq_em_uso": "Outro programa está com esse arquivo aberto. Feche e tente de novo.",
   "erro_arq_nao_e_repo_git": "A busca precisa de um repositório git.",
   "erro_arq_busca_vazia": "Digite algo para buscar.",
   "erro_arq_busca_falhou": "A busca falhou: {msg}",

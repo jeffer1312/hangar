@@ -22,6 +22,12 @@ import re
 import tempfile
 import threading
 from pathlib import Path
+
+# UNICO import de `app` aqui, e ele nao fere a regra do stdlib-only: `app.atomico` tambem e
+# stdlib puro (os + time), e o `test_modulo_e_stdlib_pura` cobre os DOIS agora. O que aquela
+# sentinela barra e o que arrasta pydantic e quebra o `scripts/cp-engine`, que roda no python do
+# SISTEMA — e o cp-engine ja poe o backend no sys.path pra importar este modulo.
+from app import atomico
 from typing import Any
 from urllib.parse import urlparse
 
@@ -232,7 +238,7 @@ def _gravar(tudo: dict[str, Any]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(tudo, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, destino)
+        atomico.substituir(tmp, destino)
         try:
             os.chmod(destino, 0o600)
         except OSError:

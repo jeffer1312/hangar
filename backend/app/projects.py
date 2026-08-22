@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from app import runner
+from app import atomico, runner
 from app.models import ProjectStatus, RunInfo
 from app.procinfo import _TEM_PROC
 
@@ -96,7 +96,7 @@ def _mutate(fn) -> None:
                 f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
             if _CONFIG.exists():
                 os.chmod(tmp, _CONFIG.stat().st_mode & 0o777)
-            os.replace(tmp, _CONFIG)
+            atomico.substituir(tmp, _CONFIG)
         except OSError as e:
             tmp.unlink(missing_ok=True)
             raise ProjectError(500, f"falha ao gravar projects.json: {e}") from e

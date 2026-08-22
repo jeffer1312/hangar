@@ -391,19 +391,48 @@ def test_cli_exec_de_motor_envenenado_nao_roda_o_comando():
     assert "api_key" in r.stderr
 
 
-def test_modulo_e_stdlib_pura():
-    # O cp-engine importa este módulo com o python3 do SISTEMA (sem venv). Um import de app.config
-    # puxaria pydantic e quebraria o terminal, deixando só o app funcionando — falha assimétrica,
-    # chata de diagnosticar. Sentinela, não prova: barra os culpados conhecidos.
-    fonte = pathlib.Path(eng.__file__).read_text(encoding="utf-8")
-    arvore = ast.parse(fonte)
-    importados = {
+def _importados_de(caminho: pathlib.Path) -> set[str]:
+    arvore = ast.parse(caminho.read_text(encoding="utf-8"))
+    return {
         n.module.split(".")[0] for n in ast.walk(arvore)
         if isinstance(n, ast.ImportFrom) and n.module
     } | {
         a.name.split(".")[0] for n in ast.walk(arvore)
         if isinstance(n, ast.Import) for a in n.names
     }
+
+
+def _nomes_importados_de_app(caminho: pathlib.Path) -> set[str]:
+    """O que exatamente o modulo tira de `app` (`from app import x, y` -> {x, y})."""
+    arvore = ast.parse(caminho.read_text(encoding="utf-8"))
+    return {a.name for n in ast.walk(arvore)
+            if isinstance(n, ast.ImportFrom) and n.module == "app" for a in n.names}
+
+
+# Unico modulo de `app` que o engines.py pode importar. Entrou porque o `os.replace` cru falha no
+# Windows quando outro processo tem o destino aberto (e o cp-engine LE o engines.json — e
+# exatamente esse leitor), e duplicar a retentativa aqui seria uma segunda verdade. Qualquer nome
+# novo nesta lista tem que ser stdlib puro, e o caso abaixo cobra isso.
+_APP_PERMITIDO = {"atomico"}
+
+
+def test_modulo_e_stdlib_pura():
+    # O cp-engine importa este módulo com o python3 do SISTEMA (sem venv). Um import de app.config
+    # puxaria pydantic e quebraria o terminal, deixando só o app funcionando — falha assimétrica,
+    # chata de diagnosticar. Sentinela, não prova: barra os culpados conhecidos.
+    importados = _importados_de(pathlib.Path(eng.__file__))
+    assert not (importados & {"pydantic", "fastapi", "httpx", "httpx2"})
+    # `app` deixou de ser proibido em bloco e passou a ser uma allowlist: barrar o pacote inteiro
+    # impediria reusar codigo que É stdlib puro, e liberar o pacote inteiro devolveria o furo.
+    assert _nomes_importados_de_app(pathlib.Path(eng.__file__)) <= _APP_PERMITIDO
+
+
+@pytest.mark.parametrize("nome", sorted(_APP_PERMITIDO))
+def test_o_que_o_engines_importa_de_app_tambem_e_stdlib_puro(nome):
+    """A pureza tem que valer TRANSITIVAMENTE, senao a allowlist vira a porta que ela fechou."""
+    modulo = pathlib.Path(eng.__file__).parent / f"{nome}.py"
+    assert modulo.is_file(), f"app/{nome}.py nao existe"
+    importados = _importados_de(modulo)
     assert not (importados & {"app", "pydantic", "fastapi", "httpx", "httpx2"})
 
 

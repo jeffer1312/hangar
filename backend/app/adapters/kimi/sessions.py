@@ -30,6 +30,8 @@ import re
 import time
 from pathlib import Path
 
+from app import atomico
+
 _log = logging.getLogger("claude_pocket.kimi.sessions")
 
 
@@ -111,7 +113,7 @@ def pretrust_cwd(cwd: str) -> None:
         tmp = f.with_suffix(".tmp")
         tmp.write_text(json.dumps({"root": resolved, "trustedAt": int(time.time() * 1000)}),
                        encoding="utf-8")
-        os.replace(tmp, f)  # atomico, mesmo padrao dos marcadores
+        atomico.substituir(tmp, f)  # atomico, mesmo padrao dos marcadores
     except OSError as e:
         # Best-effort NAO e mudo: o unico sintoma de um pre-trust que nao foi gravado e a TUI
         # parada no "Trust this folder?", e sem esta linha nao ha nada no log ligando uma coisa a

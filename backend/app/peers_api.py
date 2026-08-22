@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import peers, peers_check, runtime_config
+from app import atomico, peers, peers_check, runtime_config
 from app.auth import require_auth
 from app.config import settings
 from app.mensagens import erro
@@ -179,7 +179,7 @@ def _escrever_id_env_travado(valor: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.writelines(novas)
         os.chmod(tmp, 0o600)
-        os.replace(tmp, _ENV_ARQUIVO)
+        atomico.substituir(tmp, _ENV_ARQUIVO)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

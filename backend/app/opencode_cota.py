@@ -28,7 +28,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from app import contas
+from app import atomico, contas
 
 _log = logging.getLogger("claude_pocket.opencode_cota")
 
@@ -124,7 +124,7 @@ def definir_config(id_credencial: str, workspace_id: str, auth_cookie: str) -> N
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(json.dumps(atual, ensure_ascii=False, indent=1))
             os.chmod(tmp, 0o600)
-            os.replace(tmp, alvo)
+            atomico.substituir(tmp, alvo)
         except OSError:
             tmp.unlink(missing_ok=True)
             raise

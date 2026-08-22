@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from app import atomico
 from app.config import _backend_config_base, settings
 
 # Configuração editável em RUNTIME.
@@ -214,7 +215,7 @@ def _aplicar_travado(mudancas: dict[str, Any]) -> dict[str, Any]:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(atual, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp, destino)
+        atomico.substituir(tmp, destino)
         # O arquivo guarda segredo (chave da Groq): 0600 como o .env, pra não ficar legível por
         # outro usuário da máquina. Falha de chmod não desfaz a gravação — o valor já está lá.
         try:

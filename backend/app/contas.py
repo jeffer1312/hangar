@@ -36,6 +36,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from app import atomico
+
 try:
     import fcntl
 except ImportError:      # Windows: sem flock. A trava da conta vira no-op; ver _trava.
@@ -204,7 +206,7 @@ def _ligar(destino: Path, alvo: Path) -> None:
             "Desenvolvedor ligado (Configurações → Sistema → Para desenvolvedores). Sem ele a "
             "conta ficaria com uma CÓPIA, que passa a divergir do original sem ninguém perceber.",
         ) from e
-    os.replace(tmp, destino)
+    atomico.substituir(tmp, destino)
 
 
 def _gavetar(dir_conta: Path, destino: Path) -> str:
@@ -364,7 +366,7 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> str | None:
     # escrita receberia JSON truncado.
     tmp = destino.with_name(f"{destino.name}.hangar-novo.{os.getpid()}.{uuid.uuid4().hex[:8]}")
     tmp.write_text(json.dumps(para, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, destino)
+    atomico.substituir(tmp, destino)
     if desfeitas:
         return ("settings.json: o principal sobrescreveu "
                 + ", ".join(desfeitas) + " na cópia desta conta")

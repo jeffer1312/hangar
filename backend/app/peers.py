@@ -16,6 +16,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from app import atomico
+
 try:
     import fcntl
 except ImportError:      # Windows: não existe flock; a trava vai por msvcrt.locking (ver _mutar)
@@ -175,7 +177,7 @@ def _mutar_travado(fn):
             json.dump(dados, fh, ensure_ascii=False, indent=2)
             fh.write("\n")
         os.chmod(tmp, 0o600)          # mkstemp já nasce 0600; explícito porque é contrato
-        os.replace(tmp, _PEERS_FILE)
+        atomico.substituir(tmp, _PEERS_FILE)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

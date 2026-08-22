@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
+from app import atomico
 from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
@@ -4037,7 +4038,7 @@ def _models_cache_put(chave: str, resp: dict) -> None:
     tmp = alvo.with_name(f"{alvo.name}.{os.getpid()}.tmp")
     try:
         tmp.write_text(json.dumps({"ts": time.time(), "resp": resp}), encoding="utf-8")
-        os.replace(tmp, alvo)
+        atomico.substituir(tmp, alvo)
     except OSError:
         # Config dir somente-leitura ou inexistente: o cache em memoria segue valendo.
         tmp.unlink(missing_ok=True)

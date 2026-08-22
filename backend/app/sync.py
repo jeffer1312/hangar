@@ -13,6 +13,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from app import atomico
+
 from app.config import settings, _LOOPBACK
 from app.mensagens import erro
 
@@ -52,7 +54,7 @@ def save_vault(v: dict) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(v))
-        os.replace(tmp, p)  # atomic
+        atomico.substituir(tmp, p)  # atomic
     except BaseException:
         Path(tmp).unlink(missing_ok=True)  # não deixa tmp órfão se falhar no meio
         raise

@@ -1623,6 +1623,7 @@
   "erro_arq_nao_e_arquivo": "That's not a regular file.",
   "erro_arq_binario": "Binary file — can't show it here.",
   "erro_arq_sem_permissao": "No permission to read that file.",
+  "erro_arq_em_uso": "Another program has that file open. Close it and try again.",
   "erro_arq_nao_e_repo_git": "Search needs a git repository.",
   "erro_arq_busca_vazia": "Type something to search for.",
   "erro_arq_busca_falhou": "Search failed: {msg}",

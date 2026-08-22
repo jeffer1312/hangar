@@ -513,7 +513,15 @@ def test_modulo_e_stdlib_pura():
         a.name.split(".")[0] for n in ast.walk(arvore)
         if isinstance(n, ast.Import) for a in n.names
     }
-    assert not (importados & {"app", "pydantic", "fastapi", "httpx"})
+    assert not (importados & {"pydantic", "fastapi", "httpx"})
+    # `app` saiu do bloqueio em bloco e virou allowlist, pelo mesmo motivo do test_engines: o
+    # `app.atomico` e stdlib puro e existe pra nao duplicar a retentativa do `os.replace` que o
+    # Windows exige. Quem prova de verdade e o import com `-S` la em cima — ele carregou
+    # `app.contas` inteiro sem site-packages, `atomico` junto. A allowlist so mantem o
+    # diagnostico rapido honesto: nome novo aqui tem que ser stdlib puro tambem.
+    de_app = {a.name for n in ast.walk(arvore)
+              if isinstance(n, ast.ImportFrom) and n.module == "app" for a in n.names}
+    assert de_app <= {"atomico"}
 
 
 def test_drift_poda_por_nome_e_nao_pela_gaveta_inteira(casa):

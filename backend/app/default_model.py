@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from app import atomico
+
 _log = logging.getLogger(__name__)
 
 # A escrita do Claude Code NAO e sincrona com a linha de resultado no terminal: medido, o
@@ -105,7 +107,7 @@ def restore(config_dir: Path | None, antes: Any) -> bool:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(d, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
-        os.replace(tmp, path)
+        atomico.substituir(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
