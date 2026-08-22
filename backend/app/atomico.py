@@ -71,3 +71,19 @@ def em_uso(erro: BaseException) -> bool:
     entao PermissionError ali e permissao de verdade.
     """
     return _E_WINDOWS and isinstance(erro, PermissionError)
+
+
+def explicar(erro: BaseException) -> str:
+    """O erro em texto, ja com a palavra certa pra quem so vai LER a mensagem.
+
+    O `em_uso` responde sim/nao pra quem escolhe um CODIGO de erro (o `filetree` faz isso: 409
+    `erro_arq_em_uso` contra 403 `erro_arq_sem_permissao`, cada um com sua traducao). Este aqui e
+    pro outro caso, o de quem monta uma frase com o `{e}` dentro e manda pra tela: ali o
+    `[WinError 5] Acesso negado` chega intacto e diz a coisa errada — o usuario TEM permissao no
+    arquivo, o que falta e ele estar livre.
+
+    Fora do Windows devolve `str(erro)` e nada muda.
+    """
+    if em_uso(erro):
+        return f"outro programa esta com o arquivo aberto ({erro})"
+    return str(erro)

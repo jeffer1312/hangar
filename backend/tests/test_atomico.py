@@ -76,6 +76,16 @@ def test_posix_nao_retenta_nem_uma_vez(monkeypatch, tmp_path):
     assert estado["chamadas"] == 1
 
 
+def test_explicar_troca_a_palavra_errada_por_uma_certa(monkeypatch):
+    """Pra quem monta a frase com o `{e}` dentro — `em_uso` serve pra quem escolhe um CODIGO."""
+    monkeypatch.setattr(atomico, "_E_WINDOWS", True)
+    texto = atomico.explicar(PermissionError(5, "Acesso negado"))
+    assert "outro programa" in texto
+    assert atomico.explicar(OSError("disco cheio")) == "disco cheio"
+    monkeypatch.setattr(atomico, "_E_WINDOWS", False)
+    assert "outro programa" not in atomico.explicar(PermissionError(13, "Permission denied"))
+
+
 def test_em_uso_so_diz_sim_no_windows(monkeypatch):
     """Quem escolhe a MENSAGEM precisa distinguir 'sem permissao' de 'arquivo aberto'."""
     monkeypatch.setattr(atomico, "_E_WINDOWS", True)

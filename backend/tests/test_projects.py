@@ -193,6 +193,21 @@ def test_primeiro_token_respeita_aspas(linha, esperado):
     assert projects._primeiro_token(linha) == esperado
 
 
+def test_gravar_com_o_arquivo_aberto_nao_diz_sem_permissao(config, monkeypatch, tmp_path):
+    """A mensagem do `_write` vai INTEIRA pra tela (`HTTPException(e.status, e.detail)`), e no
+    Windows um projects.json aberto por outro processo derruba o rename com "Acesso negado" —
+    mandando a pessoa conferir permissao de um arquivo que ela pode escrever."""
+    from app import atomico
+    config({})
+    monkeypatch.setattr(atomico, "_E_WINDOWS", True)
+    monkeypatch.setattr(atomico, "substituir",
+                        lambda o, d: (_ for _ in ()).throw(PermissionError(5, "Acesso negado")))
+
+    with pytest.raises(projects.ProjectError) as e:
+        projects.upsert("a", str(tmp_path), "npm run dev")
+    assert "outro programa" in e.value.detail
+
+
 def test_builtin_do_cmd_nao_e_procurado_no_path(config, monkeypatch, tmp_path):
     """`cd ... && taskkill ...` e stop_command legitimo, e `cd` nao e arquivo nenhum."""
     config({"a": {"cwd": str(tmp_path), "command": "x",

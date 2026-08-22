@@ -103,7 +103,13 @@ def _mutate(fn) -> None:
             atomico.substituir(tmp, _CONFIG)
         except OSError as e:
             tmp.unlink(missing_ok=True)
-            raise ProjectError(500, f"falha ao gravar projects.json: {e}") from e
+            # `atomico.explicar`, nao `{e}` cru: esta e das poucas mensagens de escrita que chegam
+            # INTEIRAS na tela (a rota faz `HTTPException(e.status, e.detail)` com a string). No
+            # Windows o rename por cima do projects.json aberto por outro processo levanta
+            # PermissionError, e "Acesso negado" manda a pessoa conferir o ACL de um arquivo que
+            # ela pode escrever.
+            raise ProjectError(500,
+                               f"falha ao gravar projects.json: {atomico.explicar(e)}") from e
 
 
 def upsert(name: str, cwd: str, command: str, port: int | None = None,
