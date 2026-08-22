@@ -81,6 +81,11 @@ def test_acento_no_nome_nao_volta_escapado(tmp_path):
     assert "sessão-única.md" in paths
 
 
+# `:`, `"` e newline em NOME DE ARQUIVO so existem no POSIX — no Windows os tres sao proibidos
+# pela propria API (o write_text nem chega a criar). O que estes dois casos provam e o parse da
+# saida do `git grep` quando o nome tem separador de campo dentro; onde o nome nao pode existir,
+# nao ha objeto de teste.
+@pytest.mark.skipif(os.name != "posix", reason="`:`/aspas/newline sao nomes invalidos no Windows")
 def test_conteudo_nomes_com_dois_pontos_aspas_e_newline(tmp_path):
     d = _repo(tmp_path)
     for nome in ("a:b.txt", 'a"b.txt', "line\nname.txt"):
@@ -90,6 +95,7 @@ def test_conteudo_nomes_com_dois_pontos_aspas_e_newline(tmp_path):
     assert achados == {("a:b.txt", 1, "needle"), ('a"b.txt', 1, "needle"), ("line\nname.txt", 1, "needle")}
 
 
+@pytest.mark.skipif(os.name != "posix", reason="`:` e nome invalido no Windows (ver o caso acima)")
 def test_teto_conta_hits_reais_com_nomes_estranhos(tmp_path):
     d = _repo(tmp_path)
     for i in range(201):

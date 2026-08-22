@@ -160,7 +160,12 @@ def models_cache_em_tmp(tmp_path, monkeypatch):
     from app import api
 
     def _path_de_teste(chave: str):
-        return tmp_path / f"models-{chave.replace(chr(47), chr(95))}.json"
+        # A chave e um CAMINHO (o config dir). Trocar so a barra bastava no POSIX; no Windows
+        # sobram `\` e o `:` do drive, que sao invalidos em nome de arquivo — o teste morria com
+        # WinError 123 antes de exercitar qualquer rota. `_sanitizar` tira tudo que nao serve pra
+        # nome, e o proposito continua o mesmo: um arquivo por chave, dentro do tmp_path.
+        seguro = "".join(c if c.isalnum() or c in "-._" else "_" for c in chave)
+        return tmp_path / f"models-{seguro}.json"
 
     monkeypatch.setattr(api, "_models_cache_path", _path_de_teste)
     api._claude_models_cache.clear()
