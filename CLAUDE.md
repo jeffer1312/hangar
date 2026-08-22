@@ -659,6 +659,40 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `settings.json` must NOT have a BOM (`JSON.parse` in Node throws on it), while the PowerShell
   **profile** must — it is the only encoding both 5.1 and 7 can read when the path has an accent
   (5.1 alone writes ANSI, 7 alone writes UTF-8-no-BOM, and each fails to read the other's).
+- **Two Windows traps that a `subprocess` and a `tmp+rename` hide from you** (measured 22/08/2026 on
+  this VM, python 3.14, locale cp1252, console codepage 850). Both are cases where the failure does
+  **not** land where you would look for it.
+  - **`Path.replace` IS `os.replace`** — `pathlib` calls `os.replace(self, target)` — so
+    `tmp.replace(alvo)` carries the exact WinError 5 that `atomico.substituir` exists to survive.
+    The first sweep converted only the `os.replace(tmp, alvo)` spelling and left 20 sites written the
+    other way, the sidecars with a concurrent reader by design among them (durable queue, the state
+    marker read by a hook in another process, the price cache). The guard is now on the **shape**:
+    `tests/test_atomico_call_sites.py` walks the AST of `app/` for `<x>.replace(<one positional
+    arg>)`, a signature only the file rename has (`str.replace` takes two, `datetime.replace` takes
+    keywords). Testing this needs the fake `os.replace` patched on the **`os` module**, not on
+    `atomico.os` — same object, and only that reaches the `pathlib` spelling, so the case fails
+    against the old code on Linux too.
+  - **A strict decode failure in `subprocess` dies in a reader THREAD.** With `capture_output` there
+    are two pipes, so Windows reads them in threads: `encoding="utf-8"` without `errors=` on a byte
+    that is not UTF-8 prints `Exception in thread` to stderr, `run()` raises **nothing** and
+    `stdout` comes back **None** — the caller blows up later, far from the cause (on Linux the same
+    code raises `UnicodeDecodeError` from `run()`). This is why `errors="replace"` stays in
+    `conta_estado`/`pi_catalog`; what changed is that its output stops being stamped as good — a
+    field carrying U+FFFD is dropped (`conta_estado`, so the account keeps working) or refused
+    (`pi_catalog`, where the `id` is later TYPED into the TUI). Note also that `encoding="utf-8"`
+    **alone** already fixes the cp1252 mojibake; `errors=` covers a different failure.
+- **`stop_command` on Windows: the return code cannot be read as failure, and the shell won't tell
+  you in a language you can parse** (`projects.py`, measured against the real `cmd.exe`).
+  `taskkill /F /IM x` with no such process answers **128**, the Windows sibling of the `pkill`
+  returning 1 that made this code ignore `rc` in the first place; a POSIX `stop_command` (common
+  when the project came from a Linux box) answers **1** with "not recognized". Charging by `rc`
+  turns every stop of an already-stopped project into an error on screen, and the two stderr
+  messages come translated into the Windows UI language. What separates them without depending on
+  either is whether the command **exists** — so the check runs only **after** a non-zero rc, on the
+  first token of the line, with `cwd` added to the search (`cmd.exe` looks at the current directory
+  before PATH) and cmd builtins skipped. Not-found → a `ProjectError` naming the command and warning
+  about the orphan; found and failed → silence, with rc and the stderr tail in the log. The stderr
+  never reaches the screen: it comes in the console's OEM codepage, not the locale's.
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
