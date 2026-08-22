@@ -11,6 +11,7 @@ import {
   donoDaLinha,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent } from '@hangar/core';
+import * as m from '../paraglide/messages';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
 // para zustand. Histórico janelado (cauda primeiro), merge SSE com dedup por id, preview ao
@@ -108,10 +109,10 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     } catch (err) {
       if (isAbortError(err) || g !== histGen || !alive) return;
       const msg = isTimeoutError(err)
-        ? 'O servidor não respondeu a tempo.'
+        ? m.chat_historico_sem_resposta()
         : err instanceof Error
           ? err.message
-          : 'Não deu pra carregar o histórico.';
+          : m.chat_nao_carregou_historico();
       useChatStore.setState({ error: msg, loading: false });
     }
   }
@@ -138,9 +139,9 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         aplicarEvents(merged);
         useChatStore.setState({ olderFailed: '' });
       })
-      .catch(() => {
+      .catch((err) => {
         olderInFlight = false;
-        if (!alive) return;
+        if (isAbortError(err) || !alive) return;
         useChatStore.setState({ olderFailed: 'failed' });
       });
   }
@@ -281,6 +282,10 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       void loadHistory();
     });
 
+    // reset do backoff quando a conexão estabiliza (paridade com Chat.svelte:1017 noteAlive)
+    es.onopen = () => {
+      retryDelay = SSE_RETRY_MIN_MS;
+    };
     // Erro REAL (TCP RST ou watchdog do adapter): FECHA e reagenda com backoff. O adapter
     // mobile já tem auto-retry nativo desligado? Não: react-native-sse reconecta sozinho —
     // fechar aqui impede a 2ª máquina de retry martelar em paralelo (mesma lição da PWA).

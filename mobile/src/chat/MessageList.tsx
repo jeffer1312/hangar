@@ -72,12 +72,16 @@ export function MessageList({
       ListFooterComponent={
         <View style={styles.footer}>
           <StatusLine line={statusLine} />
-          {olderFailed !== '' ? (
-            <Text style={styles.gap} onPress={onLoadOlder}>
-              {olderFailed === 'unjoinable'
-                ? m.chat_sem_historico_anterior()
-                : m.chat_historico_antigo()}
+          {olderFailed === 'failed' ? (
+            <Text
+              style={styles.gap}
+              onPress={onLoadOlder}
+              accessibilityRole="button"
+            >
+              {m.chat_historico_antigo()}
             </Text>
+          ) : olderFailed === 'unjoinable' ? (
+            <Text style={styles.gap}>{m.chat_sem_historico_anterior()}</Text>
           ) : null}
           {preview ? <PreviewBubble text={preview} /> : null}
         </View>
@@ -100,5 +104,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.tokens.status.warning,
     textAlign: 'center',
     paddingVertical: theme.base.space[1],
+    minHeight: 44,
+    lineHeight: 44,
   },
 }));

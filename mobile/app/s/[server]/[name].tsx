@@ -48,8 +48,8 @@ export default function ChatScreen() {
         ) : error ? (
           <View style={styles.erro}>
             <Text style={styles.hint}>{error}</Text>
-            <Text style={styles.retry} onPress={chat.retry}>
-              {m.chat_nao_carregou_historico()}
+            <Text style={styles.retry} onPress={chat.retry} accessibilityRole="button">
+              {m.lista_tentar_novamente()}
             </Text>
           </View>
         ) : (

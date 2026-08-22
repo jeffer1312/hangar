@@ -44,7 +44,13 @@ function fakeCreateEventSource(url: string): unknown {
     set onerror(fn: ((e: unknown) => void) | null) {
       fake.onerror = fn;
     },
-    onopen: null,
+    get onopen() {
+      return (fake as unknown as { _onopen: ((e: unknown) => void) | null })._onopen ?? null;
+    },
+    set onopen(fn: ((e: unknown) => void) | null) {
+      (fake as unknown as { _onopen: ((e: unknown) => void) | null })._onopen = fn;
+      if (fn) (fake.listeners['open'] ??= []).push(fn as never);
+    },
     readyState: 1,
   };
 }
@@ -275,6 +281,51 @@ test('onerror fecha e reconecta com backoff crescente', async () => {
     await vi.advanceTimersByTimeAsync(6_000); // backoff dobrou
     expect(created).toHaveLength(3);
 
+    chat.release();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('loadOlder abortado por reset não marca failed (B4)', async () => {
+  historyResponses = [[ev({ id: 'a:1' })]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  expect(chat.use.getState().olderFailed).toBe('');
+  // forçar o próximo getHistory a rejeitar com AbortError (reset aborta o signal)
+  const abortErr = Object.assign(new Error('abort'), { name: 'AbortError' });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.reject(abortErr)),
+  );
+  chat.loadOlder();
+  // simula o reset que aborta o histAbort enquanto loadOlder está em voo
+  created[0].trigger('reset', '{}');
+  await tick();
+  expect(chat.use.getState().olderFailed).toBe('');
+});
+
+test('onopen reseta backoff para 3s (B5)', async () => {
+  vi.useFakeTimers();
+  try {
+    historyResponses = [[]];
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(created).toHaveLength(1);
+    created[0].fail();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(created).toHaveLength(2);
+    created[1].fail();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(created).toHaveLength(3);
+    // conexão 3 abre com sucesso → onopen reseta delay
+    created[2].trigger('open', '{}');
+    // próxima queda deve usar 3s de novo, não 12s
+    created[2].fail();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(created).toHaveLength(4);
     chat.release();
   } finally {
     vi.useRealTimers();

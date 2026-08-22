@@ -7,7 +7,11 @@ import { mkMarkdownStyle } from './AssistantBubble';
 // A bolha translúcida da PWA (prévia em voo): mesmo markdown do assistente, opacidade 0.7.
 export function PreviewBubble({ text }: { text: string }) {
   const { theme } = useUnistyles();
-  const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
+  const md = useMemo(() => {
+    const base = mkMarkdownStyle(theme);
+    // prévia distinguível da bolha commitada: texto secondary + itálico implícito via cor
+    return { ...base, paragraph: { ...base.paragraph, color: theme.tokens.text.secondary } };
+  }, [theme]);
   return (
     <View style={styles.wrap}>
       <EnrichedMarkdownText markdown={text} markdownStyle={md} flavor="github" />
@@ -23,6 +27,9 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.base.radius.lg,
     paddingHorizontal: theme.base.space[3],
     paddingVertical: theme.base.space[2],
-    opacity: 0.7,
+    opacity: 0.85,
+    borderWidth: 1,
+    borderColor: theme.tokens.border.default,
+    borderStyle: 'dashed',
   },
 }));
