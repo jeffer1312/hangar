@@ -1,0 +1,356 @@
+import { create } from 'zustand';
+import type { StoreApi, UseBoundStore } from 'zustand';
+import {
+  getHistory,
+  openEventStream,
+  prependOlder,
+  hasSeam,
+  isAbortError,
+  isTimeoutError,
+  especificidade,
+  donoDaLinha,
+} from '@hangar/core';
+import type { ChatEvent, StateEvent } from '@hangar/core';
+
+// Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
+// para zustand. Histórico janelado (cauda primeiro), merge SSE com dedup por id, preview ao
+// vivo full-replace, watchdog/reconexão.
+//
+// Watchdog: fica NO ADAPTER (mobile/src/net/sse.ts) — ele fecha o stream após 25s sem evento
+// e dispara onerror; qualquer listener registrado rearma o relógio dele via wrap. Este store
+// NÃO cria segundo timer de inatividade (fecharia o MESMO stream duas vezes); só registra um
+// listener de 'ping' vazio pro rearmar() rodar — mesmo padrão do sessions.ts.
+
+// Cauda da primeira carga: mesma régua da PWA (400 > _BACKFILL_LINES=200 do SSE, fecha o
+// buraco do resume sem re-baixar tudo).
+export const TAIL_FIRST = 400;
+
+const SSE_RETRY_MIN_MS = 3_000;
+const SSE_RETRY_MAX_MS = 30_000;
+
+export interface ChatState {
+  events: ChatEvent[];
+  stateEvent: StateEvent | null;
+  // Prévia do bloco em voo (texto cru/markdown). Full-replace; some quando o assistant_msg
+  // real chega ou quando a sessão sai de working.
+  preview: string;
+  statusLine: string | null;
+  loading: boolean;
+  error: string;
+  // Carga do histórico antigo falhou ('failed' = rede/backend, tocar tenta de novo) ou veio
+  // de outro transcript ('unjoinable' = sem costura, conversa truncada).
+  olderFailed: '' | 'failed' | 'unjoinable';
+}
+
+export interface ChatApi {
+  use: UseBoundStore<StoreApi<ChatState>>;
+  retain: () => void;
+  release: () => void;
+  loadOlder: () => void;
+  send: (text: string) => Promise<void>;
+  // Recarrega o histórico depois de falha da primeira carga (o SSE segue vivo por conta
+  // própria — onerror reconecta —, então retry é só a parte REST).
+  retry: () => void;
+}
+
+function criarChatStore(serverId: string, name: string): ChatApi {
+  const useChatStore = create<ChatState>(() => ({
+    events: [],
+    stateEvent: null,
+    preview: '',
+    statusLine: null,
+    loading: true,
+    error: '',
+    olderFailed: '',
+  }));
+
+  // internos — fora do set() para não virar proxy
+  let es: ReturnType<typeof openEventStream> | null = null;
+  let lastEventId: string | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let retryDelay = SSE_RETRY_MIN_MS;
+  let alive = false;
+  let refs = 0;
+  // Uma geração por carga: resposta velha nunca cai na sessão nova (padrão do Chat.svelte).
+  let histGen = 0;
+  let histAbort: AbortController | null = null;
+  // Índice id->posição: o SSE re-emite o transcript inteiro a cada reconexão; Map = dedup O(1)
+  // em vez de findIndex O(n) por evento (O(n²) por reconexão congelava a PWA em conversa longa).
+  const idIndex = new Map<string, number>();
+  // Fonte da prévia no último frame (md/full): a monotonicidade só vale DENTRO da mesma fonte.
+  let previewMd = false;
+  let previewFull = false;
+
+  function rebuildIndex(events: ChatEvent[]) {
+    idIndex.clear();
+    for (let i = 0; i < events.length; i++) idIndex.set(events[i].id, i);
+  }
+
+  function aplicarEvents(events: ChatEvent[]) {
+    rebuildIndex(events);
+    useChatStore.setState({ events });
+  }
+
+  async function loadHistory(): Promise<void> {
+    histGen++;
+    histAbort?.abort();
+    histAbort = new AbortController();
+    const signal = histAbort.signal;
+    const g = histGen;
+    try {
+      const tail = await getHistory(name, TAIL_FIRST, signal);
+      if (g !== histGen) return;
+      aplicarEvents(tail);
+      useChatStore.setState({ error: '', olderFailed: '' });
+      // Histórico antigo NÃO vem automático (diferente da PWA): entra sob demanda no
+      // loadOlder(), chamado pelo onStartReached da lista — menos banda em link móvel.
+      useChatStore.setState({ loading: false });
+    } catch (err) {
+      if (isAbortError(err) || g !== histGen || !alive) return;
+      const msg = isTimeoutError(err)
+        ? 'O servidor não respondeu a tempo.'
+        : err instanceof Error
+          ? err.message
+          : 'Não deu pra carregar o histórico.';
+      useChatStore.setState({ error: msg, loading: false });
+    }
+  }
+
+  let olderInFlight = false;
+  function loadOlder(): void {
+    if (olderInFlight || !alive) return;
+    if (useChatStore.getState().olderFailed === 'unjoinable') return;
+    olderInFlight = true;
+    getHistory(name, undefined, histAbort?.signal)
+      .then((full) => {
+        olderInFlight = false;
+        if (!alive) return;
+        const events = useChatStore.getState().events;
+        const merged = prependOlder(full, events);
+        if (!merged) {
+          // null tem dois motivos: "já temos desde o começo" (feliz, calado) ou sem costura
+          // (transcript trocado no meio do voo -> avisa).
+          useChatStore.setState({
+            olderFailed: hasSeam(full, events) ? '' : 'unjoinable',
+          });
+          return;
+        }
+        aplicarEvents(merged);
+        useChatStore.setState({ olderFailed: '' });
+      })
+      .catch(() => {
+        olderInFlight = false;
+        if (!alive) return;
+        useChatStore.setState({ olderFailed: 'failed' });
+      });
+  }
+
+  function connectSSE(): void {
+    if (!alive) return;
+    clearTimeout(retryTimer);
+    es?.close();
+
+    es = openEventStream(name, lastEventId);
+
+    // Prova de vida pro watchdog do adapter: SEM listener registrado o wrap do adapter
+    // não roda rearmar() e o stream saudável morre aos 25s (mesmo padrão do sessions.ts).
+    es.addEventListener('ping', () => {});
+
+    es.addEventListener('message', (e) => {
+      // Só o transcript carrega lastEventId ("<stem>:<offset>"); state/preview/ping vêm sem.
+      if (e.lastEventId) lastEventId = e.lastEventId;
+      try {
+        const ev = JSON.parse(e.data as string) as ChatEvent;
+        let { events } = useChatStore.getState();
+        // Dedup cruzado fila<->transcript: a fila durável emite user_msg sintético (id
+        // "queued-") e o transcript grava depois o user_msg REAL com texto igual — sem
+        // isto, toda msg enfileirada (cp-send, composer working) aparece DOBRADA. O backend
+        // documenta que o dedup é do front (sse.py: "O front faz o dedup cruzado").
+        // Porte do handler de message do Chat.svelte.
+        if (ev.kind === 'user_msg' && ev.text) {
+          const filas: { i: number; text: string }[] = [];
+          for (let i = 0; i < events.length; i++) {
+            const x = events[i];
+            if (x.kind === 'user_msg' && x.id.startsWith('queued-') && x.text) {
+              filas.push({ i, text: x.text });
+            }
+          }
+          if (ev.id.startsWith('queued-')) {
+            // Sintético só entra se NENHUMA bolha real já cobre este texto sendo ela dona.
+            const candidatos = [...filas.map((f) => f.text), ev.text];
+            const coberto = events.some(
+              (x) =>
+                x.kind === 'user_msg' &&
+                !x.id.startsWith('queued-') &&
+                !!x.text &&
+                especificidade(x.text, ev.text!) >= 0 &&
+                donoDaLinha(x.text!, candidatos) === candidatos.length - 1,
+            );
+            if (coberto) return; // real já cobre e é o dono -> ignora o sintético
+          } else {
+            // Real chegou: remove SÓ a bolha da fila DONA da linha (não todas).
+            const dono = donoDaLinha(ev.text, filas.map((f) => f.text));
+            if (dono >= 0) {
+              const qi = filas[dono].i;
+              events = [...events.slice(0, qi), ...events.slice(qi + 1)];
+            }
+          }
+        }
+        // Dedup por id (replay do SSE + seed do history): existente SUBSTITUI (conteúdo
+        // pode ter crescido), novo entra no fim.
+        const i = idIndex.get(ev.id);
+        if (i !== undefined) {
+          const next = events.slice();
+          next[i] = ev;
+          rebuildIndex(next);
+          useChatStore.setState({ events: next });
+          return;
+        }
+        const next = [...events, ev];
+        idIndex.set(ev.id, next.length - 1);
+        useChatStore.setState({ events: next });
+        // Swap prévia->bolha: o bloco real chegou, a prévia sai no MESMO flush.
+        if (ev.kind === 'assistant_msg' && ev.text && useChatStore.getState().preview) {
+          previewMd = false;
+          previewFull = false;
+          useChatStore.setState({ preview: '' });
+        }
+      } catch {
+        // evento ilegível não derruba o stream
+      }
+    });
+
+    es.addEventListener('state', (e) => {
+      try {
+        const ev = JSON.parse(e.data as string) as StateEvent;
+        // Turno acabou sem bloco de assistente: ninguém mais viria apagar a prévia.
+        const limparPreview = ev.state !== 'working' && useChatStore.getState().preview !== '';
+        if (limparPreview) {
+          previewMd = false;
+          previewFull = false;
+        }
+        useChatStore.setState({
+          stateEvent: ev,
+          statusLine: ev.status_line ?? null,
+          ...(limparPreview ? { preview: '' } : {}),
+        });
+      } catch {
+        // engolir aqui congela estado/linha de status no valor antigo; stream segue vivo
+      }
+    });
+
+    es.addEventListener('preview', (e) => {
+      try {
+        const ev = JSON.parse(e.data as string) as { text?: string; md?: boolean; full?: boolean };
+        const t = ev.text ?? '';
+        const atual = useChatStore.getState().preview;
+        // Frame transitório do pane às vezes chega como PREFIXO do texto já mostrado:
+        // ignorar, senão o texto recua e re-cresce. Só vale DENTRO da mesma fonte
+        // (md/full trocados = fonte nova, passa sempre).
+        if (
+          t &&
+          !!ev.md === previewMd &&
+          !!ev.full === previewFull &&
+          t.length < atual.length &&
+          atual.startsWith(t)
+        ) {
+          return;
+        }
+        // VAZIO enquanto working não apaga a bolha (entre ferramentas o extrator manda "");
+        // quem apaga de verdade são o assistant_msg real e a saída de working, acima.
+        if (!t && useChatStore.getState().stateEvent?.state === 'working') return;
+        previewMd = !!ev.md;
+        previewFull = !!ev.full;
+        useChatStore.setState({ preview: t });
+      } catch {
+        // frame ilegível: mantém o último bom
+      }
+    });
+
+    es.addEventListener('reset', () => {
+      // Transcript trocado (/clear): ids do arquivo antigo não valem mais — zera e recarrega.
+      lastEventId = null;
+      previewMd = false;
+      previewFull = false;
+      useChatStore.setState({
+        stateEvent: null,
+        statusLine: null,
+        preview: '',
+        loading: true,
+      });
+      void loadHistory();
+    });
+
+    // Erro REAL (TCP RST ou watchdog do adapter): FECHA e reagenda com backoff. O adapter
+    // mobile já tem auto-retry nativo desligado? Não: react-native-sse reconecta sozinho —
+    // fechar aqui impede a 2ª máquina de retry martelar em paralelo (mesma lição da PWA).
+    // Atribuição ÚNICA por conexão (objeto novo a cada connectSSE) — o setter do adapter
+    // acumula listeners a cada atribuição (regra do grupo, achado da T4 r2).
+    es.onerror = () => {
+      es?.close();
+      es = null;
+      if (!alive) return;
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(connectSSE, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
+    };
+  }
+
+  return {
+    use: useChatStore,
+    retain() {
+      refs++;
+      if (refs === 1) {
+        alive = true;
+        retryDelay = SSE_RETRY_MIN_MS;
+        void loadHistory().then(() => {
+          if (alive) connectSSE();
+        });
+      }
+    },
+    release() {
+      refs--;
+      if (refs > 0) return;
+      alive = false;
+      histGen++;
+      histAbort?.abort();
+      es?.close();
+      es = null;
+      clearTimeout(retryTimer);
+      idIndex.clear();
+      useChatStore.setState({
+        events: [],
+        stateEvent: null,
+        preview: '',
+        statusLine: null,
+        loading: true,
+        error: '',
+        olderFailed: '',
+      });
+    },
+    loadOlder,
+    retry: () => {
+      void loadHistory();
+    },
+    // Task 9 (composer) preenche: envio pela API + eco local pendente.
+    async send(_text: string) {},
+  };
+}
+
+// Um store por sessão, registry global — remonta só quando todos os consumers soltam.
+const chats = new Map<string, ChatApi>();
+
+export function chatStore(serverId: string, name: string): ChatApi {
+  const chave = `${serverId}::${name}`;
+  let api = chats.get(chave);
+  if (!api) {
+    api = criarChatStore(serverId, name);
+    chats.set(chave, api);
+  }
+  return api;
+}
+
+export function _resetChatsForTests(): void {
+  for (const api of chats.values()) api.release();
+  chats.clear();
+}

@@ -3,6 +3,8 @@ import '../src/theme/unistyles';
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+// Sem o KeyboardProvider, KeyboardStickyView/KeyboardChatScrollView lançam em runtime
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { configureCore } from '../src/net/configureCore';
 import { useServers } from '../src/stores/servers';
 
@@ -27,8 +29,10 @@ export default function Layout() {
   }, [ready, servers.length, segments]);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <Stack screenOptions={{ headerShown: false }} />
-    </GestureHandlerRootView>
+    <KeyboardProvider>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <Stack screenOptions={{ headerShown: false }} />
+      </GestureHandlerRootView>
+    </KeyboardProvider>
   );
 }
