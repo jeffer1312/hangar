@@ -9,9 +9,11 @@ import {
   isTimeoutError,
   especificidade,
   donoDaLinha,
+  sendInput,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent } from '@hangar/core';
 import * as m from '../paraglide/messages';
+import { reconcilePending, type PendingMsg } from '../chat/pending';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
 // para zustand. Histórico janelado (cauda primeiro), merge SSE com dedup por id, preview ao
@@ -41,6 +43,14 @@ export interface ChatState {
   // Carga do histórico antigo falhou ('failed' = rede/backend, tocar tenta de novo) ou veio
   // de outro transcript ('unjoinable' = sem costura, conversa truncada).
   olderFailed: '' | 'failed' | 'unjoinable';
+  // Ecos locais pendentes — já enviados mas ainda sem user_msg real no transcript.
+  pending: PendingMsg[];
+}
+
+// Quantas bolhas estão "na fila" (translúcidas): ecos locais + sintéticos queued-* da fila durável.
+// Extraído pra não duplicar a regra entre Composer (chip) e teste (file: chat.ts é a fonte).
+export function filaCount(state: Pick<ChatState, 'events' | 'pending'>): number {
+  return state.pending.length + state.events.filter((e) => e.kind === 'user_msg' && e.id.startsWith('queued-')).length;
 }
 
 export interface ChatApi {
@@ -63,6 +73,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     loading: true,
     error: '',
     olderFailed: '',
+    pending: [],
   }));
 
   // internos — fora do set() para não virar proxy
@@ -81,6 +92,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   // Fonte da prévia no último frame (md/full): a monotonicidade só vale DENTRO da mesma fonte.
   let previewMd = false;
   let previewFull = false;
+  let pendingSeq = 0;
+  let prevState: string | null = null;
 
   function rebuildIndex(events: ChatEvent[]) {
     idIndex.clear();
@@ -209,7 +222,11 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         }
         const next = [...events, ev];
         idIndex.set(ev.id, next.length - 1);
-        useChatStore.setState({ events: next });
+        // Reconcilia pending com o evento que acabou de chegar (se for user_msg real)
+        const curPending = useChatStore.getState().pending;
+        const nextPending = curPending.length ? reconcilePending(curPending, ev) : curPending;
+        const pendingPatch = nextPending.length !== curPending.length ? { pending: nextPending } : {};
+        useChatStore.setState({ events: next, ...pendingPatch });
         // Swap prévia->bolha: o bloco real chegou, a prévia sai no MESMO flush.
         if (ev.kind === 'assistant_msg' && ev.text && useChatStore.getState().preview) {
           previewMd = false;
@@ -230,10 +247,19 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           previewMd = false;
           previewFull = false;
         }
+        // Solidifica pending quando volta a idle (igual ao Chat.svelte): msgs enviadas
+        // enquanto working que não viraram entrada gravada viram bolha sólida.
+        const curPending = useChatStore.getState().pending;
+        const solidPatch =
+          prevState !== 'idle' && ev.state === 'idle' && curPending.some((p) => !p.solid)
+            ? { pending: curPending.map((p) => ({ ...p, solid: true })) }
+            : {};
+        prevState = ev.state;
         useChatStore.setState({
           stateEvent: ev,
           statusLine: ev.status_line ?? null,
           ...(limparPreview ? { preview: '' } : {}),
+          ...solidPatch,
         });
       } catch {
         // engolir aqui congela estado/linha de status no valor antigo; stream segue vivo
@@ -323,6 +349,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       es = null;
       clearTimeout(retryTimer);
       idIndex.clear();
+      pendingSeq = 0;
+      prevState = null;
       useChatStore.setState({
         events: [],
         stateEvent: null,
@@ -331,14 +359,26 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         loading: true,
         error: '',
         olderFailed: '',
+        pending: [],
       });
     },
     loadOlder,
     retry: () => {
       void loadHistory();
     },
-    // Task 9 (composer) preenche: envio pela API + eco local pendente.
-    async send(_text: string) {},
+    async send(text: string) {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      const id = `pending-${pendingSeq++}`;
+      useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed }] }));
+      try {
+        await sendInput(name, trimmed);
+      } catch (err) {
+        // falhou -> remove o eco que acabamos de pôr (não ficou enfileirado)
+        useChatStore.setState((s) => ({ pending: s.pending.filter((p) => p.id !== id) }));
+        throw err;
+      }
+    },
   };
 }
 

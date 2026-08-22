@@ -2,11 +2,12 @@ import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { KeyboardStickyView } from 'react-native-keyboard-controller';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { chatStore } from '../../../src/stores/chat';
 import { Screen } from '../../../src/ui/Screen';
 import { ChatHeader } from '../../../src/chat/ChatHeader';
 import { MessageList } from '../../../src/chat/MessageList';
+import { Composer } from '../../../src/chat/Composer';
 import * as m from '../../../src/paraglide/messages';
 
 // Tela de chat de uma sessão: histórico janelado + SSE ao vivo (store chat.ts).
@@ -31,6 +32,7 @@ export default function ChatScreen() {
   const loading = chat.use((s) => s.loading);
   const error = chat.use((s) => s.error);
   const olderFailed = chat.use((s) => s.olderFailed);
+  const pending = chat.use((s) => s.pending);
 
   return (
     <Screen>
@@ -42,36 +44,40 @@ export default function ChatScreen() {
           else router.replace('/');
         }}
       />
-      <View style={styles.body}>
-        {loading && !error ? (
-          <Text style={styles.hint}>{m.chat_carregando_historico()}</Text>
-        ) : error ? (
-          <View style={styles.erro}>
-            <Text style={styles.hint}>{error}</Text>
-            <Text style={styles.retry} onPress={chat.retry} accessibilityRole="button">
-              {m.lista_tentar_novamente()}
-            </Text>
-          </View>
-        ) : (
-          <MessageList
-            events={events}
-            preview={preview}
-            statusLine={statusLine}
-            olderFailed={olderFailed}
-            onLoadOlder={chat.loadOlder}
-          />
-        )}
-      </View>
-      {/* Task 9 troca pelo composer real */}
-      <KeyboardStickyView>
-        <View style={styles.composerSlot} />
-      </KeyboardStickyView>
+      {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}
+      <KeyboardAvoidingView behavior="padding" style={styles.body}>
+        <View style={styles.inner}>
+          {loading && !error ? (
+            <Text style={styles.hint}>{m.chat_carregando_historico()}</Text>
+          ) : error ? (
+            <View style={styles.erro}>
+              <Text style={styles.hint}>{error}</Text>
+              <Text style={styles.retry} onPress={chat.retry} accessibilityRole="button">
+                {m.lista_tentar_novamente()}
+              </Text>
+            </View>
+          ) : (
+            <MessageList
+              events={events}
+              preview={preview}
+              statusLine={statusLine}
+              olderFailed={olderFailed}
+              onLoadOlder={chat.loadOlder}
+              pending={pending}
+            />
+          )}
+        </View>
+        <Composer serverId={serverId} name={name} />
+      </KeyboardAvoidingView>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
   body: {
+    flex: 1,
+  },
+  inner: {
     flex: 1,
   },
   hint: {
@@ -91,11 +97,5 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: 'center',
     minHeight: 44,
     lineHeight: 44,
-  },
-  composerSlot: {
-    height: 56,
-    borderTopWidth: 1,
-    borderTopColor: theme.tokens.border.subtle,
-    backgroundColor: theme.tokens.bg.surface,
   },
 }));

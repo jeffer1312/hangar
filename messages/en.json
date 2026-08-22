@@ -445,6 +445,7 @@
   "composer_cache_expirou": "Prompt cache expired — the next turn reprocesses the whole context",
   "composer_expirou": "expired",
   "composer_enviando": "uploading…",
+  "composer_sessao_trabalhando": "working…",
   "composer_mensagem_para": "Message for {nome}…",
   "composer_aria_mensagem": "Message",
   "composer_preparando_mic": "Preparing microphone",

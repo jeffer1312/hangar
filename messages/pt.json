@@ -445,6 +445,7 @@
   "composer_cache_expirou": "Cache de prompt expirou — o próximo turno reprocessa o contexto inteiro",
   "composer_expirou": "expirou",
   "composer_enviando": "enviando…",
+  "composer_sessao_trabalhando": "trabalhando…",
   "composer_mensagem_para": "Mensagem para {nome}…",
   "composer_aria_mensagem": "Mensagem",
   "composer_preparando_mic": "Preparando microfone",
