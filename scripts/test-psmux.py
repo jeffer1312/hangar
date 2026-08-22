@@ -42,18 +42,21 @@ _frames: list[tuple[str, str]] = []
 
 
 def run(args: list[str], timeout: int = 10,
-        entrada: bytes | None = None) -> subprocess.CompletedProcess:
+        entrada: bytes | None = None,
+        ambiente: dict | None = None) -> subprocess.CompletedProcess:
+    # `ambiente` = env de QUEM CHAMA o multiplexador; so a secao 1c se importa com ele.
     # `entrada` = stdin, pro `load-buffer -` (mesmo caminho do tmux.py:_run). text=True e
     # input=bytes sao incompativeis, entao aqui a saida vem em bytes e e decodificada — o
     # retorno continua sendo str pra todos os checks.
     try:
         if entrada is not None:
-            cp = subprocess.run([BIN, *args], capture_output=True, timeout=timeout, input=entrada)
+            cp = subprocess.run([BIN, *args], capture_output=True, timeout=timeout, input=entrada,
+                                env=ambiente)
             return subprocess.CompletedProcess(
                 args, cp.returncode,
                 cp.stdout.decode("utf-8", "replace"), cp.stderr.decode("utf-8", "replace"))
         return subprocess.run([BIN, *args], capture_output=True, text=True,
-                              timeout=timeout, encoding="utf-8", errors="replace")
+                              timeout=timeout, encoding="utf-8", errors="replace", env=ambiente)
     except (subprocess.TimeoutExpired, OSError) as e:
         return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
 
@@ -144,6 +147,45 @@ if "trust this folder" in tela.lower() or "❯ 1." in tela:
 else:
     print("  --  sem tela de confianca (pasta ja confiada)")
 
+# ── 1c. de onde vem o AMBIENTE do pane ──────────────────────────────────────
+# A regra do `-e CLAUDE_CONFIG_DIR` (tmux._e_config_dir) se apoia em DUAS propriedades MEDIDAS do
+# psmux, e nao no nome do sistema: o pane herda o ambiente de QUEM CHAMA, e nada vaza de uma
+# sessao pra outra. E por isso que la o app pode OMITIR o `-e` quando o valor e o padrao — e
+# omitir e obrigatorio, porque `CLAUDE_CONFIG_DIR` setado (mesmo apontando pro proprio ~/.claude)
+# manda o Claude Code ler o `.claude.json` de DENTRO da pasta, que nasce vazio: sessao na tela de
+# boas-vindas com a credencial intacta. Se uma versao nova do psmux passar a guardar o ambiente do
+# SERVIDOR (como o tmux faz), a omissao volta a deixar a conta de uma sessao antiga vazar pra
+# proxima — e o lugar de descobrir isso e aqui, nao numa conta trocada em silencio.
+print()
+print("1c. de onde vem o ambiente do pane")
+if os.name != "nt":
+    # No tmux o ambiente do pane e o do SERVIDOR e o app manda o `-e` SEMPRE: nada a medir aqui.
+    print("  --  so no Windows (no tmux o app manda o -e sempre)")
+else:
+    SESS_ENV = f"{SESS}-env"
+    # `cmd /k`: mantem o pane vivo pra captura, e deixa `%VAR%` LITERAL quando a variavel nao
+    # existe — e o que torna "nao herdou nada" uma prova visivel, e nao uma linha vazia ambigua.
+    ECO = "cmd.exe /k echo HERDA=[%ZZ_CP_HERDA%] VIAE=[%ZZ_CP_VIA_E%]"
+    base = ["new-session", "-d", "-s", SESS_ENV, "-c", os.getcwd()]
+    casos = (
+        ("chamador com a variavel, mais um -e",
+         base + ["-e", "ZZ_CP_VIA_E=viaE", ECO],
+         {**os.environ, "ZZ_CP_HERDA": "herdado"},
+         ("HERDA=[herdado]", "VIAE=[viaE]")),
+        ("sessao seguinte, sem a variavel e sem -e",
+         base + [ECO],
+         None,
+         ("HERDA=[%ZZ_CP_HERDA%]", "VIAE=[%ZZ_CP_VIA_E%]")),
+    )
+    for etapa, args_ns, env_pai, esperados in casos:
+        run(["kill-session", "-t", SESS_ENV])
+        cp = run(args_ns, ambiente=env_pai)
+        espera(2)
+        tela = run(["capture-pane", "-p", "-t", f"={SESS_ENV}:"]).stdout
+        for esperado in esperados:
+            check(f"{etapa}: {esperado}", esperado in tela,
+                  tela[:300] or cp.stderr or "pane vazio")
+        run(["kill-session", "-t", SESS_ENV])
 # ── 2. has-session, com e sem match exato ───────────────────────────────────
 print("\n2. has_session")
 check("has-session -t =NOME (exato, sessao viva)",

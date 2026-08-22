@@ -559,8 +559,11 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   as a separator glues the lines together (both measured) — and it is precisely the path that was
   measured delivering 309 of 600 lines while returning success, which is why the clipboard exists.
   Probe: `scripts/test-psmux.py` (+ `.ps1`).
-  Install: `install.ps1`. Not there on Windows: systemd services and the `claude`/`codex` shell
-  wrappers, so a session you open in the terminal is invisible to the app — app-created ones are fine.
+  Install: `install.ps1`. Not there on Windows: systemd services and the `codex` shell wrapper. The
+  `claude` one **is** there — `install.ps1` step 5/8 dot-sources `scripts/shell/claude.ps1` and
+  `claude-conta.ps1` from the PowerShell profile — so a `claude` typed in PowerShell is trackable
+  like on Linux; one typed in another shell (Git Bash) is not, and app-created sessions are always
+  fine.
 - **Where psmux and tmux disagree about IDENTITY and TARGETS** (measured on psmux 3.3.7, 22/08/2026).
   These four are not cosmetic: three of them were live bugs, and the pattern is the same — a command
   the tmux docs say **fails** or **addresses one thing** quietly does something else.
@@ -594,6 +597,25 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     user's own native `attach` included. This is why the terminal panel's Windows teardown is
     **killing our own `tmux attach` process**: measured, it releases just that client, a client of
     another session stays attached, and the session keeps running.
+- **The pane's environment comes from the SERVER on tmux and from the CALLER on psmux — which is
+  why `CLAUDE_CONFIG_DIR` cannot be exported unconditionally** (measured on psmux 3.3.7,
+  22/08/2026). tmux gives a new session the env of whoever started the *server*, so `new_session`
+  sent `-e CLAUDE_CONFIG_DIR=<value>` **always**, the default included: without it, a server started
+  by a `claude-conta contaA` silently births every later session in contaA. psmux has neither half
+  of that — the pane inherits the **caller's** env (`ZZ=x tmux new-session …` → the pane sees
+  `ZZ=x`) and nothing crosses from one session to the next (a `-e` on session A is invisible to a
+  later B). And exporting the default there is not free: for Claude Code, `CLAUDE_CONFIG_DIR` set —
+  **even pointing at `~/.claude` itself** — means "read `.claude.json` from INSIDE that folder", a
+  file it then creates empty (measured here: `~/.claude.json` 52236 bytes, the real one, against
+  `~/.claude/.claude.json` 1259). So **every session created by the app on Windows landed on the
+  welcome screen** ("Select login method", theme picker) with the credential intact, reading the
+  wrong `settings.json` on the way (that is where the fullscreen TUI went). `tmux._e_config_dir` is
+  the one place that decides: on POSIX always (the argument list is byte-identical to before); on
+  psmux only when the value **differs** from `~/.claude`, or when the backend itself declares the
+  variable — the pane would inherit that one anyway, so omitting would not erase it. Same rule in
+  the Windows shell wrapper (`scripts/shell/claude.ps1`); the POSIX wrappers are untouched. The
+  fallback everywhere else already reads absence as `~/.claude` (hooks, sidecars, `projects/`), so
+  nothing else moves.
 - **Windows-only trap in the installer: encoding is per interpreter, and ASCII is never the answer.**
   Every launcher `install.ps1` writes carries a PATH inside it (checkout, python, `%LOCALAPPDATA%`
   log — the user's profile name). Measured by executing each file with an accented path, console

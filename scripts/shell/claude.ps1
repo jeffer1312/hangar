@@ -76,12 +76,19 @@ function claude {
     # sem repassar aqui, a sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao
     # contrario da key do motor, que vai pelo `cp-engine --exec` justamente pra nao aparecer em
     # /proc/<pid>/cmdline): isto e um caminho, nao um segredo.
-    # Passado SEMPRE, nao so quando o chamador tem a variavel: o multiplexador guarda o ambiente
-    # com que foi INICIADO, e omitir o `-e` numa sessao posterior nao remove a variavel — o pane
-    # nasceria na conta de uma sessao antiga. Chamador sem a variavel -> padrao explicito
-    # ($HOME/.claude), nunca string vazia (diretorio invalido/indefinido pro claude).
+    # SO quando o chamador tem a variavel. O padrao explicito ($HOME\.claude) que ficava aqui era
+    # medido como ERRADO em 22/08/2026: pro Claude Code, CLAUDE_CONFIG_DIR setado — mesmo apontando
+    # pro proprio ~/.claude — quer dizer "leia o .claude.json de DENTRO dessa pasta", que nasce
+    # vazio; sem a variavel ele le o ~/.claude.json, o de verdade (onboarding, tema, historico).
+    # Resultado do `-e` com o padrao: sessao na tela de boas-vindas ("Select login method") com a
+    # credencial intacta, e o settings.json lido da pasta errada junto.
+    # E omitir aqui NAO abre a porta pra conta vazar de outra sessao: no psmux o pane herda o
+    # ambiente de QUEM CHAMA, e nada passa de uma sessao pra outra (medido no psmux 3.3.7 — a
+    # mesma medicao esta em `_e_config_dir`, backend/app/tmux.py, que aplica esta regra do lado do
+    # app). Chamador com a variavel (`claude-conta`) segue mandando o `-e`: e o unico jeito de a
+    # conta chegar no pane, e ali o valor nunca e string vazia.
     if ($env:CLAUDE_CONFIG_DIR) { $cfg = @('-e', "CLAUDE_CONFIG_DIR=$($env:CLAUDE_CONFIG_DIR)") }
-    else { $cfg = @('-e', "CLAUDE_CONFIG_DIR=$HOME\.claude") }
+    else { $cfg = @() }
 
     # Sem `exec` e sem systemd-run, ao contrario do POSIX: nao ha shell intermediario dentro do
     # pane do psmux (ele roda o comando direto no ConPTY) e nao ha cgroup de servico pra escapar.
