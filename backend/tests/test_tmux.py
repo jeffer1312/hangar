@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -742,6 +743,47 @@ def test_paste_text_falha_no_load_buffer_nao_cola_nada():
 # e matando a janela no fim. O valor afirmado é exatamente o passado, nunca o do servidor tmux.
 
 
+def _espera_environ_do_pane(alvo: str, esperado: str, timeout: float = 5.0):
+    """Espera o `environ` do pane FICAR PRONTO, e falha explicando o que viu se nao ficar.
+
+    O `new-session -d` volta assim que a SESSAO existe; o processo do pane e forkado pelo servidor
+    tmux e so ganha o ambiente pedido no `exec`. Entre uma coisa e outra ha uma janela em que o
+    `#{pane_pid}` ja responde e `/proc/<pid>/environ` ou nao abre, ou volta vazio, ou ainda e o
+    ambiente do SERVIDOR tmux (sem a variavel). Ler uma vez so tornava este caso — o unico do
+    arquivo que sobe um pane de verdade — instavel na suite cheia: mesmo commit, mesma maquina,
+    passava ou falhava conforme a rodada. Sleep fixo trocaria a corrida por lentidao garantida, e
+    voltaria a falhar numa maquina mais carregada; aqui espera-se a CONDICAO, com falha explicita
+    quando o tempo estoura.
+
+    Variavel presente com valor ERRADO nao espera: `/proc/<pid>/environ` e o ambiente do exec e
+    nao muda depois, entao insistir so adiaria uma falha de verdade ate o timeout.
+    """
+    limite = time.monotonic() + timeout
+    ultimo_pid, ultimo_env = "", None
+    while True:
+        cp = tmux._run(["tmux", "display-message", "-p", "-t", f"={alvo}:", "#{pane_pid}"])
+        ultimo_pid = cp.stdout.strip()
+        if ultimo_pid.isdigit():
+            try:
+                bruto = Path(f"/proc/{ultimo_pid}/environ").read_bytes()
+            except OSError:
+                bruto = b""
+            if bruto:
+                ultimo_env = bruto.replace(b"\0", b"\n").decode("utf-8", "replace")
+                if esperado in ultimo_env:
+                    return ultimo_pid, ultimo_env
+                chave = esperado.split("=", 1)[0] + "="
+                achado = [l for l in ultimo_env.splitlines() if l.startswith(chave)]
+                if achado:
+                    pytest.fail(f"o pane nasceu com {achado!r}, e nao com {esperado!r}")
+        if time.monotonic() >= limite:
+            pytest.fail(f"{timeout}s sem {esperado!r} no ambiente do pane de {alvo!r}: "
+                        f"pane_pid={ultimo_pid!r}, environ="
+                        + ("nao legivel" if ultimo_env is None
+                           else f"{len(ultimo_env.splitlines())} variaveis"))
+        time.sleep(0.02)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="le /proc/<pid>/environ, que so existe no Linux")
 def test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane():
     # Cenario montado AQUI, nao herdado: zera a sonda do scope pra ela rodar contra o `RUN` de
@@ -755,11 +797,8 @@ def test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane():
     alvo = tmux.new_hidden_shell(f"prova-cfg-{uuid.uuid4().hex[:6]}", "/tmp", config_dir=cfg)
     assert alvo is not None
     try:
-        pane_pid = tmux._run(["tmux", "display-message", "-p", "-t", f"={alvo}:",
-                              "#{pane_pid}"]).stdout.strip()
+        pane_pid, env = _espera_environ_do_pane(alvo, f"CLAUDE_CONFIG_DIR={cfg}")
         assert pane_pid.isdigit()
-        env = Path(f"/proc/{pane_pid}/environ").read_bytes()
-        env = env.replace(b"\0", b"\n").decode("utf-8", "replace")
         assert f"CLAUDE_CONFIG_DIR={cfg}" in env
     finally:
         tmux.kill_session(alvo)
