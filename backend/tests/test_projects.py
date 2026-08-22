@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -94,3 +95,112 @@ def test_stop_command_falho_mata_pane_e_sobe_erro(config, monkeypatch):
     with pytest.raises(projects.ProjectError):
         projects.stop("a")
     assert killed == ["/tmp/a"]  # pane morre MESMO com stop_command quebrado
+
+
+# --- stop_command que o cmd.exe nem chega a rodar (Windows) -------------------------------------
+# O `/bin/sh` chumbado nunca rodava no Windows; agora roda pelo COMSPEC, e um stop_command com
+# sintaxe POSIX (projeto vindo de uma maquina Linux) falha ali sem ninguem ver: o pane morre, a UI
+# diz "parado" e o processo de verdade fica orfao. Os casos abaixo forcam `os.name == "nt"` pra
+# valerem tambem no Linux — o ramo POSIX nao tem nem a chamada.
+
+def _cp(rc: int, stderr: bytes = b""):
+    import subprocess as sp
+    return sp.CompletedProcess(["cmd"], rc, b"", stderr)
+
+
+def test_stop_command_que_o_windows_nao_tem_vira_erro_visivel(config, monkeypatch, tmp_path):
+    """Sem mock de `which`: o PATH aponta pra uma pasta vazia e o comando nao existe em lugar
+    nenhum — o mesmo que o `pkill` e nesta maquina.
+
+    De proposito nao se toca em `projects.shutil` aqui: assim o caso roda IGUAL contra o codigo
+    velho, que nem importa shutil, e o que ele mede la e o defeito de verdade (stop nao levanta
+    nada, a UI diz "parado", o processo fica orfao) — nao um AttributeError de simbolo novo.
+    """
+    raiz = str(tmp_path)
+    vazio = tmp_path / "path-vazio"
+    vazio.mkdir()
+    monkeypatch.setenv("PATH", str(vazio))
+    config({"a": {"cwd": raiz, "command": "x",
+                  "stop_command": "pkill-que-nao-existe -f 'node server.js'"}})
+    monkeypatch.setattr(projects.os, "name", "nt")
+    monkeypatch.setattr(runner, "stop_run", lambda cwd: None)
+    monkeypatch.setattr(projects.subprocess, "run",
+                        lambda *a, **k: _cp(1, "nao e reconhecido".encode("cp850")))
+
+    with pytest.raises(projects.ProjectError) as e:
+        projects.stop("a")
+    assert "pkill-que-nao-existe" in e.value.detail and "orfao" in e.value.detail
+    assert e.value.status == 500
+
+
+def test_rc_diferente_de_zero_com_o_comando_existindo_segue_calado(config, monkeypatch, tmp_path):
+    """`taskkill /IM x` sem processo devolve **128** (medido) — o mesmo "nao havia o que matar" que
+    faz o `pkill` devolver 1 no Linux. Acusar por rc faria toda parada de projeto ja parado virar
+    erro na tela."""
+    raiz = str(tmp_path)
+    config({"a": {"cwd": raiz, "command": "x", "stop_command": "taskkill /F /IM node.exe"}})
+    monkeypatch.setattr(projects.os, "name", "nt")
+    monkeypatch.setattr(projects.shutil, "which", lambda n, path=None: r"C:\W\taskkill.exe")
+    monkeypatch.setattr(runner, "stop_run", lambda cwd: None)
+    monkeypatch.setattr(projects.subprocess, "run", lambda *a, **k: _cp(128, b"nao encontrado"))
+
+    projects.stop("a")                       # nao levanta
+
+
+def test_script_ao_lado_do_projeto_nao_e_acusado_de_inexistente(config, monkeypatch, tmp_path):
+    """O cmd.exe procura no diretorio ATUAL antes do PATH, e o subprocess roda com cwd no projeto:
+    sem o cwd na busca, um `stop.bat` do proprio projeto viraria "o Windows nao tem"."""
+    (tmp_path / "stop.bat").write_text("@exit /b 1\r\n", encoding="ascii")
+    vistos = {}
+
+    def which(nome, path=None):
+        vistos["path"] = path
+        from pathlib import Path as P
+        for raiz in (path or "").split(os.pathsep):
+            if raiz and (P(raiz) / nome).is_file():
+                return str(P(raiz) / nome)
+        return None
+
+    config({"a": {"cwd": str(tmp_path), "command": "x", "stop_command": "stop.bat"}})
+    monkeypatch.setattr(projects.os, "name", "nt")
+    monkeypatch.setattr(projects.shutil, "which", which)
+    monkeypatch.setattr(runner, "stop_run", lambda cwd: None)
+    monkeypatch.setattr(projects.subprocess, "run", lambda *a, **k: _cp(1))
+
+    projects.stop("a")                       # nao levanta
+    assert str(tmp_path) in vistos["path"]   # o cwd entrou na busca
+
+
+def test_posix_nao_ganha_checagem_nenhuma(config, monkeypatch, tmp_path):
+    """No Linux o caminho fica byte-identico: rc != 0 nem e olhado (o `pkill` devolve 1 quando ja
+    nao ha o que matar, e isso sempre foi silencio aqui)."""
+    config({"a": {"cwd": str(tmp_path), "command": "x", "stop_command": "pkill -f node"}})
+    monkeypatch.setattr(projects.os, "name", "posix")
+    monkeypatch.setattr(projects.shutil, "which",
+                        lambda *a, **k: pytest.fail("POSIX nao pode consultar o PATH aqui"))
+    monkeypatch.setattr(runner, "stop_run", lambda cwd: None)
+    monkeypatch.setattr(projects.subprocess, "run", lambda *a, **k: _cp(1))
+
+    projects.stop("a")                       # nao levanta
+
+
+@pytest.mark.parametrize("linha, esperado", [
+    ('"C:\\Program Files\\app\\stop.exe" --tudo', "C:\\Program Files\\app\\stop.exe"),
+    ("taskkill /F /IM node.exe", "taskkill"),
+    ("   ", ""),
+])
+def test_primeiro_token_respeita_aspas(linha, esperado):
+    assert projects._primeiro_token(linha) == esperado
+
+
+def test_builtin_do_cmd_nao_e_procurado_no_path(config, monkeypatch, tmp_path):
+    """`cd ... && taskkill ...` e stop_command legitimo, e `cd` nao e arquivo nenhum."""
+    config({"a": {"cwd": str(tmp_path), "command": "x",
+                  "stop_command": "cd . && taskkill /F /IM node.exe"}})
+    monkeypatch.setattr(projects.os, "name", "nt")
+    monkeypatch.setattr(projects.shutil, "which",
+                        lambda *a, **k: pytest.fail("builtin nao se procura no PATH"))
+    monkeypatch.setattr(runner, "stop_run", lambda cwd: None)
+    monkeypatch.setattr(projects.subprocess, "run", lambda *a, **k: _cp(128))
+
+    projects.stop("a")                       # nao levanta
