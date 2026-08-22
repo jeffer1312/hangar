@@ -166,9 +166,9 @@ class ConPty:
         # `TerminateProcess` e `restype = BOOL`: falha volta como 0, nunca como excecao. Um
         # `except OSError` aqui seria codigo morto, e a falha passaria batida ate o
         # `ClosePseudoConsole` — que trava esperando um cliente que continua vivo.
+        erro_matar = None
         if not k.TerminateProcess(self._pi.hProcess, 1):
-            _log.warning("conpty: TerminateProcess falhou no pid=%s: %s",
-                         self.pid, ctypes.WinError(ctypes.get_last_error()))
+            erro_matar = ctypes.WinError(ctypes.get_last_error())
         saiu = False
         try:
             saiu = _winapi.WaitForSingleObject(self._pi.hProcess, 3000) == _winapi.WAIT_OBJECT_0
@@ -177,10 +177,13 @@ class ConPty:
         if saiu:
             k.ClosePseudoConsole(self._hpc)
         else:
+            # Quem avisa e o WAIT, nao o TerminateProcess: com o filho ja saido sozinho (o usuario
+            # digitou `exit`) ele devolve 0 com ERROR_ACCESS_DENIED — medido 3 de 3 no Windows —, e
+            # avisar ali punha um WARNING em TODO fechamento de painel, afogando a falha de verdade.
             # Vazar o pseudoconsole (um `conhost.exe`) e o mal menor: fechar com o filho vivo
             # pendura esta thread pra sempre, e ela e um worker do `to_thread` do backend inteiro.
-            _log.warning("conpty: filho pid=%s nao saiu em 3s; pseudoconsole nao foi fechado",
-                         self.pid)
+            _log.warning("conpty: filho pid=%s nao saiu em 3s; pseudoconsole nao foi fechado"
+                         " (TerminateProcess: %s)", self.pid, erro_matar or "ok")
         for h in (self._pi.hProcess, self._pi.hThread):
             try:
                 _winapi.CloseHandle(h)

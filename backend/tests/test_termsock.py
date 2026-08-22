@@ -1035,6 +1035,20 @@ def test_conpty_encerrar_fecha_o_pseudoconsole_quando_o_filho_sai(monkeypatch):
     assert k.fechou_pseudoconsole
 
 
+def test_conpty_encerrar_e_silencioso_com_o_filho_ja_saido_sozinho(monkeypatch, caplog):
+    """Fechar o painel depois de um `exit` e o caminho NORMAL, e nao pode virar aviso.
+
+    Com o filho ja morto, `TerminateProcess` devolve 0 com ERROR_ACCESS_DENIED — medido 3 de 3 no
+    Windows. Avisar ali punha um WARNING em todo fechamento de painel, e uma falha de verdade
+    ficaria indistinguivel do ruido.
+    """
+    pty_, k = _conpty_falso(monkeypatch, mata=False, saiu=True)
+    with caplog.at_level(logging.WARNING):
+        pty_.encerrar()
+    assert k.fechou_pseudoconsole
+    assert caplog.text == ""
+
+
 def test_conpty_encerrar_nao_fecha_o_pseudoconsole_com_o_filho_vivo(monkeypatch, caplog):
     """`ClosePseudoConsole` TRAVA esperando o cliente sair (microsoft/terminal#17716).
 
@@ -1046,5 +1060,5 @@ def test_conpty_encerrar_nao_fecha_o_pseudoconsole_com_o_filho_vivo(monkeypatch,
     with caplog.at_level(logging.WARNING):
         pty_.encerrar()
     assert not k.fechou_pseudoconsole
-    assert "TerminateProcess falhou" in caplog.text
     assert "nao saiu em 3s" in caplog.text
+    assert "TerminateProcess" in caplog.text      # o erro de matar vai junto, e util aqui
