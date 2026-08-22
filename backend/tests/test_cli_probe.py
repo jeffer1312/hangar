@@ -16,6 +16,21 @@ def _make_script(tmp_path, name, content):
 
 
 def _make_sh(tmp_path, name, exit_code=0, sleep=None):
+    """Executavel de mentira que a sonda consiga RODAR nesta plataforma.
+
+    A sonda executa o candidato de verdade (`[caminho, "--version"]`), entao o duble precisa
+    ser executavel de verdade — nao basta existir. No POSIX isso e um `#!/bin/sh` com o bit de
+    exec. No Windows nao ha bit de exec e um arquivo de TEXTO chamado `claude` (ou ate
+    `claude.EXE`) devolve WinError 193 na hora de rodar: o que o sistema executa la e `.cmd`,
+    e a sonda ja procura por PATHEXT. Por isso o nome ganha a extensao — sem ela o caso ficaria
+    afirmando "nao instalado" e nao provaria nada da sonda.
+
+    O `sleep` vira `ping` porque o `timeout` do Windows recusa stdin redirecionado (e a sonda
+    roda com capture_output).
+    """
+    if os.name == "nt":
+        corpo = f"@echo off\nping -n {int(sleep) + 1} 127.0.0.1 > nul\n" if sleep is not None else "@echo off\n"
+        return _make_script(tmp_path, name + ".cmd", corpo + f"exit /b {exit_code}\n")
     if sleep is not None:
         content = f"#!/bin/sh\nsleep {sleep}\nexit {exit_code}\n"
     else:
@@ -84,12 +99,17 @@ def test_sem_permissao_pula_pro_proximo_candidato(tmp_path, monkeypatch):
     dir1.mkdir()
     dir2.mkdir()
     # d1/claude existe mas sem exec
-    p1 = dir1 / "claude"
-    p1.write_text("#!/bin/sh\nexit 0\n")
-    p1.chmod(0o644)  # sem exec
+    # No POSIX o candidato ruim e um script SEM o bit de exec (PermissionError). No Windows nao
+    # ha bit de exec: o equivalente e um arquivo de texto com nome executavel, que a sonda tenta
+    # rodar e recebe WinError 193 (ENOEXEC). Os dois caem no mesmo ramo do `except` e provam a
+    # mesma coisa: candidato ruim NAO encerra a busca, a sonda segue pro proximo diretorio.
+    p1 = dir1 / ("claude.EXE" if os.name == "nt" else "claude")
+    p1.write_bytes(b"\x7fELF nao sou executavel deste sistema\n")
+    if os.name != "nt":
+        p1.chmod(0o644)  # sem exec
     # d2/claude é bom
     _make_sh(dir2, "claude", exit_code=0)
-    monkeypatch.setattr(cli_probe, "_path_login", f"{dir1}:{dir2}")
+    monkeypatch.setattr(cli_probe, "_path_login", os.pathsep.join([str(dir1), str(dir2)]))
     res = cli_probe.sondar_providers()
     assert res["claude"]["disponivel"] is True
     assert res["claude"]["motivo"] is None
@@ -124,8 +144,15 @@ def test_windows_path_com_drive_e_pathext(tmp_path, monkeypatch):
     monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
     dir1 = tmp_path / "bin1"
     dir1.mkdir()
-    _make_sh(dir1, "claude.EXE", exit_code=0)
-    _make_sh(dir1, "codex.CMD", exit_code=0)
+    # No Linux o shebang roda com qualquer extensao, entao `.EXE`/`.CMD` sao so nomes. No Windows
+    # eles precisam ser mesmo executaveis do sistema — `_make_sh` ja cuida disso e cria `.cmd`,
+    # que esta no PATHEXT forjado abaixo.
+    if os.name == "nt":
+        _make_sh(dir1, "claude")
+        _make_sh(dir1, "codex")
+    else:
+        _make_sh(dir1, "claude.EXE", exit_code=0)
+        _make_sh(dir1, "codex.CMD", exit_code=0)
     # PATH com drive letter + ; + dir com binários
     fake_path = f"C:\\Users\\jefferson\\bin;{dir1}"
     monkeypatch.setattr(cli_probe, "_path_login", fake_path)
