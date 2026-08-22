@@ -585,7 +585,9 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
     apontaria pra sessao errada.
     """
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    ticket = Path(base) / ".claude-pocket-kimi" / f"{pane_id.lstrip('%')}.json"
+    # Mesma chave do bilhete do Pi, pelo mesmo motivo: no psmux o %N nao e unico e dois panes Kimi
+    # dividiriam um bilhete so (ver _chave_do_bilhete).
+    ticket = Path(base) / ".claude-pocket-kimi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     try:
         data = json.loads(ticket.read_text(encoding="utf-8"))   # mesmo motivo do pi_session_file
         if not isinstance(data, dict):
