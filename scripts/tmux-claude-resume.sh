@@ -123,8 +123,13 @@ save() {
       pi)     id=$(ticket_field pi "$pane" "$AGENT_PID" id) || id="" ;;
     esac
     [ -n "$id" ] || continue
-    cfg=$(_env_of "$AGENT_PID" CLAUDE_CONFIG_DIR)
-    engine=$(_env_of "$AGENT_PID" CP_ENGINE)
+    # `|| cfg=""`: o processo pode morrer ENTRE o scan_pane e esta leitura — e o instante mais
+    # provavel disso e o desligamento, que e justamente quando o resurrect salva. Sem a guarda o
+    # `tr` falha, o pipefail contamina a atribuicao e o `set -e` mata o save() aqui, calado (todo
+    # log deste arquivo vive no restore()). Como o MAP so e gravado no `mv` do fim, uma sessao que
+    # racea derruba a atualizacao de TODAS as outras daquele ciclo. Mesma guarda do _cmdline.
+    cfg=$(_env_of "$AGENT_PID" CLAUDE_CONFIG_DIR) || cfg=""
+    engine=$(_env_of "$AGENT_PID" CP_ENGINE) || engine=""
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$AGENT_PROV" "$id" "$cfg" "$engine" >> "$tmp"
   done < <(tmux list-sessions -F '#{session_name} #{pane_id} #{pane_pid}' 2>/dev/null)
   mv "$tmp" "$MAP"
