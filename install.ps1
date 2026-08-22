@@ -51,6 +51,84 @@ function Pergunte($texto) {
     return ($r -eq '' -or $r -match '^[SsYy]')
 }
 
+function Escrever-Texto($caminho, $texto, [switch]$ComBom) {
+    <#
+      Escrita de texto do instalador. Existe porque `Set-Content`/`Out-File`/`Add-Content` NAO
+      escrevem a mesma coisa no PowerShell 5.1 e no 7 — medido nesta VM em 22/08/2026
+      (5.1.26100.4202 vs 7.6.5), gravando a mesma string com acento:
+
+        chamada                       5.1                      7.6.5
+        Set-Content -Encoding UTF8    UTF-8 COM BOM            UTF-8 sem BOM
+        Out-File    -Encoding utf8    UTF-8 COM BOM            UTF-8 sem BOM
+        Set-Content (sem -Encoding)   ANSI (cp1252)            UTF-8 sem BOM
+        Add-Content (sem -Encoding)   ANSI (cp1252)            UTF-8 sem BOM
+
+      Ou seja: o MESMO instalador produzia arquivos diferentes conforme o PowerShell de quem
+      rodou. Aqui o encoding e dito, e o BOM e escolha de quem chama — porque as duas respostas
+      existem: arquivo LIDO PELO PowerShell precisa dele (ver Perfis-Do-Usuario), e .env / JSON /
+      script com shebang nao podem te-lo (o BOM ja fez o CP_AUTH_TOKEN virar chave invisivel aqui,
+      install.ps1:241).
+    #>
+    $pai = Split-Path -Parent $caminho
+    if ($pai) { New-Item -ItemType Directory -Force -Path $pai | Out-Null }
+    [System.IO.File]::WriteAllText($caminho, $texto, (New-Object System.Text.UTF8Encoding $ComBom.IsPresent))
+}
+
+function Ler-Texto($caminho) {
+    <#
+      Le respeitando o que o arquivo E, nao o que a versao do PowerShell chuta. `Get-Content` sem
+      BOM assume ANSI no 5.1 e UTF-8 no 7: o mesmo arquivo, duas leituras. Como este instalador
+      REESCREVE o perfil inteiro, chutar errado corrompe o que ja estava la (o comentario do
+      Set-EnvKey conta a mesma historia com o token acentuado).
+
+      Ordem: BOM manda; sem BOM, tenta UTF-8 ESTRITO (throwOnInvalidBytes) e so entao cp1252 —
+      texto valido em UTF-8 quase nunca e cp1252 por acidente, e o contrario nao vale.
+    #>
+    if (-not (Test-Path $caminho)) { return $null }
+    $bytes = [System.IO.File]::ReadAllBytes($caminho)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+    }
+    try {
+        return (New-Object System.Text.UTF8Encoding $false, $true).GetString($bytes)
+    } catch {
+        return [System.Text.Encoding]::GetEncoding(1252).GetString($bytes)
+    }
+}
+
+function Perfis-Do-Usuario {
+    <#
+      TODOS os perfis que precisam do bloco, nao so o da versao que esta rodando.
+
+      `$PROFILE.CurrentUserAllHosts` aponta pra pastas DIFERENTES em cada versao (medido aqui):
+        5.1 -> ...\Documents\WindowsPowerShell\profile.ps1
+        7.x -> ...\Documents\PowerShell\profile.ps1
+      Instalar pelo pwsh 7 deixava todo terminal 5.1 — o padrao do Windows — sem o wrapper, e
+      nada dizia isso: a pessoa abria o terminal de sempre e a sessao continuava invisivel pro app.
+
+      O caminho da outra versao e DERIVADO do atual (troca so o nome da pasta), pra herdar um
+      Documents redirecionado por OneDrive/politica em vez de remontar o caminho na mao. A outra
+      versao so entra se ela EXISTE na maquina: o 5.1 vem no Windows; o 7 pode estar so como app
+      da Store (medido: winget instala em %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe, que nao
+      aparece no PATH de sessao SSH nao-interativa — procurar so por `pwsh` da falso negativo).
+    #>
+    $atual = $PROFILE.CurrentUserAllHosts
+    $alvos = @($atual)
+    $pasta = Split-Path -Parent $atual
+    $nome = Split-Path -Leaf $pasta
+    if ($nome -eq 'WindowsPowerShell') {
+        $temSete = (Tem 'pwsh') -or
+                   (Test-Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe')) -or
+                   (Test-Path (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'))
+        if ($temSete) { $alvos += (Join-Path (Split-Path -Parent $pasta) 'PowerShell\profile.ps1') }
+    } elseif ($nome -eq 'PowerShell') {
+        # O 5.1 vem no Windows, entao o perfil dele SEMPRE entra: e o terminal que a pessoa abre
+        # por padrao, e o que o proprio app usa pra criar sessao.
+        $alvos += (Join-Path (Split-Path -Parent $pasta) 'WindowsPowerShell\profile.ps1')
+    }
+    return $alvos
+}
+
 function Atualiza-Path {
     # winget grava o PATH no registro, mas o PowerShell JA ABERTO segue com o antigo -> o
     # programa recem-instalado "nao existe". Reler os dois escopos evita mandar fechar o terminal
@@ -543,7 +621,10 @@ if ($precisa) {
     } else {
         # A marca so e gravada com o build VERIFICADO: marca de build que falhou faz a proxima
         # rodada pular um dist quebrado, que e exatamente o estrago descrito acima.
-        if ($marca) { Set-Content -Path $marcaArq -Value $marca -NoNewline -Encoding UTF8 }
+        # Escrever-Texto (sem BOM) em vez de `Set-Content -Encoding UTF8`, que poe BOM no 5.1 e
+        # nao poe no 7: a marca e comparada com o que o git devolve, e arquivo que muda de bytes
+        # conforme quem rodou o instalador e pegadinha esperando acontecer.
+        if ($marca) { Escrever-Texto $marcaArq $marca }
         Ok 'buildado em frontend\dist\'
     }
 } else {
@@ -557,25 +638,65 @@ if ($precisa) {
 Titulo '5/8 Wrapper do claude (sessao aberta por voce aparece no app)'
 $marca = '# >>> hangar >>>'
 $marcaFim = '# <<< hangar <<<'
-$perfil = $PROFILE.CurrentUserAllHosts
-$jaTem = (Test-Path $perfil) -and (Select-String -Path $perfil -Pattern ([regex]::Escape($marca)) -Quiet)
-if ($jaTem) {
-    # Bloco antigo (instalado antes do claude-conta existir) nao deixa o wrapper novo de fora:
-    # reescreve o conteudo ENTRE as marcas, preservando o resto do perfil.
-    $linhas = Get-Content -Path $perfil
-    $ini = [Array]::IndexOf($linhas, $marca)
-    $fim = [Array]::IndexOf($linhas, $marcaFim)
-    $temConta = ($linhas -match 'claude-conta\.ps1').Count -gt 0
-    if (-not $temConta -and $ini -ge 0 -and $fim -gt $ini) {
-        if ($ini -gt 0) { $antes = @($linhas[0..($ini - 1)]) } else { $antes = @() }
-        if ($fim -lt ($linhas.Count - 1)) { $depois = @($linhas[($fim + 1)..($linhas.Count - 1)]) } else { $depois = @() }
-        $bloco = @($marca, ". `"$raiz\scripts\shell\claude.ps1`"", ". `"$raiz\scripts\shell\claude-conta.ps1`"", $marcaFim)
-        Set-Content -Path $perfil -Value ($antes + $bloco + $depois)
-        Ok 'bloco do $PROFILE atualizado (claude-conta incluido)'
-    } else {
-        Ok 'bloco ja presente no seu $PROFILE'
+
+function Instalar-Bloco-No-Perfil($perfil) {
+    <#
+      Poe (ou atualiza) o bloco do wrapper NUM perfil. Devolve um texto curto pro log.
+
+      O encoding e UTF-8 COM BOM, e essa e a unica escolha que funciona nas DUAS versoes. Medido
+      aqui em 22/08/2026 com um caminho de repo contendo acento (C:\...\Joao com til), fazendo cada
+      PowerShell carregar o mesmo perfil:
+
+        perfil gravado como   PowerShell 5.1        PowerShell 7.6.5
+        ANSI (cp1252)         carrega               FALHA (caminho vira "Jo?o")
+        UTF-8 SEM BOM         FALHA                 carrega
+        UTF-8 COM BOM         carrega               carrega
+
+      E o que o instalador fazia antes era exatamente o pior caso: `Add-Content`/`Set-Content` sem
+      -Encoding gravam ANSI no 5.1 e UTF-8 sem BOM no 7 — cada versao escrevia o formato que a
+      OUTRA nao le. Aqui o BOM e desejado; no .env e no settings.json ele e veneno (install.ps1:241).
+    #>
+    $texto = Ler-Texto $perfil
+    $bloco = @($marca,
+               ". `"$raiz\scripts\shell\claude.ps1`"",
+               ". `"$raiz\scripts\shell\claude-conta.ps1`"",
+               $marcaFim) -join "`r`n"
+
+    if ($null -ne $texto -and $texto.Contains($marca)) {
+        # Bloco antigo (instalado antes do claude-conta existir) nao pode ficar pra tras: reescreve
+        # o conteudo ENTRE as marcas e preserva o resto do arquivo.
+        $linhas = $texto -split "`r?`n"
+        $ini = [Array]::IndexOf($linhas, $marca)
+        $fim = [Array]::IndexOf($linhas, $marcaFim)
+        $precisa = -not ($texto -match 'claude-conta\.ps1')
+        if ($ini -ge 0 -and $fim -gt $ini) {
+            if ($ini -gt 0) { $antes = @($linhas[0..($ini - 1)]) } else { $antes = @() }
+            if ($fim -lt ($linhas.Count - 1)) { $depois = @($linhas[($fim + 1)..($linhas.Count - 1)]) } else { $depois = @() }
+            $novoTexto = (@($antes) + @($bloco) + @($depois)) -join "`r`n"
+            # Reescreve mesmo quando o CONTEUDO ja esta certo: o arquivo pode estar em ANSI ou em
+            # UTF-8 sem BOM (escrito por uma versao anterior deste instalador, ou pela outra versao
+            # do PowerShell), e ai o bloco existe mas o terminal nao consegue LER o caminho.
+            Escrever-Texto $perfil $novoTexto -ComBom
+            if ($precisa) { return 'atualizado (claude-conta incluido)' }
+            return 'ja presente (encoding normalizado)'
+        }
+        # Marca de abertura sem a de fechamento: arquivo mexido na mao. Nao adivinha onde o bloco
+        # termina — dizer isso e melhor que reescrever o perfil de alguem por palpite.
+        return 'MEXIDO NA MAO (marca de fim ausente) - nao toquei'
     }
-} elseif (Pergunte '  Instalar (recomendado)?') {
+
+    $prefixo = ''
+    if ($null -ne $texto -and $texto.Trim()) { $prefixo = $texto.TrimEnd() + "`r`n`r`n" }
+    Escrever-Texto $perfil ($prefixo + $bloco + "`r`n") -ComBom
+    return 'bloco adicionado'
+}
+
+$perfis = Perfis-Do-Usuario
+$jaTem = $false
+foreach ($pf in $perfis) {
+    if ((Test-Path $pf) -and ((Ler-Texto $pf) -match [regex]::Escape($marca))) { $jaTem = $true }
+}
+if ($jaTem -or (Pergunte '  Instalar (recomendado)?')) {
     # O Windows vem com ExecutionPolicy = Restricted, que recusa carregar QUALQUER perfil. Escrever
     # o bloco assim mesmo nao so deixaria o wrapper sem carregar: todo terminal novo passaria a
     # cuspir um PSSecurityException por causa de um arquivo que nos criamos. Medido nesta maquina.
@@ -596,16 +717,13 @@ if ($jaTem) {
         }
     }
     if ($podeEscrever) {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $perfil) | Out-Null
-    Add-Content -Path $perfil -Value @"
-
-$marca
-. "$raiz\scripts\shell\claude.ps1"
-. "$raiz\scripts\shell\claude-conta.ps1"
-# <<< hangar <<<
-"@
-    Ok "bloco adicionado em $perfil"
-    Nota 'Vale nos terminais NOVOS - este aqui ainda esta com o perfil antigo.'
+        # TODOS os perfis, nao so o da versao que esta rodando: instalar pelo pwsh 7 deixava o
+        # terminal 5.1 — o padrao do Windows, e o que o proprio app usa — sem o wrapper, calado.
+        foreach ($pf in $perfis) {
+            $r = Instalar-Bloco-No-Perfil $pf
+            if ($r -like 'MEXIDO*') { Falta "$pf : $r" } else { Ok "$pf : $r" }
+        }
+        Nota 'Vale nos terminais NOVOS - este aqui ainda esta com o perfil antigo.'
     }
 } else {
     Nota 'pulado - sessao aberta no terminal nao vai aparecer no app'
@@ -672,7 +790,10 @@ if (-not (Test-Path $slJs)) {
     $cfg = $null
     if (Test-Path $settingsClaude) {
         try {
-            $bruto = Get-Content $settingsClaude -Raw
+            # Ler-Texto e nao `Get-Content -Raw`: sem BOM o Get-Content assume ANSI no 5.1 e
+            # UTF-8 no 7, e como este bloco REESCREVE o arquivo inteiro, o chute errado corrompia
+            # todo acento que ja estava la (mesma historia do token no Set-EnvKey).
+            $bruto = Ler-Texto $settingsClaude
             if ($bruto.Trim()) { $cfg = $bruto | ConvertFrom-Json }
         } catch {
             Falta 'settings.json do Claude ilegivel - nao vou reescrever por cima'
@@ -689,7 +810,12 @@ if (-not (Test-Path $slJs)) {
             if ($atual) { Copy-Item $settingsClaude "$settingsClaude.bak" -Force }
             $valor = New-Object psobject -Property @{ type = 'command'; command = $cmdSl }
             $cfg | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue $valor -Force
-            $cfg | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsClaude -Encoding UTF8
+            # SEM BOM, e isto nao e preferencia: `Set-Content -Encoding UTF8` poe BOM no 5.1 e
+            # nao poe no 7 (medido), e quem le este arquivo e o Claude Code, em Node — medido
+            # aqui que `JSON.parse` de um arquivo com BOM levanta
+            # "Unexpected token, is not valid JSON". Ou seja, instalar pelo 5.1 podia deixar o
+            # settings.json do Claude ilegivel pra ele.
+            Escrever-Texto $settingsClaude ($cfg | ConvertTo-Json -Depth 20)
             Ok 'statusline configurada no ~/.claude/settings.json'
             Nota 'Vale nas sessoes NOVAS do Claude Code.'
             # Mesmo aviso do Linux: o caminho do node fica CRAVADO no settings. Trocar de versao
