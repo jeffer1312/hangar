@@ -3,6 +3,9 @@
 Tudo roda contra um HOME falso (`tmp_path`) — nenhum teste aqui pode encostar no ~/.pi,
 ~/.kimi-code ou ~/.codex de verdade, que têm as chaves do usuário dentro.
 """
+import os
+
+import pytest
 import json
 import stat
 import tomllib
@@ -127,6 +130,12 @@ def test_agente_nao_instalado_nao_e_erro(tmp_path):
     assert list(tmp_path.iterdir()) == []  # não criou config pra agente que não existe
 
 
+# LACUNA VISIVEL: estes arquivos guardam a CHAVE de API do provedor, e no Windows eles NAO
+# ficam protegidos — nao ha bit de modo la (quem decide e a ACL) e a ACL equivalente ainda nao
+# esta implementada. Mesmo tratamento do peers.json e do arquivo de conexao do Pi: a falta fica
+# escrita, em vez de sumir atras de um assert que nao roda.
+@pytest.mark.skipif(os.name != "posix",
+                    reason="modo 0600 nao existe no Windows; a protecao por ACL ainda nao existe")
 def test_modo_0600_continua_0600(tmp_path):
     """O config do Kimi tem API key em texto puro; virar 0644 pela nossa escrita é vazamento."""
     _homes(tmp_path, "kimi", "pi")

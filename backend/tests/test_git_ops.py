@@ -1,4 +1,5 @@
 """Cobertura do git_ops: list/switch/action contra um repo temporario + rejeicoes e erro de binario."""
+import os
 import pytest
 
 from app import git_ops
@@ -755,6 +756,8 @@ def test_untracked_com_acento_e_com_espaco_aparece(tmp_path):
     assert "espaco" in git_ops.path_diff(d, "com espaco.txt", "nao_commitado")["diff"]
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="chmod(0) e no-op no Windows: o arquivo segue legivel (quem nega e a ACL)")
 def test_untracked_ilegivel_nao_vira_diff_vazio(tmp_path):
     d, _f = _repo_com_upstream(tmp_path)
     alvo = tmp_path / "trab" / "trancado.txt"

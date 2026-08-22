@@ -4,6 +4,7 @@ O download é trocado; o que se testa é o parse do HTML e a decisão de estado.
 abaixo é o do SSR do SolidJS que o painel emite (`chave:$R[n]={...usagePercent:..resetInSec:..}`),
 o mesmo que o pacote pi-quotas casa.
 """
+import os
 import time
 
 import pytest
@@ -83,8 +84,12 @@ def test_config_grava_le_e_apaga(tmp_path, monkeypatch):
     assert opencode_cota.config_de("chave:oc") is None
     opencode_cota.definir_config("chave:oc", "ws-9", "abc123")
     assert opencode_cota.config_de("chave:oc") == {"workspace_id": "ws-9", "auth_cookie": "abc123"}
-    # O arquivo guarda cookie de sessão: 0600, nunca 0644.
-    assert oct((tmp_path / ".claude-pocket-opencode.json").stat().st_mode)[-3:] == "600"
+    # O arquivo guarda cookie de sessão: 0600, nunca 0644. No Windows nao ha bit de modo (o
+    # st_mode volta 0o666 e quem decide e a ACL), e a protecao equivalente ainda NAO existe — a
+    # lacuna fica escrita aqui em vez de virar um assert que nao roda. Mesmo tratamento do
+    # peers.json e do config dos agentes.
+    if os.name == "posix":
+        assert oct((tmp_path / ".claude-pocket-opencode.json").stat().st_mode)[-3:] == "600"
     opencode_cota.definir_config("chave:oc", "", "")
     assert opencode_cota.config_de("chave:oc") is None
 

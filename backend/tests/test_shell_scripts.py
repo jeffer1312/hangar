@@ -4,6 +4,7 @@
 dropava o motor porque `pre` só era montado DEPOIS do early-return dessas flags — achado só testando
 à mão). Sem isto no `pytest`, nada impede o mesmo bug de voltar num refactor futuro do wrapper.
 """
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,6 +28,12 @@ def test_wrappers_sh():
 def test_statusline_sh():
     if not shutil.which("node"):
         pytest.skip("precisa de node no PATH")
+    # O script tem shebang, e shebang so vale no POSIX: no Windows o Popen devolve "WinError 193:
+    # nao e um aplicativo Win32 valido" antes de o script rodar. Chamar pelo bash do Git seria
+    # outro teste (o do bash, nao o do statusline) e esconderia a diferenca; o que o caso prova —
+    # o contrato da statusline — vale igual nos dois, e quem o roda e o Linux.
+    if os.name != "posix":
+        pytest.skip("script com shebang: o Windows nao executa .sh direto")
     r = subprocess.run([str(REPO / "scripts" / "test-statusline.sh")],
                         cwd=REPO, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
