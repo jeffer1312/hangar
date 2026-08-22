@@ -1,4 +1,4 @@
-﻿// Tempo relativo curto a partir de um timestamp epoch em segundos, no idioma escolhido
+// Tempo relativo curto a partir de um timestamp epoch em segundos, no idioma escolhido
 // (as frases sao mensagens; a data acima de 24h usa o intlLocale).
 // Mesma semântica do antigo formatActivity do SessionCard, agora compartilhada.
 export function relativeTime(ts: number | null | undefined): string {
