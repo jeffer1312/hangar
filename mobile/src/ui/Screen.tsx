@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 export function Screen({ children }: { children: React.ReactNode }) {
   return (
     <View style={styles.root}>
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {children}
       </SafeAreaView>
     </View>

@@ -1,19 +1,32 @@
-import { Text } from 'react-native';
+import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { Screen } from '../src/ui/Screen';
-import { Glass } from '../src/ui/Glass';
+import { SessionList } from '../src/features/sessions/SessionList';
 
 export default function Index() {
   return (
     <Screen>
-      <Glass style={styles.card}>
-        <Text style={styles.t}>Hangar</Text>
-      </Glass>
+      <View style={styles.header}>
+        <Text style={styles.title}>Sessões</Text>
+      </View>
+      <View style={styles.listWrap}>
+        <SessionList />
+      </View>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  card: { margin: theme.base.space[4], padding: theme.base.space[4] },
-  t: { color: theme.tokens.text.primary, fontSize: theme.base.text.lg },
+  header: {
+    paddingHorizontal: theme.base.space[4],
+    paddingTop: theme.base.space[2],
+    paddingBottom: theme.base.space[3],
+  },
+  title: {
+    fontSize: 34,
+    fontWeight: '700',
+    color: theme.tokens.text.primary,
+    letterSpacing: -0.5,
+  },
+  listWrap: { flex: 1 },
 }));
