@@ -1931,5 +1931,9 @@
   "happy_tools_desc_modifyingFile": "Modificando {file}",
   "happy_common_yes": "Sim",
   "happy_claude_permissions_noTellClaude": "Não contar ao Claude",
-  "happy_tools_desc_readingFile": "Lendo {file}"
+  "happy_tools_desc_readingFile": "Lendo {file}",
+  "login_titulo": "Conectar a um servidor",
+  "login_permitir_camera": "Permitir acesso à câmera",
+  "login_qr": "Escanear QR",
+  "login_fechar": "Fechar"
 }

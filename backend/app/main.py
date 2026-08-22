@@ -5,7 +5,7 @@ from pathlib import Path
 import uvicorn
 import qrcode
 
-from app.config import settings, resolve_bind_ip, pairing_url, list_config_dirs, _backend_config_base
+from app.config import pairing_url_api, settings, resolve_bind_ip, pairing_url, list_config_dirs, _backend_config_base
 from app.hook_installer import (
     ensure_askq_hook_installed,
     ensure_guard_hooks_installed,
@@ -55,6 +55,7 @@ def _saida_utf8() -> None:
 def print_pairing(settings) -> None:
     """Print a scannable QR (PWA URL + token) so a phone pairs without typing anything."""
     url = pairing_url(settings)
+    url_api = pairing_url_api(settings)
     # QR so faz sentido em TERMINAL: ele existe pra ser apontado com a camera do celular. Rodando
     # como servico (systemd, tarefa agendada) a saida vai pra arquivo, onde o desenho e ruido puro
     # — e era justamente ali que ele derrubava o backend por codificacao. A URL com o token, essa
@@ -67,8 +68,17 @@ def print_pairing(settings) -> None:
         qr.print_ascii(out=buf, invert=True)
         print(buf.getvalue(), flush=True)
         print(f"  Scan to pair, or open: {url}\n", flush=True)
+        # Segundo QR — app nativo (API direto, sem PWA)
+        qr2 = qrcode.QRCode(border=1)
+        qr2.add_data(url_api)
+        qr2.make(fit=True)
+        buf2 = io.StringIO()
+        qr2.print_ascii(out=buf2, invert=True)
+        print(buf2.getvalue(), flush=True)
+        print(f"  App nativo: {url_api}\n", flush=True)
     else:
         print(f"  Pareamento (abra no celular): {url}\n", flush=True)
+        print(f"  App nativo: {url_api}\n", flush=True)
 
 
 def _setup_diag_logging() -> None:

@@ -31,9 +31,14 @@ export const useServers = create<ServersState>((set, get) => ({
   activeId: null,
   ready: false,
   async load() {
-    const raw = await SecureStore.getItemAsync(KEY);
-    const p: Persisted = raw ? JSON.parse(raw) : { servers: [], activeId: null };
-    set({ ...p, ready: true });
+    try {
+      const raw = await SecureStore.getItemAsync(KEY);
+      const p: Persisted = raw ? JSON.parse(raw) : { servers: [], activeId: null };
+      set({ ...p, ready: true });
+    } catch {
+      // JSON corrompido ou SecureStore falhou: reseta pra vazio e libera a tela
+      set({ servers: [], activeId: null, ready: true });
+    }
   },
   add({ baseUrl, token, label }) {
     const base = baseUrl.replace(/\/+$/, '');
@@ -64,6 +69,9 @@ export const useServers = create<ServersState>((set, get) => ({
   },
 }));
 
-function persist(p: Persisted) {
-  void SecureStore.setItemAsync(KEY, JSON.stringify(p));
+function persist(p: Persisted): Promise<void> {
+  return SecureStore.setItemAsync(KEY, JSON.stringify(p)).catch(() => {
+    // keystore invalidado pós-restore: escrita falhou silenciosamente antes;
+    // agora pelo menos não é fire-and-forget — chamadores podem await e tratar
+  });
 }
