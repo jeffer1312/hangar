@@ -11,8 +11,15 @@ from pathlib import Path
 
 try:
     import fcntl
-except ImportError:      # Windows: sem flock, a trava vira no-op — mesmo padrão de peers.py/contas.py
+except ImportError:      # ver o comentário abaixo: aqui o no-op é aceitável, e a razão é o consumidor
     fcntl = None
+# NÃO tem fallback de `msvcrt.locking`, e isso é decisão, não esquecimento. O comentário daqui dizia
+# "mesmo padrão de peers.py/contas.py" — frase que deixou de ser verdade quando os dois ganharam o
+# fallback (e comentário errado é pior que nenhum: o próximo a ler confia nele). A diferença é o
+# CONSUMIDOR: este módulo serve o painel Quickshell/Hyprland, que só existe no Linux — no Windows
+# este código não roda, então o ramo do `except` é alcançável só em teoria. Se um dia algo de
+# Windows passar a importar daqui, o fallback tem que entrar junto: o desenho é read-modify-write,
+# igual ao dos outros, e sem trava a última gravação apaga a anterior calada.
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 TIMEOUT = 8
