@@ -49,7 +49,17 @@ export function MessageList({
   const tools = useMemo(() => pairTools(events), [events]);
 
   const renderItem = ({ item }: { item: ChatEvent }) => {
-    if (item.kind === 'user_msg') return <UserBubble text={item.text ?? ''} />;
+    if (item.kind === 'user_msg') {
+      // fila durável (queued-*) aparece translúcida igual ao eco local até o real chegar
+      if (item.id.startsWith('queued-')) {
+        return (
+          <View style={styles.pending}>
+            <UserBubble text={item.text ?? ''} />
+          </View>
+        );
+      }
+      return <UserBubble text={item.text ?? ''} />;
+    }
     if (item.kind === 'assistant_msg') return <AssistantBubble text={item.text ?? ''} />;
     if (item.kind === 'tool_use') {
       const par = tools.get(item.tool_use_id ?? '');

@@ -1,7 +1,7 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureApi } from '@hangar/core';
 import type { ChatEvent } from '@hangar/core';
-import { chatStore, _resetChatsForTests } from './chat';
+import { chatStore, _resetChatsForTests, filaCount } from './chat';
 
 // EventSource falso injetado via configureApi (mesmo padrão de sessions.test.ts)
 type FakeES = {
@@ -260,6 +260,36 @@ test('(e) user_msg da fila (queued-) sai quando o real chega com o mesmo texto',
   const events = chat.use.getState().events;
   expect(events).toHaveLength(1);
   expect(events[0]?.id).toBe('a:9');
+});
+
+test('(f) filaCount conta pending + queued-* e zera quando o real chega', async () => {
+  historyResponses = [[]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  const origFetch = global.fetch;
+  // send() usa sendInput -> fetch POST; stub pra sucesso
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+  const p = chat.send('oi tudo bem');
+  // eco local já entrou
+  expect(chat.use.getState().pending).toHaveLength(1);
+  expect(filaCount(chat.use.getState())).toBe(1);
+  // sintético queued-* chega com mesmo texto -> pending reconciliado, queued entra
+  // restaura fetch falso de history pra não quebrar o SSE trigger, mas mantém send mock
+  // o trigger não depende de fetch, só do store
+  created[0].trigger('message', JSON.stringify(ev({ id: 'queued-1', text: 'oi tudo bem' })));
+  await tick();
+  expect(chat.use.getState().pending).toHaveLength(0);
+  expect(filaCount(chat.use.getState())).toBe(1);
+  // render queued translúcido: events contém queued-*
+  expect(chat.use.getState().events.some((e) => e.id.startsWith('queued-'))).toBe(true);
+  // real chega -> queued sai, fila zera
+  created[0].trigger('message', JSON.stringify(ev({ id: 'a:10', text: 'oi tudo bem' })));
+  await tick();
+  expect(filaCount(chat.use.getState())).toBe(0);
+  expect(chat.use.getState().events.some((e) => e.id.startsWith('queued-'))).toBe(false);
+  await p;
+  vi.stubGlobal('fetch', origFetch as never);
 });
 
 test('onerror fecha e reconecta com backoff crescente', async () => {

@@ -47,6 +47,12 @@ export interface ChatState {
   pending: PendingMsg[];
 }
 
+// Quantas bolhas estão "na fila" (translúcidas): ecos locais + sintéticos queued-* da fila durável.
+// Extraído pra não duplicar a regra entre Composer (chip) e teste (file: chat.ts é a fonte).
+export function filaCount(state: Pick<ChatState, 'events' | 'pending'>): number {
+  return state.pending.length + state.events.filter((e) => e.kind === 'user_msg' && e.id.startsWith('queued-')).length;
+}
+
 export interface ChatApi {
   use: UseBoundStore<StoreApi<ChatState>>;
   retain: () => void;

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { chatStore } from '../../../src/stores/chat';
 import { Screen } from '../../../src/ui/Screen';
 import { ChatHeader } from '../../../src/chat/ChatHeader';
@@ -43,27 +44,30 @@ export default function ChatScreen() {
           else router.replace('/');
         }}
       />
-      <View style={styles.body}>
-        {loading && !error ? (
-          <Text style={styles.hint}>{m.chat_carregando_historico()}</Text>
-        ) : error ? (
-          <View style={styles.erro}>
-            <Text style={styles.hint}>{error}</Text>
-            <Text style={styles.retry} onPress={chat.retry} accessibilityRole="button">
-              {m.lista_tentar_novamente()}
-            </Text>
-          </View>
-        ) : (
-          <MessageList
-            events={events}
-            preview={preview}
-            statusLine={statusLine}
-            olderFailed={olderFailed}
-            onLoadOlder={chat.loadOlder}
-            pending={pending}
-          />
-        )}
-      </View>
+      {/* KeyboardAvoidingView dá inset à lista pra não ficar sob o Composer quando o teclado sobe; Composer já sobe via KeyboardStickyView */}
+      <KeyboardAvoidingView behavior="padding" style={styles.body}>
+        <View style={styles.inner}>
+          {loading && !error ? (
+            <Text style={styles.hint}>{m.chat_carregando_historico()}</Text>
+          ) : error ? (
+            <View style={styles.erro}>
+              <Text style={styles.hint}>{error}</Text>
+              <Text style={styles.retry} onPress={chat.retry} accessibilityRole="button">
+                {m.lista_tentar_novamente()}
+              </Text>
+            </View>
+          ) : (
+            <MessageList
+              events={events}
+              preview={preview}
+              statusLine={statusLine}
+              olderFailed={olderFailed}
+              onLoadOlder={chat.loadOlder}
+              pending={pending}
+            />
+          )}
+        </View>
+      </KeyboardAvoidingView>
       <Composer serverId={serverId} name={name} />
     </Screen>
   );
@@ -71,6 +75,9 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create((theme) => ({
   body: {
+    flex: 1,
+  },
+  inner: {
     flex: 1,
   },
   hint: {
