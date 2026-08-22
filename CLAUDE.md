@@ -561,6 +561,44 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   Probe: `scripts/test-psmux.py` (+ `.ps1`).
   Install: `install.ps1`. Not there on Windows: systemd services and the `claude`/`codex` shell
   wrappers, so a session you open in the terminal is invisible to the app — app-created ones are fine.
+- **Where psmux and tmux disagree about IDENTITY and TARGETS** (measured on psmux 3.3.7, 22/08/2026).
+  These four are not cosmetic: three of them were live bugs, and the pattern is the same — a command
+  the tmux docs say **fails** or **addresses one thing** quietly does something else.
+  - **`%N` addresses nothing.** psmux numbers panes per SESSION (tmux, per server), so two sessions
+    each have `%1`. `send-keys -t %1` did not reach either of them: it landed in the **client's
+    current session** — i.e. the app can type a phone prompt, Enter included, into someone else's
+    conversation. `agentpane.resolve_target` only returns a `%N` when the session has 2+ panes, which
+    is why it stayed latent. The address that works is `=<session>:<window_index>.<pane_index>`;
+    `tmux.alvo_de_pane` builds it, and on POSIX returns the `%N` unchanged. `pane_id` is still the
+    **identity** (Pi ticket, agentpane cache) — what changed is what serves as an **address**.
+  - **`kill-session -t "=<name>"` does not kill.** The `=` (exact match) is honored by `has-session`,
+    `display`, `send-keys`, `new-window` and `split-window` — and NOT by `kill-session`, which waits
+    **5s** and returns rc=1 with the session still alive. `tmux.alvo_de_kill` is the single place
+    that knows this (production and tests share it); test teardowns that missed it left **65** orphan
+    servers on this machine and made `test_termsock` fail the NEXT case with "duplicate session".
+  - **`rename-session` to an occupied name overwrites instead of failing** (rc=0). The session that
+    was there does not die: it becomes unreachable, with the name pointing at the other one, and both
+    processes keep running. `registry.rename` depends on the refusal to fall back to killing the old
+    hidden shell, so `tmux.rename_session` now checks first — non-POSIX branch only.
+  - **`list-clients` ignores `-F` and invents the tty.** Any format string comes back as the default
+    line, every client shows as `/dev/pts/0` (even clients of different sessions), and
+    `detach-client -t <tty>` is parsed as a session name. A line from `list-clients` therefore does
+    **not** prove a client is attached — what proves it is the `[activity=...]` suffix and the
+    `(attached)` flag in `list-sessions`. This is what keeps the browser terminal panel off Windows:
+    the only available teardown is `detach-client -s <session>`, which drops **every** client of that
+    session, including the user's own native `attach`. (Measured way out, not implemented: killing
+    our own `tmux attach` process releases just that client — the other client stays attached and the
+    session and its work survive.)
+- **Windows-only trap in the installer: encoding is per interpreter, and ASCII is never the answer.**
+  Every launcher `install.ps1` writes carries a PATH inside it (checkout, python, `%LOCALAPPDATA%`
+  log — the user's profile name). Measured by executing each file with an accented path, console
+  codepage 850: `.cmd` needs the console's OEM codepage (ANSI, UTF-8 and ASCII all fail; UTF-8 plus
+  `chcp 65001` also works but changes the caller's console), `.vbs` needs UTF-16LE **with** BOM (ANSI
+  works, OEM does not), `.sh` needs UTF-8 without BOM. `Escrever-Lancador` encodes per type; ASCII
+  content still comes out byte-identical. And the same file's two other rules stand: the `.env` and
+  `settings.json` must NOT have a BOM (`JSON.parse` in Node throws on it), while the PowerShell
+  **profile** must — it is the only encoding both 5.1 and 7 can read when the path has an accent
+  (5.1 alone writes ANSI, 7 alone writes UTF-8-no-BOM, and each fails to read the other's).
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
