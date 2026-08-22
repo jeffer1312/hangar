@@ -10,6 +10,7 @@ from datetime import datetime, time as dtime
 from pathlib import Path
 from threading import Lock, Timer
 
+from app import atomico
 from app.config import settings
 
 _log = logging.getLogger("claude_pocket.push")
@@ -79,7 +80,7 @@ def _save_prefs(data: dict) -> None:
     f = _prefs_file()
     tmp = f.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(f)
+    atomico.substituir(tmp, f)
 
 
 def _load() -> list[dict]:
@@ -93,7 +94,7 @@ def _save(subs: list[dict]) -> None:
     f = _file()
     tmp = f.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(subs, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(f)
+    atomico.substituir(tmp, f)
 
 
 def set_muted(session_name: str, muted: bool) -> None:

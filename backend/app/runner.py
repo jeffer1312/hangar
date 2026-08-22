@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import Optional
 
+from app import atomico
 from app.config import settings
 from app.models import Runner, RunInfo
 from app.tmux import _scope_prefix
@@ -144,7 +145,7 @@ def remember(cwd: str, command: str) -> None:
     d[cwd] = command
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(d), encoding="utf-8")
-    tmp.replace(p)  # escrita atomica
+    atomico.substituir(tmp, p)  # escrita atomica
 
 
 RUN = subprocess.run

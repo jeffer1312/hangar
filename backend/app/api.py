@@ -1418,7 +1418,7 @@ def rename_session(name: str, body: RenameBody):
     try:
         oq, nq = PromptQueue(name).path, PromptQueue(new).path
         if oq.exists():
-            oq.replace(nq)
+            atomico.substituir(oq, nq)
     except OSError:
         pass
     return {"ok": True, "name": new}

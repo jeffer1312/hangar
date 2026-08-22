@@ -6,6 +6,7 @@ por vez (one-shot: quem dispara consome e limpa — ver app.api._maybe_chain).""
 import json
 from pathlib import Path
 
+from app import atomico
 from app.config import settings
 from app.models import dumps_safe
 from app.pqueue import _sanitize
@@ -33,7 +34,7 @@ class ThenLink:
         # Escrita atomica (tmp + replace), mesmo padrao do PromptQueue._write_atomic.
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(dumps_safe({"target": target, "text": text}), encoding="utf-8")
-        tmp.replace(self.path)
+        atomico.substituir(tmp, self.path)
 
     def clear(self) -> None:
         # Idempotente: chamado tanto no clear explicito (usuario) quanto no one-shot pos-disparo.
@@ -46,4 +47,4 @@ class ThenLink:
         # (edge case raro; usuario reconfigura o alvo se precisar).
         self.path.with_suffix(".json.tmp").unlink(missing_ok=True)
         if self.path.exists():
-            self.path.replace(_chain_dir() / f"{_sanitize(new_name)}.json")
+            atomico.substituir(self.path, _chain_dir() / f"{_sanitize(new_name)}.json")

@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from app import runtime_config
+from app import atomico, runtime_config
 from app.config import settings
 
 # Sintese de voz. Mesma forma do transcribe.py: urllib da stdlib, sem dependencia nova, erro tipado
@@ -286,7 +286,7 @@ def sintetizar(texto: str, voz: str, provedor: str, instrucao: str = "") -> tupl
     tmp = base / f"{h}.{os.getpid()}.tmp"
     try:
         tmp.write_bytes(audio)
-        tmp.replace(destino)
+        atomico.substituir(tmp, destino)
     except OSError as e:
         # Disco cheio/permissao negada aqui: o usuario ja PAGOU a chamada ao provedor (audio
         # baixado) — sem isto, a rota so captura TtsError e devolve 500 sem detail nenhum.

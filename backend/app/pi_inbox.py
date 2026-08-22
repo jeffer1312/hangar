@@ -25,6 +25,8 @@ import uuid
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from app import atomico
+
 _log = logging.getLogger(__name__)
 
 # Prazo da confirmação. Chute inicial: é chamada local, e a confirmação atesta só a CHAMADA, não o
@@ -215,7 +217,7 @@ def escrever_endpoint() -> list[Path]:
             tmp = Path(tmp_nome)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(json.dumps(dados))
-            tmp.replace(alvo)
+            atomico.substituir(tmp, alvo)
             destinos.append(alvo)
         except Exception as e:
             # Exception generica (nao só OSError) pelo mesmo motivo do try de cima: um sidecar

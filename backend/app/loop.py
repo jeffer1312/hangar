@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from app import atomico
 from app.config import settings
 from app.models import dumps_safe
 from app.pqueue import _sanitize
@@ -59,7 +60,7 @@ class LoopLink:
     def set(self, data: dict) -> None:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(dumps_safe(data), encoding="utf-8")
-        tmp.replace(self.path)
+        atomico.substituir(tmp, self.path)
 
     def update(self, **fields) -> dict | None:
         cur = self.get()

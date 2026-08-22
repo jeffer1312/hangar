@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
-from app import tmux
+from app import atomico, tmux
 from app import agentpane
 from app.config import settings
 from app import runtime_config
@@ -124,7 +124,7 @@ def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
             entry["hasTrustDialogAccepted"] = True
             tmp = cfg.with_suffix(".json.cp-tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(cfg)
+            atomico.substituir(tmp, cfg)
         except Exception as e:
             _log.warning("pretrust falhou pra %s: %r", cwd, e)
 

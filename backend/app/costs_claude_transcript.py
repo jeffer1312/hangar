@@ -30,7 +30,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app import pricing
+from app import atomico, pricing
 
 _log = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def _gravar_cache(raiz: Path, estado: dict) -> None:
     # entrelaçados — mesmo furo que o cp_panel_common.py já corrigiu.
     tmp = destino.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(destino)
+    atomico.substituir(tmp, destino)
 
 
 def _serializar(u: UsoSessao) -> dict:

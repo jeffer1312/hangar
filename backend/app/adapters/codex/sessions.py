@@ -12,6 +12,7 @@ por sessao, keyed pelo NOME sanitizado da sessao."""
 import json
 from pathlib import Path
 
+from app import atomico
 from app.names import sanitize_session_name
 
 
@@ -52,7 +53,7 @@ def save(name: str, thread_id: str, rollout_path: str, cwd: str,
         "model": model,
         "effort": effort,
     }), encoding="utf-8")
-    tmp.replace(p)
+    atomico.substituir(tmp, p)
 
 
 def update_model(name: str, model: str | None, effort: str | None) -> None:
@@ -87,7 +88,7 @@ def rename(old: str, new: str) -> None:
     if not src.exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
-    src.replace(dst)
+    atomico.substituir(src, dst)
     meta = load(new)
     if meta is not None:
         save(new, meta["thread_id"], meta["rollout_path"], meta["cwd"],

@@ -13,6 +13,7 @@ import threading
 import uuid
 from pathlib import Path
 
+from app import atomico
 from app.config import settings
 from app.models import dumps_safe
 from app.pqueue import _sanitize
@@ -59,7 +60,7 @@ class PairLink:
         # Escrita atômica (tmp + replace), mesmo padrão do PromptQueue._write_atomic.
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(dumps_safe({"peers": peers, "task": task, "gid": gid}), encoding="utf-8")
-        tmp.replace(self.path)
+        atomico.substituir(tmp, self.path)
 
     def clear(self) -> None:
         self.path.unlink(missing_ok=True)

@@ -11,6 +11,7 @@ from typing import AsyncIterator
 
 from watchfiles import awatch
 
+from app import atomico
 from app.config import settings
 from app.models import ChatEvent, dumps_safe, scrub_surrogates
 from app.transcript import parse_obj
@@ -302,7 +303,7 @@ class PromptQueue:
         # dumps_safe (nao json.dumps): surrogate solto no texto do usuario passa pelo json.dumps e
         # so estoura no encode do write_text -> o POST /input inteiro virava 500 e a msg sumia.
         tmp.write_text("".join(dumps_safe(r) + "\n" for r in rows), encoding="utf-8")
-        tmp.replace(self.path)
+        atomico.substituir(tmp, self.path)
 
     def append(self, text: str, delivered: bool = False, ts: float | None = None) -> dict:
         # delivered=False por padrao = enfileirada mas NAO digitada na TUI (o /input passa True quando
@@ -532,7 +533,7 @@ class PromptQueue:
         # (mesmo dir). Sem fila = no-op. O .tmp meio-escrito nao migra.
         self.path.with_suffix(".jsonl.tmp").unlink(missing_ok=True)
         if self.path.exists():
-            self.path.replace(_queue_dir() / f"{_sanitize(new_name)}.jsonl")
+            atomico.substituir(self.path, _queue_dir() / f"{_sanitize(new_name)}.jsonl")
 
     def load(self) -> list[dict]:
         if not self.path.exists():

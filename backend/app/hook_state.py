@@ -5,6 +5,8 @@ from typing import Callable, Optional
 
 from watchfiles import awatch
 
+from app import atomico
+
 _log = logging.getLogger("claude_pocket.hook_state")
 
 _SUBDIR = ".claude-pocket-state"
@@ -74,7 +76,7 @@ class HookState:
                 try:
                     tmp = f.with_suffix(".json.tmp")
                     tmp.write_text(json.dumps({"state": "idle", "ts": cur[1]}), encoding="utf-8")
-                    tmp.replace(f)  # atomico, mesmo padrao do state_hook
+                    atomico.substituir(tmp, f)  # atomico, mesmo padrao do state_hook
                 except OSError:
                     # Mapa ja esta idle mas o sidecar ficou awaiting: proximo BOOT re-semeia o
                     # fantasma (load_existing le do disco). Logar e o rastro pra entender o retorno.

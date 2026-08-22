@@ -33,6 +33,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from app import atomico
 from app.adapters.kimi.sessions import kimi_home
 from app.engines import _NOME_OK  # mesma regra de nome do motor — uma fonte só (precedente: engine_probe)
 
@@ -99,7 +100,7 @@ def _gravar_preservando(caminho: Path, conteudo: str) -> None:
     modo = (caminho.stat().st_mode & 0o777) if caminho.exists() else 0o600
     tmp = caminho.with_name(f"{caminho.name}.tmp-hangar-{os.getpid()}")
     _escrever_restrito(tmp, conteudo, modo)
-    tmp.replace(caminho)
+    atomico.substituir(tmp, caminho)
 
 
 def _backup(caminho: Path) -> None:

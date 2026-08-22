@@ -22,6 +22,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from app import atomico
 from app.adapters.kimi.sessions import kimi_home
 
 _log = logging.getLogger("claude_pocket.kimi_hook_installer")
@@ -152,7 +153,7 @@ def ensure_kimi_hooks_installed() -> list[str]:
         # O replace adota a permissao da ORIGEM (o tmp), nao a do destino: sem este chmod o
         # config.toml com a API key saia de 0600 pra 0644 a cada instalacao do hook.
         os.chmod(tmp, 0o600)
-        tmp.replace(cfg)  # atomico
+        atomico.substituir(tmp, cfg)  # atomico
         return [str(cfg)]
     except Exception:
         _log.exception("kimi: falha ao instalar hook (fail-soft)")
