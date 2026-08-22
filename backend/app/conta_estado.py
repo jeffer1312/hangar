@@ -101,7 +101,11 @@ def _auth_status(dir_conta: Path) -> dict | None:
     try:
         r = subprocess.run(
             ["claude", "auth", "status", "--json"],
-            env=env, capture_output=True, text=True, timeout=_CLI_TIMEOUT,
+            # `encoding` explicito: sem ele o `text=True` usa o locale, que no Windows e cp1252.
+            # Aqui sai e-mail e nome de plano — o campo mais provavel de ter acento na tela de
+            # Contas —, e cp1252 nao so embaralha como pode ESTOURAR (tem bytes indefinidos).
+            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_CLI_TIMEOUT,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         # FileNotFoundError (claude fora do PATH) é subclasse de OSError: cai aqui junto.

@@ -252,7 +252,8 @@ def test_resume_arquivo_com_motor_valido_repassa(cli):
               return_value=SessionInfo(name="proj", cwd="/home/u/proj", engine="kimi")) as cr:
         r = cli.post(f"/api/archive/proj/{_SID}/resume", json={"engine": "kimi"}, headers=AUTH)
     assert r.status_code == 200
-    cr.assert_called_once_with("proj", "/home/u/proj", resume_session_id=_SID, engine="kimi")
+    cr.assert_called_once_with("proj", "/home/u/proj", config_dir=None, provider="claude",
+                               resume_session_id=_SID, engine="kimi")
 
 
 def test_put_com_string_vazia_LIMPA_o_campo(cli):

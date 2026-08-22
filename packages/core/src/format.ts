@@ -338,7 +338,15 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
     .split(marker)
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((p) => p.split('/').filter(Boolean).pop() ?? '')
+    // Os DOIS separadores: no Windows o marcador traz o caminho nativo
+    // (`C:\cockpit\.claude-pocket-uploads\<arquivo>.png`), que não tem `/` nenhum — o split por `/`
+    // devolvia o caminho INTEIRO como se fosse o basename. Aí `uploadUrl` montava
+    // `/uploads/C%3A%5C…` e o backend recusava com 400 "filename invalido" (resolve_upload rejeita
+    // `\` de propósito, contra path traversal): no celular a foto virava o quadrinho de imagem
+    // quebrada, com a legenda do lado. Medido em 21/08/2026, mandando um print do celular pra uma
+    // sessão no Windows. Dividir por `\` também é seguro no Linux: o nome é GERADO pelo servidor
+    // (`<epoch>-<hex>.<ext>`, uploads.py:30) e nunca contém separador.
+    .map((p) => p.split(/[\\/]/).filter(Boolean).pop() ?? '')
     .filter(Boolean);
   // `filenames` VAZIO nao e "nao e mensagem de imagem": e o caso mais comum do celular — UMA foto,
   // que o Claude Code absorve como anexo de verdade e cujo path ele apaga, deixando so o marcador

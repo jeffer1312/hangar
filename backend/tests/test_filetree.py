@@ -21,13 +21,31 @@ def cliente():
     settings.auth_token = anterior
 
 
+def _escrever(caminho, texto, encoding="utf-8"):
+    """Grava o texto BYTE a BYTE como ele esta escrito aqui.
+
+    `Path.write_text` sem `newline` usa a traducao de fim de linha da plataforma, e no Windows
+    todo `
+` sai `
+
+`. O `filetree.read_file` le em BINARIO de proposito — um editor nao pode
+    reescrever o fim de linha do arquivo de quem usa —, entao ele devolve fielmente o `
+
+` que
+    o fixture criou sem querer, e a comparacao com `"linha
+"` falha por defeito do TESTE, nao do
+    codigo. `newline=""` desliga a traducao; no POSIX ele nao muda byte nenhum.
+    """
+    caminho.write_text(texto, encoding=encoding, newline="")
+
+
 def _repo(tmp_path):
     """Repo git com um commit, pra changed_files funcionar."""
     d = str(tmp_path)
     git_ops._run(d, "init", "-q", ".")
     git_ops._run(d, "config", "user.email", "t@t")
     git_ops._run(d, "config", "user.name", "t")
-    (tmp_path / "base.txt").write_text("base\n")
+    _escrever(tmp_path / "base.txt", "base\n")
     git_ops._run(d, "add", "base.txt")
     git_ops._run(d, "commit", "-q", "-m", "base")
     return d
@@ -36,14 +54,14 @@ def _repo(tmp_path):
 def test_lista_pastas_antes_de_arquivos(tmp_path):
     d = _repo(tmp_path)
     (tmp_path / "zeta").mkdir()
-    (tmp_path / "alfa.txt").write_text("a")
+    _escrever(tmp_path / "alfa.txt", "a")
     nomes = [e["name"] for e in filetree.list_dir(d, so_modificados=False)["entries"]]
     assert nomes.index("zeta") < nomes.index("alfa.txt")
 
 
 def test_esconde_git_mas_mostra_dotfile(tmp_path):
     d = _repo(tmp_path)
-    (tmp_path / ".env.example").write_text("X=1")
+    _escrever(tmp_path / ".env.example", "X=1")
     nomes = [e["name"] for e in filetree.list_dir(d, so_modificados=False)["entries"]]
     assert ".git" not in nomes
     assert ".env.example" in nomes
@@ -90,7 +108,7 @@ def test_repo_sem_commit_lista_sem_numstat(tmp_path):
     O `_numstat` devolve {} e a lista sai sem somas (nem marca, nem erro)."""
     d = str(tmp_path)
     git_ops._run(d, "init", "-q", ".")
-    (tmp_path / "a.txt").write_text("x")
+    _escrever(tmp_path / "a.txt", "x")
     r = filetree.list_dir(d, so_modificados=False)
     assert any(e["name"] == "a.txt" for e in r["entries"])
 
@@ -99,10 +117,10 @@ def test_pasta_herda_marca_e_soma_do_neto(tmp_path):
     d = _repo(tmp_path)
     (tmp_path / "src" / "lib").mkdir(parents=True)
     alvo = tmp_path / "src" / "lib" / "x.txt"
-    alvo.write_text("a\nb\n")
+    _escrever(alvo, "a\nb\n")
     git_ops._run(d, "add", "src/lib/x.txt")
     git_ops._run(d, "commit", "-q", "-m", "x")
-    alvo.write_text("a\nb\nc\nd\n")
+    _escrever(alvo, "a\nb\nc\nd\n")
     src = [e for e in filetree.list_dir(d)["entries"] if e["name"] == "src"][0]
     assert src["changed"] == "M"
     assert src["add"] == 2 and src["del"] == 0
@@ -110,7 +128,7 @@ def test_pasta_herda_marca_e_soma_do_neto(tmp_path):
 
 def test_nome_com_acento_nao_volta_escapado(tmp_path):
     d = _repo(tmp_path)
-    (tmp_path / "sessão-única.md").write_text("x")
+    _escrever(tmp_path / "sessão-única.md", "x")
     paths = [e["path"] for e in filetree.list_dir(d)["entries"]]
     assert "sessão-única.md" in paths
     assert not any("\\303" in p for p in paths)
@@ -119,8 +137,8 @@ def test_nome_com_acento_nao_volta_escapado(tmp_path):
 def test_so_modificados_esconde_intocado_mas_mantem_o_caminho(tmp_path):
     d = _repo(tmp_path)
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "novo.txt").write_text("n")
-    (tmp_path / "intocado.txt").write_text("i")
+    _escrever(tmp_path / "src" / "novo.txt", "n")
+    _escrever(tmp_path / "intocado.txt", "i")
     git_ops._run(d, "add", "intocado.txt")
     git_ops._run(d, "commit", "-q", "-m", "i")
     nomes = [e["name"] for e in filetree.list_dir(d)["entries"]]
@@ -135,10 +153,10 @@ def test_sessao_aberta_numa_SUBPASTA_do_repo(tmp_path):
     d = _repo(tmp_path)
     (tmp_path / "backend" / "app").mkdir(parents=True)
     alvo = tmp_path / "backend" / "app" / "x.py"
-    alvo.write_text("a\n")
+    _escrever(alvo, "a\n")
     git_ops._run(d, "add", "backend/app/x.py")
     git_ops._run(d, "commit", "-q", "-m", "x")
-    alvo.write_text("a\nb\n")
+    _escrever(alvo, "a\nb\n")
 
     sub = str(tmp_path / "backend")          # a sessao vive AQUI, nao no topo
     ent = {e["name"]: e for e in filetree.list_dir(sub)["entries"]}
@@ -160,14 +178,14 @@ def test_recusa_path_comecando_com_traco(tmp_path):
 
 def test_le_texto_inteiro(tmp_path):
     d = _repo(tmp_path)
-    (tmp_path / "a.txt").write_text("linha\n")
+    _escrever(tmp_path / "a.txt", "linha\n")
     r = filetree.read_file(d, "a.txt")
     assert r["text"] == "linha\n" and r["truncated"] is False
 
 
 def test_corta_arquivo_grande(tmp_path):
     d = _repo(tmp_path)
-    (tmp_path / "g.txt").write_text("x" * (filetree.MAX_BYTES + 5000))
+    _escrever(tmp_path / "g.txt", "x" * (filetree.MAX_BYTES + 5000))
     r = filetree.read_file(d, "g.txt")
     assert r["truncated"] is True
     assert len(r["text"].encode()) <= filetree.MAX_BYTES
@@ -184,12 +202,12 @@ def test_recusa_binario(tmp_path):
 def test_nome_com_espaco_aparece_na_arvore(tmp_path):
     """`core.quotePath=false` cobre o acento e NAO o espaco — o porcelain cita os dois."""
     d = _repo(tmp_path)
-    (tmp_path / "com espaco.txt").write_text("um\n")
+    _escrever(tmp_path / "com espaco.txt", "um\n")
     (tmp_path / "pasta com espaco").mkdir()
-    (tmp_path / "pasta com espaco" / "x.txt").write_text("novo\n")
+    _escrever(tmp_path / "pasta com espaco" / "x.txt", "novo\n")
     git_ops._run(d, "add", "com espaco.txt")
     git_ops._run(d, "commit", "-q", "-m", "e")
-    (tmp_path / "com espaco.txt").write_text("um\ndois\n")
+    _escrever(tmp_path / "com espaco.txt", "um\ndois\n")
     ent = {e["name"]: e for e in filetree.list_dir(d)["entries"]}
     assert "com espaco.txt" in ent, "arquivo com espaco sumiu da arvore"
     assert ent["com espaco.txt"]["changed"] == "M"
@@ -212,13 +230,15 @@ def test_git_interno_fora_do_alcance(tmp_path):
             with pytest.raises(FileError) as e:
                 fn(d, alvo)
             assert e.value.code == "erro_arq_area_do_git", (fn.__name__, alvo)
-    (tmp_path / ".gitignore").write_text("node_modules\n")
+    _escrever(tmp_path / ".gitignore", "node_modules\n")
     assert filetree.read_file(d, ".gitignore")["text"] == "node_modules\n"
     (tmp_path / ".github").mkdir()
-    (tmp_path / ".github" / "x.yml").write_text("on: push\n")
+    _escrever(tmp_path / ".github" / "x.yml", "on: push\n")
     assert filetree.read_file(d, ".github/x.yml")["text"] == "on: push\n"
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="FIFO e socket unix nao existem no Windows: nao ha o que abrir")
 def test_nao_trava_em_fifo_nem_estoura_em_socket(tmp_path):
     """FIFO sem escritor bloqueia no open() e come uma thread do pool pra sempre."""
     import os, socket
@@ -287,7 +307,7 @@ def test_rota_path_diff_nao_atravessa_cwd(monkeypatch, tmp_path, cliente):
     from app import api
     d = _repo(tmp_path)
     (tmp_path / "sub").mkdir()
-    (tmp_path / "segredo.txt").write_text("SENHA\n")
+    _escrever(tmp_path / "segredo.txt", "SENHA\n")
     sub = str(tmp_path / "sub")
     monkeypatch.setattr(api, "_session_cwd", lambda name: sub)
     r = cliente.post("/api/sessions/s/git/path-diff",
@@ -316,7 +336,7 @@ def test_rota_symlink_que_atravessa_cwd_recusado(monkeypatch, tmp_path, cliente)
     from app import api
     d = _repo(tmp_path)
     (tmp_path / "sub").mkdir()
-    (tmp_path / "segredo.txt").write_text("SENHA\n")
+    _escrever(tmp_path / "segredo.txt", "SENHA\n")
     os.symlink("../segredo.txt", tmp_path / "sub" / "elo")
     sub = str(tmp_path / "sub")
     monkeypatch.setattr(api, "_session_cwd", lambda name: sub)
@@ -328,19 +348,24 @@ def test_rota_symlink_que_atravessa_cwd_recusado(monkeypatch, tmp_path, cliente)
     assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_git_diff"
 
 
+# O `*` no NOME so existe no POSIX: no Windows ele e reservado pela propria API de arquivos
+# (`OSError 22` no open), entao aqui nao ha objeto de teste. O ramo coberto — `--literal-pathspecs`
+# no `git_ops` — nao e POSIX-only, e por isso o gemeo abaixo, com `[`, roda nos dois sistemas.
+@pytest.mark.skipif(os.name != "posix",
+                    reason="`*` e nome invalido no Windows; o gemeo com `[` cobre o mesmo ramo la")
 def test_rota_path_diff_trata_asterisco_como_literal(monkeypatch, tmp_path, cliente):
     """Arquivo real chamado `*`: sem --literal-pathspecs o diff devolvia a soma de TODOS
     os arquivos modificados (medido no parecer). O diff tem que ser so do arquivo `*`."""
     from app import api, git_ops
     d = _repo(tmp_path)
-    (tmp_path / "*").write_text("estrela\n")
-    (tmp_path / "a.txt").write_text("um\n")
-    (tmp_path / "b.txt").write_text("dois\n")
+    _escrever(tmp_path / "*", "estrela\n")
+    _escrever(tmp_path / "a.txt", "um\n")
+    _escrever(tmp_path / "b.txt", "dois\n")
     git_ops._run(d, "add", ".")
     git_ops._run(d, "commit", "-q", "-m", "base")
-    (tmp_path / "*").write_text("estrela\nestrela2\n")
-    (tmp_path / "a.txt").write_text("um\nAAA\n")
-    (tmp_path / "b.txt").write_text("dois\nBBB\n")
+    _escrever(tmp_path / "*", "estrela\nestrela2\n")
+    _escrever(tmp_path / "a.txt", "um\nAAA\n")
+    _escrever(tmp_path / "b.txt", "dois\nBBB\n")
     monkeypatch.setattr(api, "_session_cwd", lambda name: d)
     r = cliente.post("/api/sessions/s/git/path-diff",
                      json={"path": "*", "escopo": "nao_commitado"},
@@ -356,10 +381,10 @@ def test_rota_pasta_comum_lista_e_le(monkeypatch, tmp_path, cliente):
     marca e sem soma, e le arquivos normalmente; um arquivo comum chamado `config` nao
     confunde (o guard de .git compara por COMPONENTE, nao por nome de arquivo)."""
     from app import api
-    (tmp_path / "leia.txt").write_text("texto fora de git\n")
-    (tmp_path / "config").write_text("config comum\n")
+    _escrever(tmp_path / "leia.txt", "texto fora de git\n")
+    _escrever(tmp_path / "config", "config comum\n")
     (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "x.txt").write_text("x\n")
+    _escrever(tmp_path / "sub" / "x.txt", "x\n")
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
     h = {"Authorization": "Bearer secret"}
     r = cliente.get("/api/sessions/s/files/list", params={"so_modificados": "false"}, headers=h)
@@ -381,10 +406,10 @@ def test_rota_pasta_comum_plausivel_3_marcadores(monkeypatch, tmp_path, cliente)
     read funcionam — o guard de .git so olha o componente `.git`, nunca nomes de
     arquivo, entao nada disso bloqueia (parecer 47612d58, B2)."""
     from app import api
-    (tmp_path / "config").write_text("config comum\n")
+    _escrever(tmp_path / "config", "config comum\n")
     (tmp_path / "objects").mkdir()
     (tmp_path / "refs").mkdir()
-    (tmp_path / "README.txt").write_text("comum\n")
+    _escrever(tmp_path / "README.txt", "comum\n")
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
     h = {"Authorization": "Bearer secret"}
     r = cliente.get("/api/sessions/s/files/read", params={"path": "README.txt"}, headers=h)
@@ -395,11 +420,36 @@ def test_rota_pasta_comum_plausivel_3_marcadores(monkeypatch, tmp_path, cliente)
     assert any(e["name"] == "README.txt" for e in r.json()["entries"])
 
 
+def test_rota_path_diff_trata_colchete_como_literal(monkeypatch, tmp_path, cliente):
+    """Gemeo PORTATIL do caso do `*`, e o unico que cobre `--literal-pathspecs` no Windows.
+
+    `[` e `]` sao nomes validos nos dois sistemas, e o git os le como classe de caracteres: sem
+    `--literal-pathspecs`, a pathspec `a[b].txt` casa o IRMAO `ab.txt` e nao o arquivo literal —
+    medido aqui, o diff voltava com o `+IRMAO` junto. Com a opcao, so o arquivo pedido aparece.
+    """
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    _escrever(tmp_path / "a[b].txt", "colchete\n")
+    _escrever(tmp_path / "ab.txt", "irmao\n")
+    git_ops._run(d, "add", ".")
+    git_ops._run(d, "commit", "-q", "-m", "base")
+    _escrever(tmp_path / "a[b].txt", "colchete\nCOLCHETE\n")
+    _escrever(tmp_path / "ab.txt", "irmao\nIRMAO\n")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.post("/api/sessions/s/git/path-diff",
+                     json={"path": "a[b].txt", "escopo": "nao_commitado"},
+                     headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    diff = r.json()["diff"]
+    assert "+COLCHETE" in diff, "o diff do arquivo pedido sumiu"
+    assert "+IRMAO" not in diff, "a pathspec foi interpretada como classe de caracteres"
+
+
 def test_rota_busca_fora_de_repo_continua_409(monkeypatch, tmp_path, cliente):
     """A busca NAO muda com a regra da pasta comum: fora de repo ela continua exigindo
     git e explicando com 409 erro_arq_nao_e_repo_git."""
     from app import api
-    (tmp_path / "x.txt").write_text("agulha\n")
+    _escrever(tmp_path / "x.txt", "agulha\n")
     monkeypatch.setattr(api, "_session_cwd", lambda name: str(tmp_path))
     r = cliente.get("/api/sessions/s/files/search", params={"q": "agulha"},
                     headers={"Authorization": "Bearer secret"})
@@ -421,6 +471,8 @@ def test_rota_list_falha_do_git_vira_envelope(monkeypatch, tmp_path, cliente):
     assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="chmod(0) e no-op no Windows: quem nega e a ACL, a pasta segue legivel")
 def test_rota_list_pasta_sem_permissao_vira_envelope(monkeypatch, tmp_path, cliente):
     from app import api
     d = _repo(tmp_path)
@@ -532,7 +584,7 @@ def test_rota_numstat_falha_vira_envelope(monkeypatch, tmp_path, cliente):
     falsa, medida no parecer): o cliente recebe o envelope erro_arq_lista_falhou."""
     from app import api, git_ops
     d = _repo(tmp_path)
-    (tmp_path / "base.txt").write_text("base\nmexido\n")
+    _escrever(tmp_path / "base.txt", "base\nmexido\n")
     monkeypatch.setattr(api, "_session_cwd", lambda name: d)
     orig = git_ops._run
 
@@ -625,7 +677,7 @@ def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
     padrao (a marca do git nunca casa) e um link intocado herda o 'M' do vizinho."""
     import os
     d = _repo(tmp_path)
-    (tmp_path / "alvo.txt").write_text("um\n")
+    _escrever(tmp_path / "alvo.txt", "um\n")
     git_ops._run(d, "add", "alvo.txt")
     git_ops._run(d, "commit", "-q", "-m", "alvo")
     os.symlink("alvo.txt", tmp_path / "link-novo.txt")
@@ -636,7 +688,7 @@ def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
 
     git_ops._run(d, "add", "link-novo.txt")
     git_ops._run(d, "commit", "-q", "-m", "link")
-    (tmp_path / "alvo.txt").write_text("um\ndois\n")          # so o ALVO muda
+    _escrever(tmp_path / "alvo.txt", "um\ndois\n")          # so o ALVO muda
     ent = {e["name"]: e for e in filetree.list_dir(d)["entries"]}
     assert "link-novo.txt" not in ent, "link intocado herdou a marca do alvo"
     assert ent["alvo.txt"]["changed"] == "M"
@@ -645,7 +697,7 @@ def test_symlink_carrega_o_proprio_nome_e_a_propria_marca(tmp_path):
 # ── escrita ────────────────────────────────────────────────────────────────────────────────────
 
 def test_write_grava_e_devolve_digest_novo(tmp_path):
-    (tmp_path / "a.txt").write_text("um\n", encoding="utf-8")
+    _escrever(tmp_path / "a.txt", "um\n", encoding="utf-8")
     lido = filetree.read_file(str(tmp_path), "a.txt")
     r = filetree.write_file(str(tmp_path), "a.txt", "um\ndois\n", lido["digest"])
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "um\ndois\n"
@@ -658,9 +710,9 @@ def test_write_grava_e_devolve_digest_novo(tmp_path):
 def test_write_recusa_quando_o_arquivo_mudou_no_disco(tmp_path):
     """O caso real: a tela está aberta e o AGENTE da sessão edita o mesmo arquivo. Salvar por
     cima apagaria o trabalho dele sem ninguém ver."""
-    (tmp_path / "a.txt").write_text("um\n", encoding="utf-8")
+    _escrever(tmp_path / "a.txt", "um\n", encoding="utf-8")
     lido = filetree.read_file(str(tmp_path), "a.txt")
-    (tmp_path / "a.txt").write_text("o agente escreveu isto\n", encoding="utf-8")
+    _escrever(tmp_path / "a.txt", "o agente escreveu isto\n", encoding="utf-8")
     with pytest.raises(filetree.FileError) as e:
         filetree.write_file(str(tmp_path), "a.txt", "um\ndois\n", lido["digest"])
     assert e.value.status == 409
@@ -669,7 +721,7 @@ def test_write_recusa_quando_o_arquivo_mudou_no_disco(tmp_path):
 
 
 def test_write_sem_digest_e_recusado(tmp_path):
-    (tmp_path / "a.txt").write_text("um\n", encoding="utf-8")
+    _escrever(tmp_path / "a.txt", "um\n", encoding="utf-8")
     with pytest.raises(filetree.FileError) as e:
         filetree.write_file(str(tmp_path), "a.txt", "outro\n", None)
     assert e.value.code == "erro_arq_sem_digest"
@@ -678,8 +730,8 @@ def test_write_sem_digest_e_recusado(tmp_path):
 
 def test_write_nao_escapa_da_raiz_nem_toca_no_git(tmp_path):
     raiz = tmp_path / "repo"; (raiz / ".git").mkdir(parents=True)
-    (raiz / ".git" / "config").write_text("[core]\n", encoding="utf-8")
-    (tmp_path / "fora.txt").write_text("segredo\n", encoding="utf-8")
+    _escrever(raiz / ".git" / "config", "[core]\n", encoding="utf-8")
+    _escrever(tmp_path / "fora.txt", "segredo\n", encoding="utf-8")
     for caminho in ("../fora.txt", ".git/config"):
         with pytest.raises(filetree.FileError):
             filetree.write_file(str(raiz), caminho, "invadido\n", "x" * 64)
@@ -687,10 +739,12 @@ def test_write_nao_escapa_da_raiz_nem_toca_no_git(tmp_path):
     assert (raiz / ".git" / "config").read_text(encoding="utf-8") == "[core]\n"
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="nao ha bit de execucao no Windows: quem decide executar e a extensao")
 def test_write_preserva_o_bit_de_execucao(tmp_path):
     import os
     alvo = tmp_path / "s.sh"
-    alvo.write_text("#!/bin/sh\necho oi\n", encoding="utf-8")
+    _escrever(alvo, "#!/bin/sh\necho oi\n", encoding="utf-8")
     alvo.chmod(0o755)
     lido = filetree.read_file(str(tmp_path), "s.sh")
     filetree.write_file(str(tmp_path), "s.sh", "#!/bin/sh\necho tchau\n", lido["digest"])
@@ -701,7 +755,7 @@ def test_write_sem_digest_nao_le_o_arquivo(tmp_path, monkeypatch):
     """Rejeitar por falta de digest não pode custar uma leitura: um POST apontando pra um arquivo
     de gigabytes derrubava o backend por memória antes mesmo de recusar o pedido."""
     alvo = tmp_path / "grande.bin"
-    alvo.write_text("x" * 100, encoding="utf-8")
+    _escrever(alvo, "x" * 100, encoding="utf-8")
     def explode(*a, **k):
         raise AssertionError("leu o arquivo antes de validar")
     monkeypatch.setattr(pathlib.Path, "read_bytes", explode)
@@ -715,7 +769,7 @@ def test_write_recusa_arquivo_acima_do_teto(tmp_path):
     (600KB) em vez de monkeypatch no `Path.stat`: mockar stat quebra o `is_dir` da própria
     função e o teste passaria a exercitar outra coisa."""
     alvo = tmp_path / "enorme.bin"
-    alvo.write_text("x" * (filetree.MAX_BYTES + 1024), encoding="utf-8")
+    _escrever(alvo, "x" * (filetree.MAX_BYTES + 1024), encoding="utf-8")
     with pytest.raises(filetree.FileError) as e:
         filetree.write_file(str(tmp_path), "enorme.bin", "novo\n", "a" * 64)
     assert e.value.status == 413

@@ -52,7 +52,17 @@ def _trava(base: str, stem: str):
 
 
 try:
-    o = json.loads(sys.stdin.read())
+    # LER OS BYTES, nunca `sys.stdin.read()`: em modo texto o Python decodifica com o encoding
+    # do LOCALE, que no Windows e cp1252. O Claude Code entrega o evento em UTF-8, entao o texto
+    # ja nascia corrompido aqui — e as duas pontas seguintes estao certas (o _publicar grava
+    # utf-8, o preview.py le utf-8), so carregando lixo. Sintoma no app, medido em 21/08/2026:
+    # durante a PREVIA ao vivo saia "sessAo", "suIte", "relatOrio"; o texto ja commitado, que vem
+    # do transcript e nao passa por aqui, vinha certo.
+    #
+    # O defeito e INTERMITENTE por ambiente: quem tiver PYTHONIOENCODING setado (o terminal desta
+    # maquina tinha) nao ve nada de errado. Por isso bytes + decode na mao, que nao depende de
+    # variavel de ambiente nem do modo texto.
+    o = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     event = o.get("hook_event_name")
     # Chave = stem do transcript VIVO (o mesmo session_key que o backend usa), nao o session_id do
     # cmdline: numa sessao retomada os dois divergem e o backend le pelo jsonl real.

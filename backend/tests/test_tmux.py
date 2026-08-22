@@ -1,5 +1,7 @@
+import os
 import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,6 +10,31 @@ import pytest
 from types import SimpleNamespace
 
 from app import tmux
+
+from tmux_teste import matar_sessao
+
+
+@pytest.fixture(autouse=True)
+def _isola_o_cache_do_scope():
+    """`tmux._scope_usavel` e cache de MODULO, e `_scope_probe` o grava com `global`.
+
+    Varios casos deste arquivo trocam so o `RUN` e chamam algo que passa pelo `_scope_prefix()`.
+    A sonda entao roda contra o MOCK, grava True no cache — e o `patch.object(tmux, "RUN", ...)`
+    devolve o RUN de verdade no fim, mas NAO desfaz a gravacao. Do teste seguinte em diante, quem
+    fala com o tmux de verdade herda um prefixo `systemd-run` decidido por uma mentira.
+
+    Foi o que derrubava o `test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane` quando o
+    arquivo rodava inteiro (sozinho ele passava): o `new_hidden_shell` real ia embrulhado em
+    systemd-run, falhava, e `alvo` vinha None. Na suite completa isso ficou escondido por acidente
+    ate 21/08/2026, quando outra correcao tirou o andaime que zerava o cache sem querer.
+
+    Sem `monkeypatch` de proposito: pedir fixture dentro de fixture autouse muda a ordem de
+    setup/teardown de todo teste — e foi exatamente essa a armadilha do conftest (ver o comentario
+    de la). Guardar e repor na mao nao mexe em ordem nenhuma.
+    """
+    anterior = tmux._scope_usavel
+    yield
+    tmux._scope_usavel = anterior
 
 
 def test_list_sessions_parses_output():
@@ -74,6 +101,7 @@ def test_send_keys_named_key():
     assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "=cc:", "Escape"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="no Windows o Enter vai como tecla nomeada, nao como `-l -- \r` (tmux.py ramifica)")
 def test_send_keys_enter_vira_cr_cru():
     # Enter NUNCA como nome de tecla: com extended-keys on no tmux (Shift+Enter do Pi), o "Enter"
     # nomeado sai no protocolo estendido e o composer do Claude Code engole o submit (regressão
@@ -113,8 +141,7 @@ def test_has_session_is_exact_against_real_tmux():
         # kill-SESSION (alvo exato), nunca kill-server: um `-L` esquecido num kill-server derruba o
         # servidor tmux DEFAULT e com ele todas as sessoes do usuario. Matar a unica sessao ja encerra
         # este servidor sozinho, e um socket orfao vazio e inofensivo — nao vale o risco do atalho.
-        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={base}-2"],
-                       capture_output=True, text=True)
+        matar_sessao(f"{base}-2", sock)
 
 
 def test_pane_target_uses_exact_session_form():
@@ -172,8 +199,29 @@ def test_new_session_falls_back_to_backend_config_dir(monkeypatch):
     assert "CLAUDE_CONFIG_DIR=/home/u/.claude-work" in captured["args"]
 
 
-def test_new_session_sempre_manda_config_dir(monkeypatch, tmp_path):
-    """SEM config_dir e SEM a variavel, o -e tem que sair mesmo assim, com o ~/.claude explicito.
+def _casa_home(monkeypatch, tmp_path):
+    """Home falsa nos DOIS sistemas. `HOME` sozinho nao move o `Path.home()` no Windows (o
+    `ntpath.expanduser` olha `USERPROFILE`, medido), e era por isso que o caso do config dir padrao
+    vinha vermelho aqui desde sempre: ele comparava com a home de VERDADE da maquina."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    return tmp_path / ".claude"
+
+
+def _args_de_new_session(monkeypatch, **kw):
+    captured = {}
+    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
+        tmux.new_session("s", "/tmp", "claude --session-id x", **kw)
+    return captured["args"]
+
+
+def _valores_de_config_dir(args):
+    return [a for a in args if str(a).startswith("CLAUDE_CONFIG_DIR=")]
+
+
+def test_new_session_sempre_manda_config_dir_no_tmux(monkeypatch, tmp_path):
+    """No TMUX, SEM config_dir e SEM a variavel, o -e tem que sair mesmo assim, com o ~/.claude
+    explicito — e este caso e o que prende o comportamento do Linux, byte por byte.
 
     O ambiente do pane e o global do SERVIDOR tmux somado ao da sessao, e o global vem de quem
     subiu o servidor. Se foi um `claude-conta contaA`, uma sessao aberta depois sem -e nasce na
@@ -183,19 +231,96 @@ def test_new_session_sempre_manda_config_dir(monkeypatch, tmp_path):
         -> /tmp/conta-a
     """
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    captured = {}
-    with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
-        tmux.new_session("s", "/tmp", "claude --session-id x")
-    assert f"CLAUDE_CONFIG_DIR={tmp_path}/.claude" in captured["args"]
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: False)
+    # `tmp_path / ".claude"` e nao um f-string com `/`: o tmux.py monta o valor com
+    # `str(Path.home() / ".claude")`, que no Windows sai com `\`. No Linux o resultado e
+    # identico ao de antes — o caso continua valendo nos dois sistemas em vez de virar skip.
+    assert f"CLAUDE_CONFIG_DIR={padrao}" in _args_de_new_session(monkeypatch)
 
 
+def test_new_session_omite_config_dir_padrao_no_psmux(monkeypatch, tmp_path):
+    """No psmux o pane herda o ambiente de QUEM CHAMA, entao o -e com o valor PADRAO nao defende de
+    vazamento nenhum — e exportar a variavel e o proprio bug: pro Claude Code, config dir setado
+    (mesmo apontando pro ~/.claude) significa ler o `.claude.json` de DENTRO dele, que nasce vazio.
+    Sintoma: toda sessao criada pelo app no Windows caia na tela de boas-vindas, com a credencial
+    intacta."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    assert _valores_de_config_dir(_args_de_new_session(monkeypatch)) == []
+
+
+def test_new_session_manda_conta_escolhida_no_psmux(monkeypatch, tmp_path):
+    """A guarda que fica de pe: conta ESCOLHIDA (valor != padrao) vai sempre, nos dois
+    multiplexadores — e o unico jeito de a conta chegar no pane."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    conta = str(tmp_path / ".claude-work")
+    assert f"CLAUDE_CONFIG_DIR={conta}" in _args_de_new_session(monkeypatch, config_dir=conta)
+
+
+def test_new_session_manda_padrao_no_psmux_quando_o_backend_tem_a_variavel(monkeypatch, tmp_path):
+    """Backend com CLAUDE_CONFIG_DIR proprio -> o -e vai mesmo valendo o padrao: o pane herda o
+    ambiente do backend, entao OMITIR nao apaga a variavel de la — mandar explicito e o que garante
+    que valeu o valor pedido, e nao o que o backend calhava de ter."""
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude-outra"))
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    args = _args_de_new_session(monkeypatch, config_dir=str(padrao))
+    assert f"CLAUDE_CONFIG_DIR={padrao}" in args
+
+
+def test_e_config_dir_compara_pasta_e_nao_string(monkeypatch, tmp_path):
+    """A comparacao com o padrao e por PASTA (normpath+normcase), nao por string crua: o mesmo
+    ~/.claude escrito de outro jeito (`.` no meio, barra final) e o mesmo diretorio, e mandar o -e
+    por causa da grafia traria o bug de volta."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+    assert tmux._e_config_dir(os.path.join(str(tmp_path), ".", ".claude")) == []
+    assert tmux._e_config_dir(str(padrao) + os.sep) == []
+    assert tmux._e_config_dir(str(tmp_path / ".claude2")) != []
+
+
+def test_new_hidden_shell_segue_a_mesma_regra_do_config_dir(monkeypatch, tmp_path):
+    """A janela escondida (login de conta, renovacao de token) usa o MESMO `_e_config_dir`: pedir a
+    pasta PADRAO no psmux nasce sem a variavel — que e o que "conta padrao" quer dizer la — e a
+    credencial cai no mesmo `~/.claude/.credentials.json`. Conta de verdade continua indo."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    padrao = _casa_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(tmux, "_pane_herda_env_do_chamador", lambda: True)
+
+    capturado = []
+
+    def _run_falso(args, **k):
+        cp = _CP()
+        if "has-session" in args:
+            cp = MagicMock(returncode=1, stdout="", stderr="")   # nao existe -> cria
+        elif "new-session" in args:
+            capturado.append(args)
+        return cp
+
+    with patch.object(tmux, "RUN", _run_falso):
+        assert tmux.new_hidden_shell("s", "/tmp", config_dir=str(padrao)) == "term-s"
+    assert _valores_de_config_dir(capturado[-1]) == []
+
+    capturado.clear()
+    conta = str(tmp_path / ".claude-work")
+    with patch.object(tmux, "RUN", _run_falso):
+        tmux.new_hidden_shell("s", "/tmp", config_dir=conta)
+    assert f"CLAUDE_CONFIG_DIR={conta}" in capturado[-1]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sem olhar o env")
 def test_scope_prefix_empty_without_runtime_dir(monkeypatch):
     # Sem XDG_RUNTIME_DIR (host nao-systemd) -> spawn direto, sem wrap.
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     assert tmux._scope_prefix() == []
 
 
+@pytest.mark.skipif(os.name != "posix", reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sempre")
 def test_scope_prefix_wraps_when_systemd_available(monkeypatch):
     # Com runtime dir + systemd-run QUE FUNCIONA -> tmux nasce em scope proprio (fora do cgroup do
     # backend). O probe entrou depois deste teste: "systemd-run instalado" deixou de bastar, porque o
@@ -237,6 +362,7 @@ def test_new_session_skips_wayland_without_socket(monkeypatch, tmp_path):
     assert not any(str(a).startswith("WAYLAND_DISPLAY=") for a in captured["args"])
 
 
+@pytest.mark.skipif(os.name != "posix", reason="o `exec` e so do POSIX: no psmux o comando roda direto no ConPTY, sem shell no meio")
 def test_new_session_execs_command_so_claude_owns_tty(monkeypatch):
     # O comando vai prefixado com `exec`: o tmux roda via `fish -c`, e sem exec o fish ficaria como
     # dono do tty e o send-keys nao chegaria no claude. Com exec, o fish vira o claude.
@@ -291,6 +417,9 @@ def test_capture_pane_falha_de_tmux_e_logada(caplog):
     assert "session not found" in caplog.text
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] "
+                           "sem sondar — o caso passaria por vacuidade, nao por merito")
 def test_scope_prefix_sem_scope_quando_systemd_run_falha(monkeypatch):
     # systemd-run pode ESTAR instalado e ainda assim recusar criar scope transiente ("Failed to start
     # transient scope unit"). Sem este gate, TODA criacao de sessao morria com "falha ao criar sessao
@@ -302,6 +431,8 @@ def test_scope_prefix_sem_scope_quando_systemd_run_falha(monkeypatch):
     assert tmux._scope_prefix() == []
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sempre")
 def test_scope_prefix_usa_scope_quando_systemd_run_funciona(monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/systemd-run")
@@ -310,6 +441,7 @@ def test_scope_prefix_usa_scope_quando_systemd_run_funciona(monkeypatch):
     assert tmux._scope_prefix() == ["systemd-run", "--user", "--scope", "--collect", "-q", "--"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="a sonda do scope so roda no POSIX; no Windows _scope_prefix sai antes de sondar")
 def test_scope_probe_roda_uma_vez_so(monkeypatch):
     # O probe custa um fork; repetir a cada sessao seria desperdicio num estado que quase nunca muda.
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
@@ -705,16 +837,62 @@ def test_paste_text_falha_no_load_buffer_nao_cola_nada():
 # e matando a janela no fim. O valor afirmado é exatamente o passado, nunca o do servidor tmux.
 
 
+def _espera_environ_do_pane(alvo: str, esperado: str, timeout: float = 5.0):
+    """Espera o `environ` do pane FICAR PRONTO, e falha explicando o que viu se nao ficar.
+
+    O `new-session -d` volta assim que a SESSAO existe; o processo do pane e forkado pelo servidor
+    tmux e so ganha o ambiente pedido no `exec`. Entre uma coisa e outra ha uma janela em que o
+    `#{pane_pid}` ja responde e `/proc/<pid>/environ` ou nao abre, ou volta vazio, ou ainda e o
+    ambiente do SERVIDOR tmux (sem a variavel). Ler uma vez so tornava este caso — o unico do
+    arquivo que sobe um pane de verdade — instavel na suite cheia: mesmo commit, mesma maquina,
+    passava ou falhava conforme a rodada. Sleep fixo trocaria a corrida por lentidao garantida, e
+    voltaria a falhar numa maquina mais carregada; aqui espera-se a CONDICAO, com falha explicita
+    quando o tempo estoura.
+
+    Variavel presente com valor ERRADO nao espera: `/proc/<pid>/environ` e o ambiente do exec e
+    nao muda depois, entao insistir so adiaria uma falha de verdade ate o timeout.
+    """
+    limite = time.monotonic() + timeout
+    ultimo_pid, ultimo_env = "", None
+    while True:
+        cp = tmux._run(["tmux", "display-message", "-p", "-t", f"={alvo}:", "#{pane_pid}"])
+        ultimo_pid = cp.stdout.strip()
+        if ultimo_pid.isdigit():
+            try:
+                bruto = Path(f"/proc/{ultimo_pid}/environ").read_bytes()
+            except OSError:
+                bruto = b""
+            if bruto:
+                ultimo_env = bruto.replace(b"\0", b"\n").decode("utf-8", "replace")
+                if esperado in ultimo_env:
+                    return ultimo_pid, ultimo_env
+                chave = esperado.split("=", 1)[0] + "="
+                achado = [l for l in ultimo_env.splitlines() if l.startswith(chave)]
+                if achado:
+                    pytest.fail(f"o pane nasceu com {achado!r}, e nao com {esperado!r}")
+        if time.monotonic() >= limite:
+            pytest.fail(f"{timeout}s sem {esperado!r} no ambiente do pane de {alvo!r}: "
+                        f"pane_pid={ultimo_pid!r}, environ="
+                        + ("nao legivel" if ultimo_env is None
+                           else f"{len(ultimo_env.splitlines())} variaveis"))
+        time.sleep(0.02)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="le /proc/<pid>/environ, que so existe no Linux")
 def test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane():
+    # Cenario montado AQUI, nao herdado: zera a sonda do scope pra ela rodar contra o `RUN` de
+    # verdade. Este caso fala com o tmux REAL, entao herdar um `_scope_usavel` que outro teste
+    # gravou sob mock faria o `new_hidden_shell` sair embrulhado num `systemd-run` que este
+    # ambiente pode nao aceitar — e a sessao nem nasceria (`alvo is None`), sem que o assert
+    # abaixo tivesse qualquer relacao com o que ele existe pra provar. O fixture no topo do arquivo
+    # impede o vazamento entre casos; esta linha garante que ESTE nao depende de quem veio antes.
+    tmux._scope_usavel = None
     cfg = "/tmp/zz-config-dir-prova"
     alvo = tmux.new_hidden_shell(f"prova-cfg-{uuid.uuid4().hex[:6]}", "/tmp", config_dir=cfg)
     assert alvo is not None
     try:
-        pane_pid = tmux._run(["tmux", "display-message", "-p", "-t", f"={alvo}:",
-                              "#{pane_pid}"]).stdout.strip()
+        pane_pid, env = _espera_environ_do_pane(alvo, f"CLAUDE_CONFIG_DIR={cfg}")
         assert pane_pid.isdigit()
-        env = Path(f"/proc/{pane_pid}/environ").read_bytes()
-        env = env.replace(b"\0", b"\n").decode("utf-8", "replace")
         assert f"CLAUDE_CONFIG_DIR={cfg}" in env
     finally:
         tmux.kill_session(alvo)

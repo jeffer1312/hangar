@@ -3,6 +3,7 @@ da malha cross-server. O peers.json é lido pelo cp-send, pelas rotas de pareame
 de origens permitidas do terminal: gravação torta ali derruba todo servidor remoto de uma vez.
 """
 import json
+import os
 
 import pytest
 
@@ -78,6 +79,12 @@ def test_apagar_desconhecido_recusa_e_nao_escreve(arquivo):
     assert json.loads(arquivo.read_text(encoding="utf-8"))["a"]["token"] == "ta"
 
 
+# LACUNA VISIVEL, nao contornada: o peers.json guarda os TOKENS da malha, e no Windows ele NAO
+# esta protegido — la nao existe bit de modo (o st_mode volta 0o666 e quem decide acesso e a ACL),
+# e a ACL equivalente ainda nao esta implementada. Esconder isso atras de um assert que nao roda
+# seria pior; e o mesmo tratamento que o test_pi_inbox ja da ao arquivo de conexao do Pi.
+@pytest.mark.skipif(os.name != "posix",
+                    reason="modo 0600 nao existe no Windows; a protecao por ACL ainda nao existe")
 def test_arquivo_nasce_e_permanece_0600(arquivo):
     peers.gravar_peer("a", "http://a:8765", "ta")
     assert arquivo.stat().st_mode & 0o777 == 0o600

@@ -36,6 +36,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from app import atomico
+
 try:
     import fcntl
 except ImportError:      # Windows: sem flock. A trava da conta vira no-op; ver _trava.
@@ -166,6 +168,24 @@ def _trava_compartilhada():
                 msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+def _aponta_para(link: Path, alvo: Path) -> bool:
+    """O atalho `link` já aponta pra `alvo`? É a pergunta "não preciso mexer nisso".
+
+    `os.readlink(link) == str(alvo)` não serve: no Windows o readlink devolve o alvo com o prefixo
+    de caminho estendido (`\\\\?\\C:\\...`), então a comparação por string é SEMPRE falsa — medido em
+    21/08/2026 nesta VM, para link de pasta e de arquivo. O efeito não era cosmético: `reconciliar`
+    deixava de ser idempotente. A cada passada ela concluía que o atalho estava errado, mandava o
+    alvo real pra `.drift/<nome>.1`, `.2`, `.3`… e refazia o link — quer dizer, o CLAUDE.md e a
+    memory da conta iam pra gaveta de novo a cada reconciliação, calado.
+
+    `realpath` nos dois lados responde a pergunta certa nas duas plataformas: link bom casa, link
+    pra outro alvo não casa, e link MORTO não casa (o realpath devolve o alvo inexistente sem
+    resolver). Ele SEGUE o link de propósito — é exatamente o que se quer saber aqui; quem não
+    pode seguir (a regra de deriva, logo abaixo) continua usando `is_symlink`/`lstat`.
+    """
+    return os.path.realpath(link) == os.path.realpath(alvo)
+
+
 def _ligar(destino: Path, alvo: Path) -> None:
     """Cria o atalho por troca atômica: sem janela em que o caminho não existe.
 
@@ -186,7 +206,7 @@ def _ligar(destino: Path, alvo: Path) -> None:
             "Desenvolvedor ligado (Configurações → Sistema → Para desenvolvedores). Sem ele a "
             "conta ficaria com uma CÓPIA, que passa a divergir do original sem ninguém perceber.",
         ) from e
-    os.replace(tmp, destino)
+    atomico.substituir(tmp, destino)
 
 
 def _gavetar(dir_conta: Path, destino: Path) -> str:
@@ -262,7 +282,7 @@ def _ligar_memoria(dir_conta: Path, projeto: str | None) -> list[str]:
         local = dir_conta / "projects" / nome
         local.mkdir(parents=True, exist_ok=True)
         destino = local / "memory"
-        if destino.is_symlink() and os.readlink(destino) == str(alvo):
+        if destino.is_symlink() and _aponta_para(destino, alvo):
             continue
         if destino.is_symlink() or destino.exists():
             # Mesma regra do topo: o que não é o atalho esperado é deriva. Memória local de
@@ -294,7 +314,7 @@ def _semear_settings(dir_conta: Path) -> str | None:
     destino = dir_conta / "settings.json"
     aviso = None
     if destino.is_symlink():
-        if os.readlink(destino) == str(alvo):
+        if _aponta_para(destino, alvo):
             destino.unlink()
         else:
             # Symlink que não é o do layout antigo: deriva — mesma regra do resto, gaveta.
@@ -346,7 +366,7 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> str | None:
     # escrita receberia JSON truncado.
     tmp = destino.with_name(f"{destino.name}.hangar-novo.{os.getpid()}.{uuid.uuid4().hex[:8]}")
     tmp.write_text(json.dumps(para, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, destino)
+    atomico.substituir(tmp, destino)
     if desfeitas:
         return ("settings.json: o principal sobrescreveu "
                 + ", ".join(desfeitas) + " na cópia desta conta")
@@ -367,7 +387,7 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
         if alvo.name in _NAO_LIGAR:
             continue
         destino = dir_conta / alvo.name
-        if destino.is_symlink() and os.readlink(destino) == str(alvo):
+        if destino.is_symlink() and _aponta_para(destino, alvo):
             continue
         if destino.is_symlink() or destino.exists():
             aviso = _resolver_colisao(dir_conta, destino, alvo)

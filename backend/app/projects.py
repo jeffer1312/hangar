@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from app import runner
+from app import atomico, runner
 from app.models import ProjectStatus, RunInfo
 from app.procinfo import _TEM_PROC
 
@@ -96,7 +96,7 @@ def _mutate(fn) -> None:
                 f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
             if _CONFIG.exists():
                 os.chmod(tmp, _CONFIG.stat().st_mode & 0o777)
-            os.replace(tmp, _CONFIG)
+            atomico.substituir(tmp, _CONFIG)
         except OSError as e:
             tmp.unlink(missing_ok=True)
             raise ProjectError(500, f"falha ao gravar projects.json: {e}") from e
@@ -331,7 +331,10 @@ def stop(name: str) -> None:
         # proprio stop — matar so o pane deixaria os filhos orfaos rodando. Exit != 0 nao e
         # falha: pkill devolve 1 quando ja nao ha processo pra matar.
         try:
-            subprocess.run(["/bin/sh", "-lc", stop_cmd], cwd=cfg["cwd"],
+            # `/bin/sh` chumbado aqui nao existe no Windows — o stop_command do projeto NUNCA
+            # rodava la, e a mensagem generica de falha nao dizia por que. `runner.argv_de_shell`
+            # e o mesmo lugar que o start usa (POSIX byte-identico; Windows vai por COMSPEC).
+            subprocess.run(runner.argv_de_shell(stop_cmd), cwd=cfg["cwd"],
                            capture_output=True, timeout=_STOP_TIMEOUT)
         except subprocess.TimeoutExpired:
             err = f"stop_command estourou {_STOP_TIMEOUT}s — confira processos orfaos"

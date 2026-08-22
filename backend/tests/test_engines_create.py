@@ -5,6 +5,8 @@ aparece em /proc/<pid>/cmdline (legível por qualquer usuário) e o tmux.py não
 E o motor tem que sobreviver aos DOIS resumes — senão uma sessão Kimi ressuscita na conta Anthropic
 continuando um transcript de Kimi, calado.
 """
+import os
+
 import pytest
 
 from app import engines as eng
@@ -12,10 +14,36 @@ from app import procinfo
 from app import registry as reg
 
 
+# Capturado no IMPORT, antes de qualquer fixture: o `_isola` abaixo troca `reg._exigir_cp_engine`
+# por um no-op, entao la dentro nao ha mais como alcancar a funcao de verdade.
+_EXIGIR_ORIGINAL = reg._exigir_cp_engine
+
+
 @pytest.fixture(autouse=True)
 def _isola(tmp_path, monkeypatch):
     monkeypatch.setattr(eng, "caminho", lambda: tmp_path / "engines.json")
+    # A guarda que recusa quando o `cp-engine` nao esta no PATH e sobre o AMBIENTE do servidor, nao
+    # sobre a montagem do comando, que e o assunto deste arquivo. Sem desliga-la aqui, todos estes
+    # casos passariam a depender de o lancador estar instalado na maquina que roda a suite — verde
+    # no Linux (onde o install-claude-wrapper.sh o poe no PATH) e vermelho no Windows, pelo
+    # ambiente e nao pelo codigo. A guarda tem teste proprio, logo abaixo.
+    monkeypatch.setattr(reg, "_exigir_cp_engine", lambda: None)
     yield
+
+
+def test_recusa_alto_quando_o_cp_engine_nao_esta_no_path(monkeypatch):
+    """A guarda em si — o unico caso que NAO desliga o `_exigir_cp_engine`.
+
+    Sem ela o pane nasce rodando um comando que nao existe, morre no ato, e o `tmux new-session`
+    devolve 0 assim mesmo (medido no psmux: rc=0 e, 3s depois, `has-session` ja responde 1). O app
+    entao reporta "sessao criada" pra uma sessao que evaporou.
+    """
+    monkeypatch.setattr(reg.shutil, "which", lambda nome: None)
+    with pytest.raises(ValueError, match="cp-engine"):
+        _EXIGIR_ORIGINAL()
+
+    monkeypatch.setattr(reg.shutil, "which", lambda nome: "/qualquer/cp-engine")
+    _EXIGIR_ORIGINAL()           # com o lancador no PATH, passa calado
 
 
 def _motor():
@@ -64,6 +92,9 @@ def test_create_com_motor_inexistente_estoura(tmp_path, monkeypatch):
     assert "command" not in visto
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="exercita o ramo /proc do _engine_of contra um /proc de mentira; no "
+                           "Windows o despacho vai pro psutil e nao ha o que este caso testa")
 def test_engine_of_le_o_cp_engine_do_proc(tmp_path, monkeypatch):
     # Mesmo truque do _config_dir_of: o env do processo VIVO é o registro autoritativo — um sidecar
     # em disco pode divergir do que está de fato rodando no pane.

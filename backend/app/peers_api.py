@@ -12,14 +12,9 @@ import os
 import tempfile
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:      # Windows: sem flock, a trava vira no-op (mesmo padrão de peers.py)
-    fcntl = None
-
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import peers, peers_check, runtime_config
+from app import atomico, peers, peers_check, runtime_config
 from app.auth import require_auth
 from app.config import settings
 from app.mensagens import erro
@@ -124,52 +119,70 @@ def _escrever_id_env(valor: str) -> None:
     atômica (tmp + os.replace) com o PID no nome do temporário — o mesmo formato do peers.json;
     ​​o .env nasce 0600 e permanece (guarda CP_AUTH_TOKEN e as chaves VAPID)."""
     # Lock sidecar cobrindo LEITURA e escrita (mesmo desenho de peers._mutar): a tela não é o
-    # único escritor do .env (instalador, editor do usuário); sem flock, duas gravações
+    # único escritor do .env (instalador, editor do usuário); sem trava, duas gravações
     # concorrentes liam o mesmo estado e a última apagava a mudança da outra, calado.
+    #
+    # A trava vem IMPORTADA de peers.py, não copiada: este arquivo tinha um `fcntl.flock` direto
+    # com `except ImportError: fcntl = None`, que no Windows virava no-op silencioso — e o
+    # comentário dizia "mesmo padrão de peers.py", frase que deixou de ser verdade quando o
+    # peers.py ganhou o fallback de `msvcrt.locking` e ficou pior que não ter comentário nenhum.
+    # O que se perde aqui é mais sensível que o peers.json: este .env é o do CP_AUTH_TOKEN (a
+    # única credencial do app) e o das chaves VAPID. Uma verdade só, num lugar só.
     lock_path = _ENV_ARQUIVO.with_name(_ENV_ARQUIVO.name + ".lock")
     _ENV_ARQUIVO.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "w", encoding="utf-8") as lock:
-        if fcntl is not None:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        linhas: list[str] = []
+    # "a+" e não "w" pelo motivo que o peers.py mede: no Windows a trava é de REGIÃO (o
+    # `msvcrt.locking` tranca N bytes a partir da posição atual), e truncar o arquivo de lock
+    # debaixo de outro processo que já o tem travado é pedir confusão.
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        peers._travar(lock)
         try:
-            linhas = _ENV_ARQUIVO.read_text(encoding="utf-8").splitlines(keepends=True)
-        except FileNotFoundError:
-            pass
-        chave = "CP_SERVER_ID"
-        achou = False
-        novas: list[str] = []
-        for linha in linhas:
-            if linha.startswith(chave + "="):
-                achou = True
-                if valor:
-                    novas.append(f"{chave}={valor}\n")
-                # vazio: a linha some — pydantic lê campo ausente como "" (pareamento desligado)
-            else:
-                novas.append(linha)
-        if not achou and valor:
-            if novas and not novas[-1].endswith("\n"):
-                novas[-1] += "\n"
-            novas.append(f"{chave}={valor}\n")
-        # Órfão de processo morto entre o write e o replace (kill -9/OOM não roda except): contém
-        # a malha INTEIRA do .env — CP_AUTH_TOKEN e chaves VAPID — não pode apodrecer no disco
-        # esperando a próxima gravação. Dentro do lock: a limpeza de um processo não apaga o
-        # temporário vivo de outro.
-        for stale in _ENV_ARQUIVO.parent.glob(_ENV_ARQUIVO.name + ".*.tmp"):
-            stale.unlink(missing_ok=True)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(_ENV_ARQUIVO.parent),
-            prefix=f"{_ENV_ARQUIVO.name}.{os.getpid()}.",
-            suffix=".tmp")
-        tmp = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.writelines(novas)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, _ENV_ARQUIVO)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+            _escrever_id_env_travado(valor)
+        finally:
+            peers._destravar(lock)
+
+
+def _escrever_id_env_travado(valor: str) -> None:
+    """O corpo do `_escrever_id_env`, já sob a trava — separado só pra o unlock caber num
+    `finally` sem aninhar o resto (mesma separação de `peers._mutar_travado`)."""
+    linhas: list[str] = []
+    try:
+        linhas = _ENV_ARQUIVO.read_text(encoding="utf-8").splitlines(keepends=True)
+    except FileNotFoundError:
+        pass
+    chave = "CP_SERVER_ID"
+    achou = False
+    novas: list[str] = []
+    for linha in linhas:
+        if linha.startswith(chave + "="):
+            achou = True
+            if valor:
+                novas.append(f"{chave}={valor}\n")
+            # vazio: a linha some — pydantic lê campo ausente como "" (pareamento desligado)
+        else:
+            novas.append(linha)
+    if not achou and valor:
+        if novas and not novas[-1].endswith("\n"):
+            novas[-1] += "\n"
+        novas.append(f"{chave}={valor}\n")
+    # Órfão de processo morto entre o write e o replace (kill -9/OOM não roda except): contém
+    # a malha INTEIRA do .env — CP_AUTH_TOKEN e chaves VAPID — não pode apodrecer no disco
+    # esperando a próxima gravação. Dentro do lock: a limpeza de um processo não apaga o
+    # temporário vivo de outro.
+    for stale in _ENV_ARQUIVO.parent.glob(_ENV_ARQUIVO.name + ".*.tmp"):
+        stale.unlink(missing_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(_ENV_ARQUIVO.parent),
+        prefix=f"{_ENV_ARQUIVO.name}.{os.getpid()}.",
+        suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.writelines(novas)
+        os.chmod(tmp, 0o600)
+        atomico.substituir(tmp, _ENV_ARQUIVO)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     try:
         os.chmod(_ENV_ARQUIVO, 0o600)
     except OSError as e:

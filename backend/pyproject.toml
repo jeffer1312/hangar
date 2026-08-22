@@ -18,6 +18,13 @@ dependencies = [
     # que e extensao C. Ver app/procinfo.py: no Linux o caminho continua sendo /proc direto,
     # porque psutil.open_files() e bem mais lento e esses caminhos rodam por poll.
     "psutil>=5.9.0 ; sys_platform != 'linux'",
+    # NAO ha dependencia de PTY pro Windows. O `pywinpty` chegou a entrar aqui e SAIU depois de
+    # medido (22/08/2026): ele nao usa o ConPTY do sistema — embarca `conpty.dll` e
+    # `OpenConsole.exe` proprios, do Windows Terminal —, entao nao expunha handle aproveitavel pra
+    # entregar ao asyncio, que e o ponto inteiro do motor. Junte a isso `PTY.read()` devolvendo
+    # `str` em vez de `bytes` (num cano de bytes crus ate o xterm.js) e um `socket.bind` ESCUTANDO
+    # por sessao, e nao sobra motivo pra 1,2 MB de binario de terceiro. Hoje o pty do Windows e
+    # `app/conpty.py`: ctypes puro sobre o kernel32, stdlib e nada mais.
 ]
 
 [dependency-groups]

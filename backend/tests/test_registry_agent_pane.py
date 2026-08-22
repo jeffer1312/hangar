@@ -11,6 +11,8 @@ import pytest
 import app.api as api_mod
 from app import agentpane, registry, tmux
 
+from tmux_teste import matar_sessao
+
 SESS = "cp-test-registry-agentpane"
 _UUID = "12345678-1234-1234-1234-123456789abc"
 
@@ -19,11 +21,11 @@ _UUID = "12345678-1234-1234-1234-123456789abc"
 def sessao(tmp_path):
     # cwd EXCLUSIVO desta sessao (tmp_path): _cwd_has_siblings faz um `tmux list-panes -a` real e
     # conta por cwd -- com "/tmp" cru colidiria com qualquer outra sessao da maquina que use /tmp.
-    subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
+    matar_sessao(SESS)
     subprocess.run(["tmux", "new-session", "-d", "-s", SESS, "-c", str(tmp_path),
                     "-x", "200", "-y", "50", "sleep 600"], check=True)
     yield SESS
-    subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
+    matar_sessao(SESS)
 
 
 def _segunda_janela(nome, cwd):
@@ -43,8 +45,10 @@ def test_list_resolve_pelo_pane_do_agente_com_janela_extra(sessao, tmp_path, mon
     _segunda_janela(sessao, str(tmp_path))
 
     monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: pid == agente["pid"])
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda pid: f"claude --session-id {_UUID}" if pid == agente["pid"] else "bash")
+    def _cmd(pid):
+        return f"claude --session-id {_UUID}" if pid == agente["pid"] else "bash"
+    monkeypatch.setattr(registry, "_cmdline", _cmd)
+    monkeypatch.setattr(registry, "_argv", lambda pid: _cmd(pid).split())
 
     reg = registry.SessionRegistry(projects_dir=tmp_path)
     info = {i.name: i for i in reg.list()}[sessao]
@@ -135,8 +139,8 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
         # esquecido num kill-server derruba o servidor tmux DEFAULT (todas as sessoes Claude vivas
         # do usuario), nao so o socket privado deste teste. Aqui o `sock` e sempre um uuid novo e
         # nunca ficaria vazio de verdade, mas o padrao errado nao pode ser o que fica pra copiar.
-        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={a}"], capture_output=True)
-        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={b}"], capture_output=True)
+        matar_sessao(a, sock)
+        matar_sessao(b, sock)
 
 
 def test_pane_info_resolve_pelo_pane_do_agente_com_split(sessao, tmp_path, monkeypatch):
@@ -147,8 +151,10 @@ def test_pane_info_resolve_pelo_pane_do_agente_com_split(sessao, tmp_path, monke
     _segunda_janela(sessao, str(tmp_path))     # 2o pane, fica ATIVO -- o agente perde o "ativo"
 
     monkeypatch.setattr(agentpane, "_pane_do_agente", lambda pid, children: pid == agente["pid"])
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda pid: "pi --whatever" if pid == agente["pid"] else "bash")
+    def _cmd(pid):
+        return "pi --whatever" if pid == agente["pid"] else "bash"
+    monkeypatch.setattr(registry, "_cmdline", _cmd)
+    monkeypatch.setattr(registry, "_argv", lambda pid: _cmd(pid).split())
 
     provider, pane_id = api_mod._pane_info(sessao)
 

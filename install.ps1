@@ -31,10 +31,144 @@ function Nota($m)   { Write-Host "      $m" -ForegroundColor DarkGray }
 function Falta($m)  { Write-Host "  --  $m" -ForegroundColor Yellow }
 function Erro($m)   { Write-Host "  X   $m" -ForegroundColor Red }
 
+# Da pra PERGUNTAR alguma coisa nesta execucao? Medido em 21/08/2026 nesta VM: com o stdin vindo
+# de um pipe — que e o caso de `irm ... | iex` chamado por outro processo, e de qualquer execucao
+# por SSH/tarefa — `[Console]::IsInputRedirected` volta True e o `Read-Host` responde STRING VAZIA
+# na hora, sem esperar ninguem. Era assim que o passo 3/8 gerava um token aleatorio "porque o
+# usuario apertou Enter" e seguia adiante sem nunca mostrar o token: a pessoa terminava a
+# instalacao sem a credencial. Ler do console real (CONIN$) nao e caminho: o File.Open recusa o
+# dispositivo ("FileStream foi solicitado a abrir um dispositivo que nao era um arquivo") e a
+# alternativa seria P/Invoke de CreateFile dentro de um instalador.
+$script:Interativo = -not [Console]::IsInputRedirected
+
 function Pergunte($texto) {
     if ($Sim) { return $true }
+    # Sem entrada interativa nao ha o que perguntar. Antes disto o Read-Host devolvia '' e o valor
+    # DEFAULT (sim) valia do mesmo jeito — o comportamento nao muda, o que muda e ele ser escolha
+    # escrita em vez de efeito colateral de uma pergunta que ninguem viu.
+    if (-not $script:Interativo) { Nota "$texto -> sim (sem entrada interativa, assumindo o padrao)"; return $true }
     $r = Read-Host "$texto [S/n]"
     return ($r -eq '' -or $r -match '^[SsYy]')
+}
+
+function Escrever-Texto($caminho, $texto, [switch]$ComBom) {
+    <#
+      Escrita de texto do instalador. Existe porque `Set-Content`/`Out-File`/`Add-Content` NAO
+      escrevem a mesma coisa no PowerShell 5.1 e no 7 — medido nesta VM em 22/08/2026
+      (5.1.26100.4202 vs 7.6.5), gravando a mesma string com acento:
+
+        chamada                       5.1                      7.6.5
+        Set-Content -Encoding UTF8    UTF-8 COM BOM            UTF-8 sem BOM
+        Out-File    -Encoding utf8    UTF-8 COM BOM            UTF-8 sem BOM
+        Set-Content (sem -Encoding)   ANSI (cp1252)            UTF-8 sem BOM
+        Add-Content (sem -Encoding)   ANSI (cp1252)            UTF-8 sem BOM
+
+      Ou seja: o MESMO instalador produzia arquivos diferentes conforme o PowerShell de quem
+      rodou. Aqui o encoding e dito, e o BOM e escolha de quem chama — porque as duas respostas
+      existem: arquivo LIDO PELO PowerShell precisa dele (ver Perfis-Do-Usuario), e .env / JSON /
+      script com shebang nao podem te-lo (o BOM ja fez o CP_AUTH_TOKEN virar chave invisivel aqui,
+      install.ps1:241).
+    #>
+    $pai = Split-Path -Parent $caminho
+    if ($pai) { New-Item -ItemType Directory -Force -Path $pai | Out-Null }
+    [System.IO.File]::WriteAllText($caminho, $texto, (New-Object System.Text.UTF8Encoding $ComBom.IsPresent))
+}
+
+function Escrever-Lancador($caminho, $texto, [ValidateSet('cmd','sh','vbs')][string]$Tipo) {
+    <#
+      Escreve um lancador (.cmd/.sh/.vbs) no encoding que o INTERPRETADOR dele entende, e devolve
+      $true se o arquivo mudou (pra quem chama dizer "criado" ou "ja atualizado").
+
+      Todos estes arquivos carregam CAMINHO dentro — o do checkout, o do python, o do log em
+      %LOCALAPPDATA% (que tem o nome do usuario). Todos eram gravados com `-Encoding ASCII`, e
+      ASCII transforma qualquer acento em `?`: num "C:\Users\Joao\..." (com til) o lancador nasce
+      apontando pra um caminho que nao existe, roda, e diz "o sistema nao pode encontrar o
+      caminho". Falha silenciosa de instalador, que e a classe de bug que este trabalho persegue.
+
+      Qual encoding serve NAO e opiniao — medido em 22/08/2026, cada arquivo executado de verdade
+      com um caminho contendo "Joao" com til (console em codepage 850):
+
+        .cmd (cmd.exe)      ASCII FALHOU | ANSI 1252 FALHOU | UTF-8 FALHOU | OEM 850 OK | UTF-8+chcp OK
+        .vbs (wscript)      ASCII FALHOU | ANSI 1252 OK     | OEM FALHOU   | UTF-16LE c/ BOM OK
+        .sh  (bash do Git)  ASCII FALHOU | ANSI 1252 OK     | UTF-8 sem BOM OK
+
+      Escolhas: `.cmd` vai na codepage OEM do console (o `chcp 65001` tambem funciona, mas ele muda
+      a codepage do console DE QUEM CHAMA — efeito colateral visivel num terminal interativo);
+      `.vbs` vai em UTF-16LE com BOM, que o WSH detecta sozinho e nao depende da codepage ANSI da
+      regiao; `.sh` vai em UTF-8 sem BOM, o padrao do bash (e um BOM antes do `#!` quebra o
+      shebang, como o proprio install.ps1 ja documenta mais abaixo).
+
+      Conteudo 100% ASCII sai byte a byte igual ao de antes nos tres casos.
+    #>
+    $enc = switch ($Tipo) {
+        'cmd' { [System.Text.Encoding]::GetEncoding([Console]::OutputEncoding.CodePage) }
+        'vbs' { New-Object System.Text.UnicodeEncoding $false, $true }   # UTF-16LE + BOM
+        'sh'  { New-Object System.Text.UTF8Encoding $false }
+    }
+    $bytes = $enc.GetBytes($texto)
+    if (Test-Path $caminho) {
+        $atual = [System.IO.File]::ReadAllBytes($caminho)
+        if ($atual.Length -eq $bytes.Length -and -not (Compare-Object $atual $bytes)) { return $false }
+    }
+    $pai = Split-Path -Parent $caminho
+    if ($pai) { New-Item -ItemType Directory -Force -Path $pai | Out-Null }
+    [System.IO.File]::WriteAllBytes($caminho, $bytes)
+    return $true
+}
+
+function Ler-Texto($caminho) {
+    <#
+      Le respeitando o que o arquivo E, nao o que a versao do PowerShell chuta. `Get-Content` sem
+      BOM assume ANSI no 5.1 e UTF-8 no 7: o mesmo arquivo, duas leituras. Como este instalador
+      REESCREVE o perfil inteiro, chutar errado corrompe o que ja estava la (o comentario do
+      Set-EnvKey conta a mesma historia com o token acentuado).
+
+      Ordem: BOM manda; sem BOM, tenta UTF-8 ESTRITO (throwOnInvalidBytes) e so entao cp1252 —
+      texto valido em UTF-8 quase nunca e cp1252 por acidente, e o contrario nao vale.
+    #>
+    if (-not (Test-Path $caminho)) { return $null }
+    $bytes = [System.IO.File]::ReadAllBytes($caminho)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+    }
+    try {
+        return (New-Object System.Text.UTF8Encoding $false, $true).GetString($bytes)
+    } catch {
+        return [System.Text.Encoding]::GetEncoding(1252).GetString($bytes)
+    }
+}
+
+function Perfis-Do-Usuario {
+    <#
+      TODOS os perfis que precisam do bloco, nao so o da versao que esta rodando.
+
+      `$PROFILE.CurrentUserAllHosts` aponta pra pastas DIFERENTES em cada versao (medido aqui):
+        5.1 -> ...\Documents\WindowsPowerShell\profile.ps1
+        7.x -> ...\Documents\PowerShell\profile.ps1
+      Instalar pelo pwsh 7 deixava todo terminal 5.1 — o padrao do Windows — sem o wrapper, e
+      nada dizia isso: a pessoa abria o terminal de sempre e a sessao continuava invisivel pro app.
+
+      O caminho da outra versao e DERIVADO do atual (troca so o nome da pasta), pra herdar um
+      Documents redirecionado por OneDrive/politica em vez de remontar o caminho na mao. A outra
+      versao so entra se ela EXISTE na maquina: o 5.1 vem no Windows; o 7 pode estar so como app
+      da Store (medido: winget instala em %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe, que nao
+      aparece no PATH de sessao SSH nao-interativa — procurar so por `pwsh` da falso negativo).
+    #>
+    $atual = $PROFILE.CurrentUserAllHosts
+    $alvos = @($atual)
+    $pasta = Split-Path -Parent $atual
+    $nome = Split-Path -Leaf $pasta
+    if ($nome -eq 'WindowsPowerShell') {
+        $temSete = (Tem 'pwsh') -or
+                   (Test-Path (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe')) -or
+                   (Test-Path (Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'))
+        if ($temSete) { $alvos += (Join-Path (Split-Path -Parent $pasta) 'PowerShell\profile.ps1') }
+    } elseif ($nome -eq 'PowerShell') {
+        # O 5.1 vem no Windows, entao o perfil dele SEMPRE entra: e o terminal que a pessoa abre
+        # por padrao, e o que o proprio app usa pra criar sessao.
+        $alvos += (Join-Path (Split-Path -Parent $pasta) 'WindowsPowerShell\profile.ps1')
+    }
+    return $alvos
 }
 
 function Atualiza-Path {
@@ -168,6 +302,25 @@ if (-not (Tem 'git')) {
     }
 } else { Ok 'git' }
 
+# ripgrep tambem e OPCIONAL, e o preco de nao ter e ESPECIFICO: quem chama o `rg` e a busca por
+# conteudo entre sessoes (a lupa; backend/app/search.py), e sem o binario ela devolve lista VAZIA -
+# a tela diz "nenhum resultado" pra uma busca que nunca rodou. No Linux o ripgrep costuma ja estar
+# ai; no Windows nao vem com o sistema, e foi assim que a busca ficou muda nesta VM. O backend
+# agora tambem registra o aviso no log, mas quem resolve de verdade e instalar.
+# NAO usa `Instale`: aquele empurra pra $pendencias e a linha seguinte aborta a instalacao inteira -
+# desproporcional pra uma ferramenta que so a lupa usa.
+if (-not (Tem 'rg')) {
+    Falta 'ripgrep ausente - a busca por conteudo entre sessoes (a lupa) volta sempre vazia'
+    if (-not $SoChecar -and (Pergunte '      Instalar o ripgrep agora?')) {
+        Write-Host '  .. instalando ripgrep (BurntSushi.ripgrep.MSVC)'
+        Nativo winget install --id BurntSushi.ripgrep.MSVC --exact --silent `
+            --accept-package-agreements --accept-source-agreements | Out-Null
+        Atualiza-Path
+        if (Tem 'rg') { Ok 'ripgrep instalado' }
+        else { Erro 'ripgrep nao instalou - so a lupa fica vazia; o resto do app funciona' }
+    }
+} else { Ok 'ripgrep' }
+
 if ($SoChecar) {
     if ($pendencias.Count -eq 0) { Titulo 'Nada faltando.'; exit 0 }
     Titulo "Faltam: $($pendencias -join ', ')"
@@ -246,11 +399,34 @@ function Token-Aleatorio {
     return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
 }
 
+function Token-Do-Env {
+    # -Encoding UTF8 pelo mesmo motivo do Set-EnvKey: sem ele o Get-Content do PS 5.1 decodifica
+    # arquivo sem BOM pela codepage ANSI, e um token acentuado ("cafezinho" com acento) voltaria
+    # corrompido — o resumo do fim mostraria uma credencial que nao e a que esta no arquivo.
+    if (-not (Test-Path $envFile)) { return $null }
+    foreach ($l in @(Get-Content -Path $envFile -Encoding UTF8)) {
+        if ($l -match '^\s*CP_AUTH_TOKEN=(.*)$') { return $Matches[1].Trim() }
+    }
+    return $null
+}
+
 if ($temToken) {
     Ok 'backend\.env ja tem CP_AUTH_TOKEN (mantido)'
 } elseif ($Sim) {
     Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor (Token-Aleatorio)
     Ok 'CP_AUTH_TOKEN aleatorio gerado (modo -Sim nao pergunta)'
+} elseif (-not $script:Interativo) {
+    # Sem stdin interativo nao da pra perguntar, e o silencio aqui era o pior dos mundos: token
+    # sorteado, gravado, e a pessoa terminando a instalacao sem saber qual e. Gera e MOSTRA — aqui
+    # e de novo no resumo do fim, que e onde quem rolou a tela vai olhar.
+    $novoToken = Token-Aleatorio
+    Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor $novoToken
+    Falta 'entrada nao-interativa (o stdin vem de um pipe): nao da pra perguntar o token'
+    Nota 'gerei um aleatorio. ANOTE — ele aparece de novo no fim, e e o que voce digita no celular:'
+    Write-Host ""
+    Write-Host "      $novoToken" -ForegroundColor Yellow
+    Write-Host ""
+    Nota 'pra escolher um token que voce lembre, rode o instalador num terminal aberto por voce.'
 } else {
     Write-Host '  Voce vai DIGITAR este token no celular, entao escolha algo que lembre.'
     Write-Host '  Enter em branco = gera um aleatorio de 48 caracteres (seguro, chato de digitar).'
@@ -295,9 +471,14 @@ if ((Tem 'git') -and (Test-Path "$raiz\.git")) {
 $precisa = $true
 if ((Test-Path $dist) -and (Test-Path $modulos)) {
     if ($marca -and (Test-Path $marcaArq)) {
-        # -Raw: sem isto o Get-Content devolve array de linhas e a comparacao com a string falha
-        # sempre - o build rodaria toda vez de novo, so que por outro motivo.
-        $precisa = ((Get-Content $marcaArq -Raw) -ne $marca)
+        # `Ler-Texto` e nao `Get-Content -Raw` (que era o que estava aqui): sem -Encoding, o 5.1
+        # decodifica arquivo sem BOM pela codepage ANSI e o 7 por UTF-8 — e a marca carrega a saida
+        # do `git status --porcelain`, onde entra nome de arquivo acentuado. Lendo errado, a
+        # comparacao diz "mudou" e o front e rebuildado a cada execucao, por um motivo que nao tem
+        # nada a ver com o git. Mesmo furo do .env e do settings.json, terceira porta.
+        # (O `-Raw` original existia porque sem ele o Get-Content devolve ARRAY de linhas e a
+        # comparacao com a string falharia sempre; `Ler-Texto` ja devolve o arquivo inteiro.)
+        $precisa = ((Ler-Texto $marcaArq) -ne $marca)
     } elseif (-not $marca) {
         # Sem git nao da pra saber o que mudou; rebuildar e a escolha segura.
         $precisa = $true
@@ -310,9 +491,52 @@ if ((Test-Path $dist) -and (Test-Path $modulos)) {
 # nao mexe em frontend/ pula o ramo, e a chamada do passo 7 estourava CommandNotFound no meio do
 # registro das tarefas, com o backend ja registrado e nao reiniciado.
 # `npm ci`. Ver o comentario naquele passo.
+$script:wmiMorto = $false
+
+function Tabela-De-Processos([int]$TimeoutSeg = 20) {
+    <#
+      A tabela de processos (pid, pai, nome, cmdline, nascimento) COM TETO DE TEMPO. `$null` = nao
+      consegui ler; quem chama tem que tratar isso como "nao sei quem e quem" e nao matar nada.
+
+      Existe porque o `Get-CimInstance Win32_Process` pode simplesmente NAO VOLTAR. Medido nesta VM
+      em 22/08/2026: `Get-CimInstance Win32_Process`, `Get-WmiObject Win32_Process` e ate
+      `Get-CimInstance Win32_OperatingSystem` estouraram 25s sem responder, enquanto `Get-Process`
+      (que nao passa pelo WMI) devolveu os 438 processos na hora — WMI degradado, nao volume.
+      O instalador ficava PENDURADO no passo 4/8, com o front ja derrubado, sem nada na tela: duas
+      execucoes travadas em 18 e 26 minutos ate serem mortas na mao. O `-ErrorAction
+      SilentlyContinue` que ja estava ali cobre erro, e erro nao era o problema — silencio era.
+
+      UMA varredura por chamada de Pare-Servico (antes eram tres identicas) e nada de cache entre
+      passos: a tabela muda enquanto o instalador roda, e decidir matar por uma foto velha e como
+      matar por pid reciclado.
+    #>
+    if ($script:wmiMorto) { return $null }
+    $j = Start-Job -ScriptBlock {
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate
+    }
+    if (Wait-Job $j -Timeout $TimeoutSeg) {
+        $tabela = @(Receive-Job $j)
+        Remove-Job $j -Force -ErrorAction SilentlyContinue
+        if ($tabela.Count -gt 0) { return $tabela }
+        return $null
+    }
+    Stop-Job $j -ErrorAction SilentlyContinue
+    Remove-Job $j -Force -ErrorAction SilentlyContinue
+    $script:wmiMorto = $true      # falhou uma vez, nao paga o teto de novo a cada passo
+    Erro "o WMI desta maquina nao respondeu em ${TimeoutSeg}s (Win32_Process)"
+    Nota 'sem a tabela de processos eu NAO derrubo nada — servico velho pode continuar de pe e'
+    Nota 'segurar porta ou arquivo. Se algum passo falhar por isso, feche o processo na mao.'
+    Nota 'pra consertar o WMI:  winmgmt /verifyrepository   (e, se preciso, /salvagerepository)'
+    return $null
+}
+
 function Pare-Servico {
     param([string]$Nome, [int]$Porta, [string]$Padrao, [string]$Exe)
     $alvos = @()
+    # UMA leitura da tabela pros tres usos abaixo (linhagem, casamento por padrao e BFS dos
+    # descendentes). $null = o WMI nao respondeu; o `if` de cada uso degrada pro caminho seguro.
+    $tabela = Tabela-De-Processos
     # ANCESTRAIS do instalador, jamais alvos. Medido em 08/08/2026: quem edita um arquivo do front e
     # chama o instalador no MESMO comando deixa o caminho do checkout na cmdline do proprio shell —
     # o casamento por substring pegava esse shell, e como o BFS abaixo desce nos descendentes, matar
@@ -322,7 +546,8 @@ function Pare-Servico {
     # processo atual, nunca a linhagem dele.
     $paisMapa = @{}
     $nascMapa = @{}
-    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+    foreach ($p in @($tabela)) {
+        if ($null -eq $p) { continue }
         $paisMapa[[int]$p.ProcessId] = [int]$p.ParentProcessId
         $nascMapa[[int]$p.ProcessId] = $p.CreationDate
     }
@@ -365,8 +590,8 @@ function Pare-Servico {
     # se roda o instalador (quem editou um arquivo do front no mesmo comando), um editor aberto, um
     # grep. Casando tambem o nome do processo, sobra quem de fato executa o front.
     if ($Padrao) {
-        $alvos += (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                   Where-Object { $_.CommandLine -and $_.CommandLine -match $Padrao -and
+        $alvos += (@($tabela) |
+                   Where-Object { $_ -and $_.CommandLine -and $_.CommandLine -match $Padrao -and
                                   (-not $Exe -or $_.Name -match $Exe) } |
                    Select-Object -ExpandProperty ProcessId)
     }
@@ -378,7 +603,8 @@ function Pare-Servico {
     # nova colidia igual. Varredura unica da tabela de processos + BFS, em vez de um Get-CimInstance
     # por nivel.
     $mapa = @{}
-    foreach ($p in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+    foreach ($p in @($tabela)) {
+        if ($null -eq $p) { continue }
         if (-not $mapa.ContainsKey([int]$p.ParentProcessId)) { $mapa[[int]$p.ParentProcessId] = @() }
         $mapa[[int]$p.ParentProcessId] += [int]$p.ProcessId
     }
@@ -487,7 +713,10 @@ if ($precisa) {
     } else {
         # A marca so e gravada com o build VERIFICADO: marca de build que falhou faz a proxima
         # rodada pular um dist quebrado, que e exatamente o estrago descrito acima.
-        if ($marca) { Set-Content -Path $marcaArq -Value $marca -NoNewline -Encoding UTF8 }
+        # Escrever-Texto (sem BOM) em vez de `Set-Content -Encoding UTF8`, que poe BOM no 5.1 e
+        # nao poe no 7: a marca e comparada com o que o git devolve, e arquivo que muda de bytes
+        # conforme quem rodou o instalador e pegadinha esperando acontecer.
+        if ($marca) { Escrever-Texto $marcaArq $marca }
         Ok 'buildado em frontend\dist\'
     }
 } else {
@@ -501,25 +730,88 @@ if ($precisa) {
 Titulo '5/8 Wrapper do claude (sessao aberta por voce aparece no app)'
 $marca = '# >>> hangar >>>'
 $marcaFim = '# <<< hangar <<<'
-$perfil = $PROFILE.CurrentUserAllHosts
-$jaTem = (Test-Path $perfil) -and (Select-String -Path $perfil -Pattern ([regex]::Escape($marca)) -Quiet)
-if ($jaTem) {
-    # Bloco antigo (instalado antes do claude-conta existir) nao deixa o wrapper novo de fora:
-    # reescreve o conteudo ENTRE as marcas, preservando o resto do perfil.
-    $linhas = Get-Content -Path $perfil
-    $ini = [Array]::IndexOf($linhas, $marca)
-    $fim = [Array]::IndexOf($linhas, $marcaFim)
-    $temConta = ($linhas -match 'claude-conta\.ps1').Count -gt 0
-    if (-not $temConta -and $ini -ge 0 -and $fim -gt $ini) {
-        if ($ini -gt 0) { $antes = @($linhas[0..($ini - 1)]) } else { $antes = @() }
-        if ($fim -lt ($linhas.Count - 1)) { $depois = @($linhas[($fim + 1)..($linhas.Count - 1)]) } else { $depois = @() }
-        $bloco = @($marca, ". `"$raiz\scripts\shell\claude.ps1`"", ". `"$raiz\scripts\shell\claude-conta.ps1`"", $marcaFim)
-        Set-Content -Path $perfil -Value ($antes + $bloco + $depois)
-        Ok 'bloco do $PROFILE atualizado (claude-conta incluido)'
-    } else {
-        Ok 'bloco ja presente no seu $PROFILE'
+
+# Marcadores de blocos NOSSOS que ficaram pra tras em instalacoes antigas. Sao os dois nomes que
+# este projeto ja teve; qualquer outro marcador no perfil da pessoa NAO entra nesta lista e nao e
+# tocado. Nao e faxina: hoje o bloco legado tambem faz `. claude.ps1`, entao um perfil com os dois
+# carrega o wrapper DUAS vezes a cada terminal novo.
+$MarcasLegadas = @(
+    @{ Ini = '# >>> claude-cockpit >>>'; Fim = '# <<< claude-cockpit <<<' },
+    @{ Ini = '# >>> claude-pocket >>>';  Fim = '# <<< claude-pocket <<<'  }
+)
+
+function Instalar-Bloco-No-Perfil($perfil) {
+    <#
+      Poe (ou atualiza) o bloco do wrapper NUM perfil. Devolve um texto curto pro log.
+
+      MESMA FORMA do scripts/setup-windows-tmux.ps1, de proposito: regex em modo singleline com os
+      marcadores escapados, remove TODAS as ocorrencias (nossas e as legadas conhecidas) e reescreve
+      uma so. Dois jeitos diferentes de fazer isto no mesmo repo seria pior que qualquer um dos dois.
+      O que esta FORA dos nossos marcadores nao e tocado — o perfil e da pessoa e pode ter meia vida
+      de configuracao ali.
+
+      O encoding e UTF-8 COM BOM, e essa e a unica escolha que funciona nas DUAS versoes. Medido
+      aqui em 22/08/2026 com um caminho de repo contendo acento (C:\...\Joao com til), fazendo cada
+      PowerShell carregar o mesmo perfil:
+
+        perfil gravado como   PowerShell 5.1        PowerShell 7.6.5
+        ANSI (cp1252)         carrega               FALHA (caminho vira "Jo?o")
+        UTF-8 SEM BOM         FALHA                 carrega
+        UTF-8 COM BOM         carrega               carrega
+
+      E o que o instalador fazia antes era exatamente o pior caso: `Add-Content`/`Set-Content` sem
+      -Encoding gravam ANSI no 5.1 e UTF-8 sem BOM no 7 — cada versao escrevia o formato que a
+      OUTRA nao le. Aqui o BOM e desejado; no .env e no settings.json ele e veneno (install.ps1:241).
+    #>
+    $texto = Ler-Texto $perfil
+    if ($null -eq $texto) { $texto = '' }
+    $bloco = @($marca,
+               ". `"$raiz\scripts\shell\claude.ps1`"",
+               ". `"$raiz\scripts\shell\claude-conta.ps1`"",
+               $marcaFim) -join "`r`n"
+
+    # Marca de abertura SEM a de fechamento: arquivo mexido na mao. Nao adivinha onde o bloco
+    # termina — o regex abaixo tambem nao casaria, e ai o bloco novo entraria embaixo do meio-bloco
+    # velho. Dizer isso e melhor que reescrever o perfil de alguem por palpite.
+    if ($texto.Contains($marca) -and -not $texto.Contains($marcaFim)) {
+        return 'MEXIDO NA MAO (marca de fim ausente) - nao toquei'
     }
-} elseif (Pergunte '  Instalar (recomendado)?') {
+
+    $padrao = '(?s)' + [regex]::Escape($marca) + '.*?' + [regex]::Escape($marcaFim) + '\r?\n?'
+    $nossos = ([regex]::Matches($texto, $padrao)).Count
+    $limpo = [regex]::Replace($texto, $padrao, '')
+
+    $legados = 0
+    foreach ($m in $MarcasLegadas) {
+        $pl = '(?s)' + [regex]::Escape($m.Ini) + '.*?' + [regex]::Escape($m.Fim) + '\r?\n?'
+        $legados += ([regex]::Matches($limpo, $pl)).Count
+        $limpo = [regex]::Replace($limpo, $pl, '')
+    }
+
+    # Cauda normalizada antes de concatenar (mesma nota do setup-windows-tmux): depois de arrancar
+    # os blocos o texto ja pode terminar em quebra de linha, e somar outra deixaria linha em branco
+    # acumulando a cada execucao — que e como se descobre que a funcao nao e idempotente.
+    $limpo = $limpo.TrimEnd("`r", "`n")
+    $novoTexto = if ($limpo) { $limpo + "`r`n`r`n" + $bloco + "`r`n" } else { $bloco + "`r`n" }
+
+    # Reescreve mesmo quando o CONTEUDO ja esta certo: o arquivo pode estar em ANSI ou em UTF-8 sem
+    # BOM (escrito por uma versao anterior deste instalador, ou pela outra versao do PowerShell), e
+    # ai o bloco existe mas o terminal nao consegue LER o caminho.
+    Escrever-Texto $perfil $novoTexto -ComBom
+
+    if ($legados -gt 0) { return "bloco no lugar; $legados bloco(s) legado(s) colapsado(s)" }
+    if ($nossos -gt 1)  { return "bloco no lugar; $nossos copias colapsadas em 1" }
+    if ($nossos -eq 1)  { return 'ja presente (encoding normalizado)' }
+    return 'bloco adicionado'
+}
+
+
+$perfis = Perfis-Do-Usuario
+$jaTem = $false
+foreach ($pf in $perfis) {
+    if ((Test-Path $pf) -and ((Ler-Texto $pf) -match [regex]::Escape($marca))) { $jaTem = $true }
+}
+if ($jaTem -or (Pergunte '  Instalar (recomendado)?')) {
     # O Windows vem com ExecutionPolicy = Restricted, que recusa carregar QUALQUER perfil. Escrever
     # o bloco assim mesmo nao so deixaria o wrapper sem carregar: todo terminal novo passaria a
     # cuspir um PSSecurityException por causa de um arquivo que nos criamos. Medido nesta maquina.
@@ -540,16 +832,13 @@ if ($jaTem) {
         }
     }
     if ($podeEscrever) {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $perfil) | Out-Null
-    Add-Content -Path $perfil -Value @"
-
-$marca
-. "$raiz\scripts\shell\claude.ps1"
-. "$raiz\scripts\shell\claude-conta.ps1"
-# <<< hangar <<<
-"@
-    Ok "bloco adicionado em $perfil"
-    Nota 'Vale nos terminais NOVOS - este aqui ainda esta com o perfil antigo.'
+        # TODOS os perfis, nao so o da versao que esta rodando: instalar pelo pwsh 7 deixava o
+        # terminal 5.1 — o padrao do Windows, e o que o proprio app usa — sem o wrapper, calado.
+        foreach ($pf in $perfis) {
+            $r = Instalar-Bloco-No-Perfil $pf
+            if ($r -like 'MEXIDO*') { Falta "$pf : $r" } else { Ok "$pf : $r" }
+        }
+        Nota 'Vale nos terminais NOVOS - este aqui ainda esta com o perfil antigo.'
     }
 } else {
     Nota 'pulado - sessao aberta no terminal nao vai aparecer no app'
@@ -616,7 +905,10 @@ if (-not (Test-Path $slJs)) {
     $cfg = $null
     if (Test-Path $settingsClaude) {
         try {
-            $bruto = Get-Content $settingsClaude -Raw
+            # Ler-Texto e nao `Get-Content -Raw`: sem BOM o Get-Content assume ANSI no 5.1 e
+            # UTF-8 no 7, e como este bloco REESCREVE o arquivo inteiro, o chute errado corrompia
+            # todo acento que ja estava la (mesma historia do token no Set-EnvKey).
+            $bruto = Ler-Texto $settingsClaude
             if ($bruto.Trim()) { $cfg = $bruto | ConvertFrom-Json }
         } catch {
             Falta 'settings.json do Claude ilegivel - nao vou reescrever por cima'
@@ -633,7 +925,12 @@ if (-not (Test-Path $slJs)) {
             if ($atual) { Copy-Item $settingsClaude "$settingsClaude.bak" -Force }
             $valor = New-Object psobject -Property @{ type = 'command'; command = $cmdSl }
             $cfg | Add-Member -NotePropertyName 'statusLine' -NotePropertyValue $valor -Force
-            $cfg | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsClaude -Encoding UTF8
+            # SEM BOM, e isto nao e preferencia: `Set-Content -Encoding UTF8` poe BOM no 5.1 e
+            # nao poe no 7 (medido), e quem le este arquivo e o Claude Code, em Node — medido
+            # aqui que `JSON.parse` de um arquivo com BOM levanta
+            # "Unexpected token, is not valid JSON". Ou seja, instalar pelo 5.1 podia deixar o
+            # settings.json do Claude ilegivel pra ele.
+            Escrever-Texto $settingsClaude ($cfg | ConvertTo-Json -Depth 20)
             Ok 'statusline configurada no ~/.claude/settings.json'
             Nota 'Vale nas sessoes NOVAS do Claude Code.'
             # Mesmo aviso do Linux: o caminho do node fica CRAVADO no settings. Trocar de versao
@@ -987,7 +1284,9 @@ if ($registrou) {
             $vbs = Join-Path (Split-Path -Parent $log) "$($t.Nome).vbs"
             $linhaVbs = 'CreateObject("WScript.Shell").Run "powershell -NoProfile ' +
                         "-ExecutionPolicy Bypass -EncodedCommand $b64" + '", 0, False'
-            Set-Content -Path $vbs -Value $linhaVbs -Encoding ASCII
+            # O .vbs carrega o caminho do LOG, que fica em %LOCALAPPDATA% — ou seja, no perfil do
+            # usuario, que pode ter acento no nome. Ver Escrever-Lancador.
+            Escrever-Lancador $vbs ($linhaVbs + "`r`n") 'vbs' | Out-Null
             $acao = New-ScheduledTaskAction -Execute 'wscript.exe' `
                 -Argument "`"$vbs`"" -WorkingDirectory $t.Dir
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
@@ -1075,6 +1374,12 @@ if ($registrou) {
     # PowerShell dentro de string de aspas simples.
     $vigiaPadraoCaminho = $tarefas[0].Padrao.Replace("'", "''")   # regex do checkout, ja escapado (acima)
     $vigiaExeProc = $tarefas[0].ExeProc        # 'uv|python'
+    # O front nao tem o par de criterios do backend (nao ha um `-m app.main` equivalente): o que
+    # identifica o processo dele e o caminho do checkout. Mesmo `.Replace("'","''")` do de cima,
+    # pelo mesmo motivo — o caminho entra CRU dentro de um literal de aspas simples, e um perfil
+    # com apostrofo (C:\Users\O'Brien\...) fecharia a aspa cedo e quebraria a vigia inteira.
+    $vigiaPadraoFront = $tarefas[1].Padrao.Replace("'", "''")
+    $vigiaExeFront = $tarefas[1].ExeProc       # 'node|npm|vite'
     $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
     # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_`/`$candidatos`/etc
     # sobrevivem literais sem precisar de crase nenhuma - o script so vira real quando o
@@ -1092,29 +1397,38 @@ if ($registrou) {
     # comparar nascimento de processo (install.ps1, $nascMapa). Passado o limite, dispara MESMO
     # ASSIM e registra no log que havia processo velho sem porta aberta - o problema tem que
     # aparecer, nao sumir.
+    # O FRONT tambem entra na vigia. Ate aqui ela so olhava a porta do backend e so reerguia o
+    # `hangar-backend`; o `hangar-frontend` ficava sem rede nenhuma - `RestartCount` e 0 nas tres
+    # tarefas (conferido com Get-ScheduledTask), entao o vite morto so voltava no proximo logon,
+    # e quem acessa pelo Tailscale ve a PAGINA fora do ar com a API respondendo. Mesmo criterio
+    # do backend, inclusive a heuristica de idade: processo do checkout vivo NAO prova que subiu.
+    # A funcao existe pra os dois nao virarem duas copias que divergem no proximo conserto.
     $vigiaTemplate = @'
 & {
-    $portaViva = Get-NetTCPConnection -State Listen -LocalPort __PORTA__ -ErrorAction SilentlyContinue
-    if ($portaViva) { return }
-    $candidatos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and ($_.CommandLine -match '__APPMAIN__' -or $_.CommandLine -match '__CAMINHO__') -and $_.Name -match '__EXE__' })
-    $limite = (Get-Date).AddMinutes(-10)
-    $recentes = @($candidatos | Where-Object { $_.CreationDate -and $_.CreationDate -gt $limite })
-    if ($recentes.Count -gt 0) { return }
-    if ($candidatos.Count -gt 0) { Write-Output "$(Get-Date -Format 's') vigia: processo(s) do checkout vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim" }
-    Start-ScheduledTask -TaskName 'hangar-backend'
+    function Reergue($porta, $padrao, $exe, $tarefa) {
+        if (Get-NetTCPConnection -State Listen -LocalPort $porta -ErrorAction SilentlyContinue) { return }
+        $candidatos = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -match $padrao -and $_.Name -match $exe })
+        $limite = (Get-Date).AddMinutes(-10)
+        $recentes = @($candidatos | Where-Object { $_.CreationDate -and $_.CreationDate -gt $limite })
+        if ($recentes.Count -gt 0) { return }
+        if ($candidatos.Count -gt 0) { Write-Output "$(Get-Date -Format 's') vigia: processo(s) de $tarefa vivo(s) ha mais de 10 min sem a porta aberta - pode estar pendurado; reiniciando mesmo assim" }
+        Start-ScheduledTask -TaskName $tarefa
+    }
+    Reergue __PORTA__ '(__APPMAIN__|__CAMINHO__)' '__EXE__' 'hangar-backend'
+    Reergue __PORTAFRONT__ '__CAMINHOFRONT__' '__EXEFRONT__' 'hangar-frontend'
 } *>&1 | Out-File -FilePath '__LOG__' -Append -Encoding utf8
 '@
     # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
     # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
     # de linha do resto do arquivo (crase, ou deixar parentese/vírgula aberto) cobre encadeamento
     # de metodo com seguranca - a mais simples e nao quebrar.
-    $vigiaPs = $vigiaTemplate.Replace('__APPMAIN__', $vigiaPadraoAppMain).Replace('__CAMINHO__', $vigiaPadraoCaminho).Replace('__EXE__', $vigiaExeProc).Replace('__PORTA__', "$portaBack").Replace('__LOG__', $vigiaLog)
+    $vigiaPs = $vigiaTemplate.Replace('__APPMAIN__', $vigiaPadraoAppMain).Replace('__CAMINHO__', $vigiaPadraoCaminho).Replace('__EXE__', $vigiaExeProc).Replace('__PORTA__', "$portaBack").Replace('__CAMINHOFRONT__', $vigiaPadraoFront).Replace('__EXEFRONT__', $vigiaExeFront).Replace('__PORTAFRONT__', "$portaFront").Replace('__LOG__', $vigiaLog)
     $vigiaEnc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($vigiaPs))
     $vigiaVbs = Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.vbs"   # mesmo lugar dos outros .vbs
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $vigiaVbs) | Out-Null
-    Set-Content -Path $vigiaVbs -Encoding ASCII -Value @"
+    Escrever-Lancador $vigiaVbs @"
 CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $vigiaEnc", 0, False
-"@
+"@ 'vbs' | Out-Null
     # NAO e -AtLogOn puro (era a versao anterior) - MEDIDO na maquina real em 09/08/2026 que a
     # Repetition so comeca a CONTAR a partir do disparo do gatilho, e registrar a tarefa nao
     # dispara nada sozinho: registrada as 02:28, com o ultimo logon interativo as 19:53 do dia
@@ -1219,10 +1533,8 @@ if (-not $bash) {
         $corpoShim = "#!/bin/sh`n" +
                      "# Gerado por hangar/install.ps1 - o cp-send chama python3.`n" +
                      "exec '$pyMsys'$arg `"`$@`"`n"
-        if (-not (Test-Path $shim) -or (Get-Content $shim -Raw) -ne $corpoShim) {
-            Set-Content -Path $shim -Encoding ASCII -NoNewline -Value $corpoShim
-            Ok "atalho python3 -> $pyExe$arg"
-        } else { Ok 'atalho python3 ja atualizado' }
+        if (Escrever-Lancador $shim $corpoShim 'sh') { Ok "atalho python3 -> $pyExe$arg" }
+        else { Ok 'atalho python3 ja atualizado' }
     }
 
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
@@ -1235,10 +1547,8 @@ if (-not $bash) {
     $conteudo = "@echo off`r`n" +
                 "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
                 "`"$bash`" `"$raiz\scripts\cp-send`" %*`r`n"
-    if (-not (Test-Path $lancador) -or (Get-Content $lancador -Raw) -ne $conteudo) {
-        Set-Content -Path $lancador -Value $conteudo -Encoding ASCII -NoNewline
-        Ok "lancador cp-send.cmd criado em $binUsuario"
-    } else { Ok 'lancador cp-send.cmd ja atualizado' }
+    if (Escrever-Lancador $lancador $conteudo 'cmd') { Ok "lancador cp-send.cmd criado em $binUsuario" }
+    else { Ok 'lancador cp-send.cmd ja atualizado' }
 
     # (2b) lancador pro cp-conta (helper de contas do claude-conta): sem ele o claude-conta.ps1
     # falha com "cp-conta nao e reconhecido" antes de abrir o Claude.
@@ -1252,10 +1562,26 @@ if (-not $bash) {
     } else {
         $conteudoConta = "@echo off`r`n" +
                          "`"$pyExe`"$arg `"$raiz\scripts\cp-conta`" %*`r`n"
-        if (-not (Test-Path $lancadorConta) -or (Get-Content $lancadorConta -Raw) -ne $conteudoConta) {
-            Set-Content -Path $lancadorConta -Value $conteudoConta -Encoding ASCII -NoNewline
-            Ok "lancador cp-conta.cmd criado em $binUsuario"
-        } else { Ok 'lancador cp-conta.cmd ja atualizado' }
+        if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador cp-conta.cmd criado em $binUsuario" }
+        else { Ok 'lancador cp-conta.cmd ja atualizado' }
+    }
+
+    # (2c) lancador pro cp-engine (motores de modelo). Sem ele o backend monta o comando do pane
+    # como `cp-engine --exec <motor> -- claude ...`, o pane morre no ato e o `tmux new-session`
+    # devolve 0 assim mesmo: medido nesta VM, rc=0 na criacao e 3s depois a sessao ja nao existe.
+    # O app reportava "sessao criada" e ela sumia calada. Hoje o backend recusa alto quando este
+    # lancador falta (registry._exigir_cp_engine) — este bloco e o outro lado do conserto, o que
+    # faz o motor de fato FUNCIONAR no Windows.
+    # Pelo PYTHON e nao pelo bash, mesmo motivo do cp-conta: o cp-engine e script Python
+    # (`#!/usr/bin/env python3`) e `bash arquivo` nao honra shebang.
+    $lancadorEngine = Join-Path $binUsuario 'cp-engine.cmd'
+    if (-not $pyExe) {
+        Falta 'cp-engine.cmd nao criado - precisa de um Python real (ver acima)'
+    } else {
+        $conteudoEngine = "@echo off`r`n" +
+                          "`"$pyExe`"$arg `"$raiz\scripts\cp-engine`" %*`r`n"
+        if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador cp-engine.cmd criado em $binUsuario" }
+        else { Ok 'lancador cp-engine.cmd ja atualizado' }
     }
 
     # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
@@ -1295,8 +1621,7 @@ if (-not $bash) {
                    "# Gerado por hangar/install.ps1 - ver comentario no instalador.`n" +
                    "PATH='$binMsys':`$PATH; export PATH`n" +
                    "exec '$rota/scripts/cp-send' `"`$@`"`n"
-        if (-not (Test-Path $cpSendSh) -or (Get-Content $cpSendSh -Raw) -ne $corpoCp) {
-            Set-Content -Path $cpSendSh -Encoding ASCII -NoNewline -Value $corpoCp
+        if (Escrever-Lancador $cpSendSh $corpoCp 'sh') {
             Ok 'cp-send do ~/.local/bin aponta pro script do repo'
         }
         Ok 'cp-send + skills instalados'
@@ -1483,8 +1808,21 @@ if ($vivo -and -not $Update) {
 # hostil. try/catch porque $ErrorActionPreference='Stop' (install.ps1:24) transformaria "sem
 # navegador padrao" em aborto do ultimo passo.
 if ($vivo -and -not $Update) {
-    $abrir = if ($script:cpPublicUrl) { $script:cpPublicUrl } else { "http://127.0.0.1:$portaBack" }
-    try { Start-Process $abrir | Out-Null; Ok "abri $abrir no navegador" } catch { Nota "abra na mao: $abrir" }
+    # Com o TOKEN na URL, o mesmo mecanismo do QR: o app le o `?token=`, grava a credencial (e o
+    # cookie cp_token que o SSE usa) e APAGA o parametro do historico da aba. Sem isto o instalador
+    # abria a tela de login e mandava digitar na mao um token de 48 caracteres no proprio PC onde
+    # ele acabou de ser gerado.
+    #
+    # O token continua OBRIGATORIO em todo acesso, inclusive no loopback: nao ha isencao por IP e
+    # nao e isso que este bloco faz. O motivo de nao ter isencao esta em auth.py — este backend cria
+    # sessao que roda comando na maquina, e QUALQUER pagina aberta no navegador consegue falar com
+    # 127.0.0.1. O que muda aqui e so a conveniencia de nao digitar no PC; o celular segue digitando
+    # (ou lendo o QR).
+    $tokenAgora = Token-Do-Env
+    $base = if ($script:cpPublicUrl) { $script:cpPublicUrl } else { "http://127.0.0.1:$portaBack" }
+    $abrir = if ($tokenAgora) { "$base/?token=$([uri]::EscapeDataString($tokenAgora))" } else { $base }
+    try { Start-Process $abrir | Out-Null; Ok "abri $base no navegador (ja autenticado)" }
+    catch { Nota "abra na mao: $abrir" }
 }
 
 # -- Fim ---------------------------------------------------------------------
@@ -1529,9 +1867,37 @@ $linhaQr
   O que este Windows ainda NAO tem:
   - wrappers do `codex`, do `pi` e do `kimi`, e a extensao cp-state.ts do Pi. Sessao Codex, Pi
     ou Kimi aberta por voce no terminal nao aparece; criada pelo app, funciona.
-  - motores de modelo (tela Motores / `CP_ENGINE`): o cp-engine aplica o ambiente por execvpe,
-    que no Windows nao substitui o processo - o pane morreria na largada. Sessao em motor, so
-    no Linux/macOS por enquanto; a conta Anthropic e o claude-conta funcionam normalmente.
+  - resurrect/continuum abaixo, e mais nada desta lista: motor de modelo (tela Motores /
+    `CP_ENGINE`) PASSOU a funcionar aqui - o cp-engine roda o comando por subprocess no Windows
+    (o exec com env crasha la, medido) e o passo 7b instala o cp-engine.cmd.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
     psmux nao roda plugin de tmux. Fechou o Windows, as sessoes se foram.
 "@
+
+# -- Resumo (o que a pessoa precisa ter na mao quando a janela fechar) --------
+# A janela do instalador FECHA sozinha quando ele foi aberto com duplo clique ou por
+# `irm ... | iex` num processo proprio, e ate aqui a unica copia do token era uma linha no meio da
+# saida. Este bloco existe pra ser a ULTIMA coisa na tela: token, endereco local e endereco do
+# Tailscale, os tres juntos.
+$tokenFim = Token-Do-Env
+Write-Host ""
+Write-Host "  ---------------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "   RESUMO" -ForegroundColor Cyan
+if ($tokenFim) {
+    Write-Host "   token   : " -NoNewline; Write-Host $tokenFim -ForegroundColor Yellow
+    Write-Host "             (e o que voce digita no celular; fica em backend\.env)"
+} else {
+    Write-Host "   token   : nao consegui ler de backend\.env - veja o passo 3/8 acima" -ForegroundColor Red
+}
+Write-Host "   local   : http://127.0.0.1:$portaBack"
+if ($script:cpPublicUrl) { Write-Host "   celular : $($script:cpPublicUrl)" }
+else { Write-Host "   celular : nao publicado no Tailscale (passo 6/8 pulado ou 'so nesta maquina')" }
+Write-Host "  ---------------------------------------------------------------" -ForegroundColor Cyan
+Write-Host ""
+
+# Pausa SO com console interativo: com o stdin vindo de um pipe (irm|iex chamado por outro
+# processo, SSH, tarefa agendada) o Read-Host voltaria na hora e a pausa nao seguraria nada; e no
+# -Update ela travaria um `git pull` esperando por uma tecla que ninguem vai apertar.
+if ($script:Interativo -and -not $Update) {
+    Read-Host '  Enter pra fechar' | Out-Null
+}

@@ -6,7 +6,6 @@ PRÓPRIO do subagente (`<projeto>/<sessao>/subagents/agent-<id>.jsonl`), não pr
 """
 import importlib.util
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -46,10 +45,26 @@ def casa(tmp_path, monkeypatch):
     return tmp_path
 
 
+class _StdinFalso:
+    """stdin de mentira COM `.buffer`, como o de verdade.
+
+    O hook lê `sys.stdin.buffer` e decodifica utf-8 na mão — um `io.StringIO` não tem `.buffer` e,
+    pior, entregaria texto já decodificado, que é exatamente o passo onde o defeito morava (no
+    Windows o modo texto usa cp1252; ver hooks/preview_hook.py). Fingir com bytes é o que faz este
+    teste exercitar o caminho real.
+    """
+
+    def __init__(self, texto: str):
+        import io
+        self.buffer = io.BytesIO(texto.encode("utf-8"))
+
+    def read(self) -> str:
+        return self.buffer.read().decode("utf-8")
+
+
 def _rodar(payload: dict, monkeypatch):
-    """Executa o hook como ele roda de verdade: payload no stdin."""
-    import io
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    """Executa o hook como ele roda de verdade: payload no stdin, em BYTES."""
+    monkeypatch.setattr("sys.stdin", _StdinFalso(json.dumps(payload, ensure_ascii=False)))
     hook.main()
 
 
@@ -145,8 +160,17 @@ def test_dois_hooks_ao_mesmo_tempo_nao_perdem_atualizacao(casa, monkeypatch):
     ler→mudar→gravar no mesmo arquivo. Sem a trava, o segundo grava por cima da alteração do
     primeiro e um agente some da lista — em silêncio, porque tudo aqui é fail-soft.
 
+    Este caso já foi `skipif(os.name != "posix")` com a razão escrita: no Windows `_trava` devolvia
+    None e a corrida abaixo REALMENTE perdia atualização, então o teste falharia por dizer a
+    verdade. Era lacuna conhecida, e é ela que fechou (22/08/2026) — a trava lá é `msvcrt.locking`,
+    o mesmo mecanismo de `contas.py`/`peers.py`. Conferido contra o código velho: com o `_trava`
+    de antes este caso falha no Windows; com o de hoje passa nos dois. Um teste de trava que
+    ninguém viu falhar não prova nada.
+
     O teste roda em THREADS (o hook é um processo, mas a trava é de arquivo e a corrida a proteger
     é a mesma) com uma pausa injetada entre a leitura e a escrita, que é a janela do defeito.
+    Threads bastam nos dois sistemas porque `flock` é por descrição de arquivo aberto e
+    `msvcrt.locking` é por handle: um segundo handle do MESMO processo é barrado igual.
     """
     import threading, time as _t
     original = hook._gravar
@@ -164,9 +188,9 @@ def test_dois_hooks_ao_mesmo_tempo_nao_perdem_atualizacao(casa, monkeypatch):
         try:
             hook._atualizar(alvo, p, agent_id)
         finally:
-            if fh is not None:
-                hook.fcntl.flock(fh.fileno(), hook.fcntl.LOCK_UN)
-                fh.close()
+            # Pelo helper do próprio hook, não por `fcntl` direto: quem destrava tem que usar o
+            # mecanismo com que travou, e o teste não é o lugar de decidir qual dos dois é.
+            hook._destravar(fh)
 
     ts = [threading.Thread(target=roda, args=(f"ag{i}",)) for i in range(4)]
     for t in ts:

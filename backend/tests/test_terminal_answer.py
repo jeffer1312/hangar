@@ -420,7 +420,12 @@ def test_send_prompt_multilinha_que_nao_submete_devolve_partial():
         assert ti.TerminalInput().send_prompt("s", texto) == "partial"
 
 
-def test_send_prompt_multilinha_que_submete_devolve_sent():
+def test_send_prompt_multilinha_que_submete_devolve_sent(monkeypatch):
+    # Este caso exercita o caminho de COLAGEM DIRETA (paste_text), que e o do POSIX: no
+    # Windows + claude o send_prompt vai pelo clipboard (Alt+V), que tem casos proprios
+    # logo abaixo/ao lado. Fixar o `os.name` aqui e o espelho do que aqueles ja fazem com
+    # "nt" — assim os DOIS ramos rodam nos dois sistemas, em vez de cada um so na sua casa.
+    monkeypatch.setattr(ti.os, "name", "posix")
     # Caminho feliz COMPLETO: o texto aparece no composer (prova de entrega) e some no Enter (prova de
     # submissao). Os dois juntos -> "sent".
     texto = "primeira linha\nsegunda linha\ncauda longa o bastante pra provar"
@@ -454,7 +459,12 @@ def test_send_prompt_multilinha_que_o_multiplexador_nao_entrega():
     assert "Enter" not in teclas
 
 
-def test_multilinha_com_cauda_curta_nao_da_pra_provar_e_segue():
+def test_multilinha_com_cauda_curta_nao_da_pra_provar_e_segue(monkeypatch):
+    # Este caso exercita o caminho de COLAGEM DIRETA (paste_text), que e o do POSIX: no
+    # Windows + claude o send_prompt vai pelo clipboard (Alt+V), que tem casos proprios
+    # logo abaixo/ao lado. Fixar o `os.name` aqui e o espelho do que aqueles ja fazem com
+    # "nt" — assim os DOIS ramos rodam nos dois sistemas, em vez de cada um so na sua casa.
+    monkeypatch.setattr(ti.os, "name", "posix")
     # O outro lado da moeda, explicito pra ninguem "consertar" isso achando que e bug: com cauda curta
     # a ausencia NAO e demonstravel (o composer vazio nao distingue "nao entrou" de "nada a procurar"),
     # entao o envio segue em vez de travar. E a mesma politica do _wait_input_ready: na duvida, envia.

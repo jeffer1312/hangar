@@ -21,6 +21,13 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   transcribeFile: vi.fn(),
   getCodexModels: vi.fn().mockResolvedValue([]),
   getPiModels: vi.fn().mockResolvedValue([]),
+  // O ramo do Kimi é o ÚNICO que este arquivo exercita (ele monta o Composer com provider 'kimi'),
+  // e era o único que faltava no mock. O `.catch` do $effect não salvava: o proxy do vitest levanta
+  // SÍNCRONO no acesso à propriedade, antes de existir promise — daí 4 erros não capturados por
+  // rodada, com os testes passando e o carregamento de modelo sem cobertura nenhuma aqui.
+  getKimiModels: vi.fn().mockResolvedValue([]),
+  // O ramo `else` do mesmo efeito (Claude): sobra do provider trocado no meio de um caso.
+  getModelOptions: vi.fn().mockResolvedValue([]),
 }));
 
 const flush = () => new Promise((r) => setTimeout(r, 0));

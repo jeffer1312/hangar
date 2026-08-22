@@ -63,7 +63,11 @@ def _semeia_cache_claude() -> None:
 
 def test_chave_config_colapsa_as_grafias_da_conta_padrao():
     casa = str(Path.home() / ".claude")
-    for grafia in ("", None, "  ", "~", "~/.claude", casa, casa + "/", "/home/jefferson/.claude/../.claude"):
+    # A grafia com `..` sai da PROPRIA casa: com o caminho do Linux escrito na mao ela nunca
+    # colapsaria noutro sistema (a casa la e `C:\Users\<voce>`), e o caso passaria a medir o
+    # `Path.home()` em vez do colapso de grafias, que e o que ele existe pra provar.
+    volta = str(Path.home() / ".claude" / ".." / ".claude")
+    for grafia in ("", None, "  ", "~", "~/.claude", casa, casa + "/", volta):
         assert api._chave_config(grafia) == casa, grafia
 
 

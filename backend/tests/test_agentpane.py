@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import uuid
@@ -5,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 from app import agentpane, tmux
+
+from tmux_teste import matar_sessao
 
 # L12 da revisao final: estes testes dirigem um tmux DE VERDADE. Sem o skipif eles quebravam a
 # suite em maquina sem tmux; com nome FIXO, duas copias sob xdist criavam/matavam a MESMA sessao e
@@ -50,8 +53,20 @@ def sessao():
         # tmux DEFAULT e com ele todas as sessoes do usuario (mesma nota do test_tmux.py). Matar a
         # ultima sessao ja encerra este servidor sozinho.
         for alvo in (nome, f"term-{nome}", ancora):
-            subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={alvo}"],
-                           capture_output=True)
+            matar_sessao(alvo, sock)
+
+
+def _alvo_esperado(sessao, pane):
+    """O alvo que o `resolve_target` DEVE devolver para este pane, montado aqui na mao.
+
+    Nao chama `tmux.alvo_de_pane` de proposito: usar a funcao sob teste pra calcular o esperado
+    faria o caso concordar com ela ate quando as duas estivessem erradas. No POSIX e o `%N`; no
+    Windows e `=<sessao>:<janela>.<pane>`, porque la o `%N` nao endereca pane nenhum — ele cai na
+    sessao do cliente corrente (medido; docstring de `tmux.alvo_de_pane`).
+    """
+    if os.name == "posix":
+        return pane["pane_id"]
+    return f"={sessao}:{pane['window_index']}.{pane['pane_index']}"
 
 
 def _segunda_janela(nome):
@@ -81,8 +96,9 @@ def test_alvo_e_o_pane_do_agente_mesmo_com_janela_nova(sessao, monkeypatch):
                         lambda pid, children: pid == primeiro["pid"])
     _segunda_janela(sessao)
     agentpane.invalidate(sessao)
-    assert agentpane.resolve_target(sessao) == primeiro["pane_id"]
-    assert tmux._pane_target(sessao) == primeiro["pane_id"]
+    esperado = _alvo_esperado(sessao, primeiro)
+    assert agentpane.resolve_target(sessao) == esperado
+    assert tmux._pane_target(sessao) == esperado
 
 
 def test_sem_pane_de_agente_cai_no_alvo_antigo(sessao, monkeypatch):
@@ -115,7 +131,7 @@ def test_desempate_com_dois_panes_de_agente_prefere_o_ativo(sessao, monkeypatch)
         "o cenario exige exatamente UM pane ativo -- senao o desempate nao e exercido"
     ativo = next(p for p in panes if p["active"])
     assert panes[0] is not ativo, "o ativo nao pode ser o 1o da varredura, ou os dois criterios coincidem"
-    assert agentpane.resolve_target(sessao) == ativo["pane_id"]
+    assert agentpane.resolve_target(sessao) == _alvo_esperado(sessao, ativo)
     # E o outro lado escolhe o MESMO pane -- e disso que o bug dependia.
     grupo = tmux.list_panes_all()[sessao]
     assert SessionRegistry._agent_pane(grupo, {})["pane_id"] == ativo["pane_id"]
@@ -153,12 +169,20 @@ def test_kill_e_recria_mesma_sessao_invalida_o_cache_quente(sessao, monkeypatch)
     velho = tmux.list_panes_of(sessao)[0]
     _segunda_janela(sessao)   # so com 2+ panes o resolve_target desce pro /proc (achado 2)
     agentpane.invalidate(sessao)
-    assert agentpane.resolve_target(sessao) == velho["pane_id"]   # cache quente, aponta pro pane velho
+    assert agentpane.resolve_target(sessao) == _alvo_esperado(sessao, velho)  # cache quente, pane velho
 
     assert tmux.kill_session(sessao) is True
     assert tmux.new_session(sessao, "/tmp", "sleep 600") is True   # mesmo nome, sessao nova
 
     novo = tmux.list_panes_of(sessao)[0]
-    assert novo["pane_id"] != velho["pane_id"]   # tmux nunca reusa %N: prova que sao panes diferentes
+    # Sao panes DIFERENTES, e a prova disso e o PID — que muda nos dois sistemas. O `%N` servia como
+    # prova no tmux ("nunca reusa"), mas o psmux numera pane por SESSAO: a sessao recriada volta a
+    # ter `%1` e a comparacao de ids nao distinguiria nada (verde pelo motivo errado no Windows).
+    assert novo["pid"] != velho["pid"]
+    if os.name == "posix":
+        assert novo["pane_id"] != velho["pane_id"], "o tmux nunca reusa %N"
     _segunda_janela(sessao)
-    assert agentpane.resolve_target(sessao) == novo["pane_id"]   # NAO o velho, que kill/new invalidam
+    # NAO o velho, que kill/new invalidam. No Windows os dois ALVOS sao iguais em texto
+    # (`=nome:0.0`), entao o que prova a invalidacao aqui e o pane_pid resolvido por ele.
+    assert agentpane.resolve_target(sessao) == _alvo_esperado(sessao, novo)
+    assert tmux.pane_pid(sessao) == novo["pid"]

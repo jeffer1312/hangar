@@ -94,6 +94,12 @@ def _nome_tailscale() -> str:
             ["tailscale", "status", "--json"],
             capture_output=True,
             text=True,
+            # `text=True` sozinho decodifica pelo locale, e no Windows isso e cp1252 (medido:
+            # utf8_mode=0, locale.getencoding()='cp1252'). O nome de maquina do tailnet pode ter
+            # acento, e ai o `json.loads` recebe texto corrompido — ou estoura, porque cp1252 tem
+            # bytes indefinidos. No Linux o locale ja e UTF-8 e isto e no-op.
+            encoding="utf-8",
+            errors="replace",
             timeout=_TETO_TAILSCALE_S,
         )
         return json.loads(r.stdout)["Self"]["DNSName"].rstrip(".")

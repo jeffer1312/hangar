@@ -1,3 +1,4 @@
+import os
 import asyncio
 import json
 
@@ -165,7 +166,11 @@ async def test_follow_backfills_only_tail(tmp_path, monkeypatch):
 def test_read_from_marca_offset_do_inicio_da_linha(tmp_path):
     p = tmp_path / "t.jsonl"
     linhas = [_user("a", "um"), _user("b", "dois"), _user("c", "tres")]
-    p.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+    # `newline=""`: o offset conferido abaixo e contado em BYTES, e sem isto o Windows traduz
+    # cada \n em \r\n na escrita — o arquivo fica 1 byte maior por linha e o esperado, montado com
+    # len(ln.encode())+1, deixa de bater. O tailer le em binario de proposito (ele devolve offset
+    # de arquivo); quem estava errado era o fixture.
+    p.write_text("\n".join(linhas) + "\n", encoding="utf-8", newline="")
     evs, _ = TranscriptTailer(p)._read_from(0)
     assert [e.id for e in evs] == ["a", "b", "c"]
     # offset do INICIO da linha (nao do fim): retomar dali RELE a linha inteira, entao eventos

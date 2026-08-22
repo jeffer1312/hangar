@@ -71,6 +71,32 @@ def test_live_vs_dead_flag(tmp_path):
     assert by_project["-home-u-dead"].session_name is None
 
 
+def test_sem_rg_no_path_avisa_uma_vez_e_devolve_vazio(tmp_path, monkeypatch, caplog):
+    """Sem o ripgrep a busca nao tem como funcionar — mas nao pode ficar MUDA.
+
+    A rota devolve `list[SearchHit]`, entao a resposta continua sendo `[]` (virar erro HTTP mudaria
+    o contrato dela e a tela junto). O que nao pode e `[]` de "nao instalado" ser indistinguivel de
+    `[]` de "procurei e nao achei": no Windows o ripgrep nao vem com o sistema, e a lupa voltava
+    vazia sem nada em lugar nenhum dizendo por que. Uma vez por processo, nao por busca — a tela
+    busca a cada tecla digitada.
+    """
+    _write(tmp_path / "-home-u-proj")
+    monkeypatch.setattr(search, "_rg_avisado", False)
+    monkeypatch.setattr(search.shutil, "which", lambda nome: None)
+
+    def _nao_existe(*a, **k):
+        raise FileNotFoundError(2, "nao achei o rg")
+
+    # O Popen tambem precisa falhar, senao o caso mede a maquina e nao o codigo: com o ripgrep
+    # instalado o fallback "rg" (nome puro) ainda roda pelo PATH do SO e a busca DA certo.
+    monkeypatch.setattr(search.subprocess, "Popen", _nao_existe)
+    with caplog.at_level("WARNING", logger="claude_pocket.search"):
+        assert search.search("needle", {}) == []
+        assert search.search("needle", {}) == []
+    avisos = [r for r in caplog.records if "ripgrep" in r.getMessage()]
+    assert len(avisos) == 1, avisos
+
+
 def test_query_passed_as_argv_not_shell(tmp_path, monkeypatch):
     # SEGURANCA: o rg tem que ser chamado com LISTA DE ARGUMENTOS (sem shell) e a query como VALOR de -e.
     recorded = {}

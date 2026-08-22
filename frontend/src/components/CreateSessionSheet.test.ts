@@ -35,6 +35,12 @@ vi.mock('@hangar/core', async (importOriginal) => ({
   getEngines: vi.fn(async () => ({ motores: {}, arquivo_corrompido: false, arquivo_caminho: '' })),
   getProviders: vi.fn(async () => ({ claude: { disponivel: true, motivo: null }, codex: { disponivel: true, motivo: null }, pi: { disponivel: true, motivo: null }, kimi: { disponivel: true, motivo: null } })),
   criarConta: vi.fn(), apagarConta: vi.fn(),
+  // O atalho de RETOMAR conversa da pasta. Sem estes três o `$effect` que os chama estourava
+  // "No X export is defined on the mock" — 29 rejeições não tratadas por rodada, com os testes
+  // passando assim mesmo, porque erro dentro de `.then` não derruba o caso.
+  getArchivePorCwd: vi.fn(async () => []),
+  getArchiveHistory: vi.fn(async () => []),
+  resumeArchivedConversation: vi.fn(),
 }));
 vi.mock('./FolderScanner.svelte', () => ({
   default: createRawSnippet(() => ({ render: () => '<div />' })),
@@ -587,6 +593,38 @@ describe('CreateSessionSheet — seletor nativo de pasta (shell Electron)', () =
     await flush();
     expect(document.querySelector('.abrir-btn')).toBeNull();
     expect(document.querySelector('.advanced-toggle')!.classList.contains('sozinho')).toBe(true);
+    unmount(comp);
+  });
+});
+
+describe('CreateSessionSheet — retomar conversa da pasta', () => {
+  function conversa(over: Partial<api.ArchiveEntry>): api.ArchiveEntry {
+    return {
+      project: '-tmp-x', cwd: '/tmp/x', session_id: 'sid', mtime: 1_700_000_000,
+      preview: 'primeira', ultima: 'ultima', live: false, config_dir: null,
+      conta: 'padrão', provider: 'claude', ...over,
+    };
+  }
+
+  it('conversa ABERTA fica de fora da lista de retomáveis', async () => {
+    // Ela e a mais recente, entao ocuparia o topo empurrando pra baixo justamente as que dá pra
+    // continuar — e retomar não se aplica a uma sessão que já está viva na barra lateral.
+    vi.mocked(api.getArchivePorCwd).mockResolvedValueOnce([
+      conversa({ session_id: 'viva', ultima: 'esta esta aberta', live: true }),
+      conversa({ session_id: 'parada', ultima: 'esta da pra retomar' }),
+    ]);
+    const { comp } = montar();
+    await flush();
+    await escolherPasta();
+    expect(api.getArchivePorCwd).toHaveBeenCalledWith('/tmp/x', null, 'claude');
+
+    (document.querySelector('.retomar-check input') as HTMLInputElement).click();
+    await flush();
+    await (document.querySelector('#conversa-pick') as HTMLElement).click();
+    await tick();
+    const rotulos = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent ?? '');
+    expect(rotulos.some((t) => t.includes('esta da pra retomar'))).toBe(true);
+    expect(rotulos.some((t) => t.includes('esta esta aberta'))).toBe(false);
     unmount(comp);
   });
 });

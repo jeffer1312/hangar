@@ -1,4 +1,55 @@
+import os
+
 import pytest
+
+
+def _instalar_home_do_windows() -> None:
+    """No Windows, `monkeypatch.setenv("HOME", tmp)` NAO isola nada — e a suite escreve no perfil
+    REAL de quem roda.
+
+    `ntpath.expanduser` (logo, `Path.home()` e todo `expanduser("~")`) le USERPROFILE e, na falta
+    dele, HOMEDRIVE+HOMEPATH. HOME nao entra na conta em NENHUM ramo. Medido em 21/08/2026 nesta
+    VM: os 14 `setenv("HOME", ...)` da suite (test_contas, test_commands, test_costs_sources,
+    test_tmux, test_contas_api, test_conta_estado_api) resolviam pro C:\\Users\\<user> de verdade,
+    e `test_contas` chegou a criar SEIS pastas `~/.claude-*` cheias de symlinks apontando pro
+    ~/.claude real. Nao e so teste falhando: e a suite mexendo na casa de quem a roda.
+
+    Em vez de reescrever os 14 pontos (e ter de lembrar do detalhe no 15o), o vinculo mora aqui:
+    enquanto o teste roda, `setenv("HOME", v)` leva junto o trio que o Windows de fato consulta.
+    No POSIX o fixture nao faz nada — HOME ja e a fonte, e o ramo fica byte-identico ao de hoje.
+
+    Patch de CLASSE, feito UMA vez no import — nao um fixture autouse. A primeira versao disto era
+    um autouse pedindo `monkeypatch` na assinatura, e isso instancia (e finaliza) o monkeypatch em
+    outro ponto da ordem, em TODO teste da suite, inclusive nos que nunca ouviram falar daqui. O
+    comentario do `models_cache_em_tmp`, mais abaixo, ja registrava essa armadilha com nome e
+    sobrenome ("a versao autouse derrubava os mocks de test_tmux ... interacao de fixtures via
+    test_codex_adapter") — e foi exatamente nela que eu pisei.
+
+    Medido em 21/08/2026, o par `test_codex_adapter.py + test_tmux.py`: 7 falhas com um autouse
+    VAZIO, 7 com `autouse(request)`, e 22 com `autouse(monkeypatch)`. No Linux a suite inteira ia
+    de 0 pra 16 falhas, todas em test_tmux. Sem fixture nenhum nao ha ordem pra mudar.
+
+    Cada chamada ao original registra o proprio undo NA INSTANCIA, entao o teardown de cada teste
+    continua desfazendo tudo como sempre — o patch de classe nao guarda estado.
+    """
+    original = pytest.MonkeyPatch.setenv
+
+    def setenv(self, name, value, prepend=None):
+        original(self, name, value, prepend)
+        if name == "HOME":
+            # USERPROFILE e o 1o ramo do ntpath.expanduser; HOMEDRIVE+HOMEPATH e o 2o. Os dois
+            # precisam ir: deixar o par velho de pe faria o fallback apontar pro perfil real caso
+            # algum codigo (ou uma lib) limpe USERPROFILE.
+            original(self, "USERPROFILE", value)
+            drive, resto = os.path.splitdrive(value)
+            original(self, "HOMEDRIVE", drive)
+            original(self, "HOMEPATH", resto or "\\")
+
+    pytest.MonkeyPatch.setenv = setenv
+
+
+if os.name == "nt":
+    _instalar_home_do_windows()
 
 
 @pytest.fixture(autouse=True)
@@ -109,7 +160,12 @@ def models_cache_em_tmp(tmp_path, monkeypatch):
     from app import api
 
     def _path_de_teste(chave: str):
-        return tmp_path / f"models-{chave.replace(chr(47), chr(95))}.json"
+        # A chave e um CAMINHO (o config dir). Trocar so a barra bastava no POSIX; no Windows
+        # sobram `\` e o `:` do drive, que sao invalidos em nome de arquivo — o teste morria com
+        # WinError 123 antes de exercitar qualquer rota. `_sanitizar` tira tudo que nao serve pra
+        # nome, e o proposito continua o mesmo: um arquivo por chave, dentro do tmp_path.
+        seguro = "".join(c if c.isalnum() or c in "-._" else "_" for c in chave)
+        return tmp_path / f"models-{seguro}.json"
 
     monkeypatch.setattr(api, "_models_cache_path", _path_de_teste)
     api._claude_models_cache.clear()

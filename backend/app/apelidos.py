@@ -17,7 +17,7 @@ import os
 import threading
 from pathlib import Path
 
-from app import contas
+from app import atomico, contas
 
 _log = logging.getLogger("claude_pocket.apelidos")
 
@@ -69,7 +69,7 @@ def definir(id_credencial: str, apelido: str | None) -> dict[str, str]:
         try:
             alvo.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(atual, ensure_ascii=False, indent=1), encoding="utf-8")
-            os.replace(tmp, alvo)
+            atomico.substituir(tmp, alvo)
         except OSError as e:
             tmp.unlink(missing_ok=True)
             _log.warning("apelidos: nao deu pra gravar %s: %r", alvo, e)

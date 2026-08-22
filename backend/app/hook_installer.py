@@ -32,8 +32,20 @@ def _script_of(command: str) -> str:
 
 
 def _tokens(command: str) -> list[str]:
+    r"""Tokens do command, respeitando aspas — e no Windows respeitando a CONTRABARRA.
+
+    `shlex.split` em modo POSIX trata `\` como escape FORA de aspas: um command no formato antigo
+    (`python3 C:\cockpit\backend\hooks\askq_capture.py`, sem aspas) sai como
+    `C:cockpitackendhooksskq_capture.py` — o caminho perde os separadores e `_refers_to` deixa de
+    reconhecer o hook como NOSSO. O efeito e o que este modulo inteiro existe pra impedir: hook
+    duplicado, agora um por subida do backend, porque o instalador nao acha o que ele mesmo
+    escreveu. (Dentro de aspas o POSIX preserva a contrabarra, entao o formato de hoje escapava
+    disso por sorte, nao por desenho.)
+
+    `posix=False` mantem as aspas nos tokens; quem compara ja faz `.strip("\"'")`.
+    """
     try:
-        return shlex.split(command) or [command]
+        return shlex.split(command, posix=(os.name != "nt")) or [command]
     except ValueError:  # aspas desbalanceadas a mao
         return command.split() or [command]
 
@@ -285,7 +297,11 @@ def _guard_path(config_dir: Path) -> str:
     link = config_dir / "hooks" / "guard_tmux.py"
     try:
         link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink() and os.readlink(link) == GUARD_HOOK:
+        # realpath nos dois lados, e nao `os.readlink(link) == GUARD_HOOK`: no Windows o readlink
+        # devolve o alvo com o prefixo de caminho estendido (\\?\C:\...), entao a igualdade por
+        # string nunca dava certo e o symlink era refeito a cada subida do backend. Mesmo motivo
+        # (e mesma correcao) do contas._aponta_para, onde o estrago era maior.
+        if link.is_symlink() and os.path.realpath(link) == os.path.realpath(GUARD_HOOK):
             return str(link)
         if link.exists() or link.is_symlink():
             link.unlink()

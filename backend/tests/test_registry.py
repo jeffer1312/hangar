@@ -1010,6 +1010,10 @@ def test_inbox_socket_of_fora_do_posix_devolve_none_em_vez_de_estourar(monkeypat
     assert registry.inbox_socket_of("qualquer") is None
 
 
+# O ramo que este caso exercita e POSIX por construcao: `inbox_socket_of` sai com None fora dele
+# (getuid nao existe no Windows), e e justamente o que o caso IRMAO acima prova. Rodar aqui seria
+# afirmar `None == <caminho>` sem ter chegado perto do codigo que importa.
+@pytest.mark.skipif(os.name != "posix", reason="inbox_socket_of so tem corpo no POSIX (ver o caso irmao)")
 def test_inbox_socket_of_acha_o_socket_do_descendente(monkeypatch, tmp_path):
     socks = tmp_path / "cc-socks"
     socks.mkdir()
@@ -1066,7 +1070,12 @@ def test_list_preenche_conta_da_sessao(tmp_path):
          patch.object(registry, "_config_dir_of", return_value=Path("/home/u/.claude-jefferson")), \
          patch.object(registry, "_engine_of", return_value=None):
         out = reg.list()
-    assert out[0].conta == "claude:/home/u/.claude-jefferson"
+    # O esperado passa pelo MESMO `.resolve()` que o registry aplica (registry.py:1052). A string
+    # literal de antes so valia no POSIX: no Windows um `Path("/home/u/x")` resolvido ganha a letra
+    # do drive corrente (`C:\home\u\x`), ou seja o caso comparava a normalizacao do
+    # pathlib, nao o que o registry monta. O que ele prova — prefixo `claude:` e o config dir do
+    # pane, e nao o do backend — continua igual nos dois sistemas.
+    assert out[0].conta == "claude:" + str(Path("/home/u/.claude-jefferson").resolve())
 
     # Motor vence o config dir (a cota da sessão de motor é a da CHAVE, não da assinatura).
     with patch.object(registry.tmux, "list_panes_all", return_value={"cc": [pane]}), \

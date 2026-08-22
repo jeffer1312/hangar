@@ -13,6 +13,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from app import atomico
+
 from app.config import settings, _LOOPBACK
 from app.mensagens import erro
 
@@ -33,7 +35,7 @@ def _data_path() -> Path:
 
 def load_vault() -> dict | None:
     try:
-        return json.loads(_data_path().read_text())
+        return json.loads(_data_path().read_text(encoding="utf-8"))   # nunca o cp1252 do locale
     except FileNotFoundError:
         return None  # sem cadastro ainda
     except (OSError, json.JSONDecodeError):
@@ -52,7 +54,7 @@ def save_vault(v: dict) -> None:
     try:
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(v))
-        os.replace(tmp, p)  # atomic
+        atomico.substituir(tmp, p)  # atomic
     except BaseException:
         Path(tmp).unlink(missing_ok=True)  # não deixa tmp órfão se falhar no meio
         raise

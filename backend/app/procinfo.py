@@ -25,7 +25,17 @@ _log = logging.getLogger("claude_pocket.procinfo")
 # Escolha da implementacao: por CAPACIDADE, uma vez, na importacao. Nao por nome de sistema —
 # "e unix?" responde SIM pro macOS, que nao tem /proc, e mandaria o Mac ler /proc/<pid>/fd pra
 # sempre falhar em silencio (era exatamente o que acontecia antes deste modulo existir).
-_TEM_PROC = Path("/proc").is_dir()
+#
+# O `os.name == "posix"` na frente NAO desfaz isso: macOS e posix e continua caindo no ramo
+# psutil pelo is_dir(), que e quem responde a pergunta de verdade. Ele existe porque no Windows
+# "/proc" nem sequer e um caminho absoluto — e relativo ao DRIVE corrente, entao a pergunta que
+# se estava fazendo era "existe C:\proc?" (ou D:\proc, conforme o cwd de quem subiu o backend).
+# Medido em 21/08/2026: um teste criou C:\proc nesta VM e, a partir dali, TODA execucao pulava o
+# `import psutil` e mandava o Windows pelo ramo /proc — onde cada leitura levanta OSError, e
+# todas sao engolidas de proposito. Nao ha erro, nao ha log: cmdline vazio, mapa de filhos vazio,
+# environ None. Na pratica o app perde provider do pane, --session-id, CLAUDE_CONFIG_DIR e
+# CP_ENGINE de uma vez, e a sessao viva aparece como tracked=False.
+_TEM_PROC = os.name == "posix" and Path("/proc").is_dir()
 
 if not _TEM_PROC:
     # Importado SO fora do Linux. No Linux o psutil nem esta instalado (marcador
@@ -115,6 +125,32 @@ def _cmdline(pid: int) -> str:
             return fh.read().replace(b"\x00", b" ").decode(errors="replace")
     except OSError:
         return ""
+
+
+def _argv(pid: int) -> list[str]:
+    """cmdline com as FRONTEIRAS preservadas — irmao do _cmdline, nao substituto dele.
+
+    O `_cmdline` junta tudo com espaco (o lado /proc troca o NUL por espaco, e o psutil faz
+    `" ".join` de proposito pra os dois sistemas darem o mesmo formato). Quem faz busca de
+    substring continua usando ele. Mas quem precisa do argv0 nao pode reconstrui-lo com `.split()`:
+    no Windows o caminho do executavel tem espaco na esmagadora maioria das instalacoes
+    (`C:\\Program Files\\nodejs\\node.exe`), e o split devolve `C:\\Program` como argv0 — medido
+    nesta VM, era o que fazia a deteccao de provider olhar pra "Program" e nao reconhecer nada. No
+    Linux o mesmo codigo nunca falhou porque `/usr/bin/node` nao tem espaco; e a mesma armadilha
+    que o comentario do _model_of ja descreve.
+    """
+    if not _TEM_PROC:
+        try:
+            return list(psutil.Process(pid).cmdline())
+        except psutil.Error:
+            return []
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            bruto = fh.read()
+    except OSError:
+        return []
+    # O /proc termina a lista com um NUL, entao o ultimo pedaco vem vazio — descarta.
+    return [a.decode("utf-8", "replace") for a in bruto.split(b"\x00") if a]
 
 
 def _config_dir_of(pid: int) -> Optional[Path]:

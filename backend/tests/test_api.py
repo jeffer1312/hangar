@@ -1345,7 +1345,8 @@ def test_resume_archived_route_derives_name_from_cwd(api_client):
         r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
     assert r.status_code == 200
     assert r.json()["name"] == "my-proj"
-    create.assert_called_once_with("my-proj", "/home/u/my-proj", resume_session_id=_SID, engine=None)
+    create.assert_called_once_with("my-proj", "/home/u/my-proj", config_dir=None, provider="claude",
+                                  resume_session_id=_SID, engine=None)
 
 
 def test_resume_archived_route_suffixes_on_name_collision(api_client):
@@ -1356,7 +1357,8 @@ def test_resume_archived_route_suffixes_on_name_collision(api_client):
                return_value=SessionInfo(name="my-proj-2", cwd="/home/u/my-proj")) as create:
         r = api_client.post(f"/api/archive/-home-u-my-proj/{_SID}/resume", headers=_h())
     assert r.status_code == 200
-    create.assert_called_once_with("my-proj-2", "/home/u/my-proj", resume_session_id=_SID, engine=None)
+    create.assert_called_once_with("my-proj-2", "/home/u/my-proj", config_dir=None, provider="claude",
+                                  resume_session_id=_SID, engine=None)
 
 
 def test_resume_archived_route_422_when_cwd_missing(api_client):

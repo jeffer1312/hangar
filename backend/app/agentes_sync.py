@@ -133,7 +133,15 @@ def _gravar_bloco_toml(
     redefinição e o arquivo pararia de abrir — melhor recusar que corromper config de terceiro.
     """
     ini, fim = _sentinelas(nome)
-    raw = cfg.read_text(encoding="utf-8") if cfg.exists() else ""
+    try:
+        raw = cfg.read_text(encoding="utf-8") if cfg.exists() else ""
+    except UnicodeDecodeError:
+        # Config do usuario que nao e UTF-8 (editor antigo, arquivo vindo de outra maquina, cp1252
+        # no Windows). Sem isto o UnicodeDecodeError subia CRU: o irmao do Pi logo abaixo ja
+        # traduzia esse mesmo caso pra "config-invalido", que e a CHAVE que a tela traduz — a
+        # mensagem crua do Python aparecia no lugar do texto do app, em ingles e sem acao. E o
+        # arquivo de terceiro continua intocado, que e a regra desta funcao.
+        return False, "config-invalido"
     i = raw.find(ini)
     if i >= 0:
         j = raw.find(fim, i)

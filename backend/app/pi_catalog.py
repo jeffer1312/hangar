@@ -36,7 +36,10 @@ def listar(fresco: bool = False) -> list[dict]:
     global _cache
     if _cache and not fresco and time.monotonic() - _cache[0] < _TTL:
         return _cache[1]
-    r = subprocess.run(["pi", "--list-models"], capture_output=True, text=True, timeout=30)
+    # `encoding` explicito pelo mesmo motivo dos outros: `text=True` sozinho decodifica pelo
+    # locale, cp1252 no Windows, e a tabela do `pi` traz rotulo de modelo que nao e so ASCII.
+    r = subprocess.run(["pi", "--list-models"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=30)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or "pi --list-models falhou")
     modelos = parse(r.stdout)

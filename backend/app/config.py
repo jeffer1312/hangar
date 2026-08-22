@@ -59,8 +59,18 @@ def list_config_dirs() -> list[ConfigDirInfo]:
             if not item:
                 continue
             label, sep, path = item.partition(":")
+            # No Windows um caminho SEM rótulo já tem ':' dentro — o do drive. `C:\Users\x` era
+            # partido em label="C" e path="\Users\x": o rótulo virava a letra do drive E o caminho
+            # perdia o drive, então o resolve() abaixo o reancorava no drive do cwd. Duas linhas
+            # erradas de uma vez, caladas. Rótulo de UMA letra seguido de barra é sempre drive:
+            # rótulo de verdade com esse formato não existe, e se existisse o caminho depois dele
+            # não começaria com barra. Só no `nt` — no POSIX `t:/home/u` é rótulo `t`, e este ramo
+            # fica byte-idêntico ao de sempre.
+            if os.name == "nt" and sep and len(label) == 1 and label.isalpha() \
+                    and path[:1] in ("\\", "/"):
+                sep = ""
             if not sep:
-                path, label = label, ""
+                path, label = item, ""
             p = Path(os.path.expanduser(path)).resolve()
             entries.append((label.strip() or _label_for(p), p))
     else:
@@ -93,7 +103,27 @@ def _default_projects_dir() -> Path:
 # Allowlist padrao do scanner de pastas: estas raizes sao o PERIMETRO DE SEGURANCA da
 # varredura. Editavel via CP_SCAN_ROOTS (lista separada por virgula, ~ expandido). Edicao
 # das raizes dentro do app fica pra depois: por ora o env e a superficie editavel.
-_DEFAULT_SCAN_ROOTS = "~/pessoal,~/sistemas"
+#
+# O padrao muda por SISTEMA porque `~/pessoal,~/sistemas` sao pastas do dono deste repo, que so
+# existem no Linux dele. Num Windows recem-instalado nenhuma das duas existe, e o
+# resolve_scan_roots abaixo descarta raiz inexistente de proposito (um typo nunca pode alargar o
+# perimetro) — resultado medido nesta VM: a lista resolvia pra VAZIA, `GET /api/fs/roots` devolvia
+# `[]` e TODO `GET /api/fs/scan` respondia 403 "root not allowed". Ou seja, o seletor de pasta do
+# modal de sessao nova nascia inutil, sem nada na tela explicando por que.
+#
+# E o padrao, nao um fallback: cair pra `~` quando a lista resolve vazia seria o app ALARGANDO
+# sozinho o perimetro que o usuario configurou, que e exatamente o que o descarte acima existe
+# pra impedir. Quem apontar CP_SCAN_ROOTS pra caminho errado continua com lista vazia.
+def _default_scan_roots() -> str:
+    if os.name == "nt":
+        # As tres que existem em toda instalacao do Windows e onde projeto de fato mora. Sem `C:\`:
+        # a raiz do drive lista Windows/, Program Files/ e ProgramData/ — ruido pra um seletor de
+        # projeto, e perimetro grande demais pra vir ligado por padrao.
+        return "~,~/Documents,~/Desktop"
+    return "~/pessoal,~/sistemas"
+
+
+_DEFAULT_SCAN_ROOTS = _default_scan_roots()
 
 
 class Settings(BaseSettings):
@@ -111,6 +141,13 @@ class Settings(BaseSettings):
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
     front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
+    # CP_TERM_ORIGINS: origens EXTRAS que o WebSocket do terminal aceita, separadas por virgula
+    # (ex: "https://pocket.exemplo.com"). Existe porque o front pode ser servido de UMA maquina e
+    # falar com ESTE backend por outro endereco: o PWA carregado da VPS manda Origin da VPS, que nao
+    # e nem a mesma-origem nem a public_url, e o terminal era recusado com 403 no celular. Nao ha
+    # default permissivo de proposito — o handshake tambem aceita o cookie `cp_token`, entao aceitar
+    # origem arbitraria seria deixar qualquer site abrir um terminal na maquina.
+    term_origins: str = ""
     # CP_SERVER_ID: id DESTA maquina no peers.json (mesmo que o cp-send usa). Vazio = pareamento
     # cross-server desligado; quando setado, vira o endereco de resposta 'srv::sessao' que o backend
     # remoto recebe pra registrar o vinculo reverso. Recado 1:1 cross-server segue so no cp-send.

@@ -1,5 +1,8 @@
 """Checks dos fixes: middleware de body-size, cache no rename, prefixo do _open_jsonl."""
+import os
 from pathlib import Path
+
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from app.api import _BodySizeLimitMiddleware
@@ -67,6 +70,11 @@ def test_read_from_nao_consome_linha_parcial(tmp_path):
     assert [e.id for e in evs2] == ["u2"]
 
 
+# O duble aqui e o /proc/<pid>/fd (listdir + readlink), que so existe no Linux: fora dele o
+# `_open_jsonl` cai na implementacao psutil e o monkeypatch nao alcanca nada — o caso afirmaria
+# `None == <caminho>` sem ter exercitado a regra. O contrato dos dois ramos vive em procinfo.py,
+# e o irmao via psutil e testado la.
+@pytest.mark.skipif(os.name != "posix", reason="fabrica /proc/<pid>/fd; fora do Linux quem responde e o psutil")
 def test_open_jsonl_rejeita_dir_irmao_com_mesmo_prefixo(monkeypatch):
     # _open_jsonl nao pode casar um fd que aponta pra dir IRMAO de mesmo prefixo de string
     # (projects-evil/ vs projects/) -> senao serviria o transcript de outra sessao.

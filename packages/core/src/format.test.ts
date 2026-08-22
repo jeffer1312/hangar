@@ -771,6 +771,16 @@ describe('parseImageMessage', () => {
     expect(out.caption).toBe(cap);
     expect(out.filenames).toEqual(['a.png', 'b.png']);
   });
+  it('tira o basename de caminho do WINDOWS (só barra invertida)', () => {
+    // O marcador carrega o caminho NATIVO da sessão. No Windows ele não tem `/` nenhum, e o split
+    // só por `/` devolvia o caminho inteiro como basename: a URL virava
+    // `/uploads/C%3A%5C…`, o backend respondia 400 e a foto aparecia quebrada no celular.
+    const out = parseImageMessage(
+      `${cap} — 📎 imagem: C:\\cockpit\\.claude-pocket-uploads\\1787356601-230c76.png`,
+    )!;
+    expect(out.caption).toBe(cap);
+    expect(out.filenames).toEqual(['1787356601-230c76.png']);
+  });
   it('lê o formato REESCRITO pelo Claude Code (prefixo, quebra de linha, último path consumido)', () => {
     // Sem isto a bolha que SOBRA no chat (a do transcript) mostrava os caminhos em texto cru --
     // era a metade feia do par duplicado que o usuário viu em 03/08/2026.

@@ -12,6 +12,35 @@ from app.config import settings
 from app.models import Runner, RunInfo
 from app.tmux import _scope_prefix
 
+# O `start_command`/`stop_command` do projeto e uma LINHA DE SHELL escrita pelo usuario ("cd x &&
+# npm run dev"), entao ela precisa de um shell — nao da pra mandar como argv. As duas funcoes
+# abaixo dizem QUAL shell, e existem porque o caminho POSIX nao roda no Windows: medido nesta VM,
+# `exec {SHELL} -lc <cmd>` no pane do psmux NAO executa nada (nem citando o SHELL, que aqui e o
+# bash do Git e tem espaco no caminho), e o `/bin/sh` que o stop chamava simplesmente nao existe
+# (FileNotFoundError [WinError 2]). Medido tambem o que FUNCIONA no Windows: `cmd /c <linha>`
+# executa, no pane e por subprocess, com `&&` e tudo.
+#
+# `COMSPEC` e o espelho exato do `SHELL` do POSIX (e o que o proprio `subprocess(shell=True)` usa
+# no Windows), entao os dois ramos tem a mesma forma: variavel de ambiente com um padrao.
+# O ramo POSIX sai BYTE-IDENTICO ao de antes — mesma string, mesmo `exec`, mesmo `shlex.quote`.
+def _linha_de_shell_no_pane(command: str) -> str:
+    """A string que vai pro `new-session` pra rodar `command` como linha de shell."""
+    if os.name == "nt":
+        # Sem `shlex.quote`: ele e citacao POSIX e o `cmd /c` toma o RESTO da linha como comando —
+        # citar transformaria a linha do usuario em um argumento literal.
+        return f'{os.environ.get("COMSPEC", "cmd.exe")} /c {command}'
+    shell = os.environ.get("SHELL", "/bin/sh")
+    # login shell (-lc) herda env/PATH do projeto; exec faz o comando virar dono do pane.
+    return f"exec {shell} -lc {shlex.quote(command)}"
+
+
+def argv_de_shell(command: str) -> list[str]:
+    """argv pra rodar `command` como linha de shell por `subprocess` (e o caminho do stop)."""
+    if os.name == "nt":
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/c", command]
+    return ["/bin/sh", "-lc", command]
+
+
 # nome -> peso pra escolher o melhor palpite de "dev" (so um vence).
 _DEV_RANK = {"dev": 5, "start": 4, "serve": 3, "watch": 2, "run": 1}
 _MAKE_TARGET = re.compile(r"^([a-zA-Z0-9_-]+):", re.MULTILINE)
@@ -145,11 +174,9 @@ def start_run(cwd: str, command: str) -> RunInfo:
     # rastro. Setar depois do new-session deixava exatamente essa janela aberta.
     _sock(["start-server"])
     _sock(["set-option", "-g", "remain-on-exit", "on"])
-    shell = os.environ.get("SHELL", "/bin/sh")
-    # login shell (-lc) herda env/PATH do projeto; exec faz o comando virar dono do pane.
     spawn = _scope_prefix() + [
         "tmux", "-L", SOCK, "new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50",
-        f"exec {shell} -lc {shlex.quote(command)}",
+        _linha_de_shell_no_pane(command),
     ]
     try:
         RUN(spawn, capture_output=True, text=True, encoding="utf-8",

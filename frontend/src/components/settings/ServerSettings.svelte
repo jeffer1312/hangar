@@ -6,6 +6,7 @@ import { intlLocale } from '../../lib/locale';
   import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
   import { ouvirAmostra } from '../../lib/ouvir';
   import { cortarAmostra } from '../../lib/ttsFormat';
+  import { criarSeletorNativo } from '../../lib/pastaNativa.svelte';
   import * as m from '../../paraglide/messages';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
@@ -91,15 +92,23 @@ import { intlLocale } from '../../lib/locale';
   function raizesGravar(lista: string[]) {
     store.setRascunho('scan_roots', lista.join(','));
   }
-  function raizAdicionar() {
-    const p = novaRaiz.trim();
-    if (!p || raizes.includes(p)) return;
+  /** Devolve se ADICIONOU: caminho vazio ou repetido é no-op, e só quem adicionou limpa o campo
+   *  (digitar uma raiz que já está na lista não pode apagar o que a pessoa escreveu). */
+  function raizAdicionar(caminho: string): boolean {
+    const p = caminho.trim();
+    if (!p || raizes.includes(p)) return false;
     raizesGravar([...raizes, p]);
-    novaRaiz = '';
+    return true;
   }
   function raizRemover(p: string) {
     raizesGravar(raizes.filter((r) => r !== p));
   }
+  // Seletor NATIVO de pasta, o mesmo do modal de "Nova sessão" (lib/pastaNativa.svelte). Aqui ele
+  // ADICIONA direto, sem passar pelo campo: quem acabou de apontar a pasta num diálogo do sistema
+  // já respondeu qual é, e exigir um segundo clique em "Adicionar" seria perguntar de novo. Fora do
+  // shell Electron o botão não existe e a tela fica exatamente como era — o campo de texto continua
+  // sendo o caminho de quem usa pelo navegador e pelo celular.
+  const nativo = criarSeletorNativo();
 
   // Vozes e saldo: sob demanda, no botao. As duas chamadas batem no provedor (ElevenLabs) e custam
   // latencia — abrir a tela de config nao pode disparar rede pra fora so por estar aberta.
@@ -351,7 +360,7 @@ import { intlLocale } from '../../lib/locale';
             <button class="raiz-x" onclick={() => raizRemover(r)} aria-label={m.config_server_raiz_remover({ p: r })}>✕</button>
           </div>
         {/each}
-        <form class="raiz-add" onsubmit={(e) => { e.preventDefault(); raizAdicionar(); }}>
+        <form class="raiz-add" onsubmit={(e) => { e.preventDefault(); if (raizAdicionar(novaRaiz)) novaRaiz = ''; }}>
           <input
             type="text"
             autocomplete="off"
@@ -362,7 +371,13 @@ import { intlLocale } from '../../lib/locale';
             bind:value={novaRaiz}
           />
           <button type="submit" class="btn" disabled={!novaRaiz.trim()}>{m.config_server_raiz_adicionar()}</button>
+          {#if nativo.disponivel}
+            <!-- Só no shell Electron (window.hangar): diálogo nativo de diretório do sistema.
+                 `type="button"` porque ele vive DENTRO do form — sem isso o clique submeteria. -->
+            <button type="button" class="btn" onclick={() => nativo.escolher((p) => raizAdicionar(p))} disabled={nativo.ocupado}>{m.criar_pasta_computador()}</button>
+          {/if}
         </form>
+        {#if nativo.erro}<p class="aviso erro" role="alert">{nativo.erro}</p>{/if}
       </div>
 
       <div class="somente-leitura">
@@ -504,8 +519,11 @@ import { intlLocale } from '../../lib/locale';
     color: var(--text-muted); font-size: var(--text-sm);
   }
   .raiz-x:hover { color: var(--error); }
-  .raiz-add { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
-  .raiz-add input { flex: 1; }
+  /* Com o botão do seletor nativo a linha tem TRÊS itens, e ela vale nas duas views: no celular e
+     no modal estreito o campo espremeria os dois botões até virar um traço. Quebra em vez de
+     espremer — a base de 12rem é o ponto em que o campo ainda mostra um caminho. */
+  .raiz-add { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+  .raiz-add input { flex: 1 1 12rem; min-width: 0; }
 
   .somente-leitura { margin-top: var(--space-5); }
   .somente-leitura h3 {

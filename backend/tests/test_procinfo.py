@@ -14,6 +14,13 @@ import pytest
 from app import procinfo
 
 
+# Marcador dos casos que exercitam o ramo /proc DE VERDADE (leem /proc/<pid>/... ou comparam o
+# psutil contra uma leitura direta dele). Onde /proc nao existe nao ha o que exercitar — nao e
+# falha, e ausencia de objeto de teste. Os irmaos `via_psutil` continuam rodando aqui, e sao
+# justamente os que importam nesta plataforma: no Windows eles deixam de ser simulacao.
+so_com_proc = pytest.mark.skipif(not procinfo._TEM_PROC, reason="exercita o ramo /proc")
+
+
 @pytest.fixture
 def via_psutil(monkeypatch):
     """Forca o despacho pro lado psutil.
@@ -24,12 +31,14 @@ def via_psutil(monkeypatch):
     monkeypatch.setattr(procinfo, "_TEM_PROC", False)
 
 
+@so_com_proc
 def test_no_linux_o_despacho_escolhe_o_proc():
     # Guarda da promessa central: em maquina com /proc nada muda. Se este teste falhar num
     # Linux, alguem trocou o caminho quente por psutil sem querer.
     assert procinfo._TEM_PROC is True
 
 
+@so_com_proc
 def test_cmdline_igual_nas_duas_implementacoes(via_psutil):
     eu = os.getpid()
     # O lado /proc troca NUL por espaco e sobra um no fim; o psutil junta com espaco. O que os
@@ -75,6 +84,7 @@ def test_open_jsonl_desiste_de_proposito_fora_do_linux(via_psutil, tmp_path):
         assert procinfo._open_jsonl(os.getpid(), projects) is None
 
 
+@so_com_proc
 def test_open_jsonl_acha_o_transcript_aberto_no_proc(tmp_path):
     # Cobertura do caminho /proc, que NAO mudou (sem a fixture: _TEM_PROC real).
     projects = tmp_path / "projects"
@@ -114,6 +124,7 @@ def _cmdline_proc_direto(pid: int) -> str:
         return fh.read().replace(b"\x00", b" ").decode(errors="replace")
 
 
+@so_com_proc
 def test_pids_com_config_dir_acha_no_proc_fake(monkeypatch, tmp_path):
     """Varredura de processos por CLAUDE_CONFIG_DIR (a guarda do DELETE de conta contra CLI vivo
     fora do tmux), exercitada contra um /proc de mentira: casa pelo valor do env, ignora quem não
@@ -191,6 +202,7 @@ def test_model_of_psutil_real_sem_modelo_degrada(via_psutil):
     assert procinfo._model_of(os.getpid()) == (None, None)
 
 
+@so_com_proc
 def test_env_var_of_le_variavel_do_environ(tmp_path, monkeypatch):
     # Mesmo truque do test_engine_of_le_o_cp_engine_do_proc (test_engines_create.py): arquivo
     # environ de mentira apontado por _proc_environ_path.

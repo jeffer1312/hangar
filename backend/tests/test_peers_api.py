@@ -252,3 +252,45 @@ def test_gravar_identificador_nao_deixa_tmp_para_tras(env_tmp, cli):
     cli.put("/api/peers/identificador", headers=AUTH, json={"identificador": "casa"})
     assert not orfao.exists()
     assert list(env_tmp.parent.glob(env_tmp.name + ".*.tmp")) == []
+
+
+def test_gravar_identificador_espera_a_trava_de_outro_escritor(env_tmp):
+    """A trava deste .env tem que ser trava DE VERDADE nos dois sistemas — não no-op num deles.
+
+    Este arquivo não é o peers.json: ele guarda o CP_AUTH_TOKEN (a única credencial do app) e as
+    chaves VAPID, e a gravação é read-modify-write do texto inteiro. O módulo tinha `fcntl` com
+    `except ImportError: fcntl = None`, o que no Windows virava trava nenhuma — dois escritores
+    (a tela e o instalador, ou a tela e o editor do dono) liam o mesmo estado e o último apagava
+    a mudança do outro, calado. O teste da concorrência em si é o
+    `test_gravacao_concorrente_nao_perde_update` do peers; aqui a pergunta é mais direta e não
+    depende de timing pra falhar: com a trava tomada por OUTRO escritor, a gravação espera.
+
+    Vale nos dois: `flock` é por descrição de arquivo aberto e `msvcrt.locking` é por handle, e
+    nos dois casos um segundo handle do MESMO processo é barrado (LockFileEx documenta isso
+    explicitamente). Por isso duas threads bastam — não precisa de subprocesso.
+    """
+    import threading
+
+    from app import peers, peers_api
+
+    env_tmp.write_text("CP_AUTH_TOKEN=abc\n", encoding="utf-8")
+    terminou = threading.Event()
+
+    def escreve():
+        peers_api._escrever_id_env("casa")
+        terminou.set()
+
+    with open(env_tmp.with_name(env_tmp.name + ".lock"), "a+", encoding="utf-8") as outro:
+        peers._travar(outro)
+        t = threading.Thread(target=escreve)
+        t.start()
+        try:
+            assert not terminou.wait(1.0), "gravou com a trava de outro escritor tomada"
+        finally:
+            peers._destravar(outro)
+    t.join(15)
+    assert terminou.is_set(), "não destravou: a gravação nunca terminou"
+    # E o que ela escreveu continua certo — a trava não pode ter custado o conteúdo.
+    texto = env_tmp.read_text(encoding="utf-8")
+    assert "CP_SERVER_ID=casa" in texto
+    assert "CP_AUTH_TOKEN=abc" in texto

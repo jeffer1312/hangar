@@ -10,6 +10,8 @@ from app import procinfo
 def _pane(monkeypatch, cmd: str):
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: cmd)
+    # _argv junto: provider_of_pane le o argv SEPARADO (procinfo._argv), nao a string.
+    monkeypatch.setattr(registry, "_argv", lambda p: cmd.split())
 
 
 def test_detects_pi_from_the_process_command(monkeypatch):
@@ -41,12 +43,14 @@ def test_provider_of_pane_reads_proc_not_a_pane_field(monkeypatch):
     # _repl_sid ja faz. Este teste trava esse contrato — se alguem "simplificar" pra ler um campo
     # inexistente do pane, todo pane vira "claude" calado.
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11, 12])
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda p: {11: "fish", 12: "pi --session-id x"}.get(p, ""))
+    _cmds = {11: "fish", 12: "pi --session-id x"}
+    monkeypatch.setattr(registry, "_cmdline", lambda p: _cmds.get(p, ""))
+    monkeypatch.setattr(registry, "_argv", lambda p: _cmds.get(p, "").split())
     assert registry.provider_of_pane(99) == "pi"
 
-    monkeypatch.setattr(registry, "_cmdline",
-                        lambda p: {11: "fish", 12: "claude --session-id x"}.get(p, ""))
+    _cmds2 = {11: "fish", 12: "claude --session-id x"}
+    monkeypatch.setattr(registry, "_cmdline", lambda p: _cmds2.get(p, ""))
+    monkeypatch.setattr(registry, "_argv", lambda p: _cmds2.get(p, "").split())
     assert registry.provider_of_pane(99) == "claude"
 
 
@@ -66,6 +70,7 @@ def test_provider_of_pane_defaults_to_claude_when_nothing_matches(monkeypatch):
     # Claude, como antes desta task existir.
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "vim")
+    monkeypatch.setattr(registry, "_argv", lambda p: ["vim"])
     assert registry.provider_of_pane(99) == "claude"
 
 
@@ -96,11 +101,24 @@ def test_session_file_ignores_a_stale_sidecar(monkeypatch, tmp_path):
         json.dumps({"file": str(tmp_path / "sumiu.jsonl")}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     # env tambem sem nada, senao o fallback mascararia o bilhete ignorado com um resultado valido.
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(tmp_path / "nao-existe"))
+    _fake_env(monkeypatch, tmp_path, None)
     assert registry.pi_session_file("%123", pid=7, cwd="/w") is None
 
 
+# Os tres dubles abaixo existem porque o procinfo tem DUAS implementacoes e cada plataforma le uma
+# fonte diferente. Falsificar so a fonte do Linux deixava estes casos verdes no Windows lendo o
+# processo REAL de pid 7 — verde pelo motivo errado, que e vermelho disfarcado. Quem escolhe o
+# duble e a CAPACIDADE (`procinfo._TEM_PROC`), nunca o nome do sistema.
+
+
 def _fake_proc_start(monkeypatch, tmp_path, nasceu: float):
+    """Faz o processo do pane 'nascer' em `nasceu`, na fonte que a plataforma de fato le."""
+    if not procinfo._TEM_PROC:
+        # Sem /proc quem responde e o psutil, e nao ha arquivo pra falsificar: o duble e a propria
+        # `_start_time_psutil`. O que estes casos provam continua sendo a logica do
+        # `pi_session_file`; o parser do /proc tem caso proprio, marcado como POSIX.
+        monkeypatch.setattr(procinfo, "_start_time_psutil", lambda pid: nasceu)
+        return
     # /proc/<pid>/stat de mentira com o processo nascendo em `nasceu` (epoch). O comm leva espaco E
     # parentese de proposito: e o caso que quebra qualquer contagem de campo feita da esquerda.
     with open("/proc/stat") as fh:
@@ -111,6 +129,32 @@ def _fake_proc_start(monkeypatch, tmp_path, nasceu: float):
     monkeypatch.setattr(procinfo, "_proc_stat_path", lambda pid: str(stat))
 
 
+def _sem_nascimento(monkeypatch, tmp_path):
+    """Nascimento INDETERMINAVEL (pid morto, sem permissao, kernel sem /proc)."""
+    if not procinfo._TEM_PROC:
+        monkeypatch.setattr(procinfo, "_start_time_psutil", lambda pid: None)
+        return
+    monkeypatch.setattr(procinfo, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
+
+
+def _fake_env(monkeypatch, tmp_path, mapa):
+    """environ do processo do pane. `mapa=None` = ilegivel/ausente."""
+    if not procinfo._TEM_PROC:
+        monkeypatch.setattr(procinfo, "_env_psutil", lambda pid: dict(mapa or {}))
+        return
+    if mapa is None:
+        monkeypatch.setattr(procinfo, "_proc_environ_path",
+                            lambda pid: str(tmp_path / "nao-existe"))
+        return
+    env = tmp_path / "environ"
+    env.write_bytes(b"".join(f"{k}={v}".encode() + b"\x00" for k, v in mapa.items()))
+    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+
+
+# Este e o UNICO caso do arquivo sobre o parser de /proc/<pid>/stat (ticks + btime + o comm com
+# parentese). Fora do Linux nao ha o que exercitar: la o `_proc_start_time` cai no
+# `psutil.create_time()`, que ja devolve epoch e nao passa por parse nenhum.
+@pytest.mark.skipif(not procinfo._TEM_PROC, reason="exercita o parser de /proc/<pid>/stat")
 def test_proc_start_time_survives_a_comm_with_spaces_and_parens(monkeypatch, tmp_path):
     # Sem o rindex(")") o campo 22 sai errado por alguns tokens e o frescor do bilhete vira ruido.
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)
@@ -133,9 +177,7 @@ def test_session_file_rejects_a_sidecar_older_than_the_pane_process(monkeypatch,
         json.dumps({"file": str(velho), "id": None, "ts": 1_700_000_000.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_600.0)     # pane nasceu 10min DEPOIS
-    env = tmp_path / "environ"
-    env.write_bytes(b"CP_PI_SESSION=bbb\x00")
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+    _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "bbb"})
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
 
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
@@ -153,9 +195,7 @@ def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, t
         json.dumps({"file": str(alvo), "id": "bbb", "ts": 1_700_000_600.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)     # pane nasceu ANTES do bilhete
-    env = tmp_path / "environ"
-    env.write_bytes(b"CP_PI_SESSION=aaa\x00")
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+    _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "aaa"})
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(alvo)
 
@@ -177,9 +217,7 @@ def test_session_file_refuses_a_sidecar_pointing_at_a_subagent_run(monkeypatch, 
         json.dumps({"file": str(run / "session.jsonl"), "id": "sub", "ts": 1_700_000_600.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)      # pane nasceu ANTES do bilhete
-    env = tmp_path / "environ"
-    env.write_bytes(b"CP_PI_SESSION=18e48e08\x00")
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+    _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "18e48e08"})
     # Este fallback NAO pode ser o que salva: com cwd cheio de espaco/acento ele ja falhou de
     # verdade. Quem devolve a conversa e o proprio caminho do subagente, que carrega a raiz.
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: "")
@@ -198,9 +236,7 @@ def _bilhete_e_env(monkeypatch, tmp_path, dados: dict):
     velho.write_text("")
     (cfg / ".claude-pocket-pi" / "9.json").write_text(json.dumps({"file": str(velho), **dados}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
-    env = tmp_path / "environ"
-    env.write_bytes(b"CP_PI_SESSION=bbb\x00")
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+    _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "bbb"})
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     return velho
 
@@ -213,7 +249,7 @@ def test_session_file_refuses_a_sidecar_when_the_pane_birth_is_unknown(monkeypat
     # novo abrindo a conversa VELHA, tracked=True, sem log nenhum.
     registry._PI_TICKET_WARNED.clear()
     _bilhete_e_env(monkeypatch, tmp_path, {"id": None, "ts": 1_700_000_000.0})
-    monkeypatch.setattr(procinfo, "_proc_stat_path", lambda pid: str(tmp_path / "nao-existe"))
+    _sem_nascimento(monkeypatch, tmp_path)
     assert registry._proc_start_time(7) is None
 
     with caplog.at_level("WARNING", logger="claude_pocket.registry"):
@@ -240,10 +276,8 @@ def test_session_file_falls_back_to_the_wrapper_env(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg"
     cfg.mkdir()
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
-    env = tmp_path / "environ"
     sid = "019fa3d5-f074-707b-92a8-1ca7f1d99ec9"
-    env.write_bytes(b"PATH=/bin\x00CP_PI_SESSION=" + sid.encode() + b"\x00")
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(env))
+    _fake_env(monkeypatch, tmp_path, {"PATH": "/bin", "CP_PI_SESSION": sid})
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%123", pid=7, cwd="/w") == f"/s/2026_{sid}.jsonl"
 
@@ -254,7 +288,7 @@ def test_session_file_is_none_when_nothing_knows(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg"
     cfg.mkdir()
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
-    monkeypatch.setattr(procinfo, "_proc_environ_path", lambda pid: str(tmp_path / "nao-existe"))
+    _fake_env(monkeypatch, tmp_path, None)
     assert registry.pi_session_file("%123", pid=7, cwd="/w") is None
 
 
@@ -272,6 +306,7 @@ def test_pi_pane_does_not_inherit_a_claude_transcript(monkeypatch, tmp_path):
                                            "active": True}]})
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
+    monkeypatch.setattr(registry, "_argv", lambda p: ["pi"])
     monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)
 
     infos = registry.SessionRegistry().list()
@@ -293,6 +328,7 @@ def _pane_pi_sem_transcript(monkeypatch, tmp_path):
                                            "active": True}]})
     monkeypatch.setattr(registry, "_descendant_pids", lambda pid, children=None: [11])
     monkeypatch.setattr(registry, "_cmdline", lambda p: "pi" + " " * 80)
+    monkeypatch.setattr(registry, "_argv", lambda p: ["pi"])
     monkeypatch.setattr(registry, "pi_session_file", lambda *a, **k: None)
 
 
@@ -393,17 +429,19 @@ def test_create_claude_still_seeds_the_same_path(tmp_path, monkeypatch):
     pt.assert_called_once_with("/home/u/p", None)
 
 
-def test_create_pi_refuses_resume_instead_of_spawning_claude(tmp_path, monkeypatch):
-    # O branch de resume monta `claude --resume <uuid>` LITERAL: aceitar aqui subiria um CLAUDE
-    # lendo o transcript de outro agente, com cara de sessao Pi.
+def test_create_pi_resume_sobe_pi_e_nao_claude(tmp_path, monkeypatch):
+    # O que este teste protege NAO mudou: uma sessao Pi retomada nunca pode subir `claude --resume`,
+    # que leria o transcript de outro agente com cara de sessao Pi. O que mudou e a saida: antes a
+    # unica defesa era recusar; hoje o Pi tem via propria (`pi --session-id <id>` retoma quando o id
+    # ja existe), entao o certo e SUBIR O PI. A recusa antiga tornava esse branch inalcancavel.
     from unittest.mock import patch
     reg = registry.SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "has_session", return_value=False), \
          patch.object(registry.tmux, "new_session", return_value=True) as ns:
-        with pytest.raises(ValueError) as exc:
-            reg.create("s-pi", "/home/u/p", provider="pi", resume_session_id=_UUID_PI)
-    assert "resume" in str(exc.value)
-    ns.assert_not_called()
+        reg.create("s-pi", "/home/u/p", provider="pi", resume_session_id=_UUID_PI)
+    cmd = ns.call_args[0][2]
+    assert cmd == f"pi --session-id {_UUID_PI}"
+    assert "claude" not in cmd
 
 
 def test_create_pi_refuses_an_engine(tmp_path, monkeypatch):

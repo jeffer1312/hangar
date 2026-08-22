@@ -559,8 +559,106 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   as a separator glues the lines together (both measured) — and it is precisely the path that was
   measured delivering 309 of 600 lines while returning success, which is why the clipboard exists.
   Probe: `scripts/test-psmux.py` (+ `.ps1`).
-  Install: `install.ps1`. Not there on Windows: systemd services and the `claude`/`codex` shell
-  wrappers, so a session you open in the terminal is invisible to the app — app-created ones are fine.
+  Install: `install.ps1`. Not there on Windows: systemd services and the `codex` shell wrapper. The
+  `claude` one **is** there — `install.ps1` step 5/8 dot-sources `scripts/shell/claude.ps1` and
+  `claude-conta.ps1` from the PowerShell profile — so a `claude` typed in PowerShell is trackable
+  like on Linux; one typed in another shell (Git Bash) is not, and app-created sessions are always
+  fine.
+- **Where psmux and tmux disagree about IDENTITY and TARGETS** (measured on psmux 3.3.7, 22/08/2026).
+  These four are not cosmetic: three of them were live bugs, and the pattern is the same — a command
+  the tmux docs say **fails** or **addresses one thing** quietly does something else.
+  - **`%N` addresses nothing.** psmux numbers panes per SESSION (tmux, per server), so two sessions
+    each have `%1`. `send-keys -t %1` did not reach either of them: it landed in the **client's
+    current session** — i.e. the app can type a phone prompt, Enter included, into someone else's
+    conversation. `agentpane.resolve_target` only returns a `%N` when the session has 2+ panes, which
+    is why it stayed latent. The address that works is `=<session>:<window_index>.<pane_index>`;
+    `tmux.alvo_de_pane` builds it, and on POSIX returns the `%N` unchanged. `pane_id` is still the
+    **identity** (Pi ticket, agentpane cache) — what changed is what serves as an **address**.
+  - **`kill-session -t "=<name>"` does not kill.** The `=` (exact match) is honored by `has-session`,
+    `display`, `send-keys`, `new-window` and `split-window` — and NOT by `kill-session`, which waits
+    **5s** and returns rc=1 with the session still alive. `tmux.alvo_de_kill` is the single place
+    that knows this (production and tests share it); test teardowns that missed it left **65** orphan
+    servers on this machine and made `test_termsock` fail the NEXT case with "duplicate session".
+  - **`rename-session` to an occupied name overwrites instead of failing** (rc=0). The session that
+    was there does not die: it becomes unreachable, with the name pointing at the other one, and both
+    processes keep running. `registry.rename` depends on the refusal to fall back to killing the old
+    hidden shell, so `tmux.rename_session` now checks first — non-POSIX branch only.
+  - **`list-clients` ignores `-F` and invents the tty.** Any format string comes back as the default
+    line, every client shows as `/dev/pts/0` (even clients of different sessions), and
+    `detach-client -t <tty>` is parsed as a session name. A line from `list-clients` therefore does
+    **not** prove a client is attached — what proves it is the `[activity=...]` suffix and the
+    `(attached)` flag in `list-sessions`. Worse than useless, in fact: with the session provably
+    empty (`#{session_attached}` = 0) `list-clients -t "={name}"` still returns rc=0 and **one
+    line** for a client that does not exist, so `assert list-clients == ""` is not a regression
+    check there — it is a question that command cannot answer. `#{session_attached}` answers it on
+    both multiplexers. `detach-client` is unusable for a different reason: with the exact target it
+    answers `no session '={name}'` (rc=1) — the `=` is **not** honored by it, same family as
+    `kill-session` above — and without the `=` it drops **every** client of that session, the
+    user's own native `attach` included. This is why the terminal panel's Windows teardown is
+    **killing our own `tmux attach` process**: measured, it releases just that client, a client of
+    another session stays attached, and the session keeps running.
+- **Where psmux and tmux disagree about CONFIGURATION — and how to tell a real setting from one it
+  merely stored** (measured on psmux 3.3.7, 22/08/2026, on a throwaway `-L` socket). The section
+  above is about commands that address the wrong thing; this one is about `bind`/`set` **accepting
+  everything**. Same family as the `terminal-features` it once ignored in silence, except here
+  reading the value back does not catch it either.
+  - **`set -g <anything> <value>` returns 0 and the invented option comes back from `show -g`.**
+    So "it accepted it, and I read it back" proves nothing about a psmux option — the read is just
+    your own string. What proves a setting is real is it appearing in the **default `show -g`
+    listing** (58 entries here) *before* anyone sets it. Use that as the test.
+  - **No mouse key name can be bound.** `bind -T root WheelUpPane …` returns rc=0 and is **silently
+    discarded** — `list-keys -T root` never shows it, in the plain form or in the nested `if -F`
+    one. It is not the table and not `list-keys`: `NPage`, `Home`, `F5`, `C-a`, `M-v` and a prefix
+    `bind X` all store fine, while `WheelUpPane`, `WheelDownPane`, `WheelUpStatus`, `MouseDown1Pane`
+    and `MouseDrag1Pane` behave exactly like a `TeclaQueNaoExiste`. The consequence: the wheel
+    recipe from the user's Linux `~/.tmux.conf` (`bind -T root WheelUpPane` + nested `if -F`)
+    **cannot be ported**, and a future attempt will get rc=0 the whole way and look like it worked.
+  - **`#{mouse_any_flag}` does not exist**; `#{alternate_on}` and `#{pane_in_mode}` do. Measured
+    against an app holding the alternate screen and asking for mouse (`?1049h` + `?1000h` +
+    `?1006h`): `alternate_on` went `0` → `1`, `pane_in_mode` answered `0`, and `mouse_any_flag` came
+    back **empty** — same as an invented variable — even while the app was requesting mouse. So the
+    "app that asks for mouse" branch of that recipe has no condition to test, either.
+  - **The wheel-into-copy-mode behaviour is OUR option, not a psmux law.** psmux carries three
+    settings tmux has no equivalent for — `scroll-enter-copy-mode` (default `on`), `mouse-selection`
+    and `pwsh-mouse-selection` — and `docs/tmux.conf.windows.example` already writes
+    `set -g scroll-enter-copy-mode on`. That line is what sends the wheel into copy mode; the lever
+    is one word, and it is in our own managed block.
+  - **Synthetic wheel events could not be delivered** (two attempts, both dead ends worth not
+    repeating): writing the SGR sequence (`ESC [ < 64 ; x ; y M`) into a ConPTY's input measures the
+    **ConPTY**, which translates input before the client sees it; and a `MOUSE_WHEELED`
+    `INPUT_RECORD` posted with `WriteConsoleInput` into a console the client inherited never reached
+    it either. Neither triggered copy mode even with the option `on`, which is the behaviour a real
+    wheel produces every day — so the result is about the injection, not about psmux. Wheel
+    behaviour here is verified by a human scrolling, not by a probe.
+- **The pane's environment comes from the SERVER on tmux and from the CALLER on psmux — which is
+  why `CLAUDE_CONFIG_DIR` cannot be exported unconditionally** (measured on psmux 3.3.7,
+  22/08/2026). tmux gives a new session the env of whoever started the *server*, so `new_session`
+  sent `-e CLAUDE_CONFIG_DIR=<value>` **always**, the default included: without it, a server started
+  by a `claude-conta contaA` silently births every later session in contaA. psmux has neither half
+  of that — the pane inherits the **caller's** env (`ZZ=x tmux new-session …` → the pane sees
+  `ZZ=x`) and nothing crosses from one session to the next (a `-e` on session A is invisible to a
+  later B). And exporting the default there is not free: for Claude Code, `CLAUDE_CONFIG_DIR` set —
+  **even pointing at `~/.claude` itself** — means "read `.claude.json` from INSIDE that folder", a
+  file it then creates empty (measured here: `~/.claude.json` 52236 bytes, the real one, against
+  `~/.claude/.claude.json` 1259). So **every session created by the app on Windows landed on the
+  welcome screen** ("Select login method", theme picker) with the credential intact, reading the
+  wrong `settings.json` on the way (that is where the fullscreen TUI went). `tmux._e_config_dir` is
+  the one place that decides: on POSIX always (the argument list is byte-identical to before); on
+  psmux only when the value **differs** from `~/.claude`, or when the backend itself declares the
+  variable — the pane would inherit that one anyway, so omitting would not erase it. Same rule in
+  the Windows shell wrapper (`scripts/shell/claude.ps1`); the POSIX wrappers are untouched. The
+  fallback everywhere else already reads absence as `~/.claude` (hooks, sidecars, `projects/`), so
+  nothing else moves.
+- **Windows-only trap in the installer: encoding is per interpreter, and ASCII is never the answer.**
+  Every launcher `install.ps1` writes carries a PATH inside it (checkout, python, `%LOCALAPPDATA%`
+  log — the user's profile name). Measured by executing each file with an accented path, console
+  codepage 850: `.cmd` needs the console's OEM codepage (ANSI, UTF-8 and ASCII all fail; UTF-8 plus
+  `chcp 65001` also works but changes the caller's console), `.vbs` needs UTF-16LE **with** BOM (ANSI
+  works, OEM does not), `.sh` needs UTF-8 without BOM. `Escrever-Lancador` encodes per type; ASCII
+  content still comes out byte-identical. And the same file's two other rules stand: the `.env` and
+  `settings.json` must NOT have a BOM (`JSON.parse` in Node throws on it), while the PowerShell
+  **profile** must — it is the only encoding both 5.1 and 7 can read when the path has an accent
+  (5.1 alone writes ANSI, 7 alone writes UTF-8-no-BOM, and each fails to read the other's).
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
@@ -634,14 +732,68 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
       is never renamed or killed.
   - **POSIX-only imports (`pty`, `fcntl`, `termios`) live INSIDE the functions.** `termsock` is
     imported by the 409 guard that also runs on Windows; a top-level `import fcntl` there is a
-    `ModuleNotFoundError` that breaks a feature which works today. The panel itself is gated by
-    `config.somente_leitura.terminal_panel` (`os.name == "posix"`), but a gate that turns the
+    `ModuleNotFoundError` that breaks a feature which works today. The rule is symmetric now that
+    there are two engines: `asyncio.windows_utils` (which pulls `_winapi`/`msvcrt`) is imported
+    inside `_pipe_handle` for the same reason, and `app/conpty.py` guards its `ctypes.wintypes`
+    import on `sys.platform` — `wintypes` does not import at all on Linux. A gate that turns the
     *panel* off never protects an import — or a format string — on a shared path.
+  - **The panel runs on Windows too, and it is TWO ENGINES, not one** (`app/conpty.py` +
+    `termsock._motor_windows`, 22/08/2026). `terminal_panel` in `/api/config` is
+    `termsock.painel_disponivel()` — a **capability** ("can a panel open here?"), never
+    `os.name == "posix"`, which is what it used to say. POSIX is `pty.fork()` + `add_reader`;
+    Windows is a ConPTY via ctypes whose pipes are fed to the Proactor's
+    `connect_read_pipe`/`connect_write_pipe` — no thread, no queue, because
+    `pause_reading()`/`resume_reading()` on `_ProactorReadPipeTransport` is a one-for-one
+    replacement for `remove_reader`/`add_reader`. The shared front door (auth, Origin, session
+    exists, cols/rows clamp) stays in ONE place; only the engine forks. Four things measured that
+    bite whoever touches this:
+    (1) **`STARTF_USESTDHANDLES` with all three handles NULL is mandatory** — without it
+    `CreateProcess` propagates the *parent's* std handles, so in a service (stdout → log file) the
+    child writes to the log and the pseudoconsole renders a **blank screen**, while `mode con`
+    inside the child already reports the right size. Clearing `HANDLE_FLAG_INHERIT` does **not**
+    fix it. Microsoft's own sample omits the flag and "works" only because its parent is a console
+    app whose std handles are already console handles;
+    (2) the ConPTY **input** pipe needs `duplex=True` — `_ProactorWritePipeTransport` fires a
+    16-byte `ReadFile` on the write end just to detect closure, and `GENERIC_WRITE` alone returns
+    WinError 5;
+    (3) kill the child **before** `ClosePseudoConsole` (it can hang, microsoft/terminal#17716) —
+    which is also the only safe teardown psmux allows;
+    (4) there is **no size-restore step** on Windows, deliberately: psmux's window size follows
+    whichever client is attached (the next client at 80x24 makes it 80x23 by itself), and
+    `resize-window`/`setw window-size latest` both return rc=0 and do nothing there.
+    `pywinpty` was tried and **removed**: it ships its own `conpty.dll`/`OpenConsole.exe` instead
+    of using the system ConPTY, so it exposes no handle for asyncio; it also returns `str` from
+    `read()` and opens a **listening** socket per session.
   While the panel is attached the window is at ITS size (~120x20), so anything that counts lines in
   the pane (option picker, AskUserQuestion stepper, `model_picker`) would read a truncated screen:
   `/select`, `/answer` and friends answer **409**, and the phone UI must **show that text** — the
   refusal explains the way out ("close the panel"), and a `catch` that only logs turns a tap into
   nothing at all.
+- **O mesmo terminal no CELULAR** (`components/TerminalMobile.svelte`, aberto pelo botão Terminal do
+  `Chat` quando `desktop` é falso): mesmo PTY, mesmo socket, mesma montagem do xterm — o que é
+  compartilhado mora em `lib/xterm.ts` (`novoTerminal`/`temaDe`, onde vivem o fundo
+  `rgba(0, 0, 0, 0)` e a fonte lida por `getComputedStyle`), e não em uma segunda cópia. O
+  `TerminalMirror` (capture-pane a cada 450ms, texto cru) **continua existindo**: é o caminho quando
+  `somente_leitura.terminal_panel` é falso — hoje isso não é mais "Windows", que ganhou motor de
+  ConPTY em 22/08/2026, e sim qualquer máquina sem motor nenhum —, e o Chat escolhe pela config do
+  servidor — otimista em `true` enquanto ela não chega, senão o primeiro toque cairia no espelho por
+  causa de um fetch em voo. Três decisões medidas em 21/08/2026:
+  - **A entrada são BYTES CRUS, não os nomes de tecla do `/term-input`.** Do outro lado está o
+    `tmux attach`, que parseia a entrada como um terminal de verdade e reemite pro programa no modo
+    que ELE espera (inclusive cursor-keys em modo aplicação): `\x1b[A` é exatamente o que a seta
+    física manda. Texto e Enter saem no MESMO `send` (`valor + '\r'`) — dois envios abrem janela pra
+    a TUI processar a linha antes do texto inteiro chegar.
+  - **A fonte é o controle de COLUNAS, não só de legibilidade**, porque o tmux redimensiona a janela
+    pro tamanho deste cliente enquanto ele estiver anexado (medido: 68x53 com o celular aberto,
+    200x50 de volta ao fechar). Por isso trocar a fonte **não** remonta o terminal: muda
+    `options.fontSize`, refaz o `fit()` e manda `resize` — remontar fecharia o socket e repintaria a
+    TUI a cada toque em A+.
+  - **O `Origin` do WebSocket precisa ser declarado quando o front vem de OUTRA máquina**
+    (`CP_TERM_ORIGINS`, csv). O PWA carregado da VPS manda a Origin da VPS, que não é mesma-origem,
+    não é a `public_url` e não está no `peers.json` — o handshake voltava **403** e a tela dizia só
+    "desconectado". Vazio (o default) **não** pode virar "aceita qualquer um": o handshake também
+    autentica pelo cookie `cp_token`, então origem arbitrária seria qualquer site abrindo um
+    terminal na máquina.
 
 ## tmux + Claude Code truecolor
 

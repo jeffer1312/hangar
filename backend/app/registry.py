@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import re
-import shlex
+import shutil
 import threading
 import time
 import uuid
@@ -33,7 +33,7 @@ from app.planprog import plan_progress, plano_escondido
 # monkeypatch delas neste modulo, e o binding local preserva isso.
 from app import model_args
 from app import procinfo
-from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cmdline,
+from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cmdline, _argv,
                          _config_dir_of, _proc_start_time, _engine_of)
 # _proc_environ_path/_proc_stat_path saem de proposito da lista acima: existem SO como ponto de
 # injecao de teste e sao chamadas de dois lados (aqui e de dentro do procinfo). Importadas por
@@ -243,6 +243,63 @@ def _kimi_corrige_ocioso(info, marker):
 # transcript do Claude do mesmo cwd (medido no e2e de 19/08/2026).
 _EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi"}
 
+# Windows: o argv0 vem com extensao (`claude.exe`), que nao casa em _EXEC_PROVIDER; e um CLI
+# instalado por `npm -g` nao aparece com o nome dele nenhuma vez — o processo e o
+# `node.exe <...>\<pacote>\dist\cli.js`. Medido nesta VM em 21/08/2026, com o pi 0.84.2 aberto num
+# pane: os descendentes eram `powershell.exe -NoLogo -Command pi` e
+# `node.exe C:\...\npm/node_modules/@earendil-works/pi-coding-agent/dist/cli.js`. Nenhum dos dois
+# casava, entao TODA sessao Pi era classificada como Claude — e dai o app nem procurava o bilhete
+# da extensao, resolvia um jsonl do layout do Claude e caia no scrape do pane pra statusline.
+# So o que foi MEDIDO entra aqui: kimi e codex no Windows ainda nao foram verificados, e chutar o
+# nome de pacote deles seria pior que a ausencia (viraria deteccao errada em vez de nenhuma).
+_PKG_PROVIDER = {"pi-coding-agent": "pi"}
+
+
+def _exigir_cp_engine() -> None:
+    """Recusa ALTO quando o `cp-engine` nao esta no PATH. Chamado antes de montar o prefixo.
+
+    O `cp-engine --exec` vira o COMANDO do pane. Sem o lancador no PATH o pane morre no ato — e o
+    `tmux new-session` devolve 0 do mesmo jeito. Medido nesta VM (psmux 3.3.7): rc=0 na criacao e,
+    tres segundos depois, `has-session` ja responde 1. Sem esta guarda o backend responde "sessao
+    criada" pro celular e a sessao some sem deixar rastro, que e o pior modo de falha que existe
+    aqui — o usuario nao tem nem o que procurar.
+
+    Conferir ANTES em vez de verificar DEPOIS e deliberado: "o pane sobreviveu?" e uma corrida (ele
+    pode morrer a qualquer instante depois da checagem), enquanto "o lancador existe?" e uma
+    pergunta estavel, e a resposta ja diz o que fazer.
+
+    RESSALVA: o PATH consultado e o do BACKEND, e o comando roda no PATH do PANE. Onde os dois
+    divergirem isto pode recusar uma criacao que funcionaria. Recusa visivel e com instrucao e
+    melhor que sessao que evapora calada, e o conserto (instalar o lancador) serve pros dois.
+    """
+    if shutil.which("cp-engine"):
+        return
+    raise ValueError(
+        "cp-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
+        "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
+        "Windows, install.ps1.")
+
+
+def _provider_do_argv(argv: list[str]) -> Optional[str]:
+    """Provider a partir do argv JA separado, ou None. Nao recebe string: ver procinfo._argv."""
+    if not argv:
+        return None
+    base = os.path.basename(argv[0])
+    if os.name == "nt":
+        base = os.path.splitext(base)[0]      # claude.exe -> claude
+    prov = _EXEC_PROVIDER.get(base)
+    if prov:
+        return prov
+    # Lancado por node: quem diz qual agente e o CAMINHO do script, nao o interpretador. Normaliza
+    # a barra porque o npm do Windows monta o shim com `/` no meio de um caminho com `\`.
+    if base in ("node", "node.exe"):
+        for arg in argv[1:]:
+            partes = arg.replace("\\", "/").split("/")
+            for pkg, p in _PKG_PROVIDER.items():
+                if pkg in partes:
+                    return p
+    return None
+
 
 def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> str:
     """Qual agente roda neste pane, lido do /proc dos descendentes.
@@ -259,10 +316,10 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
         cmd = _cmdline(p)
         if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
             continue        # mesma exclusao do _repl_sid: subprocesso nao e o REPL dono
-        argv0 = cmd.strip().split()[:1]   # o pi reescreve o argv -> "pi" + NUL virado espaco
-        if not argv0:
-            continue
-        prov = _EXEC_PROVIDER.get(os.path.basename(argv0[0]))
+        # _argv e nao `cmd.split()`: no Windows o caminho do executavel tem espaco
+        # (`C:\Program Files\nodejs\node.exe`) e o split devolvia `C:\Program` como argv0. O `cmd`
+        # acima segue servindo pra exclusao por substring, que e o uso dele.
+        prov = _provider_do_argv(_argv(p))
         if prov:
             return prov
     return "claude"
@@ -415,6 +472,26 @@ def _warn_bilhete_once(pane_id: str, motivo: str) -> None:
         _log.warning("pi: bilhete de %s recusado (%s); usando CP_PI_SESSION", pane_id, motivo)
 
 
+def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
+    """Mesma chave que a extensao usa pra gravar o bilhete (scripts/pi/cp-state.ts, paneKey).
+
+    No tmux e o `%N`, que e unico no servidor. No psmux (Windows) NAO e: medido em 21/08/2026,
+    quatro sessoes vivas ao mesmo tempo e todas com `TMUX_PANE=%1` — a segunda sessao Pi
+    sobrescrevia o bilhete da primeira e `pi_session_file` passava a devolver o MESMO transcript
+    pras duas, ou seja, uma abria a conversa da outra. Ali a chave e o `PSMUX_SESSION`, que carrega
+    o nome da sessao e e unico por construcao.
+
+    Lido do ambiente do PROCESSO do pane, e nao de um parametro novo, pra ser exatamente o que a
+    extensao leu — as duas pontas olham a mesma fonte, entao nao ha como divergirem. No Linux a
+    variavel nao existe, `_env_var_of` devolve None e a chave fica byte-identica a de sempre.
+    """
+    if pid is not None:
+        psmux = procinfo._env_var_of(pid, "PSMUX_SESSION")
+        if psmux:
+            return re.sub(r"[^A-Za-z0-9._-]", "-", psmux)
+    return pane_id.lstrip("%")
+
+
 def pi_session_file(pane_id: str, pid: Optional[int] = None,
                     cwd: str = "") -> Optional[str]:
     """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
@@ -424,10 +501,13 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     conversa de outro agente.
     """
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    ticket = Path(base) / ".claude-pocket-pi" / f"{pane_id.lstrip('%')}.json"
+    ticket = Path(base) / ".claude-pocket-pi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     sid = _pi_sid_of(pid) if pid else None
     try:
-        data = json.loads(ticket.read_text())
+        # encoding explicito: o bilhete guarda o CAMINHO do transcript, e no Windows o default e
+        # cp1252. Uma pasta com acento (Area de trabalho) ou emoji volta corrompida daqui — e o
+        # caminho corrompido nao existe, entao a sessao Pi ficaria sem transcript sem erro nenhum.
+        data = json.loads(ticket.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return None            # ver o irmao em kimi_session_file: nao-dict derruba list() inteira
         f, ts = data.get("file"), data.get("ts")
@@ -504,9 +584,11 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
     apontaria pra sessao errada.
     """
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    ticket = Path(base) / ".claude-pocket-kimi" / f"{pane_id.lstrip('%')}.json"
+    # Mesma chave do bilhete do Pi, pelo mesmo motivo: no psmux o %N nao e unico e dois panes Kimi
+    # dividiriam um bilhete so (ver _chave_do_bilhete).
+    ticket = Path(base) / ".claude-pocket-kimi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     try:
-        data = json.loads(ticket.read_text())
+        data = json.loads(ticket.read_text(encoding="utf-8"))   # mesmo motivo do pi_session_file
         if not isinstance(data, dict):
             # JSON VALIDO do tipo errado (`null`, lista) nao levanta ValueError, entao o except
             # abaixo nao pega: `.get` num nao-dict e AttributeError, que sobe pelo loop de list()
@@ -1200,14 +1282,10 @@ class SessionRegistry:
         # recusam alto em vez de "quase funcionar":
         #  - motor: o `cp-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
         #    a sessao subiria na conta do proprio pi PARECENDO estar no motor pedido.
-        #  - resume: o branch abaixo monta `claude --resume <uuid>` LITERAL -> aceitar aqui spawnaria
-        #    um Claude com cara de sessao Pi, lendo o transcript do agente errado. O equivalente no Pi
-        #    seria `pi --session <id>` (o wrapper ja respeita esse flag); enquanto nao existir, 400.
-        if provider == "pi":
-            if engine:
-                raise ValueError("motor so vale para provider claude")
-            if resume_session_id is not None:
-                raise ValueError("resume de sessao pi ainda nao e suportado")
+        # Resume do Pi passou a existir (branch `elif provider == "pi"` la embaixo, com
+        # `pi --session-id <id>`); a recusa que morava aqui tornava aquele branch INALCANCAVEL.
+        if provider == "pi" and engine:
+            raise ValueError("motor so vale para provider claude")
         # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (cp-engine so exporta
         # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
         if provider == "kimi" and engine:
@@ -1232,9 +1310,20 @@ class SessionRegistry:
                 sid = resume_session_id
                 # args_de("kimi", None, None) == []: a escolha na abertura nao cobre o Kimi (e
                 # qualquer escolha pra ele e recusada pela validacao na api), e com ausencia o
-                # shlex.join e byte por byte o f-string de antes.
-                cmd = shlex.join(["kimi", "--session", sid]
+                # join_cmd e byte por byte o f-string de antes (no POSIX ele E o shlex.join).
+                cmd = tmux.join_cmd(["kimi", "--session", sid]
                                  + model_args.args_de(provider, model, effort))
+            elif provider == "pi":
+                # `pi --session-id <id>` RETOMA quando o id ja existe ("creating it if missing", no
+                # --help do 0.82.1) -> o comando do resume e o mesmo do spawn, so com o id antigo.
+                # Sem este ramo o Pi caia no `claude --resume` abaixo e o pane subia o agente errado.
+                try:
+                    uuid.UUID(resume_session_id)
+                except (ValueError, AttributeError, TypeError):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                from app.adapters import get_adapter
+                cmd = tmux.join_cmd(get_adapter("pi").spawn_command(cwd, sid, model, effort, None))
             else:
                 try:
                     uuid.UUID(resume_session_id)
@@ -1244,14 +1333,14 @@ class SessionRegistry:
                 # Retomada de conversa MORTA (vinda do Arquivo): nao existe sessao antiga nem pid
                 # pra consultar. A escolha que vale e a que este create() recebeu.
                 # permission_mode NÃO entra no resume (a sessão retoma no estado dela).
-                cmd = shlex.join(["claude", "--resume", sid]
+                cmd = tmux.join_cmd(["claude", "--resume", sid]
                                  + model_args.args_de(provider, model, effort))
         else:
             sid = str(uuid.uuid4())
             # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
             # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
             from app.adapters import get_adapter
-            cmd = shlex.join(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
+            cmd = tmux.join_cmd(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
         if engine:
             # `cp-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
@@ -1263,12 +1352,13 @@ class SessionRegistry:
             # de ANTHROPIC_MODEL (ver engines.env_de). A janela vem do catálogo do provedor, resolvida
             # no backend (api.create_session); quem passa por aqui sem ela (ex: resume do Arquivo)
             # simplesmente não exporta a var — o CLI usa o default dele.
+            _exigir_cp_engine()
             pre = ["cp-engine", "--exec", engine]
             if model:
                 pre += ["--model", model]
                 if context_window:
                     pre += ["--context", str(context_window)]
-            cmd = shlex.join(pre + ["--"]) + " " + cmd
+            cmd = tmux.join_cmd(pre + ["--"]) + " " + cmd
         base = (Path(config_dir) / "projects") if config_dir else self.projects_dir
         # Pi tem layout PROPRIO (~/.pi/agent/sessions/<slug>/<ts>_<uuid>.jsonl) e o arquivo so nasce
         # quando a TUI grava o 1o turno -> nao ha path pra pre-semear. jsonl=None e cache INTOCADO
@@ -1606,18 +1696,22 @@ class SessionRegistry:
         # anexa ao nome. Nada aqui toca o tmux.
         # "claude" literal: esta funcao ja recusa provider nao-Claude acima
         # (_refuse_non_claude_resume), e nao ha variavel `provider` neste escopo.
-        cmd = shlex.join(["claude", "--resume", session_id]
+        cmd = tmux.join_cmd(["claude", "--resume", session_id]
                          + model_args.args_de("claude", modelo, esforco))
         if motor:
             # Prefixo remontado JUNTO com a escolha: preservar so a flag deixaria a sessao
             # ressuscitada com a flag num modelo e o AMBIENTE noutro (as cinco chaves ANTHROPIC_*,
             # o SUBAGENT_MODEL e a janela voltariam pro modelo do motor).
+            # Antes do kill, junto com o resto da montagem do comando — o comentario acima explica
+            # por que NADA aqui pode tocar o tmux antes de o comando inteiro estar pronto: recusar
+            # depois do kill trocaria "resume recusado" por "sessao destruida e nao relancada".
+            _exigir_cp_engine()
             pre = ["cp-engine", "--exec", motor]
             if modelo:
                 pre += ["--model", modelo]
                 if janela:
                     pre += ["--context", janela]
-            cmd = shlex.join(pre + ["--"]) + " " + cmd
+            cmd = tmux.join_cmd(pre + ["--"]) + " " + cmd
         tmux.kill_session(name)
         self._forget(name)
         if not tmux.new_session(name, cwd, cmd, str(cdir) if cdir else None):

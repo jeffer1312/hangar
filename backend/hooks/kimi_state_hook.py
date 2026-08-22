@@ -16,6 +16,7 @@
 # %pane_id depois de um restart.
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -75,7 +76,8 @@ def _write_marker(base: str, subdir: str, key: str, payload: dict) -> None:
 base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
 try:
-    o = json.loads(sys.stdin.read())
+    # bytes + utf-8 explicito: em modo texto o Windows usa o locale (cp1252). Ver preview_hook.py.
+    o = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     event = o.get("hook_event_name")
     sid = o.get("session_id")
 
@@ -85,9 +87,17 @@ try:
 
     # Bilhete pane->sessao em QUALQUER evento: quanto mais cedo o backend liga o pane ao wire,
     # melhor (SessionStart ja basta). Sem TMUX_PANE (kimi fora do tmux) nao ha o que ligar.
-    pane = os.environ.get("TMUX_PANE")
-    if sid and pane:
-        _write_marker(base, ".claude-pocket-kimi", pane.lstrip("%"),
+    # A CHAVE precisa ser unica no servidor do multiplexador. No tmux o %N e global e serve; no
+    # psmux (Windows) ele e por SESSAO — medido em 21/08/2026 com quatro sessoes vivas, TODAS com
+    # TMUX_PANE=%1. Com o pane como chave, a 2a sessao Kimi sobrescreveria o bilhete da 1a e as
+    # duas apontariam pro mesmo wire: uma abriria a conversa da outra. `PSMUX_SESSION` traz o nome
+    # da sessao, unico por construcao. Mesma correcao (e mesma fonte) do bilhete do Pi, em
+    # scripts/pi/cp-state.ts e registry._chave_do_bilhete — as duas pontas leem a MESMA variavel
+    # pra nao poderem divergir sobre qual e a chave.
+    psmux = os.environ.get("PSMUX_SESSION")
+    chave = re.sub(r"[^A-Za-z0-9._-]", "-", psmux) if psmux else (os.environ.get("TMUX_PANE") or "").lstrip("%")
+    if sid and chave:
+        _write_marker(base, ".claude-pocket-kimi", chave,
                       {"session_id": sid, "cwd": o.get("cwd"), "ts": time.time()})
 except Exception:
     # NUNCA travar o prompt do usuario por causa do hook -> engole a excecao. Mas nao pode ser um

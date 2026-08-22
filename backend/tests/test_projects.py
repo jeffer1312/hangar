@@ -18,9 +18,14 @@ def config(tmp_path, monkeypatch):
     return write
 
 
-def test_state_derivation(config, monkeypatch):
-    config({"a": {"cwd": "/tmp/a", "command": "x", "port": 1234}})
-    slug = runner._slug("/tmp/a")
+def test_state_derivation(config, monkeypatch, tmp_path):
+    # Caminho REAL (tmp_path) em vez de "/tmp/a" literal: o `_owns` compara o dono da porta com
+    # `os.path.realpath(cwd)`, e no Windows um "/tmp/a" ganha a letra do drive so de um lado — o
+    # caso media a normalizacao do os.path, nao a regra de dono. Com caminho real a regra e a mesma
+    # nos dois sistemas.
+    raiz = str(tmp_path / "a")
+    config({"a": {"cwd": raiz, "command": "x", "port": 1234}})
+    slug = runner._slug(raiz)
 
     def status(runs, port=(False, None)):
         monkeypatch.setattr(projects, "_port_info", lambda ports: {1234: port})
@@ -31,27 +36,30 @@ def test_state_derivation(config, monkeypatch):
     assert status({slug: RunInfo(command="x", exited=True, exit_status=3)}).state == "failed"
     assert status({slug: RunInfo(command="x", exited=True, exit_status=3)}).exit_status == 3
     assert status({slug: RunInfo(command="x")}).state == "starting"
-    assert status({slug: RunInfo(command="x")}, port=(True, "/tmp/a")).state == "running"
+    assert status({slug: RunInfo(command="x")}, port=(True, raiz)).state == "running"
     # subpasta do projeto tambem e dele (PSS sobe de deploy/)
-    assert status({slug: RunInfo(command="x")}, port=(True, "/tmp/a/deploy")).state == "running"
+    assert status({slug: RunInfo(command="x")},
+                  port=(True, str(tmp_path / "a" / "deploy"))).state == "running"
     # porta aberta por OUTRO projeto: pane vivo continua "starting", nunca "running" emprestado
-    assert status({slug: RunInfo(command="x")}, port=(True, "/outro")).state == "starting"
+    assert status({slug: RunInfo(command="x")},
+                  port=(True, str(tmp_path / "outro"))).state == "starting"
 
 
-def test_externo_exige_dono_no_cwd(config, monkeypatch):
-    config({"a": {"cwd": "/tmp/a", "command": "x", "port": 9}})
+def test_externo_exige_dono_no_cwd(config, monkeypatch, tmp_path):
+    raiz = str(tmp_path / "a")     # caminho real, mesmo motivo do caso acima
+    config({"a": {"cwd": raiz, "command": "x", "port": 9}})
     monkeypatch.setattr(runner, "all_runs", lambda: {})
 
     def with_port(port):
         monkeypatch.setattr(projects, "_port_info", lambda ports: {9: port})
         return projects.list_projects()[0].state
 
-    assert with_port((True, "/tmp/a")) == "external"
+    assert with_port((True, raiz)) == "external"
     # porta 3000 aberta por outro front, ou dono nao identificavel: NAO atribui
-    assert with_port((True, "/outro/front")) == "stopped"
+    assert with_port((True, str(tmp_path / "outro" / "front"))) == "stopped"
     assert with_port((True, None)) == "stopped"
     # sem porta configurada nao ha como afirmar run externo -> stopped
-    config({"a": {"cwd": "/tmp/a", "command": "x"}})
+    config({"a": {"cwd": raiz, "command": "x"}})
     assert projects.list_projects()[0].state == "stopped"
 
 

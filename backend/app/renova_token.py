@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -165,22 +166,64 @@ def pasta_confiada(dir_conta: Path) -> Path | None:
 def esta_em_uso(dir_conta: Path) -> bool:
     """Algum processo VIVO já usa este config dir?
 
-    Mesma consulta da borda destrutiva (o DELETE de conta): `procinfo._pids_com_config_dir` varre o
-    ambiente dos processos atrás do `CLAUDE_CONFIG_DIR`. Um `claude` aberto fora do tmux não aparece
-    no registry, mas aparece aqui.
+    Mesma varredura da borda destrutiva (o DELETE de conta): `procinfo._pids_com_config_dir` lê o
+    ambiente dos processos atrás do `CLAUDE_CONFIG_DIR`. Um `claude` aberto fora do tmux não
+    aparece no registry, mas aparece aqui. O DELETE recusa com QUALQUER herdeiro (apagar a pasta
+    por baixo de um tmux ou MCP que a carrega é outra conversa); aqui só o CLI importa.
 
     Varredura que FALHOU devolve True, não False: "não consegui olhar" não pode sair igual a "olhei
     e não tem ninguém" — o preço de errar pro lado do não é derrubar a sessão de alguém, e o preço
     de errar pro lado do sim é uma conta esperar a próxima rodada.
 
-    O próprio processo do backend é descontado: ele pode ter herdado a variável de quem o subiu, e
-    aí a conta base (`~/.claude`) nunca seria renovada — pra sempre, calada.
+    Só conta processo que É o CLI `claude`. A variável é herdada por tudo que nasce dentro de uma
+    sessão — o servidor do tmux, o backend subido de lá (`uv run`), MCPs, um `pi`/`kimi` —, e
+    esses sobrevivem à sessão que os criou. Medido em 22/08/2026: a conta da sessão ficava "em
+    uso" por 30 processos sem nenhum `claude` entre eles, nunca renovava, e a tela prometia
+    "a sessão aberta renova sozinha" pra uma sessão que não existia.
     """
     pids, varredura_ok = procinfo._pids_com_config_dir(dir_conta)
     if not varredura_ok:
         _log.warning("não consegui varrer os processos — trato %s como em uso", dir_conta)
         return True
-    return any(pid != os.getpid() for pid in pids)
+    return any(pid != os.getpid() and _e_cli_claude(pid) for pid in pids)
+
+
+def _e_cli_claude(pid: int) -> bool:
+    """O processo é o CLI do Claude Code? Três formas medidas: argv0 `claude` (instalador nativo,
+    Linux), `claude.exe` (nativo, Windows) e `node <...>/@anthropic-ai/claude-code/cli.js` (npm).
+
+    argv ilegível (psutil AccessDenied/Zombie no Windows/macOS; no Linux o cmdline é 0444 e não
+    acontece) conta como CLI: o ambiente já disse que o processo é da conta, e "não consegui ver o
+    que é" tem que errar pro mesmo lado que "não consegui varrer".
+    """
+    argv = procinfo._argv(pid)
+    if not argv:
+        _log.warning("pid %s usa a conta mas não consegui ler o argv — trato como claude", pid)
+        return True
+    # argv inteiro, não só os dois primeiros: `node --max-old-space-size=… cli.js` empurra o
+    # script pra terceira posição, e aqui errar é liberar a conta com o CLI rodando.
+    for arg in argv:
+        # Não é `Path(arg).name`: no Linux a barra invertida do caminho Windows não separa.
+        partes = re.split(r"[\\/]", arg)
+        nome = partes[-1].lower()
+        if nome in ("claude", "claude.exe") or "claude-code" in partes:
+            return True
+    return False
+
+
+# Uma renovação por vez POR CONTA. A rodada (tmux, até 45s) e a leitura de cota (`claude mcp
+# list`) podem querer a mesma conta ao mesmo tempo, e a janela escondida da rodada é um `bash` —
+# não conta mais como "em uso" — então sem isto duas renovações rotacionariam o mesmo refresh
+# token. A rodada espera (acha o token já novo; o CLI não rotaciona token válido); o caminho
+# barato NÃO espera, porque ele roda dentro do `GET /cotas` e uma requisição presa 45s atrás de
+# uma janela tmux parece rede lenta.
+_travas: dict[Path, threading.Lock] = {}
+_travas_guarda = threading.Lock()
+
+
+def _trava_de(dir_conta: Path) -> threading.Lock:
+    with _travas_guarda:
+        return _travas.setdefault(dir_conta.resolve(), threading.Lock())
 
 
 # ------------------------------------------------------------- a janela escondida (I/O do tmux)
@@ -224,6 +267,17 @@ def renovar_por_cli(dir_conta: Path) -> bool:
     de segurança (não renovar por baixo de sessão viva; o refresh ROTACIONA) continua sendo
     obrigação do chamador, igual nos dois caminhos.
     """
+    trava = _trava_de(dir_conta)
+    if not trava.acquire(blocking=False):
+        _log.info("renovação barata de %s: outra renovação em curso, não espero", dir_conta.name)
+        return False
+    try:
+        return _renovar_por_cli(dir_conta)
+    finally:
+        trava.release()
+
+
+def _renovar_por_cli(dir_conta: Path) -> bool:
     binario = _bin_claude()
     if binario is None:
         _log.warning("renovação barata de %s: binário do claude não encontrado", dir_conta.name)
@@ -302,6 +356,11 @@ def renovar(dir_conta: Path, espera_s: float = 45) -> tuple[bool, str]:
     daqui é pane fantasma: um `claude` vivo segurando o config dir, que ainda por cima faria a
     própria rotina considerar a conta "em uso" nas rodadas seguintes.
     """
+    with _trava_de(dir_conta):
+        return _renovar(dir_conta, espera_s)
+
+
+def _renovar(dir_conta: Path, espera_s: float) -> tuple[bool, str]:
     if esta_em_uso(dir_conta):
         return False, "em-uso"
     pasta = pasta_confiada(dir_conta)

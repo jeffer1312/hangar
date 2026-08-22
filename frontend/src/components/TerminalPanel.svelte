@@ -7,6 +7,7 @@
   // -- o xterm continua fora do bundle de quem nunca abre o terminal.
   import type { Terminal } from '@xterm/xterm';
   import type { FitAddon } from '@xterm/addon-fit';
+  import { novoTerminal, temaDe } from '../lib/xterm';
   import * as m from '../paraglide/messages';
 
   interface Props {
@@ -201,50 +202,6 @@
     maximizado = !maximizado;
   }
 
-  // Cores do xterm a partir dos tokens do app. `color`, propriedade REAL (nao custom property): o
-  // browser sempre entrega ela RESOLVIDA, mesmo quando --text-primary e um color-mix() com var()
-  // aninhado (app.css:323, o boost de texto sobre papel de parede) -- ler a CUSTOM PROPERTY direto
-  // devolveria a string CRUA com var() por dentro (e assim que a spec de CSS Custom Properties define
-  // o computed value delas: sem substituir var() aninhado), o xterm rejeitava calado e caia no branco
-  // padrao. `body` ja seta `color: var(--text-primary)` (app.css) e `host` herda -- de graca, sem
-  // elemento nem estilo extra. --accent, ao contrario, e hex LITERAL nas duas paletas do app.css (sem
-  // var() aninhado), entao ler a custom property direto e seguro ali.
-  // A chave e `foreground`, NAO `fg`: o xterm ignora chave desconhecida em silencio e cai no branco
-  // padrao dele. Ficou errado por semanas sem ninguem ver porque o objeto entra no `theme` por
-  // ESPALHAMENTO (`{ background: ..., ...lerTema(el) }`), e propriedade vinda de spread escapa da
-  // checagem de excesso do TypeScript -- `svelte-check` passava limpo com o tema nunca sendo aplicado.
-  function lerTema(el: HTMLElement): { foreground: string; cursor: string } {
-    const cs = getComputedStyle(el);
-    const foreground = cs.color || '#d2cbcd';
-    const cursor = cs.getPropertyValue('--accent').trim() || foreground;
-    return { foreground, cursor };
-  }
-
-  // Constroi o Terminal+FitAddon com o mesmo tema/fonte das duas abas -- fatorado so pra nao duplicar
-  // o comentario do 'rgba(0, 0, 0, 0)' (achado caro, ver abaixo) numa segunda copia que pode divergir.
-  function novoTerminal(hostEl: HTMLDivElement, TerminalCls: typeof Terminal,
-                        FitAddonCls: typeof FitAddon) {
-    // getComputedStyle, nao `var(--font-mono)` cru: o renderer canvas monta
-    // `ctx.font = \`${size}px ${family}\``, onde var() e invalido e ignorado calado -> metrica de
-    // glifo errada e grade desalinhada.
-    const mono = getComputedStyle(hostEl).getPropertyValue('--font-mono').trim() || 'monospace';
-    const t = new TerminalCls({
-      fontFamily: mono, fontSize: 12, convertEol: false,
-      allowTransparency: true,
-      // 'rgba(0, 0, 0, 0)', NAO 'transparent': o parser de cor do xterm 6.0.0 (Color.ts) so casa
-      // hex/rgb()/rgba() -- 'transparent' cai no caminho do canvas e LANCA (alfa != 255 e
-      // rejeitado), o ThemeService ENGOLE a excecao calado e devolve o fallback #000000 opaco por
-      // cima do --surface-inset do .tp-screen (regra de vidro do CLAUDE.md). Medido no pacote
-      // instalado -- nao aparece nenhum erro no console, so o retangulo preto.
-      theme: { background: 'rgba(0, 0, 0, 0)', ...lerTema(hostEl) },
-    });
-    const f = new FitAddonCls();
-    t.loadAddon(f);
-    t.open(hostEl);
-    f.fit();
-    return { term: t, fit: f };
-  }
-
   // Garante o MutationObserver compartilhado (troca de tema claro/escuro com o painel ABERTO):
   // qualquer uma das duas abas que montar primeiro o cria; a outra reusa. O fundo acompanha sozinho
   // (e CSS, --surface-inset por baixo do canvas transparente), mas foreground/cursor sao retrato do
@@ -253,9 +210,9 @@
   function garantirObserverDeTema() {
     if (mo) return;
     mo = new MutationObserver(() => {
-      if (term && host) term.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(host) };
+      if (term && host) term.options.theme = temaDe(host);
       if (termShell && hostShell) {
-        termShell.options.theme = { background: 'rgba(0, 0, 0, 0)', ...lerTema(hostShell) };
+        termShell.options.theme = temaDe(hostShell);
       }
     });
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });

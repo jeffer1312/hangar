@@ -596,7 +596,11 @@ export interface ArchiveEntry {
   session_id: string;
   mtime: number;
   preview: string;
+  ultima: string;   // ultima msg da conversa — e o que identifica qual sessao e essa
   live: boolean;
+  config_dir: string | null;   // conta dona do transcript (null = a do backend)
+  conta: string;               // rotulo dela, pra mostrar na lista
+  provider: Provider;          // cada agente guarda transcript num lugar proprio
 }
 
 export function getArchive(): Promise<ArchiveFolder[]> {
@@ -617,16 +621,38 @@ export function resumeArchivedConversation(
   project: string,
   sessionId: string,
   engine?: string | null,
+  configDir?: string | null,
+  provider?: string,
 ): Promise<SessionInfo> {
   return apiFetch<SessionInfo>(
     `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sessionId)}/resume`,
-    { method: 'POST', body: JSON.stringify({ engine: engine ?? null }) },
+    { method: 'POST', body: JSON.stringify({
+      engine: engine ?? null, config_dir: configDir ?? null, provider: provider ?? 'claude' }) },
   );
 }
 
-export function getArchiveHistory(project: string, sid: string): Promise<ChatEvent[]> {
+// Conversas retomaveis de UM cwd, na conta pedida — a lista do modal de sessao nova. Pasta sem
+// conversa devolve [], nao erro.
+export function getArchivePorCwd(cwd: string, configDir?: string | null,
+                                 provider?: string): Promise<ArchiveEntry[]> {
+  const q = new URLSearchParams({ cwd });
+  if (configDir) q.set('config_dir', configDir);
+  if (provider && provider !== 'claude') q.set('provider', provider);
+  return apiFetch<ArchiveEntry[]>(`/api/archive-por-cwd?${q}`);
+}
+
+// `tail` = so as N ultimas mensagens, lidas pelo fim do arquivo (previa). Sem ele, a conversa
+// inteira, como sempre.
+export function getArchiveHistory(project: string, sid: string, tail?: number,
+                                  configDir?: string | null,
+                                  provider?: string): Promise<ChatEvent[]> {
+  const q = new URLSearchParams();
+  if (tail) q.set('tail', String(tail));
+  if (configDir) q.set('config_dir', configDir);
+  if (provider && provider !== 'claude') q.set('provider', provider);
+  const qs = q.toString();
   return apiFetch<ChatEvent[]>(
-    `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/history`,
+    `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sid)}/history${qs ? `?${qs}` : ''}`,
   );
 }
 

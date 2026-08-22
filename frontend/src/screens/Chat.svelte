@@ -11,6 +11,7 @@
   import PreviewSheet from '../components/PreviewSheet.svelte';
   import ActivitySheet from '../components/ActivitySheet.svelte';
   import TerminalMirror from '../components/TerminalMirror.svelte';
+  import TerminalMobile from '../components/TerminalMobile.svelte';
   import AskQuestionSheet from '../components/AskQuestionSheet.svelte';
   import RunSheet from '../components/RunSheet.svelte';
   import MoreSheet from '../components/MoreSheet.svelte';
@@ -47,6 +48,7 @@
     isAbortError,
     isTimeoutError,
     getPlan,
+    getConfig,
   } from '@hangar/core';
   import { formataErro } from '@hangar/core';
   import { parseStatusLine } from '../lib/statusline';
@@ -487,10 +489,11 @@
   }
 
   const anyOverlayOpen = () =>
-    switcherOpen || createOpen || usageOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || askOpen || moreOpen || anexosOpen;
+    switcherOpen || createOpen || usageOpen || gitOpen || runOpen || previewOpen || activityOpen || limitsOpen || mirrorOpen || xtermOpen || askOpen || moreOpen || anexosOpen;
   function closeOverlays() {
     switcherOpen = createOpen = usageOpen = gitOpen = runOpen = previewOpen = activityOpen = limitsOpen = moreOpen = anexosOpen = false;
     if (mirrorOpen) closeMirror();
+    xtermOpen = false;
     askOpen = false;
   }
 
@@ -629,6 +632,21 @@
   const needsLogin = $derived(!!stateEvent?.login && currentState !== 'awaiting_input');
   const tuiOverlay = $derived((!!stateEvent?.overlay || needsLogin) && currentState !== 'awaiting_input');
   let mirrorOpen = $state(false);
+  // Terminal de VERDADE no celular (xterm sobre o PTY do backend). O espelho continua vivo pro
+  // servidor sem `pty` (Windows), onde este abriria morto.
+  let xtermOpen = $state(false);
+  // Capacidade do SERVIDOR (GET /api/config, `somente_leitura.terminal_panel`). Default true
+  // (assume capaz) pra o primeiro toque nao cair no espelho so porque a config ainda nao chegou;
+  // falha de rede tambem mantem true e deixa o proprio terminal mostrar o erro real.
+  let terminalCapazMobile = $state(true);
+  $effect(() => {
+    if (desktop) return;
+    let vivo = true;
+    getConfig()
+      .then((c) => { if (vivo) terminalCapazMobile = c.somente_leitura.terminal_panel !== false; })
+      .catch(() => {});
+    return () => { vivo = false; };
+  });
 
   // Pergunta nativa do Pi (tool `question`). O Pi nao tem o hook de AskUserQuestion do Claude, mas
   // nao precisa: o toolCall cai no transcript com o payload COMPLETO (pergunta, header, opcoes com
@@ -720,6 +738,7 @@
   // do AskUserQuestion: o fallback existe pra destravar picker, e o painel bloqueia o /answer (Task 3).
   function abrirTerminalReal() {
     if (desktop && onOpenTerminalPanel && terminalPanelDisponivel) onOpenTerminalPanel();
+    else if (!desktop && terminalCapazMobile) xtermOpen = true;
     else mirrorOpen = true;
   }
   // Statusline crua -> campos tipados (modelo, contexto, custo, tempo de sessao).
@@ -1646,7 +1665,7 @@
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -1668,7 +1687,7 @@
       serverId={getActiveId() ?? ''}
       {sessionName}
       onOpenTerminal={abrirTerminalReal}
-      terminalAlert={tuiOverlay && !mirrorOpen && !terminalPanelOpen}
+      terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}
       onOpenAttachments={() => (anexosOpen = true)}
@@ -1800,7 +1819,7 @@
     {/if}
   {/if}
 
-  {#if tuiOverlay && !mirrorOpen && !terminalPanelOpen}
+  {#if tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
     <!-- Aviso DESTACADO: ha um painel que SO da pra interagir pela TUI. Pulsa pra chamar atencao;
          tocar abre o espelho. Nao toma a tela (so um banner acima do dock). -->
     <button class="tui-pill" style:bottom={`calc(${dockH}px + 10px + var(--cp-tts-h, 0px))`} onclick={abrirTerminalReal} aria-label={needsLogin ? m.chat_abrir_terminal_login() : m.chat_abrir_terminal_interagir()}>
@@ -1926,6 +1945,7 @@
     showPlan={!desktop} session={planSession} {planDetail} {planLoading} {planError} />
 
   <TerminalMirror open={mirrorOpen} {sessionName} onClose={closeMirror} />
+  <TerminalMobile open={xtermOpen} {sessionName} onClose={() => (xtermOpen = false)} />
 
   {#if !isWide}
     <AskQuestionSheet

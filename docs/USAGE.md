@@ -93,6 +93,7 @@ ou em `backend/.env`):
 | `CP_PORT` | `8765` | porta do backend |
 | `CP_FRONT_PORT` | `5173` | porta onde o PWA é servido (entra no QR) |
 | `CP_PUBLIC_URL` | — | sobrescreve a URL base do QR (ex: hostname Tailscale) |
+| `CP_TERM_ORIGINS` | — | origens EXTRAS aceitas pelo WebSocket do terminal (csv). Precisa quando o PWA é servido de um host que não é este backend, nem a `CP_PUBLIC_URL`, nem um peer — é o caso do app carregado da VPS falando com a máquina de casa. Sem isso o terminal abre e cai em "desconectado". |
 | `CP_SCAN_ROOTS` | — | pastas que o seletor "Nova sessão" pode listar (csv) |
 | `CP_TERMINAL` | — | emulador do botão **terminal nativo** (`wezterm`, `kitty`, `alacritty`, `konsole`, `gnome-terminal`, `xterm`). Vazio = procura nessa ordem no PATH. |
 

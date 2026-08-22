@@ -335,8 +335,13 @@ def account_info(config_dir: Path, fallback_label: str) -> tuple[str, str | None
     criaria ciclo (costs importa costs_sources; _config_dirs precisaria de costs)."""
     for f in (config_dir / ".claude.json", Path.home() / ".claude.json"):
         try:
-            oa = (json.loads(f.read_text()).get("oauthAccount") or {})
-        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            # encoding EXPLÍCITO: sem ele o Python usa o do locale, que no Windows é cp1252 — e o
+            # .claude.json tem caminho de projeto e histórico de prompt dentro, texto do usuário.
+            # Ali cp1252 falha dos dois jeitos: byte sem mapa (0x81/0x8D/0x8F/0x90/0x9D) levanta
+            # UnicodeDecodeError, que NÃO é json.JSONDecodeError e escapa deste except; e o resto
+            # decodifica torto e calado (medido: "café 🚀" volta "cafÃ© ðŸš€").
+            oa = (json.loads(f.read_text(encoding="utf-8")).get("oauthAccount") or {})
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError, TypeError):
             # .claude.json existe mas a raiz não é dict (corrompido) -> tenta o próximo
             continue
         uuid = oa.get("accountUuid")
