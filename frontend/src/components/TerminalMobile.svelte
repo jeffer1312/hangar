@@ -27,6 +27,9 @@
 
   let host = $state<HTMLDivElement | null>(null);
   let caiu = $state(false);
+  // Cano aberto de verdade (onopen do WebSocket), nao "socket criado": entre um e outro ha a janela
+  // do handshake, e nela toda tecla da barra sai no vazio — sem eco, sem erro, sem nada.
+  let pronto = $state(false);
   let motivo = $state<string | null>(null);
   let erro = $state<string | null>(null);
   let geracao = $state(0);          // incrementar reconecta de verdade
@@ -129,13 +132,23 @@
 
       sock = new TermSocket(termUrlForServer(srv, alvo, t.cols, t.rows), {
         data: (b) => { t.write(b); agendarBuscaDeUrl(); },
+        open: () => { if (vivo) pronto = true; },
         // `vivo`, nao incondicional: o close() dispara onclose ASSINCRONO, e sem a guarda o "caiu"
         // de um socket ja descartado aterrissava na proxima conexao (ou num componente destruido).
-        close: (motivoFechamento) => { if (vivo) { caiu = true; motivo = motivoFechamento ?? null; } },
+        close: (motivoFechamento) => {
+          if (vivo) { caiu = true; pronto = false; motivo = motivoFechamento ?? null; }
+        },
       });
-      // Digitar direto no xterm continua valendo (quem tem teclado bluetooth, ou toca na tela e usa
-      // o teclado do sistema); o campo e a barra de teclas embaixo sao o caminho de dedo.
-      t.onData((d: string) => sock?.send(enc.encode(d)));
+      // Digitar e DIRETO no xterm: tocar na tela ja levanta o teclado do sistema (o xterm foca
+      // sozinho a <textarea> escondida dele) e cada tecla vai como byte pro PTY. A barra de baixo
+      // fica so com o que teclado de celular nao tem (Esc, Tab, setas, PgUp/PgDn).
+      t.onData((d: string) => { sock?.send(enc.encode(d)); agendarBuscaDeUrl(); });
+
+      // { passive: false } exige addEventListener na mao: o `ontouchmove` do template nasce PASSIVO
+      // (o navegador ignora o preventDefault e ainda avisa no console), e sem o preventDefault o
+      // Safari leva o arrasto pro bounce da pagina em vez de deixar a TUI paginar.
+      hostEl.addEventListener('touchstart', toqueInicio, { passive: true });
+      hostEl.addEventListener('touchmove', toqueMove, { passive: false });
 
       ro = new ResizeObserver(() => { r.fit.fit(); sock?.resize(t.cols, t.rows); });
       ro.observe(hostEl);
@@ -151,6 +164,9 @@
 
     return () => {
       vivo = false;
+      pronto = false;
+      hostEl.removeEventListener('touchstart', toqueInicio);
+      hostEl.removeEventListener('touchmove', toqueMove);
       ro?.disconnect(); ro = null;
       mo?.disconnect(); mo = null;
       sock?.close(); sock = null;
@@ -200,22 +216,50 @@
   } as const;
 
   function tecla(nome: keyof typeof SEQ) {
-    sock?.send(enc.encode(SEQ[nome]));
+    // Sem cano aberto nao adianta mandar: `TermSocket.send` e no-op de proposito e a barra nao tem
+    // eco nenhum pra denunciar (o eco de um terminal vem do PTY). Os botoes ja ficam desabilitados
+    // fora do ar; isto e a guarda do caminho programatico.
+    if (!sock?.aberto) return;
+    sock.send(enc.encode(SEQ[nome]));
     agendarBuscaDeUrl();
   }
 
-  let draft = $state('');
-  function enviar(comEnter: boolean) {
-    const valor = draft;
-    // `sock.aberto`, nao so `sock`: com a conexao caida o TermSocket.send e no-op de proposito
-    // (senao cada tecla joga InvalidStateError no console), e o `draft = ''` abaixo rodava do mesmo
-    // jeito — o texto sumia da tela sem nunca chegar no PTY. Nao enviou, nao limpa.
-    if (!valor || !sock?.aberto) return;
-    // Texto e Enter no MESMO envio: dois sends separados abriam janela pra a TUI processar a linha
-    // antes do texto inteiro chegar.
-    sock.send(enc.encode(comEnter ? valor + '\r' : valor));
-    draft = '';
-    agendarBuscaDeUrl();
+  // ── Rolar com o dedo ─────────────────────────────────────────────────────────
+  // Arrastar nao rolava NADA, e a causa nao e o gesto: numa TUI de tela alternada (Claude Code,
+  // vim, less) o buffer do xterm nao tem historico — medido, `scrollHeight == clientHeight` (690 =
+  // 690) com a conversa inteira acima. Quem guarda o passado ali e o PROGRAMA, e ele so devolve
+  // com PageUp/PageDown (o mesmo motivo pelo qual os botoes ⇞/⇟ existem desde o espelho).
+  // Entao o arrasto vira pagina: cada terco da altura visivel = um PageUp/PageDown.
+  // Com buffer NORMAL (shell comum, que tem scrollback de verdade) nao mexemos em nada — ali o
+  // proprio viewport do xterm rola nativo, com a inercia do sistema.
+  let toqueY = 0;
+  let acumulado = 0;
+  const emTuiSemHistorico = () => term?.buffer.active.type === 'alternate';
+
+  function toqueInicio(e: TouchEvent) {
+    toqueY = e.touches[0]?.clientY ?? 0;
+    acumulado = 0;
+  }
+
+  function toqueMove(e: TouchEvent) {
+    if (!emTuiSemHistorico() || !host) return;
+    const y = e.touches[0]?.clientY;
+    if (y == null) return;
+    acumulado += y - toqueY;
+    toqueY = y;
+    // preventDefault: sem ele o Safari leva o gesto pro bounce da pagina inteira enquanto a TUI
+    // rola por baixo — por isso o listener e registrado com { passive: false }, la no efeito.
+    e.preventDefault();
+    const passo = Math.max(40, host.clientHeight / 3);
+    while (acumulado >= passo) { tecla('PageUp'); acumulado -= passo; }
+    while (acumulado <= -passo) { tecla('PageDown'); acumulado += passo; }
+  }
+
+  // Botao de barra de ferramentas nao pode levar o foco junto: no celular, tirar o foco da textarea
+  // escondida do xterm ABAIXA o teclado — apertar uma seta no meio de uma frase custava dois toques
+  // a mais pra voltar a digitar.
+  function naoRoubarFoco(e: PointerEvent) {
+    e.preventDefault();
   }
 </script>
 
@@ -246,44 +290,32 @@
           <button class="tx-key" onclick={() => geracao++}>{m.term_reconectar_btn()}</button>
         {/if}
       </div>
+    {:else if !pronto}
+      <!-- Janela do handshake: sem isto a barra de teclas parecia funcionar e nao mandava nada. -->
+      <div class="tx-conectando" role="status">{m.comum_carregando()}</div>
     {/if}
 
     {#if paneUrl}
       <a class="tx-link" href={paneUrl} target="_blank" rel="noopener noreferrer">{m.term_abrir_link()}</a>
     {/if}
 
-    <form class="tx-compose" onsubmit={(e) => { e.preventDefault(); enviar(true); }}>
-      <input
-        class="tx-input"
-        bind:value={draft}
-        placeholder={m.term_digitar()}
-        aria-label={m.term_texto_para()}
-        autocapitalize="off"
-        autocorrect="off"
-        spellcheck="false"
-        enterkeyhint="send"
-      />
-      <!-- Enviar SEM Enter: num picker/filtro o Enter submeteria antes da hora. -->
-      <button class="tx-key" type="button" aria-label={m.term_enviar_sem_enter()}
-              disabled={!draft} onclick={() => enviar(false)}
-              title={m.term_enviar_sem_enter_curto()}>↵̸</button>
-      <button class="tx-key tx-enter" type="submit" disabled={!draft}
-              title={m.term_enviar_com_enter()}>{m.term_envia()}</button>
-    </form>
-
+    <!-- Sem campo de texto: quem digita e o proprio terminal (tocar nele levanta o teclado do
+         sistema). A barra abaixo tem so o que teclado de celular nao tem.
+         `onpointerdown` com preventDefault em cada botao: sem isso o botao ROUBA o foco da textarea
+         do xterm e o teclado do celular abaixa a cada seta apertada. -->
     <nav class="tx-keys" aria-label={m.term_teclas_resgate()}>
       <span class="tx-keys-hint">{m.term_resgate()}</span>
-      <button class="tx-key" onclick={() => tecla('Escape')}>Esc</button>
-      <button aria-label="Tab" class="tx-key" onclick={() => tecla('Tab')}>⇥</button>
-      <button aria-label={m.term_rolar_cima_aria()} class="tx-key" onclick={() => tecla('PageUp')} title={m.term_rolar_cima()}>⇞</button>
-      <button aria-label={m.term_rolar_baixo_aria()} class="tx-key" onclick={() => tecla('PageDown')} title={m.term_rolar_baixo()}>⇟</button>
+      <button class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('Escape')}>Esc</button>
+      <button aria-label="Tab" class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('Tab')}>⇥</button>
+      <button aria-label={m.term_rolar_cima_aria()} class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('PageUp')} title={m.term_rolar_cima()}>⇞</button>
+      <button aria-label={m.term_rolar_baixo_aria()} class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('PageDown')} title={m.term_rolar_baixo()}>⇟</button>
       <div class="tx-arrows">
-        <button aria-label={m.term_seta_esquerda()} class="tx-key" onclick={() => tecla('Left')}>←</button>
-        <button aria-label={m.term_seta_cima()} class="tx-key" onclick={() => tecla('Up')}>↑</button>
-        <button aria-label={m.term_seta_baixo()} class="tx-key" onclick={() => tecla('Down')}>↓</button>
-        <button aria-label={m.term_seta_direita()} class="tx-key" onclick={() => tecla('Right')}>→</button>
+        <button aria-label={m.term_seta_esquerda()} class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('Left')}>←</button>
+        <button aria-label={m.term_seta_cima()} class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('Up')}>↑</button>
+        <button aria-label={m.term_seta_baixo()} class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('Down')}>↓</button>
+        <button aria-label={m.term_seta_direita()} class="tx-key" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('Right')}>→</button>
       </div>
-      <button aria-label="Enter" class="tx-key tx-enter" onclick={() => tecla('Enter')}>⏎</button>
+      <button aria-label="Enter" class="tx-key tx-enter" disabled={!pronto} onpointerdown={naoRoubarFoco} onclick={() => tecla('Enter')}>⏎</button>
     </nav>
   </div>
 </ModalDialog>
@@ -331,20 +363,16 @@
     background: color-mix(in srgb, var(--error) 16%, transparent);
     color: var(--text-primary); font-size: var(--text-sm);
   }
+  /* Mesma faixa do "caiu", em tom neutro: e informacao de espera, nao erro. */
+  .tx-conectando {
+    flex-shrink: 0; padding: var(--space-2) var(--space-3);
+    background: var(--surface-raised); color: var(--text-muted); font-size: var(--text-xs);
+  }
   .tx-link {
     flex-shrink: 0; padding: var(--space-2) var(--space-3);
     color: var(--accent); font-size: var(--text-sm); text-decoration: none;
     border-top: 1px solid var(--border-subtle);
   }
-
-  .tx-compose { flex-shrink: 0; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border-subtle); }
-  /* 16px: abaixo disso o iOS da zoom ao focar e a tela inteira sai do lugar. */
-  .tx-input {
-    flex: 1; min-width: 0; min-height: 40px; padding: 0 var(--space-3);
-    background: var(--surface-inset); border: 1px solid var(--border-subtle); border-radius: var(--radius-md, 8px);
-    color: var(--text-primary); font-family: var(--font-mono); font-size: 16px; outline: none;
-  }
-  .tx-input:focus-visible { border-color: var(--accent); }
 
   .tx-keys {
     flex-shrink: 0; display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;

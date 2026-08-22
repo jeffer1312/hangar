@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
-// O terminal do celular manda BYTES CRUS pro PTY (o desktop digita direto no xterm; aqui quem
-// digita e o campo de texto e a barra de teclas). Estes testes travam o que a tela promete:
-// as teclas de resgate viram a sequencia que uma tecla fisica mandaria, "envia ⏎" nao separa o
-// texto do Enter em dois envios, e fechar a tela derruba o socket.
+// O terminal do celular manda BYTES CRUS pro PTY: quem digita e o proprio xterm, e a barra de baixo
+// so tem o que teclado de celular nao tem. Estes testes travam o que a tela promete: a tecla vira a
+// sequencia que uma tecla fisica mandaria, arrastar o dedo numa TUI de tela alternada vira
+// PageUp/PageDown (ali nao existe scrollback pra rolar), e fechar a tela derruba o socket.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import TerminalMobile from './TerminalMobile.svelte';
@@ -14,13 +14,22 @@ class FakeWS {
   static ultimo: FakeWS | null = null;
   static abertos = 0;
   static fechados = 0;
+  // Deixa um teste segurar o handshake pra valer (o socket existe, o cano ainda nao abriu).
+  static autoAbrir = true;
   sent: (string | ArrayBufferLike)[] = [];
   binaryType = '';
   readyState = 1;                              // OPEN: o TermSocket recusa enviar fora disso
   static readonly OPEN = 1;
   onmessage: ((e: MessageEvent) => void) | null = null;
   onclose: ((e?: { reason?: string }) => void) | null = null;
-  constructor(public url: string) { FakeWS.ultimo = this; FakeWS.abertos++; }
+  onopen: (() => void) | null = null;
+  constructor(public url: string) {
+    FakeWS.ultimo = this;
+    FakeWS.abertos++;
+    // O handshake real leva um tempo; aqui o `onopen` sai no proximo tick, que e o que separa
+    // "socket criado" de "cano aberto" — a barra de teclas so libera no segundo.
+    if (FakeWS.autoAbrir) setTimeout(() => this.onopen?.(), 0);
+  }
   send(d: string | ArrayBufferLike) { this.sent.push(d); }
   close() { FakeWS.fechados++; this.onclose?.(); }
 }
@@ -28,13 +37,16 @@ class FakeWS {
 // happy-dom nao roda rAF na mesma volta, e o componente faz probe + import dinamico do xterm antes
 // de existir socket. Espera a CONDICAO, nao um numero fixo de quadros: contar quadros passava
 // isolado e falhava na suite inteira (o import demora mais com o resto dos testes na frente).
-async function ate(cond: () => boolean, quadros = 400): Promise<void> {
-  for (let i = 0; i < quadros && !cond(); i++) {
+async function ate(cond: () => boolean, limite = 400): Promise<void> {
+  for (let i = 0; i < limite && !cond(); i++) {
     await tick();
     await new Promise((r) => requestAnimationFrame(() => r(null)));
   }
 }
-const socketPronto = () => ate(() => FakeWS.ultimo !== null);
+const quadros = (n: number) => ate(() => false, n);
+// "pronto" aqui e o cano ABERTO: a barra de teclas fica desabilitada ate o onopen chegar.
+const socketPronto = () => ate(() =>
+  FakeWS.ultimo !== null && document.querySelector('.tx-key:not([disabled])') !== null);
 
 const dec = new TextDecoder();
 const enviados = () => (FakeWS.ultimo?.sent ?? []).map((b) =>
@@ -60,6 +72,7 @@ afterEach(() => {
   FakeWS.ultimo = null;
   FakeWS.abertos = 0;
   FakeWS.fechados = 0;
+  FakeWS.autoAbrir = true;
 });
 
 function montar(props: Record<string, unknown> = {}) {
@@ -73,6 +86,26 @@ function montar(props: Record<string, unknown> = {}) {
 const tecla = (rotulo: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('.tx-key')]
     .find((b) => b.textContent?.trim() === rotulo || b.getAttribute('aria-label') === rotulo)!;
+
+// Bytes do PTY chegando: e por aqui que o programa entra em tela alternada (o mesmo `\x1b[?1049h`
+// que o Claude Code, o vim e o less mandam ao abrir).
+function doPty(texto: string) {
+  const bytes = new TextEncoder().encode(texto);
+  FakeWS.ultimo!.onmessage!({ data: bytes.buffer } as MessageEvent);
+}
+
+// happy-dom nao tem TouchEvent; o componente so le `touches[0].clientY`, entao um Event com essa
+// propriedade e o suficiente — e mantem o teste preso ao que o codigo REALMENTE usa.
+function arrastar(alvo: Element, ys: number[]) {
+  const inicio = new Event('touchstart', { bubbles: true });
+  Object.defineProperty(inicio, 'touches', { value: [{ clientY: ys[0] }] });
+  alvo.dispatchEvent(inicio);
+  for (const y of ys.slice(1)) {
+    const mv = new Event('touchmove', { bubbles: true, cancelable: true });
+    Object.defineProperty(mv, 'touches', { value: [{ clientY: y }] });
+    alvo.dispatchEvent(mv);
+  }
+}
 
 describe('TerminalMobile', () => {
   it('conecta no servidor ATIVO, com o tamanho do terminal na URL', async () => {
@@ -100,44 +133,53 @@ describe('TerminalMobile', () => {
     unmount(t.comp);
   });
 
-  it('"envia ⏎" manda texto e Enter num ENVIO so, e limpa o campo', async () => {
+  it('nao ha campo de texto: quem digita e o proprio terminal', async () => {
     const t = montar();
     await socketPronto();
-    const campo = document.querySelector<HTMLInputElement>('.tx-input')!;
-    campo.value = 'oi';
-    campo.dispatchEvent(new Event('input'));
-    await tick();
-    campo.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    await tick();
-    expect(enviados()).toEqual(['oi\r']);
-    expect(campo.value).toBe('');
+    expect(document.querySelector('.tx-input')).toBeNull();
     unmount(t.comp);
   });
 
-  it('conexao caida: NAO limpa o campo (o texto sumia sem nunca chegar no PTY)', async () => {
+  it('arrastar o dedo numa TUI de tela alternada vira PageUp/PageDown', async () => {
     const t = montar();
     await socketPronto();
-    FakeWS.ultimo!.readyState = 3;                 // CLOSED: o TermSocket.send vira no-op
-    const campo = document.querySelector<HTMLInputElement>('.tx-input')!;
-    campo.value = 'comando importante';
-    campo.dispatchEvent(new Event('input'));
-    await tick();
-    campo.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    await tick();
+    doPty('\x1b[?1049h');                 // o programa entra em tela alternada
+    await quadros(20);                    // o xterm processa a escrita fora da volta atual
+    const tela = document.querySelector('.tx-screen')!;
+    // Tela alternada = sem scrollback: arrastar o viewport nao rolaria nada, quem guarda o passado
+    // e o programa. O passo e 1/3 da altura, com piso de 40px (happy-dom reporta altura 0).
+    arrastar(tela, [400, 300, 200]);      // dedo SOBE = avanca (PageDown)
+    expect(enviados().length).toBeGreaterThan(0);
+    expect(new Set(enviados())).toEqual(new Set(['\x1b[6~']));
+    const ate_aqui = enviados().length;
+    arrastar(tela, [0, 100, 200]);        // dedo DESCE = volta pro passado (PageUp)
+    expect(new Set(enviados().slice(ate_aqui))).toEqual(new Set(['\x1b[5~']));
+    unmount(t.comp);
+  });
+
+  it('com scrollback de verdade (buffer normal) o arrasto NAO e sequestrado', async () => {
+    const t = montar();
+    await socketPronto();
+    // Shell comum: o viewport do xterm tem historico proprio e rola nativo, com a inercia do
+    // sistema — traduzir pra PageUp ali roubaria o gesto e mandaria tecla pro programa errado.
+    const tela = document.querySelector('.tx-screen')!;
+    arrastar(tela, [400, 200, 0]);
     expect(enviados()).toEqual([]);
-    expect(campo.value).toBe('comando importante');   // continua ali pra reenviar
     unmount(t.comp);
   });
 
-  it('enviar SEM Enter nao acrescenta o \\r (picker/filtro submeteria antes da hora)', async () => {
+  it('enquanto o cano nao abriu, a barra de teclas fica desabilitada', async () => {
+    FakeWS.autoAbrir = false;                    // segura o handshake
     const t = montar();
-    await socketPronto();
-    const campo = document.querySelector<HTMLInputElement>('.tx-input')!;
-    campo.value = 'filtro';
-    campo.dispatchEvent(new Event('input'));
+    await ate(() => FakeWS.ultimo !== null);
+    // Janela do handshake: o send seria no-op e a barra nao tem eco pra denunciar — botao apertavel
+    // ali e um controle que mente.
+    expect(tecla('Esc').disabled).toBe(true);
+    tecla('Esc').click();
+    expect(enviados()).toEqual([]);
+    FakeWS.ultimo!.onopen!();                    // cano abre
     await tick();
-    tecla(m.term_enviar_sem_enter()).click();
-    expect(enviados()).toEqual(['filtro']);
+    expect(tecla('Esc').disabled).toBe(false);
     unmount(t.comp);
   });
 
