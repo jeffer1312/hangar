@@ -14,7 +14,7 @@ export default function Index() {
         <Pressable
           onPress={() => router.push('/create' as never)}
           style={styles.fab}
-          accessibilityLabel={m.sessao_nova?.() ?? 'Nova sessão'}
+          accessibilityLabel={m.sessao_nova()}
           accessibilityRole="button"
           hitSlop={8}
         >

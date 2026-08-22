@@ -116,6 +116,9 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
 
   // modelos quando provider/config/engine mudam
   useEffect(() => {
+    // reset incondicional — igual à PWA (CreateSessionSheet.svelte:141), evita vazar modelo/esforço pro Codex
+    setModelo('');
+    setEsforco('');
     if (provider !== 'claude' && provider !== 'pi' && provider !== 'kimi') {
       setModelos([]);
       setListaReduzida(false);
@@ -133,11 +136,8 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
       .catch((e) => {
         if (!alive) return;
         setModelos([]);
-        setErroModelos(e instanceof Error ? e.message : (m.criar_modelos_erro?.() ?? 'erro modelos'));
+        setErroModelos(e instanceof Error ? e.message : m.criar_modelos_erro());
       });
-    // reset escolha ao trocar provider/engine
-    setModelo('');
-    setEsforco('');
     return () => {
       alive = false;
     };
@@ -180,19 +180,18 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
         provider === 'claude' ? selectedConfig : null,
         provider,
         provider === 'claude' ? engine || null : null,
-        modelo || null,
-        esforco || null,
+        (provider === 'claude' || provider === 'pi' || provider === 'kimi') ? (modelo || null) : null,
+        (provider === 'claude' || provider === 'pi') ? (esforco || null) : null,
         provider === 'claude' ? permissao || null : null,
       );
-      // sucesso → abre chat da nova sessão
+      // sucesso → abre chat da nova sessão — não chamar onClose (router.back) que desfaz o replace
       if (serverId) {
         router.replace((`/s/${serverId}/${s.name}` as never) as never);
       } else {
         router.replace('/' as never);
       }
-      onClose?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : (m.criar_sessao_erro?.() ?? 'Erro ao criar'));
+      setError(e instanceof Error ? e.message : m.criar_sessao_erro());
     } finally {
       setLoading(false);
     }
@@ -203,13 +202,13 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
     return (
       <View style={styles.root}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <Text style={styles.title}>{m.sessao_nova?.() ?? 'Nova sessão'}</Text>
+          <Text style={styles.title}>{m.sessao_nova()}</Text>
           <View style={styles.pickerWrap}>
             <CwdPicker onPick={handlePick} selected={picked} />
           </View>
           <View style={styles.advanced}>
             <Pressable onPress={() => setManualOpen((v) => !v)} style={styles.advToggle}>
-              <Text style={styles.advTxt}>{m.criar_avancado?.() ?? 'Avançado: digitar caminho'}</Text>
+              <Text style={styles.advTxt}>{m.criar_avancado()}</Text>
               <Text style={[styles.chev, manualOpen && styles.chevOpen]}>›</Text>
             </Pressable>
             {manualOpen ? (
@@ -218,13 +217,13 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
                   style={styles.input}
                   value={manualPath}
                   onChangeText={setManualPath}
-                  placeholder={m.criar_caminho_placeholder?.() ?? '/home/voce/projetos/foo'}
+                  placeholder={m.criar_caminho_placeholder()}
                   placeholderTextColor="#8d8489"
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
                 <Pressable onPress={handleManual} disabled={!manualPath.trim()} style={[styles.manualGo, !manualPath.trim() && styles.manualGoDis]}>
-                  <Text style={styles.manualGoTxt}>{m.criar_usar?.() ?? 'Usar'}</Text>
+                  <Text style={styles.manualGoTxt}>{m.criar_usar()}</Text>
                 </Pressable>
               </View>
             ) : null}
@@ -248,18 +247,18 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
         {checking ? (
           <View style={styles.rowCenter}>
             <ActivityIndicator />
-            <Text style={styles.hint}>{m.criar_verificando?.() ?? 'Verificando…'}</Text>
+            <Text style={styles.hint}>{m.criar_verificando()}</Text>
           </View>
         ) : (
           <>
-            {hasSameFolder ? <Text style={styles.hint}>{m.criar_ja_existe?.() ?? 'Já há sessão nesta pasta — criando outra com nome único.'}</Text> : null}
+            {hasSameFolder ? <Text style={styles.hint}>{m.criar_ja_existe()}</Text> : null}
             <View style={styles.field}>
-              <Text style={styles.label}>{m.comum_nome?.() ?? 'Nome'}</Text>
+              <Text style={styles.label}>{m.comum_nome()}</Text>
               <TextInput
                 style={styles.input}
                 value={name}
                 onChangeText={setName}
-                placeholder={m.criar_nome_placeholder?.() ?? 'meu-projeto'}
+                placeholder={m.criar_nome_placeholder()}
                 autoCapitalize="none"
                 autoCorrect={false}
                 placeholderTextColor="#8d8489"
@@ -267,19 +266,19 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
             </View>
 
             <View style={styles.field}>
-              <Text style={styles.label}>{m.comum_provider?.() ?? 'Provider'}</Text>
+              <Text style={styles.label}>{m.comum_provider()}</Text>
               <ProviderPicker value={provider} onChange={(p) => setProvider(p)} />
             </View>
 
             {provider === 'claude' && configs.length > 1 ? (
               <View style={styles.field}>
-                <Text style={styles.label}>{m.comum_conta_claude?.() ?? 'Conta Claude'}</Text>
+                <Text style={styles.label}>{m.comum_conta_claude()}</Text>
                 <MenuSelect
                   value={selectedConfig ?? ''}
                   options={configs.map((c) => ({
                     value: c.path,
                     label: c.label,
-                    hint: c.active ? (m.switcher_atual?.() as string) ?? undefined : undefined,
+                    hint: c.active ? (m.switcher_atual() as string) ?? undefined : undefined,
                   }))}
                   onChange={(v) => setSelectedConfig(v)}
                 />
@@ -288,10 +287,10 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
 
             {provider === 'claude' && Object.keys(motores).length ? (
               <View style={styles.field}>
-                <Text style={styles.label}>{m.comum_motor?.() ?? 'Motor'}</Text>
+                <Text style={styles.label}>{m.comum_motor()}</Text>
                 <MenuSelect
                   value={engine}
-                  options={[{ value: '', label: m.criar_claude_sua_conta?.() ?? 'Claude (sua conta)' }, ...Object.entries(motores).map(([k, v]) => ({ value: k, label: (v as any).label ?? k, hint: (v as any).model }))]}
+                  options={[{ value: '', label: m.criar_claude_sua_conta() }, ...Object.entries(motores).map(([k, v]) => ({ value: k, label: (v as any).label ?? k, hint: (v as any).model }))]}
                   onChange={(v) => setEngine(v)}
                 />
               </View>
@@ -299,23 +298,23 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
 
             {(provider === 'claude' || provider === 'pi' || provider === 'kimi') && (
               <View style={styles.field}>
-                <Text style={styles.label}>{m.composer_modelo?.() ?? 'Modelo'}</Text>
+                <Text style={styles.label}>{m.composer_modelo()}</Text>
                 <MenuSelect
                   value={modelo}
-                  options={[{ value: '', label: m.criar_padrao?.() ?? 'Padrão' }, ...modelos.map((md) => ({ value: valorModelo(md), label: md.name ?? md.id, hint: [md.provider, (md as any).context ?? ((md as any).context_length ? `${Math.round(((md as any).context_length) / 1000)}K` : null), ((md as any).vision ?? (md as any).images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
+                  options={[{ value: '', label: m.criar_padrao() }, ...modelos.map((md) => ({ value: valorModelo(md), label: md.name ?? md.id, hint: [md.provider, (md as any).context ?? ((md as any).context_length ? `${Math.round(((md as any).context_length) / 1000)}K` : null), ((md as any).vision ?? (md as any).images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
                   onChange={(v) => setModelo(v)}
                 />
-                {listaReduzida ? <Text style={styles.hintSm}>{m.criar_lista_reduzida?.() ?? 'Lista reduzida'}</Text> : null}
-                {erroModelos ? <Text style={styles.hintSm}>{m.criar_abre_padrao?.({ erro: erroModelos } as any) ?? erroModelos}</Text> : null}
+                {listaReduzida ? <Text style={styles.hintSm}>{m.criar_lista_reduzida()}</Text> : null}
+                {erroModelos ? <Text style={styles.hintSm}>{m.criar_abre_padrao({ erro: erroModelos } as any)}</Text> : null}
               </View>
             )}
 
             {(provider === 'claude' || provider === 'pi') && (
               <View style={styles.field}>
-                <Text style={styles.label}>{provider === 'pi' ? (m.criar_raciocinio?.() ?? 'Raciocínio') : (m.composer_esforco?.() ?? 'Esforço')}</Text>
+                <Text style={styles.label}>{provider === 'pi' ? (m.criar_raciocinio()) : (m.composer_esforco())}</Text>
                 <MenuSelect
                   value={esforco}
-                  options={[{ value: '', label: m.criar_padrao?.() ?? 'Padrão' }, ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
+                  options={[{ value: '', label: m.criar_padrao() }, ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]}
                   onChange={(v) => setEsforco(v)}
                 />
               </View>
@@ -323,10 +322,10 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
 
             {provider === 'claude' && (
               <View style={styles.field}>
-                <Text style={styles.label}>{m.criar_permissao?.() ?? 'Permissão'}</Text>
+                <Text style={styles.label}>{m.criar_permissao()}</Text>
                 <MenuSelect
                   value={permissao}
-                  options={[{ value: '', label: m.criar_permissao_padrao?.() ?? 'padrão' }, ...MODOS_PERMISSAO.map((n) => ({ value: n, label: n }))]}
+                  options={[{ value: '', label: m.criar_permissao_padrao() }, ...MODOS_PERMISSAO.map((n) => ({ value: n, label: n }))]}
                   onChange={(v) => setPermissao(v)}
                 />
               </View>
@@ -339,11 +338,11 @@ export function CreateSessionSheet({ onClose }: { onClose?: () => void }) {
             ) : null}
 
             <Pressable onPress={handleCreate} disabled={!canCreate} style={[styles.primary, !canCreate && styles.primaryDis]}>
-              <Text style={styles.primaryTxt}>{loading ? (m.criar_criando?.() ?? 'Criando…') : (m.sessao_nova?.() ?? 'Criar')}</Text>
+              <Text style={styles.primaryTxt}>{loading ? m.criar_criando() : m.sessao_nova()}</Text>
             </Pressable>
 
             <Pressable onPress={() => setPicked(null)} style={styles.ghost}>
-              <Text style={styles.ghostTxt}>{m.criar_outra_pasta?.() ?? 'Escolher outra pasta'}</Text>
+              <Text style={styles.ghostTxt}>{m.criar_outra_pasta()}</Text>
             </Pressable>
           </>
         )}

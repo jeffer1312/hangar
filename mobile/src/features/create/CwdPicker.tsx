@@ -95,21 +95,21 @@ export function CwdPicker({
     return (
       <View style={styles.center}>
         <ActivityIndicator />
-        <Text style={styles.muted}>{m.arquivo_carregando?.() ?? 'Carregando…'}</Text>
+        <Text style={styles.muted}>{m.arquivo_carregando()}</Text>
       </View>
     );
   }
   if (rootsError) {
     return (
       <View style={styles.center}>
-        <Text style={styles.muted}>{m.arquivo_carregar_raizes_erro?.() ?? 'Falha ao carregar raízes'}</Text>
+        <Text style={styles.muted}>{m.arquivo_carregar_raizes_erro()}</Text>
       </View>
     );
   }
   if (!roots.length) {
     return (
       <View style={styles.center}>
-        <Text style={styles.muted}>{m.arquivo_sem_raizes?.() ?? 'Nenhuma raiz liberada'}</Text>
+        <Text style={styles.muted}>{m.arquivo_sem_raizes()}</Text>
       </View>
     );
   }
@@ -132,7 +132,7 @@ export function CwdPicker({
         style={styles.search}
         value={query}
         onChangeText={setQuery}
-        placeholder={m.arquivo_buscar_pasta?.() ?? 'Buscar pasta'}
+        placeholder={m.arquivo_buscar_pasta()}
         placeholderTextColor="#8d8489"
         autoCapitalize="none"
         autoCorrect={false}
@@ -151,7 +151,7 @@ export function CwdPicker({
             ))}
           </ScrollView>
           <Pressable onPress={() => onPick(path)} style={styles.useHere}>
-            <Text style={styles.useHereTxt}>{m.arquivo_usar_pasta?.() ?? 'Usar esta pasta'}</Text>
+            <Text style={styles.useHereTxt}>{m.arquivo_usar_pasta()}</Text>
           </Pressable>
         </View>
       ) : null}
@@ -164,7 +164,7 @@ export function CwdPicker({
         ) : scanError ? (
           <Text style={styles.muted}>{scanError}</Text>
         ) : filtered.length === 0 ? (
-          <Text style={styles.muted}>{query.trim() ? (m.arquivo_sem_resultados?.() ?? 'Sem resultados') : (m.arquivo_sem_subpastas?.() ?? 'Sem subpastas')}</Text>
+          <Text style={styles.muted}>{query.trim() ? (m.arquivo_sem_resultados()) : (m.arquivo_sem_subpastas())}</Text>
         ) : (
           <ScrollView style={styles.list} contentContainerStyle={{ gap: 4 }}>
             {filtered.map((e) => {
@@ -183,7 +183,7 @@ export function CwdPicker({
                       {e.has_claude_md ? <Text style={styles.badgeCl}>CLAUDE.md</Text> : null}
                     </View>
                   </Pressable>
-                  <Pressable onPress={() => setPath(e.path)} style={styles.drill} hitSlop={8} accessibilityLabel={m.arquivo_abrir?.({ nome: e.name }) ?? `Abrir ${e.name}`}>
+                  <Pressable onPress={() => setPath(e.path)} style={styles.drill} hitSlop={8} accessibilityLabel={m.arquivo_abrir({ nome: e.name })}>
                     <Text style={styles.drillTxt}>›</Text>
                   </Pressable>
                 </View>
@@ -203,7 +203,8 @@ const styles = StyleSheet.create((theme) => ({
   chipsScroll: { flexGrow: 0 },
   chips: { flexDirection: 'row', gap: theme.base.space[2], paddingBottom: 2 },
   chip: {
-    height: 36,
+    height: 44,
+    minHeight: 44,
     paddingHorizontal: theme.base.space[4],
     borderRadius: 9999,
     backgroundColor: theme.tokens.bg.surface,
@@ -228,11 +229,12 @@ const styles = StyleSheet.create((theme) => ({
   crumbs: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   crumbRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   sep: { color: theme.tokens.text.muted },
-  crumbBtn: { paddingHorizontal: 6, paddingVertical: 4, borderRadius: 6 },
+  crumbBtn: { minHeight: 44, minWidth: 44, paddingHorizontal: 8, paddingVertical: 8, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
   crumbTxt: { color: theme.tokens.accent.base, fontSize: theme.base.text.sm },
   useHere: {
     alignSelf: 'flex-start',
-    height: 36,
+    height: 44,
+    minHeight: 44,
     paddingHorizontal: theme.base.space[3],
     borderRadius: theme.base.radius.md,
     borderWidth: 1,
