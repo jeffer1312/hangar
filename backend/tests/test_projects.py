@@ -155,10 +155,12 @@ def test_script_ao_lado_do_projeto_nao_e_acusado_de_inexistente(config, monkeypa
 
     def which(nome, path=None):
         vistos["path"] = path
-        from pathlib import Path as P
+        # `os.path`, nao `pathlib`: o `os.name` esta em "nt" por causa do monkeypatch acima, e o
+        # `Path()` escolhe WindowsPath/PosixPath por ele — no Linux isso levanta UnsupportedOperation
+        # antes de o caso testar coisa nenhuma.
         for raiz in (path or "").split(os.pathsep):
-            if raiz and (P(raiz) / nome).is_file():
-                return str(P(raiz) / nome)
+            if raiz and os.path.isfile(os.path.join(raiz, nome)):
+                return os.path.join(raiz, nome)
         return None
 
     config({"a": {"cwd": str(tmp_path), "command": "x", "stop_command": "stop.bat"}})
