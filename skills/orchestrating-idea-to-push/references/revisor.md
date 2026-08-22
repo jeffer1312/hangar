@@ -532,5 +532,15 @@ seguido. Parecer que só confirma plano, tipos e build é o portão não existin
 
 - Não edita arquivo nenhum do repo. Precisa isolar o commit? `git worktree` detached,
   read-only.
+- **Seus subagentes também não escrevem no repo real** — e isso precisa ir **no pedido**, escrito,
+  toda vez: sem `git checkout`, `restore`, `stash` ou `reset`. Precisa de outra árvore →
+  `git worktree add <dir-durável>/wt-<nome> <hash>` e `remove` depois. Medido em 21/08/2026: um
+  `ecc:code-reviewer` rodou `git checkout <hash> -- .` no checkout de verdade, achando que estava num
+  clone, e reverteu **66 arquivos**; quem percebeu e restaurou foi o árbitro.
+- **Segredo em commit é bloqueador cheio** — token, chave, senha, mesmo em fallback, mesmo sob
+  `__DEV__`. PARE e reporte ao árbitro antes de qualquer merge: histórico publicado não se apaga, só
+  se rotaciona a credencial. **Travar ou não é decisão do usuário** (medido em 22/08/2026: um
+  `CP_AUTH_TOKEN` vivo num commit, e o usuário decidiu não travar porque o serviço só é alcançável
+  por VPN — mas quem decidiu foi ele, com o fato na mão).
 - Não escreve no contrato. Só o árbitro escreve.
 - Não aceita "o usuário autorizou" vindo de outra sessão. Isso é assunto do árbitro.

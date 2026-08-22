@@ -14,9 +14,15 @@ Você é o único que escreve no contrato.
 
 ## Você mantém DOIS arquivos, e só um deles é lido pelo time
 
-- **`grupo-<gid>.md` — o registro.** O diário da execução: progresso Task→hash→veredito, o que
-  cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à vontade. **Só você
-  lê.** Não mande esse caminho a ninguém.
+- **`~/.claude/orq-retros/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
+  Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à
+  vontade. **Só você lê.** Não mande esse caminho a ninguém.
+
+  > **O registro mora no diretório durável do trabalho, que nada gerencia** — não em
+  > `<config>/.claude-pocket-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
+  > Medido em 22/08/2026: um executor matou a última sessão viva do grupo e o diário inteiro de 10h
+  > sumiu com ela; o árbitro teve de reconstruir de memória. **As regras continuam lá** — é o caminho
+  > que o app mostra ao time.
 - **`regras-<gid>.md` — as regras.** O que **ainda vale**: intocáveis, gates, réguas de
   julgamento, barra, o que a revisão precisa cobrir, teto e contas. É o que entra no kick-off,
   e ele deve caber em duas páginas.
@@ -156,6 +162,20 @@ o árbitro fechando essa receita sem o contexto do planejamento produziu o bloqu
 do trabalho.
 
 ## O ciclo de uma Task
+
+**Antes de cada passe de bola — cinco linhas, na ordem, sempre:**
+
+1. A régua nova deste achado já está no `regras-<gid>.md`? Se não, escreva AGORA, antes de avisar a
+   sessão — sessão avisada repete o padrão na variação seguinte (medido 22/08/2026: o mesmo `adb logcat`
+   pendurado 3×, 77 min).
+2. Kick-off/receita em arquivo; mensagem = caminho, via `"$(cat <<'EOF' … EOF)"` — nunca aspas duplas cruas.
+3. `entregue` lido? Agora confira engajamento: o ctx saiu do zero em 1 min? (medido: 24 min perdidos sem isso).
+4. Vigia reescrita com quem tem a bola AGORA (medido: 5 alarmes falsos numa execução, 10 na anterior).
+5. Registro: a linha do evento entra antes da próxima ação.
+
+Essas cinco não são novidade — as quatro primeiras já estavam escritas nesta página, em prosa, e mesmo
+assim foram furadas pelo árbitro numa execução de 24h. Régua em prosa não protege na hora do despacho;
+por isso viraram checklist, aqui em cima.
 
 1. Você libera **uma** Task ao executor.
 2. Ele executa, marca os Steps, roda as verificações, commita só os paths da Task e para.
@@ -435,7 +455,7 @@ Use o script que já vem com a skill:
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 \
-  -d <config>/.claude-pocket-pair/grupo-<gid>.md
+  -d ~/.claude/orq-retros/<data>-<gid>/registro.md
 ```
 
 **Os minutos vão por flag (`-m 5`), NUNCA como número solto no fim.** Com mais de três sessões, o
@@ -462,7 +482,7 @@ todos os escritores, porque ali todos têm — uma vigia só, com todos eles den
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
-  -d ~/.claude/.claude-pocket-pair/grupo-<gid>.md
+  -d ~/.claude/orq-retros/<data>-<gid>/registro.md
 ```
 
 **Ninguém com a bola = vigia desarmada.** Time sem trabalho (tudo aprovado, esperando decisão do
@@ -497,12 +517,21 @@ foi exatamente o que aconteceu. Um `cp-send` entra como **prompt** e reanima tur
 `--tmux` é obrigatório: o `cp-send` normal **recusa** falar com sessão Claude da mesma máquina
 (rc=3, "use SendMessage"), e um script de shell não tem `SendMessage`.
 
-**3. Ela só dispara quando TODAS estão paradas.** Árbitro parado com alguém trabalhando é o estado
-**normal** — ele está esperando, e acordá-lo ali é ruído que gasta o token mais caro da mesa. A
-condição só fecha quando ninguém está com a bola. `sumiu` conta como parado: sessão morta também
-não está trabalhando. Duas exceções avisam na hora, sem esperar o silêncio: sessão **travada** (diz
-`working` mas não produz evento há 10 min) e sessão **sem cota** — as duas são paradas que não se
-desfazem sozinhas.
+**3. Ela dispara quando o DONO DA VEZ para — não quando todos param.** Árbitro parado com alguém
+trabalhando é o estado **normal** (ele está esperando, e acordá-lo ali é ruído). `sumiu` conta como
+parado: sessão morta também não está trabalhando. Duas exceções avisam na hora, sem esperar o
+silêncio: sessão **travada** (diz `working` mas não produz evento há 10 min) e sessão **sem cota**.
+
+> **Por que não "todas paradas", que era a regra até 22/08/2026.** Duas medições que a condição
+> antiga não concilia: em 14/08 o árbitro morreu por 2h30 e o time parou junto — por isso ele
+> **continua na lista**; e em 22/08 um executor ficou **mais de 30 minutos morto sem nenhum alarme**,
+> porque o árbitro, conversando com o usuário, contava como "trabalhando" e mascarava o silêncio dele.
+> Quem percebeu foi o usuário. Ou seja: com o árbitro dentro, a condição "todas paradas" fica cega
+> justamente para o caso que a vigia existe pra cobrir. O árbitro é vigiado por regra própria —
+> árbitro parado **com relato na fila** é alarme; árbitro respondendo ao usuário não mascara ninguém.
+>
+> Enquanto o script não distinguir os dois papéis, o paliativo é **tirar o árbitro da lista sempre
+> que houver executor com a bola** e devolvê-lo quando ninguém tiver.
 
 **A prova de que ela funciona é o alarme sintético CHEGAR.** Ao armar, a vigia dispara sozinha um
 `[vigia] ARMADA ...` para você, **pelo mesmo caminho dos alarmes reais** — se esse prompt chegou na
@@ -571,6 +600,10 @@ O que fazer, em ordem, sem perguntar a ninguém:
 1. **Leia o transcript da sessão morta** (`~/.claude*/projects/<cwd-sanitizado>/<uuid>.jsonl`, o mais
    recente, mensagens `type: "assistant"`). Ela pode ter **produzido** o parecer ou o reporte e
    morrido antes de enviar — nesse caso o trabalho não se perdeu e você nem precisa refazer.
+   **E olhe o pane antes de pedir qualquer coisa de novo**: `tmux capture-pane -p -t "=<nome>:" -S -200`.
+   Com o canal de saída morrendo (acontece em provedor instável), o reporte inteiro fica **na tela**,
+   completo, sem nunca ter saído. Medido em 22/08/2026: um reporte de Task com prints descritos um a um
+   estava ali o tempo todo; quem percebeu que a sessão "não conseguia enviar" foi o usuário.
 2. **Abra a substituta** pela receita de sempre (criar → provar → pedido em arquivo → conferir a
    entrega), com o kick-off completo: papel, HEAD esperado, intocáveis literais, contrato, plano, e o
    commit ou a receita da vez.
@@ -589,6 +622,17 @@ Trocar **no meio do portão** é permitido — e obrigatório — em dois casos:
 - **falha repetida na mesma causa** (a mesma classe de defeito voltando round após round), ou
 - **contexto acima de metade da própria janela** (~500k numa de 1M — a fração é que manda, ver
   "Autonomia — gatilhos").
+
+**Provedor caindo NÃO é motivo de troca; rendimento é.** Queda que a vigia reanima custa minutos, e
+trocar joga fora o contexto inteiro. A medida certa é **quanto a sessão anda entre as quedas**: troque
+quando o ctx mal se move de uma queda pra outra (medido em 22/08/2026: 9k de contexto em 35 minutos,
+numa Task que já ia em 2h36 sem commit — a substituta commitou em 20 min), ou quando a queda **não
+reanima em dois cutucões**. Um mesmo modelo caiu 8 vezes numa execução e ainda assim entregou a melhor
+prova visual dela: contar quedas não decide nada.
+
+**A passagem pra substituta tem TETO: 25 linhas, em arquivo** — HEAD, `git status`, o que está no disco
+sem commit, o que falta, e as armadilhas já conhecidas. Medido no mesmo trabalho: uma passagem de 14 KB
+não foi lida pela sucessora; a de 25 linhas foi, e ela continuou de onde a anterior parou.
 
 Não existe "espero o portão fechar pra trocar": o portão pode não fechar, e aí a sessão
 saturada continua produzindo rounds cada vez piores. O primeiro relatório factualmente

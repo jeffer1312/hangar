@@ -382,6 +382,27 @@ O que você não conseguir rodar entra marcado: `<!-- NÃO VERIFICADO: … -->`.
 como descrição, não como receita — e é infinitamente melhor que ele descobrir sozinho no meio da
 Task.
 
+Quatro coisas que o plano erra **calado**, e as quatro custaram rodada ou bloqueador em 21–22/08/2026:
+
+- **Toda afirmação sobre COMPORTAMENTO de lib externa leva a marca, ou o trecho do fonte instalado
+  colado junto** — não só o nome da API. "A opção X é um watchdog" e "depois do `error` a lib para de
+  reconectar" são exatamente as frases que erram sem avisar: as duas erraram no mesmo trabalho, a
+  primeira custou uma rodada e a segunda virou bloqueador de conjunto na revisão da branch. Nome de
+  API o `tsc` cobra; comportamento, ninguém.
+- **Task que MOVE arquivo lista os consumidores do caminho antigo** — e não são só imports: infra
+  (CI, deploy, instalador) e **testes que varrem a árvore** (`i18nGuard`, `boundary`) apontam por
+  string. A trava de texto cru que varria `frontend/src` ficou cega para os 6 módulos que foram pro
+  core e para o `mobile/` inteiro, e ninguém viu até a fase 4. Some a isso o `vi.mock`, que aponta
+  caminho por string e não aparece em busca por `import` nem no compilador.
+- **Estado compartilhado entre Tasks é decisão de desenho escrita no CABEÇALHO do plano**, não dentro
+  de uma Task. "Servidor ativo global × servidor da rota" atravessou 5 Tasks aprovadas uma a uma e só
+  apareceu na revisão do conjunto — como bloqueador número 1.
+- **O portão de saída da fase 1 não fecha com `___` no arquivo de estimativas.** A linha "cota dos
+  provedores" ficou em branco e o custo apareceu no meio do lote: `429` do provedor e quatro sessões
+  trocadas de conta às pressas. E **estime ≥2 sessões por Task em provedor que cai** — foram 23
+  sessões executoras para 10 Tasks; a ficha do modelo, em `references/modelos/`, diz quantas quedas
+  por hora esperar.
+
 ## Portão de saída da fase 1 — checklist fechado, agnóstico de método
 
 A fase 1 só fecha com os doze abaixo conferidos, **um a um, por escrito no plano ou no contrato**.

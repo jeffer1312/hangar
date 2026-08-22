@@ -109,6 +109,26 @@ suporta), ou **prova visual como seção crítica** — um executor captura por 
 vez. O plano declara qual dos dois; o executor confere a aba antes de cada captura de qualquer
 jeito (`executor.md`, passo 3).
 
+**Arquivo ADITIVO compartilhado (catálogo i18n, índice de exports) não tira a Task do lote — mas o
+plano diz COMO ele é tocado.** A página manda "arquivo compartilhado sai do lote", e isso não sobrevive
+a um catálogo de tradução, que **toda** Task de tela toca. O conflito ali é **posicional por
+construção** (as duas acrescentam no fim do arquivo) e o git não resolve nem quando um lado contém o
+outro. Então: cada Task insere no bloco do **próprio prefixo**, em ordem alfabética — não no fim —, e o
+gate do executor exige quebra de linha final (`tail -c1 | xxd` = `0a`). O conflito posicional que
+sobrar **é do árbitro, no merge**: ele prova por **conteúdo** (contagem de chaves de cada lado antes e
+depois, zero valor alterado) e resolve por estratégia de merge — **nunca devolve ao executor**, que não
+tem como resolver isso na branch de origem. Medido em 22/08/2026: duas rodadas de mensagem gastas
+tentando empurrar pro executor um conflito que só se resolvia no merge, uma delas por um único byte.
+
+**Recurso GLOBAL do APARELHO é seção crítica como o navegador**: o emulador, o `adb reverse` (que é do
+aparelho, não da sessão) e o armazenamento do app. Porta por Task no plano (T5→8083 … T10→8086 funcionou)
+e reverse refeito imediatamente antes de cada captura. Os executores negociando o aparelho entre si por
+recado, com slots de 10–15 min, funcionou sem o árbitro no meio — mas **sessão que morre segurando o
+recurso vira impasse silencioso**: medido em 22/08/2026, uma revisora ficou parada mais de 30 minutos
+esperando um emulador preso por uma sessão que tinha morrido. Duas regras daí: **quem segura libera
+ANTES de fechar o próprio trabalho**, e o árbitro **olha quem segura o quê** sempre que alguém fica
+ocioso sem motivo aparente.
+
 **Os hooks do git são compartilhados, e por isso worktree NÃO roda `git merge main`.** `.git/hooks`
 vale para o checkout principal e para todas as worktrees. Um `post-merge` que rode o instalador do
 projeto executa com o toplevel valendo **a worktree** — e reaponta unidades de serviço, symlinks

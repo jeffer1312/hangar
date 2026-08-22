@@ -134,8 +134,13 @@ próprio desvio, e o árbitro só descobre relendo o arquivo.
 
 | Arquivo | Contém | Quem lê |
 |---|---|---|
-| `grupo-<gid>.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
+| `~/.claude/orq-retros/<data>-<gid>/registro.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
 | `regras-<gid>.md` — **as regras** | o que **ainda vale**: intocáveis, gates, réguas, barra, o que a revisão cobre, teto e contas | executor e revisor |
+
+> **O registro mora no diretório durável do trabalho, que nada gerencia.** `<config>/.claude-pocket-pair/`
+> é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo (medido 22/08/2026, quando um executor
+> matou a última sessão viva e o diário de 10h sumiu). As **regras** continuam lá — é o caminho que o
+> app mostra ao time.
 
 A fronteira é o **tipo** do conteúdo, não o assunto: **já aconteceu → registro; ainda vale →
 regras.** Uma decisão nova entra nas regras, e o registro só anota a data e aponta pra lá. Assim
