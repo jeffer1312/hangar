@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import subprocess
+import tempfile
 import time
 import anyio
 import pytest
@@ -14,6 +15,52 @@ from tmux_teste import matar_sessao
 from app.config import settings
 
 SESS = "cp-test-termsock"
+
+# Diretorio de trabalho dos shells escondidos deste arquivo. Era "/tmp" cru: no Windows esse caminho
+# nao existe, o `new-session -c /tmp` cai no cwd do processo e o `#{session_path}` volta
+# outro caminho qualquer — ai o guard "o shell e deste diretorio?" via divergencia onde nao havia e
+# recriava a sessao, derrubando tres casos por um motivo que nao e o deles. `gettempdir()` e "/tmp"
+# no Linux (o mesmo caminho de antes) e o Temp do perfil no Windows.
+DIR_NEUTRO = tempfile.gettempdir()
+
+# Marcador dos casos que ANEXAM o painel de verdade (websocket -> pty). O `termsock` abre o pty com
+# `pty`/`termios`/`fcntl`, que so existem no POSIX — e nao e descuido: o painel inteiro e gated por
+# `config.somente_leitura.terminal_panel` (`os.name == "posix"`), e o botao nem aparece no Windows.
+# Ali o import estoura em `tty.py: No module named 'termios'`, que e ausencia de objeto de teste, nao
+# falha. O que NAO depende de pty (guardas do 409, shell escondido, rename, kill, origem) continua
+# rodando aqui e passou a valer no Windows.
+#
+# Se um dia o painel ganhar um motor de I/O pro Windows (ver a secao 13.4 do relatorio da VM: hoje
+# ele esta PARADO de proposito, porque o `%N`/detach do psmux nao permite desmontar com seguranca),
+# e este marcador que sai — os casos ja estao escritos.
+so_com_pty = pytest.mark.skipif(os.name != "posix",
+                                reason="o painel usa pty/termios (POSIX); ele nem e oferecido no Windows")
+
+
+def _emulador_falso(tmp_path, nome, exit_code=0, mensagem=None):
+    """Emulador de terminal de mentira que a rota consiga RODAR nesta plataforma.
+
+    A rota `open-terminal` executa o candidato de verdade (e o que ela existe pra provar: um
+    emulador que sai cedo nao pode virar 200). Um `#!/bin/sh` no Windows nem chega a rodar — vira
+    WinError 193/216 e a rota devolve `erro_terminal_abertura_falhou`, que e outro codigo. Mesma
+    solucao do tests/test_cli_probe.py: `.cmd` la, script sh aqui.
+    """
+    if os.name == "nt":
+        alvo = tmp_path / f"{nome}.cmd"
+        linhas = ["@echo off"]
+        if mensagem:
+            linhas.append(f"echo {mensagem} 1>&2")
+        linhas.append(f"exit /b {exit_code}")
+        alvo.write_text("\n".join(linhas) + "\n", encoding="ascii")
+        return alvo
+    alvo = tmp_path / nome
+    corpo = "#!/bin/sh\n"
+    if mensagem:
+        corpo += f"echo '{mensagem}' >&2\n"
+    corpo += f"exit {exit_code}\n"
+    alvo.write_text(corpo)
+    alvo.chmod(0o755)
+    return alvo
 
 
 def _client(host="127.0.0.1"):
@@ -98,6 +145,7 @@ def test_sessao_desconhecida_recusa(sessao):
             pass
 
 
+@so_com_pty
 def test_anexa_recebe_bytes_e_repoe_tamanho_ao_sair(sessao):
     c = _client()
     assert _tam(sessao).startswith("200x50")
@@ -122,6 +170,7 @@ def test_anexa_recebe_bytes_e_repoe_tamanho_ao_sair(sessao):
         assert _clientes(sessao) == ""
 
 
+@so_com_pty
 def test_segunda_conexao_derruba_a_primeira(sessao):
     c = _client()
     url = f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24"
@@ -145,6 +194,7 @@ def test_segunda_conexao_derruba_a_primeira(sessao):
                     _receive_bytes_com_teto(a, segundos=2.0)
 
 
+@so_com_pty
 def test_resize_chega_no_pty(sessao):
     c = _client()
     with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
@@ -154,6 +204,7 @@ def test_resize_chega_no_pty(sessao):
         assert _tam(sessao).startswith("100x30")
 
 
+@so_com_pty
 def test_frame_de_controle_torto_nao_derruba_o_terminal(sessao):
     """Achado da revisao: JSON valido que nao e OBJETO (`5`, `null`, `[1,2]`) levantava
     AttributeError no `.get`, e `cols` com lista levantava TypeError no `int()` — nenhum dos dois
@@ -171,6 +222,7 @@ def test_frame_de_controle_torto_nao_derruba_o_terminal(sessao):
         _esperar(lambda: _tam(sessao).startswith("100x30"))
 
 
+@so_com_pty
 def test_master_do_pty_nao_e_herdavel(sessao):
     """C1: `pty.fork()` (os.forkpty) NAO aplica o PEP 446 que `os.openpty`/`os.pipe` aplicam — o
     mestre nasce herdavel. Com o backend guardando uma Sessao viva por conexao, o `tmux attach` da
@@ -182,6 +234,7 @@ def test_master_do_pty_nao_e_herdavel(sessao):
         assert os.get_inheritable(termsock._ativos[sessao].master) is False
 
 
+@so_com_pty
 def test_saida_acima_do_teto_reata_o_reader_depois_de_drenar(sessao, monkeypatch):
     """Q1 da rodada 2 de revisao: `pausado` recalculado no TOPO do laco do escritor (em vez de
     marcado por QUEM pausa, o `do_pty`) perdia uma pausa que acontecesse NO MEIO do dreno — dentro
@@ -236,6 +289,7 @@ def test_saida_acima_do_teto_reata_o_reader_depois_de_drenar(sessao, monkeypatch
         assert b"PASSOU_DO_TETO" in acumulado
 
 
+@so_com_pty
 def test_pty_morto_fecha_o_socket(sessao):
     # O `fim` tem que ser esperado de verdade: sem isso o handler fica parado no receive() e o
     # painel congela pra sempre quando o attach sai (achado do pass).
@@ -248,6 +302,7 @@ def test_pty_morto_fecha_o_socket(sessao):
                 _receive_bytes_com_teto(ws)
 
 
+@so_com_pty
 def test_fechamento_feio_nao_deixa_zumbi_nem_trava_a_listagem(sessao):
     c = _client()
     for _ in range(5):
@@ -430,9 +485,7 @@ def test_open_terminal_detecta_emulador_que_morre_logo_apos_abrir(sessao, monkey
     # Achado da revisao (I5): o `Popen` so levanta se o BINARIO nao existe -- um emulador que
     # executa e morre logo depois (ex: sem DISPLAY/WAYLAND_DISPLAY, "cannot open display") saia
     # sozinho e a rota devolvia {"ok": true} pra uma janela que nunca abriu de verdade.
-    script = tmp_path / "fake-term"
-    script.write_text("#!/bin/sh\necho 'cannot open display' >&2\nexit 1\n")
-    script.chmod(0o755)
+    script = _emulador_falso(tmp_path, "fake-term", exit_code=1, mensagem="cannot open display")
     import app.api as api_mod
     import app.tmux as tmux_mod
     monkeypatch.setattr(api_mod, "_EMULADORES", {"fake-term": lambda alvo: [str(script)]})
@@ -454,9 +507,7 @@ def test_open_terminal_aceita_emulador_que_sai_0_logo_apos_abrir(sessao, monkeyp
     # `gnome-terminal-server` e sai 0 na hora; `wezterm start`/`konsole` com instancia ja de pe
     # fazem o mesmo. Tratar QUALQUER saida como erro (o teste com `exit 1` acima nao pega isso)
     # devolvia 503 pra uma janela que abriu certo.
-    script = tmp_path / "fake-term-ok"
-    script.write_text("#!/bin/sh\nexit 0\n")
-    script.chmod(0o755)
+    script = _emulador_falso(tmp_path, "fake-term-ok", exit_code=0)
     import app.api as api_mod
     import app.tmux as tmux_mod
     monkeypatch.setattr(api_mod, "_EMULADORES", {"fake-term-ok": lambda alvo: [str(script)]})
@@ -517,7 +568,7 @@ def test_new_hidden_shell_mata_sessao_recem_criada_se_a_marca_falhar(sessao, mon
         return orig(args, **kw)
 
     monkeypatch.setattr(tmux_mod, "RUN", _falha_set_option)
-    alvo = tmux_mod.new_hidden_shell(sessao, "/tmp")
+    alvo = tmux_mod.new_hidden_shell(sessao, DIR_NEUTRO)
     assert alvo is None
     assert subprocess.run(["tmux", "has-session", "-t", f"=term-{sessao}"],
                           capture_output=True).returncode != 0
@@ -536,12 +587,12 @@ def test_shell_escondido_orfa_nao_reata_no_cwd_errado(sessao, tmp_path):
     daqui. Criar depois outra sessao com o MESMO nome noutro repo e abrir a aba Shell devolvia o
     shell do repo ANTIGO, rotulado com a sessao nova."""
     from app import tmux as tmux_mod
-    alvo = tmux_mod.new_hidden_shell(sessao, "/tmp")
+    alvo = tmux_mod.new_hidden_shell(sessao, DIR_NEUTRO)
     assert alvo == f"term-{sessao}"
     primeiro = _id_da_sessao(alvo)
 
     # Mesmo cwd -> REATA (idempotencia; nao pode matar o shell de ninguem a toa).
-    assert tmux_mod.new_hidden_shell(sessao, "/tmp") == alvo
+    assert tmux_mod.new_hidden_shell(sessao, DIR_NEUTRO) == alvo
     assert _id_da_sessao(alvo) == primeiro
 
     # cwd diferente (o nome foi reusado por outro repo) -> recria naquele diretorio.
@@ -549,7 +600,7 @@ def test_shell_escondido_orfa_nao_reata_no_cwd_errado(sessao, tmp_path):
     assert _id_da_sessao(alvo) != primeiro
     caminho = subprocess.run(["tmux", "display", "-p", "-t", f"={alvo}:", "#{session_path}"],
                              capture_output=True, text=True).stdout.strip()
-    assert caminho == str(tmp_path)
+    assert os.path.normcase(caminho) == os.path.normcase(str(tmp_path))
     # kill do shell fica pro teardown do fixture `sessao`.
 
 
@@ -560,7 +611,7 @@ def test_rename_leva_o_shell_escondido_junto(sessao):
     estivesse rodando nele (um `npm run dev`) sobrevive, e o cwd nao muda com o rename."""
     from app import tmux as tmux_mod
     from app.registry import SessionRegistry
-    assert tmux_mod.new_hidden_shell(sessao, "/tmp") == f"term-{sessao}"
+    assert tmux_mod.new_hidden_shell(sessao, DIR_NEUTRO) == f"term-{sessao}"
     antes = _id_da_sessao(f"term-{sessao}")
     novo = f"{sessao}-renomeada"
     try:
@@ -573,7 +624,7 @@ def test_rename_leva_o_shell_escondido_junto(sessao):
         assert tmux_mod.is_hidden(f"term-{novo}")
         caminho = subprocess.run(["tmux", "display", "-p", "-t", f"=term-{novo}:",
                                   "#{session_path}"], capture_output=True, text=True).stdout.strip()
-        assert caminho == "/tmp"
+        assert os.path.normcase(caminho) == os.path.normcase(DIR_NEUTRO)
     finally:
         # A sessao mudou de nome -> o teardown do fixture (que mira o nome antigo) nao a alcanca.
         matar_sessao(novo)
@@ -587,8 +638,8 @@ def test_rename_mata_o_shell_quando_o_nome_novo_ja_esta_ocupado(sessao):
     from app import tmux as tmux_mod
     from app.registry import SessionRegistry
     novo = f"{sessao}-renomeada"
-    assert tmux_mod.new_hidden_shell(sessao, "/tmp") == f"term-{sessao}"
-    ocupante = tmux_mod.new_hidden_shell(novo, "/tmp")   # ocupa `term-<novo>` de proposito
+    assert tmux_mod.new_hidden_shell(sessao, DIR_NEUTRO) == f"term-{sessao}"
+    ocupante = tmux_mod.new_hidden_shell(novo, DIR_NEUTRO)   # ocupa `term-<novo>` de proposito
     assert ocupante == f"term-{novo}"
     ocupante_id = _id_da_sessao(ocupante)
     try:

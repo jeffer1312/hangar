@@ -593,6 +593,30 @@ def kill_session(name: str) -> bool:
 
 
 def rename_session(old: str, new: str) -> bool:
+    """Renomeia. False = NAO renomeou — inclusive quando o nome novo ja esta ocupado.
+
+    Esse "inclusive" e contrato de quem chama: `registry.rename` conta com a recusa pra saber que
+    `term-<novo>` ja existe e cair no fallback de matar o shell velho. No tmux a recusa vem de
+    graca (rename-session pra nome ocupado sai != 0). No psmux, NAO: medido em 22/08/2026, com
+    duas sessoes vivas,
+
+        $ tmux rename-session -t zzR1 zzR2        # zzR2 JA EXISTE
+        rc=0
+        $ tmux list-sessions | grep zzR
+        zzR2: 1 windows ...                       # UMA linha so
+
+    e — o pior — os processos das DUAS continuam vivos e escrevendo. A sessao que estava ali nao
+    morre: ela fica INALCANCAVEL, com o nome apontando pra outra. Do lado do app isso e a sessao de
+    alguem sumindo da lista com o trabalho ainda rodando, e todo `send-keys -t <nome>` seguinte
+    virando destino ambiguo — a mesma familia do `%N` que o `alvo_de_pane` documenta.
+
+    Por isso o guard vai ANTES, e so onde e preciso: no POSIX o caminho segue byte-identico ao que
+    sempre foi (o tmux ja recusa, e uma chamada a mais por rename nao compra nada).
+    """
+    if os.name != "posix" and has_session(new):
+        _log.info("rename-session recusado: %r ja existe (neste multiplexador o rename "
+                  "SOBRESCREVE em vez de falhar)", new)
+        return False
     ok = _run(["tmux", "rename-session", "-t", old, new]).returncode == 0
     if ok:
         # `old` nao existe mais sob esse nome; `new` pode ja ter um cache velho de uma vida anterior
