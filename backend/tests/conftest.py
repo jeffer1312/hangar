@@ -3,8 +3,7 @@ import os
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _home_isolado_no_windows(monkeypatch):
+def _instalar_home_do_windows() -> None:
     """No Windows, `monkeypatch.setenv("HOME", tmp)` NAO isola nada — e a suite escreve no perfil
     REAL de quem roda.
 
@@ -18,27 +17,39 @@ def _home_isolado_no_windows(monkeypatch):
     Em vez de reescrever os 14 pontos (e ter de lembrar do detalhe no 15o), o vinculo mora aqui:
     enquanto o teste roda, `setenv("HOME", v)` leva junto o trio que o Windows de fato consulta.
     No POSIX o fixture nao faz nada — HOME ja e a fonte, e o ramo fica byte-identico ao de hoje.
-    """
-    if os.name != "nt":
-        yield
-        return
-    original = monkeypatch.setenv
 
-    def setenv(name, value, prepend=None):
-        original(name, value, prepend)
+    Patch de CLASSE, feito UMA vez no import — nao um fixture autouse. A primeira versao disto era
+    um autouse pedindo `monkeypatch` na assinatura, e isso instancia (e finaliza) o monkeypatch em
+    outro ponto da ordem, em TODO teste da suite, inclusive nos que nunca ouviram falar daqui. O
+    comentario do `models_cache_em_tmp`, mais abaixo, ja registrava essa armadilha com nome e
+    sobrenome ("a versao autouse derrubava os mocks de test_tmux ... interacao de fixtures via
+    test_codex_adapter") — e foi exatamente nela que eu pisei.
+
+    Medido em 21/08/2026, o par `test_codex_adapter.py + test_tmux.py`: 7 falhas com um autouse
+    VAZIO, 7 com `autouse(request)`, e 22 com `autouse(monkeypatch)`. No Linux a suite inteira ia
+    de 0 pra 16 falhas, todas em test_tmux. Sem fixture nenhum nao ha ordem pra mudar.
+
+    Cada chamada ao original registra o proprio undo NA INSTANCIA, entao o teardown de cada teste
+    continua desfazendo tudo como sempre — o patch de classe nao guarda estado.
+    """
+    original = pytest.MonkeyPatch.setenv
+
+    def setenv(self, name, value, prepend=None):
+        original(self, name, value, prepend)
         if name == "HOME":
             # USERPROFILE e o 1o ramo do ntpath.expanduser; HOMEDRIVE+HOMEPATH e o 2o. Os dois
             # precisam ir: deixar o par velho de pe faria o fallback apontar pro perfil real caso
             # algum codigo (ou uma lib) limpe USERPROFILE.
-            original("USERPROFILE", value)
+            original(self, "USERPROFILE", value)
             drive, resto = os.path.splitdrive(value)
-            original("HOMEDRIVE", drive)
-            original("HOMEPATH", resto or "\\")
+            original(self, "HOMEDRIVE", drive)
+            original(self, "HOMEPATH", resto or "\\")
 
-    # Instancia (nao a classe): o proprio objeto e descartado no fim do teste, entao nao ha o que
-    # desfazer — e o `monkeypatch` que o teste recebe por argumento e ESTE mesmo objeto.
-    monkeypatch.setenv = setenv
-    yield
+    pytest.MonkeyPatch.setenv = setenv
+
+
+if os.name == "nt":
+    _instalar_home_do_windows()
 
 
 @pytest.fixture(autouse=True)
