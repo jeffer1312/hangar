@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocket
 
 from app import termsock
+
+from tmux_teste import matar_sessao
 from app.config import settings
 
 SESS = "cp-test-termsock"
@@ -26,16 +28,16 @@ def _client(host="127.0.0.1"):
 
 @pytest.fixture
 def sessao():
-    subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
-    subprocess.run(["tmux", "kill-session", "-t", f"=term-{SESS}"], capture_output=True)
+    matar_sessao(SESS)
+    matar_sessao(f"term-{SESS}")
     subprocess.run(["tmux", "new-session", "-d", "-s", SESS, "-x", "200", "-y", "50"], check=True)
     yield SESS
     # Achado da revisao (I3): a limpeza do shell escondido tem que estar AQUI (teardown do
     # fixture, roda sempre), nao no fim do corpo de cada teste -- um assert falhando pulava a
     # linha e "term-cp-test-termsock" vazava pro servidor tmux DEFAULT do usuario, invisivel no
     # app (marcada @cp_hidden) e por isso indetectavel sem olhar o tmux na mao.
-    subprocess.run(["tmux", "kill-session", "-t", f"={SESS}"], capture_output=True)
-    subprocess.run(["tmux", "kill-session", "-t", f"=term-{SESS}"], capture_output=True)
+    matar_sessao(SESS)
+    matar_sessao(f"term-{SESS}")
 
 
 def _tam(nome):
@@ -321,7 +323,7 @@ def test_shell_recusa_sequestrar_sessao_de_terceiro(sessao):
     # de `new_hidden_shell` pulava a criacao e marcava essa sessao ALHEIA como escondida -- ela
     # sumia da lista/board/canvas e a aba de shell anexava no terminal de outra sessao.
     alheia = f"term-{sessao}"
-    subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+    matar_sessao(alheia)
     subprocess.run(["tmux", "new-session", "-d", "-s", alheia, "-x", "80", "-y", "24"], check=True)
     try:
         c = _client()
@@ -331,7 +333,7 @@ def test_shell_recusa_sequestrar_sessao_de_terceiro(sessao):
         from app.registry import SessionRegistry
         assert alheia in [i.name for i in SessionRegistry().list()]
     finally:
-        subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+        matar_sessao(alheia)
 
 
 def test_shell_recusa_sequestrar_sessao_codex_de_terceiro(sessao):
@@ -344,7 +346,7 @@ def test_shell_recusa_sequestrar_sessao_codex_de_terceiro(sessao):
     # teste fixa o caso que motivou a troca: colisao com uma sessao que tambem tem sidecar Codex.
     from app.adapters.codex import sessions as codex_sessions
     alheia = f"term-{sessao}"
-    subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+    matar_sessao(alheia)
     subprocess.run(["tmux", "new-session", "-d", "-s", alheia, "-x", "80", "-y", "24"], check=True)
     codex_sessions.save(alheia, "tid-fake", "/tmp/rollout-fake.jsonl", "/tmp")
     try:
@@ -356,7 +358,7 @@ def test_shell_recusa_sequestrar_sessao_codex_de_terceiro(sessao):
         assert not tmux_mod.is_hidden(alheia)
     finally:
         codex_sessions.delete(alheia)
-        subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+        matar_sessao(alheia)
 
 
 def test_sessao_escondida_nao_muda_o_custo_da_listagem(monkeypatch, tmp_path):
@@ -407,9 +409,8 @@ def test_sessao_escondida_nao_muda_o_custo_da_listagem(monkeypatch, tmp_path):
 
         assert sum(1 for a in chamadas if "list-panes" in a) == 1
     finally:
-        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={sess}"], capture_output=True)
-        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"=term-{sess}"],
-                       capture_output=True)
+        matar_sessao(sess, sock)
+        matar_sessao(f"term-{sess}", sock)
 
 
 def test_open_terminal_sem_emulador_devolve_erro_visivel(sessao, monkeypatch):
@@ -491,14 +492,14 @@ def test_kill_nao_mata_sessao_de_terceiro_chamada_term_nome(sessao):
     # so um `_log.debug` como registro. Agora so mata se a marca @cp_hidden confirmar que e nossa.
     from app.registry import SessionRegistry
     alheia = f"term-{sessao}"
-    subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+    matar_sessao(alheia)
     subprocess.run(["tmux", "new-session", "-d", "-s", alheia, "-x", "80", "-y", "24"], check=True)
     try:
         SessionRegistry().kill(sessao)
         assert subprocess.run(["tmux", "has-session", "-t", f"={alheia}"],
                               capture_output=True).returncode == 0
     finally:
-        subprocess.run(["tmux", "kill-session", "-t", f"={alheia}"], capture_output=True)
+        matar_sessao(alheia)
 
 
 def test_new_hidden_shell_mata_sessao_recem_criada_se_a_marca_falhar(sessao, monkeypatch):
@@ -575,8 +576,8 @@ def test_rename_leva_o_shell_escondido_junto(sessao):
         assert caminho == "/tmp"
     finally:
         # A sessao mudou de nome -> o teardown do fixture (que mira o nome antigo) nao a alcanca.
-        subprocess.run(["tmux", "kill-session", "-t", f"={novo}"], capture_output=True)
-        subprocess.run(["tmux", "kill-session", "-t", f"=term-{novo}"], capture_output=True)
+        matar_sessao(novo)
+        matar_sessao(f"term-{novo}")
 
 
 def test_rename_mata_o_shell_quando_o_nome_novo_ja_esta_ocupado(sessao):
@@ -595,7 +596,7 @@ def test_rename_mata_o_shell_quando_o_nome_novo_ja_esta_ocupado(sessao):
         assert not tmux_mod.has_session(f"term-{sessao}")   # o velho saiu
         assert _id_da_sessao(f"term-{novo}") == ocupante_id  # e o ocupante NAO foi tocado
     finally:
-        subprocess.run(["tmux", "kill-session", "-t", f"=term-{novo}"], capture_output=True)
+        matar_sessao(f"term-{novo}")
 
 
 def test_config_expoe_capacidade_do_painel_de_terminal():

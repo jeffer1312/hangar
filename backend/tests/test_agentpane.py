@@ -6,6 +6,8 @@ from unittest.mock import patch
 import pytest
 from app import agentpane, tmux
 
+from tmux_teste import matar_sessao
+
 # L12 da revisao final: estes testes dirigem um tmux DE VERDADE. Sem o skipif eles quebravam a
 # suite em maquina sem tmux; com nome FIXO, duas copias sob xdist criavam/matavam a MESMA sessao e
 # uma derrubava a outra; e sem socket proprio tudo isso acontecia no servidor tmux do usuario, ao
@@ -50,8 +52,7 @@ def sessao():
         # tmux DEFAULT e com ele todas as sessoes do usuario (mesma nota do test_tmux.py). Matar a
         # ultima sessao ja encerra este servidor sozinho.
         for alvo in (nome, f"term-{nome}", ancora):
-            subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={alvo}"],
-                           capture_output=True)
+            matar_sessao(alvo, sock)
 
 
 def _segunda_janela(nome):

@@ -510,9 +510,11 @@ def new_hidden_shell(name: str, cwd: str, config_dir: str | None = None) -> str 
     return alvo
 
 
-def kill_session(name: str) -> bool:
-    """True = a sessao NAO existe mais depois desta chamada (inclui "ja nao existia"). False = ela
-    sobreviveu, e quem chama NAO pode reportar sucesso nem apagar estado duravel dela."""
+def alvo_de_kill(name: str) -> str:
+    """Alvo do `kill-session` para esta plataforma. Publica porque os TESTES precisam da
+    MESMA regra: eles matam sessao por subprocess (socket proprio), e com o `=` cru o
+    teardown deles nao matava nada no Windows e ainda pagava 5s de timeout por chamada.
+    """
     # `=` (match EXATO) so no POSIX. Era o unico alvo de sessao do modulo SEM o `=`: has_session e
     # _pane_target ja o usam justamente porque o tmux resolve target-session em exact -> fnmatch ->
     # PREFIX, e o app fabrica nomes que colidem por prefixo (`<base>`, `<base>-2`, ...). Sem ele,
@@ -527,8 +529,13 @@ def kill_session(name: str) -> bool:
     #     display/send-keys. 5s e o teto do _run: viraria timeout.
     #   - o nome cru ja e exato la: com SO "zz-alvo-2" viva, `kill-session -t zz-alvo` nao derrubou
     #     nada (rc=0). Ou seja, no Windows nao ha prefix match a se defender.
-    alvo = f"={name}" if os.name == "posix" else name
-    _run(["tmux", "kill-session", "-t", alvo])
+    return f"={name}" if os.name == "posix" else name
+
+
+def kill_session(name: str) -> bool:
+    """True = a sessao NAO existe mais depois desta chamada (inclui "ja nao existia"). False = ela
+    sobreviveu, e quem chama NAO pode reportar sucesso nem apagar estado duravel dela."""
+    _run(["tmux", "kill-session", "-t", alvo_de_kill(name)])
     # Devolve "a sessao SAIU?", nao "o comando deu 0" — sao coisas diferentes e a que importa e a
     # primeira. Dois casos reais em que o rc engana: (1) no psmux o kill-session devolve 0 e a sessao
     # continua de pe (medido; o instalador contorna matando por PID); (2) no caso quebrado descrito
