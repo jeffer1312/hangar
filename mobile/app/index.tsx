@@ -2,12 +2,13 @@ import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { Screen } from '../src/ui/Screen';
 import { SessionList } from '../src/features/sessions/SessionList';
+import * as m from '../src/paraglide/messages';
 
 export default function Index() {
   return (
     <Screen>
       <View style={styles.header}>
-        <Text style={styles.title}>Sessões</Text>
+        <Text style={styles.title}>{m.lista_titulo()}</Text>
       </View>
       <View style={styles.listWrap}>
         <SessionList />

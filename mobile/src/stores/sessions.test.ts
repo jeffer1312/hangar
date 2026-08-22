@@ -116,3 +116,24 @@ test('mensagem malformada mantém lista anterior e marca offline sem quebrar', (
   expect(useSessions.getState().rows).toHaveLength(1);
   expect(useSessions.getState().byServer[0].error).toBeTruthy();
 });
+
+test('backoff respeitado: mudança de activeId não reabre stream em retry; add de servidor abre só o novo', () => {
+  const rel = useSessions.getState().retain();
+  expect(created.length).toBe(1);
+  const es = created[0] as unknown as FakeES & { trigger: (t: string, d: string) => void; onerror: ((e: unknown) => void) | null };
+  // simula queda: dispara onerror → store fecha stream e agenda retry 5s
+  (es as unknown as { onerror: (e: unknown) => void }).onerror?.({});
+  expect(created[0].close).toHaveBeenCalled();
+  // em backoff, streams foi removido, mas retryTimer pendente
+  expect(created.length).toBe(1);
+  // mudança irrelevante (activeId) não deve reabrir
+  useServers.setState({ activeId: 'outro' });
+  expect(created.length).toBe(1);
+  // mudança real: adiciona servidor novo → deve abrir só para o novo
+  const s2 = { id: 'srv2', label: 'srv2', baseUrl: 'http://10.0.0.2:8765', token: 'tok2' };
+  const cur = useServers.getState().servers;
+  useServers.setState({ servers: [...cur, s2] });
+  expect(created.length).toBe(2);
+  expect((created[1] as unknown as { url: string }).url).toContain('10.0.0.2');
+  rel();
+});

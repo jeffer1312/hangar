@@ -88,6 +88,7 @@ function connect(list: Server[], get: () => SessionsState, set: (p: Partial<Sess
   }
   for (const s of list) {
     if (streams.has(s.id)) continue;
+    if (retryTimers.has(s.id)) continue;
     const es = openSessionsStream(s);
     // ping mantém o watchdog do adapter vivo (wrap rearma). Sem listener,
     // ping não rearma e o adapter fecharia stream saudável.
@@ -126,11 +127,10 @@ function start(get: () => SessionsState, set: (p: Partial<SessionsState>) => voi
   // observa mudanças de servidores (useServers é zustand)
   unsubServers = useServers.subscribe((state) => {
     const next = (state as unknown as { servers: Server[] }).servers;
-    // zustand subscribe dispara a cada set; filtra quando array muda de identidade
-    // ou comprimento difere
-    if (next === serversCache) return;
-    // comparação por id para evitar reconectar à toa se só token mudou? Mantemos simples:
-    // qualquer mudança reconcilia (open/close conforme lista)
+    const igual =
+      next.length === serversCache.length &&
+      next.every((s, i) => s.id === serversCache[i]?.id && s.baseUrl === serversCache[i]?.baseUrl && s.token === serversCache[i]?.token);
+    if (igual) return;
     serversCache = next.slice();
     if (refs > 0) connect(serversCache, get, set);
     else recompute(set);

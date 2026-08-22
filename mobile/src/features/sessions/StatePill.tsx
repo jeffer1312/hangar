@@ -13,7 +13,7 @@ const map: Record<State, keyof import('@hangar/core').ThemeTokens['pill']> = {
 export function StatePill({ state }: { state: State }) {
   const { theme } = useUnistyles();
   const key = map[state];
-  const pill = theme.tokens.pill[key];
+  const pill = (key ? theme.tokens.pill[key] : null) ?? theme.tokens.pill.idle;
   return (
     <View style={[styles.pill, { backgroundColor: pill.bg }]}>
       <Text style={[styles.txt, { color: pill.fg }]}>{rotuloEstado(state)}</Text>

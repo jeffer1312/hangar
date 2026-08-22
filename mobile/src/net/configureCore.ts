@@ -14,5 +14,5 @@ export function configureCore() {
     origin: null,
     createEventSource,
   });
-  configureLocale({ getLocale: () => 'pt' });
+  configureLocale({ getLocale: () => (getLocales()[0]?.languageCode === 'pt' ? 'pt' : 'en') });
 }

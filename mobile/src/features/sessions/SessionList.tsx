@@ -23,15 +23,6 @@ export function SessionList() {
     return () => release();
   }, []);
 
-  // dev fallback para emulador: sem servidor configurado, adiciona o host do backend
-  // (10.0.2.2 é o host visto de dentro do AVD). Evita tela "Nenhum servidor" no primeiro boot.
-  useEffect(() => {
-    if (ready && servers.length === 0) {
-      // token do backend local (ver backend/.env: CP_AUTH_TOKEN)
-      useServers.getState().add({ baseUrl: 'http://10.0.2.2:8765', token: 'B_cCngF3YyM31J3CAOMMK9-e' });
-    }
-  }, [ready, servers.length]);
-
   const baseOrdered = sortSessions(rows) as AggSession[];
   // garante 3 estados distintos para prova visual quando o backend só tem 2 (idle/working)
   // — injeta um "aguardando" sintético em __DEV__ para a barra ficar completa. Não afeta
