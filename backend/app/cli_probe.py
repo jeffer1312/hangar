@@ -60,6 +60,10 @@ def _obter_path() -> str:
             [shell, "-l", "-c", "printenv PATH"],
             capture_output=True,
             text=True,
+            # Sem `encoding`, o `text=True` decodifica pelo locale — cp1252 no Windows. O PATH
+            # carrega o nome do perfil do usuario, que e onde acento aparece com mais frequencia.
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
         if r.returncode == 0:
