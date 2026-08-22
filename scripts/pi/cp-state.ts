@@ -81,12 +81,26 @@ function publishState(state: "working" | "idle", ctx: any): void {
 // Bilhete pane -> arquivo de sessao. E a UNICA forma de o backend ligar um pane Pi ao transcript
 // dele: o pi reescreve o proprio argv (Task 0, fato 7), entao o `--session-id` some do
 // /proc/<pid>/cmdline e nao ha o que casar. `TMUX_PANE` (ex `%123`) o pi HERDA — medido.
+// A CHAVE do bilhete precisa ser unica no servidor do multiplexador. No tmux o `%N` e global e
+// serve; no psmux (Windows) ele e por SESSAO — medido em 21/08/2026, quatro sessoes vivas ao mesmo
+// tempo e TODAS com `TMUX_PANE=%1`. Com o pane como chave, a segunda sessao Pi sobrescrevia o
+// bilhete da primeira e as duas passavam a apontar pro MESMO transcript: uma abria a conversa da
+// outra (reproduzido — `pi_session_file` devolveu o mesmo arquivo pros dois panes).
+// `PSMUX_SESSION` traz o nome da sessao, que e unico por construcao. No tmux ela nao existe e a
+// chave continua sendo o pane, byte-identica a de sempre.
+function paneKey(): string | null {
+  const psmux = process.env.PSMUX_SESSION;
+  if (psmux) return psmux.replace(/[^A-Za-z0-9._-]/g, "-");   // vira nome de arquivo
+  const pane = process.env.TMUX_PANE;
+  return pane ? pane.replace("%", "") : null;
+}
+
 function publishPane(ctx: any): void {
   guard("publishPane", () => {
-    const pane = process.env.TMUX_PANE;
+    const chave = paneKey();
     const file = sessionFile(ctx);
-    if (!pane || !file) return;      // fora do tmux nao ha o que ligar
-    writeAtomic(path.join(paneDir, `${pane.replace("%", "")}.json`),
+    if (!chave || !file) return;      // fora do tmux nao ha o que ligar
+    writeAtomic(path.join(paneDir, `${chave}.json`),
                 { file, id: ctx?.sessionManager?.getSessionId?.() ?? null, ts: Date.now() / 1000 });
   });
 }

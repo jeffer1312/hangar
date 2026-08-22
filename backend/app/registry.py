@@ -473,6 +473,26 @@ def _warn_bilhete_once(pane_id: str, motivo: str) -> None:
         _log.warning("pi: bilhete de %s recusado (%s); usando CP_PI_SESSION", pane_id, motivo)
 
 
+def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
+    """Mesma chave que a extensao usa pra gravar o bilhete (scripts/pi/cp-state.ts, paneKey).
+
+    No tmux e o `%N`, que e unico no servidor. No psmux (Windows) NAO e: medido em 21/08/2026,
+    quatro sessoes vivas ao mesmo tempo e todas com `TMUX_PANE=%1` — a segunda sessao Pi
+    sobrescrevia o bilhete da primeira e `pi_session_file` passava a devolver o MESMO transcript
+    pras duas, ou seja, uma abria a conversa da outra. Ali a chave e o `PSMUX_SESSION`, que carrega
+    o nome da sessao e e unico por construcao.
+
+    Lido do ambiente do PROCESSO do pane, e nao de um parametro novo, pra ser exatamente o que a
+    extensao leu — as duas pontas olham a mesma fonte, entao nao ha como divergirem. No Linux a
+    variavel nao existe, `_env_var_of` devolve None e a chave fica byte-identica a de sempre.
+    """
+    if pid is not None:
+        psmux = procinfo._env_var_of(pid, "PSMUX_SESSION")
+        if psmux:
+            return re.sub(r"[^A-Za-z0-9._-]", "-", psmux)
+    return pane_id.lstrip("%")
+
+
 def pi_session_file(pane_id: str, pid: Optional[int] = None,
                     cwd: str = "") -> Optional[str]:
     """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
@@ -482,7 +502,7 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     conversa de outro agente.
     """
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    ticket = Path(base) / ".claude-pocket-pi" / f"{pane_id.lstrip('%')}.json"
+    ticket = Path(base) / ".claude-pocket-pi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     sid = _pi_sid_of(pid) if pid else None
     try:
         # encoding explicito: o bilhete guarda o CAMINHO do transcript, e no Windows o default e
