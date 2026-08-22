@@ -6,8 +6,11 @@
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
-           modelOptions, type ModelOption, type Motor } from '../lib/api';
-  import { basename, providerName } from '../lib/format';
+           modelOptions, getArchivePorCwd, resumeArchivedConversation, getArchiveHistory,
+           type ModelOption, type Motor, type ArchiveEntry } from '../lib/api';
+  import { basename, providerName, relativeTime } from '../lib/format';
+  import { renderMarkdown } from '../lib/markdown';
+  import type { ChatEvent } from '../lib/types';
   import { selectServer, getActiveId, serverColor } from '../lib/auth';
   import type { Server } from '../lib/auth';
   import type { SessionInfo, ConfigDirInfo, Provider } from '../lib/types';
@@ -416,6 +419,14 @@
       // primeiro turno, calado.
       modelo = ''; esforco = ''; permissao = '';
       modelos = []; listaReduzida = false; erroModelos = '';
+      // Mesmo motivo do bloco acima, pro atalho de retomar: um `retomando` que sobreviveu a um
+      // fechamento durante a chamada deixa o seletor E o botao travados na reabertura, com o botao
+      // dizendo "Criando…" sem nada em curso. `retSeq++` invalida a resposta que ficou em voo — sem
+      // ele, ela chega depois e navega pra uma sessao que nao tem relacao com a tela de agora.
+      retSeq++;
+      retomando = null;
+      retomaveis = []; conversaEscolhida = ''; querRetomar = false;
+      previa = []; previaCarregando = false;
       // Feedback da criação de conta não pode vazar entre aberturas: o botão liberado, o aviso
       // limpo e a conta criada esquecida — o cfgSeq do loadConfigs abaixo invalida qualquer
       // novaConta que ainda esteja em voo da abertura anterior.
@@ -458,6 +469,108 @@
     takenNames = new Set();
     hasSameFolder = false;
     error = '';
+  }
+
+  // Conversas RETOMAVEIS da pasta escolhida. Filtra pela CONTA e pelo AGENTE selecionados: o
+  // transcript de outra conta nao existe pro `claude --resume` desta, e retomar uma conversa
+  // Claude com Kimi marcado nao quer dizer nada. Codex fica de fora: a conversa dele vive num
+  // app-server (thread + rollout), nao ha `--resume` de linha de comando, e o backend recusa.
+  let retomaveis = $state<ArchiveEntry[]>([]);
+  let retomando = $state<string | null>(null);
+  let retSeq = 0;
+  // '' = comecar do zero. Escolher uma conversa troca a ACAO do botao primario (e some com os
+  // campos que so valem pra sessao nova): retomar reabre um transcript, nao cria um.
+  let conversaEscolhida = $state('');
+  let querRetomar = $state(false);
+  const conversaAlvo = $derived(
+    querRetomar ? retomaveis.find((c) => c.session_id === conversaEscolhida) ?? null : null);
+
+  $effect(() => {
+    const cwd = picked, cfg = selectedConfig, prov = provider;
+    void targetServer;   // apiFetch le o servidor ativo na hora: trocar de alvo re-busca
+    const seq = ++retSeq;
+    // A escolha e da pasta/conta ANTERIOR; carrega-la adiante retomaria outra conversa.
+    conversaEscolhida = '';
+    querRetomar = false;
+    if (!cwd || prov === 'codex') {
+      retomaveis = [];
+      return;
+    }
+    getArchivePorCwd(cwd, prov === 'claude' ? cfg : null, prov)
+      // Conversa ABERTA sai da lista: retomar nao se aplica a ela, e como sao as mais recentes
+      // elas ocupariam o topo empurrando pra baixo justamente as que da pra continuar. Quem quer
+      // uma sessao viva clica nela na barra lateral.
+      .then((r) => { if (seq === retSeq) retomaveis = r.filter((c) => !c.live); })
+      // Falhar aqui esconde o atalho inteiro, e "não há conversa nesta pasta" fica igual a "não
+      // consegui perguntar". O formulário de sessão nova segue funcionando, então não vira erro na
+      // tela — mas tem que deixar rastro pra depurar.
+      .catch((e) => {
+        console.error('resumable conversation list failed', e);
+        if (seq === retSeq) retomaveis = [];
+      });
+  });
+
+  // Previa da conversa escolhida: as ultimas msgs, pra confirmar "e essa mesmo?" antes de retomar.
+  // O rotulo do seletor mostra so a ultima linha, e uma linha nao basta pra reconhecer a conversa.
+  let previa = $state<ChatEvent[]>([]);
+  let previaCarregando = $state(false);
+  // Falha da prévia NAO pode virar "(sem mensagens)": e o mesmo texto de conversa vazia de verdade,
+  // e a caixa existe justamente pra confirmar "e essa mesmo?" antes de retomar.
+  let previaErro = $state(false);
+  let previaEl = $state<HTMLElement | null>(null);
+  let prevSeq = 0;
+
+  // Abre no FIM: a previa existe pra mostrar onde a conversa parou, e comecar no topo de 30 msgs
+  // esconde justamente isso.
+  $effect(() => {
+    void previa;
+    const el = previaEl;
+    if (el) requestAnimationFrame(() => (el.scrollTop = el.scrollHeight));
+  });
+
+  $effect(() => {
+    const alvo = conversaAlvo;
+    const seq = ++prevSeq;
+    if (!alvo) {
+      previa = [];
+      previaErro = false;
+      previaCarregando = false;
+      return;
+    }
+    previaCarregando = true;
+    previaErro = false;
+    getArchiveHistory(alvo.project, alvo.session_id, 30, alvo.config_dir, alvo.provider)
+      .then((evs) => { if (seq === prevSeq) previa = evs; })
+      .catch((e) => {
+        console.error('conversation preview failed', e);
+        if (seq === prevSeq) { previa = []; previaErro = true; }
+      })
+      .finally(() => { if (seq === prevSeq) previaCarregando = false; });
+  });
+
+  async function retomar(c: ArchiveEntry) {
+    if (retomando) return;
+    const seq = retSeq;
+    retomando = c.session_id;
+    error = '';
+    try {
+      // Motor e conta so existem no Claude; nos outros o backend recusaria motor com 400.
+      const s = await resumeArchivedConversation(
+        c.project, c.session_id,
+        c.provider === 'claude' ? (engine || null) : null,
+        c.provider === 'claude' ? selectedConfig : null,
+        c.provider);
+      // O modal pode ter fechado (e reaberto noutra pasta) enquanto isto estava em voo: navegar
+      // agora levaria pra uma sessao sem relacao com o que esta na tela. `retSeq` e incrementado
+      // no reset de abertura, entao ele responde exatamente "esta chamada ainda vale?".
+      if (seq !== retSeq) return;
+      onClose();
+      onOpenSession(s.name);
+    } catch (err) {
+      if (seq === retSeq) error = err instanceof Error ? err.message : m.criar_sessao_erro();
+    } finally {
+      if (seq === retSeq) retomando = null;
+    }
   }
 
   function submitManual(e: SubmitEvent) {
@@ -580,6 +693,9 @@
       {#if hasSameFolder}
         <p class="hint">{m.criar_ja_existe()}</p>
       {/if}
+      <!-- Nome, modelo, esforco e permissao nao chegam ao `--resume`: ele reabre o transcript como
+           ele estava. Deixa-los na tela com uma conversa escolhida seria oferecer escolha inerte. -->
+      {#if !conversaAlvo}
       <div class="field">
         <label class="field-label" for="session-name">{m.comum_nome()}</label>
         <input
@@ -595,6 +711,7 @@
           required
         />
       </div>
+      {/if}
 
       <div class="field">
         <span class="field-label">{m.comum_provider()}</span>
@@ -679,6 +796,50 @@
         </div>
       {/if}
 
+      {#if retomaveis.length}
+        <!-- Comecar do zero e o caminho normal; continuar uma conversa da pasta e a excecao, entao
+             ela fica atras de um check e so entao mostra o seletor. Uma lista sempre aberta
+             empurrava o formulario inteiro pra fora da tela.
+             O rotulo de cada conversa e a ULTIMA msg — a 1a nao identifica nada meses depois. -->
+        <div class="field">
+          <label class="retomar-check">
+            <input type="checkbox" bind:checked={querRetomar} />
+            <span>{m.criar_retomar()}</span>
+          </label>
+          {#if querRetomar}
+            <Select id="conversa-pick" ariaLabel={m.criar_retomar()} value={conversaEscolhida}
+              disabled={retomando !== null}
+              opcoes={[{ value: '', label: m.criar_retomar_escolha() },
+                       ...retomaveis.map((c) => ({
+                         value: c.session_id,
+                         label: c.ultima || c.preview || m.arquivo_sem_mensagens(),
+                         hint: relativeTime(c.mtime),
+                       }))]}
+              onchange={(v) => (conversaEscolhida = v)} />
+          {/if}
+          {#if conversaAlvo}
+            <!-- Previa: as ultimas msgs da conversa. Markdown RENDERIZADO — `**assim**` cru numa
+                 caixa de leitura e sempre bug, nao estilo. Rola pro fim ao carregar, que e onde a
+                 conversa parou. -->
+            <div class="previa" bind:this={previaEl}>
+              {#if previaCarregando}
+                <p class="previa-vazia">{m.comum_carregando()}</p>
+              {:else if previaErro}
+                <p class="previa-erro" role="alert">{m.criar_previa_erro()}</p>
+              {:else if !previa.length}
+                <p class="previa-vazia">{m.arquivo_sem_mensagens()}</p>
+              {:else}
+                {#each previa as ev (ev.id)}
+                  <div class="previa-msg" class:eu={ev.kind === 'user_msg'}>
+                    {@html renderMarkdown(ev.text ?? '')}
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       {#if provider === 'claude' && Object.keys(motores).length}
         <div class="field">
           <label class="field-label" for="engine-pick">{m.comum_motor()}</label>
@@ -690,7 +851,12 @@
         </div>
       {/if}
 
-      {#if provider === 'claude' || provider === 'pi' || provider === 'kimi'}
+      <!-- Modelo, esforço e permissão lado a lado: cada um numa linha só gastava três alturas de
+           campo com três palavras. `auto-fit`+`minmax` faz a conta sozinho — no painel largo dá três
+           colunas, num estreito (celular, ou só um dos três visível) volta a empilhar sem media
+           query, que aqui seria errada: quem aperta é a largura do PAINEL, não a da janela. -->
+      <div class="trio">
+      {#if !conversaAlvo && (provider === 'claude' || provider === 'pi' || provider === 'kimi')}
         <div class="field">
           <label class="field-label" for="model-pick">{m.composer_modelo()}</label>
           <Select id="model-pick" class="field-input" ariaLabel={m.composer_modelo()} value={modelo}
@@ -715,7 +881,7 @@
         </div>
       {/if}
 
-      {#if provider === 'claude' || provider === 'pi'}
+      {#if !conversaAlvo && (provider === 'claude' || provider === 'pi')}
         <!-- Esforço fica FORA do if de cima de propósito: o Kimi tem modelo mas NÃO tem nível
              (o CLI não tem flag; mora no [thinking] do config.toml, global) — um NIVEIS['kimi']
              undefined derrubaria a folha inteira no .map. -->
@@ -728,7 +894,7 @@
         </div>
       {/if}
 
-      {#if provider === 'claude'}
+      {#if !conversaAlvo && provider === 'claude'}
         <div class="field">
           <label class="field-label" for="perm-pick">{m.criar_permissao()}</label>
           <Select id="perm-pick" class="field-input" ariaLabel={m.criar_permissao()} value={permissao}
@@ -737,14 +903,25 @@
             onchange={(v) => (permissao = v)} />
         </div>
       {/if}
+      </div>
 
       <div class="form-acao">
         {#if error}
           <p class="error-msg" role="alert">{error}</p>
         {/if}
-        <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
-          {loading ? m.criar_criando() : m.sessao_nova()}
-        </button>
+        <!-- UMA acao primaria: com uma conversa escolhida no check acima, o botao CONTINUA aquela
+             conversa em vez de criar uma sessao nova. Dois botoes lado a lado deixariam a tela
+             perguntando duas coisas ao mesmo tempo. -->
+        {#if conversaAlvo}
+          {@const alvo = conversaAlvo}
+          <button class="primary-btn" onclick={() => retomar(alvo)} disabled={retomando !== null}>
+            {retomando ? m.criar_criando() : m.criar_retomar_acao()}
+          </button>
+        {:else}
+          <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
+            {loading ? m.criar_criando() : m.sessao_nova()}
+          </button>
+        {/if}
         {#if !isDesktop}
           <!-- No desktop o painel da esquerda continua visível: trocar de pasta é clicar nela. -->
           <button class="ghost-btn" onclick={reset}>{m.criar_outra_pasta()}</button>
@@ -1015,6 +1192,62 @@
     color: var(--text-secondary);
     font-weight: 500;
   }
+
+  .retomar-check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .retomar-check input { accent-color: var(--accent); }
+
+  .previa {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 220px;
+    overflow-y: auto;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    /* --surface-inset acompanha o slider de transparencia; --bg-base cru viraria um retangulo
+       chapado boiando sobre o papel de parede. */
+    background: var(--surface-inset);
+    font-size: var(--text-sm);
+    line-height: 1.45;
+  }
+
+  .previa-msg {
+    color: var(--text-secondary);
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--border);
+    overflow-wrap: anywhere;
+  }
+  /* Msg do usuario destacada: sem isso a previa e um bloco unico de texto e nao da pra ver de
+     quem e cada trecho. */
+  .previa-msg.eu {
+    color: var(--text-primary);
+    border-left-color: var(--accent);
+    background: var(--surface-raised);
+    padding: var(--space-2) var(--space-3);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+  .previa-msg :global(p) { margin: 0 0 var(--space-1); }
+  .previa-msg :global(p:last-child) { margin-bottom: 0; }
+  .previa-msg :global(pre) { overflow-x: auto; }
+
+  .previa-vazia { color: var(--text-muted); margin: 0; }
+  .previa-erro { color: var(--danger); margin: 0; }
+
+  .trio {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: var(--space-3);
+  }
+  /* O .field já traz a margem de baixo; dentro do grid quem espaça é o gap. */
+  .trio > .field { margin-bottom: var(--space-4); }
+  .trio:empty { display: none; }
 
   .field-input {
     height: 44px;

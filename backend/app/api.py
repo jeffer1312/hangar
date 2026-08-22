@@ -70,7 +70,9 @@ from app.transcript import last_assistant_text
 from app import tunnel
 from app import runner
 from app import projects
-from app.archive import ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl, list_conversations, list_folders
+from app import archive_providers
+from app.archive import (ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl, conta_de,
+                         list_conversations, list_folders, tail_events)
 from app.search import SearchHit, search, extract_terms, search_terms, build_ask_prompt
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import pair
@@ -3424,11 +3426,42 @@ def transcript_image(name: str, uuid: str, idx: int):
     return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable"})
 
 
+def _json_dict(linha: str) -> dict | None:
+    try:
+        o = json.loads(linha)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return o if isinstance(o, dict) else None
+
+
 # ── Arquivo: conversas mortas (transcripts sem sessao tmux viva) ──────────────
 @app.get("/api/archive", dependencies=[Depends(require_auth)], response_model=list[ArchiveFolder])
 def archive_index():
     # Nivel 1: so as PASTAS (agregado barato). As conversas vem por pasta, no endpoint abaixo.
     return list_folders()
+
+
+@app.get("/api/archive-por-cwd", dependencies=[Depends(require_auth)],
+         response_model=list[ArchiveEntry])
+def archive_por_cwd(cwd: str, config_dir: str | None = None, cap: int = 12,
+                    provider: str = "claude"):
+    """Conversas retomaveis de UM cwd, do agente e da conta pedidos — o que o modal de sessao nova
+    lista embaixo do formulario. Path proprio (nao `/api/archive/{project}`) pra nao disputar a rota
+    com um nome de projeto. Pasta sem conversa nenhuma = lista vazia, nao 404: no modal isso e o
+    caso comum (pasta nova), nao erro. `cap` baixo porque aqui a lista e um atalho, nao o Arquivo.
+
+    `config_dir` so vale pro Claude — Pi, Kimi e Codex nao tem conta, e passa-lo os excluiria."""
+    if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
+        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
+    if provider != "claude" and provider not in archive_providers.PROVIDERS:
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
+    live = {os.path.realpath(s.jsonl) for s in registry.list() if s.jsonl}
+    try:
+        todas = list_conversations(sanitize_cwd(cwd), live, cap=cap * 4,
+                                   config_dir=config_dir if provider == "claude" else None)
+    except (ValueError, FileNotFoundError):
+        return []
+    return [e for e in todas if e.provider == provider][:cap]
 
 
 @app.get("/api/archive/{project}", dependencies=[Depends(require_auth)],
@@ -3446,9 +3479,25 @@ def archive_folder(project: str):
 
 @app.get("/api/archive/{project}/{session_id}/history",
          dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
-def archive_history(project: str, session_id: str):
+def archive_history(project: str, session_id: str, tail: int = 0, config_dir: str | None = None,
+                    provider: str = "claude"):
+    # `tail=N` = so as N ultimas mensagens, lidas pelo FIM do arquivo (a previa do modal de sessao
+    # nova). Sem ele, o historico inteiro, como sempre — e um transcript de 19MB carregado inteiro
+    # so pra mostrar cinco balões era o que essa via evita.
+    if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
+        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
+    if provider != "claude" and provider not in archive_providers.PROVIDERS:
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
     try:
-        p = archive_jsonl(project, session_id)
+        if tail > 0:
+            return tail_events(project, session_id, min(tail, 200), config_dir, provider)
+        p = archive_jsonl(project, session_id, config_dir, provider)
+        if provider != "claude":
+            # Fora do Claude nao ha fila duravel keyed por este arquivo: o transcript e a conversa
+            # inteira, e cada provider tem o parser dele.
+            return [ev for linha in p.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if (o := _json_dict(linha)) is not None
+                    for ev in archive_providers.parse_obj(provider, o)]
     except ValueError:
         raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
     except FileNotFoundError:
@@ -3478,6 +3527,12 @@ class ResumeArchivedBody(_StrictBody):
     # /proc pra descobrir o motor de entao (ver registry._engine_of); quem retoma escolhe de novo.
     # Sem escolha, volta na conta Anthropic (comportamento de hoje).
     engine: str | None = None
+    # A CONTA dona do transcript. Sem isto o resume nascia sempre na conta padrao, e um `claude
+    # --resume <uuid>` de outra conta morre na hora com "No conversation found with session ID".
+    config_dir: str | None = None
+    # Agente dono da conversa. Pi e Kimi retomam com o comando DELES (`pi --session-id`,
+    # `kimi --session`); Codex nao tem via de resume aqui e e recusado logo abaixo.
+    provider: str = "claude"
 
 
 @app.post("/api/archive/{project}/{session_id}/resume", dependencies=[Depends(require_auth)],
@@ -3489,8 +3544,28 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
     # CreateSessionSheet do front; colisao suffixa -2/-3... (mesmo esquema, do lado do backend pq aqui
     # nao ha form pro usuario escolher nome).
     from app import tmux
+    if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
+        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
+    # Codex nao retoma por aqui: a conversa dele vive num app-server (thread + rollout), nao num
+    # `--resume` de linha de comando. Recusa explicita — sem ela o create cairia no ramo do Claude e
+    # subiria o agente ERRADO com um uuid que ele nao conhece.
+    if body.provider == "codex":
+        raise HTTPException(409, detail=erro("erro_resume_codex", "codex resume nao suportado"))
+    if body.provider != "claude" and body.provider not in archive_providers.PROVIDERS:
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
+    # Conta omitida (link antigo, chamador que nao sabe): descobre no disco. Deixar None aqui subia
+    # o pane na conta do backend e o `--resume` morria com "No conversation found with session ID".
+    # Conversa que nao existe nao vira erro AQUI: o archive_cwd logo abaixo faz a mesma busca e e
+    # ele quem devolve o 400/404 -- duplicar a recusa so daria duas mensagens pro mesmo caso.
+    # So o Claude tem conta: Pi e Kimi guardam transcript fora do config dir.
+    cfg = body.config_dir
+    if cfg is None and body.provider == "claude":
+        try:
+            cfg = conta_de(project, session_id)
+        except (ValueError, FileNotFoundError):
+            cfg = None
     try:
-        cwd = archive_cwd(project, session_id)
+        cwd = archive_cwd(project, session_id, cfg, body.provider)
     except ValueError:
         raise HTTPException(400, detail=erro("erro_path_invalido", "invalid path"))
     except FileNotFoundError:
@@ -3505,7 +3580,8 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
         name = f"{base}-{i}"
         i += 1
     try:
-        return registry.create(name, cwd, resume_session_id=session_id, engine=body.engine)
+        return registry.create(name, cwd, config_dir=cfg, provider=body.provider,
+                               resume_session_id=session_id, engine=body.engine)
     except ValueError as e:
         raise HTTPException(409, str(e))
 

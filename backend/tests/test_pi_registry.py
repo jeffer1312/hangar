@@ -429,17 +429,19 @@ def test_create_claude_still_seeds_the_same_path(tmp_path, monkeypatch):
     pt.assert_called_once_with("/home/u/p", None)
 
 
-def test_create_pi_refuses_resume_instead_of_spawning_claude(tmp_path, monkeypatch):
-    # O branch de resume monta `claude --resume <uuid>` LITERAL: aceitar aqui subiria um CLAUDE
-    # lendo o transcript de outro agente, com cara de sessao Pi.
+def test_create_pi_resume_sobe_pi_e_nao_claude(tmp_path, monkeypatch):
+    # O que este teste protege NAO mudou: uma sessao Pi retomada nunca pode subir `claude --resume`,
+    # que leria o transcript de outro agente com cara de sessao Pi. O que mudou e a saida: antes a
+    # unica defesa era recusar; hoje o Pi tem via propria (`pi --session-id <id>` retoma quando o id
+    # ja existe), entao o certo e SUBIR O PI. A recusa antiga tornava esse branch inalcancavel.
     from unittest.mock import patch
     reg = registry.SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "has_session", return_value=False), \
          patch.object(registry.tmux, "new_session", return_value=True) as ns:
-        with pytest.raises(ValueError) as exc:
-            reg.create("s-pi", "/home/u/p", provider="pi", resume_session_id=_UUID_PI)
-    assert "resume" in str(exc.value)
-    ns.assert_not_called()
+        reg.create("s-pi", "/home/u/p", provider="pi", resume_session_id=_UUID_PI)
+    cmd = ns.call_args[0][2]
+    assert cmd == f"pi --session-id {_UUID_PI}"
+    assert "claude" not in cmd
 
 
 def test_create_pi_refuses_an_engine(tmp_path, monkeypatch):

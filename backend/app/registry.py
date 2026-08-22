@@ -1283,14 +1283,10 @@ class SessionRegistry:
         # recusam alto em vez de "quase funcionar":
         #  - motor: o `cp-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
         #    a sessao subiria na conta do proprio pi PARECENDO estar no motor pedido.
-        #  - resume: o branch abaixo monta `claude --resume <uuid>` LITERAL -> aceitar aqui spawnaria
-        #    um Claude com cara de sessao Pi, lendo o transcript do agente errado. O equivalente no Pi
-        #    seria `pi --session <id>` (o wrapper ja respeita esse flag); enquanto nao existir, 400.
-        if provider == "pi":
-            if engine:
-                raise ValueError("motor so vale para provider claude")
-            if resume_session_id is not None:
-                raise ValueError("resume de sessao pi ainda nao e suportado")
+        # Resume do Pi passou a existir (branch `elif provider == "pi"` la embaixo, com
+        # `pi --session-id <id>`); a recusa que morava aqui tornava aquele branch INALCANCAVEL.
+        if provider == "pi" and engine:
+            raise ValueError("motor so vale para provider claude")
         # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (cp-engine so exporta
         # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
         if provider == "kimi" and engine:
@@ -1318,6 +1314,17 @@ class SessionRegistry:
                 # shlex.join e byte por byte o f-string de antes.
                 cmd = shlex.join(["kimi", "--session", sid]
                                  + model_args.args_de(provider, model, effort))
+            elif provider == "pi":
+                # `pi --session-id <id>` RETOMA quando o id ja existe ("creating it if missing", no
+                # --help do 0.82.1) -> o comando do resume e o mesmo do spawn, so com o id antigo.
+                # Sem este ramo o Pi caia no `claude --resume` abaixo e o pane subia o agente errado.
+                try:
+                    uuid.UUID(resume_session_id)
+                except (ValueError, AttributeError, TypeError):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                from app.adapters import get_adapter
+                cmd = shlex.join(get_adapter("pi").spawn_command(cwd, sid, model, effort, None))
             else:
                 try:
                     uuid.UUID(resume_session_id)

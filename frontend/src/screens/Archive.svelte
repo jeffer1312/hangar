@@ -10,6 +10,8 @@ import { intlLocale } from '../lib/locale';
   } from '../lib/api';
   import type { ChatEvent } from '../lib/types';
   import { selectServer, listServers, getActiveId, serverColor } from '../lib/auth';
+  import ProviderGlyph from '../components/icons/ProviderGlyph.svelte';
+  import { providerName } from '../lib/format';
 
   interface Props {
     onBack: () => void;
@@ -75,7 +77,8 @@ import { intlLocale } from '../lib/locale';
       load();
       openConversation({
         project: deepLink.project, session_id: deepLink.sessionId,
-        cwd: null, mtime: 0, preview: '', live: false,
+        cwd: null, mtime: 0, preview: '', ultima: '', live: false,
+        config_dir: null, conta: '', provider: 'claude',
       });
     } else {
       load();
@@ -109,7 +112,7 @@ import { intlLocale } from '../lib/locale';
       .then((r) => { if (seq === motorSeq) motores = r.motores; })
       .catch(() => { if (seq === motorSeq) motores = {}; });
     try {
-      events = await getArchiveHistory(e.project, e.session_id);
+      events = await getArchiveHistory(e.project, e.session_id, undefined, e.config_dir, e.provider);
     } catch {
       error = m.arquivo_conversa_erro();
       selected = null;
@@ -126,7 +129,10 @@ import { intlLocale } from '../lib/locale';
     resuming = true;
     resumeError = '';
     try {
-      const info = await resumeArchivedConversation(selected.project, selected.session_id, engine || null);
+      // A conta vai junto: `claude --resume` na conta errada morre com "No conversation found".
+      const info = await resumeArchivedConversation(selected.project, selected.session_id,
+                                                    engine || null, selected.config_dir,
+                                                    selected.provider);
       if (deepLink) selectServer(deepLink.serverId);
       // Rota server-aware (#/chat/<server>/<nome>): homônimas em servidores diferentes.
       const sid = getActiveId();
@@ -155,9 +161,13 @@ import { intlLocale } from '../lib/locale';
 {#if selected}
   {@const sel = selected}
   <div class="archive-screen" style="--nav-h: 0px">
-    <NavBar title={sel.preview || sel.session_id.slice(0, 8)} showBack={true} onBack={() => (selected = null)} />
+    <!-- `preview` (1a msg) só existe no Claude; fora dele o titulo cairia no slice do id e virava
+         "session_" pra TODA conversa do Kimi. A ultima msg identifica melhor de qualquer forma. -->
+    <NavBar title={sel.preview || sel.ultima || sel.session_id.slice(0, 8)} showBack={true} onBack={() => (selected = null)} />
     <div class="resume-bar">
-      {#if Object.keys(motores).length}
+      <!-- Motor é do Claude: mandá-lo num resume de Pi/Kimi faria o cp-engine exportar chave de
+           outro provedor pra um CLI que nem lê essas variáveis. -->
+      {#if sel.provider === 'claude' && Object.keys(motores).length}
         <label class="engine-pick">
           <span class="engine-pick-label">{m.comum_motor()}</span>
           <Select ariaLabel={m.comum_motor()} value={engine}
@@ -170,9 +180,16 @@ import { intlLocale } from '../lib/locale';
              ler) -- so o nome do modelo fica gravado no transcript. Escolha e sua, nao memoria. -->
         <p class="engine-pick-hint">{m.arquivo_motor_escolha()}</p>
       {/if}
-      <button class="resume-btn" onclick={resumeConversation} disabled={resuming}>
+      <!-- Codex nao retoma por aqui (o backend recusa com 409): a conversa dele vive no app-server.
+           Ler continua funcionando — o botao e que nao pode prometer o que nao acontece. -->
+      <button class="resume-btn" onclick={resumeConversation}
+              disabled={resuming || sel.provider === 'codex'}
+              title={sel.provider === 'codex' ? m.erro_resume_codex() : ''}>
         {resuming ? m.arquivo_retomando() : m.sessao_retomar()}
       </button>
+      {#if sel.provider === 'codex'}
+        <p class="engine-pick-hint">{m.erro_resume_codex()}</p>
+      {/if}
       {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
     </div>
     {#if loadingChat}
@@ -204,10 +221,19 @@ import { intlLocale } from '../lib/locale';
         {#each entries as e (e.session_id)}
           <button class="row" onclick={() => openConversation(e)}>
             <span class="row-main">
-              <span class="row-preview">{e.preview || m.arquivo_sem_mensagens()}</span>
+              <!-- A ULTIMA msg identifica a conversa; a 1a nao (todas comecam parecidas). -->
+              <span class="row-preview">{e.ultima || e.preview || m.arquivo_sem_mensagens()}</span>
               <span class="row-meta">
-                {fmtDate(e.mtime)}{#if e.live}<b class="live">{m.arquivo_ativa()}</b>{/if}
+                <!-- O separador vai DENTRO da expressao: um " · " solto no template perde o
+                     espaco da frente no build e vira "10:11· Conta". -->
+                {fmtDate(e.mtime)}{#if e.conta}{` · ${e.conta}`}{/if}{#if e.live}<b class="live">{m.arquivo_ativa()}</b>{/if}
               </span>
+              {#if e.provider && e.provider !== 'claude'}
+                <!-- Só fora do Claude: ele é a maioria das linhas, e um selo em todas seria ruído. -->
+                <span class="prov" title={providerName(e.provider)}>
+                  <ProviderGlyph provider={e.provider} size={11} />{providerName(e.provider)}
+                </span>
+              {/if}
             </span>
             <span class="chev" aria-hidden="true">›</span>
           </button>
@@ -351,6 +377,18 @@ import { intlLocale } from '../lib/locale';
   }
   .row-meta { font-size: var(--text-xs); color: var(--text-muted); }
   .live { color: var(--success); }
+  .prov {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    align-self: flex-start;
+    margin-top: 2px;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+  }
   .chev { color: var(--text-muted); flex-shrink: 0; }
 
   .resume-bar {
