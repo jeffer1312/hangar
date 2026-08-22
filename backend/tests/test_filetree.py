@@ -237,6 +237,8 @@ def test_git_interno_fora_do_alcance(tmp_path):
     assert filetree.read_file(d, ".github/x.yml")["text"] == "on: push\n"
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="FIFO e socket unix nao existem no Windows: nao ha o que abrir")
 def test_nao_trava_em_fifo_nem_estoura_em_socket(tmp_path):
     """FIFO sem escritor bloqueia no open() e come uma thread do pool pra sempre."""
     import os, socket
@@ -346,6 +348,11 @@ def test_rota_symlink_que_atravessa_cwd_recusado(monkeypatch, tmp_path, cliente)
     assert r.status_code == 400 and r.json()["detail"]["code"] == "erro_git_diff"
 
 
+# O `*` no NOME so existe no POSIX: no Windows ele e reservado pela propria API de arquivos
+# (`OSError 22` no open), entao aqui nao ha objeto de teste. O ramo coberto — `--literal-pathspecs`
+# no `git_ops` — nao e POSIX-only, e por isso o gemeo abaixo, com `[`, roda nos dois sistemas.
+@pytest.mark.skipif(os.name != "posix",
+                    reason="`*` e nome invalido no Windows; o gemeo com `[` cobre o mesmo ramo la")
 def test_rota_path_diff_trata_asterisco_como_literal(monkeypatch, tmp_path, cliente):
     """Arquivo real chamado `*`: sem --literal-pathspecs o diff devolvia a soma de TODOS
     os arquivos modificados (medido no parecer). O diff tem que ser so do arquivo `*`."""
@@ -413,6 +420,31 @@ def test_rota_pasta_comum_plausivel_3_marcadores(monkeypatch, tmp_path, cliente)
     assert any(e["name"] == "README.txt" for e in r.json()["entries"])
 
 
+def test_rota_path_diff_trata_colchete_como_literal(monkeypatch, tmp_path, cliente):
+    """Gemeo PORTATIL do caso do `*`, e o unico que cobre `--literal-pathspecs` no Windows.
+
+    `[` e `]` sao nomes validos nos dois sistemas, e o git os le como classe de caracteres: sem
+    `--literal-pathspecs`, a pathspec `a[b].txt` casa o IRMAO `ab.txt` e nao o arquivo literal —
+    medido aqui, o diff voltava com o `+IRMAO` junto. Com a opcao, so o arquivo pedido aparece.
+    """
+    from app import api, git_ops
+    d = _repo(tmp_path)
+    _escrever(tmp_path / "a[b].txt", "colchete\n")
+    _escrever(tmp_path / "ab.txt", "irmao\n")
+    git_ops._run(d, "add", ".")
+    git_ops._run(d, "commit", "-q", "-m", "base")
+    _escrever(tmp_path / "a[b].txt", "colchete\nCOLCHETE\n")
+    _escrever(tmp_path / "ab.txt", "irmao\nIRMAO\n")
+    monkeypatch.setattr(api, "_session_cwd", lambda name: d)
+    r = cliente.post("/api/sessions/s/git/path-diff",
+                     json={"path": "a[b].txt", "escopo": "nao_commitado"},
+                     headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    diff = r.json()["diff"]
+    assert "+COLCHETE" in diff, "o diff do arquivo pedido sumiu"
+    assert "+IRMAO" not in diff, "a pathspec foi interpretada como classe de caracteres"
+
+
 def test_rota_busca_fora_de_repo_continua_409(monkeypatch, tmp_path, cliente):
     """A busca NAO muda com a regra da pasta comum: fora de repo ela continua exigindo
     git e explicando com 409 erro_arq_nao_e_repo_git."""
@@ -439,6 +471,8 @@ def test_rota_list_falha_do_git_vira_envelope(monkeypatch, tmp_path, cliente):
     assert r.json()["detail"]["code"] == "erro_arq_lista_falhou"
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="chmod(0) e no-op no Windows: quem nega e a ACL, a pasta segue legivel")
 def test_rota_list_pasta_sem_permissao_vira_envelope(monkeypatch, tmp_path, cliente):
     from app import api
     d = _repo(tmp_path)
@@ -705,6 +739,8 @@ def test_write_nao_escapa_da_raiz_nem_toca_no_git(tmp_path):
     assert (raiz / ".git" / "config").read_text(encoding="utf-8") == "[core]\n"
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="nao ha bit de execucao no Windows: quem decide executar e a extensao")
 def test_write_preserva_o_bit_de_execucao(tmp_path):
     import os
     alvo = tmp_path / "s.sh"
