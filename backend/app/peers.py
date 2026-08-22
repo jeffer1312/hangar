@@ -18,8 +18,13 @@ from pathlib import Path
 
 try:
     import fcntl
-except ImportError:      # Windows: sem flock, a trava vira no-op (_salvar) — mesmo padrão de contas.py
+except ImportError:      # Windows: não existe flock; a trava vai por msvcrt.locking (ver _mutar)
     fcntl = None
+
+try:
+    import msvcrt
+except ImportError:      # Linux/macOS: só o ramo Windows da trava usa
+    msvcrt = None
 
 _log = logging.getLogger("claude_pocket")
 
@@ -111,29 +116,69 @@ def _mutar(fn):
     entrelaçados das duas — o acidente que este formato existe pra impedir.
     """
     lock_path = _PEERS_FILE.with_name(_PEERS_FILE.name + ".lock")
-    with open(lock_path, "w", encoding="utf-8") as lock:
-        if fcntl is not None:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        dados = _ler_estrito()
-        resultado = fn(dados)
-        # Órfão de processo morto entre o write e o replace (kill -9/OOM não roda except): contém
-        # a malha inteira de tokens — não pode apodrecer no disco esperando a próxima gravação.
-        for stale in _PEERS_FILE.parent.glob(_PEERS_FILE.name + ".*.tmp"):
-            stale.unlink(missing_ok=True)
-        fd, tmp_name = tempfile.mkstemp(
-            dir=str(_PEERS_FILE.parent),
-            prefix=f"{_PEERS_FILE.name}.{os.getpid()}.",
-            suffix=".tmp")
-        tmp = Path(tmp_name)
+    # "a+" e não "w": o `w` trunca, e no Windows a trava é de REGIÃO do arquivo (msvcrt.locking
+    # tranca N bytes a partir da posição atual) — truncar o arquivo de lock debaixo de outro
+    # processo que já o tem travado é pedir confusão. No POSIX o flock é do descritor e o modo não
+    # muda nada; "a+" também cria o arquivo se faltar, que era o motivo do `w`.
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        _travar(lock)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(dados, fh, ensure_ascii=False, indent=2)
-                fh.write("\n")
-            os.chmod(tmp, 0o600)          # mkstemp já nasce 0600; explícito porque é contrato
-            os.replace(tmp, _PEERS_FILE)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+            return _mutar_travado(fn)
+        finally:
+            _destravar(lock)
+
+
+def _travar(lock) -> None:
+    """Trava exclusiva no sidecar. No Windows ela era NO-OP — e o arquivo travado é o peers.json,
+    que guarda os TOKENS da malha inteira. Sem trava, `_mutar` é read-modify-write do arquivo
+    todo: duas gravações concorrentes (app e CLI/painel) leem o mesmo estado e a última apaga a
+    mudança da outra, calada. Medido nesta VM: o caso de concorrência falhava com KeyError no peer
+    que sumiu. O `msvcrt.locking` é o mesmo mecanismo que `contas.py` já usa desde sempre — só o
+    peers.py tinha ficado pra trás.
+
+    Sem nenhum dos dois (plataforma exótica), degrada pro comportamento antigo em vez de estourar.
+    """
+    if fcntl is not None:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    elif msvcrt is not None:
+        lock.seek(0)
+        # LK_LOCK: tenta por ~10s antes de desistir (o LK_NBLCK falharia na hora). A alternativa
+        # seria propagar OSError pro caller e perder a gravação por causa de meio segundo de
+        # disputa.
+        msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+
+
+def _destravar(lock) -> None:
+    if fcntl is not None:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    elif msvcrt is not None:
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _mutar_travado(fn):
+    """O corpo do `_mutar`, já sob a trava. Separado só para o unlock caber num `finally` sem
+    aninhar o resto do bloco."""
+    dados = _ler_estrito()
+    resultado = fn(dados)
+    # Órfão de processo morto entre o write e o replace (kill -9/OOM não roda except): contém
+    # a malha inteira de tokens — não pode apodrecer no disco esperando a próxima gravação.
+    for stale in _PEERS_FILE.parent.glob(_PEERS_FILE.name + ".*.tmp"):
+        stale.unlink(missing_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(_PEERS_FILE.parent),
+        prefix=f"{_PEERS_FILE.name}.{os.getpid()}.",
+        suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(dados, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        os.chmod(tmp, 0o600)          # mkstemp já nasce 0600; explícito porque é contrato
+        os.replace(tmp, _PEERS_FILE)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     # Arquivo que JÁ existia com modo frouxo volta a 0600 na gravação (o replace carrega o modo
     # do tmp, que é 0600; este chmod é a rede se algo alargar o modo entre replace e aqui).
     try:
