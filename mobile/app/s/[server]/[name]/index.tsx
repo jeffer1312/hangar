@@ -56,6 +56,8 @@ export default function ChatScreen() {
   const events = chat.use((s) => s.events);
   const stateEvent = chat.use((s) => s.stateEvent);
   const preview = chat.use((s) => s.preview);
+  const previewMd = chat.use((s) => s.previewMd);
+  const previewFull = chat.use((s) => s.previewFull);
   const statusLine = chat.use((s) => s.statusLine);
   const loading = chat.use((s) => s.loading);
   const error = chat.use((s) => s.error);
@@ -104,6 +106,8 @@ export default function ChatScreen() {
             <MessageList
               events={events}
               preview={preview}
+              previewMd={previewMd}
+              previewFull={previewFull}
               statusLine={statusLine}
               olderFailed={olderFailed}
               onLoadOlder={chat.loadOlder}

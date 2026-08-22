@@ -22,6 +22,8 @@ import * as m from '../paraglide/messages';
 interface Props {
   events: ChatEvent[];
   preview: string;
+  previewMd?: boolean; // prévia do agente = markdown (default true = comportamento antigo)
+  previewFull?: boolean;
   statusLine: string | null;
   olderFailed: '' | 'failed' | 'unjoinable';
   onLoadOlder: () => void;
@@ -40,6 +42,8 @@ function visivel(ev: ChatEvent): boolean {
 export function MessageList({
   events,
   preview,
+  previewMd = true,
+  previewFull = false,
   statusLine,
   olderFailed,
   onLoadOlder,
@@ -101,7 +105,7 @@ export function MessageList({
               <UserBubble text={p.text} />
             </View>
           ))}
-          {preview ? <PreviewBubble text={preview} /> : null}
+          {preview ? <PreviewBubble text={preview} md={previewMd} full={previewFull} /> : null}
         </View>
       }
       accessibilityLabel={m.msg_aria_mensagens()}
