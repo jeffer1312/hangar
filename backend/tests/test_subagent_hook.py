@@ -6,7 +6,6 @@ PRÓPRIO do subagente (`<projeto>/<sessao>/subagents/agent-<id>.jsonl`), não pr
 """
 import importlib.util
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -156,20 +155,22 @@ def test_chave_e_o_stem_do_transcript_nao_o_session_id(casa, monkeypatch):
     assert nomes == ["55ccea64-756b-4883-813e-de7679e19973.json"]
 
 
-@pytest.mark.skipif(os.name != "posix",
-                    reason="sem fcntl no Windows a trava e no-op (subagent_hook.py:111): a corrida "
-                           "abaixo REALMENTE perde atualizacao — o teste falharia por dizer a verdade")
 def test_dois_hooks_ao_mesmo_tempo_nao_perdem_atualizacao(casa, monkeypatch):
     """Dois subagentes de um mesmo lote terminam quase juntos: são dois PROCESSOS de hook fazendo
     ler→mudar→gravar no mesmo arquivo. Sem a trava, o segundo grava por cima da alteração do
     primeiro e um agente some da lista — em silêncio, porque tudo aqui é fail-soft.
 
-    No Windows não há `fcntl` e `_trava` devolve None de propósito, então a proteção que este caso
-    exercita não existe lá. É lacuna conhecida, não teste ruim — o equivalente é `msvcrt.locking`,
-    que `app/contas.py:149` já usa.
+    Este caso já foi `skipif(os.name != "posix")` com a razão escrita: no Windows `_trava` devolvia
+    None e a corrida abaixo REALMENTE perdia atualização, então o teste falharia por dizer a
+    verdade. Era lacuna conhecida, e é ela que fechou (22/08/2026) — a trava lá é `msvcrt.locking`,
+    o mesmo mecanismo de `contas.py`/`peers.py`. Conferido contra o código velho: com o `_trava`
+    de antes este caso falha no Windows; com o de hoje passa nos dois. Um teste de trava que
+    ninguém viu falhar não prova nada.
 
     O teste roda em THREADS (o hook é um processo, mas a trava é de arquivo e a corrida a proteger
     é a mesma) com uma pausa injetada entre a leitura e a escrita, que é a janela do defeito.
+    Threads bastam nos dois sistemas porque `flock` é por descrição de arquivo aberto e
+    `msvcrt.locking` é por handle: um segundo handle do MESMO processo é barrado igual.
     """
     import threading, time as _t
     original = hook._gravar
@@ -187,9 +188,9 @@ def test_dois_hooks_ao_mesmo_tempo_nao_perdem_atualizacao(casa, monkeypatch):
         try:
             hook._atualizar(alvo, p, agent_id)
         finally:
-            if fh is not None:
-                hook.fcntl.flock(fh.fileno(), hook.fcntl.LOCK_UN)
-                fh.close()
+            # Pelo helper do próprio hook, não por `fcntl` direto: quem destrava tem que usar o
+            # mecanismo com que travou, e o teste não é o lugar de decidir qual dos dois é.
+            hook._destravar(fh)
 
     ts = [threading.Thread(target=roda, args=(f"ag{i}",)) for i in range(4)]
     for t in ts:

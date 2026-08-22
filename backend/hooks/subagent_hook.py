@@ -49,8 +49,13 @@ from pathlib import Path
 
 try:                    # POSIX: trava de arquivo de verdade
     import fcntl
-except ImportError:     # Windows: sem flock; o app já roda lá com outras limitações
+except ImportError:     # Windows: não existe flock; a trava vai por msvcrt.locking (ver _trava)
     fcntl = None
+
+try:                    # Windows: mesmo mecanismo que contas.py e peers.py já usam
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 _SUBDIR = ".claude-pocket-subagents"
 # Teto de itens guardados por sessão. 60 cobre com folga o pior caso visto (um lote de workflow) sem
@@ -106,14 +111,47 @@ def _gravar(alvo: Path, agentes: list[dict]) -> None:
 def _trava(alvo: Path):
     """Trava exclusiva sobre a sequência ler→mudar→gravar. Arquivo de trava SEPARADO do alvo: o
     `os.replace` troca o inode do alvo, e uma trava tomada sobre o inode antigo não protegeria
-    ninguém do processo seguinte. Sem fcntl (Windows) devolve None e o hook segue sem trava —
-    perder uma atualização de painel lá é melhor que não publicar nada."""
-    if fcntl is None:
+    ninguém do processo seguinte.
+
+    No Windows ela era NO-OP, e o item 4 do cabeçalho descreve exatamente o que isso custa: dois
+    hooks concorrentes leem a MESMA lista e o segundo grava por cima do primeiro — agente preso em
+    "rodando" pra sempre, ou sumido da lista, em silêncio. E concorrência aqui é o caso NORMAL:
+    subagentes de um mesmo lote terminam quase juntos. O `msvcrt.locking` é o mesmo mecanismo que
+    `contas.py` e `peers.py` usam; este hook não importa nenhum dos dois de propósito (ele roda
+    standalone, pelo python do sistema, sem o pacote `app` no path), então a implementação é
+    repetida aqui — é a única cópia justificada das três.
+
+    Sem nenhum dos dois (plataforma exótica) devolve None e o hook segue sem trava: perder uma
+    atualização de painel é melhor que não publicar nada."""
+    if fcntl is None and msvcrt is None:
         return None
     alvo.parent.mkdir(parents=True, exist_ok=True)
     fh = open(alvo.with_suffix(".lock"), "a+")
-    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    if fcntl is not None:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    else:
+        fh.seek(0)
+        # LK_LOCK espera ~10s antes de desistir; LK_NBLCK falharia na hora e perderia a gravação
+        # por causa de meio segundo de disputa.
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
     return fh
+
+
+def _destravar(fh) -> None:
+    """Solta a trava e fecha o arquivo. Aceita o None que `_trava` devolve na plataforma sem trava.
+
+    Existe como função por um motivo prático: quem destrava tem que saber por qual dos dois
+    mecanismos travou, e essa decisão não pode ficar espalhada — com ela repetida no `main` e no
+    teste, o dia em que o ramo do Windows entrou o teste continuou chamando `fcntl` direto e
+    estourava AttributeError lá, num caso que existe justamente pra exercitar a trava."""
+    if fh is None:
+        return
+    if fcntl is not None:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    else:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    fh.close()
 
 
 def main() -> None:
@@ -135,9 +173,7 @@ def main() -> None:
     try:
         _atualizar(alvo, payload, agente_id)
     finally:
-        if fh is not None:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-            fh.close()
+        _destravar(fh)
 
 
 def _atualizar(alvo: Path, payload: dict, agente_id: str) -> None:
