@@ -44,7 +44,7 @@ export default function ChatScreen() {
           else router.replace('/');
         }}
       />
-      {/* KeyboardAvoidingView dá inset à lista pra não ficar sob o Composer quando o teclado sobe; Composer já sobe via KeyboardStickyView */}
+      {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}
       <KeyboardAvoidingView behavior="padding" style={styles.body}>
         <View style={styles.inner}>
           {loading && !error ? (
@@ -67,8 +67,8 @@ export default function ChatScreen() {
             />
           )}
         </View>
+        <Composer serverId={serverId} name={name} />
       </KeyboardAvoidingView>
-      <Composer serverId={serverId} name={name} />
     </Screen>
   );
 }

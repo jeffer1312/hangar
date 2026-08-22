@@ -1,6 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
-import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadFile } from '@hangar/core';
@@ -95,8 +94,7 @@ export function Composer({ serverId, name }: Props) {
   }, [name, text]);
 
   return (
-    <KeyboardStickyView style={styles.sticky} offset={{ closed: 0, opened: 0 }}>
-      <Glass variant="chrome" style={styles.glass}>
+    <Glass variant="chrome" style={styles.glass}>
         {/* chip de fila: pending local + queued-* do SSE (contado no store como pending até chegar o real) */}
         {filaCount > 0 ? (
           <View style={styles.filaChip}>
@@ -151,15 +149,11 @@ export function Composer({ serverId, name }: Props) {
         {state === 'working' && filaCount === 0 ? (
           <Text style={[styles.hint, { color: theme.tokens.text.muted }]}>{m.composer_sessao_trabalhando()}</Text>
         ) : null}
-      </Glass>
-    </KeyboardStickyView>
+    </Glass>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  sticky: {
-    // KeyboardStickyView precisa de style externo; Glass já tem borda
-  },
   glass: {
     marginHorizontal: theme.base.space[2],
     marginBottom: theme.base.space[2],
