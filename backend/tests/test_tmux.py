@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 from app import tmux
 
+from tmux_teste import matar_sessao
+
 
 @pytest.fixture(autouse=True)
 def _isola_o_cache_do_scope():
@@ -139,8 +141,7 @@ def test_has_session_is_exact_against_real_tmux():
         # kill-SESSION (alvo exato), nunca kill-server: um `-L` esquecido num kill-server derruba o
         # servidor tmux DEFAULT e com ele todas as sessoes do usuario. Matar a unica sessao ja encerra
         # este servidor sozinho, e um socket orfao vazio e inofensivo — nao vale o risco do atalho.
-        subprocess.run(["tmux", "-L", sock, "kill-session", "-t", f"={base}-2"],
-                       capture_output=True, text=True)
+        matar_sessao(f"{base}-2", sock)
 
 
 def test_pane_target_uses_exact_session_form():
