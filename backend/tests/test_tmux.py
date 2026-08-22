@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import uuid
@@ -8,6 +9,29 @@ import pytest
 from types import SimpleNamespace
 
 from app import tmux
+
+
+@pytest.fixture(autouse=True)
+def _isola_o_cache_do_scope():
+    """`tmux._scope_usavel` e cache de MODULO, e `_scope_probe` o grava com `global`.
+
+    Varios casos deste arquivo trocam so o `RUN` e chamam algo que passa pelo `_scope_prefix()`.
+    A sonda entao roda contra o MOCK, grava True no cache — e o `patch.object(tmux, "RUN", ...)`
+    devolve o RUN de verdade no fim, mas NAO desfaz a gravacao. Do teste seguinte em diante, quem
+    fala com o tmux de verdade herda um prefixo `systemd-run` decidido por uma mentira.
+
+    Foi o que derrubava o `test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane` quando o
+    arquivo rodava inteiro (sozinho ele passava): o `new_hidden_shell` real ia embrulhado em
+    systemd-run, falhava, e `alvo` vinha None. Na suite completa isso ficou escondido por acidente
+    ate 21/08/2026, quando outra correcao tirou o andaime que zerava o cache sem querer.
+
+    Sem `monkeypatch` de proposito: pedir fixture dentro de fixture autouse muda a ordem de
+    setup/teardown de todo teste — e foi exatamente essa a armadilha do conftest (ver o comentario
+    de la). Guardar e repor na mao nao mexe em ordem nenhuma.
+    """
+    anterior = tmux._scope_usavel
+    yield
+    tmux._scope_usavel = anterior
 
 
 def test_list_sessions_parses_output():
@@ -74,6 +98,7 @@ def test_send_keys_named_key():
     assert run.call_args[0][0] == ["tmux", "send-keys", "-t", "=cc:", "Escape"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="no Windows o Enter vai como tecla nomeada, nao como `-l -- \r` (tmux.py ramifica)")
 def test_send_keys_enter_vira_cr_cru():
     # Enter NUNCA como nome de tecla: com extended-keys on no tmux (Shift+Enter do Pi), o "Enter"
     # nomeado sai no protocolo estendido e o composer do Claude Code engole o submit (regressão
@@ -187,15 +212,20 @@ def test_new_session_sempre_manda_config_dir(monkeypatch, tmp_path):
     captured = {}
     with patch.object(tmux, "RUN", lambda args, **k: (captured.update(args=args) or _CP())):
         tmux.new_session("s", "/tmp", "claude --session-id x")
-    assert f"CLAUDE_CONFIG_DIR={tmp_path}/.claude" in captured["args"]
+    # `tmp_path / ".claude"` e nao um f-string com `/`: o tmux.py monta o valor com
+    # `str(Path.home() / ".claude")`, que no Windows sai com `\`. No Linux o resultado e
+    # identico ao de antes — o caso continua valendo nos dois sistemas em vez de virar skip.
+    assert f"CLAUDE_CONFIG_DIR={tmp_path / '.claude'}" in captured["args"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sem olhar o env")
 def test_scope_prefix_empty_without_runtime_dir(monkeypatch):
     # Sem XDG_RUNTIME_DIR (host nao-systemd) -> spawn direto, sem wrap.
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     assert tmux._scope_prefix() == []
 
 
+@pytest.mark.skipif(os.name != "posix", reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sempre")
 def test_scope_prefix_wraps_when_systemd_available(monkeypatch):
     # Com runtime dir + systemd-run QUE FUNCIONA -> tmux nasce em scope proprio (fora do cgroup do
     # backend). O probe entrou depois deste teste: "systemd-run instalado" deixou de bastar, porque o
@@ -237,6 +267,7 @@ def test_new_session_skips_wayland_without_socket(monkeypatch, tmp_path):
     assert not any(str(a).startswith("WAYLAND_DISPLAY=") for a in captured["args"])
 
 
+@pytest.mark.skipif(os.name != "posix", reason="o `exec` e so do POSIX: no psmux o comando roda direto no ConPTY, sem shell no meio")
 def test_new_session_execs_command_so_claude_owns_tty(monkeypatch):
     # O comando vai prefixado com `exec`: o tmux roda via `fish -c`, e sem exec o fish ficaria como
     # dono do tty e o send-keys nao chegaria no claude. Com exec, o fish vira o claude.
@@ -291,6 +322,9 @@ def test_capture_pane_falha_de_tmux_e_logada(caplog):
     assert "session not found" in caplog.text
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] "
+                           "sem sondar — o caso passaria por vacuidade, nao por merito")
 def test_scope_prefix_sem_scope_quando_systemd_run_falha(monkeypatch):
     # systemd-run pode ESTAR instalado e ainda assim recusar criar scope transiente ("Failed to start
     # transient scope unit"). Sem este gate, TODA criacao de sessao morria com "falha ao criar sessao
@@ -302,6 +336,8 @@ def test_scope_prefix_sem_scope_quando_systemd_run_falha(monkeypatch):
     assert tmux._scope_prefix() == []
 
 
+@pytest.mark.skipif(os.name != "posix",
+                    reason="systemd-run so existe no POSIX; no Windows _scope_prefix devolve [] sempre")
 def test_scope_prefix_usa_scope_quando_systemd_run_funciona(monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/systemd-run")
@@ -310,6 +346,7 @@ def test_scope_prefix_usa_scope_quando_systemd_run_funciona(monkeypatch):
     assert tmux._scope_prefix() == ["systemd-run", "--user", "--scope", "--collect", "-q", "--"]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="a sonda do scope so roda no POSIX; no Windows _scope_prefix sai antes de sondar")
 def test_scope_probe_roda_uma_vez_so(monkeypatch):
     # O probe custa um fork; repetir a cada sessao seria desperdicio num estado que quase nunca muda.
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
@@ -705,7 +742,15 @@ def test_paste_text_falha_no_load_buffer_nao_cola_nada():
 # e matando a janela no fim. O valor afirmado é exatamente o passado, nunca o do servidor tmux.
 
 
+@pytest.mark.skipif(os.name != "posix", reason="le /proc/<pid>/environ, que so existe no Linux")
 def test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane():
+    # Cenario montado AQUI, nao herdado: zera a sonda do scope pra ela rodar contra o `RUN` de
+    # verdade. Este caso fala com o tmux REAL, entao herdar um `_scope_usavel` que outro teste
+    # gravou sob mock faria o `new_hidden_shell` sair embrulhado num `systemd-run` que este
+    # ambiente pode nao aceitar — e a sessao nem nasceria (`alvo is None`), sem que o assert
+    # abaixo tivesse qualquer relacao com o que ele existe pra provar. O fixture no topo do arquivo
+    # impede o vazamento entre casos; esta linha garante que ESTE nao depende de quem veio antes.
+    tmux._scope_usavel = None
     cfg = "/tmp/zz-config-dir-prova"
     alvo = tmux.new_hidden_shell(f"prova-cfg-{uuid.uuid4().hex[:6]}", "/tmp", config_dir=cfg)
     assert alvo is not None
