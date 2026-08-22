@@ -642,6 +642,30 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `/select`, `/answer` and friends answer **409**, and the phone UI must **show that text** — the
   refusal explains the way out ("close the panel"), and a `catch` that only logs turns a tap into
   nothing at all.
+- **O mesmo terminal no CELULAR** (`components/TerminalMobile.svelte`, aberto pelo botão Terminal do
+  `Chat` quando `desktop` é falso): mesmo PTY, mesmo socket, mesma montagem do xterm — o que é
+  compartilhado mora em `lib/xterm.ts` (`novoTerminal`/`temaDe`, onde vivem o fundo
+  `rgba(0, 0, 0, 0)` e a fonte lida por `getComputedStyle`), e não em uma segunda cópia. O
+  `TerminalMirror` (capture-pane a cada 450ms, texto cru) **continua existindo**: é o caminho quando
+  `somente_leitura.terminal_panel` é falso (Windows não tem `pty`), e o Chat escolhe pela config do
+  servidor — otimista em `true` enquanto ela não chega, senão o primeiro toque cairia no espelho por
+  causa de um fetch em voo. Três decisões medidas em 21/08/2026:
+  - **A entrada são BYTES CRUS, não os nomes de tecla do `/term-input`.** Do outro lado está o
+    `tmux attach`, que parseia a entrada como um terminal de verdade e reemite pro programa no modo
+    que ELE espera (inclusive cursor-keys em modo aplicação): `\x1b[A` é exatamente o que a seta
+    física manda. Texto e Enter saem no MESMO `send` (`valor + '\r'`) — dois envios abrem janela pra
+    a TUI processar a linha antes do texto inteiro chegar.
+  - **A fonte é o controle de COLUNAS, não só de legibilidade**, porque o tmux redimensiona a janela
+    pro tamanho deste cliente enquanto ele estiver anexado (medido: 68x53 com o celular aberto,
+    200x50 de volta ao fechar). Por isso trocar a fonte **não** remonta o terminal: muda
+    `options.fontSize`, refaz o `fit()` e manda `resize` — remontar fecharia o socket e repintaria a
+    TUI a cada toque em A+.
+  - **O `Origin` do WebSocket precisa ser declarado quando o front vem de OUTRA máquina**
+    (`CP_TERM_ORIGINS`, csv). O PWA carregado da VPS manda a Origin da VPS, que não é mesma-origem,
+    não é a `public_url` e não está no `peers.json` — o handshake voltava **403** e a tela dizia só
+    "desconectado". Vazio (o default) **não** pode virar "aceita qualquer um": o handshake também
+    autentica pelo cookie `cp_token`, então origem arbitrária seria qualquer site abrindo um
+    terminal na máquina.
 
 ## tmux + Claude Code truecolor
 

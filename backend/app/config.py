@@ -111,6 +111,13 @@ class Settings(BaseSettings):
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
     front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
+    # CP_TERM_ORIGINS: origens EXTRAS que o WebSocket do terminal aceita, separadas por virgula
+    # (ex: "https://pocket.exemplo.com"). Existe porque o front pode ser servido de UMA maquina e
+    # falar com ESTE backend por outro endereco: o PWA carregado da VPS manda Origin da VPS, que nao
+    # e nem a mesma-origem nem a public_url, e o terminal era recusado com 403 no celular. Nao ha
+    # default permissivo de proposito — o handshake tambem aceita o cookie `cp_token`, entao aceitar
+    # origem arbitraria seria deixar qualquer site abrir um terminal na maquina.
+    term_origins: str = ""
     # CP_SERVER_ID: id DESTA maquina no peers.json (mesmo que o cp-send usa). Vazio = pareamento
     # cross-server desligado; quando setado, vira o endereco de resposta 'srv::sessao' que o backend
     # remoto recebe pra registrar o vinculo reverso. Recado 1:1 cross-server segue so no cp-send.
