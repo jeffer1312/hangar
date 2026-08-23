@@ -29,6 +29,7 @@ interface Props {
   onLoadOlder: () => void;
   pending?: PendingMsg[];
   optionsSlot?: ReactNode;
+  sessionName?: string;
 }
 
 // O que vira bolha (espelho do MessageList.svelte): tool_result nunca direto — entra no
@@ -50,6 +51,7 @@ export function MessageList({
   onLoadOlder,
   pending = [],
   optionsSlot,
+  sessionName,
 }: Props) {
   const data = useMemo(() => events.filter(visivel), [events]);
   const tools = useMemo(() => pairTools(events), [events]);
@@ -60,13 +62,13 @@ export function MessageList({
       if (item.id.startsWith('queued-')) {
         return (
           <View style={styles.pending}>
-            <UserBubble text={item.text ?? ''} />
+            <UserBubble text={item.text ?? ''} sessionName={sessionName} />
           </View>
         );
       }
-      return <UserBubble text={item.text ?? ''} />;
+      return <UserBubble text={item.text ?? ''} sessionName={sessionName} />;
     }
-    if (item.kind === 'assistant_msg') return <AssistantBubble text={item.text ?? ''} />;
+    if (item.kind === 'assistant_msg') return <AssistantBubble text={item.text ?? ''} sessionName={sessionName} />;
     if (item.kind === 'tool_use') {
       const par = tools.get(item.tool_use_id ?? '');
       return <ToolBubble tool={toToolCall(item, par?.result)} />;
@@ -104,7 +106,7 @@ export function MessageList({
           ) : null}
           {pending.map((p) => (
             <View key={p.id} style={[styles.pending, p.solid && styles.pendingSolid]}>
-              <UserBubble text={p.text} />
+              <UserBubble text={p.text} sessionName={sessionName} />
             </View>
           ))}
           {optionsSlot ?? null}

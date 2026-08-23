@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import { Image } from 'expo-image';
 import { uploadFile, transcribeFile, steerSession, podeEnviarSozinho } from '@hangar/core';
 import type { MotivoFim } from '@hangar/core';
 import { Glass } from '../ui/Glass';
@@ -16,12 +18,21 @@ import { PermissionPill } from '../features/pills/PermissionPill';
 import { EstiloPill } from '../features/ditado/EstiloPill';
 import { useDitado } from '../features/ditado/useDitado';
 import { useDitadoEstiloStore } from '../features/ditado/ditadoEstiloStore';
+import { PillMenu } from '../features/pills/PillMenu';
 
 interface Props {
   serverId: string;
   name: string;
   draft?: string;
 }
+
+type PendingAttach = {
+  uri: string;
+  name: string;
+  mime: string;
+  kind: 'image' | 'file';
+  size?: number;
+};
 
 export function Composer({ serverId, name, draft }: Props) {
   const { theme } = useUnistyles();
@@ -53,6 +64,8 @@ export function Composer({ serverId, name, draft }: Props) {
   const [undo, setUndo] = useState<{ before: string; raw: string } | null>(null);
   const [failed, setFailed] = useState<{ file: File; motivo: MotivoFim } | null>(null);
   const [autoN, setAutoN] = useState<number | null>(null);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [pendingAttach, setPendingAttach] = useState<PendingAttach | null>(null);
   const inputRef = useRef<MultiTextInputHandle>(null);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -96,26 +109,60 @@ export function Composer({ serverId, name, draft }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
 
-  const canSend = text.trim().length > 0 && !sending && !uploading;
+  const canSend = (text.trim().length > 0 || pendingAttach !== null) && !sending && !uploading;
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || uploading) return;
+    const hasAttach = pendingAttach !== null;
+    if (!trimmed && !hasAttach) return;
+    if (sending || uploading) return;
     limparUndo();
     cancelarAuto();
     setSending(true);
     setError('');
+    // upload do anexo pendente antes de enviar
+    let finalText = trimmed;
+    let toClearAttach = false;
+    if (hasAttach && pendingAttach) {
+      setUploading(true);
+      try {
+        const cur = pendingAttach;
+        const blobRes = await fetch(cur.uri);
+        const blob = await blobRes.blob();
+        const file = new File([blob], cur.name, { type: cur.mime });
+        const { path } = await uploadFile(name, file);
+        const insert = `📎 ${cur.kind === 'image' ? m.board_imagem() : m.board_arquivo()}: ${path}`;
+        finalText = trimmed ? `${trimmed} — ${insert}` : insert;
+        toClearAttach = true;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : m.board_falha_upload());
+        setSending(false);
+        setUploading(false);
+        return;
+      } finally {
+        setUploading(false);
+      }
+    }
+    if (!finalText.trim()) {
+      setSending(false);
+      return;
+    }
     setText('');
+    if (toClearAttach) setPendingAttach(null);
     try {
-      await chat.send(trimmed);
+      await chat.send(finalText);
     } catch (e) {
       const msg = e instanceof Error ? e.message : m.composer_falha_envio();
       setError(msg);
-      setText((prev) => (prev.trim() ? prev : trimmed));
+      setText((prev) => (prev.trim() ? prev : finalText));
+      if (toClearAttach) {
+        // mantém o anexo pra tentar de novo? recoloca se falhou o envio mas upload já foi
+        // upload já ocorreu, path está em finalText; recolocar pending seria duplicar
+      }
     } finally {
       setSending(false);
     }
-  }, [text, sending, uploading, chat, limparUndo, cancelarAuto]);
+  }, [text, sending, uploading, chat, limparUndo, cancelarAuto, pendingAttach, name]);
 
   // auto-envio: contagem de 3s
   const iniciarAuto = useCallback(
@@ -128,7 +175,6 @@ export function Composer({ serverId, name, draft }: Props) {
         const rest = autoAlvoRef.current - Date.now();
         if (rest <= 0) {
           cancelarAuto();
-          // envia como handleSend faz (limpa otimista)
           const toSend = autoTextoRef.current.trim();
           if (!toSend) return;
           setText('');
@@ -268,6 +314,7 @@ export function Composer({ serverId, name, draft }: Props) {
   );
 
   const handlePickImage = useCallback(async () => {
+    setAttachMenuOpen(false);
     setError('');
     try {
       const res = await ImagePicker.launchImageLibraryAsync({
@@ -276,25 +323,54 @@ export function Composer({ serverId, name, draft }: Props) {
       });
       if (res.canceled || !res.assets?.[0]) return;
       const asset = res.assets[0];
-      setUploading(true);
-      const blobRes = await fetch(asset.uri);
-      const blob = await blobRes.blob();
-      const fileName = asset.fileName ?? 'imagem.jpg';
-      const mime = asset.mimeType ?? blob.type ?? 'image/jpeg';
-      const file = new File([blob], fileName, { type: mime });
-      const { path } = await uploadFile(name, file);
-      const insert = `📎 ${m.board_imagem()}: ${path}`;
-      const next = text.trim() ? `${text.trim()} — ${insert}` : insert;
-      setText(next);
-      requestAnimationFrame(() => {
-        inputRef.current?.setTextAndSelection(next, { start: next.length, end: next.length });
+      setPendingAttach({
+        uri: asset.uri,
+        name: asset.fileName ?? 'imagem.jpg',
+        mime: asset.mimeType ?? 'image/jpeg',
+        kind: 'image',
+        size: asset.fileSize,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : m.board_falha_upload());
-    } finally {
-      setUploading(false);
     }
-  }, [name, text]);
+  }, []);
+
+  const handlePickFile = useCallback(async () => {
+    setAttachMenuOpen(false);
+    setError('');
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
+      if (res.canceled) return;
+      const asset = (res as unknown as { assets: { uri: string; name: string; mimeType?: string; size?: number }[] }).assets?.[0];
+      if (!asset) {
+        const single = res as unknown as { uri: string; name: string; mimeType?: string; size?: number };
+        if (!single.uri) return;
+        const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(single.name ?? '');
+        setPendingAttach({
+          uri: single.uri,
+          name: single.name ?? 'arquivo',
+          mime: single.mimeType ?? 'application/octet-stream',
+          kind: isImg ? 'image' : 'file',
+          size: single.size,
+        });
+        return;
+      }
+      const isImg = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(asset.name ?? '');
+      setPendingAttach({
+        uri: asset.uri,
+        name: asset.name ?? 'arquivo',
+        mime: asset.mimeType ?? 'application/octet-stream',
+        kind: isImg ? 'image' : 'file',
+        size: asset.size,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : m.board_falha_upload());
+    }
+  }, []);
+
+  const handleRemoveAttach = useCallback(() => {
+    setPendingAttach(null);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -344,6 +420,34 @@ export function Composer({ serverId, name, draft }: Props) {
           ) : null}
         </ScrollView>
 
+        {pendingAttach ? (
+          <View style={[styles.attachPreview, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}>
+            {pendingAttach.kind === 'image' ? (
+              <Image source={{ uri: pendingAttach.uri }} style={styles.attachThumb} contentFit="cover" transition={150} />
+            ) : (
+              <View style={[styles.attachFileIcon, { backgroundColor: theme.tokens.bg.surface }]}>
+                <Text style={styles.attachFileIco}>📎</Text>
+              </View>
+            )}
+            <View style={styles.attachInfo}>
+              <Text style={[styles.attachName, { color: theme.tokens.text.primary }]} numberOfLines={1}>
+                {pendingAttach.name}
+              </Text>
+              {pendingAttach.size ? (
+                <Text style={[styles.attachMeta, { color: theme.tokens.text.muted }]}>{Math.round(pendingAttach.size / 1024)} KB</Text>
+              ) : null}
+            </View>
+            <Pressable
+              onPress={handleRemoveAttach}
+              style={[styles.attachRemove, { borderColor: theme.tokens.border.subtle }]}
+              accessibilityLabel={m.board_remover_anexo()}
+              accessibilityRole="button"
+            >
+              <Text style={[styles.attachRemoveTxt, { color: theme.tokens.text.secondary }]}>✕</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <View style={styles.row}>
           <View style={styles.inputWrap}>
             <MultiTextInput
@@ -375,7 +479,7 @@ export function Composer({ serverId, name, draft }: Props) {
           </Pressable>
 
           <Pressable
-            onPress={handlePickImage}
+            onPress={() => setAttachMenuOpen(true)}
             disabled={uploading || sending || gravando}
             style={[styles.iconBtn, (uploading || gravando) && styles.iconBtnDisabled]}
             accessibilityLabel={m.composer_anexar_arquivo()}
@@ -439,6 +543,17 @@ export function Composer({ serverId, name, draft }: Props) {
         {state === 'working' && filaCount === 0 && !gravando && !transcribing ? (
           <Text style={[styles.hint, { color: theme.tokens.text.muted }]}>{m.composer_sessao_trabalhando()}</Text>
         ) : null}
+
+        <PillMenu
+          open={attachMenuOpen}
+          onClose={() => setAttachMenuOpen(false)}
+          title={m.composer_anexar_arquivo()}
+          items={[{ label: m.board_imagem() }, { label: m.board_arquivo() }]}
+          onSelect={(it) => {
+            if (it.label === m.board_imagem()) void handlePickImage();
+            else void handlePickFile();
+          }}
+        />
     </Glass>
   );
 }
@@ -606,5 +721,52 @@ const styles = StyleSheet.create((theme) => ({
   hint: {
     fontSize: theme.base.text.xs,
     paddingHorizontal: theme.base.space[1],
+  },
+  attachPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[2],
+    padding: theme.base.space[2],
+    borderRadius: theme.base.radius.md,
+    borderWidth: 1,
+  },
+  attachThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.base.radius.sm,
+    backgroundColor: theme.tokens.bg.surface,
+  },
+  attachFileIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: theme.base.radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachFileIco: {
+    fontSize: 22,
+  },
+  attachInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  attachName: {
+    fontSize: theme.base.text.sm,
+    fontWeight: '600',
+  },
+  attachMeta: {
+    fontSize: theme.base.text.xs,
+  },
+  attachRemove: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachRemoveTxt: {
+    fontSize: 14,
+    fontWeight: '700',
   },
 }));

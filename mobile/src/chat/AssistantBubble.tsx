@@ -1,12 +1,14 @@
 import { useMemo } from 'react';
-import { View, Text } from 'react-native';
+import { Pressable, View, Text } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { UnistylesThemes } from 'react-native-unistyles';
+import { Image } from 'expo-image';
+import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
+import type { MarkdownStyle } from 'react-native-enriched-markdown';
+import { fileUrl, parseFilePaths } from '@hangar/core';
 
 // Tema completo do unistyles (tokens + base) — UnistylesTheme não é exportado na raiz.
 type TemaApp = UnistylesThemes[keyof UnistylesThemes];
-import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
-import type { MarkdownStyle } from 'react-native-enriched-markdown';
 
 // Tema do markdown mapeado dos tokens do app (cores/links/code) — a lib recebe um
 // MarkdownStyle plano; sem ele usa defaults pretos que somem no tema escuro.
@@ -46,7 +48,6 @@ export function mkMarkdownStyle(t: TemaApp): MarkdownStyle {
         tag: t.tokens.accent.base,
         attribute: t.tokens.text.secondary,
         comment: t.tokens.text.muted,
-        // operator/punctuation/variable/embedded herdam color acima (text.primary)
       },
     },
     blockquote: { borderColor: t.tokens.border.default, backgroundColor: 'transparent', color: t.tokens.text.secondary },
@@ -61,12 +62,35 @@ export function mkMarkdownStyle(t: TemaApp): MarkdownStyle {
   };
 }
 
-export function AssistantBubble({ text }: { text: string }) {
+export function AssistantBubble({ text, sessionName }: { text: string; sessionName?: string }) {
   const { theme } = useUnistyles();
   const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
+  const refs = useMemo(() => parseFilePaths(text), [text]);
+  const hasRefs = refs.length > 0 && !!sessionName;
+
   return (
     <View style={styles.wrap}>
       <EnrichedMarkdownText markdown={text} markdownStyle={md} flavor="github" />
+      {hasRefs ? (
+        <View style={styles.atts}>
+          {refs.map((r) => {
+            const isImg = r.kind === 'image';
+            const uri = r.url ?? fileUrl(sessionName!, r.path);
+            if (isImg) {
+              return <Image key={r.path} source={{ uri }} style={styles.thumb} contentFit="cover" transition={150} />;
+            }
+            const icon = r.kind === 'pdf' ? '📄' : r.kind === 'html' ? '🌐' : r.kind === 'audio' ? '🎵' : '📎';
+            return (
+              <View key={r.path} style={[styles.chip, { backgroundColor: theme.tokens.bg.surface, borderColor: theme.tokens.border.subtle }]}>
+                <Text style={styles.chipIco}>{icon}</Text>
+                <Text style={[styles.chipName, { color: theme.tokens.text.primary }]} numberOfLines={1}>
+                  {r.name}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -75,10 +99,39 @@ const styles = StyleSheet.create((theme) => ({
   wrap: {
     alignSelf: 'flex-start',
     maxWidth: '92%',
-    // fundo sutil pra bolha se distinguir do papel sem virar card pesado (PWA: vidro leve)
     backgroundColor: theme.tokens.bg.elevated,
     borderRadius: theme.base.radius.lg,
     paddingHorizontal: theme.base.space[3],
     paddingVertical: theme.base.space[2],
+    gap: theme.base.space[2],
+  },
+  atts: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.base.space[2],
+    marginTop: theme.base.space[1],
+  },
+  thumb: {
+    width: 96,
+    height: 96,
+    borderRadius: theme.base.radius.md,
+    backgroundColor: theme.tokens.bg.surface,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[1],
+    paddingHorizontal: theme.base.space[2],
+    paddingVertical: theme.base.space[1],
+    borderRadius: theme.base.radius.md,
+    borderWidth: 1,
+    maxWidth: 220,
+  },
+  chipIco: {
+    fontSize: 16,
+  },
+  chipName: {
+    fontSize: theme.base.text.xs,
+    flexShrink: 1,
   },
 }));

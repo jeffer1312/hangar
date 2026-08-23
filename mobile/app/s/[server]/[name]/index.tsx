@@ -198,6 +198,7 @@ export default function ChatScreen() {
               onLoadOlder={chat.loadOlder}
               pending={pending}
               optionsSlot={optionsSlot}
+              sessionName={name}
             />
           )}
         </View>
