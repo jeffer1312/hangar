@@ -449,7 +449,7 @@ export function Composer({ serverId, name, draft }: Props) {
             >
               <Text style={[styles.pairChipText, { color: sendToPair ? theme.tokens.accent.base : theme.tokens.text.secondary }]}>⇄</Text>
               <Text style={[styles.pairChipLabel, { color: sendToPair ? theme.tokens.accent.base : theme.tokens.text.secondary }]} numberOfLines={1}>
-                {sendToPair ? m.composer_pros_dois() : m.composer_mandar_tambem({ n: pairPeers.join(', ') })}
+                {sendToPair ? (pairPeers.length === 1 ? m.composer_pros_dois() : m.composer_pro_grupo()) : m.composer_mandar_tambem({ n: pairPeers.join(', ') })}
               </Text>
             </Pressable>
           ) : null}
