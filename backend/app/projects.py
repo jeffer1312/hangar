@@ -328,7 +328,11 @@ def start(name: str) -> ProjectStatus:
     cfg = _entry(name)
     if not Path(cfg["cwd"]).is_dir():
         raise ProjectError(400, f"cwd nao existe: {cfg['cwd']}")
-    runner.start_run(cfg["cwd"], cfg["command"])
+    try:
+        runner.start_run(cfg["cwd"], cfg["command"])
+    except runner.RunnerError as e:
+        # Sem isto o RunnerError escapava como 500 cru: as rotas de projeto so tratam ProjectError.
+        raise ProjectError(e.status, e.detail) from e
     return _status(name, cfg, runner.all_runs(), _ports_of([(name, cfg)]))
 
 
@@ -436,7 +440,14 @@ def stop(name: str) -> None:
             err = f"stop_command falhou: {e}"
     # O pane morre SEMPRE, mesmo com stop_command quebrado — senao o projeto ficava "rodando"
     # eterno. Mas a falha do stop_command sobe depois: orfao invisivel e pior que erro na tela.
-    runner.stop_run(cfg["cwd"])
+    #
+    # A sessao que NAO morre e a mesma familia, e ganha prioridade na mensagem: um stop_command que
+    # saiu != 0 e um aviso sobre filhos possivelmente orfaos; um pane que sobreviveu e o processo
+    # principal ainda rodando com a tela dizendo "parado".
+    try:
+        runner.stop_run(cfg["cwd"])
+    except runner.RunnerError as e:
+        raise ProjectError(e.status, f"{e.detail}{f'. Alem disso: {err}' if err else ''}") from e
     if err:
         raise ProjectError(500, err)
 

@@ -221,3 +221,37 @@ def test_builtin_do_cmd_nao_e_procurado_no_path(config, monkeypatch, tmp_path):
     monkeypatch.setattr(projects.subprocess, "run", lambda *a, **k: _cp(128))
 
     projects.stop("a")                       # nao levanta
+
+
+# ── o run que nao subiu / nao parou tem de chegar na TELA ─────────────────────────────────────
+# O `runner` levanta `RunnerError`, e as rotas de projeto so tratam `ProjectError`: sem a traducao
+# a falha virava 500 cru, que e o mesmo silencio de antes com outra roupa.
+
+def test_start_que_nao_subiu_vira_erro_de_projeto(config, monkeypatch, tmp_path):
+    config({"a": {"cwd": str(tmp_path), "command": "npm run dev"}})
+    monkeypatch.setattr(runner, "start_run", lambda cwd, cmd: (_ for _ in ()).throw(
+        runner.RunnerError(502, "o run nao subiu: duplicate session: a-123456")))
+    with pytest.raises(projects.ProjectError) as e:
+        projects.start("a")
+    assert e.value.status == 502 and "duplicate session" in e.value.detail
+
+
+def test_pane_que_sobreviveu_vence_o_aviso_do_stop_command(config, monkeypatch, tmp_path):
+    """Os dois sao "processo pode estar orfao", mas em graus diferentes: `stop_command` != 0 e um
+    aviso sobre FILHOS; pane vivo e o processo PRINCIPAL rodando com a tela dizendo "parado". O
+    texto do stop_command nao se perde — vai junto."""
+    vazio = tmp_path / "path-vazio"
+    vazio.mkdir()
+    monkeypatch.setenv("PATH", str(vazio))
+    config({"a": {"cwd": str(tmp_path), "command": "x",
+                  "stop_command": "pkill-que-nao-existe -f node"}})
+    monkeypatch.setattr(projects.os, "name", "nt")
+    monkeypatch.setattr(projects.subprocess, "run",
+                        lambda *a, **k: _cp(1, "nao e reconhecido".encode("cp850")))
+    monkeypatch.setattr(runner, "stop_run", lambda cwd: (_ for _ in ()).throw(
+        runner.RunnerError(409, "o run (sessao a-123456) nao morreu")))
+    with pytest.raises(projects.ProjectError) as e:
+        projects.stop("a")
+    assert e.value.status == 409
+    assert "nao morreu" in e.value.detail
+    assert "pkill-que-nao-existe" in e.value.detail     # o aviso do stop_command vai junto

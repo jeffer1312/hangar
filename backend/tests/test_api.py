@@ -2539,3 +2539,30 @@ def test_input_codex_exception_do_adapter_vira_envelope(api_client):
     d = r.json()["detail"]
     assert d["code"] == "erro_envio_falhou"
     assert d["params"]["erro"] == "adapter broken"
+
+
+# ---------------------------------------------------------------------------
+# POST /run e /run/stop — a falha do runner tem de CHEGAR na tela
+# ---------------------------------------------------------------------------
+# Antes: o `new-session` rodava dentro de um `except: pass` com o rc ignorado, entao o play que nao
+# aconteceu devolvia 200 com o estado da sessao VELHA dentro, e o stop devolvia `{"ok": true}` com
+# o processo ainda rodando. Nao havia erro em lugar nenhum — o pior modo de falhar.
+
+def test_run_que_nao_subiu_devolve_erro_e_nao_o_estado_da_sessao_velha(api_client, tmp_path):
+    from app import runner as runner_mod
+    with patch("app.api._session_cwd", return_value=str(tmp_path)), \
+         patch("app.api.runner.start_run",
+               side_effect=runner_mod.RunnerError(502, "o run nao subiu: duplicate session: x")):
+        r = api_client.post("/api/sessions/cc/run", headers=_h(), json={"command": "npm run dev"})
+    assert r.status_code == 502
+    assert "duplicate session" in r.json()["detail"]
+
+
+def test_stop_que_nao_parou_nao_devolve_ok(api_client, tmp_path):
+    from app import runner as runner_mod
+    with patch("app.api._session_cwd", return_value=str(tmp_path)), \
+         patch("app.api.runner.stop_run",
+               side_effect=runner_mod.RunnerError(409, "o run (sessao x) nao morreu")):
+        r = api_client.post("/api/sessions/cc/run/stop", headers=_h())
+    assert r.status_code == 409
+    assert "nao morreu" in r.json()["detail"]

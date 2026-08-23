@@ -3336,12 +3336,21 @@ def list_runners(name: str):
 @app.post("/api/sessions/{name}/run", dependencies=[Depends(require_auth)],
           response_model=RunInfo)
 def start_runner(name: str, body: RunBody):
-    return runner.start_run(_session_cwd(name), body.command)
+    # RunnerError = "o play NAO aconteceu" (a sessao velha sobreviveu, ou o new-session falhou).
+    # Antes isso virava 200 com o estado da sessao VELHA dentro; 500 cru tambem nao serve, porque
+    # o texto diz o que houve e a tela do run mostra o detail, igual ao painel de projetos.
+    try:
+        return runner.start_run(_session_cwd(name), body.command)
+    except runner.RunnerError as e:
+        raise HTTPException(e.status, e.detail)
 
 
 @app.post("/api/sessions/{name}/run/stop", dependencies=[Depends(require_auth)])
 def stop_runner(name: str):
-    runner.stop_run(_session_cwd(name))
+    try:
+        runner.stop_run(_session_cwd(name))
+    except runner.RunnerError as e:
+        raise HTTPException(e.status, e.detail)   # `{"ok": True}` com o processo vivo era mentira
     return {"ok": True}
 
 
