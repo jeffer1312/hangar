@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Image } from 'expo-image';
-import { uploadFile, transcribeFile, steerSession, podeEnviarSozinho } from '@hangar/core';
+import { broadcast, formataErro, uploadFile, transcribeFile, steerSession, podeEnviarSozinho } from '@hangar/core';
 import type { MotivoFim } from '@hangar/core';
 import { Glass } from '../ui/Glass';
 import { MultiTextInput, type MultiTextInputHandle } from '../vendor/happy/components/MultiTextInput';
@@ -49,8 +49,18 @@ export function Composer({ serverId, name, draft }: Props) {
     }
     return (s.rows.find((x) => x.name === name)?.provider ?? null) as string | null;
   });
+  const pairPeers = useSessions((s) => {
+    const byServer = s.byServerRecord?.[serverId];
+    return byServer?.find((x) => x.name === name)?.pair_peers ?? s.rows.find((x) => x.name === name)?.pair_peers ?? null;
+  });
+  const pairPeersKey = pairPeers?.join('\u0000') ?? '';
   const isCodex = provider === 'codex';
   const filaCount = filaCountOf({ events, pending });
+
+  const [sendToPair, setSendToPair] = useState(false);
+  useEffect(() => {
+    setSendToPair(false);
+  }, [pairPeersKey]);
 
   const [text, setText] = useState('');
   const textRef = useRef(text);
@@ -149,9 +159,29 @@ export function Composer({ serverId, name, draft }: Props) {
     }
     setText('');
     if (toClearAttach) setPendingAttach(null);
+    const sendToPairNow = sendToPair && !!pairPeers?.length && !finalText.trimStart().startsWith('/');
+    let groupPendingId: string | null = null;
     try {
-      await chat.send(finalText);
+      if (sendToPairNow && pairPeers?.length) {
+        const recipients = [name, ...pairPeers];
+        groupPendingId = `pending-group-${Date.now()}`;
+        chat.use.setState((current) => ({ pending: [...current.pending, { id: groupPendingId!, text: finalText }] }));
+        const results = await broadcast(recipients, finalText);
+        const failedRecipients = recipients.filter((recipient) => !results[recipient]?.ok);
+        if (failedRecipients.length) {
+          const delivered = recipients.filter((recipient) => results[recipient]?.ok);
+          const detail = failedRecipients.map((recipient) => formataErro(results[recipient]?.error)).find(Boolean);
+          throw new Error(
+            `${delivered.length ? m.chat_chegou_mas({ n: delivered.join(', ') }) : ''}${m.chat_nao_chegou_em()}${failedRecipients.join(', ')} (${detail ?? m.board_falha_envio()})`,
+          );
+        }
+      } else {
+        await chat.send(finalText);
+      }
     } catch (e) {
+      if (groupPendingId) {
+        chat.use.setState((current) => ({ pending: current.pending.filter((item) => item.id !== groupPendingId) }));
+      }
       const msg = e instanceof Error ? e.message : m.composer_falha_envio();
       setError(msg);
       setText((prev) => (prev.trim() ? prev : finalText));
@@ -162,7 +192,7 @@ export function Composer({ serverId, name, draft }: Props) {
     } finally {
       setSending(false);
     }
-  }, [text, sending, uploading, chat, limparUndo, cancelarAuto, pendingAttach, name]);
+  }, [text, sending, uploading, chat, limparUndo, cancelarAuto, pendingAttach, name, pairPeers, sendToPair]);
 
   // auto-envio: contagem de 3s
   const iniciarAuto = useCallback(
@@ -408,6 +438,21 @@ export function Composer({ serverId, name, draft }: Props) {
             <EffortPill serverId={serverId} name={name} />
           </View>
           <PermissionPill serverId={serverId} name={name} />
+          {pairPeers?.length ? (
+            <Pressable
+              onPress={() => setSendToPair((current) => !current)}
+              style={[styles.pairChip, { borderColor: sendToPair ? theme.tokens.accent.base : theme.tokens.border.subtle, backgroundColor: sendToPair ? theme.tokens.bg.elevated : 'transparent' }]}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: sendToPair }}
+              accessibilityLabel={m.composer_mandar_grupo()}
+              accessibilityHint={sendToPair ? m.composer_mandando_grupo() : m.composer_mandar_tambem({ n: pairPeers.join(', ') })}
+            >
+              <Text style={[styles.pairChipText, { color: sendToPair ? theme.tokens.accent.base : theme.tokens.text.secondary }]}>⇄</Text>
+              <Text style={[styles.pairChipLabel, { color: sendToPair ? theme.tokens.accent.base : theme.tokens.text.secondary }]} numberOfLines={1}>
+                {sendToPair ? m.composer_pros_dois() : m.composer_mandar_tambem({ n: pairPeers.join(', ') })}
+              </Text>
+            </Pressable>
+          ) : null}
           {isCodex ? (
             <Pressable
               onPress={() => router.push(`/s/${serverId}/${name}/codex-limits` as never)}
@@ -611,6 +656,25 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: 'center',
   },
   codexChipText: {
+    fontSize: theme.base.text.xs,
+    fontWeight: '600',
+  },
+  pairChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[1],
+    minHeight: 32,
+    maxWidth: 220,
+    borderWidth: 1,
+    borderRadius: theme.base.radius.full,
+    paddingHorizontal: theme.base.space[2],
+  },
+  pairChipText: {
+    fontSize: theme.base.text.sm,
+    fontWeight: '700',
+  },
+  pairChipLabel: {
+    flexShrink: 1,
     fontSize: theme.base.text.xs,
     fontWeight: '600',
   },
