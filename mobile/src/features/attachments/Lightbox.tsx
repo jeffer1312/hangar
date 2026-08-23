@@ -1,8 +1,9 @@
-import { Modal, Pressable, Text, View } from 'react-native';
+import { Modal, Pressable, StatusBar, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as m from '../../paraglide/messages';
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
 
 export function Lightbox({ visible, uri, filename, onClose }: Props) {
   const { theme } = useUnistyles();
+  const insets = useSafeAreaInsets();
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -71,7 +73,7 @@ export function Lightbox({ visible, uri, filename, onClose }: Props) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
       <View style={styles.backdrop}>
-        <Pressable style={styles.closeArea} onPress={handleClose} accessibilityLabel={m.anexos_fechar_imagem()} accessibilityRole="button">
+        <Pressable style={[styles.closeArea, { top: (insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24)) + theme.base.space[2] }]} onPress={handleClose} accessibilityLabel={m.anexos_fechar_imagem()} accessibilityRole="button">
           <View style={[styles.closeBtn, { backgroundColor: 'rgba(0,0,0,0.6)', borderColor: 'rgba(255,255,255,0.25)' }]}>
             <Text style={styles.closeTxt}>✕</Text>
           </View>
@@ -100,7 +102,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   closeArea: {
     position: 'absolute',
-    top: theme.base.space[4],
     right: theme.base.space[4],
     zIndex: 2,
   },
