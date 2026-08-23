@@ -8,6 +8,7 @@ import { useServers } from '../../../../src/stores/servers';
 import { useSessions } from '../../../../src/stores/sessions';
 import { Screen } from '../../../../src/ui/Screen';
 import { ChatHeader } from '../../../../src/chat/ChatHeader';
+import { LoopChip } from '../../../../src/chat/LoopChip';
 import { MessageList } from '../../../../src/chat/MessageList';
 import { Composer } from '../../../../src/chat/Composer';
 import { MoreSheet } from '../../../../src/chat/MoreSheet';
@@ -159,6 +160,16 @@ export default function ChatScreen() {
           else router.replace('/');
         }}
         onMore={() => setMoreOpen(true)}
+        chipLoop={
+          stateEvent?.loop_status ? (
+            <LoopChip
+              status={stateEvent.loop_status}
+              iter={stateEvent.loop_iter}
+              max={stateEvent.loop_max}
+              onPress={() => router.push(`/s/${serverId}/${name}/loop` as never)}
+            />
+          ) : null
+        }
       />
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} serverId={serverId} name={name} />
       {/* Lista e Composer dentro do mesmo KAV: ambos sobem com o teclado e a lista termina acima do composer */}

@@ -7,6 +7,7 @@ export * from './types';
 export * from './history';
 export * from './costs';
 export * from './loop';
+export * from './loopGuide';
 export * from './messageKeys';
 export * from './editdiff';
 export * from './detectarLinguagem';
