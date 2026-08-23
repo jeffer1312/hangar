@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadFile } from '@hangar/core';
@@ -7,6 +7,11 @@ import { Glass } from '../ui/Glass';
 import { MultiTextInput, type MultiTextInputHandle } from '../vendor/happy/components/MultiTextInput';
 import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf } from '../stores/chat';
+import { useSessions } from '../stores/sessions';
+import { useRouter } from 'expo-router';
+import { ModelPill } from '../features/pills/ModelPill';
+import { EffortPill } from '../features/pills/EffortPill';
+import { PermissionPill } from '../features/pills/PermissionPill';
 
 interface Props {
   serverId: string;
@@ -16,10 +21,20 @@ interface Props {
 
 export function Composer({ serverId, name, draft }: Props) {
   const { theme } = useUnistyles();
+  const router = useRouter();
   const chat = chatStore(serverId, name);
   const pending = chat.use((s) => s.pending);
   const events = chat.use((s) => s.events);
   const state = chat.use((s) => s.stateEvent?.state ?? 'idle');
+  const provider = useSessions((s) => {
+    const byServer = s.byServerRecord?.[serverId];
+    if (byServer) {
+      const hit = byServer.find((x) => x.name === name);
+      if (hit?.provider) return hit.provider;
+    }
+    return (s.rows.find((x) => x.name === name)?.provider ?? null) as string | null;
+  });
+  const isCodex = provider === 'codex';
   // fila total = ecos locais + sintéticos queued-* da fila durável (até o real chegar)
   const filaCount = filaCountOf({ events, pending });
 
@@ -117,6 +132,24 @@ export function Composer({ serverId, name, draft }: Props) {
           </View>
         ) : null}
 
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+          <View style={styles.pillDuo}>
+            <ModelPill serverId={serverId} name={name} />
+            <EffortPill serverId={serverId} name={name} />
+          </View>
+          <PermissionPill serverId={serverId} name={name} />
+          {isCodex ? (
+            <Pressable
+              onPress={() => router.push(`/s/${serverId}/${name}/codex-limits` as never)}
+              style={[styles.codexChip, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}
+              accessibilityRole="button"
+              accessibilityLabel={m.codex_limites_titulo()}
+            >
+              <Text style={[styles.codexChipText, { color: theme.tokens.text.primary }]}>{m.codex_limites_titulo()}</Text>
+            </Pressable>
+          ) : null}
+        </ScrollView>
+
         <View style={styles.row}>
           <View style={styles.inputWrap}>
             <MultiTextInput
@@ -185,6 +218,29 @@ const styles = StyleSheet.create((theme) => ({
   filaText: {
     fontSize: theme.base.text.xs,
     fontWeight: '500',
+  },
+  pillsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[2],
+    paddingVertical: 2,
+  },
+  pillDuo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.base.space[1],
+  },
+  codexChip: {
+    borderWidth: 1,
+    borderRadius: theme.base.radius.full,
+    paddingHorizontal: theme.base.space[2],
+    paddingVertical: 6,
+    minHeight: 32,
+    justifyContent: 'center',
+  },
+  codexChipText: {
+    fontSize: theme.base.text.xs,
+    fontWeight: '600',
   },
   row: {
     flexDirection: 'row',
