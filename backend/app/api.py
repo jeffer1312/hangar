@@ -399,8 +399,17 @@ async def pi_inbox_ws(ws: WebSocket):
             if msg.get("pong") or msg.get("ping"):
                 continue
             msg_id = str(msg.get("id") or "")
-            if msg_id:
-                INBOX.confirmar(pane, msg_id, bool(msg.get("ok")), msg.get("erro"))
+            if not msg_id:
+                continue
+            if "resposta" in msg:
+                # Resposta de PERGUNTA (leitura), nao confirmacao de entrega — chaves diferentes
+                # de proposito: a extensao responde `{id, resposta}` e nunca `ok`, entao uma
+                # mensagem jamais cai nos dois caminhos. `None` explicito (a extensao dizendo "nao
+                # sei") chega como None e o backend cai no plano B; string vazia e resposta.
+                valor = msg.get("resposta")
+                INBOX.responder(pane, msg_id, valor if isinstance(valor, str) else None)
+                continue
+            INBOX.confirmar(pane, msg_id, bool(msg.get("ok")), msg.get("erro"))
     except WebSocketDisconnect:
         pass
     except Exception as e:

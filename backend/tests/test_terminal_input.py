@@ -155,6 +155,87 @@ def test_composer_pi_ilegivel_nao_bloqueia():
         assert terminal_input._composer_ocupado_pi("pi-x") is False
 
 
+# --- a MESMA pergunta, feita pra quem sabe: a extensao le `ctx.ui.getEditorText()` -----------------
+# A raspagem nao distingue aviso de sistema de rascunho do usuario — o Pi desenha aviso de extensao
+# (`console.error`) DENTRO da faixa do composer, com o mesmo ANSI do texto digitado (medido
+# 22/08/2026: `getEditorText()` devolveu "" com o aviso na faixa e o texto exato com um rascunho).
+
+class _LinhaFalsa:
+    """A linha da extensão respondendo o que o teste mandar. `None` = "não sei".
+
+    `registradas` são as chaves que TÊM linha — o mesmo que o `pi_inbox` guarda. Importa porque a
+    chave é o nome da sessão no psmux e o pane no tmux (ver `pi_inbox.linha_de`), e um duplo "sim"
+    esconderia justamente o erro de endereçamento que o 11909b31 consertou.
+    """
+
+    def __init__(self, resposta, registradas):
+        self.resposta, self.registradas, self.perguntas = resposta, set(registradas), []
+
+    def tem_linha(self, chave):
+        return chave in self.registradas
+
+    def perguntar_sync(self, chave, o_que):
+        self.perguntas.append((chave, o_que))
+        return self.resposta
+
+
+def _com_linha(monkeypatch, resposta, registradas=("pi-x",)):
+    linha = _LinhaFalsa(resposta, registradas)
+    monkeypatch.setattr(terminal_input.pi_inbox, "INBOX", linha)
+    return linha
+
+
+def test_pergunta_pela_linha_vence_a_tela(monkeypatch):
+    """O caso que gerou o conserto: a faixa do composer mostra o aviso da NOSSA extensão e a troca
+    de modelo pelo app era recusada com 409 "composer do pi ja tem texto"."""
+    linha = _com_linha(monkeypatch, "")
+    with patch.object(terminal_input, "_capture",
+                      return_value=_pane_pi([" [cp-state] linha do pocket conectada"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
+    assert linha.perguntas == [("pi-x", "editor")]      # psmux: a chave é o NOME da sessão
+
+
+def test_no_tmux_a_pergunta_vai_pelo_pane(monkeypatch):
+    """Linux: a extensão não declara nome, a linha fica registrada pelo pane — e é por ele que a
+    pergunta tem que sair."""
+    linha = _com_linha(monkeypatch, "", registradas=("%33",))
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["aviso qualquer"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%33") is False
+    assert linha.perguntas == [("%33", "editor")]
+
+
+def test_rascunho_de_verdade_continua_bloqueando(monkeypatch):
+    """O guard não pode virar "sempre envia": esta é a razão de ele existir (ABC-1234)."""
+    _com_linha(monkeypatch, "prompt que o usuario deixou pela metade")
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is True
+
+
+def test_so_espaco_no_campo_nao_e_rascunho(monkeypatch):
+    _com_linha(monkeypatch, "   ")
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
+
+
+def test_sem_resposta_da_linha_cai_na_raspagem(monkeypatch):
+    """Extensão velha (sessão Pi aberta antes deste commit) ou socket caído: o comportamento volta
+    a ser exatamente o de hoje, sem uma linha mudada."""
+    _com_linha(monkeypatch, None)
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["rascunho na tela"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is True
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
+
+
+def test_sessao_sem_linha_nenhuma_nem_pergunta(monkeypatch):
+    """Sessão sem extensão conectada (Pi velho, socket caído): não há a quem perguntar, e a
+    raspagem decide — exatamente como antes deste commit."""
+    linha = _com_linha(monkeypatch, "", registradas=())
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["rascunho"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is True
+    assert linha.perguntas == []
+
+
 def test_send_prompt_pi_adia_com_residuo(monkeypatch):
     monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
     monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda name, provider="claude": True)

@@ -270,6 +270,34 @@ function marcarEntregue(id: string): void {
   }
 }
 
+// O ctx mais recente. Os handlers de evento recebem (event, ctx) e o socket NAO — mas quem sabe
+// responder "tem rascunho na caixa?" e o `ctx.ui`. Guardar o ultimo e o unico jeito de a linha
+// alcancar essa API; e legitimo porque a extensao so registra handler no processo do USUARIO (o
+// retorno cedo de `emSubagente` cobre o resto) e todo ctx que passa por aqui e da mesma sessao —
+// a troca de sessao (/new, /fork, /resume) emite session_start de novo e sobrescreve este valor.
+let ctxAtual: any = null;
+
+function lembrarCtx(ctx: any): void {
+  if (ctx) ctxAtual = ctx;
+}
+
+// A pergunta que o backend faz antes de digitar. Vale a pena existir porque a TELA nao responde:
+// o Pi desenha aviso de extensao (`console.error`) DENTRO da faixa do composer, com o mesmo ANSI
+// do texto digitado, entao raspar o pane confunde aviso com rascunho — e era isso que recusava a
+// troca de modelo pelo app com "composer do pi ja tem texto" (medido 22/08/2026).
+//
+// `null` = "nao sei" (sem ctx ainda, Pi sem essa API, ou erro): o backend cai na raspagem de
+// sempre. String vazia e RESPOSTA — "nao ha rascunho" —, e por isso os dois nao podem se misturar.
+function responderPergunta(o_que: string): string | null {
+  if (o_que !== "editor") return null;
+  try {
+    const t = ctxAtual?.ui?.getEditorText?.();
+    return typeof t === "string" ? t : null;
+  } catch {
+    return null;
+  }
+}
+
 // Log de conectividade da linha (achado ALTA da revisao 02/08/2026): token girado / bind mudado /
 // firewall no meio faziam a extensao voltar calada pro caminho de tecla, sem rastro nem no terminal
 // do Pi nem no log do backend. Muda de estado só quando MUDA de estado — o retry roda em laço com
@@ -355,6 +383,14 @@ function conectar(pi: ExtensionAPI): void {
       guard("entregar", () => {
         const msg = JSON.parse(String(ev.data));
         if (msg.ping) { ws.send(JSON.stringify({ pong: true })); return; }
+        // Pergunta (leitura) antes da entrega: campo PROPRIO (`pedir`), e a resposta sai em
+        // `resposta` — nunca em `ok` —, entao os dois caminhos nunca se confundem no backend.
+        // Responde SEMPRE, inclusive `null`: calar faria o backend pagar o prazo inteiro pra
+        // descobrir o que esta linha ja sabe.
+        if (typeof msg.pedir === "string") {
+          if (msg.id) ws.send(JSON.stringify({ id: msg.id, resposta: responderPergunta(msg.pedir) }));
+          return;
+        }
         if (!msg.id || typeof msg.text !== "string") return;
         (async () => {
           if (foiEntregue(msg.id)) {
@@ -421,6 +457,7 @@ export default function (pi: ExtensionAPI) {
 
   // Handlers recebem (event, ctx) — types.d.ts:845. Sem o ctx nao ha arquivo de sessao.
   pi.on("session_start", async (_e: any, ctx: any) => {
+    lembrarCtx(ctx);   // ANTES do return de --no-session: a pergunta do editor nao depende de sessao
     // Achado da revisão, confirmado no pacote instalado (agent-session-runtime.js:102-113,
     // `teardownCurrent`): "session_shutdown" NÃO é só "o processo vai morrer" — dispara com
     // reason "resume"/"new"/"fork"/"quit", chamado por switchSession/newSession/fork/
@@ -453,6 +490,7 @@ export default function (pi: ExtensionAPI) {
     guard("fechar", () => socket?.close());
   });
   pi.on("agent_start", async (_e: any, ctx: any) => {
+    lembrarCtx(ctx);
     // O gate de subagente vale tambem pro `trabalhando`/corroboracao: o turno do subagente nao e o
     // turno da sessao, e tratar como se fosse confirmaria entrega de mensagem que ninguem leu —
     // mas quem bloqueia isso e o `emSubagente` la em cima; aqui so o --no-session.
@@ -462,6 +500,7 @@ export default function (pi: ExtensionAPI) {
     eventosAgente.emit("agent_start");   // corrobora entrega pendente — ver bloco da entrega acima
   });
   pi.on("agent_settled", async (_e: any, ctx: any) => {
+    lembrarCtx(ctx);
     if (!sessionFile(ctx)) return;
     publishState("idle", ctx); trabalhando = false;
     publishPreview(ctx, "", true);   // turno fechou: nada em voo (rede pro message_end perdido)
@@ -470,7 +509,9 @@ export default function (pi: ExtensionAPI) {
   // Previa ao vivo. `message_update` e o unico que traz o texto parcial; `message_end` fecha o bloco
   // (a bolha real vem do transcript, entao a previa TEM que zerar aqui — senao o texto ficaria
   // duplicado por um instante, uma vez na previa e outra na bolha).
-  pi.on("message_update", async (e: any, ctx: any) => { publishPreview(ctx, textoEmVoo(e?.message), false); });
+  pi.on("message_update", async (e: any, ctx: any) => {
+    lembrarCtx(ctx); publishPreview(ctx, textoEmVoo(e?.message), false);
+  });
   pi.on("message_end", async (e: any, ctx: any) => {
     if (e?.message?.role !== "assistant") return;
     publishPreview(ctx, "", true);

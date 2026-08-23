@@ -217,6 +217,106 @@ def test_linha_de_cai_no_pane_quando_nao_ha_nome(monkeypatch):
     assert mod.linha_de("pi-teste", "%99") is None
     assert mod.linha_de("pi-teste", None) is None
 
+# ── perguntas (leitura) ────────────────────────────────────────────────────────────────────────
+# A linha deixou de servir só pra ENTREGAR: o backend também PERGUNTA ("tem rascunho na caixa?"),
+# porque a tela não responde isso — o Pi desenha aviso de extensão dentro da faixa do composer, com
+# o mesmo ANSI do texto digitado. Ver terminal_input._composer_ocupado_pi.
+
+async def _responder_quando_chegar(inbox, pane, recebidas, valor, quantas=1):
+    vistos = 0
+    for _ in range(300):
+        if len(recebidas) > vistos:
+            inbox.responder(pane, recebidas[vistos]["id"], valor)
+            vistos += 1
+            if vistos >= quantas:
+                return
+        await asyncio.sleep(0.005)
+
+
+async def test_pergunta_devolve_o_valor_lido():
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_responder_quando_chegar(inbox, "%1", recebidas, "rascunho"))
+    assert await inbox.perguntar("%1", "editor") == "rascunho"
+    await tarefa
+    assert recebidas[0]["pedir"] == "editor"
+    assert "text" not in recebidas[0]      # pergunta NAO e entrega: campos diferentes
+
+
+async def test_string_vazia_e_RESPOSTA_e_nao_ausencia():
+    """`""` = "não há rascunho"; `None` = "não sei". Confundir os dois faria o backend tratar
+    "campo vazio" como "sem linha" e cair na raspagem — que é justamente o que erra."""
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_responder_quando_chegar(inbox, "%1", recebidas, ""))
+    assert await inbox.perguntar("%1", "editor") == ""
+    await tarefa
+
+
+async def test_extensao_que_nao_sabe_responder_vira_None():
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_responder_quando_chegar(inbox, "%1", recebidas, None))
+    assert await inbox.perguntar("%1", "editor") is None
+    await tarefa
+
+
+async def test_pergunta_sem_resposta_no_prazo_vira_None(monkeypatch):
+    """Extensão velha ignora um `pedir` que não conhece: o backend não pode ficar preso — quem
+    pergunta está segurando o _send_lock da sessão."""
+    monkeypatch.setattr("app.pi_inbox.PRAZO_PERGUNTA", 0.05)
+    inbox = PiInbox()
+    _, envia = _falsa()
+    inbox.registrar("%1", envia)
+    assert await inbox.perguntar("%1", "editor") is None
+
+
+async def test_pergunta_sem_linha_nao_explode():
+    assert await PiInbox().perguntar("%1", "editor") is None
+
+
+async def test_resposta_de_pergunta_nao_resolve_uma_ENTREGA():
+    """Dicionários separados: `confirmar` e `responder` guardam formas diferentes (`(ok, erro)` vs
+    valor). Misturados, o `entregar` desempacotaria uma string e estouraria dentro do caminho que
+    existe pra ser à prova de falha."""
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+
+    async def entrega():
+        return await inbox.entregar("%1", "oi", msg_id="mesmo-id")
+
+    tarefa = asyncio.create_task(entrega())
+    for _ in range(300):
+        if recebidas:
+            break
+        await asyncio.sleep(0.005)
+    inbox.responder("%1", "mesmo-id", "isto e resposta de pergunta")   # id igual, canal errado
+    await asyncio.sleep(0.05)
+    assert not tarefa.done()                     # a entrega segue esperando o ACK dela
+    inbox.confirmar("%1", "mesmo-id", True, None)
+    assert await tarefa == "sent"
+
+
+async def test_linha_que_cai_no_meio_da_pergunta_vira_None():
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    linha = inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(inbox.perguntar("%1", "editor"))
+    for _ in range(300):
+        if recebidas:
+            break
+        await asyncio.sleep(0.005)
+    inbox.remover("%1", linha)
+    assert await tarefa is None
+
+
+def test_perguntar_sync_sem_loop_nao_explode():
+    assert PiInbox().perguntar_sync("%1", "editor") is None
+
 
 def test_entregar_sync_cancela_a_corrotina_no_timeout(monkeypatch):
     """Achado da revisão final: sem o cancel(), a corrotina do `entregar` segue viva no loop e pode

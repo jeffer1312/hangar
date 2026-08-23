@@ -134,6 +134,28 @@ def test_send_pi_commands_key_sequence():
     ]
 
 
+def test_send_pi_commands_pergunta_pela_linha_e_nao_pela_tela():
+    """Este era o caminho do 409 medido em 22/08/2026: com o aviso da nossa própria extensão
+    desenhado na faixa do composer, a troca de modelo pelo app era recusada com "composer do pi ja
+    tem texto" e o composer estava VAZIO. Quem sabe responder é a extensão, e ela precisa do pane —
+    então o comando resolve o pane e pergunta, em vez de raspar a tela."""
+    ti = TerminalInput()
+    vistos = {}
+
+    def falso_ocupado(name, pane_id=None):
+        vistos["args"] = (name, pane_id)
+        return False
+
+    with patch.object(terminal_input, "deliverable", return_value=True), \
+         patch.object(terminal_input, "_wait_input_ready", return_value=True), \
+         patch.object(terminal_input.agentpane, "pane_info", return_value=("pi", "%7")), \
+         patch.object(terminal_input, "_composer_ocupado_pi", falso_ocupado), \
+         patch("app.terminal_input.send_keys"), \
+         patch("time.sleep"):
+        ti.send_pi_commands("s1", ["/cp-think low"])
+    assert vistos["args"] == ("s1", "%7")
+
+
 def test_send_pi_commands_refuses_when_overlay_open():
     ti = TerminalInput()
     with patch.object(terminal_input, "deliverable", return_value=False), \
