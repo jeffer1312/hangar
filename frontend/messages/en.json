@@ -1538,6 +1538,7 @@
   "erro_motor_nome_com_dados": "name already uses a saved engine; don't send base_url/api_key along",
   "erro_motor_nome_ou_dados": "provide a saved engine name, or base_url + api_key",
   "erro_pi_list_models": "pi --list-models failed: {erro}",
+  "erro_pi_ausente": "could not find the `pi` executable on the server — install Pi or fix the backend PATH",
   "erro_provider_invalido": "provider must be 'claude' or 'pi'",
   "erro_path_invalido": "invalid path",
   "erro_projeto_nao_encontrado": "project not found",

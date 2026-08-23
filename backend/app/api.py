@@ -4125,6 +4125,12 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
         try:
             return {"kind": "pi", "reduced": False,
                     "models": await asyncio.to_thread(pi_catalog.listar)}
+        except pi_catalog.PiAusente as e:
+            # Codigo proprio: "nao achei o pi" nao e "o pi falhou". Antes isso chegava como
+            # `[WinError 2] O sistema nao pode encontrar o arquivo especificado` dentro da mensagem
+            # de falha do comando — a pessoa ia procurar defeito no `pi --list-models` de um pi que
+            # nem estava instalado ali.
+            raise HTTPException(502, detail=erro("erro_pi_ausente", str(e), erro=str(e)))
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
     if provider == "kimi":

@@ -17,6 +17,19 @@ kimi-coding       k3                                       1.0M     131.1K   yes
 clinepass         cline-pass/glm-5.2                       200K     131.1K   yes       no
 """
 
+_PI_FALSO = "/opt/bin/pi"
+
+
+@pytest.fixture(autouse=True)
+def _pi_no_path(monkeypatch):
+    """O `pi` REAL da maquina nao pode decidir se o teste roda.
+
+    `listar()` resolve o binario com `shutil.which` (o `pi` do npm e um `.CMD` no Windows, que o
+    `CreateProcess` nao acha pelo nome cru) — sem este fixture, quem nao tem o Pi instalado veria
+    `PiAusente` antes de chegar no `subprocess.run` mockado, e o caso testaria a maquina.
+    """
+    monkeypatch.setattr(pi_catalog.shutil, "which", lambda nome: _PI_FALSO)
+
 
 def test_cabecalho_e_descartado():
     assert all(m["id"] != "model" for m in pi_catalog.parse(SAIDA))
@@ -83,6 +96,40 @@ def test_id_com_byte_ilegivel_e_falha_do_provedor(monkeypatch):
     with pytest.raises(RuntimeError, match="ilegivel"):
         pi_catalog.listar()
     assert pi_catalog._cache is None
+
+
+def test_argv_leva_o_caminho_RESOLVIDO_e_nao_o_nome_cru(monkeypatch):
+    """No Windows o `pi` do npm global e um `pi.CMD`, e o `CreateProcess` so completa `.exe`:
+    `subprocess.run(["pi", …])` levanta FileNotFoundError com o pi instalado e no PATH (medido
+    22/08/2026 — a tela de abertura dava 502 enquanto o `cli_probe`, que usa `which`, dizia que o
+    pi existia). Quem resolve e o `shutil.which`, que aplica o PATHEXT."""
+    visto = {}
+
+    def falso_run(argv, **k):
+        visto["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, SAIDA, "")
+
+    monkeypatch.setattr(pi_catalog.subprocess, "run", falso_run)
+    pi_catalog._cache = None
+    pi_catalog.listar()
+    assert visto["argv"][0] == _PI_FALSO
+    assert visto["argv"][0] != "pi"
+
+
+def test_pi_fora_do_path_e_erro_PROPRIO(monkeypatch):
+    """"Nao achei o pi" nao e "o pi falhou": antes isso chegava na tela como
+    `[WinError 2] O sistema nao pode encontrar o arquivo especificado` dentro da mensagem de falha
+    do comando, e mandava procurar defeito num pi que nem estava instalado."""
+    monkeypatch.setattr(pi_catalog.shutil, "which", lambda nome: None)
+    monkeypatch.setattr(pi_catalog.subprocess, "run",
+                        lambda *a, **k: pytest.fail("nao pode nem tentar rodar sem binario"))
+    pi_catalog._cache = None
+    with pytest.raises(pi_catalog.PiAusente, match="PATH"):
+        pi_catalog.listar()
+    assert pi_catalog._cache is None
+    # Subclasse de RuntimeError de proposito: a rota ja captura RuntimeError, entao um backend
+    # antigo (ou outro chamador) nunca deixa isso virar 500 cru.
+    assert issubclass(pi_catalog.PiAusente, RuntimeError)
 
 
 def test_rotulo_ilegivel_em_coluna_de_leitura_nao_derruba_a_lista(monkeypatch):

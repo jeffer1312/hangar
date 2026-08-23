@@ -1538,6 +1538,7 @@
   "erro_motor_nome_com_dados": "nome já usa o motor salvo; não envie base_url/api_key junto",
   "erro_motor_nome_ou_dados": "informe nome de um motor salvo, ou base_url + api_key",
   "erro_pi_list_models": "pi --list-models falhou: {erro}",
+  "erro_pi_ausente": "nao achei o executavel `pi` no servidor — instale o Pi ou ajuste o PATH do backend",
   "erro_provider_invalido": "provider deve ser 'claude' ou 'pi'",
   "erro_path_invalido": "caminho inválido",
   "erro_projeto_nao_encontrado": "projeto não encontrado",
