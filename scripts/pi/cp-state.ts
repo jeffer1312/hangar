@@ -95,6 +95,20 @@ function paneKey(): string | null {
   return pane ? pane.replace("%", "") : null;
 }
 
+// A MESMA unicidade, pra outra porta: a chave com que esta extensao se apresenta na LINHA (o
+// WebSocket do pi_inbox). O bilhete acima ja usava `PSMUX_SESSION`, mas a linha continuava se
+// identificando pelo pane — e no psmux o pane e `%1` em toda sessao, entao a segunda sessao Pi
+// tomava o slot da primeira e recebia a mensagem endereçada a ela (medido 22/08/2026: um /input
+// pra `pi-teste` apareceu na conversa da `pi-medir`, com `delivered: true` na resposta).
+//
+// SEM sanitizar, ao contrario do paneKey: aqui a chave nao vira nome de arquivo, e o backend
+// procura pelo nome da sessao que ELE conhece — passar uma versao "limpa" faria as duas pontas
+// discordarem justamente num nome com acento. E no tmux devolve o `TMUX_PANE` INTEIRO (com o `%`),
+// que e o que o backend sempre usou: o Linux nao muda em nada.
+function chaveDaLinha(): string | null {
+  return process.env.PSMUX_SESSION || process.env.TMUX_PANE || null;
+}
+
 function publishPane(ctx: any): void {
   guard("publishPane", () => {
     const chave = paneKey();
@@ -327,7 +341,9 @@ function conectar(pi: ExtensionAPI): void {
     ws.addEventListener("open", () => {
       tentativa = 0;
       avisaConectividade(true);
-      ws.send(JSON.stringify({ pane }));
+      // `pane` continua indo: backend velho so entende ele. `chave` e o que um backend novo usa —
+      // ver chaveDaLinha.
+      ws.send(JSON.stringify({ pane, chave: chaveDaLinha() }));
     });
 
     ws.addEventListener("message", (ev: any) => {

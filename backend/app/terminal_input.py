@@ -1214,8 +1214,12 @@ class TerminalInput:
             # set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
             # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e
             # insuficiente.
-            if provider == "pi" and pane_id and pi_inbox.INBOX.tem_linha(pane_id):
-                r = pi_inbox.INBOX.entregar_sync(pane_id, text, msg_id)
+            # `linha_de` (nome primeiro, pane depois) e nao o pane cru: no psmux TODA sessao Pi se
+            # declara `%1`, entao procurar por pane entregava a mensagem na conversa da OUTRA
+            # sessao — medido 22/08/2026, com `delivered: true` na resposta. Ver pi_inbox.
+            chave = provider == "pi" and pi_inbox.linha_de(name, pane_id)
+            if chave:
+                r = pi_inbox.INBOX.entregar_sync(chave, text, msg_id)
                 if r != "sem-linha":
                     return r
             # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por

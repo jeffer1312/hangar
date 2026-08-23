@@ -749,6 +749,30 @@ def test_pi_sem_linha_cai_na_tecla(monkeypatch):
     assert chamou["v"] is True, "sem linha, o caminho de tecla (com o guarda) tem que rodar"
 
 
+def test_pi_nao_entrega_na_linha_de_OUTRA_sessao(monkeypatch):
+    """No psmux o pane é `%1` em TODA sessão Pi. Com a busca por pane, a mensagem endereçada a uma
+    sessão saía na conversa da outra — medido 22/08/2026: um `POST /input` pra `pi-teste` respondeu
+    `delivered: true` e o texto apareceu na `pi-medir`."""
+    from app import pi_inbox, terminal_input
+
+    inbox = pi_inbox.PiInbox()
+    entregues = []
+    inbox.registrar("pi-medir", lambda payload: entregues.append(payload))
+    monkeypatch.setattr(pi_inbox, "INBOX", inbox)
+    monkeypatch.setattr(terminal_input.pi_inbox, "INBOX", inbox)
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_composer_ocupado_pi", lambda *a, **k: False)
+    monkeypatch.setattr(terminal_input, "_entrou_no_composer", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_submeteu", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: True)
+
+    r = terminal_input.TerminalInput().send_prompt("pi-teste", "oi", provider="pi", pane_id="%1")
+
+    assert entregues == [], "a linha da OUTRA sessao nao pode receber esta mensagem"
+    assert r == "sent"       # foi pela tecla, na sessao certa
+
+
 def test_pi_linha_sem_confirmacao_nao_digita(monkeypatch):
     """A regra da duplicata: tentou pela linha e não confirmou -> deferred, e NENHUMA tecla."""
     from app import pi_inbox, terminal_input

@@ -185,6 +185,39 @@ def test_entregar_sync_sem_loop_nao_explode():
     assert inbox.entregar_sync("%1", "oi") == "sem-linha"
 
 
+# ── qual linha é a DESTA sessão ────────────────────────────────────────────────────────────────
+# No psmux o pane é numerado por SESSÃO: toda sessão Pi se declara `%1`. Procurar linha por pane
+# entregava a mensagem na conversa da outra — medido 22/08/2026 com duas sessões vivas, um
+# `POST /input` pra `pi-teste` respondeu `delivered: true` e apareceu na `pi-medir`.
+
+def test_linha_de_prefere_o_nome_da_sessao(monkeypatch):
+    from app import pi_inbox as mod
+
+    inbox = PiInbox()
+    monkeypatch.setattr(mod, "INBOX", inbox)
+    _, envia = _falsa()
+    inbox.registrar("pi-medir", envia)          # a outra sessão, que conectou por último
+    # O pane das DUAS é `%1` no psmux: se a busca fosse por pane, esta chamada acharia a linha da
+    # `pi-medir` e a mensagem da `pi-teste` iria pra lá.
+    assert mod.linha_de("pi-teste", "%1") is None
+    assert mod.linha_de("pi-medir", "%1") == "pi-medir"
+
+
+def test_linha_de_cai_no_pane_quando_nao_ha_nome(monkeypatch):
+    """tmux: a extensão declara o pane e nada é registrado por nome — o caminho POSIX fica
+    byte-idêntico ao de antes, sem nenhum teste de sistema operacional no meio."""
+    from app import pi_inbox as mod
+
+    inbox = PiInbox()
+    monkeypatch.setattr(mod, "INBOX", inbox)
+    _, envia = _falsa()
+    inbox.registrar("%33", envia)
+    assert mod.linha_de("pi-teste", "%33") == "%33"
+    assert mod.linha_de(None, "%33") == "%33"
+    assert mod.linha_de("pi-teste", "%99") is None
+    assert mod.linha_de("pi-teste", None) is None
+
+
 def test_entregar_sync_cancela_a_corrotina_no_timeout(monkeypatch):
     """Achado da revisão final: sem o cancel(), a corrotina do `entregar` segue viva no loop e pode
     confirmar DEPOIS de o chamador já ter decidido `deferred` — a fila reenvia pela mesma linha e a

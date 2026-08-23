@@ -35,6 +35,7 @@ from app.filetree import FileError
 from app import pi_catalog
 from app import cli_probe
 from app import pi_models
+from app import pi_inbox
 from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
@@ -360,12 +361,17 @@ async def pi_inbox_ws(ws: WebSocket):
             await ws.close(code=1009)
             return
         primeira = json.loads(bruto)
-        pane = str(primeira.get("pane") or "")
+        # `chave` e o que a extensao declara como identidade da sessao: o nome do psmux quando
+        # existe, o pane quando nao (tmux). Extensao ANTIGA nao manda o campo e cai no pane, que e
+        # exatamente o comportamento de antes — ninguem precisa dar /reload pra continuar
+        # funcionando no Linux. Ver pi_inbox: no psmux o pane e `%1` em TODA sessao, e por isso a
+        # linha da segunda sessao Pi tomava o lugar da primeira.
+        pane = str(primeira.get("chave") or primeira.get("pane") or "")
         if not pane:
             await ws.close(code=1008)
             return
         linha = INBOX.registrar(pane, ws.send_json)
-        _log.info("pi_inbox: linha aberta pane=%s", pane)
+        _log.info("pi_inbox: linha aberta chave=%s", pane)
         pings_sem_resposta = 0
         while True:
             try:
@@ -1816,7 +1822,10 @@ def _send_one(name: str, text: str) -> dict:
     # reivindicavel por claim_undelivered. Upgrade completo precisa das DUAS coisas juntas: o
     # append() E o set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
     # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
-    is_pi = provider == "pi" and pane_id and INBOX.tem_linha(pane_id) and not stripped.startswith("/")
+    # `pi_inbox.linha_de` (nome primeiro, pane depois), nunca o pane cru: no psmux o pane e `%1`
+    # em toda sessao Pi e a busca por pane achava a linha da OUTRA — ver pi_inbox.
+    is_pi = (provider == "pi" and pi_inbox.linha_de(name, pane_id) is not None
+             and not stripped.startswith("/"))
     if is_pi:
         try:
             entry = PromptQueue(name).append(text, delivered=False, ts=t0)

@@ -12,6 +12,18 @@ confirmação por mensagem — e mesmo ela atesta só que a extensão CHAMOU a A
 CHAVE = `pane_id` do tmux (`%33`), NÃO o stem do .jsonl: o caminho quente do envio não tem o stem
 à mão, e resolvê-lo certo pro Pi custaria um `registry.list()` (fork + /proc). O pane sai de graça
 do `tmux list-panes` que o envio já faz, e a extensão o conhece pelo TMUX_PANE.
+
+...MAS o pane só é único no tmux. No psmux (Windows) ele é numerado por SESSÃO, então TODA sessão
+Pi se declarava `%1` e as duas dividiam o MESMO slot de linha — a última a conectar ficava com ele.
+Medido em 22/08/2026, com `pi-teste` e `pi-medir` vivas: um `POST /input` endereçado à `pi-teste`
+respondeu `delivered: true` e a mensagem apareceu na conversa da `pi-medir`. É a mesma família do
+bug do bilhete pane→sessão (que o `paneKey()` da extensão já resolve com `PSMUX_SESSION`), numa
+porta que ficou de fora.
+
+Por isso a extensão declara uma CHAVE ao conectar: o nome da sessão do psmux quando existe, o pane
+quando não (tmux). Quem procura usa `linha_de()`, que tenta o nome primeiro e o pane depois — no
+tmux nada é registrado por nome, então o primeiro tento sempre erra e o caminho fica byte-idêntico
+ao de antes, sem nenhum teste de sistema operacional no meio.
 """
 from __future__ import annotations
 
@@ -168,6 +180,24 @@ class PiInbox:
 
 
 INBOX = PiInbox()
+
+
+def linha_de(name: str | None, pane_id: str | None) -> str | None:
+    """A chave da linha DESTA sessão, ou None se ela não tem linha.
+
+    Nome primeiro, pane depois — e a ordem é o conserto (ver o topo do arquivo): no psmux o pane é
+    `%1` em toda sessão, então procurar por pane entrega na conversa errada. No tmux a extensão
+    nunca declara nome, o primeiro tento erra sempre e o resultado é o pane de sempre.
+
+    Ambiguidade teórica: uma sessão chamada literalmente `%1` casaria com a chave de pane de outra.
+    Nome de sessão criada pelo app passa por `sanitize_session_name`, que não deixa `%` passar; e
+    quem batiza uma sessão à mão de `%1` já tem problema maior com o próprio tmux.
+    """
+    if name and INBOX.tem_linha(name):
+        return name
+    if pane_id and INBOX.tem_linha(pane_id):
+        return pane_id
+    return None
 
 
 def escrever_endpoint() -> list[Path]:
