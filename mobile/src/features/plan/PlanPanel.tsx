@@ -6,7 +6,7 @@ import type { PlanDetail, SessionInfo, PlanListItem } from '@hangar/core';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import { mkMarkdownStyle } from '../../chat/AssistantBubble';
 import { PlanBar } from './PlanBar';
-import { PillMenu } from '../pills/PillMenu';
+import { PillMenu, type PillMenuItem } from '../pills/PillMenu';
 import { currentIndex, taskMark } from './planPanel';
 import * as m from '../../paraglide/messages';
 
@@ -89,15 +89,20 @@ export function PlanPanel({ session, name }: Props) {
   );
 
   const cur = currentIndex(detail);
+  const pickerItems: PillMenuItem[] = [
+    { label: `${m.plano_automatico()}${session?.plan_name ? ` · ${session.plan_name}` : ''}`, hint: '', selected: !pinned },
+    { label: m.plano_nenhum(), hint: '', selected: pinned === '!none' },
+    ...plans.map((p) => ({ label: p.name, hint: `${p.done}/${p.total}${p.complete ? ' ✓' : ''}`, selected: p.stem === pinned })),
+  ];
 
-  if (!detail && !loading && !error) return null;
+  if (!detail && !loading && !error && !session?.plan_hidden) return null;
 
   return (
     <View style={styles.wrap}>
       <View style={styles.head}>
         <Pressable onPress={handleOpenPicker} style={[styles.pickBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button" accessibilityLabel={m.plano_trocar()}>
           <Text style={[styles.pickText, { color: theme.tokens.text.secondary }]} numberOfLines={1}>
-            {pinned ? plans.find((p) => p.stem === pinned)?.name ?? pinned : session?.plan_name ? `${m.plano_automatico()} · ${session.plan_name}` : m.plano_automatico()}
+            {pinned === '!none' ? m.plano_nenhum() : pinned ? (plans.find((p) => p.stem === pinned)?.name ?? pinned) : session?.plan_name ? `${m.plano_automatico()} · ${session.plan_name}` : m.plano_automatico()}
           </Text>
           <Text style={[styles.caret, { color: theme.tokens.text.muted }]}>▾</Text>
         </Pressable>
@@ -163,18 +168,12 @@ export function PlanPanel({ session, name }: Props) {
         loading={false}
         error={pickerErr || null}
         onRetry={loadPlans}
-        items={[
-          { label: `${m.plano_automatico()}${session?.plan_name ? ` · ${session.plan_name}` : ''}`, hint: '', selected: !pinned },
-          { label: m.plano_nenhum(), hint: '', selected: pinned === '!none' },
-          ...plans.map((p) => ({ label: p.name, hint: `${p.done}/${p.total}${p.complete ? ' ✓' : ''}`, selected: p.stem === pinned })),
-        ]}
+        items={pickerItems}
         onSelect={(it) => {
-          if (it.label === m.plano_automatico() || it.label.startsWith(m.plano_automatico())) void handleSelect('');
-          else if (it.label === m.plano_nenhum()) void handleSelect('!none');
-          else {
-            const hit = plans.find((p) => p.name === it.label);
-            void handleSelect(hit?.stem ?? '');
-          }
+          const idx = pickerItems.indexOf(it);
+          if (idx <= 0) void handleSelect('');
+          else if (idx === 1) void handleSelect('!none');
+          else void handleSelect(plans[idx - 2]?.stem ?? '');
         }}
       />
     </View>

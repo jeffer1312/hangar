@@ -45,7 +45,7 @@ export default function ActivitySheet() {
   const genWf = useRef(0);
   const genAgent = useRef(0);
 
-  const hasPlan = !!planBadge(session);
+  const hasPlan = !!planBadge(session) || session?.plan_hidden === true;
 
   const fetchAll = useCallback(async () => {
     setWfLoading(true);
