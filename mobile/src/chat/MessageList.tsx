@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { LegendList } from '@legendapp/list/react-native';
@@ -28,6 +28,7 @@ interface Props {
   olderFailed: '' | 'failed' | 'unjoinable';
   onLoadOlder: () => void;
   pending?: PendingMsg[];
+  optionsSlot?: ReactNode;
 }
 
 // O que vira bolha (espelho do MessageList.svelte): tool_result nunca direto — entra no
@@ -48,6 +49,7 @@ export function MessageList({
   olderFailed,
   onLoadOlder,
   pending = [],
+  optionsSlot,
 }: Props) {
   const data = useMemo(() => events.filter(visivel), [events]);
   const tools = useMemo(() => pairTools(events), [events]);
@@ -105,6 +107,7 @@ export function MessageList({
               <UserBubble text={p.text} />
             </View>
           ))}
+          {optionsSlot ?? null}
           {preview ? <PreviewBubble text={preview} md={previewMd} full={previewFull} /> : null}
         </View>
       }

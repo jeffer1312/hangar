@@ -1,19 +1,20 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as ImagePicker from 'expo-image-picker';
 import { uploadFile } from '@hangar/core';
 import { Glass } from '../ui/Glass';
-import { MultiTextInput, type MultiTextInputHandle } from '@/components/MultiTextInput';
+import { MultiTextInput, type MultiTextInputHandle } from '../vendor/happy/components/MultiTextInput';
 import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf } from '../stores/chat';
 
 interface Props {
   serverId: string;
   name: string;
+  draft?: string;
 }
 
-export function Composer({ serverId, name }: Props) {
+export function Composer({ serverId, name, draft }: Props) {
   const { theme } = useUnistyles();
   const chat = chatStore(serverId, name);
   const pending = chat.use((s) => s.pending);
@@ -27,6 +28,18 @@ export function Composer({ serverId, name }: Props) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const inputRef = useRef<MultiTextInputHandle>(null);
+
+  // draft devolvido pelo cancelar do picker (Task 3): adota quando muda
+  useEffect(() => {
+    if (draft !== undefined && draft !== text) {
+      setText(draft);
+      // move caret pro fim após o value controlado ser aplicado
+      requestAnimationFrame(() => {
+        inputRef.current?.setTextAndSelection(draft, { start: draft.length, end: draft.length });
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
 
   const canSend = text.trim().length > 0 && !sending && !uploading;
 

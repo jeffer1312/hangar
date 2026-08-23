@@ -1,5 +1,6 @@
 // Shim para '@/sync/ops' — permissão do Happy não existe no Hangar
 // AskUserQuestion responde por endpoint próprio (plano 2)
+// O card do vendor segue inerte: a resposta vai pelo stepper (Task 3)
 
 export async function sessionAllow(): Promise<void> {
   // no-op
