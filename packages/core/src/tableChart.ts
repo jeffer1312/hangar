@@ -9,8 +9,8 @@
 // "chamadas" e "bruto" juntos põe 327 e 46.900.000 na mesma escala: a primeira barra vira um traço
 // invisível e o gráfico mente. Então o gráfico mostra uma coluna, e quem lê escolhe qual.
 
-import { intlLocale } from './locale';
-import * as m from '../paraglide/messages';
+import { intlLocale } from './i18n';
+import * as m from './paraglide/messages';
 
 export interface ColunaNumerica {
   indice: number;
@@ -19,7 +19,7 @@ export interface ColunaNumerica {
 }
 
 export interface TabelaLida {
-  rotulos: string[];          // a 1a coluna não-numérica: o nome de cada linha
+  rotulos: string[]; // a 1a coluna não-numérica: o nome de cada linha
   colunas: ColunaNumerica[];
 }
 
@@ -29,9 +29,9 @@ export function parseNumero(bruto: string): number | null {
   const s = bruto.trim();
   if (!s) return null;
   // Sufixo de magnitude (k/M/B), com ou sem espaço antes.
-  const m = s.match(/^([+-]?[\d.,\s]+)\s*([kKmMbB])?\s*%?$/);
-  if (!m) return null;
-  let corpo = m[1].replace(/\s/g, '');
+  const mat = s.match(/^([+-]?[\d.,\s]+)\s*([kKmMbB])?\s*%?$/);
+  if (!mat) return null;
+  let corpo = mat[1].replace(/\s/g, '');
   // Formato pt-BR ("1.234,56") vs en ("1,234.56"): manda quem aparece por ÚLTIMO como separador
   // decimal. Sem isto, "46,9" virava 469 e "1.234" virava 1.234.
   const ultimaVirgula = corpo.lastIndexOf(',');
@@ -56,36 +56,65 @@ export function parseNumero(bruto: string): number | null {
   // número que o autor escreveu certo. Quem quer milhar aqui escreve "1234" ou "1,234".
   const n = Number(corpo);
   if (!Number.isFinite(n)) return null;
-  const mult = m[2] ? { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase() as 'k' | 'm' | 'b'] : 1;
+  const mult = mat[2] ? { k: 1e3, m: 1e6, b: 1e9 }[mat[2].toLowerCase() as 'k' | 'm' | 'b'] : 1;
   return n * (mult ?? 1);
 }
 
-/** Lê uma <table> do DOM. Devolve null quando ela não tem dado plotável. */
-export function lerTabela(tabela: HTMLTableElement): TabelaLida | null {
-  const linhas = [...tabela.querySelectorAll('tr')];
-  if (linhas.length < 2) return null;
-
-  const titulos = [...linhas[0].querySelectorAll('th,td')].map((c) => c.textContent?.trim() ?? '');
-  const corpo = linhas.slice(1).map((tr) => [...tr.querySelectorAll('th,td')].map((c) => c.textContent?.trim() ?? ''));
-  if (corpo.length < 2) return null;   // uma linha só não é gráfico, é um número
-
-  // Coluna é numérica quando TODAS as células dela viram número.
-  const nCols = Math.max(titulos.length, ...corpo.map((l) => l.length));
-  const colunas: ColunaNumerica[] = [];
-  let colRotulo = -1;
-  for (let c = 0; c < nCols; c++) {
-    const celulas = corpo.map((l) => l[c] ?? '');
-    const nums = celulas.map(parseNumero);
-    if (nums.every((n) => n !== null)) {
-      colunas.push({ indice: c, titulo: titulos[c] || m.tabela_coluna({ n: c + 1 }), valores: nums as number[] });
-    } else if (colRotulo < 0) {
-      colRotulo = c;   // a 1a não-numérica nomeia as linhas
+/** Lê tabelas markdown (GFM) do texto. Devolve array de tabelas plotáveis (zero a N). */
+export function lerTabelaMarkdown(md: string): TabelaLida[] {
+  const linhas = md.split('\n');
+  const out: TabelaLida[] = [];
+  for (let i = 0; i < linhas.length; ) {
+    const linha = linhas[i].trim();
+    // Cabeçalho: começa e termina com |
+    if (!/^\|(.+)\|$/.test(linha)) {
+      i++;
+      continue;
     }
+    const sep = (linhas[i + 1] ?? '').trim();
+    if (!/^\|[\s:|-]+\|$/.test(sep)) {
+      i++;
+      continue;
+    }
+    const headerCells = linha
+      .slice(1, -1)
+      .split('|')
+      .map((c) => c.trim());
+    const corpo: string[][] = [];
+    let j = i + 2;
+    while (j < linhas.length) {
+      const r = linhas[j].trim();
+      if (!/^\|(.+)\|$/.test(r)) break;
+      const cells = r
+        .slice(1, -1)
+        .split('|')
+        .map((c) => c.trim());
+      corpo.push(cells);
+      j++;
+    }
+    if (corpo.length < 2) {
+      i = j;
+      continue; // uma linha só não é gráfico
+    }
+    const nCols = Math.max(headerCells.length, ...corpo.map((l) => l.length));
+    const colunas: ColunaNumerica[] = [];
+    let colRotulo = -1;
+    for (let c = 0; c < nCols; c++) {
+      const celulas = corpo.map((l) => l[c] ?? '');
+      const nums = celulas.map(parseNumero);
+      if (nums.every((n) => n !== null)) {
+        colunas.push({ indice: c, titulo: headerCells[c] || m.tabela_coluna({ n: c + 1 }), valores: nums as number[] });
+      } else if (colRotulo < 0) {
+        colRotulo = c;
+      }
+    }
+    if (colunas.length) {
+      const rotulos = corpo.map((l, idx) => (colRotulo >= 0 ? l[colRotulo] : '') || m.tabela_linha({ n: idx + 1 }));
+      out.push({ rotulos, colunas });
+    }
+    i = j;
   }
-  if (!colunas.length) return null;
-
-  const rotulos = corpo.map((l, i) => (colRotulo >= 0 ? l[colRotulo] : '') || m.tabela_linha({ n: i + 1 }));
-  return { rotulos, colunas };
+  return out;
 }
 
 /** Formata pro eixo: 46900000 -> "46,9M". */

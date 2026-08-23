@@ -1,3 +1,8 @@
+// Decisão EditDiff (Task 7): Edit/MultiEdit/Write usam UMA implementação só — a do vendor
+// (happy/components/diff/calculateDiff + components/tools/ToolDiffView). O computeEditDiff
+// do core (@hangar/core/editdiff) NÃO entra no mobile. Motivo: vendor já renderiza diff
+// inline com highlight e é o mesmo usado em ToolBubble; duplicar lógica no core/mobile
+// divergiria em borda (contextLines, trimIdent) e custaria bundle.
 import type { ChatEvent } from '@hangar/core';
 import type { ToolCall } from '../vendor/happy/shims/typesMessage';
 

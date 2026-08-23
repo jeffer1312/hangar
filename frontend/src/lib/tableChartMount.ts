@@ -12,7 +12,8 @@
 // primeiro clique em "Gráfico".
 import * as m from '../paraglide/messages';
 import type uPlotTipo from 'uplot';
-import { lerTabela, formatarValor, type TabelaLida } from './tableChart';
+import { formatarValor, type TabelaLida } from '@hangar/core';
+import { lerTabela } from './tableChartDom';
 
 const MARCA = 'cpChart';   // dataset.cpChart = já tratada
 

@@ -27,4 +27,24 @@ describe('toolAdapter', () => {
     expect(m.get('tu1')?.use).toBe(use);
     expect(m.get('tu1')?.result).toBe(res);
   });
+  it('Edit old_string/new_string passa pelo vendor schema (shape knownTools.tsx:244)', () => {
+    const editUse = {
+      kind: 'tool_use',
+      id: 'a:3',
+      tool_name: 'Edit',
+      tool_input: { file_path: '/tmp/x.txt', old_string: 'foo', new_string: 'bar' },
+      tool_use_id: 'tu2',
+      ts: 102,
+    } as unknown as ChatEvent;
+    const tool = toToolCall(editUse);
+    // shape copiado de knownTools.tsx:244 — Edit.input = { file_path, old_string, new_string, replace_all }
+    expect(tool.name).toBe('Edit');
+    expect(tool.input.file_path).toBe('/tmp/x.txt');
+    expect(tool.input.old_string).toBe('foo');
+    expect(tool.input.new_string).toBe('bar');
+    // o vendor EditView lê old_string/new_string via trimIdent + ToolDiffView, então o input intacto é a prova de contrato
+    expect(typeof tool.input.file_path).toBe('string');
+    expect(typeof tool.input.old_string).toBe('string');
+    expect(typeof tool.input.new_string).toBe('string');
+  });
 });

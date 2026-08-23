@@ -1,11 +1,14 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, View, Text } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { UnistylesThemes } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import type { MarkdownStyle } from 'react-native-enriched-markdown';
-import { fileUrl, parseFilePaths } from '@hangar/core';
+import { fileUrl, lerTabelaMarkdown, parseFilePaths } from '@hangar/core';
+import * as m from '../paraglide/messages';
+import { TableChart } from './TableChart';
+import { getTableChartPref, setTableChartPref } from './tableChartPref';
 
 // Tema completo do unistyles (tokens + base) — UnistylesTheme não é exportado na raiz.
 type TemaApp = UnistylesThemes[keyof UnistylesThemes];
@@ -67,10 +70,49 @@ export function AssistantBubble({ text, sessionName }: { text: string; sessionNa
   const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
   const refs = useMemo(() => parseFilePaths(text), [text]);
   const hasRefs = refs.length > 0 && !!sessionName;
+  const tabelas = useMemo(() => lerTabelaMarkdown(text), [text]);
+  const [pref, setPref] = useState(() => getTableChartPref());
+  const [colIndices, setColIndices] = useState<number[]>(() => tabelas.map(() => 0));
+  useEffect(() => {
+    if (colIndices.length !== tabelas.length) setColIndices(tabelas.map(() => 0));
+  }, [tabelas.length, colIndices.length]);
 
   return (
     <View style={styles.wrap}>
       <EnrichedMarkdownText markdown={text} markdownStyle={md} flavor="github" />
+      {tabelas.length > 0 ? (
+        <View style={styles.tableBlock}>
+          <Pressable
+            onPress={() => {
+              const next = pref === 'chart' ? 'table' : 'chart';
+              setPref(next);
+              setTableChartPref(next);
+            }}
+            style={[styles.chartBtn, { borderColor: theme.tokens.border.subtle, backgroundColor: theme.tokens.bg.surface }]}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.chartBtnText, { color: theme.tokens.accent.base }]}>
+              {pref === 'chart' ? m.tabela_botao_tabela() : m.tabela_botao_grafico()}
+            </Text>
+          </Pressable>
+          {pref === 'chart'
+            ? tabelas.map((t, idx) => (
+                <TableChart
+                  key={idx}
+                  tabela={t}
+                  coluna={colIndices[idx] ?? 0}
+                  onColuna={(c) =>
+                    setColIndices((prev) => {
+                      const copy = [...prev];
+                      copy[idx] = c;
+                      return copy;
+                    })
+                  }
+                />
+              ))
+            : null}
+        </View>
+      ) : null}
       {hasRefs ? (
         <View style={styles.atts}>
           {refs.map((r) => {
@@ -133,5 +175,20 @@ const styles = StyleSheet.create((theme) => ({
   chipName: {
     fontSize: theme.base.text.xs,
     flexShrink: 1,
+  },
+  tableBlock: {
+    gap: theme.base.space[2],
+    marginTop: theme.base.space[1],
+  },
+  chartBtn: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: theme.base.space[3],
+    paddingVertical: theme.base.space[1],
+    borderRadius: theme.base.radius.full,
+    borderWidth: 1,
+  },
+  chartBtnText: {
+    fontSize: theme.base.text.sm,
+    fontWeight: '600',
   },
 }));

@@ -28,3 +28,4 @@ export type { ThemeTokens } from './theme';
 export * from './vad';
 export * from './autoEnvio';
 export * from './ditadoEstilo';
+export * from './tableChart';
