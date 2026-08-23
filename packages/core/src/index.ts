@@ -25,3 +25,6 @@ export { configureLocale, localeAtual, intlLocale } from './i18n';
 export type { Locale } from './i18n';
 export { theme, dark as themeDark, light as themeLight, base as themeBase } from './theme';
 export type { ThemeTokens } from './theme';
+export * from './vad';
+export * from './autoEnvio';
+export * from './ditadoEstilo';

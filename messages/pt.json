@@ -315,6 +315,7 @@
   "composer_cache_expirou": "Cache de prompt expirou — o próximo turno reprocessa o contexto inteiro",
   "composer_cache_vale": "Cache de prompt vale por mais {label} (janela de {janela}, contando do último turno)",
   "composer_cancelar_prep_mic": "Cancelar preparação do microfone",
+  "composer_desfazer_limpeza": "desfazer limpeza",
   "composer_ditado_limpo": "Ditado limpo.",
   "composer_ditado_pill": "Ditado",
   "composer_enviando": "enviando…",

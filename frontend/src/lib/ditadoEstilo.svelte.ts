@@ -1,5 +1,4 @@
-import { getConfig, patchConfig } from '@hangar/core';
-import * as m from '../paraglide/messages';
+import { getConfig, patchConfig, type EstiloDitado, ehEstilo } from '@hangar/core';
 
 // Estilo do ditado, vivendo perto do microfone e nao enterrado nas Configuracoes: a decisao "isto
 // aqui e um comando rapido" ou "isto e um pedido inteiro" muda ANTES de falar, e ninguem abre modal
@@ -10,24 +9,7 @@ import * as m from '../paraglide/messages';
 // Store proprio, e nao o criarConfigServidor: aquele carrega ciclo de rascunho/salvar/desfazer pra
 // uma tela inteira de campos. Aqui e UM campo que salva no clique.
 
-export type EstiloDitado = 'limpar' | 'prosa' | 'briefing';
-
-// Funcao, e nao Record de literais, pelo mesmo motivo do rotuloEstado em format.ts: mapa de rotulo
-// com valor literal e o formato que mais vaza sem traduzir. Chamada a cada uso porque a mensagem do
-// Paraglide e compilada — um const de modulo congelaria o idioma do primeiro import.
-export function estilosDitado(): { valor: EstiloDitado; rotulo: string; hint: string }[] {
-  return [
-    { valor: 'limpar', rotulo: m.ditado_estilo_limpar(), hint: m.ditado_estilo_limpar_hint() },
-    { valor: 'prosa', rotulo: m.ditado_estilo_prosa(), hint: m.ditado_estilo_prosa_hint() },
-    { valor: 'briefing', rotulo: m.ditado_estilo_briefing(), hint: m.ditado_estilo_briefing_hint() },
-  ];
-}
-
 const PADRAO: EstiloDitado = 'prosa';
-
-function ehEstilo(v: unknown): v is EstiloDitado {
-  return v === 'limpar' || v === 'prosa' || v === 'briefing';
-}
 
 let atual = $state<EstiloDitado>(PADRAO);
 let carregado = false;

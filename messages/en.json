@@ -315,6 +315,7 @@
   "composer_cache_expirou": "Prompt cache expired — the next turn reprocesses the whole context",
   "composer_cache_vale": "Prompt cache lasts {label} more ({janela} window, counting from the last turn)",
   "composer_cancelar_prep_mic": "Cancel microphone setup",
+  "composer_desfazer_limpeza": "undo cleanup",
   "composer_ditado_limpo": "Dictation cleaned.",
   "composer_ditado_pill": "Dictation",
   "composer_enviando": "uploading…",

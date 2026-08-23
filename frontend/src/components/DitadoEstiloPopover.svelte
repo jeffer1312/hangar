@@ -4,7 +4,8 @@
   // modal, junta ele ao microfone, no mesmo estilo". Escolher o estilo do ditado é do mesmo
   // tamanho que escolher o esforço: um toque, uma lista curta, sem cobrir a tela.
   import Popover from './Popover.svelte';
-  import { ditadoEstilo, estilosDitado, type EstiloDitado } from '../lib/ditadoEstilo.svelte';
+  import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
+  import { estilosDitado, type EstiloDitado } from '@hangar/core';
   import * as m from '../paraglide/messages';
 
   interface Props {

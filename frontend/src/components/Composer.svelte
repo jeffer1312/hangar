@@ -17,11 +17,8 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte';
   import * as m from '../paraglide/messages';
-  import { novoEstadoVad, passoVad } from '../lib/vad';
-  import type { EstadoVad } from '../lib/vad';
+  import { novoEstadoVad, passoVad, podeEnviarSozinho, type EstadoVad, type MotivoFim } from '@hangar/core';
   import { lerMaosLivres } from '../lib/maosLivres';
-  import { podeEnviarSozinho } from '../lib/autoEnvio';
-  import type { MotivoFim } from '../lib/autoEnvio';
   import IconSend from './icons/IconSend.svelte';
   import IconInterrupt from './icons/IconInterrupt.svelte';
   import IconAttach from './icons/IconAttach.svelte';
@@ -43,7 +40,8 @@
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
-  import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
+  import { ditadoEstilo } from '../lib/ditadoEstilo.svelte';
+  import { estilosDitado } from '@hangar/core';
   import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '@hangar/core';
   import type { StatusFields } from '@hangar/core';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
