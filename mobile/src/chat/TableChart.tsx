@@ -28,7 +28,7 @@ export function TableChart({ tabela, coluna, onColuna }: Props) {
   }));
 
   const handleSelect = (it: PillMenuItem) => {
-    const idx = tabela.colunas.findIndex((c) => c.titulo === it.label);
+    const idx = items.indexOf(it);
     if (idx >= 0) onColuna(idx);
     setOpen(false);
   };
@@ -48,7 +48,7 @@ export function TableChart({ tabela, coluna, onColuna }: Props) {
         </Pressable>
       ) : null}
       <BarChart
-        key={col.titulo}
+        key={String(coluna)}
         data={data}
         barWidth={28}
         frontColor={theme.tokens.accent.base}

@@ -49,9 +49,9 @@ export function PillMenu({ open, onClose, items, loading, error, onRetry, onSele
               </View>
             ) : (
               <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-                {items.map((it) => (
+                {items.map((it, idx) => (
                   <Pressable
-                    key={it.label + (it.hint ?? '')}
+                    key={`${it.label}-${idx}-${it.hint ?? ''}`}
                     onPress={() => onSelect(it)}
                     style={[styles.row, it.selected && { backgroundColor: theme.tokens.bg.elevated }]}
                     accessibilityRole="button"
