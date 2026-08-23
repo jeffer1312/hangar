@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -20,6 +20,7 @@ export default function AskSheet() {
   const [payload] = useState(() => chat.use.getState().askPayload);
   const askOpen = chat.use((s) => s.askOpen);
   const [routeError, setRouteError] = useState('');
+  const navegando = useRef(false);
 
   // desmontou por gesto/back = fechou; senão askOpen ficaria true e re-empurraria a rota
   useEffect(() => {
@@ -31,7 +32,7 @@ export default function AskSheet() {
 
   // resposta dada pelo terminal, /clear, ou sucesso -> store fecha e folha sai da pilha
   useEffect(() => {
-    if (!askOpen && router.canGoBack()) {
+    if (!askOpen && !navegando.current && router.canGoBack()) {
       router.back();
     }
   }, [askOpen, router]);
@@ -54,11 +55,10 @@ export default function AskSheet() {
       setRouteError(msg);
       const status = (e as { status?: number })?.status;
       if (status !== 409) {
-        // não-409: fecha ask e abre espelho do terminal (agora rota real — Task 11)
+        navegando.current = true;
         chat.markAskDismissed();
-        router.replace(`/s/${serverId}/${sessionName}/terminal` as never);
+        router.replace(`/s/${serverId}/${sessionName}/terminal?aviso=${encodeURIComponent(msg)}` as never);
       }
-      // 409 mantém a folha com erro visível (não chama markAskDismissed além do acima quando necessário)
       throw e;
     }
   };

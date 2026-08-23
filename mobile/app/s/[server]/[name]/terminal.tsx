@@ -5,12 +5,13 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { TerminalMirror } from '../../../../src/features/terminal/TerminalMirror';
 
 export default function TerminalSheet() {
-  const { server, name } = useLocalSearchParams<{ server: string; name: string }>();
+  const { server, name, aviso } = useLocalSearchParams<{ server: string; name: string; aviso?: string }>();
   const sessionName = Array.isArray(name) ? name[0] : (name ?? '');
+  const avisoText = Array.isArray(aviso) ? aviso[0] : aviso;
   return (
     <KeyboardAvoidingView behavior="padding" style={styles.root}>
       <View style={styles.inner}>
-        <TerminalMirror name={sessionName} />
+        <TerminalMirror name={sessionName} aviso={avisoText} />
       </View>
     </KeyboardAvoidingView>
   );

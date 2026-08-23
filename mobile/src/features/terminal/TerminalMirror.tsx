@@ -8,17 +8,18 @@ import * as m from '../../paraglide/messages';
 
 interface Props {
   name: string;
+  aviso?: string;
 }
 
 const BOTTOM_SLOP = 24;
 const LINES_MAX = 1200;
 
-export function TerminalMirror({ name }: Props) {
+export function TerminalMirror({ name, aviso }: Props) {
   const { theme } = useUnistyles();
   const [lines, setLines] = useState(200);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
-  const [localErr, setLocalErr] = useState('');
+  const [localErr, setLocalErr] = useState(aviso ?? '');
   const [loadingMore, setLoadingMore] = useState(false);
 
   const { text, scrollback, err: pollErr, pending, refresh, setAtBottom } = usePanePoll(name, lines);
@@ -52,19 +53,18 @@ export function TerminalMirror({ name }: Props) {
   const loadMore = useCallback(async () => {
     if (loadingMore || !canLoadMore) return;
     setLoadingMore(true);
-    // 200 → 600 → 1200 conforme spec
     const next = lines === 200 ? 600 : 1200;
     try {
-      // só avança após sucesso
       await getPane(name, next);
       setLines(next);
+      await refresh();
       setLocalErr('');
     } catch (e) {
       setLocalErr(e instanceof Error ? e.message : m.term_erro());
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, canLoadMore, lines, name]);
+  }, [loadingMore, canLoadMore, lines, name, refresh]);
 
   const press = useCallback(
     async (key: NavKey | 'C-c') => {
@@ -138,6 +138,9 @@ export function TerminalMirror({ name }: Props) {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         onScroll={handleScroll}
+        onContentSizeChange={() => {
+          if (atBottomLocal) scrollRef.current?.scrollToEnd({ animated: false });
+        }}
         scrollEventThrottle={16}
         keyboardShouldPersistTaps="handled"
       >
