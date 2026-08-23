@@ -8,12 +8,13 @@ import { mkMarkdownStyle } from './AssistantBubble';
 interface Props {
   text: string;
   // md: prévia que veio do PRÓPRIO agente (sidecar/hook) — markdown incremental.
-  // full: prévia costurada da raspagem do pane — texto já pintado pela TUI, nunca markdown.
+  // full: bloco inteiro, não raspagem parcial do pane (quando vem do sidecar, md e full são ambos true).
+  // Mantida no contrato da Task 1; hoje não muda nada no mobile (sem teto de 10 linhas como na PWA).
   md: boolean;
   full: boolean;
 }
 
-// Caret piscando (▍): só quando !full (prévia costurada não pisca).
+// Caret piscando (▍): sempre visível na prévia, em todos os ramos (espelha AssistantBubble.svelte).
 function Caret() {
   const op = useRef(new Animated.Value(1)).current;
   useEffect(() => {
@@ -50,18 +51,18 @@ export function PreviewBubble({ text, md, full }: Props) {
           <Text style={[styles.todoBody, { color: theme.tokens.text.secondary }]}>
             {todo.body}
           </Text>
-          {!full && !prose ? <Caret /> : null}
+          {!prose ? <Caret /> : null}
         </View>
       ) : null}
       {!prose ? null : md ? (
         <>
           <EnrichedMarkdownText markdown={prose} markdownStyle={mdStyle} flavor="github" />
-          {!full ? <Caret /> : null}
+          <Caret />
         </>
       ) : (
         <Text style={[styles.plain, { color: theme.tokens.text.secondary }]}>
           {prose}
-          {!full ? <Caret /> : null}
+          <Caret />
         </Text>
       )}
     </View>
