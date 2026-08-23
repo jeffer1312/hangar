@@ -14,7 +14,7 @@ from starlette.websockets import WebSocket
 
 from app import termsock
 
-from tmux_teste import matar_sessao
+from tmux_teste import matar_servidor, matar_sessao, novo_socket
 from app.config import settings
 
 SESS = "cp-test-termsock"
@@ -538,7 +538,7 @@ def test_sessao_escondida_nao_muda_o_custo_da_listagem(monkeypatch, tmp_path):
     import uuid
     from app import tmux as tmux_mod
     from app.registry import SessionRegistry
-    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    sock = novo_socket()
     sess = f"cp-test-shell-custo-{uuid.uuid4().hex[:6]}"
     cwd = tmp_path
     chamadas: list = []
@@ -577,6 +577,7 @@ def test_sessao_escondida_nao_muda_o_custo_da_listagem(monkeypatch, tmp_path):
     finally:
         matar_sessao(sess, sock)
         matar_sessao(f"term-{sess}", sock)
+        matar_servidor(sock)     # no psmux a ultima sessao nao leva o servidor junto
 
 
 def test_open_terminal_sem_emulador_devolve_erro_visivel(sessao, monkeypatch):

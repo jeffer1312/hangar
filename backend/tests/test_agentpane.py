@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from app import agentpane, tmux
 
-from tmux_teste import matar_sessao
+from tmux_teste import matar_servidor, matar_sessao, novo_socket
 
 # L12 da revisao final: estes testes dirigem um tmux DE VERDADE. Sem o skipif eles quebravam a
 # suite em maquina sem tmux; com nome FIXO, duas copias sob xdist criavam/matavam a MESMA sessao e
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.skipif(shutil.which("tmux") is None,
 
 @pytest.fixture
 def sessao():
-    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    sock = novo_socket()
     nome = f"cp-agentpane-{uuid.uuid4().hex[:6]}"
 
     def tmux_no_socket(args, **_kw):
@@ -49,11 +49,13 @@ def sessao():
             yield nome
     finally:
         agentpane.invalidate(nome)
-        # kill-SESSION, nunca kill-server: um `-L` esquecido num kill-server derruba o servidor
-        # tmux DEFAULT e com ele todas as sessoes do usuario (mesma nota do test_tmux.py). Matar a
-        # ultima sessao ja encerra este servidor sozinho.
+        # Sessoes primeiro (o `matar_sessao` confere que cada uma saiu), servidor depois: matar a
+        # ultima sessao NAO encerra o servidor no psmux — sobra um `-s __warm__` vivo por socket, e
+        # cada rodada deste fixture cria um socket novo. O `matar_servidor` e o unico kill-server
+        # do repo e ele exige o `-L`, que e a defesa contra derrubar o servidor tmux do usuario.
         for alvo in (nome, f"term-{nome}", ancora):
             matar_sessao(alvo, sock)
+        matar_servidor(sock)
 
 
 def _alvo_esperado(sessao, pane):

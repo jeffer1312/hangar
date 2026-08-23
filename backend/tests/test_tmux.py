@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from app import tmux
 
-from tmux_teste import matar_sessao
+from tmux_teste import matar_servidor, matar_sessao, novo_socket
 
 
 @pytest.fixture(autouse=True)
@@ -123,7 +123,7 @@ def test_has_session_is_exact_against_real_tmux():
     # entao `has_session("X")` respondia VIVO por causa da IRMA "X-2" — e o /input dava "entregue"
     # digitando num pane que nao existe. Os outros testes stubam has_session, por isso nenhum via.
     # Socket proprio (-L) e sessao de nome aleatorio: nao encosta no tmux/sessoes do usuario.
-    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    sock = novo_socket()
     base = f"pocket-{uuid.uuid4().hex[:6]}"
 
     def tmux_on_sock(args, **_kw):
@@ -138,10 +138,11 @@ def test_has_session_is_exact_against_real_tmux():
             assert tmux.has_session(base) is False         # NUNCA existiu (so a irma "-2") -> prefix mentia
             assert tmux.has_session(base[:-3]) is False    # prefixo puro
     finally:
-        # kill-SESSION (alvo exato), nunca kill-server: um `-L` esquecido num kill-server derruba o
-        # servidor tmux DEFAULT e com ele todas as sessoes do usuario. Matar a unica sessao ja encerra
-        # este servidor sozinho, e um socket orfao vazio e inofensivo — nao vale o risco do atalho.
+        # "Matar a unica sessao ja encerra este servidor sozinho" era o que este comentario dizia,
+        # e vale no tmux — nao no psmux, onde sobra um `-s __warm__` por socket, pra sempre. O
+        # kill-server continua proibido solto: o `matar_servidor` exige o `-L` e confere a limpeza.
         matar_sessao(f"{base}-2", sock)
+        matar_servidor(sock)
 
 
 def test_pane_target_uses_exact_session_form():
