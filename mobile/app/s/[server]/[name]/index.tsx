@@ -9,6 +9,7 @@ import { useSessions } from '../../../../src/stores/sessions';
 import { Screen } from '../../../../src/ui/Screen';
 import { ChatHeader } from '../../../../src/chat/ChatHeader';
 import { LoopChip } from '../../../../src/chat/LoopChip';
+import { PlanChip } from '../../../../src/features/plan/PlanChip';
 import { MessageList } from '../../../../src/chat/MessageList';
 import { Composer } from '../../../../src/chat/Composer';
 import { MoreSheet } from '../../../../src/chat/MoreSheet';
@@ -103,6 +104,8 @@ export default function ChatScreen() {
     };
   }, [rowsProvider, name]);
   const provider: Provider | null = rowsProvider ?? fetchedProvider;
+  // sessão para o chip do plano (sem retain, regra do cabeçalho)
+  const planSession = useSessions((s) => s.rows.find((r) => r.serverId === serverId && r.name === name) ?? null);
 
   // abrir a folha quando o store pedir
   useEffect(() => {
@@ -160,6 +163,7 @@ export default function ChatScreen() {
           else router.replace('/');
         }}
         onMore={() => setMoreOpen(true)}
+        chipPlan={planSession ? <PlanChip session={planSession} onPress={() => router.push(`/s/${serverId}/${name}/activity` as never)} /> : null}
         chipLoop={
           stateEvent?.loop_status ? (
             <LoopChip
