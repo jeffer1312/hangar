@@ -6,7 +6,7 @@ import * as m from '../../paraglide/messages';
 interface Props {
   goal: string;
   checkCmd: string;
-  maxIters: number;
+  maxItersText: string;
   requireBranch: boolean;
   suggestions: string[];
   creating: boolean;
@@ -18,7 +18,7 @@ interface Props {
   guideOpenSections: Set<number>;
   onGoalChange: (value: string) => void;
   onCheckCmdChange: (value: string) => void;
-  onMaxItersChange: (value: number) => void;
+  onMaxItersTextChange: (text: string) => void;
   onRequireBranchChange: (value: boolean) => void;
   onRefine: () => void;
   onUndoRefine: () => void;
@@ -43,7 +43,7 @@ const GUIDE_MESSAGES: Record<LoopGuideMessageKey, () => string> = {
 export function LoopForm({
   goal,
   checkCmd,
-  maxIters,
+  maxItersText,
   requireBranch,
   suggestions,
   creating,
@@ -55,7 +55,7 @@ export function LoopForm({
   guideOpenSections,
   onGoalChange,
   onCheckCmdChange,
-  onMaxItersChange,
+  onMaxItersTextChange,
   onRequireBranchChange,
   onRefine,
   onUndoRefine,
@@ -143,8 +143,9 @@ export function LoopForm({
           <Text style={[styles.label, { color: theme.tokens.text.secondary }]}>{m.loop_max_iteracoes()}</Text>
           <TextInput
             style={[styles.input, { backgroundColor: theme.tokens.bg.surface, borderColor: theme.tokens.border.default, color: theme.tokens.text.primary }]}
-            value={String(maxIters)}
-            onChangeText={(value) => onMaxItersChange(Math.min(100, Math.max(1, Number(value) || 1)))}
+            value={maxItersText}
+            onChangeText={(text) => onMaxItersTextChange(text.replace(/[^0-9]/g, ''))}
+            onBlur={() => onMaxItersTextChange(String(Math.min(100, Math.max(1, Number(maxItersText) || 1))))}
             keyboardType="number-pad"
             accessibilityLabel={m.loop_max_iteracoes()}
           />

@@ -32,7 +32,7 @@ export default function LoopSheet() {
 
   const [goal, setGoal] = useState('');
   const [checkCmd, setCheckCmd] = useState('');
-  const [maxIters, setMaxIters] = useState(10);
+  const [maxItersText, setMaxItersText] = useState('10');
   const [requireBranch, setRequireBranch] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState('');
@@ -89,7 +89,7 @@ export default function LoopSheet() {
   function resetForm() {
     setGoal('');
     setCheckCmd('');
-    setMaxIters(10);
+    setMaxItersText('10');
     setRequireBranch(true);
     setCreateErr('');
     setGuideOpen(false);
@@ -136,7 +136,7 @@ export default function LoopSheet() {
       const response = await createLoopForServer(server, sessionName, {
         goal: trimmedGoal,
         check_cmd: checkCmd.trim() || null,
-        max_iters: maxIters,
+        max_iters: Math.min(100, Math.max(1, Number(maxItersText) || 1)),
         require_branch: requireBranch,
       });
       setLoop(response.loop);
@@ -215,7 +215,7 @@ export default function LoopSheet() {
           <LoopForm
             goal={goal}
             checkCmd={checkCmd}
-            maxIters={maxIters}
+            maxItersText={maxItersText}
             requireBranch={requireBranch}
             suggestions={suggestions}
             creating={creating}
@@ -227,7 +227,7 @@ export default function LoopSheet() {
             guideOpenSections={guideOpenSections}
             onGoalChange={setGoal}
             onCheckCmdChange={setCheckCmd}
-            onMaxItersChange={setMaxIters}
+            onMaxItersTextChange={setMaxItersText}
             onRequireBranchChange={setRequireBranch}
             onRefine={() => void refineGoal()}
             onUndoRefine={() => {
