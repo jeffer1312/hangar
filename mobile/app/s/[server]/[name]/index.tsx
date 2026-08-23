@@ -12,6 +12,7 @@ import { LoopChip } from '../../../../src/chat/LoopChip';
 import { PlanChip } from '../../../../src/features/plan/PlanChip';
 import { MessageList } from '../../../../src/chat/MessageList';
 import { Composer } from '../../../../src/chat/Composer';
+import { TuiPill } from '../../../../src/chat/TuiPill';
 import { MoreSheet } from '../../../../src/chat/MoreSheet';
 import { OptionButtons } from '../../../../src/chat/OptionButtons';
 import { pendingAskFromEvents, askPayloadFromToolUse, getSessions, selectOption, interrupt } from '@hangar/core';
@@ -217,6 +218,7 @@ export default function ChatScreen() {
             />
           )}
         </View>
+        {!servidorSumiu ? <TuiPill serverId={serverId} name={name} overlay={!!stateEvent?.overlay} login={!!stateEvent?.login} /> : null}
         {!servidorSumiu ? <Composer serverId={serverId} name={name} draft={draft} /> : null}
       </KeyboardAvoidingView>
     </Screen>

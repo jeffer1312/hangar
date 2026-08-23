@@ -1,14 +1,27 @@
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 import { useLocalSearchParams } from 'expo-router';
-import * as m from '../../../../src/paraglide/messages';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { TerminalMirror } from '../../../../src/features/terminal/TerminalMirror';
 
-// Stub da Task 1: a Task 11 troca este corpo. A rota já existe pra o menu ⋯ navegar.
 export default function TerminalSheet() {
   const { server, name } = useLocalSearchParams<{ server: string; name: string }>();
+  const sessionName = Array.isArray(name) ? name[0] : (name ?? '');
   return (
-    <View style={{ flex: 1, padding: 16 }}>
-      <Text>{m.term_titulo()}</Text>
-      <Text>{String(server)} / {String(name)}</Text>
-    </View>
+    <KeyboardAvoidingView behavior="padding" style={styles.root}>
+      <View style={styles.inner}>
+        <TerminalMirror name={sessionName} />
+      </View>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create((theme) => ({
+  root: {
+    flex: 1,
+    backgroundColor: theme.tokens.bg.base,
+  },
+  inner: {
+    flex: 1,
+  },
+}));

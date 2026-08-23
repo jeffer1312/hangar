@@ -52,8 +52,13 @@ export default function AskSheet() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : m.askq_erro_envio();
       setRouteError(msg);
-      // não dispensar: a folha permanece com o erro visível (vide parecer BLOQUEADOR 1)
-      // router.replace para terminal fica para Task 11 — hoje é stub vazio, mandaria para tela em branco
+      const status = (e as { status?: number })?.status;
+      if (status !== 409) {
+        // não-409: fecha ask e abre espelho do terminal (agora rota real — Task 11)
+        chat.markAskDismissed();
+        router.replace(`/s/${serverId}/${sessionName}/terminal` as never);
+      }
+      // 409 mantém a folha com erro visível (não chama markAskDismissed além do acima quando necessário)
       throw e;
     }
   };
