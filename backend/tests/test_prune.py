@@ -101,14 +101,89 @@ def test_arquivo_sem_stat_nao_derruba(tmp_path):
     assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
 
 
-def test_tmp_meio_escrito_nao_casa(tmp_path):
-    """O .tmp do publisher (escrita atomica) nunca e apanhado pelo glob."""
+def test_tmp_em_voo_nao_e_recolhido(tmp_path):
+    """A poda por CHAVE nunca ve um `.tmp` (suffix diferente), e a poda por idade nao toca no que
+    acabou de ser escrito: o unico risco desta limpeza e apagar uma escrita EM VOO, e ela vive
+    milissegundos."""
     base = tmp_path / "cfg"
     d = base / ".claude-pocket-status"
     d.mkdir(parents=True)
     (d / "aaa.json.tmp.123").write_text("x", encoding="utf-8")
     (d / "aaa.jsonl").write_text("x", encoding="utf-8")
-    assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
+    agora = os.stat(d / "aaa.json.tmp.123").st_mtime + prune._MIN_AGE_TMP - 1
+    assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, agora)) == 0
+    assert (d / "aaa.json.tmp.123").exists()
+
+
+# ── sobra de tmp+rename: sem dono vivo pra proteger, so idade ─────────────────
+
+def test_tmp_orfao_velho_some(tmp_path):
+    """31 destes nesta maquina em 23/08/2026, o mais antigo de 29/07, um deles com o conteudo
+    `{"text":` — a escrita cortada no meio. Ninguem le um `.tmp`: os publicadores escrevem nele e
+    renomeiam, e quem consome le so o `.json`. Um kill -9 entre as duas coisas nao roda `except`
+    nenhum, e o proximo render escreve com OUTRO pid no nome."""
+    base = tmp_path / "cfg"
+    d = base / ".claude-pocket-preview"
+    d.mkdir(parents=True)
+    for nome in ("a.json.tmp", "b.json.4321.tmp", "c.json.tmp.99", "d.json.tmp1234"):
+        f = d / nome
+        f.write_text('{"text":', encoding="utf-8")   # o corte no meio, como veio do disco real
+        _mtime(f, _AGORA, 2)
+    apagados = prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)
+    assert apagados[".claude-pocket-preview (.tmp)"] == 4
+    assert list(d.iterdir()) == []
+
+
+def test_tmp_orfao_some_mesmo_sem_saber_quem_esta_vivo(tmp_path):
+    """FORA do guard de chaves vazias, e de proposito: "nao sei quem esta vivo" e a razao de nao
+    apagar sidecar que alguem AINDA le — e ninguem le um `.tmp`. Sem isto a limpeza nao aconteceria
+    justamente na primeira varredura do boot, quando e comum nao haver sessao nenhuma."""
+    base = tmp_path / "cfg"
+    d = base / ".claude-pocket-status"
+    d.mkdir(parents=True)
+    f = d / "a.json.777.tmp"
+    f.write_text("x", encoding="utf-8")
+    _mtime(f, _AGORA, 2)
+    assert _total(prune._podar([base], set(), set(), set(), _AGORA)) == 1
+    assert not f.exists()
+
+
+def test_tmp_orfao_no_subdir_do_pi_tambem(tmp_path):
+    """O catalogo de modelos do Pi mora em `.claude-pocket-pi/models` — um nivel abaixo."""
+    base = tmp_path / "cfg"
+    d = base / ".claude-pocket-pi" / "models"
+    d.mkdir(parents=True)
+    f = d / "aaa.json.5.tmp"
+    f.write_text("x", encoding="utf-8")
+    _mtime(f, _AGORA, 2)
+    assert _total(prune._podar([base], {"viva"}, {"sessao"}, {"1"}, _AGORA)) == 1
+    assert not f.exists()
+
+
+def test_tmp_orfao_no_active_que_a_poda_normal_nem_visita(tmp_path):
+    """`.claude-pocket-active` e keyed por boot_id, entao nao esta em nenhuma das tres familias da
+    poda por chave — e acumulava tmp do mesmo jeito (um deles nesta maquina)."""
+    base = tmp_path / "cfg"
+    d = base / ".claude-pocket-active"
+    d.mkdir(parents=True)
+    f = d / "aaa.json.tmp"
+    f.write_text("x", encoding="utf-8")
+    _mtime(f, _AGORA, 2)
+    vivo = d / "bbb.json"
+    vivo.write_text("x", encoding="utf-8")
+    _mtime(vivo, _AGORA, 30)
+    assert _total(prune._podar([base], {"viva"}, {"sessao"}, {"1"}, _AGORA)) == 1
+    assert not f.exists()
+    assert vivo.exists()          # sidecar de verdade nao e assunto desta limpeza
+
+
+def test_sidecar_de_verdade_nunca_casa_o_padrao_de_tmp():
+    """A ancora no FIM do nome e o que separa: chave de sessao e uuid/timestamp, e um `.json` ou
+    `.jsonl` nunca termina em `.tmp`."""
+    for real in ("2026-08-22T01-05-00-731Z_01a026ff.json", "aaa-bbb.json", "minha-sessao.jsonl"):
+        assert not prune._TMP_RE.search(real)
+    for lixo in ("a.json.tmp", "a.json.4321.tmp", "a.json.tmp.99", "a.json.tmp1234"):
+        assert prune._TMP_RE.search(lixo)
 
 
 def test_conjunto_vazio_de_chaves_NAO_apaga_nada(tmp_path):
