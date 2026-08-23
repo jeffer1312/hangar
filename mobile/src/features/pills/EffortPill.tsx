@@ -42,9 +42,8 @@ export function EffortPill({ serverId, name }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<PillMenuItem[]>([]);
 
-  // haiku não tem esforço — esconde (hooks já chamados acima, retorno condicional é seguro)
+  // haiku não tem esforço — esconde (retorno condicional após todos os hooks, seguro)
   const modelLabel = pillLabels(statusFields, {}).model;
-  if (isClaude && semEsforco(modelLabel)) return null;
 
   const display = useMemo(() => {
     if (tempError) return tempError;
@@ -86,8 +85,8 @@ export function EffortPill({ serverId, name }: Props) {
   }, [name, isPi, isKimi, isCodex, chosenEffort, statusFields?.effort, statusFields?.model]);
 
   useEffect(() => {
-    if (open) void load();
-  }, [open, load]);
+    if (open && !(isClaude && semEsforco(modelLabel))) void load();
+  }, [open, load, isClaude, modelLabel]);
 
   const handleSelect = useCallback(
     async (it: PillMenuItem) => {
@@ -132,6 +131,8 @@ export function EffortPill({ serverId, name }: Props) {
     },
     [name, isPi, isKimi, isCodex],
   );
+
+  if (isClaude && semEsforco(modelLabel)) return null;
 
   return (
     <>
