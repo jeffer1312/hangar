@@ -17,6 +17,13 @@ import * as path from "node:path";
 const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "cp-state-test-"));
 process.env.CLAUDE_CONFIG_DIR = cfg;
 process.env.TMUX_PANE = "%999";
+// HERDADA do pane em que o teste roda, e no Windows ela SEMPRE existe: `paneKey()` prefere
+// `PSMUX_SESSION` (o pane e `%1` em toda sessao do psmux), entao o bilhete saia com o nome da
+// sessao de QUEM RODA o teste e o `999.json` nunca nascia — ENOENT na primeira assercao, antes de
+// medir coisa alguma. Mesma familia do `b4d97790`: um caso que so rodava num dos dois sistemas.
+// Aqui o teste ESCOLHE o pane, entao a variavel herdada tem de sair; o ramo do psmux tem caso
+// proprio no fim do arquivo.
+delete process.env.PSMUX_SESSION;
 
 const fakePi = () => {
   const handlers = new Map();
@@ -94,6 +101,21 @@ await disparar(piPai, "session_start", sessao(C, "outro"));
 assert.equal(bilhete(), C, "troca legitima de sessao atualiza o bilhete");
 assert.ok(temCatalogo(C), "e o catalogo da sessao nova");
 
+// ── caso real 3: no psmux a chave do bilhete e o NOME DA SESSAO, nao o pane ────────────────────
+// O pane so e unico no tmux. No psmux ele e numerado por SESSAO — quatro sessoes vivas, TODAS com
+// `TMUX_PANE=%1` (medido 21/08/2026) —, e com o pane como chave a segunda sessao Pi sobrescrevia o
+// bilhete da primeira: as duas passavam a apontar pro mesmo transcript e uma abria a conversa da
+// outra. `paneKey()` prefere `PSMUX_SESSION` por isso, e sanitiza porque ali a chave vira NOME DE
+// ARQUIVO (a chave da linha, que nao vira, vai crua — ver `chaveDaLinha`).
+process.env.PSMUX_SESSION = "pi teste/2";
+const piPsmux = fakePi();
+(await import("./pi/cp-state.ts?psmux=1")).default(piPsmux);
+await disparar(piPsmux, "session_start", sessao(A, "gpt-5.6-sol"));
+const noPsmux = path.join(cfg, ".claude-pocket-pi", "pi-teste-2.json");
+assert.ok(fs.existsSync(noPsmux), "no psmux o bilhete e do NOME da sessao, sanitizado pra arquivo");
+assert.equal(JSON.parse(fs.readFileSync(noPsmux, "utf8")).file, A);
+delete process.env.PSMUX_SESSION;
+
 fs.rmSync(cfg, { recursive: true, force: true });
-console.log("ok: subagente nao publica nada; sessao do usuario publica (cp-state.ts)");
+console.log("ok: subagente nao publica nada; sessao do usuario publica; psmux chaveia pelo nome (cp-state.ts)");
 process.exit(0);   // conectar() agendou retry do WebSocket; nada a esperar aqui
