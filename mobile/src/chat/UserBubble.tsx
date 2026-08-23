@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
-import { parseImageMessage, uploadUrl, fileUrl } from '@hangar/core';
+import { parseImageMessage, uploadUrl } from '@hangar/core';
 
 // Bolha do usuário: alinhada à direita, cor bubbleUser do tema (espelho do app.css).
 // Se parseImageMessage(text) não nulo → legenda + miniaturas (uploadUrl/fileUrl).

@@ -5,7 +5,7 @@ import type { UnistylesThemes } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import type { MarkdownStyle } from 'react-native-enriched-markdown';
-import { fileUrl, lerTabelaMarkdown, parseFilePaths } from '@hangar/core';
+import { fileUrlNative, fileAuthHeader, lerTabelaMarkdown, parseFilePaths } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { TableChart } from './TableChart';
 import { getTableChartPref, setTableChartPref } from './tableChartPref';
@@ -117,9 +117,10 @@ export function AssistantBubble({ text, sessionName }: { text: string; sessionNa
         <View style={styles.atts}>
           {refs.map((r) => {
             const isImg = r.kind === 'image';
-            const uri = r.url ?? fileUrl(sessionName!, r.path);
+            const uri = r.url ?? fileUrlNative(sessionName!, r.path);
+            const headers = r.url ? undefined : fileAuthHeader();
             if (isImg) {
-              return <Image key={r.path} source={{ uri }} style={styles.thumb} contentFit="cover" transition={150} />;
+              return <Image key={r.path} source={{ uri, headers }} style={styles.thumb} contentFit="cover" transition={150} />;
             }
             const icon = r.kind === 'pdf' ? '📄' : r.kind === 'html' ? '🌐' : r.kind === 'audio' ? '🎵' : '📎';
             return (

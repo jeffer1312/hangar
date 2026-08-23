@@ -47,11 +47,26 @@ export function fileUrl(name: string, path: string): string {
   return `${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(t)}`;
 }
 
+// URL nativa (sem token na query) — para WebView/Image nativo que manda Authorization header.
+// PWA/browser continua no fileUrl com ?token porque <img> não manda header.
+export function fileUrlNative(name: string, path: string): string {
+  return `${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`;
+}
+
+// Header Authorization para caminho nativo (mesmo token do fileUrl, mas só no header).
+export function fileAuthHeader(): Record<string, string> {
+  return authHeaders();
+}
+
 // URL de uma imagem ENVIADA do phone (upload), servida por <cwd>/.claude-pocket-uploads/<basename>.
 // `?token` igual as de cima: <img> nao manda header Authorization e cross-origin nao leva cookie.
 export function uploadUrl(name: string, filename: string): string {
   const t = apiEnv().getToken() ?? '';
   return `${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}?token=${encodeURIComponent(t)}`;
+}
+
+export function uploadUrlNative(name: string, filename: string): string {
+  return `${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/uploads/${encodeURIComponent(filename)}`;
 }
 
 // URL do mp3 gerado. `?token` porque <audio> nao manda header Authorization e o front vem de outra

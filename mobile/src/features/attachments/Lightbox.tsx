@@ -9,11 +9,12 @@ import * as m from '../../paraglide/messages';
 interface Props {
   visible: boolean;
   uri: string;
+  headers?: Record<string, string>;
   filename: string;
   onClose: () => void;
 }
 
-export function Lightbox({ visible, uri, filename, onClose }: Props) {
+export function Lightbox({ visible, uri, headers, filename, onClose }: Props) {
   const { theme } = useUnistyles();
   const insets = useSafeAreaInsets();
   const scale = useSharedValue(1);
@@ -80,7 +81,7 @@ export function Lightbox({ visible, uri, filename, onClose }: Props) {
         </Pressable>
         <GestureDetector gesture={composed}>
           <Animated.View style={[styles.imgWrap, animatedStyle]}>
-            <Image source={{ uri }} style={styles.img} contentFit="contain" transition={200} />
+            <Image source={{ uri, headers }} style={styles.img} contentFit="contain" transition={200} />
           </Animated.View>
         </GestureDetector>
         <Pressable style={styles.tapClose} onPress={handleClose} />

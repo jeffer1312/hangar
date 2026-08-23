@@ -104,6 +104,10 @@ describe('filesStore', () => {
     expect(api.use.getState().conteudo?.text).toBe('new');
     expect(api.use.getState().conteudo?.digest).toBe('d-new');
     expect(writeFile).toHaveBeenCalledWith(sessao, 'a.txt', 'new', 'd-old');
+    // espera o void recarregarDiff(path) — é fire-and-forget, precisa tick
+    await new Promise((r) => setTimeout(r, 20));
+    expect(pathDiffMock).toHaveBeenLastCalledWith(sessao, 'a.txt', 'branch');
+    expect(api.use.getState().diff?.diff).toBe('diffnew');
   });
 
   it('salvar retorna erro quando digest incompatível e não altera conteudo', async () => {

@@ -9,10 +9,9 @@ interface Props {
   initialText: string;
   onSalvar: (texto: string) => Promise<string | null>;
   onDescartar: () => void;
-  onClose: () => void;
 }
 
-export function FileEditor({ path, initialText, onSalvar, onDescartar, onClose }: Props) {
+export function FileEditor({ path, initialText, onSalvar, onDescartar }: Props) {
   const { theme } = useUnistyles();
   const [texto, setTexto] = useState(initialText);
   const [salvando, setSalvando] = useState(false);
@@ -35,7 +34,6 @@ export function FileEditor({ path, initialText, onSalvar, onDescartar, onClose }
     }
     setSalvo(true);
     setTimeout(() => setSalvo(false), 2000);
-    onClose();
   }
 
   function handleDescartar() {

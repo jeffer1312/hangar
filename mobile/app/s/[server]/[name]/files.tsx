@@ -86,7 +86,6 @@ export default function FilesSheet() {
   const handleSalvar = async (texto: string): Promise<string | null> => {
     if (!selecionado) return 'erro_arq_inexistente';
     const r = await api.salvar(selecionado, texto);
-    if (!r) setEditando(false);
     return r;
   };
 
@@ -129,7 +128,6 @@ export default function FilesSheet() {
             initialText={conteudo.text}
             onSalvar={handleSalvar}
             onDescartar={() => setEditando(false)}
-            onClose={() => setEditando(false)}
           />
         ) : selecionado ? (
           <FileViewer

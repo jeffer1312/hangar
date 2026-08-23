@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import * as m from '../../../../src/paraglide/messages';
-import { fileUrl, listUploads, uploadUrl } from '@hangar/core';
+import { fileUrl, fileUrlNative, fileAuthHeader, listUploads, uploadUrl, uploadUrlNative } from '@hangar/core';
 import type { UploadFile } from '@hangar/core';
 import { AttachmentCard } from '../../../../src/features/attachments/AttachmentCard';
 import { Lightbox } from '../../../../src/features/attachments/Lightbox';
@@ -21,7 +21,7 @@ export default function AttachmentsSheet() {
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<UploadFile | null>(null);
-  const [docUrl, setDocUrl] = useState<{ url: string; title: string } | null>(null);
+  const [docUrl, setDocUrl] = useState<{ url: string; headers?: Record<string, string>; title: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,27 +48,23 @@ export default function AttachmentsSheet() {
         return;
       }
       if (k === 'html' || k === 'pdf') {
-        // Task 12 route exists as stub: navigate there; until then fallback to inline WebView
-        // We try push, but also keep inline fallback for visual parity if route empty.
-        const url = fileUrl(sessionName, f.filename);
-        // If files route is still stub, WebView inline gives visual proof; otherwise push navigates.
-        // Prefer push to keep navigation consistent; fallback is docUrl inline.
         try {
           router.push(`/s/${serverId}/${sessionName}/files?path=${encodeURIComponent(f.filename)}` as never);
           return;
         } catch {
-          setDocUrl({ url, title: f.filename });
+          const url = fileUrlNative(sessionName, f.filename);
+          setDocUrl({ url, headers: fileAuthHeader(), title: f.filename });
           return;
         }
       }
-      // video/audio/other: open via system viewer (fileUrl in browser) – for parity show inline WebView for video
+      // video/audio/other: inline WebView — modo nativo com header
       if (k === 'video' || k === 'audio') {
-        const url = fileUrl(sessionName, f.filename);
-        setDocUrl({ url, title: f.filename });
+        const url = fileUrlNative(sessionName, f.filename);
+        setDocUrl({ url, headers: fileAuthHeader(), title: f.filename });
         return;
       }
-      const url = uploadUrl(sessionName, f.filename);
-      setDocUrl({ url, title: f.filename });
+      const url = uploadUrlNative(sessionName, f.filename);
+      setDocUrl({ url, headers: fileAuthHeader(), title: f.filename });
     },
     [sessionName, serverId, router],
   );
@@ -84,7 +80,7 @@ export default function AttachmentsSheet() {
             <Text style={{ color: theme.tokens.text.primary }}>✕</Text>
           </Pressable>
         </View>
-        <WebView source={{ uri: docUrl.url }} style={styles.webview} />
+        <WebView source={{ uri: docUrl.url, headers: docUrl.headers }} style={styles.webview} />
       </View>
     );
   }
@@ -120,7 +116,8 @@ export default function AttachmentsSheet() {
 
       <Lightbox
         visible={!!lightbox}
-        uri={lightbox ? uploadUrl(sessionName, lightbox.filename) : ''}
+        uri={lightbox ? uploadUrlNative(sessionName, lightbox.filename) : ''}
+        headers={fileAuthHeader()}
         filename={lightbox?.filename ?? ''}
         onClose={() => setLightbox(null)}
       />

@@ -3,7 +3,7 @@ import { Pressable, Text, View, ScrollView } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { WebView } from 'react-native-webview';
 import type { FileContent, PathDiff } from '@hangar/core';
-import { fileUrl, mensagemDeErro } from '@hangar/core';
+import { fileUrlNative, fileAuthHeader, mensagemDeErro } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { DiffView } from '../../vendor/happy/components/diff/DiffView';
 
@@ -33,11 +33,10 @@ export function FileViewer({ path, conteudo, diff, loading, erro, escopo, onEsco
   const temDiff = !!diffDoArquivo && diffDoArquivo.diff.trim() !== '';
   const podeEditar = !!doArquivo && doArquivo.digest !== null;
 
-  // html/pdf via WebView
+  // html/pdf via WebView — modo nativo: token só no header GET, nunca na URL (BLOQUEADOR 1)
   if (isHtmlPdf(path) && doArquivo) {
-    const uri = fileUrl(name, path);
-    // token já está na URL; mas também manda header Authorization se tiver token no apiEnv
-    // O fileUrl já inclui token; header é redundância para Android WebView que aceita GET headers
+    const uri = fileUrlNative(name, path);
+    const headers = fileAuthHeader();
     return (
       <View style={styles.root}>
         <View style={[styles.bar, { borderBottomColor: theme.tokens.border.subtle }]}>
@@ -45,7 +44,7 @@ export function FileViewer({ path, conteudo, diff, loading, erro, escopo, onEsco
             {path}
           </Text>
         </View>
-        <WebView source={{ uri, headers: {} }} style={styles.webview} />
+        <WebView source={{ uri, headers }} style={styles.webview} />
       </View>
     );
   }
