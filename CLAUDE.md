@@ -339,6 +339,24 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **Before typing into the Pi's composer, ASK — the screen cannot tell a notice from a draft**
+  (`terminal_input._composer_ocupado_pi` + `pi_inbox.perguntar` + `responderPergunta` in
+  `scripts/pi/cp-state.ts`). Pi prints extension notices (`console.error`) **inside the composer
+  band**, with the same ANSI as typed text; measured 22-23/08/2026, `cursor_flag` is 0 either way.
+  So the anti-paste guard counted our own `[cp-state] linha do pocket conectada` as a draft and
+  every `/cp-model`/`/cp-think` came back **409 with the composer empty**. Recognizing each phrase by
+  regex is whack-a-mole (`/reload` draws a fourth one no regex of ours knows), and the "compare two
+  captures — a notice is static, a draft changes" upgrade the code itself proposed **was measured and
+  does not hold**: a *parked* draft is static too, and the parked draft is exactly what the guard
+  exists for. What answers is the Pi: `ctx.ui.getEditorText()` returns `""` with a notice on the band
+  and the exact text with a draft. So the `pi_inbox` line, until then delivery-only, took a second
+  verb — `{id, pedir}` out, `{id, resposta}` back. Four rules: questions live in a **separate**
+  futures dict from deliveries (a delivery resolves `(ok, erro)` and a question resolves a value);
+  `""` is an **answer** and `None` is absence (→ fall back to scraping, so an old extension behaves
+  exactly as before); the question does **not** take `linha.lock` (that lock orders *writes*, and a
+  read must not queue behind a 3s ACK); and it uses `pi_inbox.linha_de(name, pane_id)`, never the raw
+  pane. Note `/reload` drops and re-raises the line — a command fired inside that ~5s window falls to
+  plan B and can still 409.
 - **Ditado: a transcrição não é o problema, o que vem depois é** (`app/transcribe.py` +
   `app/narrar.py:limpar_ditado`). Duas etapas, dois modelos: a Whisper (`whisper-large-v3-turbo`)
   ouve, e um LLM limpa. Tudo aqui foi **medido em 14/08/2026** — 5 ditados reais × 3 execuções ×
@@ -579,6 +597,19 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     **5s** and returns rc=1 with the session still alive. `tmux.alvo_de_kill` is the single place
     that knows this (production and tests share it); test teardowns that missed it left **65** orphan
     servers on this machine and made `test_termsock` fail the NEXT case with "duplicate session".
+  - **Killing the last session does not end the SERVER, and `list-sessions` cannot tell you.** psmux
+    keeps a pre-warmed `tmux server -s __warm__ -L <socket>` process alive per socket, forever, each
+    holding a shell and a console. On an emptied socket `list-sessions` answers rc=0 with **empty
+    output** — byte-identical to a socket that never existed — so there is no question to ask the
+    multiplexer; the process table is the only answer. This is a *test* leak with a machine-sized
+    bill: 70 orphans here on 22/08/2026, ~12,7 GB of working set, and the Claude session running the
+    suite died with the VM at its memory ceiling (`0xc00000fd`). Not one test ever went red. The
+    cleanup is `kill-server` **on the own `-L` socket** (rc=0, 0,1s, idempotent even on a virgin
+    socket) — never bare, which would take down the user's default tmux server. `tests/tmux_teste.py`
+    is the single place that knows it (`novo_socket`/`matar_servidor`, which refuses an empty socket),
+    and a session-scoped conftest fixture fails the suite if any registered socket still has a live
+    process. On Linux the same defect is harmless (the server exits with the last session; a 0-byte
+    socket file stays), so the fix is the same command with no OS branch.
   - **`rename-session` to an occupied name overwrites instead of failing** (rc=0). The session that
     was there does not die: it becomes unreachable, with the name pointing at the other one, and both
     processes keep running. `registry.rename` depends on the refusal to fall back to killing the old
