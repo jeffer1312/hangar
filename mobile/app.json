@@ -29,6 +29,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO"
