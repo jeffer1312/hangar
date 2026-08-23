@@ -77,6 +77,7 @@
   "arq_sem_conteudo": "No line with that text.",
   "arq_sem_mudanca": "This file hasn't changed — showing its contents.",
   "arq_sem_nome": "No file with that name.",
+  "arq_sem_resultados": "Nothing found",
   "arq_sessao_encerrada": "This session has ended.",
   "arq_so_modificados": "Changed only",
   "arq_trocar_escopo": "Change what it compares against",
