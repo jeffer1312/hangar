@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, View, ActivityIndicator } from 'react-native';
+import { Pressable, Text, TextInput, View, ActivityIndicator } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
 import { getPane, sendKey, sendTermInput } from '@hangar/core';
 import type { NavKey } from '@hangar/core';
 import { usePanePoll } from './usePanePoll';
@@ -25,7 +26,7 @@ export function TerminalMirror({ name, aviso }: Props) {
   const { text, scrollback, err: pollErr, pending, refresh, setAtBottom } = usePanePoll(name, lines);
   const err = localErr || pollErr;
 
-  const scrollRef = useRef<ScrollView>(null);
+  const listRef = useRef<LegendListRef>(null);
   const [atBottomLocal, setAtBottomLocal] = useState(true);
 
   const handleScroll = useCallback(
@@ -35,15 +36,12 @@ export function TerminalMirror({ name, aviso }: Props) {
       const now = dist <= BOTTOM_SLOP;
       setAtBottomLocal(now);
       setAtBottom(now);
-      if (now) {
-        // limpa pending quando volta pro fim — hook já faz via setAtBottom
-      }
     },
     [setAtBottom],
   );
 
   const toBottom = useCallback(() => {
-    scrollRef.current?.scrollToEnd({ animated: true });
+    listRef.current?.scrollToEnd({ animated: true });
     setAtBottomLocal(true);
     setAtBottom(true);
   }, [setAtBottom]);
@@ -133,31 +131,34 @@ export function TerminalMirror({ name, aviso }: Props) {
         </Pressable>
       ) : null}
 
-      <ScrollView
-        ref={scrollRef}
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
+      <LegendList
+        ref={listRef}
+        data={displayLines}
+        keyExtractor={(_, i) => String(i)}
+        renderItem={({ item }) => (
+          <Text
+            style={[
+              styles.mono,
+              {
+                color: theme.tokens.text.primary,
+                fontFamily: theme.base.fontMono,
+              },
+            ]}
+            selectable
+          >
+            {item || ' '}
+          </Text>
+        )}
+        estimatedItemSize={14}
+        alignItemsAtEnd
+        initialScrollAtEnd
+        maintainScrollAtEnd
         onScroll={handleScroll}
-        onContentSizeChange={() => {
-          if (atBottomLocal) scrollRef.current?.scrollToEnd({ animated: false });
-        }}
         scrollEventThrottle={16}
         keyboardShouldPersistTaps="handled"
-      >
-        <Text
-          style={[
-            styles.mono,
-            {
-              color: theme.tokens.text.primary,
-              fontFamily: theme.base.fontMono,
-            },
-          ]}
-          selectable
-        >
-          {text || ' '}
-        </Text>
-        {/* linhas alternativas: se quiser manter displayLines, mas Text acima já mostra tudo */}
-      </ScrollView>
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+      />
 
       {err ? (
         <Text style={[styles.err, { color: theme.tokens.status.error }]} accessibilityRole="alert">
