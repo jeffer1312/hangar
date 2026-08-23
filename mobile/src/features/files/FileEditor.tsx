@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { MultiTextInput } from '../../vendor/happy/components/MultiTextInput';
@@ -17,8 +17,15 @@ export function FileEditor({ path, initialText, onSalvar, onDescartar }: Props) 
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [salvo, setSalvo] = useState(false);
+  const salvoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => setTexto(initialText), [initialText]);
+
+  useEffect(() => {
+    return () => {
+      if (salvoTimer.current) clearTimeout(salvoTimer.current);
+    };
+  }, []);
 
   const sujo = texto !== initialText;
 
@@ -33,7 +40,8 @@ export function FileEditor({ path, initialText, onSalvar, onDescartar }: Props) 
       return;
     }
     setSalvo(true);
-    setTimeout(() => setSalvo(false), 2000);
+    if (salvoTimer.current) clearTimeout(salvoTimer.current);
+    salvoTimer.current = setTimeout(() => setSalvo(false), 2000);
   }
 
   function handleDescartar() {

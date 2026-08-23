@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Pressable, Text, View, ScrollView } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Pressable, Text, View, ScrollView } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { WebView } from 'react-native-webview';
 import type { FileContent, PathDiff } from '@hangar/core';
@@ -27,6 +27,8 @@ function isHtmlPdf(path: string) {
 export function FileViewer({ path, conteudo, diff, loading, erro, escopo, onEscopo, onEditar, name }: Props) {
   const { theme } = useUnistyles();
   const [verArquivo, setVerArquivo] = useState(false);
+  const [webErro, setWebErro] = useState<string | null>(null);
+  const [webCarregando, setWebCarregando] = useState(true);
 
   const doArquivo = conteudo && conteudo.path === path ? conteudo : null;
   const diffDoArquivo = diff && diff.path === path ? diff : null;
@@ -34,9 +36,25 @@ export function FileViewer({ path, conteudo, diff, loading, erro, escopo, onEsco
   const podeEditar = !!doArquivo && doArquivo.digest !== null;
 
   // html/pdf via WebView — modo nativo: token só no header GET, nunca na URL (BLOQUEADOR 1)
+  // Guarda de carregamento/erro do WebView (BLOQUEADOR 4): nunca área vazia
+  useEffect(() => {
+    setWebErro(null);
+    setWebCarregando(true);
+  }, [path, name]);
+
   if (isHtmlPdf(path) && doArquivo) {
     const uri = fileUrlNative(name, path);
     const headers = fileAuthHeader();
+    const semToken = Object.keys(headers).length === 0;
+    if (semToken) {
+      return (
+        <View style={styles.root}>
+          <Text style={[styles.erro, { color: theme.tokens.status.error }]} accessibilityRole="alert">
+            {m.sessao_expirada()}
+          </Text>
+        </View>
+      );
+    }
     return (
       <View style={styles.root}>
         <View style={[styles.bar, { borderBottomColor: theme.tokens.border.subtle }]}>
@@ -44,7 +62,34 @@ export function FileViewer({ path, conteudo, diff, loading, erro, escopo, onEsco
             {path}
           </Text>
         </View>
-        <WebView source={{ uri, headers }} style={styles.webview} />
+        {webCarregando && !webErro ? (
+          <View style={styles.webLoading}>
+            <ActivityIndicator color={theme.tokens.text.muted} />
+            <Text style={[styles.aviso, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
+          </View>
+        ) : null}
+        {webErro ? (
+          <Text style={[styles.erro, { color: theme.tokens.status.error }]} accessibilityRole="alert">
+            {webErro}
+          </Text>
+        ) : null}
+        <WebView
+          source={{ uri, headers }}
+          style={styles.webview}
+          onLoadStart={() => {
+            setWebCarregando(true);
+            setWebErro(null);
+          }}
+          onLoad={() => setWebCarregando(false)}
+          onError={(e) => {
+            setWebCarregando(false);
+            setWebErro(e.nativeEvent.description || m.comum_falha_carregar_modelos());
+          }}
+          onHttpError={(e) => {
+            setWebCarregando(false);
+            setWebErro(`HTTP ${e.nativeEvent.statusCode}: ${e.nativeEvent.description}`);
+          }}
+        />
       </View>
     );
   }
@@ -246,6 +291,12 @@ const styles = StyleSheet.create((theme) => ({
   },
   webview: {
     flex: 1,
+  },
+  webLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: theme.base.space[3],
   },
   codeView: {
     padding: theme.base.space[2],

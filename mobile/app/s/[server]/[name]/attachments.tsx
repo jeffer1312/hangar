@@ -4,11 +4,12 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import * as m from '../../../../src/paraglide/messages';
-import { fileUrl, fileUrlNative, fileAuthHeader, listUploads, uploadUrl, uploadUrlNative } from '@hangar/core';
+import { fileUrlNative, fileAuthHeader, listUploads, uploadUrlNative } from '@hangar/core';
 import type { UploadFile } from '@hangar/core';
 import { AttachmentCard } from '../../../../src/features/attachments/AttachmentCard';
 import { Lightbox } from '../../../../src/features/attachments/Lightbox';
 import { fileKind } from '@hangar/core';
+import { useServers } from '../../../../src/stores/servers';
 
 export default function AttachmentsSheet() {
   const { theme } = useUnistyles();
@@ -22,6 +23,10 @@ export default function AttachmentsSheet() {
   const [erro, setErro] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<UploadFile | null>(null);
   const [docUrl, setDocUrl] = useState<{ url: string; headers?: Record<string, string>; title: string } | null>(null);
+  const [webErro, setWebErro] = useState<string | null>(null);
+  const [webCarregando, setWebCarregando] = useState(true);
+  const ready = useServers((s) => s.ready);
+  const servidorSumiu = !ready ? false : !useServers.getState().servers.some((s) => s.id === serverId);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -37,8 +42,15 @@ export default function AttachmentsSheet() {
   }, [sessionName]);
 
   useEffect(() => {
+    if (!ready) return;
+    if (!useServers.getState().ensureActive(serverId)) return;
     void load();
-  }, [load]);
+  }, [load, ready, serverId]);
+
+  useEffect(() => {
+    setWebErro(null);
+    setWebCarregando(true);
+  }, [docUrl?.url]);
 
   const handlePress = useCallback(
     (f: UploadFile) => {
@@ -70,6 +82,24 @@ export default function AttachmentsSheet() {
   );
 
   if (docUrl) {
+    const semToken = !docUrl.headers || Object.keys(docUrl.headers).length === 0;
+    if (semToken) {
+      return (
+        <View style={[styles.container, { backgroundColor: theme.tokens.bg.base }]}>
+          <View style={[styles.bar, { borderBottomColor: theme.tokens.border.subtle }]}>
+            <Text style={[styles.docTitle, { color: theme.tokens.text.primary }]} numberOfLines={1}>
+              {docUrl.title}
+            </Text>
+            <Pressable onPress={() => setDocUrl(null)} style={[styles.docBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button" accessibilityLabel={m.anexos_fechar_visualizacao()}>
+              <Text style={{ color: theme.tokens.text.primary }}>✕</Text>
+            </Pressable>
+          </View>
+          <Text style={[styles.err, { color: theme.tokens.status.error }]} accessibilityRole="alert">
+            {m.sessao_expirada()}
+          </Text>
+        </View>
+      );
+    }
     return (
       <View style={[styles.container, { backgroundColor: theme.tokens.bg.base }]}>
         <View style={[styles.bar, { borderBottomColor: theme.tokens.border.subtle }]}>
@@ -80,7 +110,53 @@ export default function AttachmentsSheet() {
             <Text style={{ color: theme.tokens.text.primary }}>✕</Text>
           </Pressable>
         </View>
-        <WebView source={{ uri: docUrl.url, headers: docUrl.headers }} style={styles.webview} />
+        {webCarregando && !webErro ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 }}>
+            <ActivityIndicator color={theme.tokens.text.muted} />
+            <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
+          </View>
+        ) : null}
+        {webErro ? (
+          <Text style={[styles.err, { color: theme.tokens.status.error }]} accessibilityRole="alert">
+            {webErro}
+          </Text>
+        ) : null}
+        <WebView
+          source={{ uri: docUrl.url, headers: docUrl.headers }}
+          style={styles.webview}
+          onLoadStart={() => {
+            setWebCarregando(true);
+            setWebErro(null);
+          }}
+          onLoad={() => setWebCarregando(false)}
+          onError={(e) => {
+            setWebCarregando(false);
+            setWebErro(e.nativeEvent.description || m.comum_falha_carregar_modelos());
+          }}
+          onHttpError={(e) => {
+            setWebCarregando(false);
+            setWebErro(`HTTP ${e.nativeEvent.statusCode}: ${e.nativeEvent.description}`);
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (!ready) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.tokens.bg.base, flex: 1, alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator color={theme.tokens.text.muted} />
+        <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
+      </View>
+    );
+  }
+
+  if (servidorSumiu) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.tokens.bg.base, flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }]}>
+        <Text style={[styles.err, { color: theme.tokens.status.error }]} accessibilityRole="alert">
+          {m.arq_sessao_encerrada()}
+        </Text>
       </View>
     );
   }

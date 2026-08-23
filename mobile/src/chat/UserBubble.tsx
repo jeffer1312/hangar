@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
-import { parseImageMessage, uploadUrl } from '@hangar/core';
+import { parseImageMessage, uploadUrlNative, fileAuthHeader } from '@hangar/core';
 
 // Bolha do usuário: alinhada à direita, cor bubbleUser do tema (espelho do app.css).
 // Se parseImageMessage(text) não nulo → legenda + miniaturas (uploadUrl/fileUrl).
@@ -35,9 +35,9 @@ export function UserBubble({ text, sessionName }: { text: string; sessionName?: 
         ) : null}
         <View style={styles.thumbs}>
           {filenames.map((fn) => {
-            // uploadUrl já inclui ?token pra <img> sem header
-            const uri = uploadUrl(sessionName!, fn);
-            return <Image key={fn} source={{ uri }} style={styles.thumb} contentFit="cover" transition={150} />;
+            const uri = uploadUrlNative(sessionName!, fn);
+            const headers = fileAuthHeader();
+            return <Image key={fn} source={{ uri, headers }} style={styles.thumb} contentFit="cover" transition={150} />;
           })}
         </View>
         {/* Se a legenda estava vazia e o texto original era só marcador, já mostramos thumbs */}

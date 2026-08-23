@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import { fileKind, fmtBytes, relativeTime } from '@hangar/core';
 import type { UploadFile } from '@hangar/core';
 import * as m from '../../paraglide/messages';
-import { uploadUrl } from '@hangar/core';
+import { uploadUrlNative, fileAuthHeader } from '@hangar/core';
 
 interface Props {
   file: UploadFile;
@@ -29,12 +29,13 @@ export function AttachmentCard({ file, sessionName, onPress }: Props) {
   const { theme } = useUnistyles();
   const kind = fileKind(file.filename);
   const p = prazo(file.expires_in_days);
-  const uri = uploadUrl(sessionName, file.filename);
+  const uri = uploadUrlNative(sessionName, file.filename);
+  const headers = fileAuthHeader();
   return (
     <View style={styles.item}>
       {kind === 'image' ? (
         <Pressable onPress={onPress} style={styles.tile} accessibilityLabel={m.anexos_ver({ n: file.filename })} accessibilityRole="button">
-          <Image source={{ uri }} style={styles.media} contentFit="cover" transition={200} />
+          <Image source={{ uri, headers }} style={styles.media} contentFit="cover" transition={200} />
         </Pressable>
       ) : kind === 'video' ? (
         <Pressable onPress={onPress} style={styles.tile} accessibilityLabel={m.anexos_ver({ n: file.filename })} accessibilityRole="button">
