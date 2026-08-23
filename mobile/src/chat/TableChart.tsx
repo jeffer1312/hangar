@@ -66,7 +66,7 @@ export function TableChart({ tabela, coluna, onColuna }: Props) {
         spacing={16}
         initialSpacing={12}
       />
-      <PillMenu open={open} onClose={() => setOpen(false)} items={items} onSelect={handleSelect} title="Coluna" />
+      <PillMenu open={open} onClose={() => setOpen(false)} items={items} onSelect={handleSelect} />
     </View>
   );
 }
