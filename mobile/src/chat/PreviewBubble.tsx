@@ -34,6 +34,7 @@ function Caret() {
 // quando é raspagem do pane. Painel de Todos do TUI separado por splitTodoBlock (core):
 // cabeçalho vira markdown, árvore de itens fica num bloco mono.
 export function PreviewBubble({ text, md, full }: Props) {
+  void full; // mantida por contrato (Task 1), sem uso atual no mobile
   const { theme } = useUnistyles();
   const todo = useMemo(() => splitTodoBlock(text), [text]);
   const prose = todo ? todo.rest : text;
