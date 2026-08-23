@@ -31,8 +31,6 @@ export function PermissionPill({ serverId, name }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<PillMenuItem[]>([]);
 
-  if (!isClaude) return null;
-
   const display = tempError ?? current ?? m.composer_permissao();
 
   const load = useCallback(async () => {
@@ -50,8 +48,8 @@ export function PermissionPill({ serverId, name }: Props) {
   }, [name]);
 
   useEffect(() => {
-    if (open) void load();
-  }, [open, load]);
+    if (open && isClaude) void load();
+  }, [open, load, isClaude]);
 
   const handleSelect = useCallback(
     async (it: PillMenuItem) => {
@@ -80,6 +78,8 @@ export function PermissionPill({ serverId, name }: Props) {
     },
     [name],
   );
+
+  if (!isClaude) return null;
 
   return (
     <>
