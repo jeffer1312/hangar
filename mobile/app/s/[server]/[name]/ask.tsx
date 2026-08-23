@@ -52,11 +52,8 @@ export default function AskSheet() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : m.askq_erro_envio();
       setRouteError(msg);
-      chat.markAskDismissed();
-      // precedente Chat.svelte:1615-1636; rota terminal existe como stub até Task 11
-      if ((e as { status?: number }).status !== 409) {
-        router.replace(`/s/${serverId}/${sessionName}/terminal` as never);
-      }
+      // não dispensar: a folha permanece com o erro visível (vide parecer BLOQUEADOR 1)
+      // router.replace para terminal fica para Task 11 — hoje é stub vazio, mandaria para tela em branco
       throw e;
     }
   };
