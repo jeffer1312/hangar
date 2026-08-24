@@ -244,22 +244,50 @@ def _read_agent_kimi(d: Path, tail: int) -> dict | None:
     }
 
 
+def _mtime(f: Path) -> float:
+    try:
+        return f.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _ilegivel(agent_id: str, mtime: float) -> dict:
+    """Item pra um subagente que EXISTE mas cujo transcript nao deu pra ler agora.
+
+    Some da lista era a saida antiga (o `if a:` descartava o None do OSError), e ai a resposta ficava
+    `[]` — palavra por palavra o mesmo que "esta sessao nao delegou nada". A UI le `[]` como "nada
+    rolando agora", entao um subagente com o arquivo temporariamente ilegivel (permissao, disco
+    lento, escrita concorrente) sumia da tela com o log so no servidor, que ninguem le do celular.
+    Mesma disciplina que `get_subagent` ja aplicava aos EVENTOS de um subagente."""
+    return {
+        "agentId": agent_id, "agentType": None, "prompt": None,
+        "startedAt": "", "updatedAt": "", "mtime": mtime,
+        "toolCalls": 0, "tools": [], "recent": [], "lastText": "",
+        "ilegivel": True,
+    }
+
+
 def list_subagents(jsonl: str, tail: int = 12) -> list[dict]:
     """Todos os subagentes desta sessão, do mais recém-escrito pro mais antigo."""
+    out: list[dict] = []
     kimi = _kimi_agents_dir(jsonl)
     if kimi is not None:
-        out = [a for d in sorted(kimi.iterdir())
-               if d.is_dir() and d.name != "main" and (a := _read_agent_kimi(d, tail))]
+        # `iterdir` numa pasta que sumiu levanta FileNotFoundError, e o endpoint nao tem except: a
+        # sessao morta virava 500 no lugar do `[]` honesto que o caminho do Claude ja devolvia.
+        if not kimi.is_dir():
+            return []
+        for d in sorted(kimi.iterdir()):
+            if not d.is_dir() or d.name == "main":
+                continue
+            out.append(_read_agent_kimi(d, tail) or _ilegivel(d.name, _mtime(d / "wire.jsonl")))
         out.sort(key=lambda a: a["mtime"], reverse=True)
         return out
     d = _subagents_dir(jsonl)
     if not d.is_dir():
         return []
-    out = []
     for f in d.glob("agent-*.jsonl"):
-        a = _read_agent(f, tail)
-        if a:
-            out.append(a)
+        nome = f.stem[len("agent-"):] if f.stem.startswith("agent-") else f.stem
+        out.append(_read_agent(f, tail) or _ilegivel(nome, _mtime(f)))
     out.sort(key=lambda a: a["mtime"], reverse=True)
     return out
 

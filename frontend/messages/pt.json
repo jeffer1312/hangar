@@ -527,6 +527,7 @@
   "atividade_ferramentas_chamadas": "Ferramentas · {n} chamadas",
   "atividade_chamadas": "{n} chamadas",
   "atividade_sub_concluido": "concluído",
+  "atividade_sub_ilegivel": "não consegui ler o registro dele",
   "atividade_run_nao_encontrado": "Não encontrei esse run.",
   "atividade_resumo": "Resumo",
   "atividade_agente_nao_encontrado": "Não encontrei esse agente.",

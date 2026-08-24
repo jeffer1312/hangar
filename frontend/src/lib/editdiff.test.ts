@@ -145,6 +145,25 @@ describe('extractEdits', () => {
     expect(extractEdits('multiedit', { edits: [{ oldText: 'a', newText: 'b' }] })).toHaveLength(1);
   });
 
+  it('Write: vira uma edicao de old vazio (tudo adicao) nos tres dialetos', () => {
+    // Claude Code (file_path), Pi (write minusculo + path), Kimi (Write + path).
+    expect(extractEdits('Write', { file_path: '/x.ts', content: 'a\nb' })).toEqual([{ oldText: '', newText: 'a\nb' }]);
+    expect(extractEdits('write', { path: '/x.ts', content: 'a\nb' })).toEqual([{ oldText: '', newText: 'a\nb' }]);
+    expect(extractEdits('Write', { path: '/x.ts', content: 'a', mode: 'overwrite' })).toEqual([{ oldText: '', newText: 'a' }]);
+  });
+
+  it('Write com mode append: mesmo diff (as linhas do append SAO adicao)', () => {
+    const edits = extractEdits('Write', { path: '/x.ts', mode: 'append', content: 'nova\n' });
+    expect(edits).toEqual([{ oldText: '', newText: 'nova\n' }]);
+    expect(computeEditDiff(edits![0].oldText, edits![0].newText).add).toBe(1);
+  });
+
+  it('Write sem conteudo (ou vazio) cai no pre cru', () => {
+    expect(extractEdits('Write', { file_path: '/x.ts' })).toBeNull();
+    expect(extractEdits('Write', { file_path: '/x.ts', content: '' })).toBeNull();
+    expect(extractEdits('Write', { file_path: '/x.ts', content: 42 })).toBeNull();
+  });
+
   it('extractFilePath: file_path (Claude) ou path (Pi)', () => {
     expect(extractFilePath({ file_path: '/a.ts' })).toBe('/a.ts');
     expect(extractFilePath({ path: '/b.ts' })).toBe('/b.ts');

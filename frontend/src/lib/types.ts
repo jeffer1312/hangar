@@ -223,6 +223,9 @@ export interface SubagentRun {
   // So o Kimi manda: o wire dele registra o fim do turno do proprio subagente. Ausente (Claude) =
   // "nao da pra saber por aqui" — quem decide la e o tool_result no transcript do pai.
   finished?: boolean;
+  // O subagente existe mas o transcript dele nao deu pra ler agora (permissao, disco). Os outros
+  // campos vem zerados: `toolCalls: 0` aqui NAO quer dizer "nao chamou nada", quer dizer "nao sei".
+  ilegivel?: boolean;
   // Transcript do subagente nos MESMOS ChatEvent do chat (so com ?events=N).
   events?: ChatEvent[];
 }

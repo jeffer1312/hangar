@@ -20,9 +20,10 @@
   }
   let { event, result = null, sessionName, animate = true }: Props = $props();
 
-  // Edit/MultiEdit: o tool_input ja traz old_string/new_string -> da pra mostrar o DIFF (estilo
-  // Pi, lado a lado) no lugar do resultado cru. Aberto por padrao, recolhe no toque (escolha do
-  // usuario 2026-08-04). null = shape desconhecido -> comportamento de sempre (pre com o result).
+  // Edit/MultiEdit/Write: o tool_input ja traz o texto antigo e o novo (no Write, o antigo e vazio
+  // e sai tudo como adicao) -> da pra mostrar o DIFF (estilo Pi, lado a lado) no lugar do resultado
+  // cru. Aberto por padrao, recolhe no toque (escolha do usuario 2026-08-04). null = shape
+  // desconhecido -> comportamento de sempre (pre com o result).
   const editEdits = $derived(extractEdits(event.tool_name, event.tool_input));
   const editPath = $derived(extractFilePath(event.tool_input));
   // svelte-ignore state_referenced_locally -- o valor inicial E a decisao (aberto por padrao pra

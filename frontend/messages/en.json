@@ -527,6 +527,7 @@
   "atividade_ferramentas_chamadas": "Tools · {n} calls",
   "atividade_chamadas": "{n} calls",
   "atividade_sub_concluido": "done",
+  "atividade_sub_ilegivel": "couldn't read its log",
   "atividade_run_nao_encontrado": "Couldn't find that run.",
   "atividade_resumo": "Summary",
   "atividade_agente_nao_encontrado": "Couldn't find that agent.",

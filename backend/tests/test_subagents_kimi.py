@@ -84,6 +84,33 @@ def test_main_nunca_aparece_como_subagente(tmp_path):
     assert [a["agentId"] for a in list_subagents(main)] == ["agent-0"]
 
 
+def test_wire_ilegivel_aparece_marcado_em_vez_de_sumir(tmp_path):
+    # Sumir da lista deixava a resposta `[]`, que a UI le como "esta sessao nao delegou nada" — um
+    # subagente que rodou desaparecia da tela com o erro so no log do servidor.
+    main = _sessao(tmp_path, {"agent-2": _subagente("agent-2"), "agent-3": _subagente("agent-3")})
+    (tmp_path / "agents" / "agent-3" / "wire.jsonl").chmod(0o000)
+    try:
+        ags = {a["agentId"]: a for a in list_subagents(main)}
+    finally:
+        (tmp_path / "agents" / "agent-3" / "wire.jsonl").chmod(0o644)
+    assert set(ags) == {"agent-2", "agent-3"}
+    assert ags["agent-3"]["ilegivel"] is True
+    # E o legivel NAO carrega a marca: senao a tela diria "nao consegui ler" pra quem foi lido.
+    assert "ilegivel" not in ags["agent-2"]
+
+
+def test_pasta_agents_sumida_devolve_lista_vazia(tmp_path):
+    # `iterdir` numa pasta que sumiu levanta FileNotFoundError, e a rota nao tem except: virava 500
+    # em vez do `[]` que o caminho do Claude ja devolvia pro mesmo caso (sessao morta).
+    main = _sessao(tmp_path, {"agent-2": _subagente("agent-2")})
+    import shutil
+    shutil.rmtree(tmp_path / "agents" / "agent-2")
+    (tmp_path / "agents" / "main" / "wire.jsonl").unlink()
+    (tmp_path / "agents" / "main").rmdir()
+    (tmp_path / "agents").rmdir()
+    assert list_subagents(main) == []
+
+
 def test_detalhe_traz_os_eventos_no_formato_do_chat(tmp_path):
     main = _sessao(tmp_path, {"agent-2": _subagente("agent-2")})
     d = get_subagent(main, "agent-2", events=10)

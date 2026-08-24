@@ -437,7 +437,10 @@
                         {#if s2.agentType}<span class="agent-tag">{s2.agentType}</span>{/if}
                       </span>
                       <span class="agent-now">
-                        {#if s2.finished}{m.atividade_sub_concluido()} · {/if}{m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}
+                        <!-- Ilegivel nao mostra "0 chamadas": os campos vem zerados porque o
+                             transcript nao foi lido, e 0 ali seria afirmar que ele nao fez nada. -->
+                        {#if s2.ilegivel}{m.atividade_sub_ilegivel()}
+                        {:else}{#if s2.finished}{m.atividade_sub_concluido()} · {/if}{m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}{/if}
                       </span>
                     </span>
                     <span class="agent-arrow" aria-hidden="true">›</span>
