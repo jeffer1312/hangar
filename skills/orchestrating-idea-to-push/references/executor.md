@@ -500,6 +500,17 @@ decidiu (o padrão é `~/.claude/orq-retros/<data>-<gid>/visual/`), nunca `/tmp`
 leva junto a matéria-prima da retrospectiva. Corrigiu alguma coisa depois? **Recapture.** Print velho
 prova o bug, nunca a correção.
 
+**Quatro coisas INVALIDAM uma comparação visual, e nenhuma delas produz erro — a prova sai bonita e
+é lixo. Confira as quatro ANTES da primeira captura:** (1) **tamanho/viewport diferente do que o
+contrato fixou** (medido 23/08/2026: referência capturada em 1280×577 e julgada contra 390×844);
+(2) **idiomas diferentes nos dois lados** — o juiz compara `Save/Discard` com `Salvar/Descartar` e
+julga tradução, não paridade (medido: uma rodada inteira perdida nisso); (3) **elemento que termina
+na borda do PNG é rolagem, não desenho** — não decide comparação; recapture rolado ou declare
+não-comparado naquele ponto; (4) **o print enquadra a prova do ESTADO junto com o efeito** — print
+que só significa junto de um comando fora dele vira disputa de palavra na revisão seguinte. Essas
+quatro repetem no kick-off de toda Task visual (régua enterrada em contrato não alcança sessão que
+nasceu depois dela — foi exatamente assim que a nº 2 custou a rodada).
+
 **Toda afirmação sobre cor, sinal ou estado (`✓` / `✗` / `·`, habilitado, desabilitado) se escreve
 com o detalhe AMPLIADO, nunca a olho na imagem inteira** — e a legenda cita a cor junto do sinal.
 Medido em 18/08/2026, numa Task de 38 prints: **todo achado que sobreviveu à revisão veio de ampliar

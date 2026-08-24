@@ -97,6 +97,13 @@ Além do que o `writing-plans` já pede, o plano carrega:
   régua pegou a Montagem estourando (3h–6h → 10h50, documentado na hora); a de 16–17/08 não
   escreveu para as Tasks 1–5 e uma Task rodou **4h19 de captura com zero commits** sem nenhum
   número gritando. Plano sem esse arquivo não passa no portão de saída.
+  **Time com mais de um executor autorizado: a estimativa traz o consumo POR MODELO, não só por
+  Task** — em **cota e contexto** (as contas são assinatura; não há fatura por token pra analisar):
+  contexto esperado por Task, sessões por Task e qual conta/janela cada modelo gasta — e a régua de
+  quando o modelo pesado entra declarada junto. Medido em 23/08/2026: na mesma Task, um modelo
+  fechava rodadas em ~340–550k de contexto por sessão e o outro consumia a janela ~10× mais rápido
+  na mesma conta — os dois autorizados, e a linha única da estimativa não descrevia nenhum. As
+  fichas de `references/modelos/` são a fonte do número por modelo.
 - **Pré-condição externa com DONO**: todo Step cuja prova depende de coisa que o executor não
   controla no turno (servidor de pé, sessão tmux, conta de teste, elemento na tela) declara quem a
   cria — e o dono é **o próprio executor**, como Step anterior explícito ("suba o backend na porta

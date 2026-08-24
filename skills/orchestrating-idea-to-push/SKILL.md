@@ -15,7 +15,7 @@ plano não fechou.
 | 0. Research | sessão/subagente read-only | não | achados num arquivo que o plano cita |
 | 1. Spec + plano | **com o usuário** | não | plano aprovado, decisões e time fechados |
 | 2. Lançamento | a mesma da fase 1 → vira **árbitra** | **não, nunca mais** | time criado, contrato escrito, um "pode ir" |
-| 3. Execução | executor + revisor, modelos diferentes | só o executor | todas as Tasks com `APROVA` |
+| 3. Execução | executor + revisor, **sessões separadas** | só o executor | todas as Tasks com `APROVA` |
 | 4. Revisão da branch | sessão nova, que não participou | não | conjunto aprovado |
 | 5. Retrospectiva | sessão nova, que não participou | não | patch proposto para **esta skill**, na mão do usuário |
 
@@ -169,8 +169,12 @@ Passou → **compacta antes de enviar**. Compactar não é resumir: é tirar o q
 régua de um lote já fechado, exceção de um arquivo que já mergeou, decisão que virou código. O que
 saiu vira uma linha no registro (com a data), que é onde história mora.
 
-Vale para o registro também, com teto mais largo (**500 linhas**): ele só o árbitro lê, mas é ele
-que o árbitro relê inteiro toda vez que precisa lembrar de algo.
+**O registro tem teto mais largo (500 linhas) e no teto ele ARQUIVA, não compacta** — mesma palavra,
+efeitos opostos. "Tirar o que deixou de valer" serve ao contrato; o registro é a matéria-prima da
+fase 5, e resumir ali destrói o que ela vai destilar. Bateu o teto: mova o bloco mais antigo
+**inteiro** para um arquivo irmão no mesmo diretório durável (`registro-tasks-1-N.md`) e deixe um
+ponteiro no lugar. Medido em 23/08/2026: 308 linhas arquivadas, nada perdido, e a retrospectiva leu
+os dois.
 
 Primeira linha do arquivo de regras, pra sessão amnésica se reancorar sozinha:
 

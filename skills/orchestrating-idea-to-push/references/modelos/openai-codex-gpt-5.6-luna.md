@@ -1,55 +1,55 @@
-# `openai-codex/gpt-5.6-luna` — papel: REVISOR
+# `openai-codex/gpt-5.6-luna` — papéis: REVISOR e EXECUTOR
 
-Primeira ficha: 15/08/2026, trabalho de 13 Tasks. Cinco sessões revisoras, todas rotacionadas por
-contexto.
+Primeira ficha: 15/08/2026 (revisor, 13 Tasks). Segunda medição: 22–24/08/2026 (paridade), nos
+**dois** papéis — que corrigiu o número mais importante da ficha.
 
-## Números — e o teto aqui é o assunto principal
+## Números — a janela mudou, e o custo é o assunto principal
 
-- **Janela 272k.** É o modelo de janela curta do time, e isso governa tudo o que vem abaixo.
-- **Teto prático: 240k.** Entrar numa Task grande acima disso é compactar no meio do trabalho.
-- **Custo por sessão de revisão:** baixo (US$ 0,05 a 0,15 por Task revisada).
-- **Consumo por tipo de Task revisada**, medido:
-  - Task de texto/teste: ~20 a 30k
-  - Task de módulo (código + medição + leitura em volta): ~60 a 130k
-  - **Task de tela: ~96k por rodada, mais ~85k de leitura inicial a cada troca de sessão.** Medido
-    em 16/08/2026: 8 sessões dele pra 9 rodadas em duas Tasks. Duas fecharam **acima da própria
-    janela** (310k e 309k de 272k), isto é, compactaram no meio do julgamento — e a segunda já não
-    conseguia reportar o próprio `ctx`. **Numa Task de tela, conte um revisor por rodada, e abra a
-    substituta ANTES de a correção chegar.**
+- **Janela: 1M DECLARADO em `~/.pi/agent/models.json`** (`providers.openai-codex.modelOverrides`,
+  era 550000) — declaração nossa, não promessa do servidor. **Medido 23/08/2026: o provedor aceitou
+  até 645k sem cortar.** O "272k / teto 240k" da ficha de 15/08 era de outra configuração e **não
+  vale mais**; sem o override, a régua velha volta a valer.
+- **Consome 10–16× o modelo barato do time** (medido pelo estimado da statusline: $3,83 numa Task e
+  $6,46 em duas rodadas, contra $0,13–0,40 do spark por Task inteira). A conta é **assinatura** —
+  o que isso gasta de verdade é a **cota** da conta Codex e contexto, não fatura; o número em $ é
+  só o proxy medido da proporção.
+- **"Commite cedo, antes da prova visual" vale −190k por Task no mesmo modelo** (645k → 457k,
+  T8 → T10, única diferença a régua). Vai no topo do kick-off dele.
+- Estimativa: **uma sessão por Task, sem margem para rodada longa de correção** — e linha de custo
+  própria quando ele está na rotação.
+- **Cuidado com o id:** o mesmo `gpt-5.6-luna` existe no `openrouter` (pago por token) — só o
+  `provider/id` completo distingue.
 
-**Consequência para o plano: ele revisa 2 a 3 Tasks por sessão, e nenhuma de tela sem folga larga.**
-Um trabalho de 12 Tasks precisa prever 4 ou 5 sessões dele. Preveja no plano em vez de descobrir.
+## Modo de falha característico: o turno morre DEPOIS de escrever, ANTES de enviar
 
-## Enxerga imagem: sim, e o custo mudou de lugar
+**5 ocorrências em 22–24/08/2026** (1 parecer + 4 vereditos, todos lidos do disco pelo árbitro).
+Nele, "escreve primeiro, avisa depois" não é boa prática — **é o que segura o trabalho**. Kick-off
+dele diz: parecer/reporte em arquivo SEMPRE; canal falhou, não reenvie — o árbitro lê o disco.
 
-A parte cara **era** refazer a comparação cega; a skill não pede mais isso ao revisor
-(`revisor.md`). O que sobra e ainda consome é ler os prints por estado e medir ao vivo — numa Task
-de tela, ~96k por rodada mais ~85k de leitura inicial a cada troca de sessão. Se o trabalho tem
-várias Tasks de tela, **vale** pôr um revisor de janela larga nelas e deixar as de código para ele.
+## Como executor (1ª medição, 22–24/08/2026)
 
-## Como ele falha
+- **Acerta tudo que o contrato ESCREVE, sem a memória das Tasks anteriores:** hooks, i18n sem chave
+  nova (45 reusadas), nada de dummy, move sem quebrar caller, TDD com mutação em worktree. 1072
+  linhas na maior Task do plano sem nenhuma armadilha que já tinha custado rodada.
+- **Erra onde régua nenhuma alcança** (campo numérico que clampa a cada tecla) — modelo novo erra
+  fora do contrato; conferência mais dura exatamente ali.
+- Consertou de primeira o teste-que-não-exercita que o modelo anterior errara duas vezes (render
+  real + mutação matando) e **declara o que NÃO fez** em vez de inventar.
 
-- **A receita nomeia a ENTRADA, não o ponto que causa** — e por isso fecha o caso nomeado, não a
-  família. Confirmado, não é mais "visto uma vez": 8 rodadas em duas Tasks (16/08/2026), cada
-  parecer fechando o vizinho do caso anterior, e a solução crescendo. Não é falta de rigor: é o que
-  sobra de janela depois de ler a tela. Ele **assume** o próprio furo, com medição junto — mas quem
-  corta isso é o árbitro, pela linha de desperdício. Ver `revisor.md`, "O inventário do símbolo não
-  fecha a classe sozinho".
-- **Enumera a lista incompleta na receita.** "Trocar nos usos X, Y, Z" quando eram seis — o executor
-  fez os seis e avisou; se tivesse feito os três, o bug voltava.
+## Como revisor (2ª medição — confirma a 1ª)
 
-## Onde ele é bom
-
-- **Reproduz antes de afirmar**, e diz o comando. Pareceres dele vêm com "verifiquei por outro
-  caminho" com frequência.
-- **Assume erro próprio na cara**, incluindo "esta rodada extra é culpa da minha receita" — o que
-  economiza uma investigação inteira do árbitro.
-- **Recusa despachar ferramenta no alvo errado** e diz por quê, em vez de colar um "nada a apontar"
-  sobre código que a ferramenta não leu.
-- Avisa o teto **antes** de pegar a Task grande, quando o kick-off pede o `ctx` junto do parecer.
+- **Reproduz antes de afirmar** e acha o bloqueador fino que gate nenhum pega (cabeçalho duplicado
+  com XMLs de antes/depois; teste falso derrubado por duas mutações). **Recusa relato como prova.**
+- A régua *"harness fecha corrida determinística; não fecha fronteira externa"* é dele, e se pagou
+  na primeira aplicação. Também dele: *"memoizar apaga o sintoma e deixa a armadilha"*.
+- **Assume erro próprio na cara** (confirmado 2ª execução): "esta rodada é culpa da minha receita",
+  com medição junto.
+- Falha conhecida (confirmada): **a receita fecha o caso nomeado, não a família** — o mesmo defeito
+  voltou por outra porta em rodadas seguidas; quem corta é o árbitro, apertando o critério de
+  família por escrito (fechou em 1 rodada quando aplicado).
 
 ## O que o kick-off precisa dizer por causa dele
 
-- Reportar o `ctx` junto de **cada** parecer, com o comando de leitura.
-- Que o teto dele é 240k e que ele deve avisar antes de pegar Task grande, não no meio.
-- Na receita: **inventário completo** dos usos, não exemplos.
+- Escrever em arquivo antes de qualquer envio (o turno morre depois de escrever).
+- Commitar cedo, antes da prova visual; contar com uma sessão só.
+- Reportar `ctx` junto de cada entrega; na receita, inventário completo, não exemplos.

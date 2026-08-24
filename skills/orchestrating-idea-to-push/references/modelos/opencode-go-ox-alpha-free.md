@@ -47,3 +47,15 @@ revisor. Barra de Task de tela pode ser print; `see` não é necessário.
   20 min com o trabalho dele no disco) e **não** como único executor de um lote — o revezamento
   acabou na T10 porque ele caiu antes da primeira linha.
 - Estimativa de plano: contar **≥2 sessões por Task** quando ele é o executor.
+
+## 2ª execução (paridade, 22–24/08/2026) — confirmado, e o papel mudou
+
+- **Transporte confirmou-se fatal em Task longa:** 16 erros de provedor em 2 sessões na única Task
+  que pegou (~3h30 perdidas), com a 2ª sessão caindo MAIS que a 1ª (6 erros em 21 min contra 10 em
+  ~65). **Terceira sessão no mesmo modelo não se abre — a segunda já é a medição.**
+- Rendimento entre quedas desta execução: **3k de contexto em 18 min** (1ª execução: 9k em 35 min).
+- O que produziu entre quedas estava certo (commit completo, árvore limpa) — julgamento não é o
+  problema.
+- **Saiu da rotação de executor** (decisão do usuário, 23/08/2026, ao nomear a alternância entre os
+  dois titulares). Papel atual: **fallback** da conta — e com ele de executor, a Task se estima em
+  2–3× o relógio do modelo estável, ≥2 sessões, vigia armada, reporte em arquivo.

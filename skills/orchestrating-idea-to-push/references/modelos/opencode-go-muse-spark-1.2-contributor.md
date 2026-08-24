@@ -93,3 +93,26 @@ fabricante e de reviews públicos, não de rodada nossa — a primeira execuçã
 - Relata a própria statusline errada (disse `ox-alpha-free`): prova é o `pane_start_command`.
 - Comportamento bom que vale repetir: a t9c **perguntou antes de apagar** arquivo alheio e declarou
   por conta própria que tinha usado páginas fabricadas como barra por engano.
+
+## Medições (execução paridade, 22–24/08/2026 — 10 Tasks + fix da fase 4; 3ª execução)
+
+**Confirmado (3ª execução concorda):**
+- **Receita fechada → correção de primeira, sempre.** 8 rodadas de correção sem desperdício do
+  executor. Custo por rodada de correção **$0,04–0,22**; sessão mais barata do trabalho: $0,07.
+- **Prova é o ponto fraco — e ganhou nome específico: TESTE QUE NÃO EXERCITA O COMPONENTE.**
+  4 ocorrências em 3 Tasks, todas dele (teste com o nome certo que não importa o hook; teste sobre
+  cópia; `toString()` procurando string sem render, 2 versões seguidas) — todas derrubadas por
+  mutação do revisor, nenhuma pela régua escrita no contrato. Também dele: telas de teste como
+  prova, barra sintética, print de código não commitado, prova de escrita no README do checkout.
+  Kick-off dele cobra: mutação antes de marcar Step, prova pela rota real, arquivo de prova fora do
+  repo.
+- **Contexto ~340–550k por Task de tela; rotação no gatilho de 50% por volta de 1h40–2h** — 4
+  trocas, todas no gatilho, nenhuma custou rodada.
+- **Enxerga imagem** (2ª medição ao vivo). **Teto de 50 imagens mata a sessão** — 2ª execução
+  seguida (`request contains 51 images…` em 522k com o trabalho pronto): virou afirmação.
+- Custo base de estimativa: Task inteira **$0,12–0,59**; 10 Tasks somaram **$3,77** (o luna gastou
+  $10,29 em 2,5).
+
+**Novo *(visto uma vez)*:**
+- Quando erra na prova, **declara** (barra sintética confessada; captura em 1280×577 reportada
+  contra si mesmo) — nenhuma Task dele reprovou por relato falso, e isso encurta rodada.
