@@ -10,6 +10,7 @@ Rodar: python3 scripts/test-panel-open.py
 import contextlib
 import importlib.util
 import io
+import shlex
 import sys
 from pathlib import Path
 
@@ -91,7 +92,18 @@ def main() -> int:
     assert obtido is None, f"sem título esperado não pode escolher janela, veio {obtido}"
     assert "set-titles-string" in err.getvalue(), f"faltou diagnóstico no stderr: {err.getvalue()!r}"
 
-    print("ok: 5 casos")
+    # 6. O attach é EXATO e nunca cria sessão: `new-session -A` recriava a sessão morta como um
+    #    shell com o nome da sessão do agente, e o app mostrava esse shell como se fosse ela.
+    argv = mod.comando_terminal("kitty", "hangar")
+    sh = argv[-1]
+    assert "new-session" not in sh, f"não pode criar sessão: {sh!r}"
+    assert shlex.split(sh)[:4] == ["tmux", "attach", "-t", "=hangar:"], f"alvo não é exato: {sh!r}"
+    assert "read" in sh, f"falha do attach tem que segurar a janela pra ser lida: {sh!r}"
+    # Nome vem do painel: o alvo tem que continuar UM token, senão o resto vira comando.
+    injetado = shlex.split(mod.comando_terminal("kitty", "a; rm -rf /tmp/x")[-1])
+    assert injetado[3] == "=a; rm -rf /tmp/x:", f"nome não escapado: {injetado!r}"
+
+    print("ok: 6 casos")
     return 0
 
 

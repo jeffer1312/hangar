@@ -18,6 +18,7 @@ escolher em vez de chutar (abrir attach duplicado é visível; focar a janela er
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -141,6 +142,29 @@ def find_window(name: str) -> str | None:
     return None
 
 
+def comando_terminal(term: str, name: str) -> list[str]:
+    """ARGV do terminal que anexa em `name` — attach EXATO, nunca `new-session -A`.
+
+    O `-A` (attacha se existe, CRIA se não) parecia só cobrir a sessão que morre entre o poll e o
+    clique. O que ele cria é um SHELL com o nome da sessão do agente: na lista do app ele fica
+    idêntico a uma sessão de verdade, e o chat dela cai no transcript mais recente da pasta. Medido
+    em 24/08/2026 — a sessão `hangar` morreu ao nascer (login expirado), o clique aqui recriou um
+    fish com o mesmo nome, e o `claude --resume` que o usuário digitou nesse fish apareceu no app
+    como se o app tivesse retomado a conversa sozinho.
+
+    O `=nome:` é a mesma grafia do attach do backend (api._EMULADORES): sem o `=` o tmux cai em
+    prefix-match e anexa na sessão errada.
+
+    A recusa não pode sumir junto com a janela: `tmux attach` num alvo inexistente sai em
+    milissegundos e o terminal fecha antes de dar pra ler — que é o erro mudo que o `-A` evitava.
+    Daí o `sh -c` com mensagem e um `read` segurando a janela aberta.
+    """
+    alvo = shlex.quote(f"={name}:")
+    msg = shlex.quote(f"cp-panel-open: a sessao {name} nao existe mais (nada foi criada).")
+    sh = f'tmux attach -t {alvo} || {{ printf "\\n%s\\nEnter pra fechar. " {msg}; read _; }}'
+    return [term, "-e", "sh", "-c", sh]
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("uso: cp-panel-open <sessao>", file=sys.stderr)
@@ -159,8 +183,7 @@ def main() -> int:
     if not term:
         print("erro: nenhum terminal conhecido encontrado (kitty/foot/alacritty)", file=sys.stderr)
         return 1
-    # -A: attacha se existe, cria se não — sessão morta entre o poll e o clique não vira erro mudo.
-    os.execvp(term, [term, "-e", "tmux", "new-session", "-A", "-s", name])
+    os.execvp(term, comando_terminal(term, name))
 
 
 if __name__ == "__main__":
