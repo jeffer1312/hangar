@@ -126,7 +126,6 @@ export default function AttachmentsSheet() {
           style={styles.webview}
           onLoadStart={() => {
             setWebCarregando(true);
-            setWebErro(null);
           }}
           onLoad={() => setWebCarregando(false)}
           onError={(e) => {

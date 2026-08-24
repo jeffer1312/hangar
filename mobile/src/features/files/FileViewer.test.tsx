@@ -21,7 +21,11 @@ vi.mock('react-native-webview', () => ({
       'button',
       {
         'data-testid': 'webview-http-error',
-        onClick: () => props.onHttpError?.({ nativeEvent: { statusCode: 401, description: '' } }),
+        onClick: () => {
+          props.onHttpError?.({ nativeEvent: { statusCode: 401, description: '' } });
+          props.onLoadStart?.();
+          props.onLoad?.();
+        },
       },
       'WebView HTTP error',
     ),

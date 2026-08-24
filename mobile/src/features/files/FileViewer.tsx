@@ -78,7 +78,6 @@ export function FileViewer({ path, conteudo, diff, loading, erro, escopo, onEsco
           style={styles.webview}
           onLoadStart={() => {
             setWebCarregando(true);
-            setWebErro(null);
           }}
           onLoad={() => setWebCarregando(false)}
           onError={(e) => {
