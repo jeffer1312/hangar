@@ -58,14 +58,15 @@ export default function FilesSheet() {
     if (!existe) setServidorSumiu(true);
   }, [ready, serverId]);
 
-  // abrir direto via ?path=
+  // abrir direto via ?path= — espera ready/servidor (cold deep-link) para não chamar active()=null
   useEffect(() => {
-    if (pathParam) {
-      void api.abrir(pathParam);
-      setAba('arquivo');
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathParam]);
+    if (!ready) return;
+    if (!pathParam) return;
+    if (servidorSumiu) return;
+    if (!useServers.getState().ensureActive(serverId)) return;
+    void api.abrir(pathParam);
+    setAba('arquivo');
+  }, [ready, pathParam, serverId, servidorSumiu]);
 
   // quando seleciona arquivo, vai para aba arquivo
   useEffect(() => {
@@ -183,6 +184,12 @@ export default function FilesSheet() {
             onEditar={() => setEditando(true)}
             name={sessionName}
           />
+        ) : erro ? (
+          <View style={styles.center}>
+            <Text style={[styles.erro, { color: theme.tokens.status.error }]} accessibilityRole="alert">
+              {erro}
+            </Text>
+          </View>
         ) : (
           <View style={styles.center}>
             <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.arq_nada_mudou()}</Text>

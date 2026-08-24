@@ -1,138 +1,165 @@
-import { describe, it, expect, vi } from 'vitest';
+/**
+ * @vitest-environment happy-dom
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock('../../vendor/happy/components/MultiTextInput', () => import('../../vendor/happy/components/__mocks__/MultiTextInput'));
+vi.mock('../../paraglide/messages', () => ({
+  arq_salvar: () => 'Salvar',
+  arq_salvando: () => 'Salvando…',
+  arq_salvo: () => 'Salvo',
+  arq_descartar: () => 'Descartar',
+  arq_nao_salvo: () => 'alterações não salvas',
+}));
+
 import { FileEditor } from './FileEditor';
 
-// Harness runtime: simula a máquina de estado do FileEditor sem precisar de React Native.
-// Extraímos a lógica para uma classe testável que espelha o componente.
+const roots: Array<{ unmount: () => void }> = [];
 
-class FileEditorMachine {
-  texto: string;
-  salvando = false;
-  erro: string | null = null;
-  salvo = false;
-  private timer: ReturnType<typeof setTimeout> | null = null;
-  constructor(
-    public initialText: string,
-    private onSalvar: (t: string) => Promise<string | null>,
-  ) {
-    this.texto = initialText;
-  }
-  get sujo() {
-    return this.texto !== this.initialText;
-  }
-  setTexto(t: string) {
-    this.texto = t;
-  }
-  async salvar(): Promise<void> {
-    if (!this.sujo || this.salvando) return;
-    this.salvando = true;
-    this.erro = null;
-    const falha = await this.onSalvar(this.texto);
-    this.salvando = false;
-    if (falha) {
-      this.erro = falha;
-      return;
-    }
-    this.salvo = true;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => (this.salvo = false), 2000);
-  }
-  cleanup() {
-    if (this.timer) clearTimeout(this.timer);
-  }
+async function renderEditor(props: Partial<React.ComponentProps<typeof FileEditor>> = {}) {
+  const defaultProps: React.ComponentProps<typeof FileEditor> = {
+    path: 'README.md',
+    initialText: 'old',
+    onSalvar: vi.fn().mockResolvedValue(null),
+    onDescartar: vi.fn(),
+    ...props,
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  roots.push(root);
+  await act(async () => {
+    root.render(React.createElement(FileEditor, defaultProps));
+  });
+  return { container, props: defaultProps };
 }
 
-describe('FileEditor Saved feedback — harness runtime', () => {
-  it('sucesso: sujo -> Salvando… -> Salvo por 2s sem desmontar', async () => {
-    vi.useFakeTimers();
-    const onSalvar = vi.fn().mockImplementation(() => new Promise<string | null>((res) => setTimeout(() => res(null), 10)));
-    const m = new FileEditorMachine('old', onSalvar);
-    m.setTexto('new');
-    expect(m.sujo).toBe(true);
-    const p = m.salvar();
-    expect(m.salvando).toBe(true);
-    expect(m.erro).toBeNull();
-    vi.advanceTimersByTime(10);
-    await p;
-    expect(m.salvando).toBe(false);
-    expect(m.salvo).toBe(true);
-    expect(m.erro).toBeNull();
-    expect(m.texto).toBe('new');
-    // ainda montado, texto continua, não desmontou
-    vi.advanceTimersByTime(1999);
-    expect(m.salvo).toBe(true);
-    vi.advanceTimersByTime(1);
-    expect(m.salvo).toBe(false);
+function editorInput(container: HTMLElement) {
+  const input = container.querySelector('textarea[data-testid="editor-input"]');
+  expect(input).not.toBeNull();
+  return input as HTMLTextAreaElement;
+}
+
+function saveButton(container: HTMLElement) {
+  const button = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.includes('Salvar'));
+  expect(button).not.toBeUndefined();
+  return button as HTMLButtonElement;
+}
+
+async function changeText(container: HTMLElement, text: string) {
+  const input = editorInput(container);
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  if (!setter) throw new Error('setter de textarea indisponível');
+  await act(async () => {
+    setter.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe('FileEditor', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
     vi.useRealTimers();
-    m.cleanup();
   });
 
-  it('pendente mostra Salvando… enquanto promessa não resolve', async () => {
-    let resolve!: (v: string | null) => void;
-    const onSalvar = vi.fn().mockImplementation(() => new Promise<string | null>((r) => (resolve = r)));
-    const m = new FileEditorMachine('old', onSalvar);
-    m.setTexto('new');
-    const p = m.salvar();
-    expect(m.salvando).toBe(true);
-    expect(m.salvo).toBe(false);
-    resolve(null);
-    await p;
-    expect(m.salvando).toBe(false);
-    expect(m.salvo).toBe(true);
-    m.cleanup();
-  });
-
-  it('falha mostra erro e não mostra Salvo', async () => {
-    const onSalvar = vi.fn().mockResolvedValue('erro_arq_mudou_no_disco');
-    const m = new FileEditorMachine('old', onSalvar);
-    m.setTexto('new');
-    await m.salvar();
-    expect(m.erro).toBe('erro_arq_mudou_no_disco');
-    expect(m.salvo).toBe(false);
-    expect(m.salvando).toBe(false);
-    m.cleanup();
-  });
-
-  it('FileEditor renderiza Salvo condicionado a salvo (mutação {false ? falha)', () => {
-    // Runtime check via Function.toString — não é readFileSync, é inspeção do código carregado
-    const src = FileEditor.toString();
-    // deve conter a condição salvo ? e o texto Salvo
-    expect(src).toContain('salvo');
-    // a condição que guarda o bloco Salvo deve ser `salvo ?`, não `false ?`
-    expect(src).toMatch(/salvo\s*\?/);
-    expect(src).not.toMatch(/\bfalse\s*\?/);
-    // o render deve conter jsxDEV de Text quando salvo
-    expect(src).toContain('salvo ?');
-  });
-
-  it('FileEditor mantém interface Salvar/Descartar/Salvando', () => {
-    const src = FileEditor.toString();
-    expect(src).toContain('arq_salvar');
-    expect(src).toContain('arq_descartar');
-    expect(src).toContain('arq_salvo');
-    expect(src).toContain('arq_salvando');
-  });
-});
-
-describe('files.tsx não fecha editor no sucesso', () => {
-  it('handleSalvar não contém setEditando(false)', async () => {
-    // Verificação via leitura do arquivo em runtime (fora do vitest transform de RN)
-    // — o import de files.tsx quebra por causa de expo-router, então verificamos o fonte direto
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const candidates = [
-      path.join(process.cwd(), 'app/s/[server]/[name]/files.tsx'),
-      path.join(process.cwd(), 'mobile/app/s/[server]/[name]/files.tsx'),
-      '/home/jefferson/pessoal/hangar/mobile/app/s/[server]/[name]/files.tsx',
-    ];
-    let src = '';
-    for (const p of candidates) {
-      try {
-        src = fs.readFileSync(p, 'utf8');
-        if (src) break;
-      } catch {}
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      act(() => root.unmount());
     }
-    expect(src).toBeTruthy();
-    const handlePart = src.split('const handleSalvar')[1]?.split('return r;')[0] ?? '';
-    expect(handlePart).not.toContain('setEditando(false)');
+    document.body.innerHTML = '';
+    vi.useRealTimers();
+  });
+
+  it('mostra Salvando enquanto salvar está pendente', async () => {
+    let resolveSalvar!: (valor: string | null) => void;
+    const onSalvar = vi.fn(() => new Promise<string | null>((resolve) => {
+      resolveSalvar = resolve;
+    }));
+    const { container } = await renderEditor({ onSalvar });
+
+    await changeText(container, 'new');
+    expect(container.textContent).toContain('alterações não salvas');
+
+    await act(async () => {
+      saveButton(container).click();
+      await flushPromises();
+    });
+    expect(onSalvar).toHaveBeenCalledWith('new');
+    expect(container.textContent).toContain('Salvando…');
+    expect(container.textContent).not.toContain('Salvo');
+
+    await act(async () => {
+      resolveSalvar(null);
+      await flushPromises();
+    });
+    expect(container.textContent).toContain('Salvo');
+  });
+
+  it('mostra Salvo por 2 segundos sem desmontar o editor', async () => {
+    vi.useFakeTimers();
+    const onSalvar = vi.fn().mockResolvedValue(null);
+    const { container } = await renderEditor({ onSalvar });
+
+    await changeText(container, 'new');
+    await act(async () => {
+      saveButton(container).click();
+      await flushPromises();
+    });
+
+    expect(container.textContent).toContain('Salvo');
+    expect(editorInput(container)).toBeTruthy();
+    expect(container.textContent).toContain('Descartar');
+
+    await act(async () => {
+      vi.advanceTimersByTime(1999);
+    });
+    expect(container.textContent).toContain('Salvo');
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(container.textContent).not.toContain('Salvo');
+  });
+
+  it('mostra a mensagem de erro e não mostra Salvo quando salvar falha', async () => {
+    const onSalvar = vi.fn().mockResolvedValue('erro_arq_mudou_no_disco');
+    const { container } = await renderEditor({ onSalvar });
+
+    await changeText(container, 'new');
+    await act(async () => {
+      saveButton(container).click();
+      await flushPromises();
+    });
+
+    expect(container.textContent).toContain('erro_arq_mudou_no_disco');
+    expect(container.textContent).not.toContain('Salvo');
+    expect(container.textContent).not.toContain('Salvando…');
+  });
+
+  it('mantém editor e descarte montados depois do sucesso', async () => {
+    const onSalvar = vi.fn().mockResolvedValue(null);
+    const onDescartar = vi.fn();
+    const { container } = await renderEditor({ onSalvar, onDescartar });
+
+    await changeText(container, 'new');
+    await act(async () => {
+      saveButton(container).click();
+      await flushPromises();
+    });
+
+    expect(editorInput(container)).toBeTruthy();
+    const discard = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.includes('Descartar'));
+    expect(discard).not.toBeUndefined();
+    expect(onDescartar).not.toHaveBeenCalled();
   });
 });

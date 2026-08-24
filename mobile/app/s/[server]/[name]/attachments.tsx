@@ -131,11 +131,12 @@ export default function AttachmentsSheet() {
           onLoad={() => setWebCarregando(false)}
           onError={(e) => {
             setWebCarregando(false);
-            setWebErro(e.nativeEvent.description || m.comum_falha_carregar_modelos());
+            setWebErro(e.nativeEvent.description || m.arquivo_carregar_erro());
           }}
           onHttpError={(e) => {
             setWebCarregando(false);
-            setWebErro(`HTTP ${e.nativeEvent.statusCode}: ${e.nativeEvent.description}`);
+            const descricao = e.nativeEvent.description;
+            setWebErro(descricao ? `HTTP ${e.nativeEvent.statusCode}: ${descricao}` : m.arquivo_carregar_erro());
           }}
         />
       </View>
