@@ -155,12 +155,20 @@ export function createActivityFolder(): ActivityFolder {
         if (item) item.status = 'deleted';
         break;
       }
-      case 'Agent': {
+      // AgentSwarm é a versão em LOTE do Agent, no Kimi: um subagente por item da lista (o terminal
+      // do Kimi desenha uma coluna numerada por item). Cai no mesmo caso porque é UM tool_use, com
+      // UM tool_result — inventar um item por `items[i]` daria ids que nenhum resultado fecha, e os
+      // quatro ficariam "em execução" pra sempre. Quem mostra um a um é a lista de subagentes do
+      // painel, que lê os wires de cada um.
+      case 'Agent':
+      case 'AgentSwarm': {
         if (e.tool_use_id) {
+          const itens = Array.isArray(input.items) ? input.items.length : 0;
+          const desc = String(input.description ?? input.subagent_type ?? m.atividade_agente());
           agents.push({
             id: e.tool_use_id,
             kind: 'agent',
-            description: String(input.description ?? input.subagent_type ?? m.atividade_agente()),
+            description: itens ? m.atividade_swarm_itens({ desc, n: itens }) : desc,
             subagentType: typeof input.subagent_type === 'string' ? input.subagent_type : undefined,
             model: typeof input.model === 'string' ? input.model : undefined,
             prompt: typeof input.prompt === 'string' ? input.prompt : undefined,

@@ -2922,9 +2922,44 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
     if not limpar:
         return {"path": path, "text": text}
     # `estilo` = o que a PILL do composer mostrava quando a pessoa falou. Vence a config do
-    # servidor (narrar._estilo_efetivo); ausente/desconhecido, a config manda como sempre.
+    # servidor (narrar.estilo_efetivo); ausente/desconhecido, a config manda como sempre.
     texto_limpo, aviso = await asyncio.to_thread(narrar.limpar_ditado, text, estilo)
-    return {"path": path, "text": texto_limpo, "raw": text, "aviso": aviso}
+    # `estilo_aplicado` = qual versao o texto de fato recebeu, pra barra do ditado no composer marcar
+    # o botao certo. NAO da pra deduzir na tela: o backend rebaixa briefing pra prosa em ditado curto
+    # e cai na config quando a pill ainda nao leu o servidor, entao marcar "Briefing" pelo que foi
+    # PEDIDO faria o botao mentir. Com aviso, o texto que voltou e o cru — nao um estilo. Idem
+    # quando limpar_ditado devolve o proprio texto sem tocar (ditado de menos de 5 palavras, ou
+    # comecando com "/"): ali nao houve estilo nenhum, e dizer "prosa" seria a mesma mentira.
+    aplicado = "cru" if (aviso or texto_limpo == text) else narrar.estilo_efetivo(text, estilo)
+    return {"path": path, "text": texto_limpo, "raw": text, "aviso": aviso,
+            "estilo_aplicado": aplicado}
+
+
+class RelimparBody(_StrictBody):
+    texto: str = Field(min_length=1)
+    estilo: str
+
+
+@app.post("/api/ditado/relimpar", dependencies=[Depends(require_auth)])
+async def relimpar_ditado(body: RelimparBody):
+    """Aplica OUTRO estilo ao texto CRU de um ditado que ja foi transcrito.
+
+    Sem audio e sem sessao de proposito. A parte cara (Whisper) ja foi paga na transcricao e o cru
+    volta de la no campo `raw`; trocar de estilo e so a limpeza de novo. Reenviar o audio custaria
+    uma segunda transcricao — dinheiro e ~10s — pra chegar no mesmo texto cru. E limpeza nao le nada
+    da sessao (nem cwd, nem provider), entao exigir `name` aqui so acrescentaria um registry.list()
+    e um 404 possivel num caminho que nao precisa de nenhum dos dois.
+
+    Estilo invalido e 400 e nao "cai no padrao": aqui a pessoa CLICOU num estilo, entao entregar
+    outro calado seria mentir sobre o botao que ela apertou (na transcricao o estilo e um palpite da
+    tela e cair na config e o certo)."""
+    if body.estilo not in narrar.ESTILOS_DITADO:
+        raise HTTPException(400, detail=erro(
+            "erro_estilo_invalido",
+            f"estilo '{body.estilo}' nao existe. Use um de: {', '.join(narrar.ESTILOS_DITADO)}."))
+    texto, aviso = await asyncio.to_thread(narrar.limpar_ditado, body.texto, body.estilo)
+    aplicado = "cru" if (aviso or texto == body.texto) else narrar.estilo_efetivo(body.texto, body.estilo)
+    return {"text": texto, "aviso": aviso, "estilo_aplicado": aplicado}
 
 
 @app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])

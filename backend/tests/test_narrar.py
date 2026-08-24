@@ -10,7 +10,7 @@ from app.narrar import NarrarError
 def _config_isolada(monkeypatch, tmp_path):
     """Toda a suite le config de um diretorio VAZIO, nunca do ~/.claude da maquina.
 
-    Sem isto, `limpar_ditado` -> `_estilo_efetivo` -> `estilo_ditado` -> `runtime_config.get`
+    Sem isto, `limpar_ditado` -> `estilo_efetivo` -> `estilo_ditado` -> `runtime_config.get`
     abria o runtime-config.json de PRODUCAO desta maquina, e as travas testadas eram as do estilo
     que estivesse salvo ali. Os testes de guarda passavam porque o valor no disco era `prosa`, igual
     ao padrao — coincidencia de ambiente, nao algo que a suite fixa: trocando pra `limpar` (que sobe
@@ -381,9 +381,9 @@ def test_briefing_em_ditado_curto_vira_prosa(monkeypatch):
     de proposito: a pessoa escolheu o estilo pro dia dela, nao pra cada frase."""
     monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
     curto = "abre o narrar ponto py e roda o teste"
-    assert narrar._estilo_efetivo(curto) == "prosa"
+    assert narrar.estilo_efetivo(curto) == "prosa"
     longo = " ".join(["palavra"] * narrar._MIN_PALAVRAS_BRIEFING)
-    assert narrar._estilo_efetivo(longo) == "briefing"
+    assert narrar.estilo_efetivo(longo) == "briefing"
 
 
 def test_content_none_vira_502_honesto_nao_attributeerror(monkeypatch):
@@ -740,3 +740,168 @@ def test_so_o_briefing_usa_o_perfil_de_briefing(monkeypatch):
     vistos.clear()
     narrar.limpar_ditado(" ".join(["palavra"] * 60), "briefing")
     assert vistos == ["briefing"]
+
+
+# O caso real de 24/08/2026: o usuario ditou ~3700 chars de contexto sobre uma PM, escolheu
+# "briefing", e o texto voltou RESUMIDO — sumiram as ressalvas dele, os motivos e o que ele deixou
+# em aberto. Nenhuma trava disparou, entao ele nem aviso teve: teria que ditar tudo de novo.
+#
+# Os tres textos abaixo sao artefatos REAIS daquela medicao (deepseek-v4-flash, temperatura 0), nao
+# exemplos escritos a mao: o cru e o ditado dele, o "resumido" e uma das 3 saidas do fecho antigo
+# (cobertura 0,51) e o "completo" e a PIOR das 7 saidas do fecho novo (cobertura 0,72) — a pior de
+# proposito, porque quem tem que passar pelo piso e ela, nao a melhor.
+_BRIEFING_CRU = (
+    "Eu vou te passar uma PM aqui e a gente precisa definir uma execução para ela. Como é que a "
+    "gente vai fazer isso? Hoje eu tenho uma skill aí que chama ideia to push, eu acho que é "
+    "orchestring idea to push. e eu uso ela para trabalhos pessoais aqui, beleza, isso não é "
+    "importante. A questão é, eu quero usar ela para essa PM que eu vou te passar, eu vou te "
+    "passar o link aí, e eu quero que você analise a PM e o que é que vai ser essa PM? Ela vai "
+    "ser aqui a folha de exames da UTI, existe um MOC, então existe um projeto onde já foram "
+    "feitos os MOCs e aí o que a gente precisa fazer? a gente precisa de fazer de trazer todas "
+    "essas telas que foram do MOP l que s uma duas tr quatro cinco seis seis telas assistentes "
+    "digamos assim vai ter uma tela principal e seis telas que juntam v entregar para elas alguma "
+    "coisa que seriam seis telas de cadastro e uma tela principal que seria a folha de exames ali "
+    "isso tudo est descrito na PM eu estou falando aqui mais para ter um contexto mas tudo tem na "
+    "PM na PM tem v ent voc vai ver os v da PM voc vai ver os mocs e o que eu preciso fazer eu "
+    "preciso trazer todas essas telas aí, todas essas telas entregues que estão aí na PM para cá. "
+    "Acredito que o ideal seria começar pelas de cadastro e deixar a folha de exames por último, "
+    "porque ela é a que depende de todas as outras, né? Ela é o... todas as outras são para "
+    "entregar coisas para ela, então acredito que seria mais fácil, né? at porque elas s s uma "
+    "tela de cadastro um CRUD b talvez mais f fazer elas at porque elas podem talvez n imagine "
+    "que elas podem ser feitas em paralelo porque eu acho que nenhuma depende tanto assim da "
+    "outra n caso dessas de cadastro eu acho que talvez a gente pode fazer as seis de uma vez "
+    "depois s fazer a folha de exames que depende de todas Tudo isso est descrito na PM tem um "
+    "monte de descri a eu estou falando aqui mais para a gente ver como que a gente vai usar S "
+    "que qual que a quest Eu tenho a minha skill de fazer isso s que a minha skill para orquestrar "
+    "n Eu uso ela para orquestrar coisas E eu tenho a skill que a gente usa para portar telas "
+    "desse projeto de mockup Ent eu preciso analisar essa tela aqui agora, nessa PM aqui agora, e "
+    "ver como que eu posso integrar a skill que eu já tenho de orquestração com a skill de portar "
+    "tela, porque ela já tem as regras de negócio, ela já tem as regras que o projeto segue, "
+    "então a gente tem que usar ela. a minha skill n para isso a minha skill para orquestrar o "
+    "trabalho ent depois de ter um plano pronto ou de ter alguma coisa pronta a minha skill fica "
+    "orquestrando o trabalho sem que eu tenha que me envolver a cada etapa o plano foi dividido "
+    "em 15 tasks eu n preciso de me envolver nas 15 ap eu aprovar o plano meio que para isso que "
+    "serve a minha skill mas n leve em considera tudo que eu estou dizendo aqui como verdade voc "
+    "pode ler a skill e ver se ela faz sentido para usar junto com a portar tela e com a gerar "
+    "contrato as skills que a gente fez para usar essas dos moques porque a gente fez skills para "
+    "pegar esses moques e fazer eles virarem telas de produ a gente cria o backend e cria o front "
+    "essas de cadastro aí eu acho que a gente não vai precisar de usar nada no PSS, a gente vai "
+    "criar a parte de crude no próprio Next, mas tudo isso aqui que eu estou falando eu só estou "
+    "dando um contexto, ainda não é uma regra, a gente vai planejar e fazer a spec junto, e aí "
+    "para isso que eu preciso que você analise tanto a skill de orchestrating, a idea to push, "
+    "quanto a portar tela, e que a porta dela fica no marketplace do ProMédico. E a contrato "
+    "também, né? Contrato, back-end ou gerar contrato, alguma coisa assim, que é pra na hora do "
+    "back-end do folhas de exames, a gente vai usar o PSS pra fazer o back-end dela. Tá?"
+)
+
+_BRIEFING_RESUMIDO = """**Objetivo**
+- Analisar a PM que vou te passar e definir uma execução para ela.
+- Usar a skill de orquestração para essa PM.
+- Trazer todas as telas descritas na PM para cá.
+- Integrar a skill de orquestração com a skill de portar tela e a de gerar contrato.
+
+**Situação hoje**
+- Existe um projeto onde já foram feitos os MOCs.
+- A PM descreve a folha de exames da UTI.
+- São seis telas de cadastro e uma tela principal que seria a folha de exames.
+- Tudo está descrito na PM, com os MOCs.
+
+**Critério de pronto**
+- Trazer todas as telas entregues que estão na PM.
+- Começar pelas telas de cadastro e deixar a folha de exames por último, porque ela depende de todas as outras.
+- As seis telas de cadastro podem ser feitas em paralelo, porque nenhuma depende tanto da outra.
+- Depois fazer a folha de exames, que depende de todas.
+
+**O que eu preciso saber**
+- Como integrar a skill de orquestração com a skill de portar tela, porque ela já tem as regras de negócio e as regras que o projeto segue.
+- A skill de orquestração fica orquestrando o trabalho sem que eu tenha que me envolver a cada etapa.
+- O plano foi dividido em 15 tasks, e eu aprovo o plano.
+- Analisar a skill de orchestrating idea to push, a portar tela (que fica no marketplace do ProMédico) e a de gerar contrato.
+- Para o back-end da folha de exames, a gente vai usar o PSS.
+- Para as telas de cadastro, a gente vai criar a parte de CRUD no próprio Next."""
+
+_BRIEFING_COMPLETO = """**Objetivo**
+- Definir uma execução para a PM que vou te passar.
+- Usar a skill "orchestrating idea to push" para essa PM.
+- Analisar a PM e o que vai ser essa PM: a folha de exames da UTI.
+- Trazer todas as telas entregues que estão na PM para cá.
+
+**Situação hoje**
+- Existe um MOC, existe um projeto onde já foram feitos os MOCs.
+- A PM descreve uma tela principal e seis telas de cadastro que entregam coisas para ela.
+- A tela principal seria a folha de exames.
+- Tudo está descrito na PM, tem um monte de descrição.
+- Eu tenho uma skill de orquestração, a "idea to push", que uso para trabalhos pessoais.
+- Eu tenho a skill que a gente usa para portar telas desse projeto de mockup, com as regras de negócio e as regras que o projeto segue.
+- A skill de portar tela fica no marketplace do ProMédico.
+- Tem também a skill de contrato, back-end ou gerar contrato, para o back-end da folha de exames, que a gente vai usar o PSS.
+
+**Contexto**
+- Isso não é importante.
+- Eu estou falando aqui mais para ter um contexto, mas tudo tem na PM.
+- Eu estou falando aqui mais para a gente ver como que a gente vai usar.
+- Tudo isso que eu estou falando eu só estou dando um contexto, ainda não é uma regra, a gente vai planejar e fazer a spec junto.
+
+**Critério de pronto**
+- Acredito que o ideal seria começar pelas de cadastro e deixar a folha de exames por último, porque ela é a que depende de todas as outras.
+- As outras são para entregar coisas para ela.
+- As telas de cadastro são um CRUD, talvez mais fácil fazer elas.
+- Eu acho que talvez a gente pode fazer as seis de uma vez, depois só fazer a folha de exames que depende de todas.
+
+**Em aberto**
+- Não leve em consideração tudo que eu estou dizendo aqui como verdade, você pode ler a skill e ver se ela faz sentido para usar junto com a portar tela e com a gerar contrato.
+- Eu preciso analisar essa PM aqui agora e ver como que eu posso integrar a skill que eu já tenho de orquestração com a skill de portar tela.
+- A minha skill de orquestrar o trabalho fica orquestrando sem que eu tenha que me envolver a cada etapa, o plano foi dividido em 15 tasks, eu não preciso me envolver nas 15, eu aprovar o plano, meio que para isso que serve a minha skill.
+- Eu acho que a gente não vai precisar de usar nada no PSS para as telas de cadastro, a gente vai criar a parte de CRUD no próprio Next, mas isso ainda não é uma regra.
+
+**O que eu preciso saber**
+- Como é que a gente vai fazer isso?
+- Como que eu posso integrar a skill que eu já tenho de orquestração com a skill de portar tela?"""
+
+
+def test_briefing_que_resumiu_e_recusado(monkeypatch):
+    """O bug de 24/08/2026, virado teste. Com encolhe_min=0.3 e cobertura_min=0.45 esta saida
+    passava ILESA (0,38x do tamanho, 51% do conteudo) e o usuario recebia o resumo achando que era
+    o ditado dele. Briefing nao e resumo: perder metade do que a pessoa falou e defeito."""
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _BRIEFING_RESUMIDO)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    texto, erro = narrar.limpar_ditado(_BRIEFING_CRU)
+    assert texto == _BRIEFING_CRU, "tem que devolver o cru, nao o resumo"
+    assert erro is not None
+
+
+def test_briefing_completo_passa(monkeypatch):
+    """A outra metade da calibragem, e a mais importante: piso que recusa briefing bom devolve o
+    cru e faz a pessoa ditar de novo — pior que o defeito. Esta e a PIOR das 7 saidas medidas com o
+    fecho novo (cobertura 0,72); se ela nao passar, o piso subiu demais."""
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _BRIEFING_COMPLETO)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    texto, erro = narrar.limpar_ditado(_BRIEFING_CRU)
+    assert erro is None, erro
+    assert texto.startswith("**Objetivo**")
+
+
+def test_as_duas_populacoes_do_briefing_continuam_separadas():
+    """Os numeros que justificam os limites, presos num teste pra nao virarem folclore de
+    comentario. Medido em 24/08/2026: defeito 0,51-0,57 de cobertura e 0,38-0,41 de tamanho; bom
+    0,72-0,90 e 0,69-0,94. Os limites moram no MEIO desse vao, e e o vao que tem que existir."""
+    travas = narrar._TRAVAS_POR_ESTILO["briefing"]
+    ruim = (narrar._cobertura(_BRIEFING_CRU, _BRIEFING_RESUMIDO),
+            len(_BRIEFING_RESUMIDO) / len(_BRIEFING_CRU))
+    bom = (narrar._cobertura(_BRIEFING_CRU, _BRIEFING_COMPLETO),
+           len(_BRIEFING_COMPLETO) / len(_BRIEFING_CRU))
+    assert ruim[0] < travas.cobertura_min < bom[0], f"cobertura ruim={ruim[0]:.2f} bom={bom[0]:.2f}"
+    assert ruim[1] < travas.encolhe_min < bom[1], f"tamanho ruim={ruim[1]:.2f} bom={bom[1]:.2f}"
+
+
+def test_fecho_do_briefing_tem_completude_e_par_entrada_saida():
+    """As duas coisas que faltavam no unico fecho que nao as tinha — e a causa do resumo. Este
+    arquivo ja mediu duas vezes (regras 1 e 4, e o _FECHO_PROSA) que regra sem par entrada/saida
+    nao e obedecida; e as regras do briefing eram TODAS de agrupar e cortar repeticao, o que o
+    modelo leu como licenca pra encurtar."""
+    system = narrar._SYSTEM_POR_ESTILO["briefing"]
+    assert "NADA do que ela falou pode ficar de fora" in system
+    assert "NÃO é resumo" in system
+    # O par: o exemplo mostra uma ressalva sobrevivendo, que e o que sumia.
+    fecho = system[system.index("briefing estruturado"):]
+    assert "Entrada:" in fecho and "Saída:" in fecho

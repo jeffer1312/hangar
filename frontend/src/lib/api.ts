@@ -947,7 +947,7 @@ export async function transcribeFile(
   name: string,
   file: File,
   opts?: OpcoesTranscribe,
-): Promise<{ path: string; text: string; raw?: string; aviso?: string | null }> {
+): Promise<{ path: string; text: string; raw?: string; aviso?: string | null; estilo_aplicado?: string }> {
   const base = getBaseUrl();
   const qs = queryTranscribe(opts);
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/transcribe${qs}`, {
@@ -966,7 +966,28 @@ export async function transcribeFile(
     signal: AbortSignal.timeout(300_000),
   });
   await ensureOk(res);
-  return res.json() as Promise<{ path: string; text: string; raw?: string; aviso?: string | null }>;
+  return res.json() as Promise<{
+    path: string; text: string; raw?: string; aviso?: string | null; estilo_aplicado?: string;
+  }>;
+}
+
+/**
+ * Aplica outro estilo ao texto CRU de um ditado já transcrito. Não reenvia o áudio: a Whisper já
+ * rodou e devolveu o cru em `raw`, então trocar de estilo custa só a limpeza (~1-16s conforme o
+ * provedor, contra isso MAIS a transcrição inteira). Sem `name` porque a limpeza não lê nada da
+ * sessão. `aviso` não-nulo = a limpeza desistiu e voltou o cru, mesmo contrato do transcribeFile.
+ */
+export async function relimparDitado(
+  texto: string,
+  estilo: string,
+): Promise<{ text: string; aviso?: string | null; estilo_aplicado?: string }> {
+  return apiFetch<{ text: string; aviso?: string | null; estilo_aplicado?: string }>('/api/ditado/relimpar', {
+    method: 'POST',
+    body: JSON.stringify({ texto, estilo }),
+    // Mesmo motivo do teto do transcribeFile, sem a parcela da Whisper: o briefing pode gastar 120s
+    // no servidor (narrar._TRAVAS_POR_ESTILO) e abortar antes disso perderia a limpeza já em curso.
+    signal: AbortSignal.timeout(180_000),
+  });
 }
 
 export async function selectOption(name: string, option: number): Promise<void> {

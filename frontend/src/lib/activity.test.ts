@@ -39,3 +39,24 @@ describe('activity — pareamento de agente background', () => {
     expect(s.agents[0].running).toBe(true);
   });
 });
+
+describe('activity — AgentSwarm (Kimi)', () => {
+  // Lote: N subagentes de uma vez, um por item. Antes disto o AgentSwarm nao caia em nenhum case e
+  // o painel de Atividade dizia "nada rolando agora" com quatro agentes trabalhando.
+  const swarm = (tuid: string, itens: string[]): ChatEvent =>
+    ({ kind: 'tool_use', id: `e${seq++}`, tool_name: 'AgentSwarm', tool_use_id: tuid,
+       tool_input: { description: 'Assistir os 4 vídeos da PM', subagent_type: 'explore', items: itens } });
+
+  it('vira uma linha, com a contagem de itens do lote', () => {
+    const s = run([swarm('tu9', ['a.mp4', 'b.mp4', 'c.mp4', 'd.mp4'])]);
+    expect(s.agents).toHaveLength(1);
+    expect(s.agents[0].description).toContain('Assistir os 4 vídeos da PM');
+    expect(s.agents[0].description).toContain('4');
+    expect(s.agents[0].subagentType).toBe('explore');
+  });
+
+  it('sem items, nao inventa contagem', () => {
+    const s = run([swarm('tu9', [])]);
+    expect(s.agents[0].description).toBe('Assistir os 4 vídeos da PM');
+  });
+});

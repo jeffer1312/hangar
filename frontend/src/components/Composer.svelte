@@ -43,8 +43,8 @@
   import CommandSheet from './CommandSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
-  import { ditadoEstilo, estilosDitado } from '../lib/ditadoEstilo.svelte';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
+  import { ditadoEstilo, estilosDitado, type EstiloDitado } from '../lib/ditadoEstilo.svelte';
+  import { getCommands, setModelEffort, uploadFile, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
   import type { State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
@@ -193,12 +193,37 @@
   // ── Gravacao de audio pelo microfone (MediaRecorder) ────────────────────────
   let recording = $state(false);
   let recError = $state('');
-  // Desfazer a limpeza do ditado: guarda o texto cru (raw) devolvido pelo backend junto do texto
-  // ja limpo. `before` e o inputText anterior a esta transcricao, pra remontar a mesma concatenacao
-  // com o cru no lugar do limpo. Some ao enviar, ao editar o campo, ou em ~10s (undoTimer) -- senao
-  // fica pendurado e reaparece no ditado seguinte.
-  let undo = $state<{ before: string; raw: string } | null>(null);
-  let undoTimer: ReturnType<typeof setTimeout> | undefined;
+  // "cru" nao e um estilo do servidor (nao existe em narrar.ESTILOS_DITADO): e a transcricao como a
+  // Whisper devolveu, que o app ja tem na mao e aplica sem rede nenhuma.
+  type VersaoDitado = EstiloDitado | 'cru';
+
+  // Funcao, e nao const de modulo, pelo mesmo motivo do estilosDitado: mensagem do Paraglide e
+  // compilada, entao um const congelaria o idioma do primeiro import.
+  function versoesDitado(): { valor: VersaoDitado; rotulo: string }[] {
+    return [{ valor: 'cru', rotulo: m.composer_ditado_cru() },
+            ...estilosDitado().map((e) => ({ valor: e.valor as VersaoDitado, rotulo: e.rotulo }))];
+  }
+
+  // O ultimo ditado, vivo enquanto o texto dele ainda estiver no campo: da pra OUVIR o audio e
+  // trocar a versao do texto (cru / limpar / prosa / briefing) com um clique. Antes daqui existia so
+  // um "↩ original" com prazo de 10s; quem nao gostava do estilo depois disso tinha que ditar tudo
+  // de novo, mesmo com o audio ja gravado e o texto cru ja na mao.
+  //
+  // - `url`: objectURL do proprio File que foi gravado (o backend tambem salva em
+  //   .claude-pocket-uploads, mas o blob ja esta na aba -> player sem round-trip).
+  // - `before`: o que havia no campo antes deste ditado, pra toda troca remontar a MESMA
+  //   concatenacao trocando so a parte ditada.
+  // - `cache`: estilo -> texto ja obtido. Reclicar num estilo por onde ja passou e instantaneo e de
+  //   graca; sem isso, comparar duas versoes custaria uma chamada de LLM por ida e volta.
+  type DitadoAtivo = {
+    url: string;
+    before: string;
+    raw: string;
+    atual: VersaoDitado;
+    cache: Partial<Record<VersaoDitado, string>>;
+  };
+  let ditado = $state<DitadoAtivo | null>(null);
+  let relimpando = $state<VersaoDitado | null>(null);   // versao com troca em voo (spinner no botao)
   let mediaRecorder: MediaRecorder | undefined;
   let recChunks: Blob[] = [];
   let recStream: MediaStream | undefined;
@@ -655,7 +680,9 @@
 
   function handleInput() {
     sendError = '';
-    limparUndo();   // editar o campo invalida a oferta de desfazer a limpeza do ditado
+    // A barra do ditado NAO some ao editar o campo (o "↩ original" de antes sumia). Ajustar uma
+    // palavra e nao ter mais como ouvir o audio nem trocar a versao era exatamente a queixa: o
+    // audio existe, o texto cru existe, e mesmo assim so restava ditar tudo de novo.
     autoGrow();
   }
 
@@ -721,7 +748,7 @@
     recError = '';
     audioFalhou = null;
     try {
-      const { text, raw, aviso } = await transcribeFile(sessionName, file, {
+      const { text, raw, aviso, estilo_aplicado } = await transcribeFile(sessionName, file, {
         limpar: !!opts?.ditado,
         // O estilo vai JUNTO, e nao e lido da config no servidor: e este rotulo que a pessoa leu na
         // pill antes de falar. Ver queryTranscribe em lib/api.ts.
@@ -740,14 +767,18 @@
       // que o usuario digitou a mao enquanto esperava o round-trip (mais lento agora, com a limpeza).
       const before = inputText.trim();
       inputText = before ? `${before} ${t}` : t;
-      // Oferece desfazer so quando a limpeza de fato mudou o texto (raw ausente/igual -> nada a desfazer).
-      const cru = raw?.trim();
-      if (opts?.ditado && cru && cru !== t) {
-        undo = { before, raw: cru };
-        if (undoTimer) clearTimeout(undoTimer);
-        undoTimer = setTimeout(limparUndo, 10_000);
+      // Barra do ditado: so no mic. Audio ANEXADO pelo 📎 nao passa por limpeza nenhuma (o backend
+      // nem recebe `limpar`), entao nao ha versao pra trocar — e o arquivo e da pessoa, ela ja tem
+      // como ouvir. `cru` cai pro proprio `t` quando o backend nao mandou raw (limpeza desistiu e
+      // devolveu o cru, ou o texto era curto demais pra limpar): o botao "Cru" tem que continuar
+      // devolvendo o que a Whisper ouviu, e nesse caso e exatamente isto.
+      if (opts?.ditado) {
+        // `cru` cai pro proprio `t` quando o backend nao mandou raw: aconteceu quando a limpeza
+        // desistiu (aviso) ou o texto era curto demais pra limpar, e nos dois casos o que esta no
+        // campo JA e o cru — que e o que o botao "Cru" tem que devolver.
+        abrirDitado({ file, before, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
       } else {
-        limparUndo();
+        fecharDitado();
       }
       if (aviso) recError = aviso;
       // Teto (3min sem detectar silencio): diz o motivo provavel em vez de "grave de novo" -- so
@@ -796,19 +827,79 @@
     void transcribeIntoComposer(alvo.file, { ditado: alvo.ditado, avisoTeto: alvo.avisoTeto });
   }
 
-  // Limpa a oferta de desfazer (timeout, edicao do campo, ou envio).
-  function limparUndo() {
-    undo = null;
-    if (undoTimer) { clearTimeout(undoTimer); undoTimer = undefined; }
+  // Fecha a barra do ditado e devolve o objectURL. Sem o revoke o blob do audio fica preso na
+  // memoria da aba ate ela ser recarregada — e um ditado longo tem alguns MB.
+  function fecharDitado() {
+    if (ditado) URL.revokeObjectURL(ditado.url);
+    ditado = null;
+    relimpando = null;
   }
 
-  // Troca o texto limpo pelo cru que a Groq devolveu, preservando o que havia antes do ditado.
-  function desfazerLimpeza() {
-    if (!undo) return;
-    const { before, raw } = undo;
-    inputText = before ? `${before} ${raw}` : raw;
-    limparUndo();
+  // Abre a barra pro ditado que acabou de cair no campo. Um por vez: o anterior ja saiu do campo.
+  function abrirDitado(d: { file: File; before: string; cru: string; texto: string; aplicado?: string }) {
+    fecharDitado();
+    const atual: VersaoDitado = ehVersao(d.aplicado) ? d.aplicado : 'cru';
+    ditado = {
+      url: URL.createObjectURL(d.file),
+      before: d.before,
+      raw: d.cru,
+      atual,
+      // O texto que ja esta no campo entra no cache pela versao que o BACKEND disse ter aplicado —
+      // e o cru entra sempre, que e o unico que nunca precisa de rede.
+      cache: { cru: d.cru, [atual]: d.texto },
+    };
+  }
+
+  function ehVersao(v: unknown): v is VersaoDitado {
+    return v === 'cru' || v === 'limpar' || v === 'prosa' || v === 'briefing';
+  }
+
+  // Poe no campo a versao pedida, preservando o que havia antes do ditado. Sobrescreve edicao feita
+  // a mao no texto ditado, de proposito: e o que o botao promete ("usar ESTA versao").
+  // Poe no campo a versao pedida, preservando o que havia antes do ditado. Sobrescreve edicao feita
+  // a mao no texto ditado, de proposito: e o que o botao promete ("usar ESTA versao").
+  //
+  // `alvo` e o ditado a que este texto pertence, e a comparacao com o ditado ATUAL nao e paranoia:
+  // uma troca de versao leva de 1 a 16s no ar, e nesse meio tempo da pra gravar outro ditado. Sem
+  // isto, a resposta atrasada da gravacao A caia no campo por cima do texto da gravacao B — que a
+  // pessoa acabou de ditar —, sem erro nenhum na tela. `if (!ditado)` nao pegava: `abrirDitado`
+  // troca o objeto e nunca deixa null no meio.
+  function aplicarVersao(alvo: DitadoAtivo, v: VersaoDitado, texto: string) {
+    if (ditado !== alvo) return;
+    alvo.cache[v] = texto;
+    alvo.atual = v;
+    inputText = alvo.before ? `${alvo.before} ${texto}` : texto;
     void tick().then(autoGrow);
+  }
+
+  // Troca a versao do texto ditado. Nao reenvia o audio: a Whisper ja rodou e o cru esta aqui, entao
+  // so a limpeza roda de novo (e nem ela, se ja passamos por esta versao antes -> cache).
+  async function trocarVersao(v: VersaoDitado) {
+    const alvo = ditado;
+    if (!alvo || relimpando) return;
+    const emCache = alvo.cache[v];
+    if (emCache !== undefined) { aplicarVersao(alvo, v, emCache); return; }
+    relimpando = v;
+    recError = '';
+    try {
+      const { text, aviso, estilo_aplicado } = await relimparDitado(alvo.raw, v);
+      // Um ditado novo comecou enquanto esta troca estava no ar: a resposta e de uma gravacao que
+      // ja saiu da tela. Nao aplica e nao avisa — o resultado nao interessa mais a ninguem, e um
+      // erro aqui falaria de um ditado que a pessoa nem esta mais vendo.
+      if (ditado !== alvo) return;
+      const t = text.trim();
+      if (!t) { recError = m.composer_transcricao_vazia(); return; }
+      // A limpeza pode desistir e devolver o cru (LLM fora do ar, travas do narrar). Marcar o botao
+      // clicado nesse caso seria dizer que o estilo pegou: quem manda e o que o backend aplicou.
+      aplicarVersao(alvo, ehVersao(estilo_aplicado) ? estilo_aplicado : v, t);
+      if (aviso) recError = aviso;
+    } catch (err) {
+      if (ditado === alvo) {
+        recError = err instanceof Error ? err.message : m.composer_falha_transcricao();
+      }
+    } finally {
+      relimpando = null;
+    }
   }
 
   // ── Gravar audio: toggle (tap grava, tap para) -> vira um anexo de audio ─────
@@ -1118,7 +1209,7 @@
 
   onDestroy(() => { teardownRecording(true); pararMicMorno(); });   // encerra o mic de vez (o morno tambem)
   onDestroy(() => { destroyed = true; });   // getUserMedia em voo se descarta ao resolver (toggleRecord)
-  onDestroy(limparUndo);   // troca de sessao desmonta o Composer -> nao deixa o setTimeout solto
+  onDestroy(fecharDitado);   // troca de sessao desmonta o Composer -> revoga o objectURL do audio
   onDestroy(cancelarContagem);   // troca de sessao desmonta o Composer -> nao deixa o setInterval solto
   // Fecha o audioCtx incondicionalmente no unmount: teardownRecording() so fecha quando !maosLivres
   // (o bipe ainda pode precisar dele), entao sem isto uma sessao trocada com mãos-livres ligado
@@ -1183,7 +1274,7 @@
     cancelarContagem();   // envio manual torna a contagem sem sentido
     const caption = inputText.trim();
     sendError = '';
-    limparUndo();   // enviou -> a oferta de desfazer a limpeza do ditado nao faz mais sentido
+    fecharDitado();   // enviou -> o texto saiu do campo, nao ha mais versao pra trocar
     if (attachments.length) {
       uploading = true;
       attachError = '';
@@ -1408,12 +1499,26 @@
         <span>{m.composer_enviando_cancelar({ n: contagem })}</span>
       </div>
     {/if}
-    {#if undo}
-      <!-- Oferece voltar ao texto cru do ditado (antes da limpeza). Some sozinha (limparUndo): ao
-           enviar, ao editar o campo, ou apos ~10s. -->
-      <div class="rec-hint" role="status">
-        <span class="rec-time">{m.composer_ditado_limpo()}</span>
-        <button type="button" class="undo-btn" onclick={desfazerLimpeza}>{m.composer_original()}</button>
+    {#if ditado}
+      <!-- Barra do ultimo ditado: ouvir o audio e trocar a versao do texto. Fica ate o envio (ou a
+           gravacao seguinte) -- editar o campo NAO a fecha, ver handleInput. -->
+      <div class="ditado-bar">
+        <!-- Player nativo: controls do proprio navegador, sem componente nenhum. `preload=metadata`
+             pra barra ja nascer com a duracao (o blob e local, nao ha download a economizar). -->
+        <audio class="ditado-audio" src={ditado.url} controls preload="metadata"
+               aria-label={m.composer_ditado_ouvir()}></audio>
+        <div class="ditado-versoes" role="group" aria-label={m.composer_ditado_versao()}>
+          {#each versoesDitado() as v (v.valor)}
+            <button
+              type="button"
+              class="ditado-versao"
+              class:sel={ditado.atual === v.valor}
+              aria-pressed={ditado.atual === v.valor}
+              disabled={relimpando !== null || transcribing}
+              onclick={() => trocarVersao(v.valor)}
+            >{relimpando === v.valor ? m.composer_ditado_trocando() : v.rotulo}</button>
+          {/each}
+        </div>
       </div>
     {/if}
     {#if recError}
@@ -2308,8 +2413,50 @@
     transition: height 60ms linear;
   }
 
-  /* Botao "↩ original" do desfazer da limpeza do ditado: texto discreto, sem fundo proprio
-     (superficie e a do rec-hint/composer, ver regra de transparencia do CLAUDE.md). */
+  /* Barra do ultimo ditado (player + versoes). SEM fundo proprio: o material e o vidro do
+     .composer, ver a regra de transparencia no CLAUDE.md. Numa tela estreita as versoes descem
+     pra linha de baixo em vez de espremer o player. */
+  .ditado-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-1);
+  }
+
+  /* O player nativo tem altura fixa de ~54px no Chrome; 32px deixa ele na escala da barra sem
+     esconder controle nenhum. min-width pequeno pra ele encolher antes de forcar quebra. */
+  .ditado-audio {
+    height: 32px;
+    flex: 1 1 160px;
+    min-width: 120px;
+    max-width: 260px;
+  }
+
+  .ditado-versoes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .ditado-versao {
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-full);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
+  .ditado-versao.sel {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .ditado-versao:disabled { opacity: 0.55; }
+
+  /* Botao de acao discreta no rec-hint/erro (tentar transcrever de novo): texto sem fundo proprio
+     (superficie e a do composer, ver regra de transparencia do CLAUDE.md). */
   .undo-btn {
     flex-shrink: 0;
     padding: 0;

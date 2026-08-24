@@ -133,10 +133,20 @@
   // Título de um subagente que só o disco conhece: a primeira linha do prompt dele. O prompt de
   // skill começa com o cabeçalho do arquivo ("Base directory for this skill: …"), então a linha que
   // interessa é a primeira que não seja esse cabeçalho.
-  function tituloDoSub(s2: SubagentRun): string {
+  function tituloBaseDoSub(s2: SubagentRun): string {
     const linhas = (s2.prompt ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
     const util = linhas.find((l) => !/^base directory for this skill:/i.test(l) && !l.startsWith('#'));
     return (util ?? linhas[0] ?? s2.agentId).slice(0, 90);
+  }
+
+  // O AgentSwarm do Kimi dispara N subagentes com o MESMO prompt de abertura — o que muda (o item
+  // do lote) fica no meio do texto, então a primeira linha é idêntica nos quatro e a lista virava
+  // quatro linhas iguais, sem como saber qual é qual. Empatou, entra o agentId, que é o mesmo
+  // número que o terminal do Kimi mostra na coluna de cada um.
+  function tituloDoSub(s2: SubagentRun): string {
+    const base = tituloBaseDoSub(s2);
+    const repetido = subs.some((o) => o.agentId !== s2.agentId && tituloBaseDoSub(o) === base);
+    return repetido ? `${base} · ${s2.agentId}` : base;
   }
 
   // Abre pelo OBJETO. O `openSubagent` casa por prompt porque parte de uma linha do transcript; aqui
@@ -427,7 +437,7 @@
                         {#if s2.agentType}<span class="agent-tag">{s2.agentType}</span>{/if}
                       </span>
                       <span class="agent-now">
-                        {m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}
+                        {#if s2.finished}{m.atividade_sub_concluido()} · {/if}{m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}
                       </span>
                     </span>
                     <span class="agent-arrow" aria-hidden="true">›</span>

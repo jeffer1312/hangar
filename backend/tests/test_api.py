@@ -1302,6 +1302,56 @@ def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_
     # O estilo da query e o que a pill mostrava na hora de falar, e ele chega inteiro na limpeza:
     # sem isso o backend voltava a decidir pela config, que e o bug do "So limpar" que sai briefing.
     assert visto["estilo"] == "briefing"
+    # Com aviso, o que voltou pro campo e o CRU — dizer "briefing" faria a barra do ditado marcar um
+    # estilo que nao pegou.
+    assert body["estilo_aplicado"] == "cru"
+
+
+def test_transcribe_marca_o_estilo_efetivo_e_nao_o_pedido(api_client, monkeypatch, tmp_path):
+    # Rebaixamento silencioso do briefing em ditado curto (narrar._MIN_PALAVRAS_BRIEFING): o texto
+    # volta em prosa, e a barra do ditado tem que marcar prosa. Sem este campo o front so teria o
+    # estilo PEDIDO, e o botao "Briefing" ficaria aceso num texto que nunca foi briefing.
+    info = SessionInfo(name="cc", cwd=str(tmp_path))
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "transcribe", lambda data, fn: "ola mundo cru curto demais")
+    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", lambda t, e=None: ("Olá, mundo.", None))
+    r = api_client.post(
+        "/api/sessions/cc/transcribe?limpar=1&estilo=briefing",
+        content=b"audio",
+        headers={**_h(), "X-Filename": "a.webm"},
+    )
+    assert r.status_code == 200
+    assert r.json()["estilo_aplicado"] == "prosa"
+
+
+def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
+    # Trocar de estilo NAO reenvia o audio: a Whisper ja rodou e o cru veio no `raw`. O endpoint so
+    # chama a limpeza de novo — nao ha sessao, nem cwd, nem upload envolvidos.
+    visto = {}
+
+    def fake_limpar(texto, estilo_pedido=None):
+        visto["texto"], visto["estilo"] = texto, estilo_pedido
+        return "**Objetivo**\nfalar.", None
+
+    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", fake_limpar)
+    r = api_client.post("/api/ditado/relimpar",
+                        json={"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"},
+                        headers=_h())
+    assert r.status_code == 200
+    assert r.json()["text"] == "**Objetivo**\nfalar."
+    assert visto == {"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"}
+
+
+def test_relimpar_recusa_estilo_que_nao_existe(api_client):
+    # 400, e nao "cai no padrao": aqui a pessoa CLICOU num botao. Entregar outro estilo calada seria
+    # mentir sobre o que ela apertou (na transcricao o estilo e palpite da tela, e cair na config e
+    # o certo — por isso a regra e diferente nos dois lugares).
+    r = api_client.post("/api/ditado/relimpar",
+                        json={"texto": "um texto qualquer aqui", "estilo": "resumir"},
+                        headers=_h())
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_estilo_invalido"
+    assert "resumir" in r.json()["detail"]["msg"]
 
 
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
