@@ -283,7 +283,10 @@ export function Composer({ serverId, name, draft }: Props) {
     [name, transcribing, limparUndo, iniciarAuto],
   );
 
-  const { gravando, rms, iniciar, parar } = useDitado({ onFim: handleTranscribe });
+  const { gravando, rms, iniciar, parar } = useDitado({
+    onFim: handleTranscribe,
+    onErroParada: (e) => setError(e.message || m.composer_falha_gravacao()),
+  });
 
   const handleMicPress = useCallback(async () => {
     if (transcribing) return;

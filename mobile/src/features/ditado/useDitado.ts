@@ -13,9 +13,10 @@ const TETO_MS = 180_000;
 
 interface Opts {
   onFim: (file: File, motivo: MotivoFim) => void;
+  onErroParada?: (e: Error) => void;
 }
 
-export function useDitado({ onFim }: Opts) {
+export function useDitado({ onFim, onErroParada }: Opts) {
   // isMeteringEnabled: true para VAD; RecordingPresets.HIGH_QUALITY já traz extension/sampleRate etc
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
@@ -52,16 +53,19 @@ export function useDitado({ onFim }: Opts) {
       try {
         await recorder.stop();
         const uri = recorder.uri;
-        if (!uri) return;
+        if (!uri) {
+          onErroParada?.(new Error('ditado_parada_falhou'));
+          return;
+        }
         const res = await fetch(uri);
         const blob = await res.blob();
         const file = new File([blob], 'ditado.m4a', { type: 'audio/m4a' });
         onFim(file, motivo);
-      } catch {
-        // sem arquivo — nada a fazer, o caller mostra erro se precisar
+      } catch (e) {
+        onErroParada?.(e instanceof Error ? e : new Error('ditado_parada_falhou'));
       }
     },
-    [recorder, onFim, limparTimers],
+    [recorder, onFim, onErroParada, limparTimers],
   );
 
   const iniciar = useCallback(async () => {
