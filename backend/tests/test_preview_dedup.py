@@ -586,6 +586,31 @@ def test_kimi_used_depois_da_prosa_corta_o_bloco():
     assert extract_assistant_text(pane, "kimi") == "A resposta comeca aqui."
 
 
+# Ferramenta EM EXECUCAO, copiada do pane real (24/08/2026, 321 amostras iguais): a TUI desenha
+# "● Using <Tool> (caminho)" e, embaixo, o conteudo do arquivo com numero de linha.
+_KIMI_USING = (
+    "● Using Write (docs/superpowers/plans/2026-08-24-folha-de-exames.md)\n"
+    "      1  # Folha de exames — Implementation Plan\n"
+)
+
+
+def test_kimi_using_nao_e_prosa():
+    assert extract_assistant_text(_KIMI_USING, "kimi") == ""
+
+
+def test_kimi_using_depois_da_prosa_corta_o_bloco():
+    # O caso do print do usuario: sem o corte, a previa virava a prosa MAIS o rotulo da TUI e o
+    # arquivo inteiro numerado.
+    pane = "● A resposta comeca aqui.\n" + _KIMI_USING
+    assert extract_assistant_text(pane, "kimi") == "A resposta comeca aqui."
+
+
+def test_kimi_using_em_prosa_inglesa_nao_descarta():
+    # Mesma amarra do "Used": em prosa a palavra seguinte e minuscula e nao ha parentese colado.
+    pane = "● Using it twice made the render flicker.\n"
+    assert extract_assistant_text(pane, "kimi") == "Using it twice made the render flicker."
+
+
 def test_kimi_used_em_prosa_inglesa_nao_descarta():
     # "Used" em prosa de verdade tem a palavra seguinte minuscula — NAO pode descartar o bloco
     # (previa vazia e pior que previa suja, regra do modulo).

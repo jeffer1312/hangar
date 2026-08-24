@@ -171,7 +171,13 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 # exigida (palavra com maiuscula + parentese) e o que amarra a regra ao desenho real: "Used" em
 # prosa inglesa ("Used correctly, ...") tem a palavra seguinte minuscula e nao casa. Especifico do
 # Kimi, como o resto do chrome por provider — no Claude "Used" nem aparece.
-_KIMI_USED_RE = re.compile(r"^Used\s+[A-Z][\w-]*\s*\(")
+#
+# "Using" (a MESMA linha, com a ferramenta ainda EM EXECUCAO) entrou em 24/08/2026, medido: 900
+# amostras do pane numa sessao real, 323 com a linha, 321 delas "● Using Write (caminho)" seguida do
+# conteudo do arquivo numerado ("      1  # Titulo"). Sem isto o bloco de prosa anterior nao era cortado
+# ali, e a previa no celular virava o rotulo da TUI mais o arquivo inteiro em numero de linha — foi
+# o print que o usuario mandou. So o gerundio faltava: "Used" ja estava coberto desde 19/08.
+_KIMI_USED_RE = re.compile(r"^Us(?:ed|ing)\s+[A-Z][\w-]*\s*\(")
 
 # Painel de Todo da TUI do Kimi (medido nos quadros de 19/08/2026, durante o trabalho desta
 # costura): entre a regua e a caixa do composer ele desenha o header "  Todo" e os itens
