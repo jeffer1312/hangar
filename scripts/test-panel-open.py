@@ -103,7 +103,19 @@ def main() -> int:
     injetado = shlex.split(mod.comando_terminal("kitty", "a; rm -rf /tmp/x")[-1])
     assert injetado[3] == "=a; rm -rf /tmp/x:", f"nome não escapado: {injetado!r}"
 
-    print("ok: 6 casos")
+    # 7. O fio main()->comando_terminal: sem isto, reverter só a linha do execvp de volta pro
+    #    `new-session -A` passava no caso 6 (que testa a função sozinha) e a regressão voltava calada.
+    montar(mod, [], clientes={"morta": []})       # sem janela pra focar -> cai no abrir terminal
+    mod.shutil = type("S", (), {"which": staticmethod(lambda t: "/usr/bin/" + t)})()
+    capturado = []
+    mod.os = type("O", (), {"execvp": staticmethod(lambda f, a: capturado.append((f, a)))})()
+    mod.sys.argv = ["cp-panel-open", "morta"]
+    mod.main()
+    assert capturado, "main() não chegou a abrir terminal"
+    assert capturado[0][1] == mod.comando_terminal("kitty", "morta"), \
+        f"main() não usa comando_terminal: {capturado[0]!r}"
+
+    print("ok: 7 casos")
     return 0
 
 
