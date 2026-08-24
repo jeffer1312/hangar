@@ -474,14 +474,21 @@
             {#if !subDetail}
               <p class="activity-empty">{m.atividade_sem_transcript()}</p>
             {:else}
-              <div class="ag-meta">
-                <span class="rodando">◐ {m.atividade_rodando()}</span>
-                <span>{m.atividade_chamadas({ n: subDetail.toolCalls })}</span>
-                {#if subDetail.agentType}<span>{subDetail.agentType}</span>{/if}
-                {#if subDetail.recent.length}
-                  <span class="ag-ultima">{subDetail.recent[subDetail.recent.length - 1].name}</span>
-                {/if}
-              </div>
+              <!-- Ilegivel: o transcript existe mas nao deu pra ler agora, entao TODO numero aqui
+                   viria zerado. Mostrar "◐ Rodando · 0 chamadas" seria afirmar o estado dele — a
+                   mesma mentira que a linha da lista ja evita, uma tela adiante. -->
+              {#if subDetail.ilegivel}
+                <div class="ag-meta"><span>{m.atividade_sub_ilegivel()}</span></div>
+              {:else}
+                <div class="ag-meta">
+                  <span class="rodando">◐ {m.atividade_rodando()}</span>
+                  <span>{m.atividade_chamadas({ n: subDetail.toolCalls })}</span>
+                  {#if subDetail.agentType}<span>{subDetail.agentType}</span>{/if}
+                  {#if subDetail.recent.length}
+                    <span class="ag-ultima">{subDetail.recent[subDetail.recent.length - 1].name}</span>
+                  {/if}
+                </div>
+              {/if}
 
               <!-- MESMO renderizador do chat: o arquivo do subagente e um jsonl no formato de
                    sempre, entao o backend converte com a `parse_line` do transcript e a UI reusa a
@@ -499,9 +506,10 @@
                     onCancel={() => {}}
                   />
                 </div>
-              {:else if subDetail.toolCalls > 0}
-                <!-- Ele JA chamou ferramentas, mas o transcript nao veio: e falha de leitura, nao
-                     agente parado. Dizer "ainda pensando" aqui seria mentir sobre o estado dele. -->
+              {:else if subDetail.ilegivel || subDetail.toolCalls > 0}
+                <!-- Ele JA chamou ferramentas (ou o proprio registro nao deu pra ler): e falha de
+                     leitura, nao agente parado. "Ainda pensando" aqui seria mentir sobre o estado
+                     dele — e no ilegivel o `toolCalls: 0` nao quer dizer "nao chamou nada". -->
                 <p class="activity-empty">{m.atividade_erro_transcript()}</p>
               {:else}
                 <p class="activity-empty">{m.atividade_pensando()}</p>

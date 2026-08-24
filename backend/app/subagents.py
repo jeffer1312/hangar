@@ -274,18 +274,24 @@ def list_subagents(jsonl: str, tail: int = 12) -> list[dict]:
     if kimi is not None:
         # `iterdir` numa pasta que sumiu levanta FileNotFoundError, e o endpoint nao tem except: a
         # sessao morta virava 500 no lugar do `[]` honesto que o caminho do Claude ja devolvia.
-        if not kimi.is_dir():
+        # Checar antes NAO basta: a pasta pode sumir DEPOIS do is_dir e no meio da iteracao, e o
+        # OSError sobe cru ate a rota, que nao tem except — 500 no lugar do `[]` honesto.
+        try:
+            filhos = sorted(kimi.iterdir())
+        except OSError:
             return []
-        for d in sorted(kimi.iterdir()):
+        for d in filhos:
             if not d.is_dir() or d.name == "main":
                 continue
             out.append(_read_agent_kimi(d, tail) or _ilegivel(d.name, _mtime(d / "wire.jsonl")))
         out.sort(key=lambda a: a["mtime"], reverse=True)
         return out
     d = _subagents_dir(jsonl)
-    if not d.is_dir():
+    try:
+        arquivos = sorted(d.glob("agent-*.jsonl"))
+    except OSError:
         return []
-    for f in d.glob("agent-*.jsonl"):
+    for f in arquivos:
         nome = f.stem[len("agent-"):] if f.stem.startswith("agent-") else f.stem
         out.append(_read_agent(f, tail) or _ilegivel(nome, _mtime(f)))
     out.sort(key=lambda a: a["mtime"], reverse=True)
@@ -299,8 +305,13 @@ def get_subagent(jsonl: str, agent_id: str, tail: int = 40, events: int = 0) -> 
     f = _subagents_dir(jsonl) / f"agent-{agent_id}.jsonl"
     if not f.is_file():
         return None
-    a = _read_agent(f, tail)
-    if a is not None and events:
+    # O arquivo EXISTE (o is_file acima) — entao `None` aqui so pode ser falha de leitura, nunca
+    # "nao existe". Devolver None juntava os dois no mesmo 404 "subagente inexistente", e a linha
+    # que a lista acabou de marcar como ilegivel abria dizendo que o agente nem existe.
+    a = _read_agent(f, tail) or _ilegivel(agent_id, _mtime(f))
+    if a.get("ilegivel"):
+        return a
+    if events:
         ev = _events(f, events)
         # `None` = não deu pra ler AGORA. A chave fica ausente de propósito: uma lista vazia aqui
         # faria a UI afirmar "nenhuma ferramenta chamada", que é dizer que o agente está parado.
@@ -324,8 +335,12 @@ def _get_subagent_kimi(agents: Path, agent_id: str, tail: int, events: int) -> d
         return None
     if not (d / "wire.jsonl").is_file():
         return None
-    a = _read_agent_kimi(d, tail)
-    if a is not None and events:
+    # Mesma regra do caminho do Claude: o wire EXISTE, entao `None` aqui e falha de leitura, e o
+    # 404 de "subagente inexistente" seria mentira.
+    a = _read_agent_kimi(d, tail) or _ilegivel(agent_id, _mtime(d / "wire.jsonl"))
+    if a.get("ilegivel"):
+        return a
+    if events:
         ev = _events_kimi(d / "wire.jsonl", events)
         if ev is not None:
             a["events"] = ev
