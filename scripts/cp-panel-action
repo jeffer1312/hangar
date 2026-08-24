@@ -72,13 +72,29 @@ def op_project(name: str, action: str) -> dict:
             return {"ok": False, "message": "nenhum terminal conhecido (kitty/foot/alacritty)"}
         # Sessão do runner morta (projeto parado, pane recolhido): o attach saía em milissegundos,
         # a janela fechava antes de dar pra ler e o stderr ia pro DEVNULL — clique em "abrir log"
-        # virava um pisca sem pista, com esta função ainda devolvendo "log aberto no terminal".
-        # comando_terminal segura a janela com o motivo.
-        subprocess.Popen(comando_terminal(
-            term, ["-L", "cppkt-run", "attach-session", "-t", f"={target}"],
-            f"cp-panel-action: a sessao de log de '{name}' ({target}) nao existe mais — "
-            "o projeto provavelmente nao esta rodando."),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # virava um pisca sem pista. Quem lê este JSON é a linha do projeto no painel
+        # (ProjectRow.qml), e com `ok: True` fixo ela nunca mostrava erro: a verdade ficava só numa
+        # janela que o usuário podia nem estar olhando. Agora a recusa aparece NA LINHA.
+        try:
+            vivo = subprocess.run(["tmux", "-L", "cppkt-run", "has-session", "-t", f"={target}"],
+                                  capture_output=True, timeout=5, check=False).returncode == 0
+        except (OSError, subprocess.SubprocessError) as e:
+            raise PanelError(f"nao consegui perguntar ao tmux se o log de '{name}' existe: {e}")
+        if not vivo:
+            return {"ok": False,
+                    "message": f"a sessao de log de '{name}' nao existe (projeto parado?)"}
+        # A janela ainda leva o `comando_terminal`: entre este check e o attach a sessão pode cair,
+        # e aí é ela que mostra o motivo em vez de piscar e sumir.
+        try:
+            subprocess.Popen(comando_terminal(
+                term, ["-L", "cppkt-run", "attach-session", "-t", f"={target}"],
+                f"cp-panel-action: a sessao de log de '{name}' ({target}) nao existe mais — "
+                "o projeto provavelmente nao esta rodando."),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            # `which` disse que o terminal existia; se sumiu entre lá e aqui, a exceção crua
+            # quebraria o contrato "sempre imprime JSON" desta ferramenta.
+            raise PanelError(f"nao consegui abrir {term}: {e}")
         return {"ok": True, "message": "log aberto no terminal"}
     return {"ok": False, "message": "uso: cp-panel-action <projeto> project start|stop|pane|open"}
 

@@ -175,8 +175,15 @@ def main() -> int:
     if addr:
         # Sintaxe LUA obrigatória: neste rice o hyprctl (e o próprio socket IPC) roda o dispatch
         # como Lua — o "focuswindow address:0x..." clássico é rejeitado como sintaxe inválida.
-        r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{addr}" }})'],
-                           capture_output=True, text=True, check=False)
+        # `timeout` como nas outras três chamadas deste arquivo: sem ele, um hyprctl pendurado
+        # (IPC fora do ar) segura o script pra sempre e o `avisar` abaixo nunca chega a rodar —
+        # trocaria um clique sem pista por um clique sem pista E um processo parado.
+        try:
+            r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{addr}" }})'],
+                               capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            avisar(f"cp-panel-open: hyprctl nao respondeu ao focar {name} ({e})")
+            return 1
         if r.returncode != 0:
             # Endereço obsoleto (janela fechou entre a varredura e o clique) ou IPC fora do ar: o
             # clique não focou nada, e sem isto não sobrava pista nenhuma — nem janela nova, já
@@ -192,7 +199,14 @@ def main() -> int:
         # não faz nada. `avisar` manda pro notify-send também.
         avisar("cp-panel-open: nenhum terminal conhecido encontrado (kitty/foot/alacritty)")
         return 1
-    os.execvp(term, comando_terminal(term, name))
+    try:
+        os.execvp(term, comando_terminal(term, name))
+    except OSError as e:
+        # O `which` acima diz que o binário existia; entre ele e o exec o pacote pode ter sido
+        # atualizado ou o symlink quebrado. Sem isto vira traceback no stderr que ninguém lê —
+        # exatamente o clique-que-não-faz-nada que este arquivo passou a caçar.
+        avisar(f"cp-panel-open: nao consegui abrir {term}: {e}")
+        return 1
 
 
 if __name__ == "__main__":

@@ -217,6 +217,10 @@ def avisar(msg: str) -> None:
     o stderr, então `print(..., file=sys.stderr)` sozinho é um clique que não faz nada. Notificação
     de desktop é o único canal que sobra quando nem terminal chegou a abrir. Segue imprimindo no
     stderr também — é o que aparece no log do quickshell pra quem for depurar.
+
+    DEPENDÊNCIA: sem `notify-send` (e sem um daemon de notificação — mako, dunst, o do rice)
+    sobra só o stderr, e aí o clique volta a não mostrar nada. Não há plano B sem inventar uma
+    janela própria: quem usa o painel precisa dos dois instalados.
     """
     print(msg, file=sys.stderr)
     if shutil.which("notify-send"):
