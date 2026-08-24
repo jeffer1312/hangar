@@ -68,6 +68,9 @@ export function useDitado({ onFim, onErroParada }: Opts) {
     [recorder, onFim, onErroParada, limparTimers],
   );
 
+  const pararRef = useRef(parar);
+  pararRef.current = parar;
+
   const iniciar = useCallback(async () => {
     if (gravandoRef.current) return;
     const perm = await requestRecordingPermissionsAsync();
@@ -123,7 +126,7 @@ export function useDitado({ onFim, onErroParada }: Opts) {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (next !== 'active' && gravandoRef.current) {
-        void parar('escondeu');
+        void pararRef.current('escondeu');
       }
     });
     return () => {
@@ -131,7 +134,7 @@ export function useDitado({ onFim, onErroParada }: Opts) {
       limparTimers();
       gravandoRef.current = false;
     };
-  }, [parar, limparTimers]);
+  }, [limparTimers]);
 
   return { gravando, rms, iniciar, parar };
 }

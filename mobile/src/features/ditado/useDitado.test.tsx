@@ -177,4 +177,22 @@ describe('useDitado — parar() propaga falha via onErroParada', () => {
 
     await h.unmount();
   });
+
+  it('sobrevive a re-render com onErroParada inline (bloqueador 2)', async () => {
+    const onFim = vi.fn();
+    const onErro = vi.fn();
+    const h = mountHook({ onFim, onErroParada: (e) => onErro(e) });
+    await h.mount({ onFim, onErroParada: (e) => onErro(e) });
+    await act(async () => {
+      await h.getHook().iniciar();
+    });
+    // força UM re-render com NOVA inline arrow (nova identidade) — como o Composer faz a cada setRms/setText
+    await h.mount({ onFim, onErroParada: (e) => onErro(e) });
+    await act(async () => {
+      await h.getHook().parar('botao');
+    });
+    expect(onFim).toHaveBeenCalledTimes(1);
+    expect(onErro).not.toHaveBeenCalled();
+    await h.unmount();
+  });
 });
