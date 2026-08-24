@@ -34,7 +34,8 @@ import sys
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
 # irmão procuraria em ~/.local/bin em vez de scripts/ do repo.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import WRITE_TIMEOUT, PanelError, api, env, set_peer_enabled  # noqa: E402
+from cp_panel_common import (WRITE_TIMEOUT, PanelError, api, comando_terminal, env,  # noqa: E402
+                             set_peer_enabled)
 
 
 def op_peer(pid: str, arg: str) -> dict:
@@ -69,9 +70,15 @@ def op_project(name: str, action: str) -> dict:
         term = next((t for t in ("kitty", "foot", "alacritty") if shutil.which(t)), None)
         if not term:
             return {"ok": False, "message": "nenhum terminal conhecido (kitty/foot/alacritty)"}
-        subprocess.Popen([term, "-e", "tmux", "-L", "cppkt-run", "attach-session",
-                          "-t", f"={target}"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Sessão do runner morta (projeto parado, pane recolhido): o attach saía em milissegundos,
+        # a janela fechava antes de dar pra ler e o stderr ia pro DEVNULL — clique em "abrir log"
+        # virava um pisca sem pista, com esta função ainda devolvendo "log aberto no terminal".
+        # comando_terminal segura a janela com o motivo.
+        subprocess.Popen(comando_terminal(
+            term, ["-L", "cppkt-run", "attach-session", "-t", f"={target}"],
+            f"cp-panel-action: a sessao de log de '{name}' ({target}) nao existe mais — "
+            "o projeto provavelmente nao esta rodando."),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {"ok": True, "message": "log aberto no terminal"}
     return {"ok": False, "message": "uso: cp-panel-action <projeto> project start|stop|pane|open"}
 

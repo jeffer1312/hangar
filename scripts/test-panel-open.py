@@ -21,6 +21,10 @@ def carregar():
     """Importa o script (sem extensão .py) sem executar o main()."""
     spec = importlib.util.spec_from_loader("cp_panel_open", None)
     mod = importlib.util.module_from_spec(spec)
+    # __file__ é obrigatório desde que o script passou a importar o cp_panel_common: o prólogo dele
+    # resolve o symlink de ~/.local/bin por `os.path.realpath(__file__)`, e sem isto o exec abaixo
+    # morre num NameError antes de definir qualquer função.
+    mod.__dict__["__file__"] = str(CAMINHO)
     src = CAMINHO.read_text().replace('if __name__ == "__main__":\n    sys.exit(main())\n', "")
     exec(compile(src, str(CAMINHO), "exec"), mod.__dict__)  # noqa: S102
     return mod

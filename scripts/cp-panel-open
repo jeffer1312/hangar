@@ -18,10 +18,15 @@ escolher em vez de chutar (abrir attach duplicado é visível; focar a janela er
 """
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
+
+# resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo irmão
+# procuraria em ~/.local/bin em vez de scripts/ do repo. Mesmo prólogo do cp-panel-action.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from cp_panel_common import avisar  # noqa: E402
+from cp_panel_common import comando_terminal as comando_terminal_comum  # noqa: E402
 
 TERM_CLASSES = {"kitty", "foot", "alacritty", "wezterm", "org.wezfurlong.wezterm"}
 
@@ -142,7 +147,7 @@ def find_window(name: str) -> str | None:
     return None
 
 
-def comando_terminal(term: str, name: str) -> list[str]:
+def comando_terminal(term: str, name: str) -> list:
     """ARGV do terminal que anexa em `name` — attach EXATO, nunca `new-session -A`.
 
     O `-A` (attacha se existe, CRIA se não) parecia só cobrir a sessão que morre entre o poll e o
@@ -154,15 +159,10 @@ def comando_terminal(term: str, name: str) -> list[str]:
 
     O `=nome:` é a mesma grafia do attach do backend (api._EMULADORES): sem o `=` o tmux cai em
     prefix-match e anexa na sessão errada.
-
-    A recusa não pode sumir junto com a janela: `tmux attach` num alvo inexistente sai em
-    milissegundos e o terminal fecha antes de dar pra ler — que é o erro mudo que o `-A` evitava.
-    Daí o `sh -c` com mensagem e um `read` segurando a janela aberta.
     """
-    alvo = shlex.quote(f"={name}:")
-    msg = shlex.quote(f"cp-panel-open: a sessao {name} nao existe mais (nada foi criada).")
-    sh = f'tmux attach -t {alvo} || {{ printf "\\n%s\\nEnter pra fechar. " {msg}; read _; }}'
-    return [term, "-e", "sh", "-c", sh]
+    return comando_terminal_comum(
+        term, ["attach", "-t", f"={name}:"],
+        f"cp-panel-open: a sessao {name} nao existe mais (nada foi criada).")
 
 
 def main() -> int:
@@ -175,13 +175,22 @@ def main() -> int:
     if addr:
         # Sintaxe LUA obrigatória: neste rice o hyprctl (e o próprio socket IPC) roda o dispatch
         # como Lua — o "focuswindow address:0x..." clássico é rejeitado como sintaxe inválida.
-        subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{addr}" }})'],
-                       check=False)
+        r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{addr}" }})'],
+                           capture_output=True, text=True, check=False)
+        if r.returncode != 0:
+            # Endereço obsoleto (janela fechou entre a varredura e o clique) ou IPC fora do ar: o
+            # clique não focou nada, e sem isto não sobrava pista nenhuma — nem janela nova, já
+            # que este ramo dá o trabalho por feito.
+            avisar(f"cp-panel-open: nao consegui focar a janela de {name} "
+                   f"({(r.stderr or r.stdout or '').strip() or f'hyprctl saiu {r.returncode}'})")
+            return 1
         return 0
 
     term = next((t for t in ("kitty", "foot", "alacritty") if shutil.which(t)), None)
     if not term:
-        print("erro: nenhum terminal conhecido encontrado (kitty/foot/alacritty)", file=sys.stderr)
+        # Sem terminal não há janela onde mostrar a recusa: aqui o stderr sozinho é um clique que
+        # não faz nada. `avisar` manda pro notify-send também.
+        avisar("cp-panel-open: nenhum terminal conhecido encontrado (kitty/foot/alacritty)")
         return 1
     os.execvp(term, comando_terminal(term, name))
 
