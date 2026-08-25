@@ -190,7 +190,7 @@ def test_pergunta_pela_linha_vence_a_tela(monkeypatch):
     de modelo pelo app era recusada com 409 "composer do pi ja tem texto"."""
     linha = _com_linha(monkeypatch, "")
     with patch.object(terminal_input, "_capture",
-                      return_value=_pane_pi([" [cp-state] linha do pocket conectada"])):
+                      return_value=_pane_pi([" [hangar-state] linha do pocket conectada"])):
         assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
     assert linha.perguntas == [("pi-x", "editor")]      # psmux: a chave é o NOME da sessão
 
@@ -886,12 +886,12 @@ def test_claude_nunca_consulta_a_linha(monkeypatch):
 
 
 # --- id estavel entre reentregas pela linha do Pi (achado ALTA da revisao 02/08/2026) ------------
-# A extensao (cp-state.ts) chama sendUserMessage ANTES de confirmar: se o ACK atrasa/perde,
+# A extensao (hangar-state.ts) chama sendUserMessage ANTES de confirmar: se o ACK atrasa/perde,
 # pi_inbox.entregar devolve "deferred" mas a instrucao JA pode ter chegado no agente. Sem um id
 # ESTAVEL entre a 1a tentativa (_send_one, via api.py) e o retry (drain, abaixo), a extensao nao tem
 # como reconhecer o retry como a MESMA mensagem e chamaria sendUserMessage de novo. Estes dois testes
 # prova a plumbing do lado do backend (msg_id sobrevive ao round-trip fila -> drain -> send_prompt);
-# a dedupe em si (guardar os ids ja entregues) mora em cp-state.ts, sem harness de teste TS no repo
+# a dedupe em si (guardar os ids ja entregues) mora em hangar-state.ts, sem harness de teste TS no repo
 # — verificada por leitura + execucao manual da logica extraida (ver relatorio).
 
 def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
@@ -925,7 +925,7 @@ def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
     assert len(ids_recebidos) == 2
     assert ids_recebidos[0] == ids_recebidos[1] == entry["id"], (
         "as DUAS tentativas tem que carregar o MESMO id -- e o que deixa a extensao reconhecer "
-        "retry e nao repetir sendUserMessage (a dedupe em si mora em cp-state.ts)"
+        "retry e nao repetir sendUserMessage (a dedupe em si mora em hangar-state.ts)"
     )
 
 

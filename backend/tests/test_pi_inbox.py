@@ -110,7 +110,7 @@ async def test_duas_mensagens_no_mesmo_pane_nao_se_cruzam():
 async def test_entregar_usa_o_msg_id_recebido_em_vez_de_gerar_um_novo():
     """Id ESTAVEL entre reentregas (achado ALTA da revisao 02/08/2026 — "Porta A"): quem tem uma
     entrada de fila (retry) passa o proprio id, e a extensao usa ELE pra reconhecer o retry (dedupe
-    em cp-state.ts). Sem isto, cada tentativa gerava um uuid4 novo e a extensao nunca via duas vezes
+    em hangar-state.ts). Sem isto, cada tentativa gerava um uuid4 novo e a extensao nunca via duas vezes
     o MESMO id."""
     inbox = PiInbox()
     recebidas, envia = _falsa()

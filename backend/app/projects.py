@@ -82,7 +82,7 @@ def _validate(name: str, cwd: str, command: str, port: object) -> None:
 
 def _mutate(fn) -> None:
     """Read-modify-write do projects.json inteiro sob lock EXCLUSIVO, atômico (mkstemp 0600 +
-    os.replace). Espelha cp_panel_common.set_peer_enabled: o import dispara vários POST
+    os.replace). Espelha hangar_panel_common.set_peer_enabled: o import dispara vários POST
     concorrentes, e sem lock quem grava por último apaga as entries dos outros — sem erro, sem log.
     `fn(data)` muta o dict in place."""
     lock_path = _CONFIG.with_name(_CONFIG.name + ".lock")

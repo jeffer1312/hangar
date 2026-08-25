@@ -91,7 +91,7 @@ def validar_id(nome: str) -> None:
 def _ler_estrito() -> dict:
     """Leitura pra ESCRITA. O _load tolera corrompido (quem só lê não pode derrubar a malha);
     aqui corrompido é RECUSA: gravar por cima apagaria os tokens que o operador ainda podia
-    recuperar à mão (mesmo racional de cp_panel_common). Ausente continua sendo {}, sem peers.
+    recuperar à mão (mesmo racional de hangar_panel_common). Ausente continua sendo {}, sem peers.
     """
     try:
         data = json.loads(_PEERS_FILE.read_text(encoding="utf-8"))
@@ -110,7 +110,7 @@ def _mutar(fn):
     Sem isto duas gravações concorrentes liam o mesmo estado ANTES do lock e a última a escrever
     apagava a mudança da outra, calado (test_gravacao_concorrente pega exatamente isso). O lock é
     sidecar (.lock) e não o próprio arquivo porque o os.replace troca o INODE — travar o arquivo
-    antigo seguraria um inode órfão (mesmo desenho de cp_panel_common; no Windows sem fcntl a
+    antigo seguraria um inode órfão (mesmo desenho de hangar_panel_common; no Windows sem fcntl a
     trava vira no-op, como em contas.py).
 
     Escrita atômica (tmp + os.replace) com o PID no nome do temporário: com nome fixo, duas
@@ -214,7 +214,7 @@ def gravar_peer(server_id: str, base_url: str, token: str, web_url: str | None =
         dados[server_id] = {"base_url": base.rstrip("/"), "token": tok}
         if isinstance(antigo, dict) and antigo.get("enabled") is not None:
             dados[server_id]["enabled"] = antigo["enabled"]
-        # web_url é do painel (cp_panel_common/cp-panel-data), não deste formulário: quem regrava
+        # web_url é do painel (hangar_panel_common/hangar-panel-data), não deste formulário: quem regrava
         # sem informá-lo não está pedindo pra apagá-lo. Mesmo racional do enabled.
         if isinstance(antigo, dict) and antigo.get("web_url"):
             dados[server_id]["web_url"] = antigo["web_url"]

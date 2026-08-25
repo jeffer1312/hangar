@@ -15,7 +15,7 @@
 #   4. troca as units systemd claude-cockpit-* pelas hangar-* (services-setup.sh)
 #      e migra a claude-cockpit-deploy.service se existir (servidores com webhook);
 #   5. re-roda install-hangar-send.sh (hangar-send + skills) e, se Hyprland+Quickshell,
-#      install-cp-panel.sh (painel/tray).
+#      install-hangar-panel.sh (painel/tray).
 #
 # PRÉ-REQUISITO: o clone já tem que estar no commit do rename (units chamadas hangar-* no
 # services-setup.sh, manifest com o nome novo). Este script mexe na MÁQUINA, não no conteúdo
@@ -259,7 +259,7 @@ fi
 ./scripts/install-claude-wrapper.sh
 ./scripts/install-hangar-send.sh
 if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
-    ./scripts/install-cp-panel.sh
+    ./scripts/install-hangar-panel.sh
 fi
 
 # ── Verificação ──────────────────────────────────────────────────────────────
@@ -321,7 +321,7 @@ fi
 # link e responde falso quando o alvo sumiu — é o teste que separa link vivo de link morto.
 for l in hangar-send hangar-codex hangar-engine hangar-conta \
          cp-send cp-codex cp-engine cp-conta \
-         cp-panel-open cp-panel-data cp-panel-action cp-panel-tray; do
+         hangar-panel-open hangar-panel-data hangar-panel-action hangar-panel-tray; do
     [[ -L "$HOME/.local/bin/$l" ]] || continue
     [[ -e "$HOME/.local/bin/$l" ]] && continue
     echo "ERRO: ~/.local/bin/$l aponta pra $(readlink "$HOME/.local/bin/$l"), que não existe" >&2

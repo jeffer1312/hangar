@@ -198,7 +198,7 @@ set -g automatic-rename on
 set -g automatic-rename-format '#{b:pane_current_path}'
 # Terminal/WM title = SESSION NAME, not the cwd basename. Two sessions in the same repo get
 # distinct names (the wrapper appends -2, -3) but share a cwd basename, so a cwd title made them
-# indistinguishable to the window manager. cp-panel-open needs that title to pick the right window
+# indistinguishable to the window manager. hangar-panel-open needs that title to pick the right window
 # whenever the terminal runs single-instance (`kitty -1`), where every window shares one pid and
 # the pid->window map stops being a key. Session names are unique by construction; cwd is not.
 set -g set-titles on
@@ -209,15 +209,15 @@ TMUXCONF
 fi
 
 # --- extensoes do Pi ----------------------------------------------------------------------------
-# cp-state.ts: sem ela a sessao Pi aparece no app sempre "ociosa" (o estado vem do marcador, nao do
+# hangar-state.ts: sem ela a sessao Pi aparece no app sempre "ociosa" (o estado vem do marcador, nao do
 # pane). rich-status-line.ts: desenha o rodape E publica a linha INTEIRA no sidecar que o app le —
 # o que sai no terminal ja vem cortado na largura da janela (ver "Statusline por sidecar" no
 # CLAUDE.md), entao sem ela a sessao Pi em janela estreita fica sem contexto/cota no app.
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
 if command -v pi >/dev/null 2>&1; then
   mkdir -p "$PI_EXT_DIR"
-  ln -sfn "$SCRIPT_DIR/pi/cp-state.ts" "$PI_EXT_DIR/cp-state.ts"
-  echo "  linked cp-state.ts into $PI_EXT_DIR"
+  ln -sfn "$SCRIPT_DIR/pi/hangar-state.ts" "$PI_EXT_DIR/hangar-state.ts"
+  echo "  linked hangar-state.ts into $PI_EXT_DIR"
   # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
   # sobrescrever apagaria o trabalho dele. Avisa e deixa a decisao com quem sabe o que tem la.
   if [ -e "$PI_EXT_DIR/rich-status-line.ts" ] && [ ! -L "$PI_EXT_DIR/rich-status-line.ts" ]; then

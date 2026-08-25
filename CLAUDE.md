@@ -73,7 +73,7 @@ npm --prefix frontend run check            # svelte-check + tsc — THIS is the 
 
 ./scripts/test-wrappers.sh                 # claude-engine (bash/zsh/fish) against a fake `claude`, no tmux
 ./scripts/test-statusline.sh               # statusline.js contract (engine sessions suppress cost), needs node
-node scripts/test-pi-cp-state.mjs          # cp-state.ts: fork de subagente do Pi não rouba o pane
+node scripts/test-pi-hangar-state.mjs          # hangar-state.ts: fork de subagente do Pi não rouba o pane
 ```
 
 Sessions must run as `claude --session-id <uuid>` **inside tmux** — `scripts/install-claude-wrapper.sh`
@@ -326,7 +326,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   digitar agora?" usa **duas capturas**, não uma: um pane parado não distingue spinner vivo de
   marcador de turno concluído (está na docstring do `state.classify`), e uma captura só recusava,
   com "está trabalhando", uma sessão que tinha acabado de terminar.
-- **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/cp-state.ts` + `components/PiModelPopover.svelte` + `components/PiEffortPopover.svelte`):
+- **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/hangar-state.ts` + `components/PiModelPopover.svelte` + `components/PiEffortPopover.svelte`):
   the third mechanism, next to Claude's TUI picker and Codex's app-server, and it does **not** scrape
   the pane. Measured on pi 0.82.1: `/model` is a fuzzy-**search** list of ~300 entries (footer
   `(1/301)`, 10 rows visible) — not enumerable from the pane and not navigable by counting `Down`;
@@ -343,9 +343,9 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   empty list that reads as "no models".
 - **Before typing into the Pi's composer, ASK — the screen cannot tell a notice from a draft**
   (`terminal_input._composer_ocupado_pi` + `pi_inbox.perguntar` + `responderPergunta` in
-  `scripts/pi/cp-state.ts`). Pi prints extension notices (`console.error`) **inside the composer
+  `scripts/pi/hangar-state.ts`). Pi prints extension notices (`console.error`) **inside the composer
   band**, with the same ANSI as typed text; measured 22-23/08/2026, `cursor_flag` is 0 either way.
-  So the anti-paste guard counted our own `[cp-state] linha do pocket conectada` as a draft and
+  So the anti-paste guard counted our own `[hangar-state] linha do pocket conectada` as a draft and
   every `/cp-model`/`/cp-think` came back **409 with the composer empty**. Recognizing each phrase by
   regex is whack-a-mole (`/reload` draws a fourth one no regex of ours knows), and the "compare two
   captures — a notice is static, a draft changes" upgrade the code itself proposed **was measured and
@@ -471,7 +471,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   há sidecar (sessão sem instrumentação **nunca** pode ficar sem linha nenhuma). Três detalhes que
   já custaram bug: (1) o tmp do `tmp+rename` leva o **pid**, porque o script do Claude roda a cada
   render e duas invocações da mesma sessão se sobrepõem (nome fixo → `rename` promovendo bytes
-  entrelaçados, o mesmo furo que `cp_panel_common.py` já corrigiu); (2) `read()` exige **dict** —
+  entrelaçados, o mesmo furo que `hangar_panel_common.py` já corrigiu); (2) `read()` exige **dict** —
   JSON válido do tipo errado (`null`, lista) não levanta `ValueError` e o `.get()` derrubava a
   resolução de estado de TODAS as sessões em `list_with_state`; (3) o publicador do Pi vive na
   extensão porque a linha completa só existe dentro do processo dele — logo, **sessão Pi já aberta
@@ -525,7 +525,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `queued-` da fila durável; só o eco local dava 0 (ele some em ~1s, quando o `queued-` chega) e o
   chip nunca nascia. 409 fora do Kimi.
 - **Prévia ao vivo: sidecar do agente primeiro, pane depois** (`preview.read_sidecar` +
-  `scripts/pi/cp-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
+  `scripts/pi/hangar-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
   Pi recebe o bloco do assistente token a token (`message_update`) e publica o **último bloco de
   texto** em `<config>/.hangar-preview/<stem>.json` = `{"text", "ts"}`; `PreviewBroker._loop`
   o prefere e só cai no `capture-pane` quando não há sidecar. É o que tira a prévia do Pi da

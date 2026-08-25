@@ -41,7 +41,7 @@ class PiAdapter:
 
     def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
         # Mesmo StateMonitor: a ancora de hook (HookState) ja cobre working/idle pelo marcador que
-        # a extensao cp-state.ts escreve. O fallback de raspar o pane continua ligado como rede,
+        # a extensao hangar-state.ts escreve. O fallback de raspar o pane continua ligado como rede,
         # mas nao e o caminho normal — o Pi nao tem prompt de permissao pra detectar.
         # hook_grace=None: o loader do Pi e braille (⠋⠙⠹...), fora de SPINNER_GLYPHS, entao o
         # contador de polls-sem-spinner sobe durante o turno e a grace do Claude descartava o

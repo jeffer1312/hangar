@@ -2,7 +2,7 @@
 # ponytail: hook minimo — le o JSON do evento no stdin e grava o sidecar de PREVIA. SEM stdout.
 # Falha em silencio (nunca trava o prompt). Espelha o padrao do state_hook.py. Usado pelo backend.
 #
-# E o publicador de previa do CLAUDE CODE — o par do scripts/pi/cp-state.ts do Pi, pelo MESMO
+# E o publicador de previa do CLAUDE CODE — o par do scripts/pi/hangar-state.ts do Pi, pelo MESMO
 # contrato (<config>/.hangar-preview/<stem>.json = {"text","ts"}), que preview.read_sidecar
 # ja consome pra qualquer provider. O evento e o MessageDisplay (Claude Code >= 2.1.152): dispara
 # ENQUANTO o texto do assistente e exibido, com `delta` INCREMENTAL — medido em 2.1.233, uma

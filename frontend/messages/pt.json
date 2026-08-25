@@ -1658,7 +1658,7 @@
   "permissao_dica": "Shift+Tab no terminal também troca — a lista aqui é o que esta sessão pode percorrer",
   "permissao_dontask_sem_volta": "esta sessão nasceu em dontAsk; sair dele é irreversível — use Shift+Tab no terminal, ou recrie a sessão",
   "erro_rota_so_pi": "esta rota só existe pra sessões Pi",
-  "erro_catalogo_pi_indisponivel": "catálogo do Pi indisponível — rode ./scripts/install-claude-wrapper.sh e reinicie a sessão (extensão cp-state.ts desatualizada)",
+  "erro_catalogo_pi_indisponivel": "catálogo do Pi indisponível — rode ./scripts/install-claude-wrapper.sh e reinicie a sessão (extensão hangar-state.ts desatualizada)",
   "erro_model_effort_faltando": "informe model (com provider) e/ou effort",
   "erro_sem_confirmacao_troca": "comandos digitados, mas o Pi não republicou o catálogo — não dá pra confirmar a troca; veja o modelo no próprio terminal",
   "erro_pi_recusou_troca": "o Pi recusou a troca — segue em {provider}/{id} (raciocínio {thinking}). Causa mais comum: sem chave configurada pro provedor pedido (o Pi avisa dentro do TUI)",

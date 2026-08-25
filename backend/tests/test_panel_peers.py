@@ -1,4 +1,4 @@
-"""scripts/cp_panel_common.py — o flag que tira um peer da varredura e a gravação dele.
+"""scripts/hangar_panel_common.py — o flag que tira um peer da varredura e a gravação dele.
 
 Testado porque enabled() decide se um servidor SOME da lista (errar o default apagaria peers que
 sempre funcionaram, sem barulho nenhum) e porque set_peer_enabled() reescreve o peers.json, que
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from cp_panel_common import PanelError, enabled, set_peer_enabled  # noqa: E402
+from hangar_panel_common import PanelError, enabled, set_peer_enabled  # noqa: E402
 
 
 @pytest.mark.parametrize("cfg,esperado", [

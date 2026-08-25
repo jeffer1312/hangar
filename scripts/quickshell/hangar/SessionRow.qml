@@ -17,7 +17,7 @@ Rectangle {
     readonly property color stateColor: awaiting ? "#f2b8b5" : working ? "#f9c784" : "#8e9099"
 
     // Projeto do launcher casado com esta sessão, por cwd resolvido (realpath, campo cwd_real do
-    // cp-panel-data). Só sessão local: dev server e projects.json são local-only. null = sem botão.
+    // hangar-panel-data). Só sessão local: dev server e projects.json são local-only. null = sem botão.
     readonly property var project: session.local
         ? (Sessions.projects.find(p => p.cwd_real && p.cwd_real === session.cwd_real) ?? null)
         : null

@@ -4,11 +4,11 @@ import importlib.util
 import os
 from pathlib import Path
 
-# cp-panel-data não tem extensão .py — mesmo carregamento de test_scan_folder.py.
-_path = Path(__file__).with_name("cp-panel-data")
+# hangar-panel-data não tem extensão .py — mesmo carregamento de test_scan_folder.py.
+_path = Path(__file__).with_name("hangar-panel-data")
 spec = importlib.util.spec_from_file_location(
-    "cp_panel_data", _path,
-    loader=importlib.machinery.SourceFileLoader("cp_panel_data", str(_path)))
+    "hangar_panel_data", _path,
+    loader=importlib.machinery.SourceFileLoader("hangar_panel_data", str(_path)))
 cpd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cpd)
 

@@ -475,7 +475,7 @@ export interface CodexModelsResponse {
 }
 
 // Modelo + nivel de raciocinio de uma sessao Pi (GET /pi/models). Vem do sidecar que a extensao
-// cp-state.ts publica perguntando pro proprio Pi — nao ha picker raspado aqui (o /model do Pi e
+// hangar-state.ts publica perguntando pro proprio Pi — nao ha picker raspado aqui (o /model do Pi e
 // uma lista com busca de ~300 modelos). `levels` sao os niveis que o modelo ATUAL aceita: variam
 // por modelo (medido: glm-5.2 -> off/low/medium/high/xhigh; k3 -> low/high/max).
 export interface PiModel {

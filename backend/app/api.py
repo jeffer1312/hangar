@@ -301,7 +301,7 @@ _WS_PINGS_SEM_RESPOSTA_MAX = 2
 
 # Aviso-uma-vez-ate-mudar da recusa de conexao (achado ALTA da revisao 02/08/2026): sem isto, um
 # token girado / bind mudado / firewall no meio faz TODA tentativa de retry da extensao (laco com
-# recuo, cp-state.ts) virar linha de log — e a mesma enxurrada que o retry em si tenta evitar do
+# recuo, hangar-state.ts) virar linha de log — e a mesma enxurrada que o retry em si tenta evitar do
 # lado dela. Mesma politica de terminal_input._avisa_deferred/_limpa_deferred: WARNING na 1a recusa
 # por host, calado ate uma conexao daquele host DAR CERTO (o que também reabre o aviso se a falha
 # voltar depois — nao e "avisa uma vez na vida do processo").
@@ -4274,7 +4274,7 @@ async def engine_model_set(name: str, body: EngineModelBody):
 
 # ── Modelo + raciocinio de uma sessao Pi ────────────────────────────────────────────────────────
 # Rotas separadas das do Claude (/model-effort, picker do TUI) e das do Codex (/models, app-server)
-# porque o mecanismo e um terceiro: a extensao cp-state.ts publica o catalogo num sidecar e expoe
+# porque o mecanismo e um terceiro: a extensao hangar-state.ts publica o catalogo num sidecar e expoe
 # dois comandos que aplicam a troca pela API do Pi. Ver app/pi_models.py pro porque de nao raspar
 # o TUI aqui.
 
@@ -4343,7 +4343,7 @@ async def _pi_catalog(name: str) -> tuple[dict, str]:
         # mesma (extensao velha/ausente) e o conserto e um comando.
         raise HTTPException(409, detail=erro("erro_catalogo_pi_indisponivel",
                                              "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh "
-                                             "e reinicie a sessao (extensao cp-state.ts desatualizada)"))
+                                             "e reinicie a sessao (extensao hangar-state.ts desatualizada)"))
     return cat, info.jsonl
 
 

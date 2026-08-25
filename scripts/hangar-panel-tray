@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cp-panel-tray — ícone de bandeja (StatusNotifierItem) do painel do claude-pocket.
+"""hangar-panel-tray — ícone de bandeja (StatusNotifierItem) do painel do hangar.
 
 Clique esquerdo abre/fecha o painel; clique do meio força um refresh. O ícone entra em
 NeedsAttention quando alguma sessão está awaiting_input, e o tooltip resume o estado.
@@ -22,7 +22,7 @@ from gi.repository import GLib
 
 SNI_IFACE = "org.kde.StatusNotifierItem"
 WATCHER = "org.kde.StatusNotifierWatcher"
-DATA = os.path.expanduser("~/.local/bin/cp-panel-data")
+DATA = os.path.expanduser("~/.local/bin/hangar-panel-data")
 POLL_SECONDS = 10
 
 # Nomes do tema de ícones (freedesktop). Attention separado pra bandeja destacar sem depender
@@ -48,7 +48,7 @@ SNI_EMPTY_PROPS = {
 
 
 def panel_ipc(*args: str) -> None:
-    subprocess.Popen(["qs", "-c", "claude-pocket", "ipc", "call", "panel", *args],
+    subprocess.Popen(["qs", "-c", "hangar", "ipc", "call", "panel", *args],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -81,7 +81,7 @@ class TrayItem(dbus.service.Object):
 
     def poll(self) -> bool:
         """Dispara a coleta. NÃO bloqueia: o main loop do GLib é o mesmo que despacha o Activate
-        do clique, e o cp-panel-data espera até o timeout (4s) por peer offline. Com a coleta
+        do clique, e o hangar-panel-data espera até o timeout (4s) por peer offline. Com a coleta
         síncrona aqui, o clique no ícone ficava na fila atrás dela — medido, 3,95s pra abrir o
         painel com um servidor da malha fora do ar."""
         if self.polling:
@@ -105,13 +105,13 @@ class TrayItem(dbus.service.Object):
                    len(sessions),
                    ("⚠ " + "; ".join(errs)) if errs else "")
         except (OSError, subprocess.SubprocessError, ValueError) as e:
-            got = (0, 0, 0, f"⚠ cp-panel-data falhou: {e}")
+            got = (0, 0, 0, f"⚠ hangar-panel-data falhou: {e}")
         except Exception as e:      # noqa: BLE001
             # Rede de segurança DELIBERADAMENTE ampla: esta thread é daemon, então exceção não
-            # prevista (formato novo do cp-panel-data, bug futuro) morreria calada e deixaria
+            # prevista (formato novo do hangar-panel-data, bug futuro) morreria calada e deixaria
             # `polling` travado em True — todo poll seguinte sairia cedo e a bandeja congelaria no
             # último estado, sem nem o ⚠ que existe justamente pra denunciar poll quebrado.
-            got = (0, 0, 0, f"⚠ cp-panel-data: erro inesperado ({type(e).__name__}: {e})")
+            got = (0, 0, 0, f"⚠ hangar-panel-data: erro inesperado ({type(e).__name__}: {e})")
         # Fora de todo except: é o idle_add que devolve `polling` a False no main loop. Não chegar
         # aqui é o que trava o poll pra sempre.
         GLib.idle_add(self._apply, *got)
@@ -162,8 +162,8 @@ class TrayItem(dbus.service.Object):
         icon = ICON_ATTENTION if (self.awaiting or self.problem) else ICON_IDLE
         return {
             "Category": "ApplicationStatus",
-            "Id": "claude-pocket",
-            "Title": "Claude Pocket",
+            "Id": "hangar",
+            "Title": "Hangar",
             "Status": self.status,
             "IconName": icon,
             "AttentionIconName": ICON_ATTENTION,
@@ -172,7 +172,7 @@ class TrayItem(dbus.service.Object):
             # Sem DBusMenu: o clique já abre o painel, que É o menu. Path inválido de propósito
             # (hosts aceitam e não tentam montar menu).
             "Menu": dbus.ObjectPath("/NO_DBUSMENU"),
-            "ToolTip": (icon, dbus.Array([], signature="(iiay)"), "Claude Pocket",
+            "ToolTip": (icon, dbus.Array([], signature="(iiay)"), "Hangar",
                         self.tooltip_text()),
         }
 
@@ -201,7 +201,7 @@ def single_instance() -> socket.socket | None:
     Abstrato e não lockfile: some junto com o processo, sem resto obsoleto pra limpar."""
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        s.bind("\0cp-panel-tray")
+        s.bind("\0hangar-panel-tray")
     except OSError:
         return None
     return s      # devolvido pra manter referência viva: fechado, a trava cairia.
@@ -220,7 +220,7 @@ def register(bus: dbus.SessionBus, name: str) -> bool:
 def main() -> int:
     lock = single_instance()
     if lock is None:
-        print("cp-panel-tray já está rodando — nada a fazer", file=sys.stderr)
+        print("hangar-panel-tray já está rodando — nada a fazer", file=sys.stderr)
         return 0
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)

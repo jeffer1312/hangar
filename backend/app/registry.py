@@ -473,7 +473,7 @@ def _warn_bilhete_once(pane_id: str, motivo: str) -> None:
 
 
 def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
-    """Mesma chave que a extensao usa pra gravar o bilhete (scripts/pi/cp-state.ts, paneKey).
+    """Mesma chave que a extensao usa pra gravar o bilhete (scripts/pi/hangar-state.ts, paneKey).
 
     No tmux e o `%N`, que e unico no servidor. No psmux (Windows) NAO e: medido em 21/08/2026,
     quatro sessoes vivas ao mesmo tempo e todas com `TMUX_PANE=%1` — a segunda sessao Pi

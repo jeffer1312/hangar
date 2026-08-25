@@ -436,7 +436,7 @@ reportes de teste e consolida o painel final — você só aprova os marcos (pus
 
 **Painel/tray no desktop (só Hyprland + Quickshell):** painel flutuante de sessões
 (SUPER+SHIFT+U) + ícone na bandeja. O passo 7/7 do `install.sh` oferece quando detecta
-o ambiente; manual: `./scripts/install-cp-panel.sh`. Outros desktops ainda não têm painel
+o ambiente; manual: `./scripts/install-hangar-panel.sh`. Outros desktops ainda não têm painel
 — use a view board/canvas do app no navegador.
 
 ## 6. Sync na nuvem (opcional)

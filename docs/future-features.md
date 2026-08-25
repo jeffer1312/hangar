@@ -238,7 +238,7 @@ dele foi avaliado e recusado, por três motivos que valem ficar registrados pra 
    Nosso `servidor::sessao` é rede. Adotar seria manter os dois caminhos, não trocar um pelo outro.
 2. **O "cross-harness" já não é ganho aqui.** É o único diferencial dele, e os três lados já
    entram por API nativa: Claude pelo `SendMessage` (nativo desde 2.1.224), Pi pelo
-   `pi.sendUserMessage({deliverAs:"steer"})` do `pi_inbox`/`cp-state.ts`, Codex pelo app-server.
+   `pi.sendUserMessage({deliverAs:"steer"})` do `pi_inbox`/`hangar-state.ts`, Codex pelo app-server.
    O adaptador Claude Code **dele** não tem injeção nativa — essa família de projetos entrega por
    hook `PreToolUse` relendo inbox a cada tool call, com `Stop` hook pra acordar a sessão (ver
    [claude-code#35072](https://github.com/anthropics/claude-code/issues/35072), que pede

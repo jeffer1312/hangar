@@ -471,7 +471,7 @@ different thing, and only one of them is visible.
 
 What it needs: a settings screen listing the peers with an enable/disable toggle, reachability
 status, and add/remove. Writing is the risky part — `peers.json` holds the tokens for the whole
-mesh and `scripts/cp_panel_common.py:81` already notes a half-finished write would take the mesh
+mesh and `scripts/hangar_panel_common.py:81` already notes a half-finished write would take the mesh
 down — so the write path has to be atomic (temp file + rename), never a partial rewrite.
 
 ## Follow-ups from the real terminal panel (2026-08-07)

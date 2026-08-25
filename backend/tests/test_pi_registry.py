@@ -91,7 +91,7 @@ def test_session_file_comes_from_the_pane_sidecar(monkeypatch, tmp_path):
 
 
 def test_session_file_ignores_a_stale_sidecar(monkeypatch, tmp_path):
-    # cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa %pane_id apos um restart
+    # hangar-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa %pane_id apos um restart
     # do servidor (ex: reboot) -> um bilhete ORFAO apontando pra um .jsonl ja deletado/renomeado nao
     # pode ser devolvido como se fosse o transcript deste pane (a MESMA classe de bug que o Step 6
     # ja cobre pro fallback newest-by-mtime, so que chegando por um bilhete velho em vez do mtime).

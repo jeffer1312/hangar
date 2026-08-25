@@ -6,7 +6,7 @@ import Quickshell.Io
 import QtQuick
 
 // Estado das sessões de TODOS os servidores. Toda a lógica suja (token, peers.json, merge,
-// ordenação) vive no scripts/cp-panel-data — aqui só roda e faz parse, pra este QML não
+// ordenação) vive no scripts/hangar-panel-data — aqui só roda e faz parse, pra este QML não
 // duplicar nada do backend nem carregar segredo.
 Singleton {
     id: root
@@ -81,7 +81,7 @@ Singleton {
         root.togglePending = name;
         root.togglePendingAction = action;
         setProjError(name, "", "");
-        toggler.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project", action];
+        toggler.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", name, "project", action];
         toggler.running = true;
     }
 
@@ -138,7 +138,7 @@ Singleton {
         root.pushConfirm = "";
         root.pushPending = address;
         setPushError(address, "");
-        pusher.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", address, "push"];
+        pusher.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", address, "push"];
         pusher.running = true;
     }
 
@@ -185,7 +185,7 @@ Singleton {
             seen[s.address] = true;
             if (root._notified[s.address])
                 continue;
-            Quickshell.execDetached(["notify-send", "-a", "claude-pocket", "-u", "critical",
+            Quickshell.execDetached(["notify-send", "-a", "hangar", "-u", "critical",
                 "-i", "dialog-question", `Claude precisa de você — ${s.address}`,
                 s.question ? String(s.question) : (s.cwd ?? "")]);
         }
@@ -196,7 +196,7 @@ Singleton {
         id: fetcher
         // Symlink do installer (mesmo padrão do hangar-send). Caminho absoluto de propósito: o
         // quickshell sobe pelo compositor, sem garantia de ~/.local/bin no PATH.
-        command: [Quickshell.env("HOME") + "/.local/bin/cp-panel-data"]
+        command: [Quickshell.env("HOME") + "/.local/bin/hangar-panel-data"]
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
@@ -212,7 +212,7 @@ Singleton {
                 } catch (e) {
                     // Saída ilegível = script quebrado/ausente. Vira erro VISÍVEL no painel;
                     // engolir deixaria a lista velha na tela parecendo atual.
-                    root.errors = [`cp-panel-data: saída inválida (${e.message})`];
+                    root.errors = [`hangar-panel-data: saída inválida (${e.message})`];
                     root.everLoaded = true;
                 }
             }
@@ -229,7 +229,7 @@ Singleton {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 // Falha vira texto na linha da sessão; não pode morrer muda num botão de play.
@@ -252,7 +252,7 @@ Singleton {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 // Falha de push vira texto na linha; não pode morrer muda.

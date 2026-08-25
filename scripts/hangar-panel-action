@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cp-panel-action <endereço> <operação> [args] — ações do menu de contexto do painel.
+"""hangar-panel-action <endereço> <operação> [args] — ações do menu de contexto do painel.
 
     info                 branch + arquivos modificados (pro cabeçalho do menu)
     rename <novo>        renomeia a sessão
@@ -34,15 +34,15 @@ import sys
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo
 # irmão procuraria em ~/.local/bin em vez de scripts/ do repo.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import (WRITE_TIMEOUT, PanelError, api, comando_terminal, env,  # noqa: E402
+from hangar_panel_common import (WRITE_TIMEOUT, PanelError, api, comando_terminal, env,  # noqa: E402
                              set_peer_enabled)
 
 
 def op_peer(pid: str, arg: str) -> dict:
-    """Liga/desliga um peer na varredura. A gravação em si mora no cp_panel_common, junto da
+    """Liga/desliga um peer na varredura. A gravação em si mora no hangar_panel_common, junto da
     leitura do peers.json — PanelError sobe pro dispatcher e vira {"ok": false, message}."""
     if arg not in ("on", "off"):
-        return {"ok": False, "message": "uso: cp-panel-action <servidor> peer on|off"}
+        return {"ok": False, "message": "uso: hangar-panel-action <servidor> peer on|off"}
     set_peer_enabled(pid, arg == "on")
     return {"ok": True, "message": f"{pid} {'ligado' if arg == 'on' else 'desligado'}"}
 
@@ -88,7 +88,7 @@ def op_project(name: str, action: str) -> dict:
         try:
             subprocess.Popen(comando_terminal(
                 term, ["-L", "cppkt-run", "attach-session", "-t", f"={target}"],
-                f"cp-panel-action: a sessao de log de '{name}' ({target}) nao existe mais — "
+                f"hangar-panel-action: a sessao de log de '{name}' ({target}) nao existe mais — "
                 "o projeto provavelmente nao esta rodando."),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as e:
@@ -96,7 +96,7 @@ def op_project(name: str, action: str) -> dict:
             # quebraria o contrato "sempre imprime JSON" desta ferramenta.
             raise PanelError(f"nao consegui abrir {term}: {e}")
         return {"ok": True, "message": "log aberto no terminal"}
-    return {"ok": False, "message": "uso: cp-panel-action <projeto> project start|stop|pane|open"}
+    return {"ok": False, "message": "uso: hangar-panel-action <projeto> project start|stop|pane|open"}
 
 
 def op_project_add(name: str, rest: list) -> dict:
@@ -157,7 +157,7 @@ def _cmd_has_dead_abspath(cmd: str) -> bool:
 
 def op_import_candidates(server: str) -> dict:
     """Puxa os projetos do peer <server> e casa as pastas nesta máquina. NÃO grava — só sugere; o
-    QML confirma e chama project-add por item marcado. Fetch remoto via cp_panel_common.api, então
+    QML confirma e chama project-add por item marcado. Fetch remoto via hangar_panel_common.api, então
     o backend continua sem saber de peers."""
     remote = api(server, "GET", "/api/projects")
     if not isinstance(remote, list):
@@ -299,7 +299,7 @@ def op_commit(addr: str, msg: str, push: bool) -> dict:
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print(json.dumps({"ok": False, "message": "uso: cp-panel-action <endereço> <operação> [args]"}))
+        print(json.dumps({"ok": False, "message": "uso: hangar-panel-action <endereço> <operação> [args]"}))
         return 2
     addr, op, rest = sys.argv[1], sys.argv[2], sys.argv[3:]
 

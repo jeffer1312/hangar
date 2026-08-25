@@ -1,5 +1,5 @@
 // Contrato: a copia da extensao que roda DENTRO de um subagente do pi-subagents nao publica NADA.
-//   node scripts/test-pi-cp-state.mjs
+//   node scripts/test-pi-hangar-state.mjs
 //
 // O subagente e OUTRO PROCESSO com o MESMO TMUX_PANE herdado (execution.ts:463, `spawnEnv =
 // {...process.env, ...}`) e o arquivo de sessao do fork via `--session` (pi-args.ts:519). O sinal
@@ -14,7 +14,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "cp-state-test-"));
+const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "hangar-state-test-"));
 process.env.CLAUDE_CONFIG_DIR = cfg;
 process.env.TMUX_PANE = "%999";
 // HERDADA do pane em que o teste roda, e no Windows ela SEMPRE existe: `paneKey()` prefere
@@ -58,7 +58,7 @@ const temPreview = (f) => fs.existsSync(path.join(cfg, ".hangar-preview", `${pat
 // ── caso real 1: o SUBAGENTE (PI_SUBAGENT_DEPTH=1) nao publica nada ─────────────────────────────
 process.env.PI_SUBAGENT_DEPTH = "1";
 const piFilho = fakePi();
-(await import("./pi/cp-state.ts?filho=1")).default(piFilho);
+(await import("./pi/hangar-state.ts?filho=1")).default(piFilho);
 
 assert.equal(piFilho.handlers.size, 0, "subagente nao registra handler nenhum");
 assert.equal(piFilho.commands.size, 0, "nem comandos");
@@ -79,7 +79,7 @@ delete process.env.PI_SUBAGENT_DEPTH;
 
 // ── caso real 2: a sessao do usuario publica como sempre ───────────────────────────────────────
 const piPai = fakePi();
-(await import("./pi/cp-state.ts?pai=1")).default(piPai);
+(await import("./pi/hangar-state.ts?pai=1")).default(piPai);
 
 await disparar(piPai, "session_start", sessao(A, "gpt-5.6-sol"));
 assert.equal(bilhete(), A, "a sessao do usuario publica o bilhete pane->sessao");
@@ -109,7 +109,7 @@ assert.ok(temCatalogo(C), "e o catalogo da sessao nova");
 // ARQUIVO (a chave da linha, que nao vira, vai crua — ver `chaveDaLinha`).
 process.env.PSMUX_SESSION = "pi teste/2";
 const piPsmux = fakePi();
-(await import("./pi/cp-state.ts?psmux=1")).default(piPsmux);
+(await import("./pi/hangar-state.ts?psmux=1")).default(piPsmux);
 await disparar(piPsmux, "session_start", sessao(A, "gpt-5.6-sol"));
 const noPsmux = path.join(cfg, ".hangar-pi", "pi-teste-2.json");
 assert.ok(fs.existsSync(noPsmux), "no psmux o bilhete e do NOME da sessao, sanitizado pra arquivo");
@@ -117,5 +117,5 @@ assert.equal(JSON.parse(fs.readFileSync(noPsmux, "utf8")).file, A);
 delete process.env.PSMUX_SESSION;
 
 fs.rmSync(cfg, { recursive: true, force: true });
-console.log("ok: subagente nao publica nada; sessao do usuario publica; psmux chaveia pelo nome (cp-state.ts)");
+console.log("ok: subagente nao publica nada; sessao do usuario publica; psmux chaveia pelo nome (hangar-state.ts)");
 process.exit(0);   // conectar() agendou retry do WebSocket; nada a esperar aqui

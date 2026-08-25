@@ -13,7 +13,7 @@
 #   4. troca as units systemd claude-pocket-* pelas claude-cockpit-* (services-setup.sh)
 #      e migra a claude-pocket-deploy.service se existir (servidores com webhook);
 #   5. re-roda install-hangar-send.sh (hangar-send + skills) e, se Hyprland+Quickshell,
-#      install-cp-panel.sh (painel/tray).
+#      install-hangar-panel.sh (painel/tray).
 #
 # NÃO muda (de propósito — são dados/ids internos): ~/.claude/.claude-pocket-pair/,
 # .claude-pocket-uploads/, instância quickshell "claude-pocket", cp-*/CP_*.
@@ -102,7 +102,7 @@ fi
 # ── 5. Re-instalar symlinks (hangar-send, skills, painel) ────────────────────────
 ./scripts/install-hangar-send.sh
 if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
-    ./scripts/install-cp-panel.sh
+    ./scripts/install-hangar-panel.sh
 fi
 
 # ── Verificação ──────────────────────────────────────────────────────────────

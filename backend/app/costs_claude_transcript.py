@@ -185,7 +185,7 @@ def _gravar_cache(raiz: Path, estado: dict) -> None:
                "itens": {k: {"sig": [s[0], s[1]], "uso": u} for k, (s, u) in estado.items()}}
     destino = _caminho_cache(raiz)
     # pid no tmp: dois processos gravando com nome fixo fariam o rename promover bytes
-    # entrelaçados — mesmo furo que o cp_panel_common.py já corrigiu.
+    # entrelaçados — mesmo furo que o hangar_panel_common.py já corrigiu.
     tmp = destino.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     atomico.substituir(tmp, destino)

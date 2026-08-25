@@ -4,10 +4,10 @@ import importlib.util
 import json
 from pathlib import Path
 
-# mesmo carregamento de test_import_candidates.py: cp-panel-action não tem extensão .py.
-_path = Path(__file__).with_name("cp-panel-action")
+# mesmo carregamento de test_import_candidates.py: hangar-panel-action não tem extensão .py.
+_path = Path(__file__).with_name("hangar-panel-action")
 spec = importlib.util.spec_from_file_location(
-    "cp_panel_action", _path, loader=importlib.machinery.SourceFileLoader("cp_panel_action", str(_path)))
+    "hangar_panel_action", _path, loader=importlib.machinery.SourceFileLoader("hangar_panel_action", str(_path)))
 cpa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cpa)
 

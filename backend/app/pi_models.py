@@ -6,7 +6,7 @@ visiveis). Nao da pra enumerar do pane, nem navegar contando Down. E o nivel de 
 comando proprio tem: mora em `/settings` -> "Thinking level" (submenu), e o conjunto de niveis MUDA
 por modelo (medido: glm-5.2 = off/low/medium/high/xhigh; k3 = low/high/max).
 
-O caminho aqui e o contrario da raspagem: a extensao `scripts/pi/cp-state.ts` (que ja instalamos
+O caminho aqui e o contrario da raspagem: a extensao `scripts/pi/hangar-state.ts` (que ja instalamos
 pro estado working/idle) pergunta pro proprio Pi via API publica de extensao e:
   * publica o catalogo num sidecar JSON -> este modulo LE (nada de parse de tela);
   * registra `/cp-model <provider> <id>` e `/cp-think <nivel>` -> este modulo os DIGITA e o Pi
@@ -88,7 +88,7 @@ def confirms(catalog: dict, provider: str | None, model_id: str | None,
 
     Modelo: igualdade seca (provider+id). O `/cp-model` do Pi pode RECUSAR sem levantar nada — sem
     chave pro provedor, `setModel` devolve false, ele notifica dentro do TUI e o sidecar continua
-    com o modelo VELHO (cp-state.ts republica o catalogo de qualquer jeito).
+    com o modelo VELHO (hangar-state.ts republica o catalogo de qualquer jeito).
 
     Nivel: so exigimos igualdade quando o nivel pedido esta entre os `levels` do modelo que ficou.
     Fora deles o Pi CLAMPA (agent-session.js:1277) e cair em outro nivel e o comportamento CERTO —

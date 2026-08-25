@@ -635,7 +635,7 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             pane_id = agentpane.pane_info(name)[1]
             # msg_id=entry["id"]: mesma identidade em TODA reentrega desta entrada (retry apos
             # "deferred" logo abaixo, ou reenvio pelo reconcile de _confirm_and_drain) — e o que
-            # deixa a extensao do Pi (cp-state.ts) reconhecer um retry e nao chamar sendUserMessage
+            # deixa a extensao do Pi (hangar-state.ts) reconhecer um retry e nao chamar sendUserMessage
             # de novo. Ver pi_inbox.entregar.
             result = ti.send_prompt(name, entry["text"], provider, pane_id=pane_id, msg_id=entry["id"])
         except Exception:
@@ -702,7 +702,7 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             # reenviando um "sent" nao confirmado no transcript — achado ALTA "Porta A"/"Porta B" da
             # revisao 02/08/2026). Reenviar aqui SERIA duplicar a instrucao no agente se nao fosse
             # por uma coisa: `msg_id=entry["id"]` (linha acima) mantem o MESMO id em toda reentrega
-            # desta entrada, e a extensao (cp-state.ts) guarda os ids ja entregues — um id repetido
+            # desta entrada, e a extensao (hangar-state.ts) guarda os ids ja entregues — um id repetido
             # so re-confirma, nunca chama sendUserMessage de novo. E o que torna o revert abaixo
             # seguro nos DOIS casos, nao so no de tecla.
             # Revert pode falhar (disco): nesse caso a entrada

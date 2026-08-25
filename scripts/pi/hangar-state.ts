@@ -1,4 +1,4 @@
-// scripts/pi/cp-state.ts
+// scripts/pi/hangar-state.ts
 // Publica o estado da sessao Pi no MESMO marcador que o hook do Claude escreve
 // (<config>/.hangar-state/<session_id>.json), entao o HookState do backend le os dois sem
 // saber a diferenca. Escrita atomica (tmp + rename) pelo mesmo motivo do state_hook.py: o watcher
@@ -65,7 +65,7 @@ function guard(what: string, fn: () => void): void {
   try {
     fn();
   } catch (err) {
-    console.error(`[cp-state] ${what} falhou:`, err);
+    console.error(`[hangar-state] ${what} falhou:`, err);
   }
 }
 
@@ -316,9 +316,9 @@ function avisaConectividade(conectada: boolean, motivo?: string): void {
   if (linhaConectada === conectada) return;
   linhaConectada = conectada;
   if (conectada) {
-    console.error("[cp-state] linha do pocket conectada");
+    console.error("[hangar-state] linha do pocket conectada");
   } else {
-    console.error(`[cp-state] linha do pocket indisponivel${motivo ? ": " + motivo : ""} — ` +
+    console.error(`[hangar-state] linha do pocket indisponivel${motivo ? ": " + motivo : ""} — ` +
                   "caindo pro envio por tecla ate reconectar");
   }
 }
@@ -384,7 +384,7 @@ function conectar(pi: ExtensionAPI): void {
     ws.addEventListener("message", (ev: any) => {
       // O parse/ping continua SÍNCRONO dentro do guard (contrato original preservado): se virasse
       // async aqui, um JSON.parse malformado rejeitaria a Promise que o guard não aguarda, e o
-      // erro sumiria como unhandled rejection em vez do `[cp-state] entregar falhou: ...` de
+      // erro sumiria como unhandled rejection em vez do `[hangar-state] entregar falhou: ...` de
       // sempre. Só a entrega em si (que precisa esperar corroboração) vai pra uma IIFE assíncrona
       // com o PRÓPRIO try/catch — nada escapa sem log.
       guard("entregar", () => {

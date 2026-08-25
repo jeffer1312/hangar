@@ -1658,7 +1658,7 @@
   "permissao_dica": "Shift+Tab in the terminal also cycles — this list is what this session can reach",
   "permissao_dontask_sem_volta": "this session was born in dontAsk; leaving it is irreversible — use Shift+Tab in the terminal, or recreate the session",
   "erro_rota_so_pi": "this route only exists for Pi sessions",
-  "erro_catalogo_pi_indisponivel": "Pi catalog unavailable — run ./scripts/install-claude-wrapper.sh and restart the session (outdated cp-state.ts extension)",
+  "erro_catalogo_pi_indisponivel": "Pi catalog unavailable — run ./scripts/install-claude-wrapper.sh and restart the session (outdated hangar-state.ts extension)",
   "erro_model_effort_faltando": "provide model (with provider) and/or effort",
   "erro_sem_confirmacao_troca": "commands typed, but Pi didn't republish the catalog — can't confirm the change; check the model in the terminal itself",
   "erro_pi_recusou_troca": "Pi refused the change — staying on {provider}/{id} (reasoning {thinking}). Most common cause: no key configured for the requested provider (Pi warns inside the TUI)",

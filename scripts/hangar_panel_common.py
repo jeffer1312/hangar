@@ -1,5 +1,5 @@
-"""Resolução de servidor/token compartilhada pelos scripts do painel (cp-panel-data,
-cp-panel-action). Módulo em vez de copiar: é o ponto que lê CREDENCIAL e monta a URL — duas
+"""Resolução de servidor/token compartilhada pelos scripts do painel (hangar-panel-data,
+hangar-panel-action). Módulo em vez de copiar: é o ponto que lê CREDENCIAL e monta a URL — duas
 cópias divergindo aqui viraria bug de auth silencioso."""
 import json
 import os
@@ -95,7 +95,7 @@ def set_peer_enabled(pid: str, on: bool, path: Path | None = None) -> None:
     Escrita ATÔMICA (tmp + os.replace) sob lock exclusivo, preservando o modo do arquivo: o
     peers.json guarda os TOKENS da malha inteira, e um write cortado no meio deixaria todo
     servidor remoto inalcançável — estrago muito maior que os 4s de timeout que o toggle evita.
-    Mora aqui, e não no cp-panel-action, porque este é o módulo que já lê o arquivo — e é
+    Mora aqui, e não no hangar-panel-action, porque este é o módulo que já lê o arquivo — e é
     importável, então dá pra testar a gravação sem mexer no peers.json de verdade."""
     path = path or (BACKEND / "peers.json")
     # Lock EXCLUSIVO cobrindo leitura+escrita: isto é read-modify-write do arquivo inteiro, e o
@@ -195,11 +195,11 @@ def api(address: str, method: str, path: str, body: dict | None = None, timeout:
 def comando_terminal(term: str, tmux_args: list, aviso: str) -> list:
     """ARGV do emulador que roda `tmux <tmux_args>` e, falhando, MOSTRA o motivo.
 
-    Existe porque os dois cliques do painel que abrem terminal (cp-panel-open, e o `project open`
-    do cp-panel-action) tinham a mesma falha silenciosa: `tmux attach` num alvo que já morreu sai
-    em milissegundos e o terminal fecha antes de dar pra ler. O cp-panel-open tapava isso com
+    Existe porque os dois cliques do painel que abrem terminal (hangar-panel-open, e o `project open`
+    do hangar-panel-action) tinham a mesma falha silenciosa: `tmux attach` num alvo que já morreu sai
+    em milissegundos e o terminal fecha antes de dar pra ler. O hangar-panel-open tapava isso com
     `new-session -A`, que CRIAVA um shell com o nome da sessão do agente — indistinguível dela na
-    lista do app (medido 24/08/2026); o cp-panel-action mandava o stderr pro DEVNULL e devolvia
+    lista do app (medido 24/08/2026); o hangar-panel-action mandava o stderr pro DEVNULL e devolvia
     "log aberto no terminal" de qualquer jeito.
 
     O `|| { printf ...; read _; }` segura a janela aberta com a mensagem. `aviso` vai como

@@ -347,19 +347,19 @@ fi
 if ! { command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; }; then
   nota "painel do desktop: pulado (requer Hyprland + Quickshell)"
 # Detecta pelo SYMLINK, nao pela unit systemd: medido nesta maquina, o painel roda sob `flock`
-# direto (`qs -n -c claude-pocket`) e nao existe cp-panel.service — checar a unit dava "ausente"
+# direto (`qs -n -c hangar`) e nao existe hangar-panel.service — checar a unit dava "ausente"
 # num painel instalado e vivo.
-elif [ -e "$HOME/.local/bin/cp-panel-open" ]; then
+elif [ -e "$HOME/.local/bin/hangar-panel-open" ]; then
   ok "painel + tray já instalados"
   # Único passo que NÃO re-roda sozinho: o painel é a única coisa aqui que está VISIVELMENTE
   # em execução no teu desktop, e a forma como ele sobe pode divergir da que o script gera
   # (medido: rodando sob flock, sem unit systemd). Re-instalar por conta própria mudaria algo
   # que funciona, sem pedir. Os arquivos são symlink, então QML e scripts já vêm do git pull.
-  nota "atualizar de propósito (muda como o painel sobe): ./scripts/install-cp-panel.sh"
+  nota "atualizar de propósito (muda como o painel sobe): ./scripts/install-hangar-panel.sh"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
-  ./scripts/install-cp-panel.sh
+  ./scripts/install-hangar-panel.sh
 fi
 
 # ── Atualizar sozinho no próximo git pull (opcional) ─────────────────────────

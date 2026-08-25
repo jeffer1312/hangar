@@ -345,7 +345,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
 
 # ── Previa publicada pelo PROPRIO agente (sidecar), preferida ao pane ─────────────────────────────
 # Mesmo contrato da statusline: quem tem o dado exato publica; o pane vira plano B. Aqui o publicador
-# e a extensao do Pi (scripts/pi/cp-state.ts), que recebe o texto do assistente token a token pelo
+# e a extensao do Pi (scripts/pi/hangar-state.ts), que recebe o texto do assistente token a token pelo
 # `message_update` — sem largura de janela, sem markdown ja pintado, sem precisar adivinhar o que e
 # desenho da TUI. Todas as regras deste arquivo (verbo de ferramenta, caixa do composer, spinner,
 # painel de Todos) existem so pra essa adivinhacao; pelo sidecar elas nem entram em cena.

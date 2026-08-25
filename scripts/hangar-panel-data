@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cp-panel-data — snapshot JSON de TODAS as sessões (deste servidor + peers) pro painel do
+"""hangar-panel-data — snapshot JSON de TODAS as sessões (deste servidor + peers) pro painel do
 Quickshell. Existe pra manter o QML burro: ele só roda isto e faz JSON.parse, sem token, sem
 merge de servidor, sem HTTP na mão.
 
@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # resolve(): roda via symlink em ~/.local/bin — sem resolver, o import iria procurar lá.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import PanelError, enabled, env, local_base, peer_fields, peers  # noqa: E402
+from hangar_panel_common import PanelError, enabled, env, local_base, peer_fields, peers  # noqa: E402
 
 TIMEOUT = 4
 

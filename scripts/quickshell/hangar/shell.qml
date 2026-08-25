@@ -9,9 +9,9 @@ import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Hyprland
 
-// Painel "control center" do claude-pocket, organizado em ABAS por um trilho à esquerda
+// Painel "control center" do hangar, organizado em ABAS por um trilho à esquerda
 // (mesmo padrão do control center do rice): Sessões / Projetos / Ajustes — pensado pra crescer
-// por páginas, não por seções empilhadas. Instância SEPARADA do quickshell (qs -c claude-pocket)
+// por páginas, não por seções empilhadas. Instância SEPARADA do quickshell (qs -c hangar)
 // de propósito: não toca em nenhum arquivo do rice, então update do dots-hyprland não apaga
 // isto e um bug daqui não derruba a barra.
 ShellRoot {
@@ -41,7 +41,7 @@ ShellRoot {
             return;
         shellRoot.projectError = "";
         shellRoot.startingProject = name;
-        projStartProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project", "start"];
+        projStartProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", name, "project", "start"];
         projStartProc.running = true;
     }
 
@@ -55,7 +55,7 @@ ShellRoot {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 // Mesmo contrato do peer: falha vira texto na aba, nunca morre muda num botão.
@@ -82,7 +82,7 @@ ShellRoot {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 // ACUMULA o erro (não sobrescreve): num lote (scanAddChecked) o erro de um item do
@@ -97,7 +97,7 @@ ShellRoot {
                 if (shellRoot.scanQueue.length > 0) {
                     const next = shellRoot.scanQueue[0];
                     shellRoot.scanQueue = shellRoot.scanQueue.slice(1);
-                    projActionProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", next.name, "project-add", next.cwd, next.command];
+                    projActionProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", next.name, "project-add", next.cwd, next.command];
                     projActionProc.running = true;
                 }
             }
@@ -109,7 +109,7 @@ ShellRoot {
         if (projActionProc.running)
             return;
         shellRoot.projActionError = "";
-        let cmd = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project-add", cwd, command];
+        let cmd = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", name, "project-add", cwd, command];
         if (port && String(port).trim() !== "")
             cmd.push(String(port).trim());
         projActionProc.command = cmd;
@@ -119,7 +119,7 @@ ShellRoot {
         if (projActionProc.running)
             return;
         shellRoot.projActionError = "";
-        projActionProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", name, "project-del"];
+        projActionProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", name, "project-del"];
         projActionProc.running = true;
     }
 
@@ -150,7 +150,7 @@ ShellRoot {
             return;
         shellRoot.importServer = server;
         shellRoot.projActionError = "";
-        importProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", server, "import-candidates"];
+        importProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", server, "import-candidates"];
         importProc.running = true;
     }
 
@@ -166,7 +166,7 @@ ShellRoot {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 if (r.ok && r.path) {
@@ -193,7 +193,7 @@ ShellRoot {
         // normais), então sem isto o diálogo nativo abre ATRÁS dele (e o botão Cancelar fica coberto).
         // onStreamFinished reabre o painel quando a seleção volta.
         shellRoot.open = false;
-        pickProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "pick-folder", fCwd.text];
+        pickProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", "x", "pick-folder", fCwd.text];
         pickProc.running = true;
     }
 
@@ -213,12 +213,12 @@ ShellRoot {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 if (r.ok && r.path) {
                     shellRoot.projActionError = "";
-                    scanProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "scan-folder", r.path];
+                    scanProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", "x", "scan-folder", r.path];
                     scanProc.running = true;
                 }
                 // cancelou: sem path, não faz nada (igual pickFolder).
@@ -236,7 +236,7 @@ ShellRoot {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 if (r.ok) {
@@ -260,7 +260,7 @@ ShellRoot {
         shellRoot.projActionError = "";
         // Esconde o painel: kdialog é coberto pelo layer-shell senão (mesmo caso do pickFolder).
         shellRoot.open = false;
-        scanPickProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", "x", "pick-folder", ""];
+        scanPickProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", "x", "pick-folder", ""];
         scanPickProc.running = true;
     }
 
@@ -290,12 +290,12 @@ ShellRoot {
         shellRoot.open = !shellRoot.open;
     }
 
-    // Local: cp-panel-open foca a janela existente ou abre uma nova (attach cru duplicaria o
+    // Local: hangar-panel-open foca a janela existente ou abre uma nova (attach cru duplicaria o
     // cliente tmux e encolheria a sessão). Remota: web UI do servidor dono — só o hangar-send fala
     // com tmux remoto, abrir a UI é o equivalente útil no desktop.
     function activate(session: var): void {
         if (session.local) {
-            Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/cp-panel-open", session.name]);
+            Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/hangar-panel-open", session.name]);
         } else if (session.web_url) {
             Quickshell.execDetached(["xdg-open", session.web_url]);
         } else {
@@ -338,19 +338,19 @@ ShellRoot {
     }
 
     GlobalShortcut {
-        appid: "claude-pocket"
+        appid: "hangar"
         name: "toggle"
         onPressed: shellRoot.toggle()
     }
 
     // Toggle de servidor: liga/desliga um peer na varredura, gravando o peers.json pelo
-    // cp-panel-action. Peer offline custa o timeout (4s) em TODO poll e, como a coleta espera o
+    // hangar-panel-action. Peer offline custa o timeout (4s) em TODO poll e, como a coleta espera o
     // servidor mais lento, é o painel inteiro que fica lento por causa de uma máquina desligada.
     function setPeer(id: string, on: bool): void {
         if (peerProc.running)
             return;
         shellRoot.peerResult = "";
-        peerProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", id, "peer", on ? "on" : "off"];
+        peerProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", id, "peer", on ? "on" : "off"];
         peerProc.running = true;
     }
 
@@ -364,7 +364,7 @@ ShellRoot {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 // Falha VIRA texto na UI: sem isto, um peers.json somente-leitura deixava o
@@ -542,7 +542,7 @@ ShellRoot {
                             spacing: 8
 
                             Text {
-                                text: "Claude Pocket"
+                                text: "Hangar"
                                 color: "#e3e2e6"
                                 font.pixelSize: 18
                                 font.weight: Font.DemiBold

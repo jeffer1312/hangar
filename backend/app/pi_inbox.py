@@ -138,7 +138,7 @@ class PiInbox:
 
         `msg_id`: identidade ESTÁVEL entre reentregas da MESMA mensagem (achado ALTA da revisão
         02/08/2026 — "Porta A"). A extensão chama `sendUserMessage` ANTES de confirmar (ver
-        cp-state.ts) — se o ACK atrasar/perder, este método devolve "deferred" mas a instrução JÁ
+        hangar-state.ts) — se o ACK atrasar/perder, este método devolve "deferred" mas a instrução JÁ
         pode ter chegado no agente. Sem um id que sobreviva ao retry, a extensão não tem como saber
         que é a MESMA tentativa e chamaria `sendUserMessage` de novo. Quem tem uma identidade
         durável pra oferecer (o id da entrada na `PromptQueue`, ver `terminal_input.drain`/`send_prompt`)

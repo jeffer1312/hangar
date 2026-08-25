@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cp-panel-open <sessao> — abre a sessão tmux no desktop, sem duplicar cliente.
+"""hangar-panel-open <sessao> — abre a sessão tmux no desktop, sem duplicar cliente.
 
 Se já existe uma janela de terminal com a sessão attachada, FOCA ela. Só abre terminal novo
 quando não existe nenhuma: `tmux attach` num alvo já attachado cria um SEGUNDO cliente, e o
@@ -23,10 +23,10 @@ import subprocess
 import sys
 
 # resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo irmão
-# procuraria em ~/.local/bin em vez de scripts/ do repo. Mesmo prólogo do cp-panel-action.
+# procuraria em ~/.local/bin em vez de scripts/ do repo. Mesmo prólogo do hangar-panel-action.
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cp_panel_common import avisar  # noqa: E402
-from cp_panel_common import comando_terminal as comando_terminal_comum  # noqa: E402
+from hangar_panel_common import avisar  # noqa: E402
+from hangar_panel_common import comando_terminal as comando_terminal_comum  # noqa: E402
 
 TERM_CLASSES = {"kitty", "foot", "alacritty", "wezterm", "org.wezfurlong.wezterm"}
 
@@ -39,7 +39,7 @@ def hypr_clients() -> list[dict]:
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         # Visível no log do quickshell: sem isto, hyprctl quebrado = "nenhuma janela" mudo, e o
         # clique abre um attach duplicado sem pista do porquê.
-        print(f"cp-panel-open: hyprctl clients falhou ({e}) — sem janela pra focar", file=sys.stderr)
+        print(f"hangar-panel-open: hyprctl clients falhou ({e}) — sem janela pra focar", file=sys.stderr)
         return []
 
 
@@ -68,7 +68,7 @@ def expected_title(name: str) -> str | None:
                              capture_output=True, text=True, timeout=5).stdout.strip()
         return out or None
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"cp-panel-open: não consegui expandir o título da sessão ({e})", file=sys.stderr)
+        print(f"hangar-panel-open: não consegui expandir o título da sessão ({e})", file=sys.stderr)
         return None
 
 
@@ -85,13 +85,13 @@ def pick_by_title(clients: list[dict], addrs: list[str], name: str) -> str | Non
         # Sintoma igual ao empate lá embaixo (abre terminal em vez de focar), mas por outra causa —
         # sem esta linha o primeiro deploy, antes de reaplicar o bloco do installer no ~/.tmux.conf,
         # falha idêntico a "não deu pra escolher" e sem pista de que a config é que não está lá.
-        print(f"cp-panel-open: sem título esperado para {name!r} — set-titles-string ausente/vazio "
+        print(f"hangar-panel-open: sem título esperado para {name!r} — set-titles-string ausente/vazio "
               f"(reaplique o bloco do install-claude-wrapper.sh) ou o tmux falhou", file=sys.stderr)
         return None
     candidatos = [c for c in clients if c.get("address") in addrs and c.get("title") == alvo]
     if len(candidatos) == 1:
         return candidatos[0]["address"]
-    print(f"cp-panel-open: {len(addrs)} janelas no mesmo processo e o título "
+    print(f"hangar-panel-open: {len(addrs)} janelas no mesmo processo e o título "
           f"{alvo!r} casa com {len(candidatos)} delas — não dá pra escolher sem chutar",
           file=sys.stderr)
     return None
@@ -106,7 +106,7 @@ def tmux_client_pids(name: str) -> list[int]:
     except (OSError, subprocess.SubprocessError, ValueError) as e:
         # Falha de invocação ≠ "sem cliente", mas o degrade é o mesmo (abrir terminal) — só não
         # pode ser mudo. Sessão inexistente NÃO cai aqui (tmux sai !=0 com stdout vazio, sem check).
-        print(f"cp-panel-open: tmux list-clients falhou ({e})", file=sys.stderr)
+        print(f"hangar-panel-open: tmux list-clients falhou ({e})", file=sys.stderr)
         return []
 
 
@@ -162,12 +162,12 @@ def comando_terminal(term: str, name: str) -> list:
     """
     return comando_terminal_comum(
         term, ["attach", "-t", f"={name}:"],
-        f"cp-panel-open: a sessao {name} nao existe mais (nada foi criada).")
+        f"hangar-panel-open: a sessao {name} nao existe mais (nada foi criada).")
 
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("uso: cp-panel-open <sessao>", file=sys.stderr)
+        print("uso: hangar-panel-open <sessao>", file=sys.stderr)
         return 2
     name = sys.argv[1]
 
@@ -182,13 +182,13 @@ def main() -> int:
             r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{addr}" }})'],
                                capture_output=True, text=True, timeout=5, check=False)
         except (OSError, subprocess.SubprocessError) as e:
-            avisar(f"cp-panel-open: hyprctl nao respondeu ao focar {name} ({e})")
+            avisar(f"hangar-panel-open: hyprctl nao respondeu ao focar {name} ({e})")
             return 1
         if r.returncode != 0:
             # Endereço obsoleto (janela fechou entre a varredura e o clique) ou IPC fora do ar: o
             # clique não focou nada, e sem isto não sobrava pista nenhuma — nem janela nova, já
             # que este ramo dá o trabalho por feito.
-            avisar(f"cp-panel-open: nao consegui focar a janela de {name} "
+            avisar(f"hangar-panel-open: nao consegui focar a janela de {name} "
                    f"({(r.stderr or r.stdout or '').strip() or f'hyprctl saiu {r.returncode}'})")
             return 1
         return 0
@@ -197,7 +197,7 @@ def main() -> int:
     if not term:
         # Sem terminal não há janela onde mostrar a recusa: aqui o stderr sozinho é um clique que
         # não faz nada. `avisar` manda pro notify-send também.
-        avisar("cp-panel-open: nenhum terminal conhecido encontrado (kitty/foot/alacritty)")
+        avisar("hangar-panel-open: nenhum terminal conhecido encontrado (kitty/foot/alacritty)")
         return 1
     try:
         os.execvp(term, comando_terminal(term, name))
@@ -205,7 +205,7 @@ def main() -> int:
         # O `which` acima diz que o binário existia; entre ele e o exec o pacote pode ter sido
         # atualizado ou o symlink quebrado. Sem isto vira traceback no stderr que ninguém lê —
         # exatamente o clique-que-não-faz-nada que este arquivo passou a caçar.
-        avisar(f"cp-panel-open: nao consegui abrir {term}: {e}")
+        avisar(f"hangar-panel-open: nao consegui abrir {term}: {e}")
         return 1
 
 

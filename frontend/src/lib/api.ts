@@ -1501,7 +1501,7 @@ export function setCodexModel(name: string, model: string, effort?: string | nul
 }
 
 // ── Modelo + nivel de raciocinio de uma sessao Pi ─────────────────────────────────────────────
-// 409 = extensao cp-state.ts ausente/desatualizada no Pi (o backend manda a instrucao no detail).
+// 409 = extensao hangar-state.ts ausente/desatualizada no Pi (o backend manda a instrucao no detail).
 
 export function getPiModels(name: string): Promise<PiModelsResponse> {
   return _catalogo(`pi|${name}`, () => apiFetch(`/api/sessions/${encodeURIComponent(name)}/pi/models`));

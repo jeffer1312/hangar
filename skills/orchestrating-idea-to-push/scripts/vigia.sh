@@ -133,7 +133,7 @@ import json, sys, time
 # `working` NÃO é prova de que alguém está com a bola. Medido em 14/08/2026: o executor disparou um
 # AskUserQuestion para provar a folha em inglês, e AskUserQuestion BLOQUEIA o turno de quem dispara.
 # Ele ficou 1h17 parado esperando uma resposta que ninguém ia dar — e o app reportou `working` o
-# tempo todo, porque o hook do Pi (`scripts/pi/cp-state.ts`) só publica `working` ou `idle`: não
+# tempo todo, porque o hook do Pi (`scripts/pi/hangar-state.ts`) só publica `working` ou `idle`: não
 # existe `awaiting_input` para sessão Pi. A vigia ficou calada e estava certa pela regra que tinha.
 #
 # O sinal que distingue os dois é `last_activity`, que avança a cada evento do transcript. Sessão

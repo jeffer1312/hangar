@@ -7,7 +7,7 @@ import Quickshell.Io
 // Menu de contexto FLUTUANTE de uma sessão (botão direito na linha): abre no cursor, por cima
 // da lista, e some ao escolher/dispensar — como menu de contexto de sistema. Não empurra a
 // lista (versão anterior fazia isso e reordenava tudo sob o cursor).
-// As operações passam pelo cp-panel-action, que fala com a API do servidor DONO da sessão,
+// As operações passam pelo hangar-panel-action, que fala com a API do servidor DONO da sessão,
 // então valem também pras remotas: só o attach no terminal é exclusivo da máquina local.
 Rectangle {
     id: menu
@@ -45,7 +45,7 @@ Rectangle {
                 return;
             menu.busy = true;
             menu.result = "";
-            proc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action",
+            proc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action",
                 menu.session.address, ...args];
             proc.running = true;
         }
@@ -60,7 +60,7 @@ Rectangle {
                 try {
                     r = JSON.parse(text);
                 } catch (e) {
-                    menu.result = "resposta inválida do cp-panel-action";
+                    menu.result = "resposta inválida do hangar-panel-action";
                     menu.mode = "";
                     return;
                 }
@@ -245,7 +245,7 @@ Rectangle {
         }
 
         // Resultado da última operação — inclusive falha (pull com conflito, push rejeitado):
-        // o cp-panel-action devolve ok=false com a saída real em vez de fingir sucesso.
+        // o hangar-panel-action devolve ok=false com a saída real em vez de fingir sucesso.
         Text {
             Layout.fillWidth: true
             Layout.margins: 8

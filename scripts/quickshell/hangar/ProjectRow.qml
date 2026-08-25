@@ -14,7 +14,7 @@ Rectangle {
     required property var project
     signal changed
 
-    // Última ação falhou (texto do cp-panel-action). Some na próxima ação.
+    // Última ação falhou (texto do hangar-panel-action). Some na próxima ação.
     property string actionError: ""
     // Aberto/fechado vive no singleton (Sessions.openLogs): o delegate é destruído quando o
     // modelo troca (play/stop) e um bool local fecharia o tail sozinho nessas horas.
@@ -57,14 +57,14 @@ Rectangle {
         if (actProc.running)
             return;
         row.actionError = "";
-        actProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", row.project.name, "project", action];
+        actProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", row.project.name, "project", action];
         actProc.running = true;
     }
 
     function fetchLog(): void {
         if (paneProc.running)
             return;
-        paneProc.command = [Quickshell.env("HOME") + "/.local/bin/cp-panel-action", row.project.name, "project", "pane"];
+        paneProc.command = [Quickshell.env("HOME") + "/.local/bin/hangar-panel-action", row.project.name, "project", "pane"];
         paneProc.running = true;
     }
 
@@ -78,7 +78,7 @@ Rectangle {
                 } catch (e) {
                     r = {
                         ok: false,
-                        message: "resposta inválida do cp-panel-action"
+                        message: "resposta inválida do hangar-panel-action"
                     };
                 }
                 // Falha vira texto na linha (mesmo contrato do toggle de peer): stop_command
