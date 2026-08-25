@@ -2769,7 +2769,7 @@ def _mudancas_pendentes() -> list[dict]:
 
 
 @app.get("/api/atualizacao", dependencies=[Depends(require_auth)])
-async def get_atualizacao():
+async def get_atualizacao(procurar: bool = False):
     """Estado da atualização: as três versões, o que há de novo, e o que o motor está fazendo.
 
     As TRÊS versões porque "a versão instalada" tem três respostas — o disco, o processo vivo e o
@@ -2781,6 +2781,13 @@ async def get_atualizacao():
     nunca podem rodar na corrotina.
     """
     def _ler() -> dict:
+        # `procurar=1` vai à REDE antes de comparar. Sem isto, o botão "Procurar de novo" só relia
+        # o `origin/main` que já estava no disco — a foto do último fetch do laço, que roda a cada
+        # 30min — e respondia "Tudo em dia" com informação velha, afirmando ter procurado. Não é
+        # o padrão porque o polling da tela bate aqui a cada 2s durante uma atualização, e um
+        # `git fetch` nessa cadência é rede à toa.
+        if procurar:
+            atualizar._git("fetch", "origin", timeout=120)
         pre = atualizar.checar()
         mudancas = _mudancas_pendentes()
         return {
@@ -2790,7 +2797,10 @@ async def get_atualizacao():
             "passos": [{"id": s["id"], "titulo": s["titulo"], "texto": s["texto"]}
                        for s in atualizacoes.pendentes()],
             "pre_voo": pre,
-            "estado": atualizar.estado(),
+            # `estado_para_tela`, não `estado`: converte "rodando" com o processo morto na falha
+            # que ele não conseguiu escrever. Sem isso a tela fica presa numa atualização que já
+            # não existe, e só sai editando o JSON na mão.
+            "estado": atualizar.estado_para_tela(),
         }
     return await asyncio.to_thread(_ler)
 

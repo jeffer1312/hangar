@@ -597,6 +597,21 @@ function Pare-Servico {
     }
     # Fora: o proprio instalador e TODA a linhagem dele (ver o comentario da $linhagem acima).
     $alvos = @($alvos | Where-Object { $_ -and -not $linhagem.Contains([int]$_) } | Select-Object -Unique)
+    # E fora TAMBEM o processo da ATUALIZACAO, por reconhecimento direto da cmdline (`app.atualizar`)
+    # e nao por linhagem. Ele roda como `...\backend\.venv\Scripts\python.exe -m app.atualizar`, o
+    # que casa nos DOIS criterios do filtro acima (caminho do checkout + nome `python`) — e e ele
+    # quem esta chamando este instalador. Ou seja: sem esta linha o `-Update` mata quem o invocou,
+    # no meio da propria atualizacao. Aconteceu em 25/08/2026 no Windows: o lock e o processo
+    # morreram no minuto em que o instalador reportou "instancia anterior derrubada (2 processos)",
+    # e a atualizacao ficou congelada na etapa 4 pra sempre. A protecao por LINHAGEM ja existia e
+    # nao bastou; reconhecer pelo comando nao depende do mapa de pais estar completo nem do WMI ter
+    # respondido. No Linux quem resolve isso e o escopo transiente do systemd, que aqui nao existe.
+    $atualizador = @(@($tabela) |
+        Where-Object { $_ -and $_.CommandLine -and $_.CommandLine -match 'app\.atualizar' } |
+        Select-Object -ExpandProperty ProcessId)
+    if ($atualizador.Count -gt 0) {
+        $alvos = @($alvos | Where-Object { -not ($atualizador -contains [int]$_) })
+    }
     if ($alvos.Count -eq 0) { return 0 }
     # Descendentes RECURSIVOS, nao um nivel so. O backend nasce `uv -> python -> python` e quem
     # segura a porta e o NETO: parar so o pai (ou pai+filhos) deixava a porta presa e a instancia

@@ -33,6 +33,35 @@ def test_as_duas_versoes_vem_de_fontes_diferentes():
     assert d["atualizacao_disponivel"] is False
 
 
+def test_procurar_vai_a_rede_antes_de_comparar():
+    """Sem o fetch, "Procurar de novo" respondia com a foto do último fetch automático (30min).
+
+    Ou seja: afirmava ter procurado sem ter ido olhar — pior que não ter o botão.
+    """
+    c = _client()
+    ordem = []
+    def _git_espiao(*args, **kw):
+        ordem.append(args[0])
+        class P:
+            returncode = 0
+            stdout = ""
+        return P()
+    with patch("app.api.atualizar._git", _git_espiao), \
+         patch("app.api.atualizar.checar", side_effect=lambda: (ordem.append("checar"), {"pode": True})[1]):
+        c.get("/api/atualizacao?procurar=1", headers=_AUTH)
+    assert ordem[0] == "fetch", f"o fetch tem que vir ANTES da comparação: {ordem}"
+    assert "checar" in ordem
+
+
+def test_polling_normal_nao_vai_a_rede():
+    """A tela bate neste endpoint a cada 2s durante a atualização — fetch ali é rede à toa."""
+    c = _client()
+    with patch("app.api.atualizar._git") as g, \
+         patch("app.api.atualizar.checar", return_value={"pode": True}):
+        c.get("/api/atualizacao", headers=_AUTH)
+    assert not any(ch.args and ch.args[0] == "fetch" for ch in g.call_args_list)
+
+
 def test_mudanca_pendente_liga_o_aviso():
     c = _client()
     mudancas = [{"sha": "abc1234", "titulo": "fix: alguma coisa"}]

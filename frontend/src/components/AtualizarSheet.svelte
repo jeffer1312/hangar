@@ -54,10 +54,11 @@
   /** As duas versões só aparecem quando DIVERGEM — quem só usa não precisa de diagnóstico. */
   const versoesDivergem = $derived(!!dados && dados.versoes.repo !== dados.versoes.backend);
 
-  async function carregar(silencioso = false) {
+  /** `procurar` só no clique: o polling passa `silencioso` e não pode ir à rede a cada 2s. */
+  async function carregar(silencioso = false, procurar = false) {
     if (!silencioso) carregando = true;
     try {
-      dados = await getAtualizacao();
+      dados = await getAtualizacao(procurar);
       erroDeRede = '';
     } catch (e) {
       // Durante o restart isto acontece por DESENHO. Só vira mensagem quando não há atualização em
@@ -380,7 +381,7 @@
       {/if}
       {#if erroDeRede}<p class="erro-linha">{erroDeRede}</p>{/if}
       <div class="acoes">
-        <button class="bt secundario" onclick={() => carregar()} disabled={carregando}>
+        <button class="bt secundario" onclick={() => carregar(false, true)} disabled={carregando}>
           {m.atualizar_procurar()}
         </button>
       </div>

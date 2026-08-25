@@ -295,6 +295,39 @@ def test_sem_restart_nao_cobra_prova_de_vida(repo, monkeypatch):
     assert final["ok"] is True and final["reiniciar_manual"] is True
 
 
+def test_dono_morto_vira_falha_na_tela(repo):
+    """Estado congelado em "rodando" com o processo morto só saía editando o JSON na mão.
+
+    Acontece de verdade: no Windows, o `install.ps1 -Update` chegou a matar o processo da própria
+    atualização (ele casa o filtro de "instância anterior"), deixando a tela presa pra sempre.
+    """
+    atualizar._escrever(fase="rodando", passo=4, total=5, pid=999999)
+    d = atualizar.estado_para_tela()
+    assert d["fase"] == "pronto" and d["ok"] is False
+    assert "interrompida" in d["erro"]
+    # Converteu no ARQUIVO: a conclusão não pode depender de quem perguntou.
+    assert atualizar.estado()["fase"] == "pronto"
+
+
+def test_dono_vivo_nao_e_declarado_morto(repo):
+    import os as _os
+    atualizar._escrever(fase="rodando", passo=2, total=5, pid=_os.getpid())
+    assert atualizar.estado_para_tela()["fase"] == "rodando"
+
+
+def test_falha_ao_gravar_estado_nao_derruba_quem_chamou(repo, monkeypatch):
+    """No Windows o `atomico.substituir` levanta WinError 5 com o arquivo em uso.
+
+    Isso subiu sem tratamento até o `GET /api/atualizacao` e derrubou o request inteiro — a tela
+    perdia a resposta por causa de uma linha de log.
+    """
+    def _nega(*a, **kw):
+        raise PermissionError("[WinError 5] Acesso negado")
+    monkeypatch.setattr(atualizar.atomico, "substituir", _nega)
+    atualizar._escrever(fase="rodando", passo=1)     # não levanta
+    assert not list(atualizar._base().glob("*.tmp")), "deixou tmp orfao"
+
+
 def test_backend_nao_escreve_no_log_do_motor(repo, monkeypatch):
     """O `GET /api/atualizacao` roda `git` a cada 2s e mescla-e-grava o MESMO estado.
 

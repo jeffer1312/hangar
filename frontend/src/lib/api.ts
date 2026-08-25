@@ -863,9 +863,17 @@ export function getConfig(): Promise<ConfigServidor> {
   return apiFetch('/api/config', { signal: AbortSignal.timeout(8000) });
 }
 
-/** Estado do botão Atualizar. Sem teto de tempo curto: o pré-voo forka `git` e paga o disco frio. */
-export function getAtualizacao(): Promise<Atualizacao> {
-  return apiFetch('/api/atualizacao', { signal: AbortSignal.timeout(20000) });
+/**
+ * Estado do botão Atualizar. Sem teto de tempo curto: o pré-voo forka `git` e paga o disco frio.
+ *
+ * `procurar` faz o servidor ir à REDE (`git fetch`) antes de comparar. É o que separa "me diz o
+ * que tu já sabe" de "vai olhar se saiu versão nova" — sem ele, o botão respondia "Tudo em dia"
+ * com a foto do último fetch automático, que roda a cada 30min. Só para clique: o polling da tela
+ * bate neste endpoint a cada 2s.
+ */
+export function getAtualizacao(procurar = false): Promise<Atualizacao> {
+  return apiFetch(`/api/atualizacao${procurar ? '?procurar=1' : ''}`,
+                  { signal: AbortSignal.timeout(procurar ? 120000 : 20000) });
 }
 
 /** Lança a atualização. Devolve na hora — ela roda fora do processo do backend, que vai reiniciar. */

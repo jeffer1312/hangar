@@ -95,6 +95,31 @@ def _caminho_estado() -> Path:
 
 # ─── Estado ────────────────────────────────────────────────────────────────────────────────────
 
+def estado_para_tela() -> dict:
+    """O estado, com dono morto convertido em falha.
+
+    Um `fase: rodando` só sai desse valor quando o próprio motor grava o desfecho. Se ele morre sem
+    isso — kill, queda de energia, ou o instalador do Windows matando quem o invocou (medido em
+    25/08/2026) —, o arquivo congela e a tela fica presa numa atualização que não existe mais, sem
+    jeito de sair a não ser editando o JSON na mão. Aqui a ausência do processo VIRA o desfecho que
+    ele não conseguiu escrever, e a pessoa vê a falha na tela como veria qualquer outra.
+
+    Converte de uma vez (grava), pra a resposta não depender de quem perguntou nem repetir a
+    conclusão a cada poll.
+    """
+    atual = estado()
+    if atual.get("fase") != "rodando":
+        return atual
+    dono = atual.get("pid")
+    if _vivo(dono):
+        return atual
+    _log.warning("atualizacao abandonada: o processo %s nao existe mais", dono)
+    _escrever(fase="pronto", ok=False, voltou=False, no_ar=True,
+              erro="a atualizacao foi interrompida — o processo que a executava nao existe mais")
+    _soltar_a_vez()
+    return estado()
+
+
 def estado() -> dict:
     """O que a atualização está fazendo agora. `{}` quando nunca rodou.
 
@@ -122,8 +147,22 @@ def _escrever(**campos) -> None:
     atual.update(campos)
     atual["ts"] = datetime.now().astimezone().isoformat(timespec="seconds")
     tmp = alvo.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(atual, ensure_ascii=False), encoding="utf-8")
-    atomico.substituir(tmp, alvo)
+    try:
+        tmp.write_text(json.dumps(atual, ensure_ascii=False), encoding="utf-8")
+        atomico.substituir(tmp, alvo)
+    except OSError as e:
+        # NUNCA deixa a escrita do estado derrubar quem chamou. No Windows o `atomico.substituir`
+        # levanta `PermissionError [WinError 5]` quando outro processo segura o arquivo por mais de
+        # ~0,42s, e isso subiu sem tratamento até o `GET /api/atualizacao`, derrubando o request —
+        # ou seja, a tela perdia a resposta INTEIRA por causa de uma linha de log. Perder uma
+        # gravação de progresso é aceitável: a próxima vem em segundos e o estado é cumulativo.
+        # Perder o desfecho é o caso ruim, e contra ele há o `estado_para_tela`, que reconhece dono
+        # morto. Falha aparece no log do processo, não em silêncio.
+        _log.warning("nao consegui gravar o estado (%s): %s", ", ".join(campos), atomico.explicar(e))
+        try:
+            tmp.unlink(missing_ok=True)     # sem deixar tmp órfão pra trás
+        except OSError:
+            pass
 
 
 def _etapa(chave: str, **extra) -> None:
