@@ -156,15 +156,17 @@ _SOU_O_MOTOR = False
 
 
 def _log_do_estado(texto: str) -> None:
-    if not _SOU_O_MOTOR:
-        return
     """Acrescenta uma linha ao log que a tela mostra.
 
     A pessoa que aperta o botão fica olhando "Instalando dependências" por mais de um minuto sem
     nenhum sinal de vida — a leitura natural disso é que travou (aconteceu, 25/08/2026). Guardar o
     comando e a saída dele no próprio estado deixa a tela abrir um terminalzinho: o `estado.json`
     já é lido por polling e sobrevive ao restart, então não precisa de canal novo.
+
+    Só o processo da ATUALIZAÇÃO escreve aqui — ver `_SOU_O_MOTOR`.
     """
+    if not _SOU_O_MOTOR:
+        return
     # Guarda uma LINHA por item, mesmo recebendo um bloco. O teto conta itens, então blocos
     # multi-linha o furariam: medido, 400 blocos de 2 linhas viraram 801 linhas no estado que a
     # tela relê a cada 2s. Quebrar aqui mantém `_TETO_LOG` querendo dizer o que ele diz.
@@ -700,6 +702,14 @@ def iniciar(porta: int = 8765) -> dict:
     else:
         extra["start_new_session"] = True   # setsid: sai do grupo de processos do backend
 
+    # O estado inicial é escrito ANTES do Popen, e isso é o que impede a corrida por construção:
+    # depois do lançamento, o motor já pode estar gravando `_etapa("resguardar")`, e um `_escrever`
+    # do backend chegando em seguida reverteria `passo`/`texto` pra "Começando" — a mesma classe de
+    # disputa que prendeu a barra na etapa 4, só que estreita e autocorrigível. O `pid` sai daqui de
+    # propósito: quem o registra é o próprio motor (`_executar`), com o pid dele; o do filho, que é
+    # o que importa pra saber se a atualização morreu, mora no lock.
+    _escrever(fase="rodando", ok=None, erro=None,
+              passo=0, total=len(ETAPAS), texto="Começando")
     proc = subprocess.Popen(
         args, cwd=str(REPO / "backend"),
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -727,8 +737,6 @@ def iniciar(porta: int = 8765) -> dict:
         # BACKEND, que é lido, e não pro do filho, que vai pro /dev/null.
         _log.warning("nao consegui marcar o dono do lock (%s); soltando pra nao travar a maquina", e)
         _soltar_a_vez()
-    _escrever(fase="rodando", ok=None, erro=None, pid=proc.pid,
-              passo=0, total=len(ETAPAS), texto="Começando")
     return {"ok": True, "pid": proc.pid}
 
 

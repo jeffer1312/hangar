@@ -242,7 +242,10 @@ def test_estado_do_lancamento_e_json_valido(repo, monkeypatch):
     monkeypatch.setattr(atualizar.subprocess, "Popen", lambda *a, **k: P())
     atualizar.iniciar()
     bruto = json.loads(atualizar._caminho_estado().read_text(encoding="utf-8"))
-    assert bruto["fase"] == "rodando" and bruto["pid"] == 4242
+    assert bruto["fase"] == "rodando" and bruto["texto"] == "Começando"
+    # O pid do filho NÃO é gravado aqui: quem grava pid no estado é o próprio motor, e o do filho
+    # (que diz se a atualização morreu) mora no lock. Escrever depois do `Popen` era uma corrida.
+    assert (atualizar._base() / "rodando.lock").read_text(encoding="utf-8").strip() == "4242"
 
 
 # ─── Sessões vivas e o sistema ─────────────────────────────────────────────────────────────────

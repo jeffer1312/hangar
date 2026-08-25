@@ -149,6 +149,11 @@ import * as m from '../paraglide/messages';
   // lá no App — passar callback de lá até aqui atravessaria três componentes que não têm nada a
   // ver com atualização.
   let temAtualizacao = $state(false);
+
+  /** Um estado de atualização "vivo" — mesmo teto que destrava o fechamento da caixa. */
+  const TETO_ESTADO_MS = 10 * 60 * 1000;
+  const recente = (ts?: string) =>
+    !!ts && Date.now() - new Date(ts).getTime() < TETO_ESTADO_MS;
   // Qual falha já foi mostrada (o `ts` do estado). Guardado por viewer, no navegador: é conveniência
   // de quem está olhando, não estado do servidor — outra máquina precisa ver a mesma falha.
   const FALHA_VISTA = 'cp_atualizacao_falha_vista';
@@ -182,7 +187,10 @@ import * as m from '../paraglide/messages';
           || d.versoes.repo !== d.versoes.backend;
         // Atualização já em curso (outra aba a começou, ou esta página recarregou no meio): a
         // caixa volta a abrir sozinha, senão o progresso corre sem ninguém vendo.
-        if (d.estado?.fase === 'rodando') atualizarUI.abrir();
+        // "rodando" só reabre a caixa se for RECENTE. Um estado congelado (o processo morreu sem
+        // escrever o desfecho, a máquina desligou no meio) reabriria o modal em toda carga de
+        // página, para sempre — e, com a trava de fechamento, sem Escape nem × pra sair dele.
+        if (d.estado?.fase === 'rodando' && recente(d.estado.ts)) atualizarUI.abrir();
         // FALHA também abre, e é o caso mais importante: a atualização derruba o backend e a
         // página recarrega, então o erro acontece com a caixa fechada. Sem isto ele nunca chega
         // em ninguém — a máquina fica na versão velha em silêncio, que é o pior desfecho possível.

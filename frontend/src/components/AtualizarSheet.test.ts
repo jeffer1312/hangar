@@ -243,7 +243,8 @@ describe('ciclo de vida', () => {
     // janela que mostra o que está acontecendo — e reabrir depois ninguém descobre sozinho.
     const fechou = vi.fn();
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
-      base({ estado: { fase: 'rodando', passo: 3, total: 5, texto: 'x' } }),
+      base({ estado: { fase: 'rodando', passo: 3, total: 5, texto: 'x',
+                       ts: new Date().toISOString() } }),
     );
     montar({ onClose: fechou });
     await tick();
@@ -252,6 +253,22 @@ describe('ciclo de vida', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await tick();
     expect(fechou).not.toHaveBeenCalled();
+  });
+
+  it('estado congelado em "rodando" NÃO prende a caixa pra sempre', async () => {
+    // O processo pode morrer sem escrever o desfecho (kill, queda de energia). Sem teto, a trava
+    // deixaria um modal centrado permanentemente na tela — sem Escape, sem clique fora, sem ×.
+    const fechou = vi.fn();
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ estado: { fase: 'rodando', passo: 3, total: 5, texto: 'x',
+                       ts: new Date(Date.now() - 30 * 60_000).toISOString() } }),
+    );
+    montar({ onClose: fechou });
+    await tick();
+    await tick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    expect(fechou).toHaveBeenCalled();
   });
 
   it('fecha normalmente quando NÃO está atualizando', async () => {

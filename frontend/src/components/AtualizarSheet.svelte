@@ -127,9 +127,31 @@
     timer = null;
   }
 
-  /** Fecha, a não ser que a atualização esteja em curso — aí a caixa fica travada. */
+  // Relógio que anda no navegador, sem esperar resposta do servidor. É o único sinal de vida que
+  // não depende do comando falar: o `npm ci --silent` não imprime NADA, então nem a barra anda nem
+  // o log ganha linha, e a tela fica idêntica a uma travada. Serve a duas coisas: o tempo mostrado
+  // na etapa e o teto que destrava o fechamento da caixa.
+  let agoraMs = $state(Date.now());
+  $effect(() => {
+    if (!rodando) return;
+    const t = setInterval(() => (agoraMs = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+
+  /**
+   * Fecha, a não ser que a atualização esteja em curso — aí a caixa fica travada.
+   *
+   * Com uma saída: se o estado empacar em "rodando" (o processo morreu sem escrever o desfecho, a
+   * máquina desligou no meio), travar pra sempre deixaria a pessoa sem conseguir fechar a caixa —
+   * uma tela que não fecha é pior que o problema que ela estava explicando. Passado o teto, o
+   * fechamento volta a valer.
+   */
+  const _TETO_TRAVA_MS = 10 * 60 * 1000;
+  const travada = $derived(rodando && !!estado.ts
+    && agoraMs - new Date(estado.ts).getTime() < _TETO_TRAVA_MS);
+
   function fecharSePuder() {
-    if (rodando) return;
+    if (travada) return;
     onClose();
   }
 
@@ -200,15 +222,6 @@
 
   const passosComTexto = $derived((dados?.passos ?? []).filter((p) => p.texto.trim()));
   const invalidos = $derived(estado.passos_invalidos ?? []);
-  // Relógio da etapa atual. É o único sinal de vida que não depende do comando falar: o
-  // `npm ci --silent` não imprime NADA, então nem a barra anda nem o log ganha linha, e a tela
-  // fica idêntica a uma travada. Anda por conta própria, sem esperar resposta do servidor.
-  let agoraMs = $state(Date.now());
-  $effect(() => {
-    if (!rodando) return;
-    const t = setInterval(() => (agoraMs = Date.now()), 1000);
-    return () => clearInterval(t);
-  });
   const decorrido = $derived.by(() => {
     if (!rodando || !estado.etapa_inicio) return '';
     const s = Math.max(0, Math.round((agoraMs - new Date(estado.etapa_inicio).getTime()) / 1000));
