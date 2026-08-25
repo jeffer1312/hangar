@@ -75,6 +75,24 @@ _CAMPOS: dict[str, type] = {
     "tela_px": str,     # 1920x1032 — quase todo defeito de layout precisa disto
 }
 
+def _git_describe() -> str:
+    try:
+        return subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True,
+            text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip()
+    except Exception:                                # noqa: BLE001 — versão nunca derruba nada
+        return ""
+
+
+# Commit do backend EM EXECUÇÃO, resolvido na importação (ou seja, quando o processo subiu) e nunca
+# mais. Parece detalhe e não é: entre o `git pull` e o restart do serviço, o checkout já está no
+# commit novo e o processo ainda é o velho. Lendo `git describe` na hora do download, o diário
+# afirmaria estar rodando código que ninguém carregou — e a primeira pergunta de toda análise ("de
+# qual versão veio isto?") sairia com a resposta errada, justamente na janela em que a máquina está
+# meio atualizada, que é quando o defeito estranho aparece.
+VERSAO_EM_EXECUCAO = _git_describe()
+
 _NIVEIS = ("ok", "aviso", "erro")
 _TETO_DETALHE = 300
 _TETO_LOTE = 50        # linhas por POST: acima disso é ruído ou cliente com defeito
@@ -218,15 +236,7 @@ def _cabecalho() -> str:
     guarda. Sem o commit não dá pra saber se o defeito relatado já foi corrigido, e é a primeira
     pergunta de qualquer análise. JSON válido numa linha: não quebra parser de JSONL.
     """
-    # Mesma fonte que o front usa pro `__HANGAR_VERSION__` (vite.config.ts): `git describe` no
-    # próprio checkout. Comparar a versão de quem reporta com a do repo é o primeiro passo de
-    # qualquer análise — sem ela não dá pra saber se o defeito já foi corrigido.
-    try:
-        v = subprocess.run(["git", "describe", "--tags", "--always", "--dirty"],
-                           cwd=Path(__file__).resolve().parents[2], capture_output=True,
-                           text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip()
-    except Exception:                                # noqa: BLE001 — cabeçalho nunca derruba o download
-        v = ""
+    v = VERSAO_EM_EXECUCAO
     return json.dumps({
         "evento": "diag.formato",
         "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
