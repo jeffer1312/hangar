@@ -103,10 +103,25 @@ def _passo(arquivo: Path) -> dict | None:
 
 def todos() -> list[dict]:
     """Todos os passos declarados no repo, em ordem de id (que começa com a data)."""
+    return _ler()[0]
+
+
+def invalidos() -> list[str]:
+    """Nomes dos arquivos que o app vai IGNORAR — e que ninguém veria de outro jeito.
+
+    O aviso do `_log` não serve aqui: quem lê estes arquivos é o processo destacado da atualização,
+    cujo stderr vai pro `DEVNULL`. Um passo com erro de digitação no frontmatter não fica
+    "pendente pra depois" — ele **nunca mais aparece**, em máquina nenhuma. Devolver a lista deixa
+    o motor gravá-la no estado, e a tela mostrar.
+    """
+    return _ler()[1]
+
+
+def _ler() -> tuple[list[dict], list[str]]:
     pasta = _dir()
     if not pasta.is_dir():
-        return []
-    achados = []
+        return [], []
+    achados, ruins = [], []
     for arquivo in sorted(pasta.glob("*.md")):
         if arquivo.name.upper().startswith("README"):
             continue
@@ -114,10 +129,13 @@ def todos() -> list[dict]:
             p = _passo(arquivo)
         except OSError as e:
             _log.warning("passo %s ilegivel: %s", arquivo.name, e)
+            ruins.append(arquivo.name)
             continue
         if p:
             achados.append(p)
-    return achados
+        else:
+            ruins.append(arquivo.name)
+    return achados, ruins
 
 
 # ─── Registro ──────────────────────────────────────────────────────────────────────────────────

@@ -353,6 +353,37 @@ def test_arquivo_solto_que_colide_e_guardado_antes_do_reset(repo, monkeypatch):
     assert "--include-untracked" in guardou[0]
 
 
+def test_stash_que_falha_impede_o_reset(repo, monkeypatch):
+    """Stash falhado com o reset acontecendo mesmo assim reproduz o defeito que ele veio corrigir."""
+    resetou = []
+    real = atualizar._git
+
+    def _espiao(*args, **kw):
+        if args[0] in ("fetch", "merge", "stash", "reset"):
+            class P:
+                returncode = 0 if args[0] == "fetch" else 1
+                stdout = ""
+                stderr = "index.lock existe"
+            if args[0] == "reset":
+                resetou.append(args)
+            return P()
+        return real(*args, **kw)
+
+    monkeypatch.setattr(atualizar, "_git", _espiao)
+    with pytest.raises(RuntimeError, match="guardar o que estava no disco"):
+        atualizar._puxar({"sujo": 0})
+    assert not resetou, "resetou mesmo sem ter conseguido guardar nada"
+
+
+def test_passo_malformado_vai_pro_estado_e_nao_so_pro_log(repo, monkeypatch):
+    """O log do processo destacado vai pro /dev/null; sem isto o passo some sem ninguém ver."""
+    from app import atualizacoes
+    monkeypatch.setattr(atualizacoes, "invalidos", lambda: ["2026-01-01-torto.md"])
+    monkeypatch.setattr(atualizacoes, "aplicar_pendentes", lambda: [])
+    atualizar._aplicar_passos()
+    assert atualizar.estado()["passos_invalidos"] == ["2026-01-01-torto.md"]
+
+
 def test_duas_chamadas_so_uma_lanca(repo, monkeypatch):
     """Check-then-act deixava dois processos rodarem `git reset` no mesmo repo ao mesmo tempo."""
     import os as _os
@@ -364,6 +395,30 @@ def test_duas_chamadas_so_uma_lanca(repo, monkeypatch):
     assert atualizar.iniciar()["ok"] is True
     assert atualizar.iniciar().get("erro") == "ja_rodando"
     assert len(lancados) == 1
+
+
+def test_troca_de_dono_do_lock_nunca_deixa_o_arquivo_vazio(repo, monkeypatch):
+    """`write_text` trunca antes de escrever: quem lesse nessa janela veria "" e tomaria a vez."""
+    import os as _os
+    class P:
+        pid = _os.getpid()
+    monkeypatch.setattr(atualizar.subprocess, "Popen", lambda *a, **k: P())
+    atualizar.iniciar()
+    trava = atualizar._base() / "rodando.lock"
+    assert trava.read_text(encoding="utf-8").strip() == str(_os.getpid())
+    assert not list(trava.parent.glob("*.tmp")), "sobrou tmp da troca de dono"
+
+
+def test_rollback_que_nao_sobe_nao_diz_que_esta_no_ar(repo, monkeypatch):
+    """O restart que motivou o rollback já matou o processo antigo; se o do rollback também falha,
+    não há nada rodando — dizer "no ar" manda a pessoa embora de um servidor morto."""
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: None)
+    def _quebra(t):
+        raise RuntimeError("nao subiu nem na volta")
+    monkeypatch.setattr(atualizar, "_reiniciar", _quebra)
+    final = atualizar._voltar(atualizar._git("rev-parse", "HEAD").stdout.strip(),
+                              "o servidor caiu", "systemd", 1)
+    assert final["ok"] is False and final["no_ar"] is False
 
 
 def test_lock_de_processo_morto_nao_trava_a_maquina(repo):

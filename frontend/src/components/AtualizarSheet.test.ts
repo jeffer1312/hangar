@@ -166,6 +166,30 @@ describe('atualizando', () => {
 });
 
 describe('ciclo de vida', () => {
+  it('servidor demorando pra voltar NÃO para o acompanhamento', async () => {
+    // O caso comum, não a borda: restart de systemd passa dos 2s do intervalo com folga. Antes,
+    // qualquer tique que não visse `rodando` encerrava o acompanhamento — a barra congelava sem
+    // erro nenhum e nada mais reagendava.
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(api, 'getAtualizacao');
+      spy.mockResolvedValueOnce(base({ estado: { fase: 'rodando', passo: 4, total: 5, texto: 'x' } }));
+      spy.mockRejectedValue(new Error('Failed to fetch'));   // servidor reiniciando, demorado
+      const spyIni = vi.spyOn(api, 'iniciarAtualizacao').mockResolvedValue({ ok: true, pid: 1 });
+      montar({ trabalhando: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      const depoisDeSeisSegundos = spy.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spy.mock.calls.length).toBeGreaterThan(depoisDeSeisSegundos);
+      expect(document.body.textContent ?? '').not.toContain('Failed to fetch');
+      expect(spyIni).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('desmontar o componente para o polling', async () => {
     // Sem isto o timer sobrevive à destruição do DesktopShell (navegar pra Custos/Arquivo) e, ao
     // terminar a atualização, chama location.reload() na cara de quem já estava noutra tela.

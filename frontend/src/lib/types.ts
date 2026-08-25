@@ -638,6 +638,8 @@ export interface AtualizacaoEstado {
   /** O servidor respondeu depois disso. Separado de `voltou`: reverter e não subir é um terceiro caso. */
   no_ar?: boolean;
   reiniciar_manual?: boolean;
+  /** Arquivos de `docs/atualizacoes/` que o app ignorou por estarem malformados. */
+  passos_invalidos?: string[];
   commit_de?: string;
   commit_para?: string;
   ts?: string;

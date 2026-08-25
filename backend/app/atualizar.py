@@ -271,7 +271,13 @@ def _puxar(pre: dict) -> None:
     # arquivo calado, com rc=0. Como `resguardar` só entra em ação quando há mudança em arquivo
     # RASTREADO, esse caso passava direto pela rede de proteção — e "automático nunca é
     # irreversível" deixava de valer justamente para o arquivo que ninguém versionou.
-    _git("stash", "push", "--include-untracked", "-m", "hangar antes do reset", timeout=120)
+    s = _git("stash", "push", "--include-untracked", "-m", "hangar antes do reset", timeout=120)
+    if s.returncode != 0:
+        # Não seguir para o reset. Um stash que falhou (index.lock preso, disco cheio, permissão)
+        # com o reset acontecendo mesmo assim reproduz o defeito original — o arquivo é sobrescrito
+        # calado —, agora escondido atrás da linha que parece ser a correção. Mesma regra do
+        # `resguardar`: sem prova de que dá pra voltar, nada destrutivo acontece.
+        raise RuntimeError(f"nao consegui guardar o que estava no disco: {_cauda(s)}")
 
     r = _git("reset", "--hard", "origin/main", timeout=120)
     if r.returncode != 0:
@@ -457,7 +463,12 @@ def _voltar(commit: str, motivo: str, topologia: str, porta: int) -> dict:
         _reaplicar(topologia)
         _reiniciar(topologia)
     except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
-        return _falhou(f"{motivo}; e a volta para a versao anterior tambem falhou: {e}")
+        # `no_ar=False` explícito: chegar aqui quer dizer que o restart que motivou o rollback já
+        # matou o processo antigo, e o restart do próprio rollback também falhou — não há nada
+        # rodando. O default `True` do `_falhou` vale pro caso comum (falha antes de qualquer
+        # restart), e aqui ele diria "está no ar" com a máquina sem serviço nenhum.
+        return _falhou(f"{motivo}; e a volta para a versao anterior tambem falhou: {e}",
+                       no_ar=False)
     # Dois campos, não um. `voltou` diz que o código anterior está de volta no disco (aconteceu
     # aqui em cima, incondicionalmente); `no_ar` diz se o servidor respondeu depois disso. Com um
     # campo só, o caso "reverti e mesmo assim não subiu" era indistinguível de "não revertei", e a
@@ -475,6 +486,12 @@ def _aplicar_passos() -> None:
     ter feito o que não fez.
     """
     from app import atualizacoes
+    ruins = atualizacoes.invalidos()
+    if ruins:
+        # Vai pro ESTADO, não só pro log: o log deste processo vai pro /dev/null, e um passo
+        # descartado por erro de digitação não fica pendente — some de vez, em toda máquina.
+        _escrever(passos_invalidos=ruins)
+        _log.warning("passos ignorados por estarem malformados: %s", ", ".join(ruins))
     atualizacoes.aplicar_pendentes()
 
 
@@ -562,10 +579,25 @@ def iniciar(porta: int = 8765) -> dict:
     # O lock nasceu com o pid do BACKEND, que é quem tinha de vencer a corrida do `O_EXCL`. Agora
     # passa a apontar pro filho: é ele que fica vivo enquanto a atualização roda, e o backend (que
     # não morre) faria `_vivo` responder sim para sempre, travando a máquina no primeiro uso.
+    # tmp+rename, e não `write_text`: este último trunca e depois escreve, então há um instante em
+    # que o lock tem ZERO bytes no disco. Uma segunda chamada caindo bem aí leria "", concluiria
+    # "dono morto" (pid 0 nunca está vivo), recolheria o lock e lançaria uma segunda atualização —
+    # justamente o que o `O_EXCL` existe pra impedir. Janela de microssegundos, mas é a mesma classe
+    # de defeito que o `_escrever` daqui já evita com `atomico.substituir`.
     try:
-        (_base() / "rodando.lock").write_text(str(proc.pid), encoding="utf-8")
-    except OSError:
-        pass    # o lock já cumpriu o papel dele (a exclusão); errar aqui não pode barrar o resto
+        trava = _base() / "rodando.lock"
+        tmp = trava.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(str(proc.pid), encoding="utf-8")
+        atomico.substituir(tmp, trava)
+    except OSError as e:
+        # Falhando aqui, o lock fica com o pid do BACKEND — um processo que não morre. Deixá-lo
+        # assim (o `pass` que estava aqui) travaria a máquina PARA SEMPRE: todo lançamento futuro
+        # veria um dono vivo e recusaria, e só apagando o arquivo na mão pra destravar. Entre um
+        # lock eterno e nenhum lock, nenhum é melhor — a exclusão já cumpriu o papel dela neste
+        # lançamento, e o próximo depende de alguém apertar o botão de novo. O aviso vai pro log do
+        # BACKEND, que é lido, e não pro do filho, que vai pro /dev/null.
+        _log.warning("nao consegui marcar o dono do lock (%s); soltando pra nao travar a maquina", e)
+        _soltar_a_vez()
     _escrever(fase="rodando", ok=None, erro=None, pid=proc.pid,
               passo=0, total=len(ETAPAS), texto="Começando")
     return {"ok": True, "pid": proc.pid}

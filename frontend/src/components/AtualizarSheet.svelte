@@ -74,11 +74,19 @@
     if (timer) clearTimeout(timer);
     timer = setTimeout(async () => {
       await carregar(true);
-      if (open && rodando) agendar();
-      else {
-        lancamos = false;   // acabou: erro de rede daqui pra frente é servidor fora do ar mesmo
-        if (open && estado.fase === 'pronto' && estado.ok === true && !faltaReiniciar) concluir();
+      if (!open) return;
+      // Só PRONTO encerra o acompanhamento. Antes, qualquer tique que não visse `rodando` caía no
+      // encerramento — inclusive o tique em que o servidor ainda estava reiniciando e não
+      // respondia. Aí o polling parava mudo (nada reagendava), a barra congelava sem erro nenhum,
+      // e `lancamos` voltava a false bem no meio do restart, liberando a mensagem de
+      // "desconectado". Restart de serviço passa dos 2s do intervalo com folga: era o caso comum,
+      // não a borda.
+      if (estado.fase === 'pronto') {
+        lancamos = false;
+        if (estado.ok === true && !faltaReiniciar) concluir();
+        return;
       }
+      agendar();
     }, INTERVALO);
   }
 
@@ -129,10 +137,11 @@
   // Reabrir a caixa com uma atualização já em curso (outra aba a começou, ou a página recarregou no
   // meio) tem que voltar a acompanhar — senão a barra fica parada num estado antigo.
   $effect(() => {
-    if (open && rodando && !timer) agendar();
+    if (open && (rodando || lancamos) && !timer) agendar();
   });
 
   const passosComTexto = $derived((dados?.passos ?? []).filter((p) => p.texto.trim()));
+  const invalidos = $derived(estado.passos_invalidos ?? []);
 
   // Duas frases, não uma com `{n}`: com uma só a tela escrevia "1 sessões estão trabalhando".
   const aviso_sessoes = $derived(
@@ -248,6 +257,12 @@
           <span class="val">{dados?.versoes.backend ?? '—'}</span>
         </div>
         <p class="aviso">{m.atualizar_precisa_reiniciar()}</p>
+      {/if}
+      {#if invalidos.length}
+        <!-- O aviso não pode viver só no log: quem lê os arquivos de passo é o processo destacado,
+             cujo stderr vai pro /dev/null. Um passo malformado some pra sempre, calado. -->
+        <p class="aviso">{m.atualizar_passos_invalidos({ n: invalidos.length,
+                                                         lista: invalidos.join(', ') })}</p>
       {/if}
       {#if erroDeRede}<p class="erro-linha">{erroDeRede}</p>{/if}
       <div class="acoes">
