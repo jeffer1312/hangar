@@ -189,7 +189,7 @@ def test_capture_script_writes_sidecar(tmp_path):
         env={**os.environ, "CLAUDE_CONFIG_DIR": str(tmp_path)},
     )
     assert r.returncode == 0
-    out = tmp_path / ".claude-pocket-askq" / "abc.json"
+    out = tmp_path / ".hangar-askq" / "abc.json"
     assert out.exists()
     assert out.read_text(encoding="utf-8") == raw  # grava o stdin cru
 
@@ -202,4 +202,4 @@ def test_capture_script_ignores_non_askq(tmp_path):
         env={**os.environ, "CLAUDE_CONFIG_DIR": str(tmp_path)},
     )
     assert r.returncode == 0
-    assert not (tmp_path / ".claude-pocket-askq").exists()  # nada escrito
+    assert not (tmp_path / ".hangar-askq").exists()  # nada escrito

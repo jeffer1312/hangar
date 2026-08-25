@@ -18,10 +18,10 @@ entregam (medido em 18/08/2026 contra a CLI 2.1.234, com um hook de despejo):
 em `<projeto>/<sessao>/subagents/agent-<id>.jsonl`. Com ele o app pode abrir a conversa do
 subagente inteira, em vez de só contar quantos existem.
 
-Contrato do sidecar — mesmo formato dos outros marcadores do app (`<config>/.claude-pocket-*`),
+Contrato do sidecar — mesmo formato dos outros marcadores do app (`<config>/.hangar-*`),
 chaveado pelo stem do .jsonl da SESSÃO:
 
-    <config>/.claude-pocket-subagents/<stem>.json
+    <config>/.hangar-subagents/<stem>.json
     {"agentes": [{"id","tipo","inicio","fim","ultima_msg","transcript"}], "ts"}
 
 Três decisões que valem comentário:
@@ -32,7 +32,7 @@ Três decisões que valem comentário:
    porque é justamente o que o painel precisa mostrar.
 2. Escrita com tmp+rename levando o PID no nome do temporário. Dois subagentes que terminam no mesmo
    instante são dois processos de hook escrevendo o mesmo arquivo; com nome fixo, o `rename` promove
-   bytes entrelaçados (o mesmo furo que `cp_panel_common.py` e a statusline já corrigiram).
+   bytes entrelaçados (o mesmo furo que `hangar_panel_common.py` e a statusline já corrigiram).
 3. Falha aqui NUNCA pode atrapalhar a sessão: tudo é engolido e o hook sai 0. Um painel que não
    atualiza é um defeito de tela; um hook que estoura trava o turno de quem está trabalhando.
 4. A sequência ler→mudar→gravar roda sob `flock` EXCLUSIVO. O tmp+rename do item 2 protege só a
@@ -57,7 +57,7 @@ try:                    # Windows: mesmo mecanismo que contas.py e peers.py já 
 except ImportError:
     msvcrt = None
 
-_SUBDIR = ".claude-pocket-subagents"
+_SUBDIR = ".hangar-subagents"
 # Teto de itens guardados por sessão. 60 cobre com folga o pior caso visto (um lote de workflow) sem
 # deixar o arquivo crescer sem fim numa sessão de horas.
 _MAX = 60

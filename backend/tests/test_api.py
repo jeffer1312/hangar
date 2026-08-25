@@ -368,7 +368,7 @@ def test_broadcast_rejects_slash_commands(api_client):
 
 
 def test_group_message_delivers_to_peers_not_self(api_client):
-    # cp-send --group: entrega "[grupo: me] ..." a CADA companheiro, nunca à própria sessão.
+    # hangar-send --group: entrega "[grupo: me] ..." a CADA companheiro, nunca à própria sessão.
     with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
          patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
          patch("app.pqueue.PromptQueue.append"):
@@ -912,7 +912,7 @@ def test_create_pi_provider_routes_to_claude_create_with_provider(api_client):
 
 
 def test_create_pi_with_engine_is_refused(api_client):
-    # Motor so faz sentido no Claude: o env do cp-engine e Anthropic-only.
+    # Motor so faz sentido no Claude: o env do hangar-engine e Anthropic-only.
     with patch("app.api.registry.create") as cr:
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "p", "cwd": "/tmp", "provider": "pi", "engine": "kimi"})
@@ -1302,6 +1302,56 @@ def test_transcribe_com_limpar_devolve_o_cru_junto(api_client, monkeypatch, tmp_
     # O estilo da query e o que a pill mostrava na hora de falar, e ele chega inteiro na limpeza:
     # sem isso o backend voltava a decidir pela config, que e o bug do "So limpar" que sai briefing.
     assert visto["estilo"] == "briefing"
+    # Com aviso, o que voltou pro campo e o CRU — dizer "briefing" faria a barra do ditado marcar um
+    # estilo que nao pegou.
+    assert body["estilo_aplicado"] == "cru"
+
+
+def test_transcribe_marca_o_estilo_efetivo_e_nao_o_pedido(api_client, monkeypatch, tmp_path):
+    # Rebaixamento silencioso do briefing em ditado curto (narrar._MIN_PALAVRAS_BRIEFING): o texto
+    # volta em prosa, e a barra do ditado tem que marcar prosa. Sem este campo o front so teria o
+    # estilo PEDIDO, e o botao "Briefing" ficaria aceso num texto que nunca foi briefing.
+    info = SessionInfo(name="cc", cwd=str(tmp_path))
+    monkeypatch.setattr(api_mod.registry, "list", lambda: [info])
+    monkeypatch.setattr(api_mod, "transcribe", lambda data, fn: "ola mundo cru curto demais")
+    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", lambda t, e=None: ("Olá, mundo.", None))
+    r = api_client.post(
+        "/api/sessions/cc/transcribe?limpar=1&estilo=briefing",
+        content=b"audio",
+        headers={**_h(), "X-Filename": "a.webm"},
+    )
+    assert r.status_code == 200
+    assert r.json()["estilo_aplicado"] == "prosa"
+
+
+def test_relimpar_aplica_outro_estilo_sem_audio(api_client, monkeypatch):
+    # Trocar de estilo NAO reenvia o audio: a Whisper ja rodou e o cru veio no `raw`. O endpoint so
+    # chama a limpeza de novo — nao ha sessao, nem cwd, nem upload envolvidos.
+    visto = {}
+
+    def fake_limpar(texto, estilo_pedido=None):
+        visto["texto"], visto["estilo"] = texto, estilo_pedido
+        return "**Objetivo**\nfalar.", None
+
+    monkeypatch.setattr(api_mod.narrar, "limpar_ditado", fake_limpar)
+    r = api_client.post("/api/ditado/relimpar",
+                        json={"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"},
+                        headers=_h())
+    assert r.status_code == 200
+    assert r.json()["text"] == "**Objetivo**\nfalar."
+    assert visto == {"texto": "eu queria falar sobre uma coisa aqui", "estilo": "briefing"}
+
+
+def test_relimpar_recusa_estilo_que_nao_existe(api_client):
+    # 400, e nao "cai no padrao": aqui a pessoa CLICOU num botao. Entregar outro estilo calada seria
+    # mentir sobre o que ela apertou (na transcricao o estilo e palpite da tela, e cair na config e
+    # o certo — por isso a regra e diferente nos dois lugares).
+    r = api_client.post("/api/ditado/relimpar",
+                        json={"texto": "um texto qualquer aqui", "estilo": "resumir"},
+                        headers=_h())
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_estilo_invalido"
+    assert "resumir" in r.json()["detail"]["msg"]
 
 
 def test_push_mute_route(api_client, monkeypatch, tmp_path):
@@ -1714,7 +1764,7 @@ def test_send_thread_isolated_from_saturated_default_executor():
 
 # --- Nucleo: broadcast e group-message tambem no pool dedicado de envio -------
 def test_broadcast_uses_send_thread(api_client, monkeypatch):
-    # broadcast e trafego cp-send entre sessoes = nucleo -> tem que ir pelo pool DEDICADO (_send_thread),
+    # broadcast e trafego hangar-send entre sessoes = nucleo -> tem que ir pelo pool DEDICADO (_send_thread),
     # nao pelo executor default que a decoracao satura.
     from app import api as api_mod
     calls = []
@@ -2539,3 +2589,30 @@ def test_input_codex_exception_do_adapter_vira_envelope(api_client):
     d = r.json()["detail"]
     assert d["code"] == "erro_envio_falhou"
     assert d["params"]["erro"] == "adapter broken"
+
+
+# ---------------------------------------------------------------------------
+# POST /run e /run/stop — a falha do runner tem de CHEGAR na tela
+# ---------------------------------------------------------------------------
+# Antes: o `new-session` rodava dentro de um `except: pass` com o rc ignorado, entao o play que nao
+# aconteceu devolvia 200 com o estado da sessao VELHA dentro, e o stop devolvia `{"ok": true}` com
+# o processo ainda rodando. Nao havia erro em lugar nenhum — o pior modo de falhar.
+
+def test_run_que_nao_subiu_devolve_erro_e_nao_o_estado_da_sessao_velha(api_client, tmp_path):
+    from app import runner as runner_mod
+    with patch("app.api._session_cwd", return_value=str(tmp_path)), \
+         patch("app.api.runner.start_run",
+               side_effect=runner_mod.RunnerError(502, "o run nao subiu: duplicate session: x")):
+        r = api_client.post("/api/sessions/cc/run", headers=_h(), json={"command": "npm run dev"})
+    assert r.status_code == 502
+    assert "duplicate session" in r.json()["detail"]
+
+
+def test_stop_que_nao_parou_nao_devolve_ok(api_client, tmp_path):
+    from app import runner as runner_mod
+    with patch("app.api._session_cwd", return_value=str(tmp_path)), \
+         patch("app.api.runner.stop_run",
+               side_effect=runner_mod.RunnerError(409, "o run (sessao x) nao morreu")):
+        r = api_client.post("/api/sessions/cc/run/stop", headers=_h())
+    assert r.status_code == 409
+    assert "nao morreu" in r.json()["detail"]

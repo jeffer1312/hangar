@@ -40,7 +40,7 @@ def test_posix_e_o_shlex_join_byte_por_byte(posix):
     """O Linux nao pode mudar: la o idioma POSIX funciona e trocar so arriscaria."""
     for args in (["claude", "--resume", "abc-123"],
                  ["pi", "--session-id", "x", "--model", "openrouter/~anthropic/opus"],
-                 ["cp-engine", "--exec", "kimi", "--", "claude", "--session-id", "u"],
+                 ["hangar-engine", "--exec", "kimi", "--", "claude", "--session-id", "u"],
                  ["x", "com espaco", "com'apostrofo", "com$cifrao"]):
         assert tmux.join_cmd(args) == shlex.join(args)
 

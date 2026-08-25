@@ -52,6 +52,29 @@ if os.name == "nt":
     _instalar_home_do_windows()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _sem_servidor_de_teste_vazado():
+    """No fim da suite, nenhum socket de teste pode ter processo vivo.
+
+    Os quatro teardowns que criam socket proprio ja recolhem o servidor deles (`matar_servidor`).
+    Este fixture existe porque o defeito que ele cobre e justamente o que NAO aparece: a limpeza
+    esquecida num arquivo novo nao quebra teste nenhum — ela deixa um `tmux server -s __warm__ -L
+    cp-test-<hash>` de pe, com um shell e um console presos, ate a maquina reiniciar. Foram 70
+    deles nesta VM em 22/08/2026 (~12,7 GB) e a sessao que rodava a suite morreu por falta de
+    memoria. Falha de teardown, aqui, e barata; achar isso pela maquina travando nao e.
+
+    Confere so o que a suite ENTREGOU por `novo_socket` — nunca varre `cp-test-*` da maquina, que
+    poderia acusar sobra de outra rodada (ou de outro worker do xdist) como se fosse desta.
+    """
+    yield
+    import tmux_teste
+    vazados = tmux_teste.sockets_vazados()
+    assert not vazados, (
+        "a suite terminou deixando servidor de multiplexador vivo em socket de teste: "
+        f"{vazados}. Falta `matar_servidor(sock)` no teardown de quem criou o socket."
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_auth_backoff():
     # O backoff de token errado (app.auth) e um dict de MODULO: sem este reset, os varios testes que
@@ -150,7 +173,7 @@ def paleta_vermelha():
 
 @pytest.fixture
 def models_cache_em_tmp(tmp_path, monkeypatch):
-    # O cache de modelos tem espelho em DISCO dentro do config dir (.claude-pocket-models.json):
+    # O cache de modelos tem espelho em DISCO dentro do config dir (.hangar-models.json):
     # sem o redirecionamento, os testes das rotas de model-options ESCREVEM no ~/.claude real de
     # quem roda a suite, e os testes seguintes leem esse cache no lugar do mock. NAO e autouse
     # global de proposito: a versao autouse derrubava os mocks de test_tmux quando rodava na

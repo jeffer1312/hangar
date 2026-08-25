@@ -11,7 +11,7 @@ import pytest
 import app.api as api_mod
 from app import agentpane, registry, tmux
 
-from tmux_teste import matar_sessao
+from tmux_teste import matar_servidor, matar_sessao, novo_socket
 
 SESS = "cp-test-registry-agentpane"
 _UUID = "12345678-1234-1234-1234-123456789abc"
@@ -79,7 +79,7 @@ def test_sem_pane_de_agente_cai_no_ativo_e_loga(sessao, tmp_path, monkeypatch, c
     ativo = next(p for p in tmux.list_panes_active() if p["name"] == sessao)
     grupo = tmux.list_panes_all()[sessao]
 
-    with caplog.at_level(logging.WARNING, logger="claude_pocket.registry"):
+    with caplog.at_level(logging.WARNING, logger="hangar.registry"):
         escolhido = registry.SessionRegistry._agent_pane(grupo, {})
 
     assert escolhido["pane_id"] == ativo["pane_id"]
@@ -99,7 +99,7 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
     # do dev, nao so as deste teste) -- qualquer uma delas com --session-id no cmdline dispara
     # _cwd_has_siblings por conta propria e o total de forks passa a depender do que mais esta
     # rodando na maquina, nao do que o teste criou (medido: contaminava o teste com forks alheios).
-    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    sock = novo_socket()
     a, b = f"cp-test-fork-a-{uuid.uuid4().hex[:6]}", f"cp-test-fork-b-{uuid.uuid4().hex[:6]}"
     cwd_a, cwd_b = tmp_path / "a", tmp_path / "b"
     cwd_a.mkdir()
@@ -135,12 +135,12 @@ def test_list_nao_faz_fork_por_sessao(tmp_path, monkeypatch):
                                  "\t#{@cp_hidden}"]]
         assert chamadas_of == []                # nenhuma chamada por-sessao durante list()
     finally:
-        # kill-SESSION (alvo exato), nunca kill-server -- mesma proibicao do test_tmux.py: um `-L`
-        # esquecido num kill-server derruba o servidor tmux DEFAULT (todas as sessoes Claude vivas
-        # do usuario), nao so o socket privado deste teste. Aqui o `sock` e sempre um uuid novo e
-        # nunca ficaria vazio de verdade, mas o padrao errado nao pode ser o que fica pra copiar.
+        # Sessoes primeiro, servidor depois. O `matar_servidor` carrega a proibicao que este
+        # comentario descrevia (kill-server sem `-L` derruba o servidor tmux DEFAULT, com todas as
+        # sessoes Claude vivas do usuario) — agora como codigo, e num lugar so.
         matar_sessao(a, sock)
         matar_sessao(b, sock)
+        matar_servidor(sock)
 
 
 def test_pane_info_resolve_pelo_pane_do_agente_com_split(sessao, tmp_path, monkeypatch):

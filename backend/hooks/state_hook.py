@@ -3,8 +3,8 @@
 # silencio (nunca trava o prompt). Espelha o padrao do askq_capture.py. Usado pelo backend.
 #
 # Dois marcadores:
-#  - .claude-pocket-state/<session_id>.json  {state,ts}  -> estado da LISTA sem raspar o pane.
-#  - .claude-pocket-active/<boot_id>.json    {jsonl,ts}  -> transcript ATIVO (gravado em qualquer
+#  - .hangar-state/<session_id>.json  {state,ts}  -> estado da LISTA sem raspar o pane.
+#  - .hangar-active/<boot_id>.json    {jsonl,ts}  -> transcript ATIVO (gravado em qualquer
 #    evento). O claude pode rodar `--session-id X` mas escrever no <Y> resumido (X.jsonl nunca nasce);
 #    o backend so tem o X do cmdline -> sem isto resolvia pro path fantasma X.jsonl (chat vazio). O
 #    hook conhece o transcript REAL (transcript_path=Y) e o boot_id X (via ancestralidade /proc do
@@ -109,7 +109,7 @@ try:
 
     state = _STATE.get(event)
     if state and sid:
-        _write_marker(base, ".claude-pocket-state", sid, {"state": state, "ts": time.time()})
+        _write_marker(base, ".hangar-state", sid, {"state": state, "ts": time.time()})
 
     # Transcript ATIVO: gravado em QUALQUER evento (todo hook carrega transcript_path). Crucial: o
     # /resume feito DENTRO de uma sessao ja aberta pode NAO disparar SessionStart -> mas o 1o prompt/
@@ -123,7 +123,7 @@ try:
         if boot:
             # cwd + pid: permitem ao backend casar marcador<->pane por descendencia de processo,
             # resolvendo sessoes BARE (sem --session-id) de forma deterministica.
-            _write_marker(base, ".claude-pocket-active", boot,
+            _write_marker(base, ".hangar-active", boot,
                           {"jsonl": tp, "ts": time.time(), "cwd": o.get("cwd"), "pid": claude_pid})
 except Exception:
     pass

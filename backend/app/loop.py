@@ -1,5 +1,5 @@
 """Loop runner (harness bloco A): objetivo -> executa -> verifica -> re-prompta -> para.
-Sidecar JSON por sessao FONTE em ".claude-pocket-loop", keyed pelo NOME (sobrevive ao /clear),
+Sidecar JSON por sessao FONTE em ".hangar-loop", keyed pelo NOME (sobrevive ao /clear),
 mesmo padrao do chain/pqueue. Um loop por sessao; loop novo sobrescreve o anterior.
 Spec: docs/superpowers/specs/2026-07-22-loop-runner-design.md"""
 import json
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from app import atomico
 from app.config import settings
 from app.models import dumps_safe
 from app.pqueue import _sanitize
@@ -30,7 +31,7 @@ _lock = threading.Lock()
 
 
 def _loop_dir() -> Path:
-    d = Path(settings.projects_dir).parent / ".claude-pocket-loop"
+    d = Path(settings.projects_dir).parent / ".hangar-loop"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -59,7 +60,7 @@ class LoopLink:
     def set(self, data: dict) -> None:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(dumps_safe(data), encoding="utf-8")
-        tmp.replace(self.path)
+        atomico.substituir(tmp, self.path)
 
     def update(self, **fields) -> dict | None:
         cur = self.get()

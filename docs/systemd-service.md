@@ -12,7 +12,7 @@ Two things change once the backend is a systemd service.
 
 The backend spawns the tmux server that hosts every session. If that server is born as a
 plain child of the service, it lands in the service's control-group. Then
-`systemctl --user restart claude-pocket-backend` sends SIGTERM to the **whole** cgroup
+`systemctl --user restart hangar-backend` sends SIGTERM to the **whole** cgroup
 (default `KillMode=control-group`) and kills the tmux server and **every session** — including
 the one driving the app. No `KillMode` value fixes this cleanly (`control-group` kills tmux;
 `process`/`mixed` orphan the Python worker on port 8765).
@@ -38,7 +38,7 @@ yours doesn't fully, add it to your compositor's startup:
 
 ```sh
 dbus-update-activation-environment --systemd --all && \
-  systemctl --user restart claude-pocket-backend.service
+  systemctl --user restart hangar-backend.service
 ```
 
 - **Hyprland:** an `exec-once` line in your config.

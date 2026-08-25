@@ -10,8 +10,10 @@
   import { parseHash, type Route } from './lib/route';
   import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
   import { abrirConfig, fecharConfig } from './lib/configNav';
+  import * as diag from './lib/diag';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
+  import Orq from './screens/Orq.svelte';
   import Costs from './screens/Costs.svelte';
   import Archive from './screens/Archive.svelte';
   import Chat from './screens/Chat.svelte';
@@ -130,6 +132,12 @@
     return () => mq.removeEventListener('change', on);
   });
 
+  // Diário de uso (lib/diag.ts): liga assim que há credencial, e não antes — sem token o lote não
+  // teria pra onde ir. Registra a plataforma uma vez e passa a capturar erro de JS.
+  $effect(() => {
+    if (authenticated) diag.iniciar(__HANGAR_VERSION__, isDesktop ? 'desktop' : 'celular');
+  });
+
   const route: Route = $derived(
     syncEnabled === null
       ? { name: 'loading' }                                            // sondando o hub
@@ -137,6 +145,12 @@
         ? (syncReady ? parseHash(currentHash) : { name: 'login' })     // sync: exige sessao com chave
         : (authenticated ? parseHash(currentHash) : { name: 'login' }) // sem sync: regra antiga
   );
+
+  // "Onde o app foi usado": uma linha por tela que entra à vista. É o que responde qual parte do
+  // app é realmente usada — e, num defeito, de onde a pessoa vinha.
+  $effect(() => {
+    if (authenticated) diag.telaAtiva(route.name);
+  });
 
   // Painel de Configuracoes: segundo eixo do endereco (?config=&srv=, ver lib/configRoute.ts).
   const cfg = $derived(parseConfig(currentHash));
@@ -439,7 +453,7 @@
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
       currentKey={route.name === 'chat' ? (route.serverId ?? '') + '::' + route.sessionName : null}
-      view={route.name === 'board' ? 'board' : route.name === 'canvas' ? 'canvas' : 'chat'}
+      view={route.name === 'board' ? 'board' : route.name === 'canvas' ? 'canvas' : route.name === 'orq' ? 'orq' : 'chat'}
       overlaySession={(route.name === 'board' || route.name === 'canvas') && route.sessionName && route.serverId
         ? { name: route.sessionName, serverId: route.serverId }
         : null}
@@ -448,9 +462,14 @@
       onCloseOverlay={() => navigateTo(route.name === 'canvas' ? '#/canvas' : '#/board')}
       onToggleBoard={() => navigateTo(route.name === 'board' ? '#/' : '#/board')}
       onToggleCanvas={() => navigateTo(route.name === 'canvas' ? '#/' : '#/canvas')}
+      onToggleOrq={() => navigateTo(route.name === 'orq' ? '#/' : '#/orq')}
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
     />
+  {:else if route.name === 'orq'}
+    <!-- Orquestração TEM tela no celular (diferente do quadro/canvas): é leitura, não arrasto de
+         card, e é a tela que o usuário abre longe da máquina. -->
+    <Orq onBack={navigateToSessions} onNavigateToChat={navigateToChat} />
   {:else if route.name === 'sessions' || route.name === 'board' || route.name === 'canvas'}
     <!-- Quadro/canvas são só desktop: no mobile caem na lista normal (em vez de tela em branco). -->
     <SessionList

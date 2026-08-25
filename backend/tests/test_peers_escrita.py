@@ -1,5 +1,5 @@
 """Escrita do peers.json via peers.py — gravar/regravar/apagar o arquivo que guarda os TOKENS
-da malha cross-server. O peers.json é lido pelo cp-send, pelas rotas de pareamento e pela lista
+da malha cross-server. O peers.json é lido pelo hangar-send, pelas rotas de pareamento e pela lista
 de origens permitidas do terminal: gravação torta ali derruba todo servidor remoto de uma vez.
 """
 import json
@@ -34,7 +34,7 @@ def test_regravar_substitui_nao_duplica(arquivo):
 
 
 def test_gravar_preserva_enabled_do_painel(arquivo):
-    """O toggle do painel (cp_panel_common) grava enabled no arquivo; regravar pelo app não pode
+    """O toggle do painel (hangar_panel_common) grava enabled no arquivo; regravar pelo app não pode
     sumir com ele — senão um peer desligado volta pro scan calado."""
     peers.gravar_peer("pc", "http://pc:8765", "t")
     dados = peers.listar_peers()
@@ -57,7 +57,7 @@ def test_gravar_preserva_web_url_do_painel(arquivo):
 
 def test_arquivo_corrompido_recusa_escrever_por_cima(arquivo):
     """Corrompido à mão: recusar é certo, mas apagar o que sobrou seria perder os tokens de vez
-    — o usuário ainda consegue recuperar editando o arquivo (mesmo racional do cp_panel)."""
+    — o usuário ainda consegue recuperar editando o arquivo (mesmo racional do hangar_panel_common)."""
     arquivo.write_text('{"pc": {"token": "x"', encoding="utf-8")
     with pytest.raises(ValueError, match="ilegível"):
         peers.gravar_peer("notebook", "http://n:8765", "t")

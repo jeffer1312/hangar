@@ -30,7 +30,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app import pricing
+from app import atomico, pricing
 
 _log = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ CACHE_VERSAO = 1
 # Medido em 01/08/2026: 2.714 arquivos assim, contra 446 de conversa — cresce toda semana.
 _DIR_SUBAGENTE = "subagents"
 
-_CACHE_DIR = Path.home() / ".claude" / ".claude-pocket-custos"
+_CACHE_DIR = Path.home() / ".claude" / ".hangar-custos"
 _lock = threading.Lock()
 _mem: dict[str, dict[str, tuple[tuple[int, int], dict | None]]] = {}
 
@@ -185,10 +185,10 @@ def _gravar_cache(raiz: Path, estado: dict) -> None:
                "itens": {k: {"sig": [s[0], s[1]], "uso": u} for k, (s, u) in estado.items()}}
     destino = _caminho_cache(raiz)
     # pid no tmp: dois processos gravando com nome fixo fariam o rename promover bytes
-    # entrelaçados — mesmo furo que o cp_panel_common.py já corrigiu.
+    # entrelaçados — mesmo furo que o hangar_panel_common.py já corrigiu.
     tmp = destino.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(destino)
+    atomico.substituir(tmp, destino)
 
 
 def _serializar(u: UsoSessao) -> dict:

@@ -79,7 +79,7 @@ def _scope_probe() -> bool:
 
 def _scope_prefix() -> list[str]:
     # Spawn the tmux SERVER in its OWN transient systemd scope so it does NOT inherit the
-    # backend service's cgroup. Without this, `systemctl restart claude-pocket-backend`
+    # backend service's cgroup. Without this, `systemctl restart hangar-backend`
     # SIGTERMs the whole control-group -> kills the tmux server and every session (incl. the
     # one driving this app). ponytail: gated on systemd-run + a user runtime dir; on non-systemd
     # hosts returns [] and spawns plainly, where the cgroup teardown problem doesn't exist.
@@ -105,12 +105,37 @@ def _wayland_display() -> str | None:
     return socks[0] if socks else None
 
 
-_log = logging.getLogger("claude_pocket.tmux")
+_log = logging.getLogger("hangar.tmux")
+
+
+# Codigo de retorno que NENHUM multiplexador usa, reservado pra "nao consegui nem rodar o comando"
+# (travou e estourou o timeout, binario ausente, sem permissao) — em oposicao a "rodou e recusou",
+# que e o rc 1 do tmux dizendo, por exemplo, "no server running". Os dois continuam sendo `!= 0`,
+# entao todo caller de hoje se comporta igual; quem precisa separar os dois casos e so quem LISTA
+# sessoes, porque ali confundi-los significa dizer "voce nao tem sessao nenhuma" quando a verdade e
+# "nao sei". Ver MuxIndisponivel.
+RC_INDISPONIVEL = 240
+
+
+class MuxIndisponivel(RuntimeError):
+    """O multiplexador nao respondeu — a lista de sessoes e DESCONHECIDA, nao vazia.
+
+    Nasceu de um caso relatado em 25/08/2026 num Windows (psmux): as sessoes sumiam todas do app
+    do nada, com o servidor ainda verde, e so voltavam num "Reconectar". A causa e que
+    `list-panes -a` estourando os 5s de timeout virava rc=1, que as funcoes de listagem traduziam
+    pra "zero sessoes" — o refresher da lista via um snapshot vazio PERFEITAMENTE VALIDO, a
+    assinatura mudava e o SSE mandava `[]` pro app. Nada falhava em lugar nenhum: a conexao seguia
+    viva, o ping seguia chegando, e a tela ficava vazia ate o proximo poll bom.
+
+    Levantar aqui e o que reconecta esse caminho com a maquinaria que ja existia pra isso: o
+    refresher segura o ultimo snapshot bom e emite `list_error`, e o app mostra a lista de antes
+    com aviso em vez de apagar tudo.
+    """
 
 
 def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedProcess:
     # timeout: tmux travado nao pode prender o event loop / worker do threadpool pra sempre. Estouro ->
-    # trata como falha (returncode=1), igual ao tmux recusar; os callers ja checam returncode != 0.
+    # trata como falha (RC_INDISPONIVEL, que tambem e != 0); os callers ja checam returncode != 0.
     #
     # `input=` existe pro `load-buffer -`: o texto vai pela STDIN e escapa do teto de 16344 bytes do
     # COMANDO (medido 07/08/2026: `set-buffer -- <texto>` acima disso devolve rc=1 "command too
@@ -128,14 +153,24 @@ def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedPro
                 args, cp.returncode,
                 cp.stdout.decode("utf-8", "replace"), cp.stderr.decode("utf-8", "replace"))
         except (subprocess.TimeoutExpired, OSError) as e:
-            return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
+            _log.warning("tmux nao respondeu (%s): %s", args[1:3], e)
+            return subprocess.CompletedProcess(args, RC_INDISPONIVEL, stdout="", stderr=str(e))
     try:
         return RUN(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
                    timeout=5)
     except (subprocess.TimeoutExpired, OSError) as e:
         # OSError = tmux ausente (FileNotFoundError) / sem permissao; timeout = travado. Trata como
-        # falha (returncode=1) em vez de 500 com traceback — os callers ja checam returncode != 0.
-        return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
+        # falha (RC_INDISPONIVEL) em vez de 500 com traceback — os callers ja checam returncode != 0.
+        _log.warning("tmux nao respondeu (%s): %s", args[1:3], e)
+        return subprocess.CompletedProcess(args, RC_INDISPONIVEL, stdout="", stderr=str(e))
+
+
+def _exige_resposta(cp: subprocess.CompletedProcess) -> None:
+    # Guarda das funcoes que LISTAM sessoes: so elas separam "rodou e nao ha sessao" de "nao rodou".
+    # Nas outras (send-keys, capture-pane, kill) o rc != 0 de sempre ja basta, e levantar so trocaria
+    # um caminho de falha silencioso por outro.
+    if cp.returncode == RC_INDISPONIVEL:
+        raise MuxIndisponivel(cp.stderr.strip() or "sem resposta do multiplexador")
 
 
 def _pane_target(name: str) -> str:
@@ -177,7 +212,7 @@ _CLIP_LOCK = threading.RLock()
 #   invisivel no terminal e dentro do que a sessao recebe.
 #
 # E vai por STDIN, nao por argumento: o argv e visivel na maquina inteira (a mesma razao pela qual
-# `cp-engine` existe em vez de `tmux -e`), e o quoting ja provou mutilar texto no caminho pro
+# `hangar-engine` existe em vez de `tmux -e`), e o quoting ja provou mutilar texto no caminho pro
 # Windows — uma aspa da mensagem do usuario morria com "unexpected EOF while looking for matching
 # quote".
 _CLIP_CMD = [
@@ -243,6 +278,7 @@ def paste_via_clipboard(name: str, text: str) -> bool:
 
 def list_sessions() -> list[dict]:
     cp = _run(["tmux", "list-sessions", "-F", "#{session_name}\t#{pane_current_path}"])
+    _exige_resposta(cp)
     if cp.returncode != 0:
         return []
     out = []
@@ -260,6 +296,7 @@ def list_panes_active() -> list[dict]:
     # (ex: "%9") identifica o bilhete da extensao Pi (Task 3), que e por-pane, nao por-sessao.
     cp = _run(["tmux", "list-panes", "-a", "-F",
                "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"])
+    _exige_resposta(cp)
     if cp.returncode != 0:
         return []
     out: dict[str, dict] = {}
@@ -298,6 +335,7 @@ def list_panes_all() -> dict[str, list[dict]]:
     cp = _run(["tmux", "list-panes", "-a", "-F",
                "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
                "\t#{@cp_hidden}"])
+    _exige_resposta(cp)
     if cp.returncode != 0:
         return {}
     out: dict[str, list[dict]] = {}
@@ -511,12 +549,12 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # sessao no `.claude.json` errado (a tela de boas-vindas). O valor calculado aqui nao muda.
     cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or _config_dir_padrao()
     # CP_SESSION_NAME: identidade CARIMBADA no nascimento — "quem sou eu" pra tudo que roda dentro do
-    # pane (o cp-send usa pra assinar recado, parear e desparear). Antes o cp-send perguntava
+    # pane (o hangar-send usa pra assinar recado, parear e desparear). Antes o hangar-send perguntava
     # `tmux display-message -p '#S'`, que NAO e propriedade de quem chama: e a "sessao corrente",
     # resolvida pelo CLIENTE anexado — estado global do servidor. Com um unico cliente anexado (medido
     # nesta maquina: `list-clients` devolvia so `/dev/pts/9067: jeffer1312`), TODA sessao que
     # perguntava recebia o mesmo nome, o da sessao do cliente. Resultado: a sessao B rodava
-    # `cp-send --unpair` pra sair do grupo, se identificava como A e o backend desparava A — o
+    # `hangar-send --unpair` pra sair do grupo, se identificava como A e o backend desparava A — o
     # `--unpair` de uma sessao desfazia o vinculo da OUTRA, e o grupo de 2 se dissolvia inteiro
     # (aconteceu 2x seguidas, sem ninguem pedir). Ancorar em `$TMUX_PANE` NAO resolve no Windows: o
     # psmux numera pane id por sessao, entao `%1` existe nas duas e o alvo fica ambiguo (o tmux real
@@ -739,7 +777,7 @@ def rename_session(old: str, new: str) -> bool:
 # No Windows a TUI do Claude Code entra em "modo paste" quando UM `send-keys -l` entrega mais que
 # ~1120 chars de uma vez (medido, psmux 3.3.7 + claude v2.1.218: 1120 chega inteiro, 1140 ja perde
 # o INICIO no submit) — o Enter envia so a CAUDA e o comeco some. Foi o corte do prompt de
-# pareamento: 1220 chars -> so os ~300 finais, SEM o "[de: claude-pocket]" do inicio, e a sessao
+# pareamento: 1220 chars -> so os ~300 finais, SEM o "[de: hangar]" do inicio, e a sessao
 # obedeceu o pedaco achando que era o usuario. O send-keys/psmux entregam 100% (o buffer do input
 # fica integro, medido via Home ate 1600 chars); quem corta e a TUI no SUBMIT. Fatiar em pedacos
 # abaixo do cliff, com pausa entre eles, faz a TUI ver DIGITACAO normal (nunca vira paste) e o texto

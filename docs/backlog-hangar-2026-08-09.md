@@ -53,7 +53,7 @@ Consertada a colisão de irmãs (`svc-mailer-2` vs `svc-report-ai-2`), mas sobra
 
 ### 7. O venv da VPS está quebrado desde o rename ANTERIOR
 Medido pela sessão da VPS: os shebangs dos console scripts apontam pra
-`/home/jefferson/admin/claude-pocket/...` — caminho que não existe desde o `pocket → cockpit`.
+`/home/jefferson/admin/hangar/...` — caminho que não existe desde o `pocket → cockpit`.
 `backend/.venv/bin/pytest --version` falha. Ninguém percebeu porque a unit roda `uv run`, que
 resolve o interpretador sozinho. Um `uv sync` conserta; está no roteiro da janela de rename de lá.
 
@@ -173,7 +173,7 @@ achado 5. Barato, mas depois de confirmar as animações novas no uso real.
   `migrate-to-hangar.sh` já é a versão corrigida (leva transcripts, repara as 9 worktrees).
 - **Janela da VPS**: update manual + rename de units/diretório + `uv sync`. Em execução.
 - **winboat**: migrada e verificada; o diretório segue `C:\cockpit` de propósito (três pontos presos
-  ao caminho: tarefas agendadas, os `.vbs` com `EncodedCommand` e o `cp-send`).
+  ao caminho: tarefas agendadas, os `.vbs` com `EncodedCommand` e o `hangar-send`).
 - **macbook-jefferson**: quando ligar, `git pull` e depois `./scripts/migrate-to-hangar.sh`.
 - **Tags `pre-hangar`** nas três máquinas: só saem depois da confirmação do app no celular com a
   build nova.

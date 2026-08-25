@@ -28,11 +28,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from app import atomico, contas
+from app import atomico, contas, migracao_sidecars
 
-_log = logging.getLogger("claude_pocket.opencode_cota")
+_log = logging.getLogger("hangar.opencode_cota")
 
-_ARQUIVO = ".claude-pocket-opencode.json"
+_ARQUIVO = ".hangar-opencode.json"
 _URL = "https://opencode.ai/workspace/{}/go"
 # O painel recusa o User-Agent do urllib; o pi-quotas manda um de navegador e é o que responde.
 _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Gecko/20100101 Firefox/148.0"
@@ -75,7 +75,7 @@ def _caminho() -> Path:
 def ler_configs() -> dict[str, dict[str, str]]:
     """{id_da_credencial: {workspace_id, auth_cookie}}. Ilegível ou tipo errado = vazio."""
     try:
-        bruto = json.loads(_caminho().read_text(encoding="utf-8"))
+        bruto = json.loads(migracao_sidecars.caminho_de_leitura(_caminho()).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(bruto, dict):

@@ -38,11 +38,11 @@ import { homedir } from "node:os";
 // O `truncateToWidth` lá embaixo corta a linha na largura do terminal ANTES de imprimir, e o app
 // (que lê o pane) herdava o corte: numa janela de 99 colunas sumiam ⚡5h/📅7d, custo e a janela de
 // contexto — o medidor do app virava "medição indisponível" só por causa da largura. Aqui a versão
-// completa (sem ANSI) vai pra <config>/.claude-pocket-status/<stem>.json, mesma chave dos outros
+// completa (sem ANSI) vai pra <config>/.hangar-status/<stem>.json, mesma chave dos outros
 // marcadores do cockpit (o stem do .jsonl da sessão). Só escreve quando o texto MUDA: o render
 // roda a cada tecla.
 const CP_STATUS_DIR = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"),
-	".claude-pocket-status");
+	".hangar-status");
 const CP_ANSI = /\x1b\[[0-9;:?]*[ -/]*[@-~]/g;
 let cpLastLine = "";
 

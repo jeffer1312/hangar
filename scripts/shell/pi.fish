@@ -14,7 +14,7 @@
 #    --session-id alongside any of these either errors or silently overrides what the user asked
 #    for (e.g. `pi -c` would start a FRESH random session instead of continuing the last one).
 #    The tmux wrap keeps resumed sessions visible in the app; state tracking still works because
-#    cp-state.ts publishes the real session file from inside pi (it never depended on the id).
+#    hangar-state.ts publishes the real session file from inside pi (it never depended on the id).
 #  - not an interactive session at all -> raw, exactly like the codex wrapper leaves its subcommands
 #    alone. Two shapes: (a) the FIRST argument is one of pi's subcommands (install/remove/uninstall/
 #    update/list/config) — matched on the first argument only, so `pi "remove the dead code"` stays an
@@ -59,7 +59,7 @@ function pi
     # Flags que gerenciam a própria sessão: NUNCA injetar --session-id (um id novo por cima de
     # `pi -c` abriria sessão FRESCA em vez de continuar). Mas o tmux continua valendo — antes
     # essas flags passavam cruas e a sessão retomada ficava INVISÍVEL pro app. O rastreio não
-    # depende do id injetado: cp-state.ts publica o arquivo real da sessão por dentro do pi.
+    # depende do id injetado: hangar-state.ts publica o arquivo real da sessão por dentro do pi.
     set -l own_session 0
     for a in $argv
         switch $a
@@ -118,7 +118,7 @@ function pi
     # claude.posix.sh, que documenta a mesma escolha.
     # `sh -c` exporta CP_PI_SESSION DENTRO do próprio pane antes do exec pi — ver o comentário de
     # cabeçalho pra o porquê. $0 vira "_" (placeholder), $1 o uuid, o resto ($@) os args originais.
-    # CP_SESSION_NAME: carimbo de identidade pro cp-send de dentro do pane (ver claude.fish).
+    # CP_SESSION_NAME: carimbo de identidade pro hangar-send de dentro do pane (ver claude.fish).
     if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
         if test $own_session -eq 1
             systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \

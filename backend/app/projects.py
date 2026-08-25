@@ -10,7 +10,9 @@ running (pane vivo e porta aberta, ou sem porta configurada) / failed (pane mort
 remain-on-exit — o log final fica capturavel ate o proximo play/stop).
 """
 import json
+import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -18,6 +20,8 @@ from pathlib import Path
 from app import atomico, runner
 from app.models import ProjectStatus, RunInfo
 from app.procinfo import _TEM_PROC
+
+_log = logging.getLogger("hangar.projects")
 
 if os.name == "nt":
     import msvcrt
@@ -78,7 +82,7 @@ def _validate(name: str, cwd: str, command: str, port: object) -> None:
 
 def _mutate(fn) -> None:
     """Read-modify-write do projects.json inteiro sob lock EXCLUSIVO, atômico (mkstemp 0600 +
-    os.replace). Espelha cp_panel_common.set_peer_enabled: o import dispara vários POST
+    os.replace). Espelha hangar_panel_common.set_peer_enabled: o import dispara vários POST
     concorrentes, e sem lock quem grava por último apaga as entries dos outros — sem erro, sem log.
     `fn(data)` muta o dict in place."""
     lock_path = _CONFIG.with_name(_CONFIG.name + ".lock")
@@ -99,7 +103,13 @@ def _mutate(fn) -> None:
             atomico.substituir(tmp, _CONFIG)
         except OSError as e:
             tmp.unlink(missing_ok=True)
-            raise ProjectError(500, f"falha ao gravar projects.json: {e}") from e
+            # `atomico.explicar`, nao `{e}` cru: esta e das poucas mensagens de escrita que chegam
+            # INTEIRAS na tela (a rota faz `HTTPException(e.status, e.detail)` com a string). No
+            # Windows o rename por cima do projects.json aberto por outro processo levanta
+            # PermissionError, e "Acesso negado" manda a pessoa conferir o ACL de um arquivo que
+            # ela pode escrever.
+            raise ProjectError(500,
+                               f"falha ao gravar projects.json: {atomico.explicar(e)}") from e
 
 
 def upsert(name: str, cwd: str, command: str, port: int | None = None,
@@ -318,8 +328,94 @@ def start(name: str) -> ProjectStatus:
     cfg = _entry(name)
     if not Path(cfg["cwd"]).is_dir():
         raise ProjectError(400, f"cwd nao existe: {cfg['cwd']}")
-    runner.start_run(cfg["cwd"], cfg["command"])
+    try:
+        runner.start_run(cfg["cwd"], cfg["command"])
+    except runner.RunnerError as e:
+        # Sem isto o RunnerError escapava como 500 cru: as rotas de projeto so tratam ProjectError.
+        raise ProjectError(e.status, e.detail) from e
     return _status(name, cfg, runner.all_runs(), _ports_of([(name, cfg)]))
+
+
+def _primeiro_token(comando: str) -> str:
+    """O que o shell vai tentar EXECUTAR — o resto da linha nao interessa aqui.
+
+    Aspas primeiro por causa de `"C:\\Program Files\\app\\stop.exe" --tudo`: cortar no espaco ali
+    daria `"C:\\Program`, e o diagnostico acusaria um comando que ninguem escreveu.
+    """
+    c = comando.strip()
+    if c.startswith('"'):
+        return c[1:].partition('"')[0]
+    return c.split()[0] if c.split() else ""
+
+
+# Palavras que o cmd.exe executa SOZINHO — nao ha arquivo pra achar no PATH, e procurar por elas
+# acusaria de "nao existe" um `cd ... && taskkill ...`, que e stop_command legitimo no Windows.
+_BUILTINS_CMD = frozenset("""assoc break call cd chdir cls color copy date del dir echo endlocal
+erase exit for ftype goto if md mkdir mklink move path pause popd prompt pushd rd rem ren rename
+rmdir set setlocal shift start time title type ver verify vol""".split())
+
+
+def _stop_nao_rodou(stop_cmd: str, cwd: str, r: subprocess.CompletedProcess) -> str:
+    """Mensagem quando o `stop_command` saiu != 0 no Windows — ou "" pra seguir calado.
+
+    `rc != 0` sozinho NAO e falha, e nao virou: `pkill` devolve 1 quando ja nao ha o que matar, e
+    o equivalente daqui, `taskkill /IM x`, devolve **128** ("o processo nao foi encontrado" —
+    medido). Acusar por rc faria toda parada de projeto ja parado virar erro na tela.
+
+    O que a revisao apontou e outra coisa: um `stop_command` com sintaxe POSIX (comum quando o
+    projeto veio de uma maquina Linux) o cmd.exe nem chega a rodar — `pkill -f 'node server.js'`
+    da rc=1 dizendo que nao reconhece o comando —, o pane morre do mesmo jeito, a UI diz "parado"
+    e o processo de verdade fica orfao. Foi exatamente o cenario que o comentario do `stop_run`
+    diz querer evitar.
+
+    Separar os dois pelo rc nao da (1 e 128 sao os dois lados), e pelo stderr menos ainda: as duas
+    mensagens do cmd.exe vem traduzidas pro idioma do Windows. O que separa, sem depender de
+    idioma, e se o comando EXISTE: `taskkill` esta no PATH, `pkill` nao. Por isso a checagem so
+    roda depois de um rc != 0 — comando que funcionou nao paga nada, e um `pkill x || taskkill y`
+    que deu certo continua calado.
+
+    `cwd` entra na busca porque o cmd.exe procura no diretorio ATUAL antes do PATH, e o
+    subprocess roda com `cwd` no projeto: sem isso, um `stop.bat` ao lado do codigo seria acusado
+    de inexistente. O `shutil.which` aplica o PATHEXT, entao `stop` acha `stop.bat`.
+    """
+    nome = _primeiro_token(stop_cmd)
+    if not nome or nome.lower() in _BUILTINS_CMD:
+        return ""
+    caminho = os.environ.get("PATH", "") + os.pathsep + str(cwd)
+    if shutil.which(nome, path=caminho) is not None:
+        # Existe e falhou: pode ser o "nao havia o que matar" de sempre. Nao acusa, mas deixa
+        # rastro — e o unico jeito de entender depois um `kill $(cat pid)`, que EXISTE aqui (vem
+        # do Git) e falha por sintaxe.
+        _log.info("stop_command de %s saiu rc=%s: %s", cwd, r.returncode,
+                  _saida_curta(r.stderr))
+        return ""
+    return (f"stop_command nao rodou: o Windows nao tem `{nome}` (nem no PATH nem em {cwd}) — "
+            f"o processo que ele mataria pode ter ficado orfao")
+
+
+def _saida_curta(bruto: bytes | str | None) -> str:
+    """Cauda do stderr pro LOG. Nunca pra tela: o cmd.exe responde na codepage OEM do console
+    (cp850 nesta maquina, medido), que nao e a do `locale` — decodificar errado aqui daria uma
+    mensagem torta pro usuario em cima de um diagnostico que ja e sobre bytes."""
+    if not bruto:
+        return ""
+    if isinstance(bruto, bytes):
+        bruto = bruto.decode(_CODEPAGE_OEM, errors="replace")
+    return " | ".join(bruto.split())[:200]
+
+
+def _codepage_oem() -> str:
+    """Codepage do console, pra decodificar o que o cmd.exe escreve. Fora do Windows nao e usada."""
+    if os.name != "nt":
+        return "utf-8"
+    try:
+        import ctypes
+        return f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+    except Exception:                                    # noqa: BLE001
+        return "cp850"
+
+
+_CODEPAGE_OEM = _codepage_oem()
 
 
 def stop(name: str) -> None:
@@ -334,15 +430,24 @@ def stop(name: str) -> None:
             # `/bin/sh` chumbado aqui nao existe no Windows — o stop_command do projeto NUNCA
             # rodava la, e a mensagem generica de falha nao dizia por que. `runner.argv_de_shell`
             # e o mesmo lugar que o start usa (POSIX byte-identico; Windows vai por COMSPEC).
-            subprocess.run(runner.argv_de_shell(stop_cmd), cwd=cfg["cwd"],
-                           capture_output=True, timeout=_STOP_TIMEOUT)
+            r = subprocess.run(runner.argv_de_shell(stop_cmd), cwd=cfg["cwd"],
+                               capture_output=True, timeout=_STOP_TIMEOUT)
+            if os.name == "nt" and r.returncode != 0:
+                err = _stop_nao_rodou(stop_cmd, cfg["cwd"], r)
         except subprocess.TimeoutExpired:
             err = f"stop_command estourou {_STOP_TIMEOUT}s — confira processos orfaos"
         except OSError as e:
             err = f"stop_command falhou: {e}"
     # O pane morre SEMPRE, mesmo com stop_command quebrado — senao o projeto ficava "rodando"
     # eterno. Mas a falha do stop_command sobe depois: orfao invisivel e pior que erro na tela.
-    runner.stop_run(cfg["cwd"])
+    #
+    # A sessao que NAO morre e a mesma familia, e ganha prioridade na mensagem: um stop_command que
+    # saiu != 0 e um aviso sobre filhos possivelmente orfaos; um pane que sobreviveu e o processo
+    # principal ainda rodando com a tela dizendo "parado".
+    try:
+        runner.stop_run(cfg["cwd"])
+    except runner.RunnerError as e:
+        raise ProjectError(e.status, f"{e.detail}{f'. Alem disso: {err}' if err else ''}") from e
     if err:
         raise ProjectError(500, err)
 

@@ -17,7 +17,7 @@ from app.config import list_config_dirs, settings
 from app.models import ChatEvent
 from app.transcript import parse_obj
 
-_log = logging.getLogger("claude_pocket.archive")
+_log = logging.getLogger("hangar.archive")
 
 _PROJ_RE = re.compile(r"^[A-Za-z0-9-]+$")   # nomes de dir gerados por sanitize_cwd
 _SID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")

@@ -3,7 +3,10 @@ import type { Server } from './servers';
 import * as m from './paraglide/messages';
 import { localeAtual } from './i18n';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
+// diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
+import { registrar as registrarDiag, novoReq } from './diag';
 import type {
+  Atualizacao,
   SessionInfo,
   Provider,
   ChatEvent,
@@ -18,6 +21,8 @@ import type {
   WorkflowAgentDetail,
   AnswerItem,
   CostReport,
+  OrqExecucao,
+  OrqLista,
   ResumeResult,
   RunnersResponse,
   RunInfo,
@@ -58,7 +63,7 @@ export function fileAuthHeader(): Record<string, string> {
   return authHeaders();
 }
 
-// URL de uma imagem ENVIADA do phone (upload), servida por <cwd>/.claude-pocket-uploads/<basename>.
+// URL de uma imagem ENVIADA do phone (upload), servida por <cwd>/.hangar-uploads/<basename>.
 // `?token` igual as de cima: <img> nao manda header Authorization e cross-origin nao leva cookie.
 export function uploadUrl(name: string, filename: string): string {
   const t = apiEnv().getToken() ?? '';
@@ -125,17 +130,84 @@ async function ensureOk(res: Response): Promise<void> {
   if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
 }
 
+// Segmentos cujo VALOR seguinte não pode ir pro diário como está.
+//
+// Duas razões diferentes, e a segunda é a que importa:
+//  - agrupar: `/api/sessions/api-front/select` vira `/api/sessions/*/select`, e aí dá pra contar
+//    "quantas vezes o /select falhou" em vez de ler uma lista de caminhos únicos;
+//  - NÃO VAZAR: em `/api/archive/<projeto>` o `<projeto>` é o slug do diretório do Claude Code, ou
+//    seja, o caminho real do projeto na máquina (`-home-fulano-Projetos-cliente-x`); em
+//    `/api/claude-configs/<nome>` é o rótulo da conta. O diário promete, no topo do lib/diag.ts,
+//    não guardar caminho de arquivo do projeto — e sem `archive` nesta lista ele guardava, em toda
+//    retomada de conversa arquivada (é POST, então entra mesmo dando certo).
+const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects)\/[^/]+/g;
+
+export function rotaGenerica(path: string): string {
+  return path.split('?')[0].replace(SEGMENTOS_OPACOS, '/$1/*');
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = apiEnv().getBaseUrl();
   const url = `${base}${path}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-      ...(init?.headers ?? {}),
-    },
-  });
+  const t0 = Date.now();
+  // Id do pedido: vai no cabeçalho e na linha do diário dos DOIS lados, pra quem analisa seguir a
+  // cadeia (o toque na tela -> o que o servidor fez) sem depender de comparar horário.
+  const req = novoReq();
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Hangar-Req': req,
+        ...authHeaders(),
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    // Rede caiu / servidor fora: nunca chegou a haver status. Distinguir isto de um 500 é metade
+    // do diagnóstico de "sumiu do nada".
+    registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req,
+                    detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });
+    throw e;
+  }
+  // O que entra no diário, e por quê:
+  //  - toda AÇÃO (POST/PUT/PATCH/DELETE), dando certo ou não. É o uso: enviar mensagem, responder
+  //    opção, criar/matar sessão, trocar modelo, salvar motor. Sem o caso de SUCESSO o arquivo só
+  //    responde "o que quebrou", e a pergunta era como o app está sendo usado.
+  //  - toda LEITURA que FALHA. O sucesso de GET fica de fora de propósito: o poll da lista e o
+  //    histórico dariam milhares de linhas por hora e afogariam o resto.
+  const metodo = (init?.method ?? 'GET').toUpperCase();
+  const acao = metodo !== 'GET';
+  if (acao || !res.ok) {
+    // Falhou: junta o MOTIVO que o backend mandou no corpo. Só o status ("#409") diz que recusou e
+    // não por quê, e o `detail` do backend é exatamente a explicação ("o terminal está aberto",
+    // "sessão não encontrada — opção NÃO enviada"). Lido de um `clone()` porque o corpo só pode ser
+    // consumido uma vez e quem precisa dele de verdade é o `ensureOk` logo abaixo, que monta a
+    // mensagem da tela — tirar isso dele quebraria todo tratamento de erro do app.
+    //
+    // try/catch em volta do CLONE, não só do `errorDetail`: `res.clone()` lança de forma SÍNCRONA
+    // quando o corpo já foi lido, e como ele é avaliado como argumento, um `.catch()` na chamada
+    // nunca chegaria a ser anexado — a exceção subiria e derrubaria o pedido de verdade (enviar
+    // mensagem, responder opção) por causa do código que só descreve o que aconteceu. O diário
+    // nunca pode derrubar o que ele registra.
+    let motivo = '';
+    if (!res.ok) {
+      try {
+        motivo = await errorDetail(res.clone());
+      } catch {
+        motivo = '';
+      }
+    }
+    registrarDiag({
+      evento: acao ? 'acao' : 'leitura',
+      nivel: res.ok ? 'ok' : (res.status >= 500 ? 'erro' : 'aviso'),
+      codigo: String(res.status),
+      ms: Date.now() - t0,
+      req,
+      detalhe: [`${metodo} ${rotaGenerica(path)}`, motivo].filter(Boolean).join(' — '),
+    });
+  }
   await ensureOk(res);
   return res.json() as Promise<T>;
 }
@@ -208,6 +280,18 @@ export async function fetchCostsForServer(s: Server, period: string): Promise<Pa
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<Partial<CostReport>>;
+}
+
+// Execuções de orquestração de UM servidor (baseUrl+token explícitos), sem mexer no ativo — a tela
+// Orq soma TODOS os servidores da malha, como o `sessionsStore` já faz com as sessões; buscar só do
+// ativo mostraria meia verdade sem dizer que é meia. Prazo maior que o dos fan-outs de 4s porque
+// aqui o servidor lê disco (um diretório por execução) em vez de responder de memória.
+export function getOrqForServer(s: Server): Promise<OrqLista> {
+  return apiFetchForServer<OrqLista>(s, '/api/orq');
+}
+
+export function getOrqDetalheForServer(s: Server, id: string): Promise<OrqExecucao> {
+  return apiFetchForServer<OrqExecucao>(s, `/api/orq/${encodeURIComponent(id)}`);
 }
 
 // Cauda do histórico de UMA sessão de um servidor específico — cards do quadro kanban.
@@ -735,7 +819,7 @@ export async function steerSession(
 }
 
 // Pareamento ("trabalhando juntas"): o backend grava o vínculo simétrico e injeta o prompt de
-// pareamento nas DUAS sessões — daí em diante elas se falam via cp-send por iniciativa própria.
+// pareamento nas DUAS sessões — daí em diante elas se falam via hangar-send por iniciativa própria.
 // warning: falha PARCIAL de aviso (algum membro sem o prompt do grupo) — o backend reporta de
 // propósito; descartar isso virava "sucesso" mudo com membro que não sabe que está no grupo.
 export interface PairResult { ok: boolean; warning: string | EnvelopeErro | null }
@@ -801,6 +885,24 @@ export function getConfig(): Promise<ConfigServidor> {
   return apiFetch('/api/config', { signal: AbortSignal.timeout(8000) });
 }
 
+/**
+ * Estado do botão Atualizar. Sem teto de tempo curto: o pré-voo forka `git` e paga o disco frio.
+ *
+ * `procurar` faz o servidor ir à REDE (`git fetch`) antes de comparar. É o que separa "me diz o
+ * que tu já sabe" de "vai olhar se saiu versão nova" — sem ele, o botão respondia "Tudo em dia"
+ * com a foto do último fetch automático, que roda a cada 30min. Só para clique: o polling da tela
+ * bate neste endpoint a cada 2s.
+ */
+export function getAtualizacao(procurar = false): Promise<Atualizacao> {
+  return apiFetch(`/api/atualizacao${procurar ? '?procurar=1' : ''}`,
+                  { signal: AbortSignal.timeout(procurar ? 120000 : 20000) });
+}
+
+/** Lança a atualização. Devolve na hora — ela roda fora do processo do backend, que vai reiniciar. */
+export function iniciarAtualizacao(): Promise<{ ok: boolean; pid: number }> {
+  return apiFetch('/api/atualizacao/iniciar', { method: 'POST' });
+}
+
 export function getConfigForServer(s: Server): Promise<ConfigServidor> {
   return apiFetchForServer(s, '/api/config');
 }
@@ -821,6 +923,19 @@ export function patchConfigForServer(s: Server, mudancas: Record<string, unknown
 export async function getPlan(name: string): Promise<PlanDetail | null> {
   const res = await fetch(`${apiEnv().getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/plan`, {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<PlanDetail>;
+}
+
+// Mesmo /plan, mas de UM servidor explícito — a tela Orq mostra a execução de qualquer máquina da
+// malha, e a sessão executora dela pode não estar no servidor ativo. `fetch` cru pelo mesmo motivo
+// do getPlan acima: 404 aqui é "sem plano ativo", não falha.
+export async function getPlanForServer(s: Server, name: string): Promise<PlanDetail | null> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/plan`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    signal: AbortSignal.timeout(8000),
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
@@ -969,7 +1084,7 @@ export async function transcribeFile(
   name: string,
   file: File,
   opts?: OpcoesTranscribe,
-): Promise<{ path: string; text: string; raw?: string; aviso?: string | null }> {
+): Promise<{ path: string; text: string; raw?: string; aviso?: string | null; estilo_aplicado?: string }> {
   const base = apiEnv().getBaseUrl();
   const qs = queryTranscribe(opts);
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(name)}/transcribe${qs}`, {
@@ -988,7 +1103,28 @@ export async function transcribeFile(
     signal: AbortSignal.timeout(300_000),
   });
   await ensureOk(res);
-  return res.json() as Promise<{ path: string; text: string; raw?: string; aviso?: string | null }>;
+  return res.json() as Promise<{
+    path: string; text: string; raw?: string; aviso?: string | null; estilo_aplicado?: string;
+  }>;
+}
+
+/**
+ * Aplica outro estilo ao texto CRU de um ditado já transcrito. Não reenvia o áudio: a Whisper já
+ * rodou e devolveu o cru em `raw`, então trocar de estilo custa só a limpeza (~1-16s conforme o
+ * provedor, contra isso MAIS a transcrição inteira). Sem `name` porque a limpeza não lê nada da
+ * sessão. `aviso` não-nulo = a limpeza desistiu e voltou o cru, mesmo contrato do transcribeFile.
+ */
+export async function relimparDitado(
+  texto: string,
+  estilo: string,
+): Promise<{ text: string; aviso?: string | null; estilo_aplicado?: string }> {
+  return apiFetch<{ text: string; aviso?: string | null; estilo_aplicado?: string }>('/api/ditado/relimpar', {
+    method: 'POST',
+    body: JSON.stringify({ texto, estilo }),
+    // Mesmo motivo do teto do transcribeFile, sem a parcela da Whisper: o briefing pode gastar 120s
+    // no servidor (narrar._TRAVAS_POR_ESTILO) e abortar antes disso perderia a limpeza já em curso.
+    signal: AbortSignal.timeout(180_000),
+  });
 }
 
 export async function selectOption(name: string, option: number): Promise<void> {
@@ -1454,6 +1590,46 @@ export interface PreviewState {
   url: string | null;
 }
 
+// ── Diário de uso (lib/diag.ts + backend/app/diag.py) ────────────────────────────────────────
+export interface LinhaDiag {
+  ts: string;
+  evento: string;
+  nivel?: 'ok' | 'aviso' | 'erro';
+  origem?: 'tela' | 'servidor';
+  tela?: string;
+  sessao?: string;
+  provider?: string;
+  codigo?: string;
+  detalhe?: string;
+  ms?: number;
+  so?: string;
+  navegador?: string;
+  versao?: string;
+  vista?: string;
+  tela_px?: string;
+  cli?: string;
+}
+
+export interface ResumoDiag {
+  dias: number;
+  bytes: number;
+  arquivos: string[];
+  dias_guardados: number;
+  /** As linhas mais recentes, mais novas primeiro — a prova de que está gravando. */
+  ultimas: LinhaDiag[];
+}
+
+export function getDiagResumo(): Promise<ResumoDiag> {
+  return apiFetch('/api/diag');
+}
+
+/** Baixa o diário como arquivo. Sai da máquina só aqui, e por ação de quem usa. */
+export async function baixarDiag(): Promise<Blob> {
+  const res = await fetch(`${apiEnv().getBaseUrl()}/api/diag/arquivo`, { headers: authHeaders() });
+  if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+  return res.blob();
+}
+
 export function getPreview(): Promise<PreviewState> {
   return apiFetch<PreviewState>('/api/preview');
 }
@@ -1505,7 +1681,7 @@ export function setCodexModel(name: string, model: string, effort?: string | nul
 }
 
 // ── Modelo + nivel de raciocinio de uma sessao Pi ─────────────────────────────────────────────
-// 409 = extensao cp-state.ts ausente/desatualizada no Pi (o backend manda a instrucao no detail).
+// 409 = extensao hangar-state.ts ausente/desatualizada no Pi (o backend manda a instrucao no detail).
 
 export function getPiModels(name: string): Promise<PiModelsResponse> {
   return _catalogo(`pi|${name}`, () => apiFetch(`/api/sessions/${encodeURIComponent(name)}/pi/models`));

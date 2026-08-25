@@ -1,5 +1,5 @@
 """Rotas dos peers — máquinas que este servidor alcança (aba Servidores), e o identificador
-desta máquina (gravado no .env, onde o cp-send e o pydantic na subida do backend o leem).
+desta máquina (gravado no .env, onde o hangar-send e o pydantic na subida do backend o leem).
 
 A Task 1 só registra o roteador com a listagem vazia. As Tasks 5 e 8 (Lote B) escrevem
 aqui dentro, sem tocar em api.py.
@@ -21,9 +21,9 @@ from app.mensagens import erro
 
 peers_router = APIRouter(prefix="/api/peers")
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
-# .env do backend (o MESMO que o cp-send e o .env_file do Settings leem): é o único arquivo que
+# .env do backend (o MESMO que o hangar-send e o .env_file do Settings leem): é o único arquivo que
 # os dois enxergam — o identificador gravado aqui vale pro script e pra próxima subida do serviço.
 _ENV_ARQUIVO = Path(__file__).resolve().parent.parent / ".env"
 
@@ -99,7 +99,7 @@ def get_identificador() -> dict:
 @peers_router.put("/identificador", dependencies=[Depends(require_auth)])
 def put_identificador(body: dict) -> dict:
     """Grava o identificador desta máquina. Antes era somente-leitura (CP_SERVER_ID no .env);
-    agora a tela escreve — o valor vai pro .env (fonte do cp-send) E pro processo em memória,
+    agora a tela escreve — o valor vai pro .env (fonte do hangar-send) E pro processo em memória,
     pra o pareamento cruzar a porta sem reiniciar o serviço. Vazio remove (pareamento desligado)."""
     valor = body.get("identificador") or ""
     if valor:

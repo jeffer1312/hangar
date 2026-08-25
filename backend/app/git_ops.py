@@ -5,7 +5,7 @@ import subprocess
 import time
 from pathlib import Path
 
-_log = logging.getLogger("claude_pocket.git_ops")
+_log = logging.getLogger("hangar.git_ops")
 
 # Git pela sessao (cwd da sessao tmux). Tudo via argv list -> nunca string de shell (sem injecao).
 # Acoes fixas: listar/trocar branch, status/pull/fetch/stash, e o write-path (commit/push) + navegacao

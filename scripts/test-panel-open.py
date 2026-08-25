@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trava a resolução de janela do cp-panel-open, sem hyprland/tmux/kitty reais.
+"""Trava a resolução de janela do hangar-panel-open, sem hyprland/tmux/kitty reais.
 
 O bug que originou isto: com `kitty -1` (single-instance) TODAS as janelas do kitty compartilham
 um pid, e o mapa pid->janela de valor único ficava com a última do `hyprctl clients`. Resultado:
@@ -10,16 +10,21 @@ Rodar: python3 scripts/test-panel-open.py
 import contextlib
 import importlib.util
 import io
+import shlex
 import sys
 from pathlib import Path
 
-CAMINHO = Path(__file__).with_name("cp-panel-open")
+CAMINHO = Path(__file__).with_name("hangar-panel-open")
 
 
 def carregar():
     """Importa o script (sem extensão .py) sem executar o main()."""
-    spec = importlib.util.spec_from_loader("cp_panel_open", None)
+    spec = importlib.util.spec_from_loader("hangar_panel_open", None)
     mod = importlib.util.module_from_spec(spec)
+    # __file__ é obrigatório desde que o script passou a importar o hangar_panel_common: o prólogo dele
+    # resolve o symlink de ~/.local/bin por `os.path.realpath(__file__)`, e sem isto o exec abaixo
+    # morre num NameError antes de definir qualquer função.
+    mod.__dict__["__file__"] = str(CAMINHO)
     src = CAMINHO.read_text().replace('if __name__ == "__main__":\n    sys.exit(main())\n', "")
     exec(compile(src, str(CAMINHO), "exec"), mod.__dict__)  # noqa: S102
     return mod
@@ -91,7 +96,30 @@ def main() -> int:
     assert obtido is None, f"sem título esperado não pode escolher janela, veio {obtido}"
     assert "set-titles-string" in err.getvalue(), f"faltou diagnóstico no stderr: {err.getvalue()!r}"
 
-    print("ok: 5 casos")
+    # 6. O attach é EXATO e nunca cria sessão: `new-session -A` recriava a sessão morta como um
+    #    shell com o nome da sessão do agente, e o app mostrava esse shell como se fosse ela.
+    argv = mod.comando_terminal("kitty", "hangar")
+    sh = argv[-1]
+    assert "new-session" not in sh, f"não pode criar sessão: {sh!r}"
+    assert shlex.split(sh)[:4] == ["tmux", "attach", "-t", "=hangar:"], f"alvo não é exato: {sh!r}"
+    assert "read" in sh, f"falha do attach tem que segurar a janela pra ser lida: {sh!r}"
+    # Nome vem do painel: o alvo tem que continuar UM token, senão o resto vira comando.
+    injetado = shlex.split(mod.comando_terminal("kitty", "a; rm -rf /tmp/x")[-1])
+    assert injetado[3] == "=a; rm -rf /tmp/x:", f"nome não escapado: {injetado!r}"
+
+    # 7. O fio main()->comando_terminal: sem isto, reverter só a linha do execvp de volta pro
+    #    `new-session -A` passava no caso 6 (que testa a função sozinha) e a regressão voltava calada.
+    montar(mod, [], clientes={"morta": []})       # sem janela pra focar -> cai no abrir terminal
+    mod.shutil = type("S", (), {"which": staticmethod(lambda t: "/usr/bin/" + t)})()
+    capturado = []
+    mod.os = type("O", (), {"execvp": staticmethod(lambda f, a: capturado.append((f, a)))})()
+    mod.sys.argv = ["hangar-panel-open", "morta"]
+    mod.main()
+    assert capturado, "main() não chegou a abrir terminal"
+    assert capturado[0][1] == mod.comando_terminal("kitty", "morta"), \
+        f"main() não usa comando_terminal: {capturado[0]!r}"
+
+    print("ok: 7 casos")
     return 0
 
 

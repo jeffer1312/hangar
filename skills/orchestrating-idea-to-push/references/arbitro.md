@@ -12,20 +12,37 @@ Você é o único que escreve no contrato.
 > depois do lançamento — a ordem existia, mas mora na seção "Fase 4", que é a última coisa que
 > parece urgente na hora de lançar. Este índice não é régua nova: é o mapa das que já existem.
 
-## Você mantém DOIS arquivos, e só um deles é lido pelo time
+## Você mantém TRÊS arquivos, e só um deles é lido pelo time
 
 - **`~/.claude/orq-retros/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
   Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à
   vontade. **Só você lê.** Não mande esse caminho a ninguém.
 
   > **O registro mora no diretório durável do trabalho, que nada gerencia** — não em
-  > `<config>/.claude-pocket-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
+  > `<config>/.hangar-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
   > Medido em 22/08/2026: um executor matou a última sessão viva do grupo e o diário inteiro de 10h
   > sumiu com ela; o árbitro teve de reconstruir de memória. **As regras continuam lá** — é o caminho
   > que o app mostra ao time.
 - **`regras-<gid>.md` — as regras.** O que **ainda vale**: intocáveis, gates, réguas de
   julgamento, barra, o que a revisão precisa cobrir, teto e contas. É o que entra no kick-off,
   e ele deve caber em duas páginas.
+- **`~/.claude/orq-retros/<data>-<gid>/eventos.jsonl` — o esqueleto que máquina lê.** Uma
+  linha JSON por acontecimento, escrita NO EVENTO, junto da linha de prosa do registro — não
+  "depois". Tipos fechados: `execucao_inicio` (plano, branch, gid), `task_inicio` (task,
+  titulo, executor, par), `entrega` (task, rodada, commit), `veredito` (task, rodada,
+  resultado `aprova|reprova|devolvido` — o MESMO vocabulário do parecer —, sessao, motivo
+  curto quando houver), `sessao_trocada` (de, para, motivo), `execucao_fim` (resultado).
+  `ts` sempre ISO-8601 com offset (`date -Iseconds`); `task` e `rodada` são números, e
+  `rodada` começa em 1 — rodada desconhecida é rodada OMITIDA, nunca 0. Campo extra pode;
+  tipo novo não — o app agrega por esses seis. Prosa, contexto e julgamento continuam no
+  registro.md; o jsonl alimenta as telas de orquestração e as fichas com número.
+  Exemplo de linha, no fecho de uma rodada:
+
+      {"ts": "2026-08-25T14:02:11-03:00", "tipo": "veredito", "task": 7, "rodada": 3,
+       "resultado": "aprova", "sessao": "mx2-rev-t7", "commit": "8c34563b"}
+
+  Valide quando quiser com `python3 <repo>/scripts/orq-valida-eventos.py <arquivo>` (sai 0
+  se o contrato fecha).
 
 **A fronteira é o tipo do conteúdo, não o assunto: já aconteceu → registro; ainda vale →
 regras.** Decisão nova entra nas regras; o registro anota a data e aponta pra lá. É o que
@@ -42,10 +59,13 @@ alguma frase dali **muda o que a próxima sessão faz**. Se muda, ela pertence �
 forma de régua — não de relato.
 
 **E o registro se escreve NO EVENTO, não "depois".** Parecer chegou, merge feito, sessão trocada →
-a linha entra **antes da próxima ação**. Não existe "atualizo no fim do dia": medido em
+a linha de prosa entra no registro **E** a linha JSON entra no `eventos.jsonl`, **antes da
+próxima ação**. Não existe "atualizo no fim do dia": medido em
 17/08/2026, o registro de uma execução parou às 10:39 e as 6h45 seguintes — justamente as duas
 Tasks mais caras — ficaram sem diário; a retrospectiva virou arqueologia de git e mtime. A vigia
-cobra o mtime do arquivo (flag `--diario`), mas a vigia é rede, não desculpa.
+cobra o mtime do arquivo (flag `--diario`), e a cobrança vale para os **dois** arquivos:
+registro parado ou `eventos.jsonl` parado durante trabalho é a mesma falha. Mas a vigia é rede,
+não desculpa.
 
 ### Você é o único que reescreve as regras — e por isso tem teto
 
@@ -358,7 +378,7 @@ Depois do "pode ir", você decide. Estes três são **automáticos**, sem espera
 
 | Medida | Ação |
 |---|---|
-| Sessão sem reportar há 15 min | `cp-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca. **`working` também se confere**: olhe o ÚLTIMO comando dela — igual há 3 leituras é loop, não trabalho (medido 17/08/2026: 1.231× o mesmo comando por 3h, `working` o tempo todo) |
+| Sessão sem reportar há 15 min | `hangar-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca. **`working` também se confere**: olhe o ÚLTIMO comando dela — igual há 3 leituras é loop, não trabalho (medido 17/08/2026: 1.231× o mesmo comando por 3h, `working` o tempo todo) |
 | **Sessão do time sumiu e não foi você que fechou** | **abre outra e continua.** Não investigue. |
 | Escritor acima de **50% da própria janela** (500k numa de 1M) | **não recebe mais despacho: a troca vem ANTES da próxima rodada, sempre.** "No próximo marco" não existe — o marco pode não chegar (medido 17/08/2026: 65% da janela sem troca, cada chamada custando 2,6× a da primeira hora, numa Task que nunca fechou). E trocar não refaz prova: os prints vivem no diretório durável |
 | **Revisor acima de 50% da própria janela — OU cujo `ctx atual + custo medido de uma rodada` passe do teto** | abre a substituta **antes** de a correção chegar — e **despachar rodada pra quem já avisou que passou é proibido** (medido: rodada mandada a 86%, estourou 100% no meio do julgamento). O gatilho é igual ao do escritor (decisão do usuário, 23/08/2026, corrigindo o 85% que valia aqui: *"vc não abriu uma nova sessão pro review? ele já tava com mais de 600k"*). **Meça o custo de uma rodada na primeira Task e SOME antes de despachar**: uma rodada de julgamento de tela custou **~120k** (476k → 597k) — 483k está abaixo de 50%, mas 483k + 120k fecha em ~600k, então a substituta abre antes |
@@ -551,10 +571,10 @@ entregado às 03:32, o relato ficou preso na fila, o revisor não tinha o que re
 inteiro parou 2h30**. Do lado de dentro isso é invisível: o turno seguinte parece continuar de onde
 o anterior parou.
 
-**2. Ele acorda por `cp-send --tmux`, não por `echo`.** Um `echo` num processo de fundo só vira
+**2. Ele acorda por `hangar-send --tmux`, não por `echo`.** Um `echo` num processo de fundo só vira
 notificação se o turno do árbitro estiver **vivo** — com ele morto, a vigia grita para o vazio, que
-foi exatamente o que aconteceu. Um `cp-send` entra como **prompt** e reanima turno morto. O
-`--tmux` é obrigatório: o `cp-send` normal **recusa** falar com sessão Claude da mesma máquina
+foi exatamente o que aconteceu. Um `hangar-send` entra como **prompt** e reanima turno morto. O
+`--tmux` é obrigatório: o `hangar-send` normal **recusa** falar com sessão Claude da mesma máquina
 (rc=3, "use SendMessage"), e um script de shell não tem `SendMessage`.
 
 **3. Ela dispara quando o DONO DA VEZ para — não quando todos param.** Árbitro parado com alguém
@@ -627,7 +647,7 @@ pergunta às 23h custa uma resposta; a falta dela custou 3 intervenções de mad
 
 ## Sessão que morre não é caso de investigação
 
-Sessão do time desaparecida (some do `cp-send --list` e do tmux) sem você ter mandado fechar: **abra
+Sessão do time desaparecida (some do `hangar-send --list` e do tmux) sem você ter mandado fechar: **abra
 outra e siga**. Autonomia é isso — o trabalho não pode parar porque uma sessão caiu.
 
 O usuário fecha sessão quando quer, a máquina reinicia, o processo morre. Nada disso é incidente;
@@ -735,7 +755,7 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 | "Mandei o recado, agora é esperar" | Espere enquanto ele trabalha. **Ocioso sem reportar** → verifica. |
 | "Vou cutucar pra saber como vai" | Ruído. Quem está `working` não se interrompe. |
 | "Confirmo pro executor que o REPROVA é válido" | Ele já tem a receita. Tua confirmação é a rodada que você tirou. |
-| "A vigia me avisa se algo parar" | Só se ela estiver viva, vigiando os três, e acordando por `cp-send --tmux`. Confira as três coisas. |
+| "A vigia me avisa se algo parar" | Só se ela estiver viva, vigiando os três, e acordando por `hangar-send --tmux`. Confira as três coisas. |
 | "Eu não parei, meu último turno foi agora" | Do lado de dentro sempre parece isso. Quem tem o relógio é o usuário. |
 | "Confiro o achado do revisor rapidinho" | Conferir achado é revisar de novo: mesmo resultado, pago duas vezes. Revisor fraco se conserta no revisor — forma cobrada, rotação. |
 | "Rodo eu a verificação, é mais rápido que pedir" | Verificação tem dono: executor roda, revisor re-roda. A tua conferência é relato×repo, em metadado. |
@@ -832,30 +852,28 @@ dele**: sai do contrato, como o de todo mundo — mas quem cria e confere é ele
 Vale para toda sessão que você cria. Os cinco passos são **uma unidade**: o turno não fecha
 no meio deles.
 
-1. **Criar na conta padrão do agente:** `cp-send --new <nome> <cwd>`, **sem** `--engine`.
+1. **Criar na conta padrão do agente:** `hangar-send --new <nome> <cwd>`, **sem** `--engine`.
    Motor de provedor entra **só** quando o plano nomeou um: `--engine <motor>`.
    *"Sessão de <agente>"* quer dizer a conta padrão dele. Modelo daquele fabricante
    acessível por gateway, roteador ou API **não é** uma sessão dele — é outro provedor
    servindo um modelo parecido, com outra conta e outro comportamento.
 
-   **`cp-send --new` NÃO carrega modelo nem nível de esforço.** Ele aceita
-   `[cwd] [--engine <motor>] [--provider <claude|pi>]` e mais nada. O contrato que nomeia modelo e
-   thinking (o caso normal quando o time roda em Pi) **não cabe nesse comando** — a sessão nasceria
-   no padrão do binário. Quem carrega os quatro campos é a API:
+   **Modelo, esforço e permissão vão NO PRÓPRIO `hangar-send --new`** (desde 25/08/2026):
+   `--model <id>`, `--effort <nivel>` e `--permissao <modo>`. O contrato que nomeia modelo e
+   thinking (o caso normal quando o time roda em Pi) cabe no comando — a sessão já nasce nele:
 
    ```bash
-   T=$(grep '^CP_AUTH_TOKEN=' <repo>/backend/.env | cut -d= -f2-)
-   curl -s -X POST http://127.0.0.1:8765/api/sessions \
-     -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
-     -d '{"name":"<nome>","cwd":"<repo>","provider":"pi",
-          "model":"<provider>/<id>","effort":"<nivel>"}'
+   hangar-send --new <nome> <repo> --provider pi --model <provider>/<id> --effort <nivel>
    ```
 
-   O backend valida **antes** de qualquer efeito em disco: modelo fora da regex, nível fora da lista
-   fechada ou provider desconhecido devolvem 400 e a sessão **não nasce** — nunca uma sessão que
-   parece estar no modelo certo e não está. O caminho alternativo (criar pelo `cp-send` e trocar
-   depois por `/cp-model` + `/cp-think`) funciona, mas deixa a sessão viva um intervalo no modelo
-   errado, e contradiz o passo 2 abaixo.
+   No Pi o `--effort` vira `--thinking` (aceita também `off|minimal`); no Kimi só `--model`;
+   `--permissao` é só Claude. O backend valida **antes** de qualquer efeito em disco: modelo fora
+   da regex, nível fora da lista fechada ou provider desconhecido devolvem 400 e a sessão **não
+   nasce** — nunca uma sessão que parece estar no modelo certo e não está. O caminho alternativo
+   (criar sem os flags e trocar depois por `/cp-model` + `/cp-think`) funciona, mas deixa a sessão
+   viva um intervalo no modelo errado, e contradiz o passo 2 abaixo. (Instalação com `hangar-send`
+   antigo, sem os flags: o POST direto na API com `model`/`effort`/`permission_mode` no corpo
+   continua valendo como plano B.)
 
 2. **Provar o que nasceu**, lendo o motor/modelo **real** da sessão, nunca o que você pediu.
    Divergiu do plano → apague e recrie. Sessão errada recebendo o pedido é trabalho inteiro no lugar
@@ -886,7 +904,7 @@ no meio deles.
    Junto: **prova por sidecar de status tem que casar o `session-id` com o da sessão viva** — o
    diretório guarda um arquivo por id e não os apaga quando a sessão morre. Dois daqueles três
    leram o sidecar da sessão morta que ocupava o pane antes, e o valor saiu certo por coincidência.
-3. **Escrever o pedido num arquivo** e entregar com `cp-send <nome> "$(cat <arquivo>)"`.
+3. **Escrever o pedido num arquivo** e entregar com `hangar-send <nome> "$(cat <arquivo>)"`.
    Pedido longo digitado direto na linha quebra: `|`, `$`, crase e `|` de "SIM | NÃO" viram
    comando, e a mensagem sai mutilada ou não sai.
 4. **Conferir o retorno.** `entregue -> <nome>` é entrega. Qualquer outra coisa — `404`,

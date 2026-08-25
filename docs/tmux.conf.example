@@ -1,4 +1,4 @@
-# Reference ~/.tmux.conf for running Claude Code (and claude-pocket) in tmux.
+# Reference ~/.tmux.conf for running Claude Code (and hangar) in tmux.
 # See tmux-truecolor-setup.md for why these matter.
 
 # --- ESSENTIAL for correct Claude Code colors -------------------------------
@@ -9,7 +9,7 @@ set -ga terminal-features ",xterm-kitty:RGB,xterm-256color:RGB"
 # tmux doesn't propagate COLORTERM by default; without it Claude starts at 256-color.
 set-environment -g COLORTERM truecolor
 set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
-# NOTE: the claude-pocket wrapper/backend already inject both vars into the sessions they
+# NOTE: the hangar wrapper/backend already inject both vars into the sessions they
 # create; these lines cover sessions you make by hand. A `command claude` launched outside
 # the wrapper in an OLD pane may still need the exports in your shell rc (bash/zsh/fish).
 
@@ -22,7 +22,7 @@ set -g status off          # hide the tmux status bar
 set -g mouse on            # wheel scrolls scrollback instead of cycling input
 
 # --- Session persistence across reboot (optional; needs TPM) ----------------
-# Lets claude-pocket sessions survive a reboot/OOM. Remove if you don't use TPM.
+# Lets hangar sessions survive a reboot/OOM. Remove if you don't use TPM.
 # Easiest path: run ../scripts/tmux-persist-setup.sh — it clones these plugins AND
 # installs the systemd timer that actually drives the auto-save.
 set -g @plugin 'tmux-plugins/tpm'

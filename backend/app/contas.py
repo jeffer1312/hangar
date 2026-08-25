@@ -73,13 +73,13 @@ DRIFT_TETO = 3
 # escrita através do symlink clobberava o compartilhado — medido 2026-08-19, o primeiro boot de
 # uma conta nova regravou o settings.json de TODAS as contas sem 14 chaves (enabledPlugins etc),
 # desligando os plugins em todo lugar.
-# `.claude-pocket-apelidos.json` entrou 2026-08-21: o backend só lê/grava pelo caminho
+# `.hangar-apelidos.json` entrou 2026-08-21: o backend só lê/grava pelo caminho
 # compartilhado (apelidos._caminho), então o atalho dentro da conta não serve pra nada — e uma
 # CÓPIA real deixada de eras antigas numa conta fazia _resolver_colisao "subir" o arquivo velho
 # por cima do compartilhado, apagando os apelidos (aconteceu 19/08 08:52, mesma janela do
 # incidente do settings.json).
 _NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json",
-              ".claude-pocket-apelidos.json"}
+              ".hangar-apelidos.json"}
 
 
 def compartilhado() -> Path:
@@ -123,7 +123,7 @@ def _trava(dir_conta: Path):
     """Serializa reconciliações da MESMA conta.
 
     Sem isto, duas criações de sessão simultâneas (o app roda em thread, e o terminal chama o
-    `cp-conta --prep` por fora) caem na janela entre remover e recriar o link: uma leva
+    `hangar-conta --prep` por fora) caem na janela entre remover e recriar o link: uma leva
     FileExistsError e a criação de sessão morre com 500 intermitente. No Windows não há flock;
     a trava vira no-op e a corrida volta a ser possível — está na doc de limitações.
     """
@@ -445,7 +445,7 @@ def ciclo_conta(nome: str):
     caminho que sumiu. Quem abre sessão e quem apaga disputam o mesmo recurso; as duas pontas
     usam esta mesma trava, então uma espera a outra.
 
-    O `apagar` público adquire a mesma trava sozinho (o `cp-conta` não conhece o ciclo); a API
+    O `apagar` público adquire a mesma trava sozinho (o `hangar-conta` não conhece o ciclo); a API
     usa as operações do `_Ciclo` devolvido para não se trancar duas vezes.
     """
     dir_conta = caminho(nome)
@@ -518,7 +518,7 @@ def apagar(nome: str) -> None:
     Os `.jsonl` daquela conta vão junto: são dela, e o gasto histórico dela sai do painel. Quem
     chama (a API) é quem checa se há sessão viva usando esta conta.
 
-    Adquire a mesma trava da reconciliação e do ciclo: o `cp-conta` (que não conhece o ciclo)
+    Adquire a mesma trava da reconciliação e do ciclo: o `hangar-conta` (que não conhece o ciclo)
     também não pode apagar a conta no meio de uma abertura de sessão.
     """
     dir_conta = caminho(nome)

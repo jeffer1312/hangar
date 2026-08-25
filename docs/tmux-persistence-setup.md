@@ -1,6 +1,6 @@
 # tmux session persistence: survive reboot / OOM
 
-claude-pocket mirrors a live `tmux` session to your phone. If the machine reboots or
+hangar mirrors a live `tmux` session to your phone. If the machine reboots or
 the kernel OOM-kills the tmux server, that session — and the `claude` running in it —
 is gone. This restores it automatically.
 

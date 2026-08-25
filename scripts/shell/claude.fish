@@ -1,6 +1,6 @@
-# claude-pocket — `claude` wrapper (fish). Installed by scripts/install-claude-wrapper.sh.
+# hangar — `claude` wrapper (fish). Installed by scripts/install-claude-wrapper.sh.
 #
-# Makes every interactive `claude` trackable by the claude-pocket app:
+# Makes every interactive `claude` trackable by the hangar app:
 #  1. injects a unique --session-id  -> the backend binds the exact transcript (.jsonl), so two
 #     claudes in the SAME folder never leak into / overwrite each other.
 #  2. runs INSIDE tmux               -> the app only lists tmux sessions; a claude started outside
@@ -21,7 +21,7 @@
 # Escape hatch: `command claude ...` runs the raw binary, bypassing this wrapper.
 function claude
     # Motor de modelo (claude-engine setou CP_ENGINE): o env é aplicado DENTRO do pane pelo
-    # `cp-engine --exec`, não por `tmux -e`. Dois motivos: (1) tmux não herda o env de quem chama, e
+    # `hangar-engine --exec`, não por `tmux -e`. Dois motivos: (1) tmux não herda o env de quem chama, e
     # (2) `-e ANTHROPIC_AUTH_TOKEN=…` deixaria a key visível em /proc/<pid>/cmdline para qualquer
     # usuário da máquina. Depois do exec, o cmdline é o do claude — sem segredo. Construído ANTES do
     # scan de flags abaixo porque -c/--resume/--session-id saem por um early return e também
@@ -29,14 +29,14 @@ function claude
     # Anthropic.
     set -l pre
     if set -q CP_ENGINE; and test -n "$CP_ENGINE"
-        set pre cp-engine --exec $CP_ENGINE --
+        set pre hangar-engine --exec $CP_ENGINE --
     end
 
     for a in $argv
         switch $a
             case --session-id '--session-id=*' --resume '--resume=*' -c --continue
                 # mesmo bypass de `command` do caminho "só injeta o id" abaixo: sem motor, chama o
-                # binário direto (evita recursão na função); com motor, quem executa é o cp-engine
+                # binário direto (evita recursão na função); com motor, quem executa é o hangar-engine
                 # (processo à parte achado no PATH) — `command` não existiria pra ele executar.
                 if test (count $pre) -eq 0
                     command claude $argv
@@ -61,7 +61,7 @@ function claude
 
     if set -q TMUX; or contains -- -p $argv; or contains -- --print $argv; or not isatty stdin
         # `command` só faz sentido quando o QUEM roda é este próprio shell: bypassa a função `claude`
-        # para não recursar nela mesma. Com $pre setado, quem executa é o cp-engine (um processo
+        # para não recursar nela mesma. Com $pre setado, quem executa é o hangar-engine (um processo
         # separado, achado no PATH) — o execvpe dele nunca vê função de shell, então "command" viraria
         # só uma string a mais no argv (e um alvo inexistente pro execvpe procurar).
         if test (count $pre) -eq 0
@@ -96,7 +96,7 @@ function claude
 
     # Conta Claude (claude-conta setou CLAUDE_CONFIG_DIR): tmux NÃO herda o env de quem chama —
     # sem repassar aqui, a sessão nasceria na conta padrão, calada. Aqui pode ir por `-e` (ao
-    # contrário da key do motor, que vai pelo `cp-engine --exec` justamente pra não aparecer em
+    # contrário da key do motor, que vai pelo `hangar-engine --exec` justamente pra não aparecer em
     # /proc/<pid>/cmdline): isto é um caminho, não um segredo.
     # Passado SEMPRE, não só quando o chamador tem a variável: o servidor tmux guarda o ambiente
     # com que foi INICIADO, e omitir o `-e` numa sessão posterior não remove a variável — o pane
@@ -123,7 +123,7 @@ function claude
     # simplesmente parava de abrir. Por isso a chamada e duplicada nos dois ramos, igual ao
     # claude.posix.sh, que documenta a mesma escolha.
     # CP_SESSION_NAME: mesmo carimbo de identidade que o backend poe em new_session (app/tmux.py).
-    # Sem ele o cp-send de dentro desta sessao cai no `tmux display-message -p '#S'`, que devolve a
+    # Sem ele o hangar-send de dentro desta sessao cai no `tmux display-message -p '#S'`, que devolve a
     # sessao do CLIENTE anexado e nao a de quem chama — o `--unpair` de uma sessao desfazia o vinculo
     # da OUTRA. Sessao aberta no terminal e criada AQUI, nao pelo backend, entao o carimbo tem que
     # sair daqui tambem, senao o bug fica vivo justamente no caminho mais usado.

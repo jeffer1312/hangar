@@ -6,7 +6,7 @@ function overwriteGetLocale(fn: () => 'en' | 'pt') {
   configureLocale({ getLocale: fn });
 }
 import { configureApi } from './apiEnv';
-import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel } from './api';
+import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel, rotaGenerica } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 let onUnauthorizedSpy: ReturnType<typeof vi.fn>;
@@ -22,6 +22,31 @@ beforeEach(() => {
     onUnauthorized: onUnauthorizedSpy as unknown as () => void,
     origin: 'https://app.test',
     createEventSource: () => stubEventSource(),
+  });
+});
+
+describe('rotaGenerica — o que pode ir pro diário de uso', () => {
+  it('apaga o nome da sessão (agrupa, e não interessa: o campo `sessao` existe pra isso)', () => {
+    expect(rotaGenerica('/api/sessions/api-front/select')).toBe('/api/sessions/*/select');
+    expect(rotaGenerica('/api/sessions/api-front/history?limit=40')).toBe('/api/sessions/*/history');
+  });
+
+  it('apaga o projeto do Archive: ele É o caminho real do projeto na máquina', () => {
+    // Achado da revisão de 25/08/2026. `resumeArchivedConversation` é POST, então entrava no
+    // diário em TODO uso, dando certo — e o diário promete não guardar caminho de projeto.
+    expect(rotaGenerica('/api/archive/-home-fulano-Projetos-cliente-x'))
+      .toBe('/api/archive/*');
+    expect(rotaGenerica('/api/archive/-home-fulano-Projetos-cliente-x/abc-123/resume'))
+      .toBe('/api/archive/*/abc-123/resume');
+  });
+
+  it('apaga o nome da conta em claude-configs', () => {
+    expect(rotaGenerica('/api/claude-configs/conta-do-cliente')).toBe('/api/claude-configs/*');
+  });
+
+  it('rota sem segmento variável passa inteira', () => {
+    expect(rotaGenerica('/api/diag')).toBe('/api/diag');
+    expect(rotaGenerica('/api/sessions')).toBe('/api/sessions');
   });
 });
 

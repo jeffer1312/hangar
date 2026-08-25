@@ -495,7 +495,7 @@ def test_arquivo_colidindo_com_nome_temporario_nao_e_apagado(casa):
 
 
 def test_modulo_e_stdlib_pura():
-    """O cp-conta importa este módulo com o python3 do SISTEMA (sem venv). A prova é o import
+    """O hangar-conta importa este módulo com o python3 do SISTEMA (sem venv). A prova é o import
     num interpretador SEM site-packages (`-S`): qualquer dependência não-stdlib falharia ali,
     com o rastro do culpado no stderr. A varredura de AST fica como diagnóstico rápido."""
     raiz = pathlib.Path(contas.__file__).resolve().parent.parent
@@ -562,11 +562,11 @@ def test_apelidos_nao_viram_atalho_nem_sobem_de_copia_velha(casa):
     """O arquivo de apelidos é do APP, lido/gravado só pelo caminho compartilhado. Symlink dentro
     da conta não serve pra nada, e uma cópia real antiga fazia _resolver_colisao copiá-la POR CIMA
     do compartilhado — foi o que apagou os apelidos em 19/08 (mesma janela do settings.json)."""
-    apelidos = casa / ".claude" / ".claude-pocket-apelidos.json"
+    apelidos = casa / ".claude" / ".hangar-apelidos.json"
     apelidos.write_text('{"claude:/x": "Nome Bom"}', encoding="utf-8")
     p = contas.criar("conta2")
-    assert not (p / ".claude-pocket-apelidos.json").exists()          # nem atalho, nem cópia
+    assert not (p / ".hangar-apelidos.json").exists()          # nem atalho, nem cópia
     # Cópia VELHA deixada na conta não pode subir pro compartilhado na reconciliação.
-    (p / ".claude-pocket-apelidos.json").write_text('{"claude:/x": "velho"}', encoding="utf-8")
+    (p / ".hangar-apelidos.json").write_text('{"claude:/x": "velho"}', encoding="utf-8")
     contas.reconciliar("conta2")
     assert json.loads(apelidos.read_text(encoding="utf-8")) == {"claude:/x": "Nome Bom"}

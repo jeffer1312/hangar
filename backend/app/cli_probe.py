@@ -19,7 +19,7 @@ import subprocess
 import threading
 import time
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
 _BIN = {"claude": "claude", "codex": "codex", "pi": "pi", "kimi": "kimi"}
 

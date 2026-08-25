@@ -14,7 +14,7 @@ from app.pqueue import PromptQueue, _transcript_start_ts
 from app.state import _live_spinner, classify, is_overlay
 from app.tmux import send_keys
 
-_log = logging.getLogger("claude_pocket.terminal_input")
+_log = logging.getLogger("hangar.terminal_input")
 
 # Tempos de acomodacao do TUI entre toque e leitura do pane (o picker redesenha em overlay).
 _SETTLE = 0.3  # apos uma tecla de navegacao
@@ -489,17 +489,38 @@ _AVISO_SUBAGENT_PI_RE = re.compile(
 # Exige tambem o caminho `/tmp/pi-subagents-` alem da frase, pra nao casar por coincidencia um texto
 # de usuario que cite palavras parecidas.
 # ponytail: remendo — reconhece a FRASE especifica do aviso, nao distingue aviso de rascunho em
-# GERAL (uma frase nova de um aviso futuro nao vai casar). O upgrade de verdade seria comparar o
-# conteudo da caixa contra a leitura ANTERIOR: aviso de sistema e ESTATICO (nao muda entre duas
-# capturas), rascunho do usuario digitando MUDA — mas isso pede duas capturas espacadas no tempo, e
-# esta funcao (uma leitura so, sem estado entre chamadas) nao tem isso hoje.
+# GERAL (uma frase nova de um aviso futuro nao vai casar). Foi o que aconteceu: a frase nova e a da
+# NOSSA extensao de estado, e ela recusava a troca de modelo com 409 e o composer vazio.
+#
+# O upgrade que este comentario propunha — comparar a caixa contra a leitura ANTERIOR, porque aviso
+# de sistema e ESTATICO e rascunho de quem digita MUDA — foi medido em 23/08/2026 e NAO se sustenta.
+# Rascunho PARADO tambem e estatico, e o guard existe exatamente pro rascunho parado (ABC-1234):
+#   com um rascunho na caixa da `pi-teste`, duas capturas com 1,5s de intervalo
+#   -> ' rascunho parado do usuario' nas duas, byte a byte.
+# Duas leituras separam "digitando agora" de "nao digitando", nao rascunho de aviso.
+#
+# O que resolve e nao raspar: PERGUNTAR pra extensao, que le `ctx.ui.getEditorText()` de dentro do
+# processo do Pi. Ver `_composer_ocupado_pi` logo abaixo. Este regex fica como plano B, pro caso
+# sem linha (extensao velha, socket caido) — la o remendo continua sendo o melhor que a tela da.
 
 
-def _composer_ocupado_pi(name: str) -> bool:
+def _composer_ocupado_pi(name: str, pane_id: str | None = None) -> bool:
     """True = já ha RASCUNHO parado no composer do Pi. Digitar por cima COLARIA as mensagens num
     submit so — caso real (ABC-1234, 31/07): aviso de grupo ficou no composer com o Enter engolido
     (tmux extended-keys formato xterm), o prompt do cockpit foi digitado em cima, os dois viraram
     UMA mensagem, e o reconcile — sem achar o prompt exato no transcript — reentregou (duplicata).
+
+    PERGUNTA primeiro, raspa depois. Quem sabe a resposta e o Pi, e a extensao ja esta dentro dele:
+    `ctx.ui.getEditorText()` devolve o texto do campo. A tela NAO responde isso — medido em
+    22/08/2026, com o aviso da nossa propria extensao na faixa do composer:
+
+        getEditorText() com o aviso na faixa   -> ""                        (nao e rascunho)
+        getEditorText() com rascunho parado    -> "rascunho parado do usuario"
+        ANSI da faixa nos dois casos           -> '\\x1b[0m … \\x1b[0m'      (identico)
+        cursor_flag/cursor_x do psmux          -> 0 / 199 (borda), sempre   (nao localiza nada)
+
+    Sem linha (extensao velha, socket caido, sessao Pi aberta antes deste commit) cai na raspagem
+    de sempre, que segue abaixo sem uma linha mudada.
 
     So pro Pi porque nele a leitura e deterministica (medido): composer = linhas entre as DUAS
     ULTIMAS reguas; vazio = nenhuma linha entre elas. No Claude Code o composer vazio desenha
@@ -511,6 +532,15 @@ def _composer_ocupado_pi(name: str) -> bool:
     tela — ver comentario ali): aviso de sistema nao e rascunho do usuario, e contá-lo como ocupado
     travava o envio indefinidamente (o usuario so via a mensagem sair depois de mexer no terminal a
     mao)."""
+    # `linha_de` e nao o pane cru: no psmux o pane e `%1` em toda sessao Pi, e perguntar pela chave
+    # errada leria o composer da conversa do vizinho (mesma raiz do 11909b31).
+    chave = pi_inbox.linha_de(name, pane_id)
+    if chave:
+        resposta = pi_inbox.INBOX.perguntar_sync(chave, "editor")
+        if resposta is not None:
+            # `.strip()`: um espaco solto no campo nao e rascunho que valha adiar envio — e o que
+            # sobra de um paste cancelado. Vazio e resposta ("nao ha rascunho"), None e ausencia.
+            return bool(resposta.strip())
     try:
         linhas = _capture(name).split("\n")
     except Exception:
@@ -605,7 +635,7 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             pane_id = agentpane.pane_info(name)[1]
             # msg_id=entry["id"]: mesma identidade em TODA reentrega desta entrada (retry apos
             # "deferred" logo abaixo, ou reenvio pelo reconcile de _confirm_and_drain) — e o que
-            # deixa a extensao do Pi (cp-state.ts) reconhecer um retry e nao chamar sendUserMessage
+            # deixa a extensao do Pi (hangar-state.ts) reconhecer um retry e nao chamar sendUserMessage
             # de novo. Ver pi_inbox.entregar.
             result = ti.send_prompt(name, entry["text"], provider, pane_id=pane_id, msg_id=entry["id"])
         except Exception:
@@ -672,7 +702,7 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             # reenviando um "sent" nao confirmado no transcript — achado ALTA "Porta A"/"Porta B" da
             # revisao 02/08/2026). Reenviar aqui SERIA duplicar a instrucao no agente se nao fosse
             # por uma coisa: `msg_id=entry["id"]` (linha acima) mantem o MESMO id em toda reentrega
-            # desta entrada, e a extensao (cp-state.ts) guarda os ids ja entregues — um id repetido
+            # desta entrada, e a extensao (hangar-state.ts) guarda os ids ja entregues — um id repetido
             # so re-confirma, nunca chama sendUserMessage de novo. E o que torna o revert abaixo
             # seguro nos DOIS casos, nao so no de tecla.
             # Revert pode falhar (disco): nesse caso a entrada
@@ -1214,8 +1244,12 @@ class TerminalInput:
             # set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
             # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e
             # insuficiente.
-            if provider == "pi" and pane_id and pi_inbox.INBOX.tem_linha(pane_id):
-                r = pi_inbox.INBOX.entregar_sync(pane_id, text, msg_id)
+            # `linha_de` (nome primeiro, pane depois) e nao o pane cru: no psmux TODA sessao Pi se
+            # declara `%1`, entao procurar por pane entregava a mensagem na conversa da OUTRA
+            # sessao — medido 22/08/2026, com `delivered: true` na resposta. Ver pi_inbox.
+            chave = provider == "pi" and pi_inbox.linha_de(name, pane_id)
+            if chave:
+                r = pi_inbox.INBOX.entregar_sync(chave, text, msg_id)
                 if r != "sem-linha":
                     return r
             # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por
@@ -1244,7 +1278,11 @@ class TerminalInput:
             # Composer do Pi ja com texto (residuo de Enter engolido / rascunho / parcial anterior):
             # adia em vez de digitar por cima — deferred reverte pra delivered=False e o proximo
             # drain (idle/reconnect) tenta de novo; a bubble queued- segue visivel no app.
-            if provider == "pi" and _composer_ocupado_pi(name):
+            # `pane_id` (quando o chamador tem) faz a pergunta ir pela linha da extensao em vez de
+            # raspar a tela — ver _composer_ocupado_pi. Este caminho so e alcancado quando a linha
+            # NAO entregou (o bloco acima retorna antes), entao aqui ele quase sempre e o plano B
+            # mesmo; passar o pane custa nada e cobre o caso de a linha ter voltado no meio.
+            if provider == "pi" and _composer_ocupado_pi(name, pane_id):
                 _avisa_deferred(name, "composer do pi ja tem texto", _OCUPADO_WARNED,
                                 _OCUPADO_DEFER_COUNT, _diag_composer(_capture(name), text, name, None))
                 return "deferred"
@@ -1416,11 +1454,52 @@ class TerminalInput:
             raise ValueError(f"key not allowed: {key!r}")
         send_keys(name, tmux_key)
 
+    # Rodadas de correcao do cursor. 3 e o teto do guard equivalente em answer_questions e nunca foi
+    # atingido; a 4a e folga barata (uma captura de pane).
+    _SELECT_TENTATIVAS = 4
+
     def select(self, name: str, option: int) -> None:
+        """Escolhe a opcao `option` (1-based) do picker cru, em MALHA FECHADA.
+
+        As cegas (Down*(n-1) + Enter) partia de duas suposicoes falsas, as duas medidas em
+        25/08/2026 num Windows: o cursor NAO comeca sempre na linha 1 — num menu multi-select ele
+        fica onde a marcacao anterior parou — e o Down ia em rajada, sem intervalo nenhum (era o
+        unico lugar do arquivo sem _NAV_GAP), entao um deles era engolido no redraw. Resultado
+        gravado em video: clicar na 3 marcava a 2, calado. Le a linha REAL do cursor e corrige,
+        mesma tatica do guard pre-Enter de answer_questions. Picker sem numeracao legivel pelo
+        _CURSOR_ROW (o do Pi usa '>' ascii) cai no caminho aberto de sempre, agora com intervalo.
+        Nao convergiu -> DriveError SEM Enter: opcao errada calada e pior que erro na tela.
+        """
         if option < 1:
             raise ValueError("option must be >= 1")
-        for _ in range(option - 1):
-            send_keys(name, "Down")
+
+        def tela() -> str:
+            try:
+                return _capture(name)
+            except Exception:
+                return ""  # pane ilegivel -> _cursor_row None -> caminho aberto, como antes
+
+        row = _cursor_row(tela())
+        if row is None:
+            for _ in range(option - 1):
+                send_keys(name, "Down")
+                time.sleep(_NAV_GAP)
+        else:
+            for _ in range(self._SELECT_TENTATIVAS):
+                if row == option:
+                    break
+                if row is None:
+                    # Ilegivel NO MEIO da correcao (pane pisca, `❯ N.` some) NAO e convergencia:
+                    # sair do laco aqui como se fosse deixava o Enter ser mandado as cegas, que e
+                    # exatamente o "opcao errada calada" que este metodo existe pra evitar. Sem
+                    # linha pra corrigir, o laco nao tem o que fazer — cai no guard abaixo.
+                    break
+                for _ in range(abs(option - row)):
+                    send_keys(name, "Down" if option > row else "Up")
+                    time.sleep(_NAV_GAP)
+                row = _cursor_row(tela())
+            if row != option:
+                raise DriveError(f"cursor parou na linha {row}, esperava {option} — opcao NAO enviada")
         send_keys(name, "Enter")
 
     def interrupt(self, name: str, clear: bool = False) -> None:
@@ -1714,7 +1793,12 @@ class TerminalInput:
             # Mesma guarda anti-colagem do send_prompt: comando digitado em cima de residuo deixa
             # de ser comando e vira mensagem pro modelo (pior que a colagem de prompt). Achado da
             # review de 31/07 — o gate precisa valer em TODO caminho que digita no composer do Pi.
-            if _composer_ocupado_pi(name):
+            #
+            # Este e o caminho que MAIS precisa da pergunta pela linha: aqui o guard e um 409 na
+            # cara do usuario (nao um adiamento silencioso), e a troca de modelo pelo app ficava
+            # recusada enquanto qualquer aviso de extensao estivesse desenhado na faixa do composer
+            # — medido 22/08/2026 com o aviso da nossa propria extensao de estado.
+            if _composer_ocupado_pi(name, agentpane.pane_info(name)[1]):
                 raise DriveError("composer do pi ja tem texto — comando nao digitado (residuo/rascunho)")
             for cmd in commands:
                 send_keys(name, cmd, literal=True)

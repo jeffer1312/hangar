@@ -17,7 +17,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
 
 # O que se dita neste app e prompt pra agente: nome de ferramenta, comando, caminho e sigla. Sao
-# exatamente as palavras que a Whisper mais erra, porque nenhuma delas e portugues ("cp-send" sai
+# exatamente as palavras que a Whisper mais erra, porque nenhuma delas e portugues ("hangar-send" sai
 # "CP send", "Kimi K3" sai "QIMI K3"). O campo `prompt` da Whisper e vocabulario, nao instrucao:
 # ele so enviesa a decodificacao pra grafia certa dessas palavras. Consertar aqui e melhor que
 # consertar depois no LLM — a limpeza tem ordem explicita de PRESERVAR nome proprio como veio,
@@ -30,7 +30,9 @@ IDIOMA = "pt"
 # UMA pessoa (nome de projeto, de sessao, de cliente) entra pela config `ditado_vocabulario` e e
 # somado a este.
 VOCAB_BASE = (
-    "cp-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
+    # `cp-send` fica junto do nome novo enquanto o comando antigo existir: é o que muita gente
+    # ainda fala, e sem ele a Whisper devolve "CP send" — que a limpeza tem ordem de preservar.
+    "hangar-send, cp-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
     "frontend, commit, merge request, deploy, endpoint, worktree, prompt, token"
 )
 # A Whisper le no maximo ~224 tokens de prompt e ignora calada o resto — uma lista que cresceu
@@ -73,7 +75,7 @@ def vocabulario() -> str:
 def build_multipart(filename: str, content: bytes, vocab: str = "") -> tuple[bytes, str]:
     """Monta um corpo multipart/form-data (model + response_format + language + prompt + file) e
     devolve (body, boundary). Separado da chamada de rede pra ser testavel sem tocar na Groq."""
-    boundary = "----claudepocket" + secrets.token_hex(16)
+    boundary = "----hangar" + secrets.token_hex(16)
     b = boundary.encode()
     parts: list[bytes] = []
     campos = [("model", GROQ_MODEL), ("response_format", "text"), ("language", IDIOMA)]
@@ -110,7 +112,7 @@ def transcribe(content: bytes, filename: str | None) -> str:
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             # O Cloudflare da Groq bane o UA padrao do urllib ("Python-urllib/..") com 403 code 1010.
             # Um UA normal passa.
-            "User-Agent": "claude-pocket/1.0",
+            "User-Agent": "hangar/1.0",
         },
     )
     try:

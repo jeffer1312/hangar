@@ -13,7 +13,7 @@ try:
     if o.get("tool_name") != "AskUserQuestion":
         sys.exit(0)
     base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-    d = os.path.join(base, ".claude-pocket-askq")
+    d = os.path.join(base, ".hangar-askq")
     os.makedirs(d, exist_ok=True)
     sid = o.get("session_id") or "unknown"
     with open(os.path.join(d, sid + ".json"), "w", encoding="utf-8") as fh:

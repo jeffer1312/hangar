@@ -1,6 +1,6 @@
 # Onboarding & Networking — decisions (Plan 3)
 
-Decisions made on how a phone reaches and authenticates to claude-pocket. These
+Decisions made on how a phone reaches and authenticates to hangar. These
 are the **target for the deploy/onboarding phase (Plan 3)** — not yet implemented.
 Recorded here so the live-e2e session's conclusions survive.
 

@@ -1,15 +1,15 @@
 # claude-conta <nome> [args...] — abre o claude na conta <nome>. Ver claude-conta.fish.
 function claude-conta {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-    if (-not $Args -or $Args.Count -eq 0) { cp-conta --list; return }
-    $dir = cp-conta --prep $Args[0]
+    if (-not $Args -or $Args.Count -eq 0) { hangar-conta --list; return }
+    $dir = hangar-conta --prep $Args[0]
     if ($LASTEXITCODE -ne 0) { return }
     # Contrato do --prep: stdout = exatamente UM caminho. Multi-linha vira ARRAY em PowerShell —
     # validar antes de exportar, senão o array vira string com espaços e o claude abre em lugar
     # errado (ou falha) sem ninguém entender por quê.
     $dirs = @($dir)
     if ($dirs.Count -ne 1 -or -not (Test-Path -LiteralPath $dirs[0] -PathType Container)) {
-        Write-Error 'claude-conta: saída inesperada de cp-conta --prep'
+        Write-Error 'claude-conta: saída inesperada de hangar-conta --prep'
         return
     }
     # Restaurar o env do chamador no fim: bash usa atribuição temporária e fish set -lx, os dois

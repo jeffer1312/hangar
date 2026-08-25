@@ -4,9 +4,9 @@
 # o payload do Kimi ja traz session_id e cwd em TODO evento (docs oficiais de hooks), entao nao
 # ha a danca de ancestralidade /proc que o Claude exige pra achar o boot_id.
 #
-# Dois marcadores (mesma base do cp-state.ts do Pi — o HookState do backend ja observa este dir):
-#  - .claude-pocket-state/<session_id>.json  {state,ts}  -> estado da LISTA sem raspar o pane.
-#  - .claude-pocket-kimi/<pane>.json  {session_id,cwd,ts}  -> BILHETE pane->sessao. E a UNICA
+# Dois marcadores (mesma base do hangar-state.ts do Pi — o HookState do backend ja observa este dir):
+#  - .hangar-state/<session_id>.json  {state,ts}  -> estado da LISTA sem raspar o pane.
+#  - .hangar-kimi/<pane>.json  {session_id,cwd,ts}  -> BILHETE pane->sessao. E a UNICA
 #    forma de o backend ligar um pane Kimi ao wire.jsonl: o Kimi nao aceita --session-id escolhido
 #    pelo caller (o id nasce dentro, no 1o prompt), entao nao ha o que casar em /proc/cmdline.
 #    O hook herda TMUX_PANE do processo kimi (medido: environ do kimi tem TMUX_PANE=%<n>).
@@ -63,15 +63,15 @@ def _write_marker(base: str, subdir: str, key: str, payload: dict) -> None:
     # O tmp leva o PID: o hook roda como processo solto e dois eventos da MESMA sessao se sobrepoem
     # (PreToolUse/PostToolUse em sequencia). Com nome fixo, as duas escritas usam o mesmo arquivo e o
     # replace promove bytes entrelacados — bilhete torto, que o registry le. Mesmo furo ja corrigido
-    # em cp_panel_common.py.
+    # em hangar_panel_common.py.
     tmp = os.path.join(d, "%s.json.tmp.%d" % (key, os.getpid()))
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(payload, fh)
     os.replace(tmp, os.path.join(d, key + ".json"))  # escrita atomica (leitor nunca pega parcial)
 
 
-# Mesma base do hook do Claude e da extensao do Pi: o HookState vigia <base>/.claude-pocket-state
-# e o registry le <base>/.claude-pocket-*. Sem CLAUDE_CONFIG_DIR (padrao) = ~/.claude. FORA do try
+# Mesma base do hook do Claude e da extensao do Pi: o HookState vigia <base>/.hangar-state
+# e o registry le <base>/.hangar-*. Sem CLAUDE_CONFIG_DIR (padrao) = ~/.claude. FORA do try
 # de proposito: o log de falha abaixo precisa dela, e ela nao depende do stdin.
 base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
@@ -83,7 +83,7 @@ try:
 
     state = _state_of(event, o)
     if state and sid:
-        _write_marker(base, ".claude-pocket-state", sid, {"state": state, "ts": time.time()})
+        _write_marker(base, ".hangar-state", sid, {"state": state, "ts": time.time()})
 
     # Bilhete pane->sessao em QUALQUER evento: quanto mais cedo o backend liga o pane ao wire,
     # melhor (SessionStart ja basta). Sem TMUX_PANE (kimi fora do tmux) nao ha o que ligar.
@@ -92,12 +92,12 @@ try:
     # TMUX_PANE=%1. Com o pane como chave, a 2a sessao Kimi sobrescreveria o bilhete da 1a e as
     # duas apontariam pro mesmo wire: uma abriria a conversa da outra. `PSMUX_SESSION` traz o nome
     # da sessao, unico por construcao. Mesma correcao (e mesma fonte) do bilhete do Pi, em
-    # scripts/pi/cp-state.ts e registry._chave_do_bilhete — as duas pontas leem a MESMA variavel
+    # scripts/pi/hangar-state.ts e registry._chave_do_bilhete — as duas pontas leem a MESMA variavel
     # pra nao poderem divergir sobre qual e a chave.
     psmux = os.environ.get("PSMUX_SESSION")
     chave = re.sub(r"[^A-Za-z0-9._-]", "-", psmux) if psmux else (os.environ.get("TMUX_PANE") or "").lstrip("%")
     if sid and chave:
-        _write_marker(base, ".claude-pocket-kimi", chave,
+        _write_marker(base, ".hangar-kimi", chave,
                       {"session_id": sid, "cwd": o.get("cwd"), "ts": time.time()})
 except Exception:
     # NUNCA travar o prompt do usuario por causa do hook -> engole a excecao. Mas nao pode ser um

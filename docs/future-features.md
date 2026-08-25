@@ -123,11 +123,11 @@ running **Agent(...)** subagents and **Workflow** runs (mirrors what the termina
 
 ## 2. Attachments — send + view images (audio later)
 - **Send images** — ✅ DONE (2026-06-25): `POST /api/sessions/{name}/upload` (raw bytes) saves to
-  `<cwd>/.claude-pocket-uploads/`; the composer has a 📎 picker + paste-into-textarea; on send it
+  `<cwd>/.hangar-uploads/`; the composer has a 📎 picker + paste-into-textarea; on send it
   uploads and sends `"<caption>\n📎 imagem: <path>"` and the assistant reads the path. Lazy
   (upload-on-send, no orphan if cancelled).
 - **CLEANUP / retention (deferred — needed):** uploaded images pile up in
-  `.claude-pocket-uploads/` forever. Add a retention sweep — on backend startup (and/or periodic),
+  `.hangar-uploads/` forever. Add a retention sweep — on backend startup (and/or periodic),
   delete files older than N days (e.g. 7d) or keep the last N. Simple, no extra endpoint. (User
   explicitly flagged this; deferred but must happen.)
 - **View images** that appear in the chat: the transcript can carry image content blocks
@@ -147,7 +147,7 @@ The app already renders Claude Code's native selection menus: `state.py classify
   check if `OptionButtons` appear. If not, capture the pane and extend `classify()`/the option
   parser to recognize the widget (and carry multi-select + per-option descriptions).
 - Why it matters: the user drives sessions from the phone; interactive prompts must be
-  answerable there (see memory `claude-pocket-app-interaction`).
+  answerable there (see memory `hangar-app-interaction`).
 
 ## 4. Pending fixes (batch — this session)
 - **Cost chip → top row of the composer** (a thin row above the textarea), so the model pill
@@ -211,15 +211,15 @@ número + contexto (caro, e o arquivo pode ter mudado desde a edição). No git 
 **Observação registrada de passagem:** ele comentou que a saída do **Bash** no card *"não mostra de
 uma forma boa"*. Não foi investigado — assunto separado deste item.
 
-## 7. cp-send: pergunta com resposta rastreada (`ask`/`pending`) — avaliado 2026-08-08, não construído
+## 7. hangar-send: pergunta com resposta rastreada (`ask`/`pending`) — avaliado 2026-08-08, não construído
 
-Hoje o cp-send é **tiro e esquece**. Quem manda um recado pro par depende do texto do protocolo
-(heredoc do `install-cp-send.sh`) pra que o outro lado responda, e não existe lugar nenhum que
+Hoje o hangar-send é **tiro e esquece**. Quem manda um recado pro par depende do texto do protocolo
+(heredoc do `install-hangar-send.sh`) pra que o outro lado responda, e não existe lugar nenhum que
 saiba *"eu perguntei X e ainda não voltou"*. Recado perdido — sessão que leu e não respondeu, ou
 morreu no meio — some sem deixar rastro, e quem perguntou só descobre relendo o próprio chat.
 
-**A ideia**: um segundo verbo ao lado do recado. `cp-send --ask <sessao> "pergunta"` gera um id de
-correlação, grava a pendência, e a resposta do outro lado (`--reply <id>`) fecha a linha. `cp-send
+**A ideia**: um segundo verbo ao lado do recado. `hangar-send --ask <sessao> "pergunta"` gera um id de
+correlação, grava a pendência, e a resposta do outro lado (`--reply <id>`) fecha a linha. `hangar-send
 --pending` lista o que está em aberto, dos dois lados (o que eu perguntei, o que me perguntaram).
 
 **Onde encaixa no que já existe**: o `pqueue` já é fila durável por sessão e já sobrevive a
@@ -238,7 +238,7 @@ dele foi avaliado e recusado, por três motivos que valem ficar registrados pra 
    Nosso `servidor::sessao` é rede. Adotar seria manter os dois caminhos, não trocar um pelo outro.
 2. **O "cross-harness" já não é ganho aqui.** É o único diferencial dele, e os três lados já
    entram por API nativa: Claude pelo `SendMessage` (nativo desde 2.1.224), Pi pelo
-   `pi.sendUserMessage({deliverAs:"steer"})` do `pi_inbox`/`cp-state.ts`, Codex pelo app-server.
+   `pi.sendUserMessage({deliverAs:"steer"})` do `pi_inbox`/`hangar-state.ts`, Codex pelo app-server.
    O adaptador Claude Code **dele** não tem injeção nativa — essa família de projetos entrega por
    hook `PreToolUse` relendo inbox a cada tool call, com `Stop` hook pra acordar a sessão (ver
    [claude-code#35072](https://github.com/anthropics/claude-code/issues/35072), que pede

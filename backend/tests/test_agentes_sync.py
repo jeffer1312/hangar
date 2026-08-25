@@ -62,6 +62,142 @@ def test_pi_grava_e_rele(tmp_path):
     assert "cost" not in p["models"][0] and "maxTokens" not in p["models"][0]
 
 
+def test_pi_provedor_conhecido_recebe_so_a_credencial(tmp_path):
+    # O caminho bom: o Pi tem catálogo próprio, então dar a lista de modelos por fora só piora.
+    # Medido em 25/08/2026 com PI_CODING_AGENT_DIR num sandbox: auth.json de UMA linha
+    # (opencode-go) + models.json vazio -> `pi --list-models opencode-go` lista 13 modelos com
+    # contexto, raciocínio e imagem certos.
+    _homes(tmp_path, "pi")
+    ok, motivo = agentes_sync.gravar_pi("cred", "https://opencode.ai/zen/go", "sk-abc", MODELOS,
+                                        home=tmp_path)
+    assert ok, motivo
+    auth = json.loads((tmp_path / ".pi" / "agent" / "auth.json").read_text())
+    assert auth["opencode-go"] == {"type": "api_key", "key": "sk-abc"}
+    # E NADA em models.json: uma lista nossa ali competiria com o catálogo do Pi.
+    assert not (tmp_path / ".pi" / "agent" / "models.json").exists()
+
+
+def test_pi_nao_desloga_assinatura_ja_conectada(tmp_path):
+    # `oauth` no auth.json é assinatura logada (Claude Pro, ChatGPT, OpenRouter por OAuth).
+    # Sobrescrever com uma chave desloga a pessoa daquele provedor dentro do Pi.
+    _homes(tmp_path, "pi")
+    auth = tmp_path / ".pi" / "agent" / "auth.json"
+    auth.write_text(json.dumps({"anthropic": {"type": "oauth", "access": "token-da-assinatura"}}))
+    ok, motivo = agentes_sync.gravar_pi("cred", "https://api.anthropic.com", "sk-ant", [],
+                                        home=tmp_path)
+    assert not ok and "nao-substituivel" in motivo
+    assert json.loads(auth.read_text())["anthropic"]["access"] == "token-da-assinatura"
+
+
+def test_pi_troca_chave_antiga_e_preserva_os_outros(tmp_path):
+    _homes(tmp_path, "pi")
+    auth = tmp_path / ".pi" / "agent" / "auth.json"
+    auth.write_text(json.dumps({
+        "groq": {"type": "api_key", "key": "sk-velha"},
+        "openai-codex": {"type": "oauth", "access": "intacto"},
+    }))
+    assert agentes_sync.gravar_pi("cred", "https://api.groq.com/openai", "sk-nova", [],
+                                  home=tmp_path)[0]
+    d = json.loads(auth.read_text())
+    assert d["groq"]["key"] == "sk-nova"
+    assert d["openai-codex"]["access"] == "intacto"
+
+
+@pytest.mark.parametrize("url,esperado", [
+    ("https://opencode.ai/zen/go", "opencode-go"),
+    ("https://opencode.ai/zen/go/v1", "opencode-go"),
+    ("https://opencode.ai/zen", "opencode"),          # prefixo do /go: a ordem da tabela decide
+    ("https://api.kimi.com/coding", "kimi-coding"),
+    ("https://openrouter.ai/api/v1/", "openrouter"),
+    ("https://api.groq.com/openai", "groq"),
+    ("https://api.deepseek.com", "deepseek"),
+    ("https://api.anthropic.com", "anthropic"),
+    ("https://ai.omniwise.com.br", None),             # gateway próprio: o Pi não conhece
+    ("https://api.commandcode.ai/provider", None),
+])
+def test_reconhece_o_provedor_pela_url(url, esperado):
+    assert agentes_sync.provedor_embutido_do_pi(url) == esperado
+
+
+def test_base_url_sai_no_dialeto_openai_nos_tres_alvos(tmp_path):
+    # Caso relatado em 25/08/2026: a conta do OpenCode Zen cadastrada pelo app aparecia no Pi com o
+    # endereço errado. O app guarda a RAIZ (é o que o Claude Code e o probe pedem), e os três alvos
+    # daqui montam `{base}/chat/completions` — sem o `/v1` a chamada cai fora da API.
+    # Gateway próprio de propósito: um endereço que o Pi CONHECE não passa mais pelo models.json
+    # (vai só a credencial pro auth.json), e é o caminho da lista escrita por nós que este caso mede.
+    _homes(tmp_path, "pi", "kimi", "codex")
+    raiz = "https://ai.omniwise.com.br"
+    assert agentes_sync.gravar_pi("cred", raiz, "sk-abc", [], home=tmp_path)[0]
+    assert agentes_sync.gravar_kimi("cred", raiz, "sk-abc", [], home=tmp_path)[0]
+    assert agentes_sync.gravar_codex("cred", raiz, "sk-abc", [], home=tmp_path)[0]
+
+    pi = json.loads((tmp_path / ".pi" / "agent" / "models.json").read_text())
+    assert pi["providers"]["cred"]["baseUrl"] == "https://ai.omniwise.com.br/v1"
+    kimi = tomllib.loads((tmp_path / ".kimi-code" / "config.toml").read_text())
+    assert kimi["providers"]["cred"]["base_url"] == "https://ai.omniwise.com.br/v1"
+    codex = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert codex["model_providers"]["cred"]["base_url"] == "https://ai.omniwise.com.br/v1"
+
+
+def test_base_url_ja_com_v1_nao_duplica():
+    # O campo aceita as duas formas (dá pra colar a URL como o provedor documenta), então quem já
+    # veio com /v1 não pode virar /v1/v1.
+    assert agentes_sync.base_openai("https://x.dev/v1") == "https://x.dev/v1"
+    assert agentes_sync.base_openai("https://x.dev/v1/") == "https://x.dev/v1"
+    assert agentes_sync.base_openai("  https://x.dev  ") == "https://x.dev/v1"
+
+
+def test_pi_recupera_visao_do_catalogo_do_proprio_pi(tmp_path):
+    # Rede de segurança do caminho de gateway PRÓPRIO, onde a lista tem de sair de nós: o
+    # `/v1/models` costuma devolver o shape OpenAI pelado (sem capacidade nenhuma), e foi assim que
+    # o muse-spark, que LÊ IMAGEM, chegou ao Pi como texto puro. A tabela que o próprio Pi mantém
+    # sabe a resposta. Provedor CONHECIDO nem chega aqui — ver o caso da credencial sozinha.
+    pi = tmp_path / ".pi" / "agent"
+    pi.mkdir(parents=True)
+    (pi / "models-store.json").write_text(json.dumps({
+        "opencode-go": {"models": [
+            {"id": "muse-spark-1.2-contributor", "name": "Muse Spark 1.2 Contributor",
+             "input": ["text", "image"], "contextWindow": 1048576, "reasoning": True},
+        ]},
+    }), encoding="utf-8")
+    modelos = [{"id": "muse-spark-1.2-contributor", "context_length": None, "vision": None},
+               {"id": "modelo-fora-do-catalogo", "context_length": None, "vision": None}]
+    assert agentes_sync.gravar_pi("cred", "https://ai.omniwise.com.br", "sk-abc", modelos,
+                                  home=tmp_path)[0]
+    ms = json.loads((pi / "models.json").read_text())["providers"]["cred"]["models"]
+    assert ms[0]["input"] == ["text", "image"]
+    assert ms[0]["contextWindow"] == 1048576
+    assert ms[0]["reasoning"] is True
+    assert ms[0]["name"] == "Muse Spark 1.2 Contributor"
+    # Fora do catálogo segue no mínimo honesto — o catálogo preenche buraco, não inventa.
+    assert ms[1]["input"] == ["text"] and "contextWindow" not in ms[1]
+
+
+def test_o_que_o_provedor_disse_vence_o_catalogo(tmp_path):
+    # O provedor reflete ESTA chave e ESTE deployment; o catálogo é tabela geral. Um deployment que
+    # declara não ler imagem não pode ser sobrescrito por uma tabela dizendo que o modelo lê.
+    pi = tmp_path / ".pi" / "agent"
+    pi.mkdir(parents=True)
+    (pi / "models-store.json").write_text(json.dumps({
+        "qualquer": {"models": [{"id": "m1", "input": ["text", "image"], "contextWindow": 999}]},
+    }), encoding="utf-8")
+    modelos = [{"id": "m1", "context_length": 128000, "vision": False}]
+    assert agentes_sync.gravar_pi("cred", "https://x.dev", "sk-abc", modelos, home=tmp_path)[0]
+    m1 = json.loads((pi / "models.json").read_text())["providers"]["cred"]["models"][0]
+    assert m1["input"] == ["text"]
+    assert m1["contextWindow"] == 128000
+
+
+def test_catalogo_do_pi_ausente_ou_quebrado_nao_derruba(tmp_path):
+    pi = tmp_path / ".pi" / "agent"
+    pi.mkdir(parents=True)
+    (pi / "models-store.json").write_text("{ isto nao e json", encoding="utf-8")
+    modelos = [{"id": "m1", "context_length": None, "vision": None}]
+    assert agentes_sync.gravar_pi("cred", "https://x.dev", "sk-abc", modelos, home=tmp_path)[0]
+    m1 = json.loads((pi / "models.json").read_text())["providers"]["cred"]["models"][0]
+    assert m1["input"] == ["text"] and m1["name"] == "m1"
+
+
 def test_pi_preserva_provedor_do_usuario(tmp_path):
     _homes(tmp_path, "pi")
     cfg = tmp_path / ".pi" / "agent" / "models.json"

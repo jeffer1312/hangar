@@ -10,5 +10,5 @@ function codex
             return
         end
     end
-    command cp-codex $argv
+    command hangar-codex $argv
 end

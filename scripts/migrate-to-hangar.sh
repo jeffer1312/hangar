@@ -14,16 +14,17 @@
 #   3c. corrige o Icon= do .desktop já instalado, se houver;
 #   4. troca as units systemd claude-cockpit-* pelas hangar-* (services-setup.sh)
 #      e migra a claude-cockpit-deploy.service se existir (servidores com webhook);
-#   5. re-roda install-cp-send.sh (cp-send + skills) e, se Hyprland+Quickshell,
-#      install-cp-panel.sh (painel/tray).
+#   5. re-roda install-hangar-send.sh (hangar-send + skills) e, se Hyprland+Quickshell,
+#      install-hangar-panel.sh (painel/tray).
 #
 # PRÉ-REQUISITO: o clone já tem que estar no commit do rename (units chamadas hangar-* no
 # services-setup.sh, manifest com o nome novo). Este script mexe na MÁQUINA, não no conteúdo
 # do repo — se rodar num clone antigo, o passo 4 recria as units com o nome velho.
 #
-# NÃO muda (de propósito — são dados/ids internos, e renomear derruba pareamento e loop em
-# andamento): ~/.claude/.claude-pocket-pair/, .claude-pocket-uploads/, .claude-pocket-loop/,
-# .claude-pocket-status/, instância quickshell "claude-pocket", cp-send/cp-*/CP_*.
+# NÃO muda (de propósito): as variáveis CP_* (o .env de instalação alheia quebraria) e o cookie
+# cp_token. As pastas de dados `~/.claude/.claude-pocket-*` NÃO são deste script: quem as renomeia
+# pra `.hangar-*` é o backend na subida (backend/app/migracao_sidecars.py), que deixa link no
+# caminho antigo pra hook e extensão de sessão já aberta continuarem acertando o alvo.
 set -euo pipefail
 
 OLD="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
@@ -251,15 +252,15 @@ if [[ -f "$SD/claude-cockpit-deploy.service" ]]; then
     log "unit de deploy migrada pra hangar-deploy.service"
 fi
 
-# ── 5. Re-instalar symlinks (cp-send, wrappers, skills, painel) ──────────────
-# O install-claude-wrapper.sh é quem cria ~/.local/bin/cp-codex e cp-engine e escreve as funções de
+# ── 5. Re-instalar symlinks (hangar-send, wrappers, skills, painel) ──────────────
+# O install-claude-wrapper.sh é quem cria ~/.local/bin/hangar-codex e hangar-engine e escreve as funções de
 # shell. Sem ele aqui, os dois symlinks ficam apontando pra pasta antiga: `codex` e qualquer sessão
 # de motor morrem com "command not found" — e nada na migração denunciava, porque a verificação só
-# olhava o cp-send (medido nesta máquina em 09/08/2026, os dois pendurados no vazio).
+# olhava o hangar-send (medido nesta máquina em 09/08/2026, os dois pendurados no vazio).
 ./scripts/install-claude-wrapper.sh
-./scripts/install-cp-send.sh
+./scripts/install-hangar-send.sh
 if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
-    ./scripts/install-cp-panel.sh
+    ./scripts/install-hangar-panel.sh
 fi
 
 # ── Verificação ──────────────────────────────────────────────────────────────
@@ -319,16 +320,18 @@ fi
 # Symlink pendurado é o modo de falha típico do rename, e ele é INVISÍVEL: `ls` mostra a linha, o
 # `command -v` acha o arquivo, e só na hora de executar dá "No such file or directory". `-e` segue o
 # link e responde falso quando o alvo sumiu — é o teste que separa link vivo de link morto.
-for l in cp-send cp-codex cp-engine cp-panel-open cp-panel-data cp-panel-action cp-panel-tray; do
+for l in hangar-send hangar-codex hangar-engine hangar-conta \
+         cp-send cp-codex cp-engine cp-conta \
+         hangar-panel-open hangar-panel-data hangar-panel-action hangar-panel-tray; do
     [[ -L "$HOME/.local/bin/$l" ]] || continue
     [[ -e "$HOME/.local/bin/$l" ]] && continue
     echo "ERRO: ~/.local/bin/$l aponta pra $(readlink "$HOME/.local/bin/$l"), que não existe" >&2
     falhou=1
 done
 
-if command -v cp-send >/dev/null; then
-    cp-send --list >/dev/null 2>&1 && log "cp-send ok" \
-        || { echo "ERRO: cp-send --list falhou — symlink quebrado ou backend fora" >&2; falhou=1; }
+if command -v hangar-send >/dev/null; then
+    hangar-send --list >/dev/null 2>&1 && log "hangar-send ok" \
+        || { echo "ERRO: hangar-send --list falhou — symlink quebrado ou backend fora" >&2; falhou=1; }
 fi
 
 if [[ "$falhou" -ne 0 ]]; then

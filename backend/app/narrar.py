@@ -164,7 +164,7 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int,
             "Content-Type": "application/json",
             # O Cloudflare da Groq bane o UA padrao do urllib ("Python-urllib/..") com 403 code 1010
             # (mesmo achado do transcribe.py).
-            "User-Agent": "claude-pocket/1.0",
+            "User-Agent": "hangar/1.0",
         },
     )
     try:
@@ -204,7 +204,7 @@ def narrar(texto: str, blocos: list[str], instrucao: str) -> str:
 
 
 # Limpeza do ditado. O usuario dita PROMPTS: nome de sessao, caminho, comando, chave de ticket. Um
-# modelo com liberdade pra "arrumar o texto" transforma cp-send em "CP send" e ABC-1234 em
+# modelo com liberdade pra "arrumar o texto" transforma hangar-send em "CP send" e ABC-1234 em
 # "ABC 1234" — e ai o ditado fica pior do que era.
 _REGRAS_DITADO = (
     "Você limpa transcrições de fala em português do Brasil. O texto abaixo foi ditado por uma "
@@ -240,7 +240,7 @@ _REGRAS_DITADO = (
     "traço' vira --, 'underline' vira _, 'arroba' vira @.\n"
     "   Entrada: 'abre o backend barra app barra narrar ponto py e roda o cp traço send traço "
     "traço list'\n"
-    "   Saída: 'Abre o backend/app/narrar.py e roda o cp-send --list.'\n"
+    "   Saída: 'Abre o backend/app/narrar.py e roda o hangar-send --list.'\n"
     "   Isso vale SÓ dentro de caminho, arquivo, comando ou endereço. 'Ponto' terminando frase e "
     "'barra' no sentido comum continuam palavras.\n"
     "Preserve EXATAMENTE como foram falados: nomes próprios, nomes de arquivo e caminhos, "
@@ -282,15 +282,44 @@ _FECHO_PROSA = (
     "Responda somente com o texto final."
 )
 
+# O briefing era o UNICO dos tres fechos sem par entrada/saida, e o unico sem uma regra dizendo que
+# nada pode ficar de fora. As regras que ele tinha eram todas de AGRUPAR e CORTAR REPETICAO, e o
+# modelo leu isso como licenca pra encurtar: medido em 24/08/2026 no ditado real do usuario (3754
+# chars, deepseek-v4-flash), 3/3 execucoes com cobertura 0,51-0,57 e o texto em 0,38-0,41x do
+# tamanho — sumiram as ressalvas dele ("nao leve em consideracao tudo que estou dizendo como
+# verdade", "ainda nao e uma regra, a gente vai planejar e fazer a spec junto"), os motivos que ele
+# deu e o que ele deixou em aberto. Briefing NAO e resumo, e o prompt nunca dizia isso.
+#
+# Duas mudancas, no espirito das regras 1 e 4 e do _FECHO_PROSA: a regra de completude vem PRIMEIRO
+# (a de agrupar so opera dentro dela) e vem com par entrada/saida, que e a unica forma que este
+# arquivo ja mediu como obedecida. O par mostra exatamente o que se perdia: uma ressalva sobrevive,
+# separada da afirmacao que ela ressalva.
+#
+# Os titulos "Contexto" e "Em aberto" entraram na lista pelo mesmo motivo: conteudo sem casa era
+# conteudo descartado. Ressalva e "ainda nao decidi" nao cabiam em Objetivo/Situacao/Restricoes, e
+# o modelo, em vez de improvisar uma secao, jogava fora.
 _FECHO_BRIEFING = (
     "Além disso, TRANSFORME a fala num briefing estruturado, porque ela vai virar um pedido para "
     "outra IA:\n"
+    "- NADA do que ela falou pode ficar de fora. Briefing NÃO é resumo: você MOVE cada coisa que "
+    "ela disse para a seção onde ela pertence, você não escolhe o que é importante. Ressalva "
+    "('isso não é regra, é só contexto'), motivo ('porque ela depende das outras'), dúvida, a "
+    "ordem que ela imaginou e o que ela ainda não decidiu são conteúdo e ENTRAM no briefing. O "
+    "que some é muleta de fala, nunca assunto.\n"
+    "   Entrada: 'acho que dá pra fazer as seis em paralelo porque nenhuma depende da outra mas "
+    "não leva isso como regra não, é só contexto, a gente vai planejar junto'\n"
+    "   Saída:\n"
+    "   **Situação hoje**\n"
+    "   - Acho que dá pra fazer as seis em paralelo, porque nenhuma depende da outra.\n"
+    "   **Em aberto**\n"
+    "   - Não leve isso como regra, é só contexto: a gente vai planejar junto.\n"
     "- Agrupe o que ela falou em seções, cada uma com um título curto em negrito markdown.\n"
     "- Use SOMENTE as seções sobre as quais ela realmente falou. Títulos possíveis: Objetivo, "
-    "Situação hoje, Restrições, Referência, Critério de pronto, O que eu preciso saber. Se ela "
-    "não falou de restrição, a seção Restrições não existe.\n"
+    "Situação hoje, Contexto, Restrições, Referência, Critério de pronto, Em aberto, O que eu "
+    "preciso saber. Se ela não falou de restrição, a seção Restrições não existe.\n"
     "- O que ela enumerou falando corrido vira lista com hífen, um item por linha.\n"
-    "- Repetição da mesma ideia aparece UMA vez, na seção onde ela pertence.\n"
+    "- Repetição da MESMA ideia aparece uma vez, na seção onde ela pertence. Duas ideias "
+    "parecidas não são repetição: as duas ficam.\n"
     "Os títulos são a ÚNICA coisa que você acrescenta. O conteúdo de cada seção são as palavras "
     "dela, não as suas: não invente requisito, não responda a pergunta que ela fez, não proponha "
     "solução. "
@@ -311,7 +340,7 @@ _SYSTEM_POR_ESTILO = {
 
 # Abaixo disto, briefing vira prosa. Estruturar exige ter mais de um assunto pra separar; num
 # ditado de uma frase nao ha o que agrupar, e o resultado medido foi a piada de um "**Objetivo**"
-# em cima de "Abre o backend/app/narrar.py e roda o cp-send --list.". O corte e em PALAVRAS porque
+# em cima de "Abre o backend/app/narrar.py e roda o hangar-send --list.". O corte e em PALAVRAS porque
 # o que decide e quantas ideias cabem ali: os ditados reais do usuario tem ~150, o comando tem 16.
 _MIN_PALAVRAS_BRIEFING = 40
 
@@ -323,7 +352,7 @@ def estilo_ditado() -> str:
     return e if e in _SYSTEM_POR_ESTILO else ESTILO_PADRAO
 
 
-def _estilo_efetivo(cru: str, pedido: str | None = None) -> str:
+def estilo_efetivo(cru: str, pedido: str | None = None) -> str:
     """O estilo que o texto vai receber DE FATO. `pedido` e o estilo que a TELA mostrava na hora
     de falar, e ele ganha da config: o app le a config uma vez por carga de pagina, entao uma troca
     feita noutra aba/aparelho deixava a pill dizendo "So limpar" enquanto o servidor ja guardava
@@ -580,7 +609,20 @@ _TRAVAS_POR_ESTILO = {
     "prosa": _Travas(inflacao_max=1.3, encolhe_min=0.3, cobertura_min=0.60,
                      cobra_invencao=True, timeout=90),
     # Briefing acrescenta titulos e hifens, entao infla um pouco mesmo cortando repeticao.
-    "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.3, cobertura_min=0.45,
+    #
+    # Piso e cobertura SUBIDOS em 24/08/2026 (eram 0,3 e 0,45) porque nao pegavam o defeito que o
+    # usuario viveu: um ditado real de 3754 chars voltou RESUMIDO, com assuntos inteiros de fora, e
+    # passou calado — 55% de perda e 30% do tamanho cabiam dentro dos valores antigos. Medido no
+    # mesmo texto, deepseek-v4-flash, temperatura 0:
+    #   defeito (fecho antigo, 3 execucoes) . cobertura 0,514 0,562 0,568 | tamanho 0,384 0,392 0,409
+    #   bom (fecho novo, 7 execucoes) ....... cobertura 0,719 0,829 0,842 0,870 0,884 0,884 0,897
+    #                                         tamanho   0,686 0,795 0,851 0,911 0,926 0,935 0,940
+    # Os valores sao o meio de cada intervalo vazio: 0,65 fica 0,07 abaixo do pior briefing bom e
+    # 0,08 acima do melhor defeito; 0,55 fica 0,13 abaixo e 0,14 acima. Calibrado sobre UM ditado
+    # (o unico caso real do defeito), entao quem tiver outro que falhe recalibra com os dois.
+    # Errar pra cima e o lado barato: briefing bom recusado devolve o cru COM aviso e a pessoa
+    # repete; briefing resumido aceito e o ditado dela sumindo em silencio, que e este bug.
+    "briefing": _Travas(inflacao_max=1.4, encolhe_min=0.55, cobertura_min=0.65,
                         cobra_invencao=False, timeout=120),
 }
 
@@ -614,7 +656,7 @@ def limpar_ditado(texto: str, estilo_pedido: str | None = None) -> tuple[str, st
     cru = texto.strip()
     if not cru or cru.startswith("/") or len(cru.split()) < _MIN_PALAVRAS:
         return texto, None
-    estilo = _estilo_efetivo(cru, estilo_pedido)
+    estilo = estilo_efetivo(cru, estilo_pedido)
     travas = _TRAVAS_POR_ESTILO[estilo]
     try:
         limpo = _normalizar_saida(

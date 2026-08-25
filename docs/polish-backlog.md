@@ -40,7 +40,7 @@ to discover reachable sessions, `SendMessage` to deliver text to one by name —
 registered in files on disk; the path is exported as `CLAUDE_CODE_MESSAGING_SOCKET` to hooks and
 Bash *before any hook runs*. Docs: <https://code.claude.com/docs/en/cross-session-messaging>.
 
-It overlaps `cp-send`'s core and does that part **better**: no terminal typing at all, so the whole
+It overlaps `hangar-send`'s core and does that part **better**: no terminal typing at all, so the whole
 bug class measured above (16344-byte tmux ceiling, `\n` submitting a line, 2N−1 calls line-by-line)
 simply does not exist there. It also rate-limits and drops identical repeats, so an A↔B loop stops
 on its own.
@@ -48,7 +48,7 @@ on its own.
 **The plan is to route through it when it exists and keep everything else — not to remove what is
 here.** What stays ours, because the native feature has no equivalent:
 
-| | native | `cp-send` |
+| | native | `hangar-send` |
 |---|---|---|
 | starting an exchange with another machine | no — replies only, via Anthropic servers + Remote Control | yes, direct over the mesh (`peers.json`), no cloud |
 | Codex / Pi sessions | no (Claude Code only) | yes |
@@ -59,13 +59,13 @@ here.** What stays ours, because the native feature has no equivalent:
 
 Two things measured here that decide the shape of the integration:
 
-- **`cp-send` must NOT write into the peer's socket.** Claude Code only delivers without approval a
+- **`hangar-send` must NOT write into the peer's socket.** Claude Code only delivers without approval a
   message it can *verify* came from a child process of **that same session** (a hook or Bash posting
   to its own socket). A script posting to someone else's socket asserts no permission class, and a
   session that bypasses permission prompts — which is how these sessions run — **holds it for
   approval**, in a dialog that expires in 5 minutes. So the native path is the paired Claude using
   **its own `SendMessage` tool**; that is a change to the protocol text in the heredoc of
-  `scripts/install-cp-send.sh`, not backend code.
+  `scripts/install-hangar-send.sh`, not backend code.
 - **What breaks is the pair conversation in the UI.** `PairSheet` mines nothing the backend routed:
   it fetches each member's `getHistory` and matches `user_msg` whose text starts with `[de: X]`
   (`PairSheet.svelte:67` → `parsePeerMessage`, `lib/format.ts:205`). A native message lands in the
@@ -81,7 +81,7 @@ exactly that. The PTY item above stays the answer for the user's own text.
 
 The rollout reached this machine hours after the entry above was written, so the two items were
 measured on real traffic and built. See `transcript.py` (`_peer_msg`), `registry.inbox_socket_of` /
-`name_of_pid`, `GET /api/sessions/{name}/peer-address`, and the guard in `scripts/cp-send`.
+`name_of_pid`, `GET /api/sessions/{name}/peer-address`, and the guard in `scripts/hangar-send`.
 
 - **A peer message arrives in two different shapes, and only one of them was obvious.** Target
   **idle** → `queue-operation enqueue` + `dequeue` + a `type: "user"` entry carrying a structured
@@ -98,9 +98,9 @@ measured on real traffic and built. See `transcript.py` (`_peer_msg`), `registry
   where the tmux session is `hangar`), so it does not match anything the app addresses by.
   `verifiedPeerPid` → pane → tmux name is what makes the group feed and the badges work.
 - The whole integration is therefore **one branch in the parser** that normalizes a native message
-  into the exact shape `cp-send` already produces (`[de: <session>] body`). Nothing in the front
+  into the exact shape `hangar-send` already produces (`[de: <session>] body`). Nothing in the front
   changed.
-- **The routing rule is enforced in code, not only in the protocol text.** `cp-send` refuses a local
+- **The routing rule is enforced in code, not only in the protocol text.** `hangar-send` refuses a local
   1:1 (exit 3) only when the native path provably reaches *both* ends — sender has
   `CLAUDE_CODE_MESSAGING_SOCKET`, target's `/peer-address` returns a socket — and `--tmux` forces the
   old path. Checking the **fact** rather than the session type is what makes Pi and Codex fall out on
@@ -348,7 +348,7 @@ still prints **`Pronto`** at the end. It is not cosmetic — it is the whole fai
   when the VM was suspended and the process died: nothing could restart it.
 - **That is what the `502` was.** `tailscale serve` maps `/` to `127.0.0.1:5173`, so the chain is
   `ts.net → Vite → backend`. The backend was never down — it was the same process throughout — but a
-  dead front takes every external route with it, `cp-send` included.
+  dead front takes every external route with it, `hangar-send` included.
 - **Fixed by a clean `npm ci`** once nothing held the binary (450 packages, exit 0, `.bin\vite.cmd`
   back). One warning left behind: `esbuild@0.28.1` has a postinstall not approved by allow-scripts.
 
@@ -404,7 +404,7 @@ note never printed; and a WMI hiccup silently degraded the lineage guard back to
 now refuses to kill anything instead.
 
 **Still open:** Pi and Codex on Windows keep the old path — `Alt+V` is Claude Code's binding and
-nobody has measured theirs. And the `cp-send`/`input` channel toward Windows was caught mutilating
+nobody has measured theirs. And the `hangar-send`/`input` channel toward Windows was caught mutilating
 text in passing (a quote died as `unexpected EOF while looking for matching quote`, and a test string
 arrived stripped of accents and emoji): unrelated to this fix, unmeasured, and its own item.
 
@@ -460,7 +460,7 @@ Probes: `leitura.py`, `vazao.py`, `emul.py`, `jsonl.py`, written to the session 
 
 `backend/peers.json` is the only way to add, remove, enable or disable a remote machine. There is
 no `/api/peers` route and `app/peers.py` only exposes `_load()` — nothing writes the file. So the
-mesh that powers `cp-send <server>::<session>` is invisible in the app: a user who did not author
+mesh that powers `hangar-send <server>::<session>` is invisible in the app: a user who did not author
 the project has no way to discover it exists, and the author has to remember the file path and the
 JSON shape months later.
 
@@ -471,7 +471,7 @@ different thing, and only one of them is visible.
 
 What it needs: a settings screen listing the peers with an enable/disable toggle, reachability
 status, and add/remove. Writing is the risky part — `peers.json` holds the tokens for the whole
-mesh and `scripts/cp_panel_common.py:81` already notes a half-finished write would take the mesh
+mesh and `scripts/hangar_panel_common.py:81` already notes a half-finished write would take the mesh
 down — so the write path has to be atomic (temp file + rename), never a partial rewrite.
 
 ## Follow-ups from the real terminal panel (2026-08-07)
@@ -486,7 +486,7 @@ Today every message the app sends goes through `tmux send-keys` — which sends 
 terminal panel proved a different path exists: bytes written straight into a PTY master, delivered
 by the kernel's tty layer, indistinguishable from a physical keyboard. That path handles what
 `send-keys` handles badly: bracketed paste (a multi-line block arrives as *one* paste instead of N
-lines the TUI may read as N submissions) and — the concrete pain that motivated this — `cp-send`
+lines the TUI may read as N submissions) and — the concrete pain that motivated this — `hangar-send`
 messages between Claude sessions arriving mangled.
 
 **Image paste is NOT one of them, measured 07/08/2026** — this line used to claim it was, written as
@@ -495,7 +495,7 @@ a hypothesis and then read as fact, contradicting a code comment three files awa
 machine's clipboard itself through `wl-paste` (which is why `tmux.py:292` (`new_session`) propagates
 `WAYLAND_DISPLAY`), so the terminal only ever delivers the **keystroke** — no image bytes cross it on
 any path. The PTY gains nothing here. Separately, the app's own attachments never touch the terminal
-at all: an upload is saved to `<cwd>/.claude-pocket-uploads/` and the prompt carries the **path** as
+at all: an upload is saved to `<cwd>/.hangar-uploads/` and the prompt carries the **path** as
 text (`Composer.svelte:917`), which is also why a phone attachment works when the phone's clipboard
 is not the machine's.
 

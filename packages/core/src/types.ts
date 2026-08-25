@@ -224,6 +224,12 @@ export interface SubagentRun {
   tools: { name: string; count: number }[];
   recent: { name: string; target: string }[];
   lastText: string;
+  // So o Kimi manda: o wire dele registra o fim do turno do proprio subagente. Ausente (Claude) =
+  // "nao da pra saber por aqui" — quem decide la e o tool_result no transcript do pai.
+  finished?: boolean;
+  // O subagente existe mas o transcript dele nao deu pra ler agora (permissao, disco). Os outros
+  // campos vem zerados: `toolCalls: 0` aqui NAO quer dizer "nao chamou nada", quer dizer "nao sei".
+  ilegivel?: boolean;
   // Transcript do subagente nos MESMOS ChatEvent do chat (so com ?events=N).
   events?: ChatEvent[];
 }
@@ -473,7 +479,7 @@ export interface CodexModelsResponse {
 }
 
 // Modelo + nivel de raciocinio de uma sessao Pi (GET /pi/models). Vem do sidecar que a extensao
-// cp-state.ts publica perguntando pro proprio Pi — nao ha picker raspado aqui (o /model do Pi e
+// hangar-state.ts publica perguntando pro proprio Pi — nao ha picker raspado aqui (o /model do Pi e
 // uma lista com busca de ~300 modelos). `levels` sao os niveis que o modelo ATUAL aceita: variam
 // por modelo (medido: glm-5.2 -> off/low/medium/high/xhigh; k3 -> low/high/max).
 export interface PiModel {
@@ -495,7 +501,7 @@ export interface PiModelsResponse {
 }
 
 // Um anexo já enviado pra sessão (GET /api/sessions/{name}/uploads) — a galeria lista o diretório
-// <cwd>/.claude-pocket-uploads. expires_in_days vem do backend (só ele conhece o prazo de retenção);
+// <cwd>/.hangar-uploads. expires_in_days vem do backend (só ele conhece o prazo de retenção);
 // null = retenção desligada e PODE ser <= 0: o prune só roda no próximo upload, então um anexo
 // vencido continua aparecendo até lá.
 export interface UploadFile {
@@ -546,4 +552,126 @@ export interface PathDiff {
   // Texto do arquivo na base — o lado esquerdo do diff, pro visor desenhá-lo dentro do editor.
   // `""` = arquivo novo (tudo é adição); `null` = não há versão na base ou o arquivo é grande demais.
   original: string | null;
+}
+
+// ── Orquestração (GET /api/orq, /api/orq/{id}) ────────────────────────
+// Espelha as dataclasses de backend/app/orq.py. `eventos`/`eventos_execucao` só vêm no DETALHE —
+// a lista os corta pra não trafegar a linha do tempo inteira de toda execução.
+export interface OrqEvento {
+  ts: string;
+  tipo: 'execucao_inicio' | 'task_inicio' | 'entrega' | 'veredito' | 'sessao_trocada' | 'execucao_fim';
+  task?: number;
+  rodada?: number;
+  resultado?: string;
+  sessao?: string;
+  commit?: string;
+  motivo?: string;
+  de?: string;
+  para?: string;
+  titulo?: string;
+  executor?: string;
+  par?: string;
+  ts_aproximado?: boolean;
+}
+
+export interface OrqTask {
+  task: number;
+  titulo: string;
+  executor: string;
+  par: string;
+  rodadas: number;      // 0 = desconhecido (o arquivo omitiu a rodada), nunca "de primeira"
+  resultado: string | null;
+  inicio: string | null;
+  fim: string | null;
+  eventos?: OrqEvento[];
+}
+
+export interface OrqExecucao {
+  id: string;
+  plano: string;
+  branch: string;
+  gid: string;
+  inicio: string | null;
+  fim: string | null;          // null = execução viva
+  resultado: string | null;
+  tasks: OrqTask[];
+  eventos_execucao?: OrqEvento[];
+  voltas: number;
+  aprovadas_primeira: number;
+  reconstruida: boolean;
+}
+
+export interface OrqFicha {
+  par: string;
+  aceitas: number;
+  nao_aceitas: number;
+  aprovadas_primeira: number;
+  rodadas_media: number;
+}
+
+export interface OrqLista {
+  execucoes: OrqExecucao[];
+  fichas: OrqFicha[];
+}
+
+// ── Botão Atualizar ────────────────────────────────────────────────────────────────────────────
+
+export interface AtualizacaoMudanca {
+  sha: string;
+  titulo: string;
+}
+
+export interface AtualizacaoPasso {
+  id: string;
+  titulo: string;
+  texto: string;
+}
+
+/** O que o motor está fazendo agora. Vem do arquivo de estado, que sobrevive ao restart. */
+export interface AtualizacaoEstado {
+  fase?: 'rodando' | 'pronto';
+  etapa?: string;
+  passo?: number;
+  total?: number;
+  texto?: string;
+  ok?: boolean | null;
+  erro?: string;
+  resgate?: string | null;
+  /** O código anterior foi restaurado no disco. */
+  voltou?: boolean;
+  /** O servidor respondeu depois disso. Separado de `voltou`: reverter e não subir é um terceiro caso. */
+  no_ar?: boolean;
+  reiniciar_manual?: boolean;
+  /** Arquivos de `docs/atualizacoes/` que o app ignorou por estarem malformados. */
+  passos_invalidos?: string[];
+  /** Comandos e saída, pra tela poder mostrar o que está rodando agora. */
+  log?: string[];
+  /** Quando a etapa atual começou — a tela conta daqui pra mostrar que não travou. */
+  etapa_inicio?: string;
+  /** Terminou bem, mas algo ficou pra trás (ex: dependências da janela nativa). */
+  avisos?: string[];
+  commit_de?: string;
+  commit_para?: string;
+  ts?: string;
+}
+
+export interface AtualizacaoPreVoo {
+  pode: boolean;
+  faltando: string[];
+  branch?: string;
+  sujo?: number;
+  ahead?: number;
+  behind?: number;
+  divergiu?: boolean;
+  topologia?: 'systemd' | 'windows' | 'manual';
+}
+
+export interface Atualizacao {
+  /** `repo` é o disco; `backend` é o processo vivo. Divergem durante a atualização — é o ponto. */
+  versoes: { repo: string; backend: string };
+  atualizacao_disponivel: boolean;
+  mudancas: AtualizacaoMudanca[];
+  passos: AtualizacaoPasso[];
+  pre_voo: AtualizacaoPreVoo;
+  estado: AtualizacaoEstado;
 }

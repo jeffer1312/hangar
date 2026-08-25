@@ -80,7 +80,7 @@ def test_bloqueia(cmd):
     "grep -rn kill-server backend/",
     "rtk proxy git add x && git commit -m 'bloqueia tmux kill-server'",
     "cat > /tmp/doc.md <<'EOF'\nNao rode tmux kill-server nunca.\nEOF",
-    "echo 'avisa: tmux kill-server e proibido' | cp-send hangar",
+    "echo 'avisa: tmux kill-server e proibido' | hangar-send hangar",
     "sed -i 's/tmux kill-server/tmux -L probe kill-server/' script.sh",
     'bash -c "npm run build"',   # interprete com comando inocente dentro
     'eval "$(fnm env)"',

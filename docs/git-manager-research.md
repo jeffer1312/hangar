@@ -7,7 +7,7 @@
 > painel e a folha viraram um modal único com abas (`components/Git.svelte` → `git/GitTabs.svelte` →
 > as três abas). As recomendações de layout seguem valendo; as âncoras de código, não.
 
-# BRIEF DE DESIGN — Git Manager do claude-pocket
+# BRIEF DE DESIGN — Git Manager do hangar
 
 Base verificada no código (âncoras reais):
 - **Push-view já existe**: `GitSheet.svelte:146-163` — `{#if diffPath}` troca a sheet inteira pelo diff viewer com botão `‹ voltar`. É o mecanismo a reusar pra log e pra detalhe de commit.
@@ -235,7 +235,7 @@ Os clientes mobile citados (Working Copy, GitHub mobile) resolvem isso **não te
 - [github/relative-time-element](https://github.com/github/relative-time-element) — componente oficial de timestamp relativo compacto/auto-updating usado no GitHub
 - [Tower Git Client — Release Notes](https://www.git-tower.com/release-notes) — fallback de avatar pra iniciais quando não há imagem, agrupamento por data
 
-**Arquivos relevantes no repo**: `/home/jefferson/pessoal/claude-pocket/frontend/src/components/GitSheet.svelte` (lista atual, padrão push-view do diff a reaproveitar), `/home/jefferson/pessoal/claude-pocket/backend/app/git_ops.py` (linha 91, formato do `git log` a estruturar).
+**Arquivos relevantes no repo**: `/home/jefferson/pessoal/hangar/frontend/src/components/GitSheet.svelte` (lista atual, padrão push-view do diff a reaproveitar), `/home/jefferson/pessoal/hangar/backend/app/git_ops.py` (linha 91, formato do `git log` a estruturar).
 
 ## R2 — Syntax highlighting (Shiki vs hljs vs Prism)
 
@@ -381,7 +381,7 @@ Isso também serve pro botão "log" (que hoje cai cru num `<pre>` feio): se quis
 - [github.com/wooorm/starry-night](https://github.com/wooorm/starry-night) e [readme.md](https://github.com/wooorm/starry-night/blob/main/readme.md) — bundle 185KB (core+WASM), +250KB (~35 langs) / +1.6MB (~600 langs), depende de WASM Oniguruma sempre.
 - [github.com/wooorm/starry-night/issues/8](https://github.com/wooorm/starry-night/issues/8) — suporte a WASM hospedado localmente (não-CDN).
 
-Arquivos do projeto lidos/relevantes: `/home/jefferson/pessoal/claude-pocket/frontend/src/components/GitSheet.svelte`, `/home/jefferson/pessoal/claude-pocket/frontend/package.json`, `/home/jefferson/pessoal/claude-pocket/frontend/src/app.css` (mecanismo `data-theme="light"` no `:root`, usado acima pra escolher `dark-plus`/`light-plus`).
+Arquivos do projeto lidos/relevantes: `/home/jefferson/pessoal/hangar/frontend/src/components/GitSheet.svelte`, `/home/jefferson/pessoal/hangar/frontend/package.json`, `/home/jefferson/pessoal/hangar/frontend/src/app.css` (mecanismo `data-theme="light"` no `:root`, usado acima pra escolher `dark-plus`/`light-plus`).
 
 ## R3 — Commit graph (algoritmo de lanes)
 
@@ -393,7 +393,7 @@ Arquivos do projeto lidos/relevantes: `/home/jefferson/pessoal/claude-pocket/fro
 
 **`dolthub/commit-graph`** é a referência mais próxima do que você quer — SVG, aceita `{sha, parents[], commit:{author,message}}` (formato estilo GitHub API), já implementa o algoritmo de branch/merge children, e tem `CommitGraph.WithInfiniteScroll` pra paginação ([github.com/dolthub/commit-graph](https://github.com/dolthub/commit-graph), [dolthub.com/blog/.../drawing-a-commit-graph](https://www.dolthub.com/blog/2024-08-07-drawing-a-commit-graph/)). Só que é **componente React**, não existe porte Svelte mantido (busquei, não achei nada sério).
 
-**Conclusão prática pro claude-pocket:** não vale puxar dependência nenhuma pra isso.
+**Conclusão prática pro hangar:** não vale puxar dependência nenhuma pra isso.
 - O algoritmo de lanes é ~30-50 linhas (seção 3) e dá pra rodar **no backend Python**, que já tem toda a lógica git em `git_ops.py`.
 - O frontend Svelte só recebe `{col, parentEdges}` já prontos e desenha um `<svg>` trivial — zero JS de grafo no client, zero bundle extra, 100% self-contained (constraint do projeto).
 - SVG > Canvas aqui: a escala é ~30-50 commits por página (não milhares), então o ganho de canvas citado nos benchmarks do pvigier só aparece na *virtualização de viewport* (0.58ms vs 106ms renderizando tudo), não na escolha SVG-vs-canvas em si ([pvigier.github.io](https://pvigier.github.io/2019/05/06/commit-graph-drawing-algorithms.html)). SVG dá hit-testing por commit de graça (tap no dot → abre diff), fica nítido em qualquer DPI de tela de celular, e não precisa de loop de redraw ao trocar tema light/dark.
@@ -489,7 +489,7 @@ Pontos-chave:
 - **Unified é o default certo pra mobile**, split (side-by-side) só quando tem largura (>820px, que já é o breakpoint do app). GitLab tem queixa documentada de review mobile ruim justamente porque força colunas lado a lado em tela estreita, gerando wrap pesado e ilegível. GitHub reverteu isso: hoje até o unified faz wrap automático de linha longa (antes só o split tinha).
 - **Linha longa**: quebrar (wrap), não scroll horizontal, em mobile — bibliotecas de referência (`git-diff-view`) expõem isso como prop booleana (`diffViewWrap`), CSS puro (`white-space: pre-wrap` + indent pra não confundir linha quebrada com linha nova).
 - **Virtualização pra diffs grandes**: renderizar só as linhas visíveis + overscan pequeno. `react-window` é a lib de referência do ecossistema (`FixedSizeList`/`VariableSizeList`, prop `overscanCount`, default 1) — como diff é monoespaçado, `FixedSizeList` (altura de linha fixa) já basta, não precisa da variante de tamanho variável. Em mobile, manter overscan baixo (1–3 linhas): mais overscan = scroll mais suave mas mais DOM/CPU, o que penaliza mais em device fraco. Libs de diff que já fazem isso: `react-virtualized-diff` (10k+ linhas), `react-diff-viewer-continued` (virtualiza linhas fora da viewport), Pierre `CodeView`/diffs.com (estima a altura de cada linha matematicamente, corrige e cacheia a estimativa enquanto rola, em vez de medir tudo de uma vez).
-- **Prático pro claude-pocket**: como o app é self-contained/sem CDN, não precisa puxar `react-window` inteiro — dá pra fazer virtualização caseira simples (slice do array de linhas visível calculado por `scrollTop / lineHeight` fixa, já que é monoespaçado) reaproveitando a mesma ideia de overscan pequeno. Unified como modo único no mobile (full-width sheet); split só quando o `GitSheet` estiver docado como painel lateral desktop com espaço de verdade.
+- **Prático pro hangar**: como o app é self-contained/sem CDN, não precisa puxar `react-window` inteiro — dá pra fazer virtualização caseira simples (slice do array de linhas visível calculado por `scrollTop / lineHeight` fixa, já que é monoespaçado) reaproveitando a mesma ideia de overscan pequeno. Unified como modo único no mobile (full-width sheet); split só quando o `GitSheet` estiver docado como painel lateral desktop com espaço de verdade.
 
 ## 4. Fontes citadas
 

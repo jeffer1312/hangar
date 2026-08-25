@@ -35,7 +35,7 @@ from pathlib import Path
 from app import contas, procinfo, tmux
 from app.config import list_config_dirs
 
-_log = logging.getLogger("claude_pocket.renova_token")
+_log = logging.getLogger("hangar.renova_token")
 
 # Prefixo próprio: o `new_hidden_shell` ainda põe `term-` na frente, então a sessão real nasce como
 # `term-cp-renova-<slug>-<hash>`. Nada mais no app usa esse nome, e o `_matar` daqui SÓ recebe alvo

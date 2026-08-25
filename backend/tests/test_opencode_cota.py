@@ -89,7 +89,7 @@ def test_config_grava_le_e_apaga(tmp_path, monkeypatch):
     # lacuna fica escrita aqui em vez de virar um assert que nao roda. Mesmo tratamento do
     # peers.json e do config dos agentes.
     if os.name == "posix":
-        assert oct((tmp_path / ".claude-pocket-opencode.json").stat().st_mode)[-3:] == "600"
+        assert oct((tmp_path / ".hangar-opencode.json").stat().st_mode)[-3:] == "600"
     opencode_cota.definir_config("chave:oc", "", "")
     assert opencode_cota.config_de("chave:oc") is None
 

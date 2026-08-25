@@ -118,7 +118,7 @@ def test_git_diffstat_repo_sem_commits_sem_spam(tmp_path, monkeypatch, caplog):
 
     monkeypatch.setattr(git_ops, "_run", sem_head)
     git_ops._diffstat_cache.clear()
-    with caplog.at_level(logging.WARNING, logger="claude_pocket.git_ops"):
+    with caplog.at_level(logging.WARNING, logger="hangar.git_ops"):
         assert git_ops.git_diffstat(str(tmp_path)) is None
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
@@ -135,7 +135,7 @@ def test_git_diffstat_returncode_nao_zero_avisa(tmp_path, monkeypatch, caplog):
 
     monkeypatch.setattr(git_ops, "_run", rc1)
     git_ops._diffstat_cache.clear()
-    with caplog.at_level(logging.WARNING, logger="claude_pocket.git_ops"):
+    with caplog.at_level(logging.WARNING, logger="hangar.git_ops"):
         assert git_ops.git_diffstat(str(tmp_path)) is None
     assert any("git_diffstat" in r.getMessage() for r in caplog.records)
 

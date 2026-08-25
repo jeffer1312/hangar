@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
-from app import tmux
+from app import atomico, tmux
 from app import agentpane
 from app.config import settings
 from app import runtime_config
@@ -43,7 +43,7 @@ from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cm
 # Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
 _UNSET = object()
 
-_log = logging.getLogger("claude_pocket.registry")
+_log = logging.getLogger("hangar.registry")
 
 
 # Idade minima de um marcador awaiting_input pra que um pane raspado SEM menu o rebaixe pra idle
@@ -124,7 +124,7 @@ def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
             entry["hasTrustDialogAccepted"] = True
             tmp = cfg.with_suffix(".json.cp-tmp")
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(cfg)
+            atomico.substituir(tmp, cfg)
         except Exception as e:
             _log.warning("pretrust falhou pra %s: %r", cwd, e)
 
@@ -166,7 +166,7 @@ def _marker_by_pids(config_base: Path, pids: list[int], exclude: set[str]) -> Op
     # claude que disparou o evento. Se esse pid e DESCENDENTE deste pane, o marcador e desta sessao
     # — resolve sessao BARE (sem --session-id no cmdline) de forma deterministica, sem chute por
     # mtime. Varios marcadores casando (ex: restart do claude no mesmo pane) -> o mais recente vence.
-    d = config_base / ".claude-pocket-active"
+    d = config_base / ".hangar-active"
     pidset = set(pids)
     best: tuple[float, str] | None = None
     try:
@@ -190,11 +190,11 @@ def _marker_by_pids(config_base: Path, pids: list[int], exclude: set[str]) -> Op
 
 
 def _active_marker_jsonl(config_base: Path, sid: str, exclude: set[str]) -> Optional[str]:
-    # Marcador do hook (state_hook.py): <config>/.claude-pocket-active/<boot_id>.json = {"jsonl": <path>}
+    # Marcador do hook (state_hook.py): <config>/.hangar-active/<boot_id>.json = {"jsonl": <path>}
     # = o transcript REALMENTE ativo daquele boot_id. Sinal DETERMINISTICO pro caso resume/clear, onde
     # o <boot_id>.jsonl do cmdline NUNCA nasce (o claude escreve no <uuid> resumido) -> sem isto resolvia
     # pro path fantasma = chat vazio. So vale se o arquivo existe e nao e de um auxiliar (subagente/daemon).
-    p = config_base / ".claude-pocket-active" / f"{sid}.json"
+    p = config_base / ".hangar-active" / f"{sid}.json"
     try:
         j = json.loads(p.read_text(encoding="utf-8")).get("jsonl")
     except (OSError, ValueError):
@@ -256,9 +256,9 @@ _PKG_PROVIDER = {"pi-coding-agent": "pi"}
 
 
 def _exigir_cp_engine() -> None:
-    """Recusa ALTO quando o `cp-engine` nao esta no PATH. Chamado antes de montar o prefixo.
+    """Recusa ALTO quando o `hangar-engine` nao esta no PATH. Chamado antes de montar o prefixo.
 
-    O `cp-engine --exec` vira o COMANDO do pane. Sem o lancador no PATH o pane morre no ato — e o
+    O `hangar-engine --exec` vira o COMANDO do pane. Sem o lancador no PATH o pane morre no ato — e o
     `tmux new-session` devolve 0 do mesmo jeito. Medido nesta VM (psmux 3.3.7): rc=0 na criacao e,
     tres segundos depois, `has-session` ja responde 1. Sem esta guarda o backend responde "sessao
     criada" pro celular e a sessao some sem deixar rastro, que e o pior modo de falha que existe
@@ -272,10 +272,10 @@ def _exigir_cp_engine() -> None:
     divergirem isto pode recusar uma criacao que funcionaria. Recusa visivel e com instrucao e
     melhor que sessao que evapora calada, e o conserto (instalar o lancador) serve pros dois.
     """
-    if shutil.which("cp-engine"):
+    if shutil.which("hangar-engine"):
         return
     raise ValueError(
-        "cp-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
+        "hangar-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
         "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
         "Windows, install.ps1.")
 
@@ -345,7 +345,7 @@ def name_of_pid(pid: int) -> Optional[str]:
 
     Existe pro recado nativo entre sessoes Claude (cross-session messaging): o transcript do destino
     traz `origin.verifiedPeerPid` do REMETENTE, e o app precisa do nome tmux — que e o endereco que
-    o cp-send, o pareamento e a UI usam. O `origin.name` que vem junto NAO serve: e o titulo da
+    o hangar-send, o pareamento e a UI usam. O `origin.name` que vem junto NAO serve: e o titulo da
     sessao ("Revisar novo modo de envio no backlog"), nao o nome (medido em 07/08/2026).
 
     Roda no parse do transcript, que vive num `to_thread` — o fork do tmux aqui nao toca o laco de
@@ -387,7 +387,7 @@ def inbox_socket_of(name: str) -> Optional[str]:
     (medido em 07/08/2026; o pid e o do processo `claude`). Ter o socket e o que torna a sessao
     alcancavel pelo `SendMessage` de outra — e o que o `ListAgents` de la vai listar.
 
-    Serve pro cp-send decidir, com FATO em vez de suposicao, se o caminho nativo existe pra este
+    Serve pro hangar-send decidir, com FATO em vez de suposicao, se o caminho nativo existe pra este
     alvo: sessao aberta antes da liberacao, sessao Codex/Pi ou sessao de outra maquina nao tem
     socket nenhum, e mandar o modelo usar `SendMessage` nesses casos seria mandar ele bater numa
     porta que nao existe.
@@ -473,7 +473,7 @@ def _warn_bilhete_once(pane_id: str, motivo: str) -> None:
 
 
 def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
-    """Mesma chave que a extensao usa pra gravar o bilhete (scripts/pi/cp-state.ts, paneKey).
+    """Mesma chave que a extensao usa pra gravar o bilhete (scripts/pi/hangar-state.ts, paneKey).
 
     No tmux e o `%N`, que e unico no servidor. No psmux (Windows) NAO e: medido em 21/08/2026,
     quatro sessoes vivas ao mesmo tempo e todas com `TMUX_PANE=%1` — a segunda sessao Pi
@@ -501,7 +501,7 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     conversa de outro agente.
     """
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    ticket = Path(base) / ".claude-pocket-pi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
+    ticket = Path(base) / ".hangar-pi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     sid = _pi_sid_of(pid) if pid else None
     try:
         # encoding explicito: o bilhete guarda o CAMINHO do transcript, e no Windows o default e
@@ -586,7 +586,7 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
     # Mesma chave do bilhete do Pi, pelo mesmo motivo: no psmux o %N nao e unico e dois panes Kimi
     # dividiriam um bilhete so (ver _chave_do_bilhete).
-    ticket = Path(base) / ".claude-pocket-kimi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
+    ticket = Path(base) / ".hangar-kimi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     try:
         data = json.loads(ticket.read_text(encoding="utf-8"))   # mesmo motivo do pi_session_file
         if not isinstance(data, dict):
@@ -1280,13 +1280,13 @@ class SessionRegistry:
             raise ValueError("sessoes Codex sao criadas via create_codex (async)")
         # Pi anda no MESMO caminho tmux do Claude, mas duas coisas daqui pra baixo sao Claude puro e
         # recusam alto em vez de "quase funcionar":
-        #  - motor: o `cp-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
+        #  - motor: o `hangar-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
         #    a sessao subiria na conta do proprio pi PARECENDO estar no motor pedido.
         # Resume do Pi passou a existir (branch `elif provider == "pi"` la embaixo, com
         # `pi --session-id <id>`); a recusa que morava aqui tornava aquele branch INALCANCAVEL.
         if provider == "pi" and engine:
             raise ValueError("motor so vale para provider claude")
-        # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (cp-engine so exporta
+        # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (hangar-engine so exporta
         # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
         if provider == "kimi" and engine:
             raise ValueError("motor so vale para provider claude")
@@ -1342,18 +1342,18 @@ class SessionRegistry:
             from app.adapters import get_adapter
             cmd = tmux.join_cmd(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
         if engine:
-            # `cp-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
+            # `hangar-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
             # exec o cmdline é o do claude, então a resolução de transcript por --session-id/--resume
             # continua funcionando.
             #
-            # Modelo e janela entram NO PREFIXO, não só no comando: o env que o cp-engine aplica
+            # Modelo e janela entram NO PREFIXO, não só no comando: o env que o hangar-engine aplica
             # exporta o mesmo modelo em cinco chaves e a janela em outra — a flag sozinha ganharia só
             # de ANTHROPIC_MODEL (ver engines.env_de). A janela vem do catálogo do provedor, resolvida
             # no backend (api.create_session); quem passa por aqui sem ela (ex: resume do Arquivo)
             # simplesmente não exporta a var — o CLI usa o default dele.
             _exigir_cp_engine()
-            pre = ["cp-engine", "--exec", engine]
+            pre = ["hangar-engine", "--exec", engine]
             if model:
                 pre += ["--model", model]
                 if context_window:
@@ -1706,7 +1706,7 @@ class SessionRegistry:
             # por que NADA aqui pode tocar o tmux antes de o comando inteiro estar pronto: recusar
             # depois do kill trocaria "resume recusado" por "sessao destruida e nao relancada".
             _exigir_cp_engine()
-            pre = ["cp-engine", "--exec", motor]
+            pre = ["hangar-engine", "--exec", motor]
             if modelo:
                 pre += ["--model", modelo]
                 if janela:

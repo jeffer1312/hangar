@@ -24,7 +24,7 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in
   `~/.kimi-code/config.toml` (no pane scraping for state). The pane↔session link is the hook's
-  ticket (`~/.claude/.claude-pocket-kimi/<pane>.json`) — the CLI has no caller-chosen session-id.
+  ticket (`~/.claude/.hangar-kimi/<pane>.json`) — the CLI has no caller-chosen session-id.
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
   (native AskUserQuestion stepper), `uploads.py`, `git_ops.py`, `commands.py`, `workflows.py`,
@@ -73,21 +73,23 @@ npm --prefix frontend run check            # svelte-check + tsc — THIS is the 
 
 ./scripts/test-wrappers.sh                 # claude-engine (bash/zsh/fish) against a fake `claude`, no tmux
 ./scripts/test-statusline.sh               # statusline.js contract (engine sessions suppress cost), needs node
-node scripts/test-pi-cp-state.mjs          # cp-state.ts: fork de subagente do Pi não rouba o pane
+node scripts/test-pi-hangar-state.mjs          # hangar-state.ts: fork de subagente do Pi não rouba o pane
 ```
 
 Sessions must run as `claude --session-id <uuid>` **inside tmux** — `scripts/install-claude-wrapper.sh`
 sets this up. A `claude` without an id, or outside tmux, is invisible to the app or flagged ⚠ no id.
-The same installer also wraps interactive `codex`: it calls the local backend through `scripts/cp-codex`,
+The same installer also wraps interactive `codex`: it calls the local backend through `scripts/hangar-codex`,
 creates a managed Codex app-server/TUI pair, and attaches the caller to that tmux session. Codex
 subcommands/advanced flags remain raw; `command codex` is the explicit bypass.
 
-## Sessões-irmãs (cp-send) + pareamento
+## Sessões-irmãs (hangar-send) + pareamento
 
-Sessões Claude da MESMA máquina se falam via `scripts/cp-send` (`--list`, `<sessao> "msg"`,
-`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd] [--engine <motor>]`) — tudo sobre a API
-local do backend (`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`,
-sidecars em `<config>/.claude-pocket-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
+Sessões Claude da MESMA máquina se falam via `scripts/hangar-send` (`--list`, `<sessao> "msg"`,
+`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd] [--engine <motor>] [--provider ...]
+[--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>]` — a sessão já NASCE no
+modelo/esforço/permissão pedidos, validados pelo backend via `app/model_args.py`) — tudo sobre a
+API local do backend (`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`,
+sidecars em `<config>/.hangar-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
 mostra chip 🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado
 `<a>__<b>.md` + split view desktop).
 
@@ -97,12 +99,12 @@ uma Kimi/GPT no mesmo trabalho: o par continua no MESMO `~/.claude` — skills, 
 compartilhado, PairSheet, tudo igual —, só o motor difere, e o consumo vai pra conta do provedor.
 O flag só repassa `engine` pro `POST /api/sessions`, então motor inexistente volta `400 motor
 invalido` e a sessão **não** nasce (nunca uma sessão que parece estar no motor e não está). O texto
-do protocolo que as sessões leem vive no heredoc de `scripts/install-cp-send.sh` — editar o
+do protocolo que as sessões leem vive no heredoc de `scripts/install-hangar-send.sh` — editar o
 `~/.claude/CLAUDE.md` direto é perdido no próximo sync.
 
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
 `orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
-cp-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
+hangar-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
 `orchestrating-idea-to-push` — conduz UM trabalho da ideia ao push: research, spec/plano com
 o usuário, e daí em diante autônomo — um executor, um revisor independente de outra família
 por commit, portão entre as Tasks, e uma sessão fresca revisando a branch no fim. O revisor
@@ -119,21 +121,21 @@ depois de cada merge. `SKILL.md` é roteador: cada sessão lê só a página do 
 **Instalar/atualizar numa máquina** (após `git pull`):
 
 ```bash
-./scripts/install-cp-send.sh          # symlink ~/.local/bin/cp-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
-./scripts/install-claude-wrapper.sh   # symlink ~/.local/bin/cp-engine + wrapper claude-engine — sem isto,
+./scripts/install-hangar-send.sh          # symlink ~/.local/bin/hangar-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
+./scripts/install-claude-wrapper.sh   # symlink ~/.local/bin/hangar-engine + wrapper claude-engine — sem isto,
                                        # motor configurado pelo celular abre um pane que morre na hora
                                        # (tmux new-session ainda retorna 0, o app reporta sucesso calado)
 systemctl --user restart hangar-backend.service   # API de pareamento/preview
 npm --prefix frontend run build                          # só se o front for servido estático (vite dev pega via HMR)
 ```
 
-Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o cp-send.
+Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o hangar-send.
 Escopo: pareamento e `--group` só dentro da mesma máquina. Recado 1:1 e `--list` alcançam OUTROS
 servidores via endereço `servidor::sessao`: `backend/peers.json` (id → base_url+token, gitignored;
 ver `peers.json.example`) + `CP_SERVER_ID` no `backend/.env`. Peer com `"enabled": false` sai da
 VARREDURA (painel e `--list`) mas segue endereçável por `servidor::sessao` — é pra máquina que
 você sabe que está desligada, senão cada poll paga o timeout de 4s esperando ela (id desta máquina, endereço de
-resposta do `[de: id::sessao]`). Só o cp-send muda — o backend nem sabe da feature.
+resposta do `[de: id::sessao]`). Só o hangar-send muda — o backend nem sabe da feature.
 
 ## SSE event model
 
@@ -159,6 +161,34 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   errada digita teclas que aquela TUI não espera.
 
 ## Conventions & gotchas (read before touching UI / backend lifecycle)
+
+- **O nome antigo (`claude-pocket`) só existe em ponte de compatibilidade** (rename de 25/08/2026).
+  O código conhece **um** nome: as pastas de dados são `<config>/.hangar-*`, o cofre do sync é
+  `~/.hangar/`, os comandos são `hangar-send`/`hangar-engine`/`hangar-codex`/`hangar-conta` e
+  `hangar-panel-*`, a instância do quickshell é `hangar`, e o logger é `hangar.*`. Escreva com o
+  nome novo; nunca leia o antigo em código novo. O que resta do velho é, todo ele, migração:
+  - `backend/app/migracao_sidecars.py`, chamado na **subida** do backend (`main.py`), renomeia
+    `.claude-pocket-*` → `.hangar-*` em todo perfil `~/.claude*` e deixa **link** no caminho antigo.
+    O link é o que impede a máquina de se partir no meio da atualização: hook, extensão do Pi e o
+    publicador de statusline do Kimi (`~/.kimi-code/statusline.js`, que nem mora neste repo) podem
+    estar vivos e desatualizados, escrevendo no nome velho — e caem na pasta nova. Startup, e não
+    installer, porque atualizar é `git pull` + reiniciar o serviço; rodar `install-*.sh` não é
+    garantido. Ele **nunca funde** duas pastas: destino já existente para naquele item, com aviso.
+  - `.json` SOLTOS (`apelidos`, `conn`, `models`, `runner`, `opencode`) leem os dois caminhos, novo
+    primeiro (`migracao_sidecars.caminho_de_leitura`), porque no Windows link de ARQUIVO exige
+    privilégio — para pasta há junção (`mklink /J`), para arquivo não há equivalente. **Escrita
+    sempre no nome novo.**
+  - `<cwd>/.hangar-uploads/` é a única pasta que mora no projeto, fora do alcance da migração da
+    subida: `uploads._base()` a migra na primeira leitura daquele cwd, senão todo anexo antigo
+    citado por caminho absoluto no histórico viraria 404.
+  - **Marcador de bloco gerenciado** (rc do shell, `~/.tmux.conf`, `keybinds.lua`, o bloco
+    "Sessões-irmãs" do `~/.claude/CLAUDE.md`) virou `hangar`, e cada installer **arranca o bloco do
+    marcador antigo antes** de escrever o novo — sem isso o arquivo do usuário fica com os dois, um
+    deles ensinando o comando velho e que nenhum installer atualiza mais.
+  - `cp-send` e companhia continuam existindo como **symlink permanente** pro mesmo script (rc
+    antigo e sessão Claude já aberta chamam o nome velho); as variáveis `CP_*` e o cookie
+    `cp_token` **não mudam** — quebrariam o `.env` de instalação alheia. A documentação ensina só o
+    nome novo.
 
 - **Two views: mobile & desktop (820px breakpoint).** `App.svelte` switches on
   `matchMedia('(min-width: 820px)')`: desktop → `DesktopShell` (which uses `Sidebar.svelte`), mobile →
@@ -270,7 +300,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   goal → sessão trabalha → idle dispara tick (`_on_hook_transition`, dentro do `_work`, só com
   `sent == 0`) → roda `check_cmd` (exit 0 = `done`) ou procura `LOOP_DONE` (→ `done_claimed`,
   que SÓ fecha com confirmação humana via `/loop/resolve`) → senão re-prompta com a cauda do erro.
-  Sidecar em `.claude-pocket-loop/<nome>.json` (sobrevive `/clear`); guardrails: max_iters,
+  Sidecar em `.hangar-loop/<nome>.json` (sobrevive `/clear`); guardrails: max_iters,
   branch≠main, kill-switch `automations_enabled`, anti-estagnação (mesma cauda 2×). Loop ativo
   **suprime o chain** da sessão. Campos `loop_status/loop_iter/loop_max` fluem no `/api/sessions`
   e no `sig` do SSE (badge 🔁 nas 2 views). Spec/decisões: docs/superpowers/specs/2026-07-22-*.md.
@@ -278,10 +308,10 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   a session can run on a non-Anthropic provider — only env vars change inside that session's process,
   `~/.claude` (skills, hooks, transcript) stays the SAME. Single source of truth at
   `~/.claude/engines.json` (0600). Four invariants: (1) `engines.py` is **stdlib-only** — an
-  `app.config` import there would pull in pydantic and break `scripts/cp-engine`, which the shell
+  `app.config` import there would pull in pydantic and break `scripts/hangar-engine`, which the shell
   calls with the system `python3`; (2) it's `ANTHROPIC_AUTH_TOKEN`, **never** `ANTHROPIC_API_KEY`
   (that one writes `customApiKeyResponses` into the global `~/.claude.json`); (3) the env is applied
-  by `cp-engine --exec <engine> -- claude …` (`os.execvpe` inside the pane) and **never** via
+  by `hangar-engine --exec <engine> -- claude …` (`os.execvpe` inside the pane) and **never** via
   `tmux -e`, because the key would land in `/proc/<pid>/cmdline`, world-readable — tmux doesn't
   inherit the caller's env, so there's no "just export it" path; (4) the context-window var is
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` — `CLAUDE_CODE_AUTO_COMPACT_WINDOW` measured inert on both
@@ -324,13 +354,13 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   digitar agora?" usa **duas capturas**, não uma: um pane parado não distingue spinner vivo de
   marcador de turno concluído (está na docstring do `state.classify`), e uma captura só recusava,
   com "está trabalhando", uma sessão que tinha acabado de terminar.
-- **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/cp-state.ts` + `components/PiModelPopover.svelte` + `components/PiEffortPopover.svelte`):
+- **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/hangar-state.ts` + `components/PiModelPopover.svelte` + `components/PiEffortPopover.svelte`):
   the third mechanism, next to Claude's TUI picker and Codex's app-server, and it does **not** scrape
   the pane. Measured on pi 0.82.1: `/model` is a fuzzy-**search** list of ~300 entries (footer
   `(1/301)`, 10 rows visible) — not enumerable from the pane and not navigable by counting `Down`;
   and there is no `/thinking` command (it lives inside `/settings` → "Thinking level", a submenu).
   So the Pi extension we already ship publishes a catalog sidecar
-  (`<config>/.claude-pocket-pi/models/<jsonl-stem>.json`, same key as the state marker) and registers
+  (`<config>/.hangar-pi/models/<jsonl-stem>.json`, same key as the state marker) and registers
   `/cp-model <provider> <id>` + `/cp-think <level>`, which the backend types with `send-keys` and Pi
   applies through `pi.setModel()` / `pi.setThinkingLevel()`. Two invariants: (1) the thinking levels
   are **per model** (glm-5.2 → off/low/medium/high/xhigh; k3 → low/high/max), so they come from the
@@ -339,6 +369,24 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **Before typing into the Pi's composer, ASK — the screen cannot tell a notice from a draft**
+  (`terminal_input._composer_ocupado_pi` + `pi_inbox.perguntar` + `responderPergunta` in
+  `scripts/pi/hangar-state.ts`). Pi prints extension notices (`console.error`) **inside the composer
+  band**, with the same ANSI as typed text; measured 22-23/08/2026, `cursor_flag` is 0 either way.
+  So the anti-paste guard counted our own `[hangar-state] linha do hangar conectada` as a draft and
+  every `/cp-model`/`/cp-think` came back **409 with the composer empty**. Recognizing each phrase by
+  regex is whack-a-mole (`/reload` draws a fourth one no regex of ours knows), and the "compare two
+  captures — a notice is static, a draft changes" upgrade the code itself proposed **was measured and
+  does not hold**: a *parked* draft is static too, and the parked draft is exactly what the guard
+  exists for. What answers is the Pi: `ctx.ui.getEditorText()` returns `""` with a notice on the band
+  and the exact text with a draft. So the `pi_inbox` line, until then delivery-only, took a second
+  verb — `{id, pedir}` out, `{id, resposta}` back. Four rules: questions live in a **separate**
+  futures dict from deliveries (a delivery resolves `(ok, erro)` and a question resolves a value);
+  `""` is an **answer** and `None` is absence (→ fall back to scraping, so an old extension behaves
+  exactly as before); the question does **not** take `linha.lock` (that lock orders *writes*, and a
+  read must not queue behind a 3s ACK); and it uses `pi_inbox.linha_de(name, pane_id)`, never the raw
+  pane. Note `/reload` drops and re-raises the line — a command fired inside that ~5s window falls to
+  plan B and can still 409.
 - **Ditado: a transcrição não é o problema, o que vem depois é** (`app/transcribe.py` +
   `app/narrar.py:limpar_ditado`). Duas etapas, dois modelos: a Whisper (`whisper-large-v3-turbo`)
   ouve, e um LLM limpa. Tudo aqui foi **medido em 14/08/2026** — 5 ditados reais × 3 execuções ×
@@ -360,7 +408,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     frase literal 3/3. Toda regra nova aqui **nasce com exemplo**, e com um contra-exemplo quando ela
     pode generalizar demais ("o ponto principal", "a barra de rolagem" não podem virar pontuação).
   - **Vocabulário vai pra Whisper, não pro LLM.** O `prompt` da API é enviesamento de decodificação,
-    e é onde `cp-send` para de sair "CP send". Consertar depois é impossível por construção: a
+    e é onde `hangar-send` para de sair "CP send". Consertar depois é impossível por construção: a
     limpeza tem ordem explícita de **preservar** nome próprio como veio, então o que a Whisper errou
     chega errado no fim. `VOCAB_BASE` (termos do app, valem pra todo mundo) + `ditado_vocabulario`
     (o que é de uma pessoa só), truncados em `_VOCAB_MAX` porque a API corta em ~224 tokens **calada**.
@@ -446,19 +494,19 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   várias linhas, mas quando a quebra cai em cima do par de contexto ele vira `💬 769k/238 770k…`.
   Nos dois casos o painel dizia "medição indisponível" **por causa do tamanho do terminal**.
   Contrato: quem RENDERIZA publica a linha inteira (sem ANSI) em
-  `<config>/.claude-pocket-status/<stem>.json` = `{"line", "ts"}` — mesma chave dos outros
+  `<config>/.hangar-status/<stem>.json` = `{"line", "ts"}` — mesma chave dos outros
   marcadores (o stem do `.jsonl`) — e `statusline.read()` a prefere ao pane, caindo nele quando não
   há sidecar (sessão sem instrumentação **nunca** pode ficar sem linha nenhuma). Três detalhes que
   já custaram bug: (1) o tmp do `tmp+rename` leva o **pid**, porque o script do Claude roda a cada
   render e duas invocações da mesma sessão se sobrepõem (nome fixo → `rename` promovendo bytes
-  entrelaçados, o mesmo furo que `cp_panel_common.py` já corrigiu); (2) `read()` exige **dict** —
+  entrelaçados, o mesmo furo que `hangar_panel_common.py` já corrigiu); (2) `read()` exige **dict** —
   JSON válido do tipo errado (`null`, lista) não levanta `ValueError` e o `.get()` derrubava a
   resolução de estado de TODAS as sessões em `list_with_state`; (3) o publicador do Pi vive na
   extensão porque a linha completa só existe dentro do processo dele — logo, **sessão Pi já aberta
   só passa a publicar depois de `/reload`** (o Pi carrega extensão na largada), enquanto o lado
   Claude vale na hora, por ser script executado a cada render. O publicador do **Kimi Code**
   (`~/.kimi-code/statusline.js`, fora do repo porque o `tui.toml` aponta pra lá) segue o lado
-  Claude: script a cada render, sidecar em `~/.claude/.claude-pocket-status/<sessionId>.json` —
+  Claude: script a cada render, sidecar em `~/.claude/.hangar-status/<sessionId>.json` —
   a chave é o `sessionId` do stdin, o mesmo que `session_key()` extrai do `wire.jsonl`. A linha
   dele replica os marcadores do Claude (`🤖 K3 (high✦)`, `📁 dir [branch*]`, `⚡5h`, `📅7d`,
   `🕐 HH:MM ⏱`) com duas diferenças de formato: o contexto vem como par **rotulado e sozinho**
@@ -505,9 +553,9 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `queued-` da fila durável; só o eco local dava 0 (ele some em ~1s, quando o `queued-` chega) e o
   chip nunca nascia. 409 fora do Kimi.
 - **Prévia ao vivo: sidecar do agente primeiro, pane depois** (`preview.read_sidecar` +
-  `scripts/pi/cp-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
+  `scripts/pi/hangar-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
   Pi recebe o bloco do assistente token a token (`message_update`) e publica o **último bloco de
-  texto** em `<config>/.claude-pocket-preview/<stem>.json` = `{"text", "ts"}`; `PreviewBroker._loop`
+  texto** em `<config>/.hangar-preview/<stem>.json` = `{"text", "ts"}`; `PreviewBroker._loop`
   o prefere e só cai no `capture-pane` quando não há sidecar. É o que tira a prévia do Pi da
   adivinhação: todo o `extract_assistant_text` (verbo de ferramenta, caixa do composer, spinner,
   painel de Todos) existe só pra separar prosa de desenho de TUI, e um quadro do spinner em `*`
@@ -579,6 +627,19 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     **5s** and returns rc=1 with the session still alive. `tmux.alvo_de_kill` is the single place
     that knows this (production and tests share it); test teardowns that missed it left **65** orphan
     servers on this machine and made `test_termsock` fail the NEXT case with "duplicate session".
+  - **Killing the last session does not end the SERVER, and `list-sessions` cannot tell you.** psmux
+    keeps a pre-warmed `tmux server -s __warm__ -L <socket>` process alive per socket, forever, each
+    holding a shell and a console. On an emptied socket `list-sessions` answers rc=0 with **empty
+    output** — byte-identical to a socket that never existed — so there is no question to ask the
+    multiplexer; the process table is the only answer. This is a *test* leak with a machine-sized
+    bill: 70 orphans here on 22/08/2026, ~12,7 GB of working set, and the Claude session running the
+    suite died with the VM at its memory ceiling (`0xc00000fd`). Not one test ever went red. The
+    cleanup is `kill-server` **on the own `-L` socket** (rc=0, 0,1s, idempotent even on a virgin
+    socket) — never bare, which would take down the user's default tmux server. `tests/tmux_teste.py`
+    is the single place that knows it (`novo_socket`/`matar_servidor`, which refuses an empty socket),
+    and a session-scoped conftest fixture fails the suite if any registered socket still has a live
+    process. On Linux the same defect is harmless (the server exits with the last session; a 0-byte
+    socket file stays), so the fix is the same command with no OS branch.
   - **`rename-session` to an occupied name overwrites instead of failing** (rc=0). The session that
     was there does not die: it becomes unreachable, with the name pointing at the other one, and both
     processes keep running. `registry.rename` depends on the refusal to fall back to killing the old
@@ -659,11 +720,103 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `settings.json` must NOT have a BOM (`JSON.parse` in Node throws on it), while the PowerShell
   **profile** must — it is the only encoding both 5.1 and 7 can read when the path has an accent
   (5.1 alone writes ANSI, 7 alone writes UTF-8-no-BOM, and each fails to read the other's).
+- **Two Windows traps that a `subprocess` and a `tmp+rename` hide from you** (measured 22/08/2026 on
+  this VM, python 3.14, locale cp1252, console codepage 850). Both are cases where the failure does
+  **not** land where you would look for it.
+  - **`Path.replace` IS `os.replace`** — `pathlib` calls `os.replace(self, target)` — so
+    `tmp.replace(alvo)` carries the exact WinError 5 that `atomico.substituir` exists to survive.
+    The first sweep converted only the `os.replace(tmp, alvo)` spelling and left 20 sites written the
+    other way, the sidecars with a concurrent reader by design among them (durable queue, the state
+    marker read by a hook in another process, the price cache). The guard is now on the **shape**:
+    `tests/test_atomico_call_sites.py` walks the AST of `app/` for `<x>.replace(<one positional
+    arg>)`, a signature only the file rename has (`str.replace` takes two, `datetime.replace` takes
+    keywords). Testing this needs the fake `os.replace` patched on the **`os` module**, not on
+    `atomico.os` — same object, and only that reaches the `pathlib` spelling, so the case fails
+    against the old code on Linux too.
+  - **A strict decode failure in `subprocess` dies in a reader THREAD.** With `capture_output` there
+    are two pipes, so Windows reads them in threads: `encoding="utf-8"` without `errors=` on a byte
+    that is not UTF-8 prints `Exception in thread` to stderr, `run()` raises **nothing** and
+    `stdout` comes back **None** — the caller blows up later, far from the cause (on Linux the same
+    code raises `UnicodeDecodeError` from `run()`). This is why `errors="replace"` stays in
+    `conta_estado`/`pi_catalog`; what changed is that its output stops being stamped as good — a
+    field carrying U+FFFD is dropped (`conta_estado`, so the account keeps working) or refused
+    (`pi_catalog`, where the `id` is later TYPED into the TUI). Note also that `encoding="utf-8"`
+    **alone** already fixes the cp1252 mojibake; `errors=` covers a different failure.
+- **`monkeypatch.setattr(os, "name", …)` in a test takes `pathlib` with it — and it does NOT blow up
+  where you patched.** This is how `test_script_ao_lado_do_projeto_nao_e_acusado_de_inexistente`
+  shipped green on Windows and could not even start on Linux (fixed in `b4d97790`): forcing
+  `os.name = "nt"` to exercise a Windows branch made the test's own helper raise
+  `UnsupportedOperation: cannot instantiate 'WindowsPath' on your system` before it asserted
+  anything. Measured on 3.14 (win) and confirmed by the Linux run, the mechanism is worth knowing
+  because none of it is where you would look:
+  - The guard is a subclass `__new__` installed **at import time** by the REAL `os.name`
+    (`class PosixPath: if os.name == 'nt': def __new__… raise`). Patching the attribute later never
+    moves it, so the raising class is fixed for the whole process.
+  - `Path(...)` itself **does not raise** — `Path.__new__` calls `object.__new__(cls)` and skips
+    that guard, while still picking the class from the PATCHED `os.name`. So you get a `PosixPath`
+    on Windows (or a `WindowsPath` on Linux) and nothing complains yet.
+  - The blow-up lands on the first operation that RE-instantiates: `/`, `.parent`, `.with_suffix`
+    (all go through `type(self)(...)`). And it is not uniform — measured, `PosixPath("a").is_file()`
+    on Windows answers `False` instead of raising, so the wrong-class path can also just lie.
+  So: in a test that patches `os.name`, use **`os.path`** (`join`/`isfile`), which is chosen at
+  import and does not change class under you. Patching `os.name` is still the right way to exercise
+  a `if os.name == "nt"` branch on both systems — it is the `pathlib` in the test's own scaffolding
+  that has to go. Sibling cases only escaped by mocking `shutil.which` with a constant lambda.
+- **`stop_command` on Windows: the return code cannot be read as failure, and the shell won't tell
+  you in a language you can parse** (`projects.py`, measured against the real `cmd.exe`).
+  `taskkill /F /IM x` with no such process answers **128**, the Windows sibling of the `pkill`
+  returning 1 that made this code ignore `rc` in the first place; a POSIX `stop_command` (common
+  when the project came from a Linux box) answers **1** with "not recognized". Charging by `rc`
+  turns every stop of an already-stopped project into an error on screen, and the two stderr
+  messages come translated into the Windows UI language. What separates them without depending on
+  either is whether the command **exists** — so the check runs only **after** a non-zero rc, on the
+  first token of the line, with `cwd` added to the search (`cmd.exe` looks at the current directory
+  before PATH) and cmd builtins skipped. Not-found → a `ProjectError` naming the command and warning
+  about the orphan; found and failed → silence, with rc and the stderr tail in the log. The stderr
+  never reaches the screen: it comes in the console's OEM codepage, not the locale's.
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
   session creation fail (app and terminal both). Failing the probe, sessions are created without the
   scope and the backend logs a warning (commit `23da052`).
+- **Atualizar pelo app** (`app/atualizar.py` + `app/atualizacoes.py` + `docs/atualizacoes/`): o
+  botão faz tudo sozinho — decisão do usuário em 25/08/2026 —, `reset --hard` e reinstalador
+  incluídos, porque quem usa não administra nada e não deve precisar saber que passos existem.
+  Quatro coisas que o desenho decide de propósito:
+  - **Roda destacado do backend** (`setsid` / `DETACHED_PROCESS`), e o progresso mora em
+    `<config>/.hangar-update/estado.json`. A atualização reinicia o backend: dentro do processo ela
+    se mataria no meio, e a máquina ficaria com código novo no disco e processo velho no ar — o
+    estado que `install.ps1:1242` já registra como o pior. O arquivo é também o que deixa a tela
+    dizer "atualizando…" enquanto o servidor volta, em vez de "desconectado".
+  - **Automático não é irreversível.** `resguardar()` roda antes de qualquer coisa destrutiva: o
+    que estava no disco vai pra `resgate/<data-hora>` + stash, e a função **confere a ref** antes
+    de devolver. Falhou o resgate, a atualização para com o disco intacto. O único `reset --hard`
+    que não passa por ali é o rollback, cujo alvo é um commit da própria máquina de minutos antes.
+  - **O registro é do que JÁ RODOU aqui** (`aplicados.json`), não do intervalo de commits. O
+    intervalo fura em instalação nova e em quem reclonou ou resetou. Instalação do zero marca tudo
+    como aplicado (os dois installers), senão a primeira atualização roda a história inteira.
+  - **Passo só entra no registro depois da PROVA passar** — comando com exit 0 e efeito ausente é
+    a falha que o campo `prova` existe pra pegar. Passo novo: um arquivo em `docs/atualizacoes/`
+    (formato no README de lá), no mesmo commit que o exige. Os não destrutivos também rodam na
+    **subida do backend** (`main.py`), pelo motivo do `migracao_sidecars`: atualizar aqui é
+    `git pull` + reiniciar, e ninguém garante que o botão foi usado.
+  - **Quem reinicia o serviço é diferente em cada sistema, e no Windows já é o installer.** No
+    Linux é `systemctl --user restart`; no Windows o `install.ps1 -Update` — chamado na etapa
+    anterior — já derruba a instância velha (`Pare-Servico`) e chama `Start-ScheduledTask`, e esse
+    bloco NÃO é pulado no modo `-Update` (o que ele pula é firewall/Tailscale e o hook). Há ainda
+    a tarefa `hangar-vigia`, que sobe a tarefa de novo se a porta não estiver escutando. Por isso
+    `_reiniciar` não faz nada no ramo Windows: marcar "falta reiniciar" ali fazia a tela pedir um
+    passo que já tinha sido dado. Medido em 25/08/2026 naquela máquina: três tarefas
+    (`hangar-backend`, `hangar-frontend`, `hangar-vigia`), backend como cadeia de três processos,
+    e todas em `Ready` mesmo com o servidor vivo — o `.vbs` não espera.
+  - **O installer matava a própria atualização, e a proteção é por COMANDO, não por linhagem.** O
+    `Pare-Servico` derruba a "instância anterior" casando o caminho do checkout mais `uv|python`, e
+    o motor roda como `<repo>\backend\.venv\Scripts\python.exe -m app.atualizar` — casa nos dois.
+    Ou seja, o instalador chamado PELA atualização matava quem o invocou, no meio dela (medido
+    25/08/2026: lock e processo morreram no minuto do "instância anterior derrubada"). A proteção
+    por linhagem já existia e não bastou; hoje há exclusão explícita de quem tem `app.atualizar` na
+    linha de comando. No Linux quem cobre isso é o escopo transiente do systemd, que lá não existe.
+
 - **Plan progress** (`app/planprog.py` + `registry._decorate_plan` + `PlanBar`/`PlanPanel.svelte`):
   the source of truth is the plan's own `.md` under `docs/superpowers/plans/` — no separate state
   file, `parse_plan` re-reads it and re-counts `- [x] **Step …**` on every discovery. Fenced blocks

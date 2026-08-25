@@ -31,7 +31,7 @@ _MAX_Q = 200             # comprimento maximo da query (excedente e truncado)
 # Sobe se um dia um transcript legitimo passar disso e some da busca.
 _MAX_FILESIZE = "64M"
 
-_log = logging.getLogger("claude_pocket.search")
+_log = logging.getLogger("hangar.search")
 _rg_avisado = False
 
 

@@ -83,7 +83,13 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // /api/model-options e POST /api/sessions — catalogo do Pi falhou ou provider fora de escopo
   erro_pi_list_models: (p) => m.erro_pi_list_models({ erro: String(p.erro) }),
+  // Sem `{erro}` de proposito: o texto do backend aqui e a instrucao ("instale o Pi / ajuste o
+  // PATH"), nao um errno pra repassar — o que a pessoa precisa ler ja esta na frase traduzida.
+  erro_pi_ausente: () => m.erro_pi_ausente(),
   erro_provider_invalido: () => m.erro_provider_invalido(),
+  // POST /api/ditado/relimpar — so aparece se o cliente mandar um estilo fora da lista (os botoes
+  // da barra do ditado saem de estilosDitado, entao na pratica e defesa de contrato).
+  erro_estilo_invalido: () => m.erro_estilo_invalido(),
   // POST /api/sessions aceita claude/codex/pi/kimi — o texto generico nao pode orientar so
   // claude/pi (contrato do erro_provider_invalido, que so vale pro /api/model-options)
   erro_provider_sessao_invalido: () => m.erro_provider_sessao_invalido(),
@@ -134,6 +140,8 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_sessao_nao_encontrada_detalhe: (p) => m.erro_sessao_nao_encontrada_detalhe({ detalhe: String(p.detalhe) }),
   erro_sessao_recado_nao_enfileirado: () => m.erro_sessao_recado_nao_enfileirado(),
   erro_sessao_opcao_nao_enviada: () => m.erro_sessao_opcao_nao_enviada(),
+  erro_opcao_nao_convergiu: (p) => m.erro_opcao_nao_convergiu({ detalhe: String(p.detalhe) }),
+  erro_mux_indisponivel: (p) => m.erro_mux_indisponivel({ detalhe: String(p.detalhe) }),
   erro_workflow_inexistente: () => m.erro_workflow_inexistente(),
   erro_agente_inexistente: () => m.erro_agente_inexistente(),
   erro_subagente_inexistente: () => m.erro_subagente_inexistente(),

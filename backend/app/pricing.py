@@ -19,6 +19,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from app import atomico
+
 # Só provedores de primeira mão. Varrer os 176 do models.dev casa 'k3' com uma entrada de preço
 # ZERO de alguma revenda e a sessão inteira vira US$ 0,00, calada — medido. Ampliar esta lista
 # quebra test_lista_de_provedores_e_fechada de propósito.
@@ -97,7 +99,7 @@ _log = logging.getLogger(__name__)
 
 URL = "https://models.dev/api.json"
 SNAPSHOT = Path(__file__).with_name("pricing_data.json")
-_CACHE_DIR = Path.home() / ".claude" / ".claude-pocket-pricing"
+_CACHE_DIR = Path.home() / ".claude" / ".hangar-pricing"
 _TTL = 24 * 3600
 
 # Prefixos de provedor que o Pi e os gateways grudam no id. A ordem não importa: só um casa.
@@ -219,7 +221,7 @@ def gravar_override(model: str, tarifa: dict) -> None:
     # seco, pra caractere fora do mapa) e relido como utf-8 por _ler_json. Os dois lados do
     # round-trip precisam dizer utf-8; só um deles dizendo é pior que nenhum.
     tmp.write_text(json.dumps(atual, indent=1, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(p)
+    atomico.substituir(tmp, p)
     invalidar_cache()
 
 
@@ -344,6 +346,6 @@ def _baixar() -> None:
     payload = {"modelos": slim(bruto)}
     tmp = destino.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")   # ver gravar_override
-    tmp.replace(destino)
+    atomico.substituir(tmp, destino)
     invalidar_cache()
     _log.info("tarifas: %d modelos atualizados do models.dev", len(cat))

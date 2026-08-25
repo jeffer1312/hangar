@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from app import tmux
 
-from tmux_teste import matar_sessao
+from tmux_teste import matar_servidor, matar_sessao, novo_socket
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +53,41 @@ def test_list_sessions_empty_when_no_server():
     fake = MagicMock(stdout="", returncode=1, stderr="no server running")
     with patch.object(tmux, "RUN", return_value=fake):
         assert tmux.list_sessions() == []
+
+
+def test_timeout_do_tmux_nao_vira_lista_vazia():
+    # Caso do Windows (25/08/2026): as sessoes sumiam todas do app com o servidor ainda verde.
+    # `list-panes -a` estourando o timeout virava rc=1, que era lido como "zero sessoes" — e um
+    # snapshot vazio VALIDO faz o SSE mandar `[]` pro app, apagando a lista. Agora levanta, e quem
+    # ouve (o refresher da lista) segura o ultimo snapshot bom.
+    with patch.object(tmux, "RUN", side_effect=subprocess.TimeoutExpired(["tmux"], 5)):
+        for chamada in (tmux.list_panes_all, tmux.list_panes_active, tmux.list_sessions):
+            with pytest.raises(tmux.MuxIndisponivel):
+                chamada()
+
+
+def test_tmux_ausente_tambem_levanta():
+    # FileNotFoundError (tmux fora do PATH) e a mesma classe de "nao sei", nao "nao ha sessao".
+    with patch.object(tmux, "RUN", side_effect=FileNotFoundError("tmux")):
+        with pytest.raises(tmux.MuxIndisponivel):
+            tmux.list_panes_all()
+
+
+def test_sem_servidor_rodando_continua_sendo_lista_vazia():
+    # A contraparte: rc=1 vindo do PROPRIO tmux ("no server running") e resposta legitima de que
+    # nao ha sessao nenhuma — levantar aqui trocaria a lista vazia correta por um erro na tela.
+    fake = MagicMock(stdout="", returncode=1, stderr="no server running on /tmp/tmux-1000/default")
+    with patch.object(tmux, "RUN", return_value=fake):
+        assert tmux.list_panes_all() == {}
+        assert tmux.list_panes_active() == []
+        assert tmux.list_sessions() == []
+
+
+def test_falha_de_comando_que_nao_lista_segue_silenciosa():
+    # So a listagem separa os dois casos. send_keys com o tmux travado continua devolvendo False,
+    # sem levantar — levantar ali so trocaria um caminho de falha silencioso por outro.
+    with patch.object(tmux, "RUN", side_effect=subprocess.TimeoutExpired(["tmux"], 5)):
+        assert tmux.send_keys("cc", "oi") is False
 
 
 def test_list_panes_active_parses_pane_id():
@@ -123,7 +158,7 @@ def test_has_session_is_exact_against_real_tmux():
     # entao `has_session("X")` respondia VIVO por causa da IRMA "X-2" — e o /input dava "entregue"
     # digitando num pane que nao existe. Os outros testes stubam has_session, por isso nenhum via.
     # Socket proprio (-L) e sessao de nome aleatorio: nao encosta no tmux/sessoes do usuario.
-    sock = f"cp-test-{uuid.uuid4().hex[:8]}"
+    sock = novo_socket()
     base = f"pocket-{uuid.uuid4().hex[:6]}"
 
     def tmux_on_sock(args, **_kw):
@@ -138,10 +173,11 @@ def test_has_session_is_exact_against_real_tmux():
             assert tmux.has_session(base) is False         # NUNCA existiu (so a irma "-2") -> prefix mentia
             assert tmux.has_session(base[:-3]) is False    # prefixo puro
     finally:
-        # kill-SESSION (alvo exato), nunca kill-server: um `-L` esquecido num kill-server derruba o
-        # servidor tmux DEFAULT e com ele todas as sessoes do usuario. Matar a unica sessao ja encerra
-        # este servidor sozinho, e um socket orfao vazio e inofensivo — nao vale o risco do atalho.
+        # "Matar a unica sessao ja encerra este servidor sozinho" era o que este comentario dizia,
+        # e vale no tmux — nao no psmux, onde sobra um `-s __warm__` por socket, pra sempre. O
+        # kill-server continua proibido solto: o `matar_servidor` exige o `-L` e confere a limpeza.
         matar_sessao(f"{base}-2", sock)
+        matar_servidor(sock)
 
 
 def test_pane_target_uses_exact_session_form():
@@ -480,7 +516,7 @@ def test_new_session_sem_systemd_run_quebrado_ainda_cria(monkeypatch):
 # --- fatiamento de literal grande no Windows (corte do inicio pela TUI no submit) -----------------
 # No Windows a TUI do Claude Code come o COMECO de um send-keys -l acima de ~1120 chars (entra em
 # modo paste e o Enter envia so a cauda). Foi o corte do prompt de pareamento (1220 -> so ~300
-# finais, sem o "[de: claude-pocket]"). O send_keys fatia em pedacos <= _WIN_CHUNK com pausa, SO no
+# finais, sem o "[de: hangar]"). O send_keys fatia em pedacos <= _WIN_CHUNK com pausa, SO no
 # Windows. Estes testes travam as duas garantias: Windows fatia byte-exato; Linux fica intocado.
 
 def _captura_run(monkeypatch):

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
+  pedeMarcacao,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn, relativeTime,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   untrackedReason,
@@ -58,7 +59,7 @@ describe('initials', () => {
   });
 
   it('takes first letter of each of two words', () => {
-    expect(initials('claude-pocket')).toBe('CP');
+    expect(initials('api-front')).toBe('AF');
   });
   it('splits on non-alphanumeric separators', () => {
     expect(initials('app_web')).toBe('AW');
@@ -134,6 +135,31 @@ describe('nextAwaiting', () => {
   it('returns itself when it is the only awaiting session', () => {
     const sessions = [{ name: 'a', state: 'awaiting_input' as const }];
     expect(nextAwaiting(sessions, 'a')).toBe('a');
+  });
+});
+
+describe('pedeMarcacao', () => {
+  it('reconhece o menu de marcação pela caixa na frente da opção', () => {
+    // Caso vivo de 25/08/2026: a tira de atenção mostrou "[ ] backend" como resposta rápida.
+    expect(pedeMarcacao(['[✓] app de desktop', '[ ] backend', '[ ] Type something'])).toBe(true);
+  });
+
+  it('basta UMA opção com caixa — o escape do AskUserQuestion vem sem ela', () => {
+    expect(pedeMarcacao(['[ ] app de desktop', '[ ] backend', 'Chat about this'])).toBe(true);
+  });
+
+  it('escolha única não pede marcação', () => {
+    expect(pedeMarcacao(['Gerar miniatura no backend', 'Remover exibição no front'])).toBe(false);
+  });
+
+  it('lista vazia ou ausente não pede marcação', () => {
+    expect(pedeMarcacao([])).toBe(false);
+    expect(pedeMarcacao(undefined)).toBe(false);
+    expect(pedeMarcacao(null)).toBe(false);
+  });
+
+  it('colchete no MEIO do texto não conta — só o que abre a linha', () => {
+    expect(pedeMarcacao(['Rodar com [--force]', 'Cancelar'])).toBe(false);
   });
 });
 
@@ -776,7 +802,7 @@ describe('parseImageMessage', () => {
     // só por `/` devolvia o caminho inteiro como basename: a URL virava
     // `/uploads/C%3A%5C…`, o backend respondia 400 e a foto aparecia quebrada no celular.
     const out = parseImageMessage(
-      `${cap} — 📎 imagem: C:\\cockpit\\.claude-pocket-uploads\\1787356601-230c76.png`,
+      `${cap} — 📎 imagem: C:\\cockpit\\.hangar-uploads\\1787356601-230c76.png`,
     )!;
     expect(out.caption).toBe(cap);
     expect(out.filenames).toEqual(['1787356601-230c76.png']);

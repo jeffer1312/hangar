@@ -78,7 +78,7 @@ def parse(texto: str) -> dict | None:
     cores = {k: v for k, v in bruto.items() if _HEX.match(v)}
     faltando = [t for t in TOKENS if t not in cores]
     if faltando:
-        # WARNING, nao DEBUG: o nivel efetivo do root e WARNING (main.py so eleva "claude_pocket"
+        # WARNING, nao DEBUG: o nivel efetivo do root e WARNING (main.py so eleva "hangar"
         # pra INFO), entao um debug aqui nunca chega no stderr/journald mesmo com handler — o unico
         # sinal de que o rice mudou de formato ficava mudo. `getLogger(__name__)` (linha 22) ja e o
         # padrao usado por auth.py/engines.py/default_model.py/pi_inbox.py, que contam com esse

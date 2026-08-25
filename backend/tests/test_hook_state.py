@@ -9,7 +9,7 @@ def _write(d: Path, sid: str, state: str):
 
 
 def test_load_existing_seeds_map(tmp_path):
-    sd = tmp_path / ".claude-pocket-state"
+    sd = tmp_path / ".hangar-state"
     _write(sd, "aaa", "working")
     _write(sd, "bbb", "idle")
     hs = hook_state.HookState()
@@ -25,7 +25,7 @@ def test_get_state_none_when_absent(tmp_path):
 
 
 def test_apply_updates_existing(tmp_path):
-    sd = tmp_path / ".claude-pocket-state"
+    sd = tmp_path / ".hangar-state"
     _write(sd, "aaa", "working")
     hs = hook_state.HookState()
     hs.load_existing([tmp_path])
@@ -35,7 +35,7 @@ def test_apply_updates_existing(tmp_path):
 
 
 def test_apply_ignores_bad_json(tmp_path):
-    sd = tmp_path / ".claude-pocket-state"; sd.mkdir(parents=True)
+    sd = tmp_path / ".hangar-state"; sd.mkdir(parents=True)
     (sd / "x.json").write_text("{ not json")
     hs = hook_state.HookState()
     hs._apply(sd / "x.json")             # no raise

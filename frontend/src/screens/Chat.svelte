@@ -57,6 +57,7 @@
   import { createActivityFolder } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '@hangar/core';
+  import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';
@@ -984,7 +985,13 @@
     clearTimeout(watchdog);
     // Mesmo guard do onerror: sessao 'dead' nao ganha reconexao infinita de 25s (o estado final
     // ja chegou; reviver e acao do usuario via resume, nao do watchdog).
-    watchdog = setTimeout(() => { if (currentState !== 'dead') connectSSE(); }, 25000);
+    watchdog = setTimeout(() => {
+      // Conexão MEIO-ABERTA: 25s sem um único evento, nem o ping de 10s do backend. É o caso que
+      // não dispara `onerror` e que, sem registro, some sem deixar rastro.
+      diag.registrar({ evento: 'sse.mudo', nivel: 'aviso', tela: 'chat', sessao: sessionName,
+                       ms: 25000 });
+      if (currentState !== 'dead') connectSSE();
+    }, 25000);
   }
   // Qualquer evento recebido = conexao viva: rearma o watchdog E zera o backoff do onerror.
   function noteAlive() {
@@ -1010,6 +1017,11 @@
     if (es) { es.close(); es = null; }
 
     es = openEventStream(sessionName, lastEventId);
+    // Ciclo de vida da conexão no diário de uso. É o que faltava nos relatos de "a conversa parou"
+    // e "as sessões sumiram": sem isto não dá pra distinguir queda de rede, reconexão em laço e
+    // conexão viva com a lista congelada, e a análise vira chute.
+    diag.registrar({ evento: 'sse.abrir', tela: 'chat', sessao: sessionName,
+                     provider: sessionProvider });
     armWatchdog();
 
     es.addEventListener('message', (e) => {
@@ -1173,8 +1185,16 @@
     es.onerror = () => {
       // Erro REAL (TCP RST). FECHA o es (senao o auto-retry nativo vira uma 2ª maquina de retry
       // martelando em paralelo) e reagenda com backoff. Half-open nao cai aqui -> watchdog cobre.
+      const estadoSSE = es?.readyState ?? 2;   // lido ANTES do close, que o zera pra CLOSED
       es?.close(); es = null;
       clearTimeout(watchdog);
+      // `readyState` é o que separa os dois motivos que dão o mesmo `onerror`: CONNECTING (0) = o
+      // navegador está tentando de novo (rede caiu, servidor reiniciou); CLOSED (2) = o servidor
+      // recusou de vez (401, 404, sessão morreu). Sem ele o diário registrava "caiu" e a análise
+      // parava aí.
+      const motivo = estadoSSE === 0 ? 'reconectando (rede/servidor)' : 'fechado pelo servidor';
+      diag.registrar({ evento: 'sse.caiu', nivel: 'erro', tela: 'chat', sessao: sessionName,
+                       codigo: String(estadoSSE), ms: sseRetryDelay, detalhe: motivo });
       if (currentState === 'dead' || !alive) return;
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connectSSE, sseRetryDelay);
@@ -1538,7 +1558,13 @@
     avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
   }
 
+  // Trava de um envio por vez (mesma do BoardCard): o /select agora le o cursor do picker, corrige
+  // e so entao da Enter — dois toques rapidos leriam a mesma tela e se atropelariam no meio.
+  let selBusy = $state(false);
+
   async function handleSelect(option: number) {
+    if (selBusy) return;
+    selBusy = true;
     clearTimeout(avisoErrTimer);
     avisoErr = '';
     try {
@@ -1546,6 +1572,8 @@
     } catch (err) {
       console.error('selectOption error:', err);
       mostrarAviso(err);
+    } finally {
+      selBusy = false;
     }
   }
 

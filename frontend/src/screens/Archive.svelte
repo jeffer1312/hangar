@@ -165,7 +165,7 @@ import { intlLocale } from '../lib/locale';
          "session_" pra TODA conversa do Kimi. A ultima msg identifica melhor de qualquer forma. -->
     <NavBar title={sel.preview || sel.ultima || sel.session_id.slice(0, 8)} showBack={true} onBack={() => (selected = null)} />
     <div class="resume-bar">
-      <!-- Motor é do Claude: mandá-lo num resume de Pi/Kimi faria o cp-engine exportar chave de
+      <!-- Motor é do Claude: mandá-lo num resume de Pi/Kimi faria o hangar-engine exportar chave de
            outro provedor pra um CLI que nem lê essas variáveis. -->
       {#if sel.provider === 'claude' && Object.keys(motores).length}
         <label class="engine-pick">

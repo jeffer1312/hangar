@@ -13,8 +13,11 @@ import * as m from '../paraglide/messages';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
+  import Orq from '../screens/Orq.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { getConfig } from '@hangar/core';
+  import { getConfig, getAtualizacao } from '@hangar/core';
+  import { atualizarUI } from '../lib/atualizarUI.svelte';
+  import AtualizarSheet from './AtualizarSheet.svelte';
   import { getActiveId, selectServer } from '../lib/auth';
   import { navMode } from '../lib/navMode.svelte';
   import type { AggSession } from '@hangar/core';
@@ -44,13 +47,14 @@ import * as m from '../paraglide/messages';
     onCloseOverlay: () => void;
     onToggleBoard: () => void;
     onToggleCanvas: () => void;
+    onToggleOrq: () => void;
     onNavigateToChat: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
   }
   let {
     currentSession, currentKey = null, view, overlaySession,
     onOpenBoardSession, onOpenCanvasSession, onCloseOverlay, onToggleBoard, onToggleCanvas,
-    onNavigateToChat, onCompare,
+    onToggleOrq, onNavigateToChat, onCompare,
   }: Props = $props();
 
   let commandOpen = $state(false);
@@ -128,8 +132,85 @@ import * as m from '../paraglide/messages';
   // Sidebar/Board montados: retain/release é refcount, não cria streams por consumidor.
   onMount(() => {
     sessionsStore.retain();
-    return () => sessionsStore.release();
+    return () => {
+      sessionsStore.release();
+      // Fecha a caixa ao desmontar o shell. O estado dela mora num store de MÓDULO (pra o botão da
+      // tela Sobre alcançá-la), e store de módulo não morre junto com o componente: o App desmonta
+      // este shell ao ir pra Custos/Arquivo, e o `BottomSheet` não chama `onClose` no destroy —
+      // então voltar pro chat reabria a caixa sozinha, sem ninguém ter pedido. Antes, com estado
+      // local, isso se resolvia por tabela.
+      atualizarUI.fechar();
+    };
   });
+
+  // ── Botão Atualizar (só desktop: quem atualiza está na máquina onde o repo vive) ──────────────
+  // Estado da caixa num store, e não numa variável daqui: quem PEDE a abertura nem sempre é
+  // vizinho de quem DESENHA. O botão da tela Sobre vive dentro do modal de Configurações, montado
+  // lá no App — passar callback de lá até aqui atravessaria três componentes que não têm nada a
+  // ver com atualização.
+  let temAtualizacao = $state(false);
+
+  /** Um estado de atualização "vivo" — mesmo teto que destrava o fechamento da caixa. */
+  const TETO_ESTADO_MS = 10 * 60 * 1000;
+  const recente = (ts?: string) =>
+    !!ts && Date.now() - new Date(ts).getTime() < TETO_ESTADO_MS;
+  // Qual falha já foi mostrada (o `ts` do estado). Guardado por viewer, no navegador: é conveniência
+  // de quem está olhando, não estado do servidor — outra máquina precisa ver a mesma falha.
+  const FALHA_VISTA = 'cp_atualizacao_falha_vista';
+  let falhaVista = $state(
+    (() => { try { return localStorage.getItem(FALHA_VISTA) ?? ''; } catch { return ''; } })(),
+  );
+  let falhaPendente = $state('');
+
+  function fecharAtualizar() {
+    atualizarUI.fechar();
+    if (falhaPendente) {
+      falhaVista = falhaPendente;
+      falhaPendente = '';
+      try { localStorage.setItem(FALHA_VISTA, falhaVista); } catch { /* aba privada: reabre uma vez */ }
+    }
+  }
+
+  // Conferido na montagem e a cada 30min. O `fetch` de origin/main quem faz é o backend, no laço
+  // dele — aqui só se lê o resultado, e por isso este intervalo pode ser folgado.
+  onMount(() => {
+    let vivo = true;
+    const conferir = async () => {
+      try {
+        const d = await getAtualizacao();
+        if (!vivo) return;
+        // Duas razões para o botão existir, não uma. A segunda: o código novo já está no disco mas
+        // o servidor ainda roda o anterior — quem puxou pela linha de comando e não reiniciou. A
+        // caixa sabe dizer isso, mas sem esta condição não havia como CHEGAR nela: o botão só
+        // nascia com commit novo no GitHub, e nesse caso não há nenhum.
+        temAtualizacao = d.atualizacao_disponivel
+          || d.versoes.repo !== d.versoes.backend;
+        // Atualização já em curso (outra aba a começou, ou esta página recarregou no meio): a
+        // caixa volta a abrir sozinha, senão o progresso corre sem ninguém vendo.
+        // "rodando" só reabre a caixa se for RECENTE. Um estado congelado (o processo morreu sem
+        // escrever o desfecho, a máquina desligou no meio) reabriria o modal em toda carga de
+        // página, para sempre — e, com a trava de fechamento, sem Escape nem × pra sair dele.
+        if (d.estado?.fase === 'rodando' && recente(d.estado.ts)) atualizarUI.abrir();
+        // FALHA também abre, e é o caso mais importante: a atualização derruba o backend e a
+        // página recarrega, então o erro acontece com a caixa fechada. Sem isto ele nunca chega
+        // em ninguém — a máquina fica na versão velha em silêncio, que é o pior desfecho possível.
+        // Uma vez só por falha: o `ts` do estado é a marca, e fechar a caixa a registra.
+        else if (d.estado?.fase === 'pronto' && d.estado.ok === false
+                 && d.estado.ts && d.estado.ts !== falhaVista) {
+          atualizarUI.abrir();
+          falhaPendente = d.estado.ts;
+        }
+      } catch {
+        // Servidor fora do ar ou rota ausente (servidor mais antigo): sem aviso, sem erro na tela.
+      }
+    };
+    conferir();
+    const t = setInterval(conferir, 1800_000);
+    return () => { vivo = false; clearInterval(t); };
+  });
+
+  // Do store agregado que já está montado — nunca um fetch novo, e nunca um SSE a mais.
+  const sessoesTrabalhando = $derived(rows.filter((row) => row.state === 'working').length);
 
   $effect(() => {
     void currentKey;
@@ -154,6 +235,10 @@ import * as m from '../paraglide/messages';
       onNavigateToChat(target.name);
     } else if (next === 'board') {
       onToggleBoard();
+    } else if (next === 'orq') {
+      // Caso EXPLÍCITO, não `else`: o `else` final cai no canvas, e uma visualização nova
+      // acrescentada sem entrada aqui abriria o canvas em silêncio, sem erro de tipo.
+      onToggleOrq();
     } else {
       onToggleCanvas();
     }
@@ -183,6 +268,14 @@ import * as m from '../paraglide/messages';
       keywords: ['canvas', m.shell_org_curto()],
       group: m.nav_navegacao(),
       run: () => selectView('canvas'),
+    },
+    {
+      id: 'view:orq',
+      title: m.shell_orq(),
+      detail: m.shell_orq_detalhe(),
+      keywords: ['orq', 'orquestracao', m.shell_orq()],
+      group: m.nav_navegacao(),
+      run: () => selectView('orq'),
     },
   ];
   const workspaceActions = $derived(
@@ -271,6 +364,8 @@ import * as m from '../paraglide/messages';
     if (view === 'board' || view === 'canvas') {
       return overlaySession ? [workspaceSessionKey(overlaySession)] : [];
     }
+    // Orq não monta Chat nenhum: sessão na tela é lista vazia, e o terminal fecha ao navegar pra cá.
+    if (view === 'orq') return [];
     void currentKey;
     if (!currentSession || currentSession === 'null' || currentSession === 'undefined') return [];
     // O SPLIT (par) segue o ativo de proposito: o Chat do split ja e ativo-based (nao recebe
@@ -334,6 +429,8 @@ import * as m from '../paraglide/messages';
     <SessionTabs {currentKey} onSelect={openSession}
                  onOpenConfig={() => abrirConfig('root', getActiveId())}
                  onIrParaContas={() => abrirConfig('contas', getActiveId())}
+                 {temAtualizacao}
+                 onAbrirAtualizar={() => atualizarUI.abrir()}
                  {ctxDisponivel} />
   {/if}
 
@@ -346,6 +443,7 @@ import * as m from '../paraglide/messages';
     <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare}
              boardActive={view === 'board'}
              canvasActive={view === 'canvas'}
+             orqActive={view === 'orq'}
              onWorkspaceActionsChange={handleSidebarActionsChange}
              {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)}
              onCollapsedChange={(v) => (barraRecolhida = v)}
@@ -361,7 +459,12 @@ import * as m from '../paraglide/messages';
       </div>
     {/if}
 
-    {#if view === 'board' || view === 'canvas'}
+    {#if view === 'orq'}
+      <!-- Sem overlay de card: quem abre sessão daqui vai pro chat normal. -->
+      <div class="workspace-view">
+        <Orq onNavigateToChat={onNavigateToChat} />
+      </div>
+    {:else if view === 'board' || view === 'canvas'}
       <div class="workspace-view">
         {#if view === 'board'}
           <Board onOpenSession={onOpenBoardSession} />
@@ -483,9 +586,13 @@ import * as m from '../paraglide/messages';
     onClose={() => (commandOpen = false)}
     onOpenSession={openSession}
   />
+
+  <AtualizarSheet open={atualizarUI.aberta} onClose={fecharAtualizar}
+                  trabalhando={sessoesTrabalhando} />
 </div>
 
 <style>
+
   /* COLUNA, não linha: a barra do topo é a primeira faixa e atravessa a janela inteira — inclusive
      por cima do trilho, como no OpenCode (decisão do usuário, 10/08/2026). Antes ela vivia dentro
      da coluna do conteúdo e por isso começava onde a sidebar terminava.

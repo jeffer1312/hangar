@@ -13,7 +13,7 @@ A ironia e o ponto: o `tmp+rename`, que o repo adotou POR SEGURANCA (um corte no
 deixar JSON pela metade), e justamente o que falha no Windows — e falha no instante que ele existe
 pra proteger, que e o leitor concorrente. O caminho inseguro, truncar por cima, passa.
 
-Os leitores aqui sao CLIs vivos (o `claude` lendo o `.claude.json`/`settings.json`, o `cp-engine`
+Os leitores aqui sao CLIs vivos (o `claude` lendo o `.claude.json`/`settings.json`, o `hangar-engine`
 lendo o `engines.json`) e o proprio app lendo sidecar. Todos abrem e fecham rapido, entao a janela
 e curta: isto nao e "sempre quebra", e a falha INTERMITENTE que aparece uma vez e nao reproduz.
 Retentar por meio segundo cobre a janela real sem virar espera visivel.
@@ -24,7 +24,7 @@ Duas decisoes:
     aberto —, entao o ramo POSIX e uma linha e nao existe laco nenhum. Um retry "inofensivo" no
     Linux mascararia PermissionError de verdade (permissao mesmo, ou destino em outro filesystem).
   - **Stdlib-only, de proposito.** O `engines.py` importa daqui e ele nao pode puxar `app.config`:
-    arrastaria pydantic e quebraria o `scripts/cp-engine`, que o shell chama com o python do
+    arrastaria pydantic e quebraria o `scripts/hangar-engine`, que o shell chama com o python do
     SISTEMA (invariante ja registrada no CLAUDE.md).
 
 Esgotadas as tentativas, o `PermissionError` original sobe. Quem trata tem de dizer "arquivo em
@@ -71,3 +71,19 @@ def em_uso(erro: BaseException) -> bool:
     entao PermissionError ali e permissao de verdade.
     """
     return _E_WINDOWS and isinstance(erro, PermissionError)
+
+
+def explicar(erro: BaseException) -> str:
+    """O erro em texto, ja com a palavra certa pra quem so vai LER a mensagem.
+
+    O `em_uso` responde sim/nao pra quem escolhe um CODIGO de erro (o `filetree` faz isso: 409
+    `erro_arq_em_uso` contra 403 `erro_arq_sem_permissao`, cada um com sua traducao). Este aqui e
+    pro outro caso, o de quem monta uma frase com o `{e}` dentro e manda pra tela: ali o
+    `[WinError 5] Acesso negado` chega intacto e diz a coisa errada — o usuario TEM permissao no
+    arquivo, o que falta e ele estar livre.
+
+    Fora do Windows devolve `str(erro)` e nada muda.
+    """
+    if em_uso(erro):
+        return f"outro programa esta com o arquivo aberto ({erro})"
+    return str(erro)

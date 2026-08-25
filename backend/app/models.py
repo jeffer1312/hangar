@@ -43,7 +43,7 @@ def dumps_safe(obj: Any) -> str:
 
 
 def session_key(jsonl_path: str) -> str:
-    """Chave de ESTADO/sidecar de um transcript (marcador .claude-pocket-state, id de SSE).
+    """Chave de ESTADO/sidecar de um transcript (marcador .hangar-state, id de SSE).
 
     No Claude/Pi e o stem do arquivo (== session-id). No Kimi o transcript se chama wire.jsonl em
     TODA sessao (sessions/<wd>/<session_id>/agents/main/wire.jsonl), entao o stem seria "wire" pra

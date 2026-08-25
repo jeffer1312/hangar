@@ -110,16 +110,87 @@ def test_drain_skips_entries_before_start_ts(tmp_queue, tmp_path, monkeypatch):
     assert terminal_input.drain("cc", str(j)) == 0 and sent == []
 
 
-def test_select_option_three_navigates_then_enter():
+def _picker(cursor: int, n: int = 5) -> str:
+    # Picker cru como o pane desenha: a linha do cursor leva ❯, as outras nao.
+    return "\n".join(f"{'❯' if i == cursor else ' '} {i}. opcao {i}" for i in range(1, n + 1))
+
+
+@pytest.fixture
+def sem_espera(monkeypatch):
+    monkeypatch.setattr(terminal_input.time, "sleep", lambda _s: None)
+
+
+def test_select_ja_no_alvo_nao_navega(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker(3))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 3)
+    assert sk.call_args_list == [call("cc", "Enter")]
+
+
+def test_select_sobe_quando_o_cursor_esta_abaixo_do_alvo(sem_espera, monkeypatch):
+    # O caso do bug (25/08/2026): num multi-select o cursor fica onde a marcacao anterior parou,
+    # entao a opcao pedida pode estar ACIMA dele — as cegas so havia Down.
+    telas = iter([_picker(4), _picker(2)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "Up"), call("cc", "Up"), call("cc", "Enter")]
+
+
+def test_select_corrige_tecla_engolida(sem_espera, monkeypatch):
+    # Down engolido no redraw: pediu 3, so andou ate 2 -> corrige com mais um Down antes do Enter.
+    telas = iter([_picker(1), _picker(2), _picker(3)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 3)
+    assert sk.call_args_list == [
+        call("cc", "Down"), call("cc", "Down"),  # 1 -> 3 (a TUI so andou 1)
+        call("cc", "Down"),                       # correcao 2 -> 3
+        call("cc", "Enter"),
+    ]
+
+
+def test_select_ilegivel_no_meio_da_correcao_nao_manda_enter(sem_espera, monkeypatch):
+    # Achado da revisão: a 1a leitura dá um número, a 2a vem ilegível (pane piscou, `❯ N.` sumiu).
+    # Tratar isso como convergência mandava o Enter às CEGAS — exatamente o "opção errada calada"
+    # que a malha fechada existe pra impedir. Diferente do pane ilegível na PRIMEIRA leitura, que
+    # cai no caminho aberto de sempre (caso abaixo).
+    telas = iter([_picker(1), "tela sem cursor nenhum"])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cc", 3)
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_select_nao_convergiu_nao_manda_enter(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker(1))  # cursor nunca sai de 1
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cc", 3)
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_select_sem_cursor_legivel_cai_no_caminho_aberto(sem_espera, monkeypatch):
+    # Picker do Pi (cursor ascii '>') ou pane ilegivel: sem numero pra ler, volta ao Down*(n-1).
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: "> 1. a\n  2. b\n  3. c")
     with patch.object(terminal_input, "send_keys") as sk:
         TerminalInput().select("cc", 3)
     assert sk.call_args_list == [call("cc", "Down"), call("cc", "Down"), call("cc", "Enter")]
 
 
-def test_select_option_one_just_enter():
+def test_select_pane_ilegivel_nao_derruba(sem_espera, monkeypatch):
+    def explode(_n):
+        raise RuntimeError("tmux morto")
+    monkeypatch.setattr(terminal_input, "_capture", explode)
     with patch.object(terminal_input, "send_keys") as sk:
-        TerminalInput().select("cc", 1)
-    assert sk.call_args_list == [call("cc", "Enter")]
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "Down"), call("cc", "Enter")]
+
+
+def test_select_option_zero_recusado():
+    with pytest.raises(ValueError):
+        TerminalInput().select("cc", 0)
 
 
 def test_interrupt_sends_escape():
@@ -153,6 +224,87 @@ def test_composer_pi_ilegivel_nao_bloqueia():
     # pane sem réguas (redraw/boot): na dúvida envia — mesma política do resto do arquivo
     with patch.object(terminal_input, "_capture", return_value="pi v0.83.0\nsem reguas aqui"):
         assert terminal_input._composer_ocupado_pi("pi-x") is False
+
+
+# --- a MESMA pergunta, feita pra quem sabe: a extensao le `ctx.ui.getEditorText()` -----------------
+# A raspagem nao distingue aviso de sistema de rascunho do usuario — o Pi desenha aviso de extensao
+# (`console.error`) DENTRO da faixa do composer, com o mesmo ANSI do texto digitado (medido
+# 22/08/2026: `getEditorText()` devolveu "" com o aviso na faixa e o texto exato com um rascunho).
+
+class _LinhaFalsa:
+    """A linha da extensão respondendo o que o teste mandar. `None` = "não sei".
+
+    `registradas` são as chaves que TÊM linha — o mesmo que o `pi_inbox` guarda. Importa porque a
+    chave é o nome da sessão no psmux e o pane no tmux (ver `pi_inbox.linha_de`), e um duplo "sim"
+    esconderia justamente o erro de endereçamento que o 11909b31 consertou.
+    """
+
+    def __init__(self, resposta, registradas):
+        self.resposta, self.registradas, self.perguntas = resposta, set(registradas), []
+
+    def tem_linha(self, chave):
+        return chave in self.registradas
+
+    def perguntar_sync(self, chave, o_que):
+        self.perguntas.append((chave, o_que))
+        return self.resposta
+
+
+def _com_linha(monkeypatch, resposta, registradas=("pi-x",)):
+    linha = _LinhaFalsa(resposta, registradas)
+    monkeypatch.setattr(terminal_input.pi_inbox, "INBOX", linha)
+    return linha
+
+
+def test_pergunta_pela_linha_vence_a_tela(monkeypatch):
+    """O caso que gerou o conserto: a faixa do composer mostra o aviso da NOSSA extensão e a troca
+    de modelo pelo app era recusada com 409 "composer do pi ja tem texto"."""
+    linha = _com_linha(monkeypatch, "")
+    with patch.object(terminal_input, "_capture",
+                      return_value=_pane_pi([" [hangar-state] linha do hangar conectada"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
+    assert linha.perguntas == [("pi-x", "editor")]      # psmux: a chave é o NOME da sessão
+
+
+def test_no_tmux_a_pergunta_vai_pelo_pane(monkeypatch):
+    """Linux: a extensão não declara nome, a linha fica registrada pelo pane — e é por ele que a
+    pergunta tem que sair."""
+    linha = _com_linha(monkeypatch, "", registradas=("%33",))
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["aviso qualquer"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%33") is False
+    assert linha.perguntas == [("%33", "editor")]
+
+
+def test_rascunho_de_verdade_continua_bloqueando(monkeypatch):
+    """O guard não pode virar "sempre envia": esta é a razão de ele existir (ABC-1234)."""
+    _com_linha(monkeypatch, "prompt que o usuario deixou pela metade")
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is True
+
+
+def test_so_espaco_no_campo_nao_e_rascunho(monkeypatch):
+    _com_linha(monkeypatch, "   ")
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
+
+
+def test_sem_resposta_da_linha_cai_na_raspagem(monkeypatch):
+    """Extensão velha (sessão Pi aberta antes deste commit) ou socket caído: o comportamento volta
+    a ser exatamente o de hoje, sem uma linha mudada."""
+    _com_linha(monkeypatch, None)
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["rascunho na tela"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is True
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi([])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
+
+
+def test_sessao_sem_linha_nenhuma_nem_pergunta(monkeypatch):
+    """Sessão sem extensão conectada (Pi velho, socket caído): não há a quem perguntar, e a
+    raspagem decide — exatamente como antes deste commit."""
+    linha = _com_linha(monkeypatch, "", registradas=())
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["rascunho"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%1") is True
+    assert linha.perguntas == []
 
 
 def test_send_prompt_pi_adia_com_residuo(monkeypatch):
@@ -277,7 +429,7 @@ def test_limpar_composer_desiste_com_teto_e_avisa(caplog):
     nosso = "mensagem comprida de teste que nao sai do composer"
     with patch("app.terminal_input.tmux.capture_pane", return_value=_pane_claude([f"❯ {nosso}"])), \
          patch.object(terminal_input, "send_keys") as sk, \
-         caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
+         caplog.at_level("WARNING", logger="hangar.terminal_input"):
         assert terminal_input._limpar_composer("cc", nosso, None) is False
     assert len(sk.call_args_list) == terminal_input._LIMPEZA_MAX_TECLAS
     assert "nao limpou" in caplog.text
@@ -441,7 +593,7 @@ def test_send_prompt_partial_loga_diagnostico_no_erro(monkeypatch, caplog):
         composer = ["❯ [Pasted text #1 +5 lines]"]
         return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
 
-    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+    with caplog.at_level("ERROR", logger="hangar.terminal_input"), \
          patch("app.terminal_input.tmux.has_session", return_value=True), \
          patch.object(terminal_input, "_capture", side_effect=capture), \
          patch.object(terminal_input, "send_keys", return_value=True):
@@ -505,7 +657,7 @@ def test_send_prompt_texto_longo_com_comeco_visivel_e_cauda_cortada_envia(monkey
               "todas no pi ,")
     texto = (comeco + "\nAs vezes dps de rodar um subagnt ele aparece essa sugestão, não tem nd "
              "digitado aí\npelo terminal e escrever vai, mas se tá usando a visualização no pane\n"
-             ".claude-pocket-uploads/1785666473-67f17f.png")
+             ".hangar-uploads/1785666473-67f17f.png")
 
     estado = {"colado": False, "enter": False}
 
@@ -562,7 +714,7 @@ def test_send_prompt_multilinha_com_falha_confirmada_no_meio_vira_partial(monkey
         composer = ["❯ primeira linha"]
         return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
 
-    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+    with caplog.at_level("ERROR", logger="hangar.terminal_input"), \
          patch("app.terminal_input.tmux.has_session", return_value=True), \
          patch.object(terminal_input, "_capture", side_effect=capture), \
          patch.object(terminal_input.tmux, "paste_text", return_value=False), \
@@ -688,7 +840,7 @@ def test_send_prompt_pi_ocupado_alem_do_limite_vira_erro_visivel(monkeypatch, ca
     monkeypatch.setattr(terminal_input.time, "sleep", lambda s: None)
     pane_ocupado = _pane_pi(["rascunho que nunca sai do composer"])
     total = terminal_input._OCUPADO_DEFER_LIMIT * 2 + 1   # passa por DUAS viradas da tregua
-    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+    with caplog.at_level("ERROR", logger="hangar.terminal_input"), \
          patch.object(terminal_input, "_capture", return_value=pane_ocupado), \
          patch.object(terminal_input, "send_keys") as sk:
         for _ in range(total):
@@ -749,6 +901,30 @@ def test_pi_sem_linha_cai_na_tecla(monkeypatch):
     assert chamou["v"] is True, "sem linha, o caminho de tecla (com o guarda) tem que rodar"
 
 
+def test_pi_nao_entrega_na_linha_de_OUTRA_sessao(monkeypatch):
+    """No psmux o pane é `%1` em TODA sessão Pi. Com a busca por pane, a mensagem endereçada a uma
+    sessão saía na conversa da outra — medido 22/08/2026: um `POST /input` pra `pi-teste` respondeu
+    `delivered: true` e o texto apareceu na `pi-medir`."""
+    from app import pi_inbox, terminal_input
+
+    inbox = pi_inbox.PiInbox()
+    entregues = []
+    inbox.registrar("pi-medir", lambda payload: entregues.append(payload))
+    monkeypatch.setattr(pi_inbox, "INBOX", inbox)
+    monkeypatch.setattr(terminal_input.pi_inbox, "INBOX", inbox)
+    monkeypatch.setattr(terminal_input, "deliverable", lambda name: True)
+    monkeypatch.setattr(terminal_input, "_wait_input_ready", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_composer_ocupado_pi", lambda *a, **k: False)
+    monkeypatch.setattr(terminal_input, "_entrou_no_composer", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "_submeteu", lambda *a, **k: True)
+    monkeypatch.setattr(terminal_input, "send_keys", lambda *a, **k: True)
+
+    r = terminal_input.TerminalInput().send_prompt("pi-teste", "oi", provider="pi", pane_id="%1")
+
+    assert entregues == [], "a linha da OUTRA sessao nao pode receber esta mensagem"
+    assert r == "sent"       # foi pela tecla, na sessao certa
+
+
 def test_pi_linha_sem_confirmacao_nao_digita(monkeypatch):
     """A regra da duplicata: tentou pela linha e não confirmou -> deferred, e NENHUMA tecla."""
     from app import pi_inbox, terminal_input
@@ -781,12 +957,12 @@ def test_claude_nunca_consulta_a_linha(monkeypatch):
 
 
 # --- id estavel entre reentregas pela linha do Pi (achado ALTA da revisao 02/08/2026) ------------
-# A extensao (cp-state.ts) chama sendUserMessage ANTES de confirmar: se o ACK atrasa/perde,
+# A extensao (hangar-state.ts) chama sendUserMessage ANTES de confirmar: se o ACK atrasa/perde,
 # pi_inbox.entregar devolve "deferred" mas a instrucao JA pode ter chegado no agente. Sem um id
 # ESTAVEL entre a 1a tentativa (_send_one, via api.py) e o retry (drain, abaixo), a extensao nao tem
 # como reconhecer o retry como a MESMA mensagem e chamaria sendUserMessage de novo. Estes dois testes
 # prova a plumbing do lado do backend (msg_id sobrevive ao round-trip fila -> drain -> send_prompt);
-# a dedupe em si (guardar os ids ja entregues) mora em cp-state.ts, sem harness de teste TS no repo
+# a dedupe em si (guardar os ids ja entregues) mora em hangar-state.ts, sem harness de teste TS no repo
 # — verificada por leitura + execucao manual da logica extraida (ver relatorio).
 
 def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
@@ -820,7 +996,7 @@ def test_porta_a_retry_pela_fila_usa_o_mesmo_msg_id(tmp_queue, monkeypatch):
     assert len(ids_recebidos) == 2
     assert ids_recebidos[0] == ids_recebidos[1] == entry["id"], (
         "as DUAS tentativas tem que carregar o MESMO id -- e o que deixa a extensao reconhecer "
-        "retry e nao repetir sendUserMessage (a dedupe em si mora em cp-state.ts)"
+        "retry e nao repetir sendUserMessage (a dedupe em si mora em hangar-state.ts)"
     )
 
 

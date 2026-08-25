@@ -321,7 +321,7 @@ comando no dia em que o usuário definir o papel:
 ```markdown
 | Papel | Sessão | Agente/motor | Conta | Como abrir |
 |---|---|---|---|---|
-| revisão final | <trab>-final | <agente>, conta padrão | assinatura | `cp-send --new <trab>-final <cwd>` (SEM --engine) |
+| revisão final | <trab>-final | <agente>, conta padrão | assinatura | `hangar-send --new <trab>-final <cwd>` (SEM --engine) |
 ```
 
 **A revisão final entra na tabela como item próprio, com o gatilho junto:** *"dispara quando
@@ -455,7 +455,7 @@ seguinte.
 ```bash
 git status --short          # árvore suja → os paths viram intocáveis, listados um a um
 git branch --show-current   # branch certa
-cp-send --list              # QUEM mais está vivo neste cwd
+hangar-send --list              # QUEM mais está vivo neste cwd
 tmux display -p '#{session_name}'   # ... e QUAL DESSES É VOCÊ
 ```
 
@@ -496,9 +496,9 @@ a revisão ignora. Nunca largar calado com a base quebrada.
 ### Criar, na ordem
 
 ```bash
-cp-send --new <trab>-writer /caminho/do/repo --engine <motor do plano>
-cp-send --new <trab>-review /caminho/do/repo --engine <outro motor>
-cp-send --pair <sessao> "<trab>: <onde está o contrato>"   # uma chamada por sessão
+hangar-send --new <trab>-writer /caminho/do/repo --engine <motor do plano>
+hangar-send --new <trab>-review /caminho/do/repo --engine <outro motor>
+hangar-send --pair <sessao> "<trab>: <onde está o contrato>"   # uma chamada por sessão
 ```
 
 **NUNCA ponha o papel na string do `--pair`.** Ela é um campo do **GRUPO**, não da sessão: o
@@ -514,12 +514,12 @@ duas sessões e uma reescrita dos três sidecars.
 A string do `--pair` é **neutra e aponta pro contrato**, nunca afirma papel:
 
 ```bash
-cp-send --pair <sessao> "<trab> — o papel de cada sessão está no contrato grupo-<gid>.md"
+hangar-send --pair <sessao> "<trab> — o papel de cada sessão está no contrato grupo-<gid>.md"
 ```
 
 Papel se declara **no kick-off e na tabela do contrato**, e o contrato diz explicitamente que, se um
 aviso de grupo contradisser a tabela, vale a tabela. Se você já errou isto, conserte o estado, não
-só o texto: os sidecars ficam em `<config>/.claude-pocket-pair/<sessao>.json`, campo `task`, e dá
+só o texto: os sidecars ficam em `<config>/.hangar-pair/<sessao>.json`, campo `task`, e dá
 pra reescrever direto (tmp+rename) sem disparar broadcast novo.
 
 Ordem obrigatória: `--new` → `--pair` → ler o `gid` no próprio sidecar → **escrever o
@@ -528,10 +528,13 @@ uma sessão parada perguntando.
 
 Motor inexistente devolve `400` e a sessão não nasce. Ver os motores: `claude-engine`.
 
-### Nascem DOIS arquivos, e cada um tem um leitor
+### Nascem TRÊS arquivos, e cada um tem um leitor
 
 - **`regras-<gid>.md`** — o que executor e revisor leem. Só o que **ainda vale**. Duas páginas.
 - **`grupo-<gid>.md`** — o registro, que só o árbitro lê. Progresso, histórico, decisões com data.
+- **`eventos.jsonl`** — uma linha JSON por acontecimento, escrita pelo árbitro no diretório
+  durável abaixo. Ninguém do time lê; quem lê é máquina — as telas de orquestração do app e a
+  retrospectiva. Contrato dos tipos e dos campos: `references/arbitro.md`.
 
 E um **diretório durável pros artefatos do trabalho**, decidido agora e escrito nas regras e no
 primeiro kick-off de cada sessão:
@@ -602,13 +605,13 @@ Task N — Barra: <tela, estado, largura> | nenhuma — decisão do usuário, <d
 
 ### A sessão nova prova modelo e effort ao vivo
 
-`cp-send --new --engine` **não** configura effort, e pedir "max" no primeiro prompt não
+`hangar-send --new --engine` **não** configura effort, e pedir "max" no primeiro prompt não
 funciona. Antes de liberar a primeira Task, exija da sessão nova a prova ao vivo (o que a
 statusline dela mostra, ou o retorno do comando de troca) — repetir o que o kick-off pediu
 não é prova. Sem isso ela trabalha horas no effort errado afirmando que está no certo.
 
-### Recado: nativo ou cp-send
+### Recado: nativo ou hangar-send
 
-Sessão no `ListAgents` e você tem `SendMessage` → `SendMessage`. Senão `cp-send <sessao>`.
-`--new`, `--pair` e `--group` são sempre `cp-send`. Mensagem longa vai por heredoc de aspas
+Sessão no `ListAgents` e você tem `SendMessage` → `SendMessage`. Senão `hangar-send <sessao>`.
+`--new`, `--pair` e `--group` são sempre `hangar-send`. Mensagem longa vai por heredoc de aspas
 simples.

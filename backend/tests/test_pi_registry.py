@@ -78,12 +78,12 @@ def test_session_file_comes_from_the_pane_sidecar(monkeypatch, tmp_path):
     # O bilhete da extensao carrega o caminho EXATO. E o unico sinal que existe pra um `pi` digitado
     # na mao: o argv nao tem o id (Task 0, fato 7) e sem wrapper nao ha CP_PI_SESSION.
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    (cfg / ".hangar-pi").mkdir(parents=True)
     alvo = tmp_path / "2026_x.jsonl"
     alvo.write_text("")
     # `ts` posterior ao nascimento do pane: o bilhete so vale quando da pra PROVAR que e desta
     # encarnacao do pane (ver test_session_file_refuses_a_sidecar_when_the_pane_birth_is_unknown).
-    (cfg / ".claude-pocket-pi" / "123.json").write_text(
+    (cfg / ".hangar-pi" / "123.json").write_text(
         json.dumps({"file": str(alvo), "ts": 1_700_000_600.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)
@@ -91,13 +91,13 @@ def test_session_file_comes_from_the_pane_sidecar(monkeypatch, tmp_path):
 
 
 def test_session_file_ignores_a_stale_sidecar(monkeypatch, tmp_path):
-    # cp-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa %pane_id apos um restart
+    # hangar-state.ts NUNCA apaga o bilhete quando o pane fecha, e o tmux reusa %pane_id apos um restart
     # do servidor (ex: reboot) -> um bilhete ORFAO apontando pra um .jsonl ja deletado/renomeado nao
     # pode ser devolvido como se fosse o transcript deste pane (a MESMA classe de bug que o Step 6
     # ja cobre pro fallback newest-by-mtime, so que chegando por um bilhete velho em vez do mtime).
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-pi").mkdir(parents=True)
-    (cfg / ".claude-pocket-pi" / "123.json").write_text(
+    (cfg / ".hangar-pi").mkdir(parents=True)
+    (cfg / ".hangar-pi" / "123.json").write_text(
         json.dumps({"file": str(tmp_path / "sumiu.jsonl")}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     # env tambem sem nada, senao o fallback mascararia o bilhete ignorado com um resultado valido.
@@ -170,10 +170,10 @@ def test_session_file_rejects_a_sidecar_older_than_the_pane_process(monkeypatch,
     # id null e o caso que NENHUM guarda por divergencia de id pegava (publishPane escreve
     # `getSessionId() ?? null`) e o mais comum num bilhete velho.
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    (cfg / ".hangar-pi").mkdir(parents=True)
     velho = tmp_path / "2026-07-01T00-00-00-000Z_aaa.jsonl"
     velho.write_text("")
-    (cfg / ".claude-pocket-pi" / "9.json").write_text(
+    (cfg / ".hangar-pi" / "9.json").write_text(
         json.dumps({"file": str(velho), "id": None, "ts": 1_700_000_000.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_600.0)     # pane nasceu 10min DEPOIS
@@ -188,10 +188,10 @@ def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, t
     # sessao NOVA, e o CP_PI_SESSION segue congelado na original desde o exec. Divergir e o correto
     # — quem manda e o bilhete, que foi escrito depois de o processo nascer.
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    (cfg / ".hangar-pi").mkdir(parents=True)
     alvo = tmp_path / "2026-07-27T00-00-00-000Z_bbb.jsonl"
     alvo.write_text("")
-    (cfg / ".claude-pocket-pi" / "9.json").write_text(
+    (cfg / ".hangar-pi" / "9.json").write_text(
         json.dumps({"file": str(alvo), "id": "bbb", "ts": 1_700_000_600.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)     # pane nasceu ANTES do bilhete
@@ -207,13 +207,13 @@ def test_session_file_refuses_a_sidecar_pointing_at_a_subagent_run(monkeypatch, 
     # seguia normal. O bilhete e FRESCO aqui de proposito: o guarda de frescor nao pega este caso.
     registry._PI_TICKET_WARNED.clear()
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    (cfg / ".hangar-pi").mkdir(parents=True)
     raiz = tmp_path / "2026-07-30T20-29-24-651Z_18e48e08.jsonl"
     raiz.write_text("")
     run = tmp_path / "2026-07-30T20-29-24-651Z_18e48e08" / "44bad0fb" / "run-2"
     run.mkdir(parents=True)
     (run / "session.jsonl").write_text("")
-    (cfg / ".claude-pocket-pi" / "9.json").write_text(
+    (cfg / ".hangar-pi" / "9.json").write_text(
         json.dumps({"file": str(run / "session.jsonl"), "id": "sub", "ts": 1_700_000_600.0}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)      # pane nasceu ANTES do bilhete
@@ -231,10 +231,10 @@ def _bilhete_e_env(monkeypatch, tmp_path, dados: dict):
     # CP_PI_SESSION apontando pra outra sessao: e o env que tem que ganhar quando o frescor do
     # bilhete nao da pra estabelecer.
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    (cfg / ".hangar-pi").mkdir(parents=True)
     velho = tmp_path / "2026-07-01T00-00-00-000Z_aaa.jsonl"
     velho.write_text("")
-    (cfg / ".claude-pocket-pi" / "9.json").write_text(json.dumps({"file": str(velho), **dados}))
+    (cfg / ".hangar-pi" / "9.json").write_text(json.dumps({"file": str(velho), **dados}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "bbb"})
     monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
@@ -252,7 +252,7 @@ def test_session_file_refuses_a_sidecar_when_the_pane_birth_is_unknown(monkeypat
     _sem_nascimento(monkeypatch, tmp_path)
     assert registry._proc_start_time(7) is None
 
-    with caplog.at_level("WARNING", logger="claude_pocket.registry"):
+    with caplog.at_level("WARNING", logger="hangar.registry"):
         assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
         assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
     # Uma vez, nao a cada poll: list() roda de segundo em segundo e um warning por varredura
@@ -445,7 +445,7 @@ def test_create_pi_resume_sobe_pi_e_nao_claude(tmp_path, monkeypatch):
 
 
 def test_create_pi_refuses_an_engine(tmp_path, monkeypatch):
-    # `cp-engine --exec` so exporta ANTHROPIC_*/CLAUDE_CODE_*, que o pi ignora -> a sessao subiria
+    # `hangar-engine --exec` so exporta ANTHROPIC_*/CLAUDE_CODE_*, que o pi ignora -> a sessao subiria
     # na conta do proprio pi PARECENDO estar no motor pedido.
     from unittest.mock import patch
     reg = registry.SessionRegistry(projects_dir=tmp_path)
@@ -463,9 +463,9 @@ def test_session_file_accepts_a_fresh_ticket_before_the_file_exists(monkeypatch,
     # escreve o .jsonl no 1o turno. Exigir que o arquivo ja exista deixava a sessao "sem id" e
     # inclicavel no celular — e mandar a 1a mensagem era exatamente o que nao dava pra fazer.
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-pi").mkdir(parents=True)
+    (cfg / ".hangar-pi").mkdir(parents=True)
     alvo = tmp_path / "2026-07-27T23-00-00-000Z_ainda-nao-existe.jsonl"   # NAO criado de proposito
-    (cfg / ".claude-pocket-pi" / "300.json").write_text(
+    (cfg / ".hangar-pi" / "300.json").write_text(
         json.dumps({"file": str(alvo), "id": "x", "ts": 2_000_000_000}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     monkeypatch.setattr(registry, "_proc_start_time", lambda pid: 1_999_999_000)  # bilhete e mais novo

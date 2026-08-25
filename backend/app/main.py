@@ -13,6 +13,7 @@ from app.hook_installer import (
     ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
+from app import migracao_sidecars
 from app.hook_state import hook_state
 from app.pi_inbox import escrever_endpoint
 
@@ -82,11 +83,11 @@ def print_pairing(settings) -> None:
 
 
 def _setup_diag_logging() -> None:
-    # DIAG: garante que os logs "claude_pocket.*" (RESOLVE/SEND) saiam no stderr -> journald. O uvicorn
+    # DIAG: garante que os logs "hangar.*" (RESOLVE/SEND) saiam no stderr -> journald. O uvicorn
     # so configura os proprios loggers; sem isto, INFO de app propaga pro root (WARNING) e some.
     import logging
     import sys
-    cp = logging.getLogger("claude_pocket")
+    cp = logging.getLogger("hangar")
     if not cp.handlers:
         h = logging.StreamHandler(sys.stderr)
         h.setFormatter(logging.Formatter("%(levelname)s:     [%(name)s] %(message)s"))
@@ -95,11 +96,40 @@ def _setup_diag_logging() -> None:
         cp.propagate = False
 
 
+def _passos_pendentes_da_versao() -> None:
+    """Passos que a versão exige e que ainda não rodaram AQUI — os não destrutivos.
+
+    Aqui, e não no installer, pelo mesmo motivo do `migracao_sidecars` logo acima: atualizar neste
+    projeto é `git pull` + reiniciar o serviço, e rodar `install-*.sh` não é garantido. Assim quem
+    atualizou pela linha de comando, sem tocar no botão do app, fica em dia no restart seguinte.
+
+    Só os NÃO destrutivos: passo que apaga ou sobrescreve alguma coisa espera o botão, onde há uma
+    pessoa olhando e o motor já guardou o disco numa branch de resgate antes.
+
+    Fail-soft, como os hooks: um passo com defeito não pode impedir o backend de subir — a máquina
+    ficaria sem app por causa de uma linha errada num arquivo de atualização.
+    """
+    try:
+        from app import atualizacoes
+        feitos = atualizacoes.aplicar_pendentes(incluir_destrutivos=False)
+        if feitos:
+            print(f"[hangar] passos de atualizacao aplicados: {', '.join(feitos)}")
+    except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
+        print(f"[hangar] AVISO: passo de atualizacao falhou ({e}); o app segue subindo")
+
+
 def main():
     bind = resolve_bind_ip(settings)
     _saida_utf8()   # antes de qualquer print: o QR abaixo quebra em cp1252
     startup_guard(settings)
     _setup_diag_logging()
+    _state_dirs = list({Path(c.path) for c in list_config_dirs()}
+                       | {_backend_config_base().resolve(), Path.home() / ".claude"})
+    # Renomeia os sidecars .hangar-* pra .hangar-* (link no caminho antigo). ANTES de tudo
+    # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
+    # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
+    migracao_sidecars.migrar(_state_dirs)
+    _passos_pendentes_da_versao()
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
@@ -111,7 +141,6 @@ def main():
     ensure_kimi_hooks_installed()
     # Endereço pra extensão do Pi ligar de volta (ver pi_inbox.escrever_endpoint).
     escrever_endpoint()
-    _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.load_existing(_state_dirs)
     print_pairing(settings)
     # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de

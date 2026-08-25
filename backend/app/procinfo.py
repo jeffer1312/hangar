@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-_log = logging.getLogger("claude_pocket.procinfo")
+_log = logging.getLogger("hangar.procinfo")
 
 # Escolha da implementacao: por CAPACIDADE, uma vez, na importacao. Nao por nome de sistema —
 # "e unix?" responde SIM pro macOS, que nao tem /proc, e mandaria o Mac ler /proc/<pid>/fd pra
@@ -263,7 +263,7 @@ def _proc_start_time(pid: int) -> Optional[float]:
 def _engine_of(pid: int) -> Optional[str]:
     if not _TEM_PROC:
         return _env_psutil(pid).get("CP_ENGINE") or None
-    # Motor de modelo do processo claude (CP_ENGINE, injetado por engines.env_de via cp-engine
+    # Motor de modelo do processo claude (CP_ENGINE, injetado por engines.env_de via hangar-engine
     # --exec). None = conta Anthropic. Mesmo truque do _config_dir_of: o env do processo VIVO é o
     # registro autoritativo — sidecar em disco pode divergir do que está rodando no pane.
     try:
@@ -304,7 +304,7 @@ def _model_of(pid: int) -> tuple[str | None, str | None]:
 def _env_var_of(pid: int, nome: str) -> str | None:
     """Uma variável do environ do processo, irmã do _engine_of (que lê só CP_ENGINE).
 
-    O resume remonta o prefixo cp-engine com a janela da sessão que está morrendo
+    O resume remonta o prefixo hangar-engine com a janela da sessão que está morrendo
     (CLAUDE_CODE_MAX_CONTEXT_TOKENS): sem ler do processo vivo, a sessão ressuscitaria com a flag
     num modelo e o ambiente noutro — o cenário "motor de 1M com modelo de 262k" depois de um
     resume e sem nada na tela acusando.

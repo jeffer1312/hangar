@@ -25,7 +25,7 @@ checa "sessao normal mostra o contexto" tem '262k'  "$out"
 
 # Motor fake: não encosta no cache dos motores reais. NO_REFRESH corta a chamada de rede.
 MOTOR=motor-teste
-CACHE="${TMPDIR:-/tmp}/cp-engine-usage-$MOTOR.json"
+CACHE="${TMPDIR:-/tmp}/hangar-engine-usage-$MOTOR.json"
 motor() { printf '%s' "$PAYLOAD" | env CP_ENGINE=$MOTOR CP_STATUSLINE_NO_REFRESH=1 node omniroute-statusline.js; }
 
 # Sessão de motor: custo suprimido, resto intacto.

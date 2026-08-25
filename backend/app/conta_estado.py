@@ -31,12 +31,12 @@ from app.auth import require_auth
 from app.config import list_config_dirs
 from app.mensagens import erro
 
-_log = logging.getLogger("claude_pocket.conta_estado")
+_log = logging.getLogger("hangar.conta_estado")
 
 conta_estado_router = APIRouter(prefix="/api/conta-estado")
 
 # Mesmo subdiretório do statusline.py — é a FONTE da leitura de limite.
-_STATUS_SUBDIR = ".claude-pocket-status"
+_STATUS_SUBDIR = ".hangar-status"
 # A chamada à CLI é um processo externo por conta, e a tela lista todas de uma vez: cache curto.
 # 30s é curto o bastante pra um login novo (OAuth leva minutos) aparecer sem refresh manual e
 # longo o bastante pra não pagar N subprocesses a cada montagem da aba.
@@ -123,6 +123,29 @@ def _auth_status(dir_conta: Path) -> dict | None:
     return bruto
 
 
+def _texto_legivel(valor, campo: str) -> str | None:
+    """String da CLI, ou None se ela veio com U+FFFD — o carimbo do `errors="replace"`.
+
+    O `errors="replace"` acima existe pra a leitura não morrer num byte que não é utf-8 (medido:
+    sem ele, no Windows, o erro estoura DENTRO da thread leitora do subprocess, o `run()` não
+    levanta nada e o `stdout` volta `None` — o chamador leva um TypeError longe da causa). O preço
+    é que o byte ruim vira `�` e segue como se fosse texto.
+
+    Só que aqui o dado é o e-mail da conta: mostrar `jo�o@exemplo.com` como se fosse o
+    endereço da pessoa é dado ruim carimbado como bom. `loggedIn` é bool e não sofre disso (byte
+    ruim dentro da estrutura quebraria o `json.loads`, que já vira `indisponivel`), então derrubar
+    a conta inteira pra `indisponivel` custaria o botão Entrar por causa de um campo de texto. A
+    conta continua `ok`; o campo ilegível some, e o front já trata e-mail ausente (não renderiza a
+    sub-linha).
+    """
+    if not isinstance(valor, str):
+        return None
+    if "�" in valor:
+        _log.warning("auth status: campo %s veio com byte que nao decodifica — descartado", campo)
+        return None
+    return valor
+
+
 def _estado_login(bruto: dict | None) -> EstadoLogin:
     """Decisão de estado em volta do dict da CLI (lógica pura, teste direto)."""
     if bruto is None:
@@ -132,13 +155,11 @@ def _estado_login(bruto: dict | None) -> EstadoLogin:
     # Afirmar "nunca entrou" sem prova é o mesmo defeito do front (ver parecer 17/08).
     if not isinstance(logado, bool):
         return EstadoLogin(estado="indisponivel", motivo="formato-desconhecido")
-    email = bruto.get("email")
-    plano = bruto.get("subscriptionType")
     return EstadoLogin(
         estado="ok",
         loggedIn=logado,
-        email=email if isinstance(email, str) else None,
-        plano=plano if isinstance(plano, str) else None,
+        email=_texto_legivel(bruto.get("email"), "email"),
+        plano=_texto_legivel(bruto.get("subscriptionType"), "subscriptionType"),
     )
 
 
@@ -162,7 +183,7 @@ def _login_de(cfg) -> EstadoLogin:
 def _limite(dir_conta: Path) -> EstadoLimite:
     """Último limite lido: o sidecar de status mais recente DENTRO da conta.
 
-    O publisher da statusline escreve em `<config>/.claude-pocket-status/<stem>.json` com o
+    O publisher da statusline escreve em `<config>/.hangar-status/<stem>.json` com o
     `ts` da escrita; a conta pode ter várias sessões (vários stems) — vale o mais novo, que é
     a leitura que o usuário viu por último. Sem teto de idade de propósito: "dado velho parece
     velho" — a idade vai no JSON e o front esmaece; jogar fora por idade faria a conta parecer

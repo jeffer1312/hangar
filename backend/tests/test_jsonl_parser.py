@@ -184,7 +184,7 @@ def _peer_wrap(corpo: str) -> str:
 
 def test_recado_nativo_entre_sessoes_vira_bubble_no_formato_do_cp_send(monkeypatch):
     # O recado nativo chega marcado isMeta=True: sem tratamento ele cairia no descarte de meta e o
-    # app nao mostraria recado NENHUM. Tem que virar bubble no mesmo formato do cp-send ("[de: X]"),
+    # app nao mostraria recado NENHUM. Tem que virar bubble no mesmo formato do hangar-send ("[de: X]"),
     # que e o que o front (parsePeerMessage) e a conversa do grupo no PairSheet ja sabem ler.
     import app.registry as registry
     monkeypatch.setattr(registry, "name_of_pid", lambda pid: "api-fix" if pid == 4242 else None)
@@ -195,7 +195,7 @@ def test_recado_nativo_entre_sessoes_vira_bubble_no_formato_do_cp_send(monkeypat
                    "verifiedPeerPid": 4242, "name": "Titulo comprido da sessao",
                    "fromMode": "bypass", "body": "subiu a migration, pode rebasear"},
     }))
-    # Nome TMUX (o endereco do cp-send), nao o `origin.name` (que e o titulo da sessao).
+    # Nome TMUX (o endereco do hangar-send), nao o `origin.name` (que e o titulo da sessao).
     assert ev.kind == "user_msg"
     assert ev.text == "[de: api-fix] subiu a migration, pode rebasear"
 
@@ -440,7 +440,7 @@ def test_system_recado_repetido_tem_id_deterministico():
 
 def test_system_com_embrulho_nativo_vira_bubble_normalizada(monkeypatch):
     # O texto da entrega pode ser um recado NATIVO (embrulho <cross-session-message>): entra no
-    # mesmo formato do cp-send, como o resto do app le.
+    # mesmo formato do hangar-send, como o resto do app le.
     import app.registry as registry
     monkeypatch.setattr(registry, "name_of_pid", lambda pid: None)
     bruto = ("<cross-session-message from=\"uds:/run/user/1000/cc-socks/4242.sock\" "
@@ -473,7 +473,7 @@ def test_system_com_cara_de_recado_sem_ancora_registra_aviso(caplog):
     # ancora, o recado para de aparecer e ninguem fica sabendo. Nao vira bubble (o formato nao esta
     # provado), mas vira linha de log.
     conteudo = "Algum aviso novo do harness\n\nPrompt original: [de: outra-sessao] RODADA 3 ENTREGUE"
-    with caplog.at_level("WARNING", logger="claude_pocket.transcript"):
+    with caplog.at_level("WARNING", logger="hangar.transcript"):
         assert parse_line(_line({"type": "system", "uuid": "u9",
                                  "timestamp": "2026-08-18T00:36:42Z",
                                  "content": conteudo})) == []
@@ -483,7 +483,7 @@ def test_system_com_cara_de_recado_sem_ancora_registra_aviso(caplog):
 def test_system_ruido_comum_nao_registra_aviso(caplog):
     # Ruido de tooling (a maioria das entradas system) nao pode virar log: aviso que aparece
     # sempre e aviso que ninguem le.
-    with caplog.at_level("WARNING", logger="claude_pocket.transcript"):
+    with caplog.at_level("WARNING", logger="hangar.transcript"):
         assert parse_line(_line({"type": "system", "uuid": "u10",
                                  "timestamp": "2026-08-18T00:36:42Z",
                                  "content": "Kept model as claude-opus-5"})) == []

@@ -110,7 +110,7 @@ async def test_duas_mensagens_no_mesmo_pane_nao_se_cruzam():
 async def test_entregar_usa_o_msg_id_recebido_em_vez_de_gerar_um_novo():
     """Id ESTAVEL entre reentregas (achado ALTA da revisao 02/08/2026 — "Porta A"): quem tem uma
     entrada de fila (retry) passa o proprio id, e a extensao usa ELE pra reconhecer o retry (dedupe
-    em cp-state.ts). Sem isto, cada tentativa gerava um uuid4 novo e a extensao nunca via duas vezes
+    em hangar-state.ts). Sem isto, cada tentativa gerava um uuid4 novo e a extensao nunca via duas vezes
     o MESMO id."""
     inbox = PiInbox()
     recebidas, envia = _falsa()
@@ -185,6 +185,139 @@ def test_entregar_sync_sem_loop_nao_explode():
     assert inbox.entregar_sync("%1", "oi") == "sem-linha"
 
 
+# ── qual linha é a DESTA sessão ────────────────────────────────────────────────────────────────
+# No psmux o pane é numerado por SESSÃO: toda sessão Pi se declara `%1`. Procurar linha por pane
+# entregava a mensagem na conversa da outra — medido 22/08/2026 com duas sessões vivas, um
+# `POST /input` pra `pi-teste` respondeu `delivered: true` e apareceu na `pi-medir`.
+
+def test_linha_de_prefere_o_nome_da_sessao(monkeypatch):
+    from app import pi_inbox as mod
+
+    inbox = PiInbox()
+    monkeypatch.setattr(mod, "INBOX", inbox)
+    _, envia = _falsa()
+    inbox.registrar("pi-medir", envia)          # a outra sessão, que conectou por último
+    # O pane das DUAS é `%1` no psmux: se a busca fosse por pane, esta chamada acharia a linha da
+    # `pi-medir` e a mensagem da `pi-teste` iria pra lá.
+    assert mod.linha_de("pi-teste", "%1") is None
+    assert mod.linha_de("pi-medir", "%1") == "pi-medir"
+
+
+def test_linha_de_cai_no_pane_quando_nao_ha_nome(monkeypatch):
+    """tmux: a extensão declara o pane e nada é registrado por nome — o caminho POSIX fica
+    byte-idêntico ao de antes, sem nenhum teste de sistema operacional no meio."""
+    from app import pi_inbox as mod
+
+    inbox = PiInbox()
+    monkeypatch.setattr(mod, "INBOX", inbox)
+    _, envia = _falsa()
+    inbox.registrar("%33", envia)
+    assert mod.linha_de("pi-teste", "%33") == "%33"
+    assert mod.linha_de(None, "%33") == "%33"
+    assert mod.linha_de("pi-teste", "%99") is None
+    assert mod.linha_de("pi-teste", None) is None
+
+# ── perguntas (leitura) ────────────────────────────────────────────────────────────────────────
+# A linha deixou de servir só pra ENTREGAR: o backend também PERGUNTA ("tem rascunho na caixa?"),
+# porque a tela não responde isso — o Pi desenha aviso de extensão dentro da faixa do composer, com
+# o mesmo ANSI do texto digitado. Ver terminal_input._composer_ocupado_pi.
+
+async def _responder_quando_chegar(inbox, pane, recebidas, valor, quantas=1):
+    vistos = 0
+    for _ in range(300):
+        if len(recebidas) > vistos:
+            inbox.responder(pane, recebidas[vistos]["id"], valor)
+            vistos += 1
+            if vistos >= quantas:
+                return
+        await asyncio.sleep(0.005)
+
+
+async def test_pergunta_devolve_o_valor_lido():
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_responder_quando_chegar(inbox, "%1", recebidas, "rascunho"))
+    assert await inbox.perguntar("%1", "editor") == "rascunho"
+    await tarefa
+    assert recebidas[0]["pedir"] == "editor"
+    assert "text" not in recebidas[0]      # pergunta NAO e entrega: campos diferentes
+
+
+async def test_string_vazia_e_RESPOSTA_e_nao_ausencia():
+    """`""` = "não há rascunho"; `None` = "não sei". Confundir os dois faria o backend tratar
+    "campo vazio" como "sem linha" e cair na raspagem — que é justamente o que erra."""
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_responder_quando_chegar(inbox, "%1", recebidas, ""))
+    assert await inbox.perguntar("%1", "editor") == ""
+    await tarefa
+
+
+async def test_extensao_que_nao_sabe_responder_vira_None():
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(_responder_quando_chegar(inbox, "%1", recebidas, None))
+    assert await inbox.perguntar("%1", "editor") is None
+    await tarefa
+
+
+async def test_pergunta_sem_resposta_no_prazo_vira_None(monkeypatch):
+    """Extensão velha ignora um `pedir` que não conhece: o backend não pode ficar preso — quem
+    pergunta está segurando o _send_lock da sessão."""
+    monkeypatch.setattr("app.pi_inbox.PRAZO_PERGUNTA", 0.05)
+    inbox = PiInbox()
+    _, envia = _falsa()
+    inbox.registrar("%1", envia)
+    assert await inbox.perguntar("%1", "editor") is None
+
+
+async def test_pergunta_sem_linha_nao_explode():
+    assert await PiInbox().perguntar("%1", "editor") is None
+
+
+async def test_resposta_de_pergunta_nao_resolve_uma_ENTREGA():
+    """Dicionários separados: `confirmar` e `responder` guardam formas diferentes (`(ok, erro)` vs
+    valor). Misturados, o `entregar` desempacotaria uma string e estouraria dentro do caminho que
+    existe pra ser à prova de falha."""
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    inbox.registrar("%1", envia)
+
+    async def entrega():
+        return await inbox.entregar("%1", "oi", msg_id="mesmo-id")
+
+    tarefa = asyncio.create_task(entrega())
+    for _ in range(300):
+        if recebidas:
+            break
+        await asyncio.sleep(0.005)
+    inbox.responder("%1", "mesmo-id", "isto e resposta de pergunta")   # id igual, canal errado
+    await asyncio.sleep(0.05)
+    assert not tarefa.done()                     # a entrega segue esperando o ACK dela
+    inbox.confirmar("%1", "mesmo-id", True, None)
+    assert await tarefa == "sent"
+
+
+async def test_linha_que_cai_no_meio_da_pergunta_vira_None():
+    inbox = PiInbox()
+    recebidas, envia = _falsa()
+    linha = inbox.registrar("%1", envia)
+    tarefa = asyncio.create_task(inbox.perguntar("%1", "editor"))
+    for _ in range(300):
+        if recebidas:
+            break
+        await asyncio.sleep(0.005)
+    inbox.remover("%1", linha)
+    assert await tarefa is None
+
+
+def test_perguntar_sync_sem_loop_nao_explode():
+    assert PiInbox().perguntar_sync("%1", "editor") is None
+
+
 def test_entregar_sync_cancela_a_corrotina_no_timeout(monkeypatch):
     """Achado da revisão final: sem o cancel(), a corrotina do `entregar` segue viva no loop e pode
     confirmar DEPOIS de o chamador já ter decidido `deferred` — a fila reenvia pela mesma linha e a
@@ -251,14 +384,14 @@ def test_endpoint_vai_pra_todos_os_config_dirs(tmp_path, monkeypatch):
                                  ConfigDirInfo(path=str(b), label="B", active=False)])
     escritos = pi_inbox.escrever_endpoint()
     assert len(escritos) == 2
-    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    d = json.loads((a / ".hangar-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://127.0.0.1:")
     if os.name == "posix":
         # So o resto do caso vale no Windows: la nao ha bit de modo (o st_mode volta 0o666 e quem
         # decide acesso e a ACL), entao a asserção testaria o os.stat, nao o pi_inbox. A protecao
         # do token PRECISA existir la tambem — mas por ACL, e isso ainda nao esta implementado;
         # esconder a lacuna atras de um assert que nao roda seria pior que deixa-la visivel.
-        assert (a / ".claude-pocket-conn.json").stat().st_mode & 0o777 == 0o600, "tem token dentro"
+        assert (a / ".hangar-conn.json").stat().st_mode & 0o777 == 0o600, "tem token dentro"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="modo 0600 nao existe no Windows (quem manda e a ACL)")
@@ -300,7 +433,7 @@ def test_endpoint_usa_o_bind_real_do_backend(tmp_path, monkeypatch):
                         lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
     monkeypatch.setattr("app.config.resolve_bind_ip", lambda s: "192.168.1.50")
     pi_inbox.escrever_endpoint()
-    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    d = json.loads((a / ".hangar-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://192.168.1.50:")
 
 
@@ -315,7 +448,7 @@ def test_endpoint_bind_0000_ainda_aponta_pro_loopback(tmp_path, monkeypatch):
                         lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
     monkeypatch.setattr("app.config.resolve_bind_ip", lambda s: "0.0.0.0")
     pi_inbox.escrever_endpoint()
-    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    d = json.loads((a / ".hangar-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://127.0.0.1:")
 
 

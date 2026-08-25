@@ -14,7 +14,7 @@ from typing import Optional
 
 from app.models import ChatEvent, scrub_surrogates
 
-_log = logging.getLogger("claude_pocket.pi_transcript")
+_log = logging.getLogger("hangar.pi_transcript")
 
 # Blocos que nao viram bolha de chat. `thinking` fica de fora igual no Claude: e rascunho interno,
 # nao resposta.

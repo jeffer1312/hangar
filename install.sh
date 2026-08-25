@@ -6,9 +6,9 @@
 #   ./install.sh --check      # só diz o que falta e sai, sem instalar nada
 #   ./install.sh --update        # re-aplica só o que um `git pull` não atualiza sozinho
 #   ./install.sh --no-frontend   # só o backend (o PWA já roda noutro lugar)
-#   ./install.sh --no-wrapper --no-services --no-cp-send --no-panel   # pula partes
+#   ./install.sh --no-wrapper --no-services --no-hangar-send --no-panel   # pula partes
 #
-# Os sub-scripts (services-setup.sh, lan-setup.sh, install-cp-send.sh, ...) continuam
+# Os sub-scripts (services-setup.sh, lan-setup.sh, install-hangar-send.sh, ...) continuam
 # rodáveis sozinhos; este aqui só faz com que um comando baste.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -27,7 +27,8 @@ for arg in "$@"; do
     --update)      UPDATE=1; YES=1 ;;
     --no-wrapper)  WRAPPER=0 ;;
     --no-services) SERVICES=0 ;;
-    --no-cp-send)  CPSEND=0 ;;
+    # O nome antigo do flag segue aceito: está no histórico de comando de quem já instala assim.
+    --no-hangar-send|--no-cp-send)  CPSEND=0 ;;
     --no-panel)    PANEL=0 ;;
     --no-frontend) FRONTEND=0 ;;
     *) echo "flag desconhecida: $arg"; exit 1 ;;
@@ -44,7 +45,7 @@ fail() { erro "$*"; exit 1; }
 # Toda pergunta lê do TERMINAL, nunca do stdin do script. Sob `curl … | bash` (e sob o
 # bootstrap.sh) o stdin é o cano do curl: um `read` normal recebia EOF na hora, devolvia string
 # vazia — e vazio aqui vale como "sim". O instalador aceitaria firewall, serviços, Tailscale e
-# cp-send sem ninguém ter respondido nada. Sem terminal (CI, cron), a resposta é NÃO.
+# hangar-send sem ninguém ter respondido nada. Sem terminal (CI, cron), a resposta é NÃO.
 if { exec 3</dev/tty; } 2>/dev/null; then TEM_TTY=1; else TEM_TTY=0; fi
 
 ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim; sem terminal, sempre não)
@@ -209,9 +210,43 @@ if [ -f "$DIST" ] && [ -z "$(find frontend/src package-lock.json frontend/index.
                               frontend/vite.config.* -newer "$DIST" -print -quit 2>/dev/null)" ]; then
   ok "frontend já buildado e atualizado (nada mudou desde o último build)"
 else
-  (cd frontend && npm ci --silent && npm run build --silent)
+  # Sem --silent no --update (o modo que o BOTÃO Atualizar usa): a caixinha da tela mostra esta
+  # saída ao vivo, e com --silent o npm não imprime nada — a tela fica idêntica a uma travada
+  # durante o minuto do `npm ci`. No modo interativo o --silent fica, pra não poluir o terminal.
+  QUIETO=--silent; [ "$UPDATE" = 1 ] && QUIETO=
+  (cd frontend && npm ci $QUIETO && npm run build $QUIETO)
   ok "buildado em frontend/dist/"
 fi
+fi
+
+# ── Janela nativa (Electron, shell/) ──────────────────────────────────────────
+# Só as DEPENDÊNCIAS, nunca o `npm run dist`. O `git pull` traz o `main.cjs` novo, e quem roda o
+# app a partir do repo já o executa no próximo start — mas se o `package-lock.json` do shell mudar
+# (Electron novo, dependência nova), a janela roda com dependência velha e nada avisa. Empacotar
+# (AppImage/NSIS) é outra coisa: leva minutos e produz um INSTALADOR, que alguém ainda tem que
+# instalar — publicação, não atualização, e não cabe num botão que roda sozinho.
+if [ -d shell ] && [ -f shell/package.json ]; then
+  # Compara com `node_modules/.package-lock.json`, que o npm reescreve a CADA instalação — e não
+  # com a pasta `node_modules`, cuja data não acompanha o que aconteceu dentro dela. Medido aqui:
+  # a pasta era de 16/08 e o lock de 22/08, então a condição dava "precisa" toda vez e um `npm ci`
+  # de minutos rodaria em cada atualização, à toa.
+  MARCA_SHELL=shell/node_modules/.package-lock.json
+  if [ ! -f "$MARCA_SHELL" ] || [ shell/package-lock.json -nt "$MARCA_SHELL" ]; then
+    say "Janela nativa (Electron)"
+    QUIETO_SHELL=--silent; [ "$UPDATE" = 1 ] && QUIETO_SHELL=
+    if (cd shell && npm ci $QUIETO_SHELL); then
+      ok "dependências da janela instaladas"
+    else
+      # Não derruba a atualização: o app funciona no navegador sem a janela nativa.
+      falta "npm ci do shell/ falhou — a janela nativa pode não abrir (rode: cd shell && npm ci)"
+      # Marca canônica (não traduzida, não colorida): é como o motor da atualização sabe que algo
+      # ficou pra trás sem o instalador precisar falhar inteiro. Sem ela, a tela dizia "Atualizado"
+      # com a janela nativa quebrada, e a única pista era uma linha amarela perdida no log.
+      echo "##HANGAR-AVISO## a janela nativa (Electron) ficou com dependencias desatualizadas"
+    fi
+  else
+    ok "janela nativa já com as dependências em dia"
+  fi
 fi
 
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
@@ -225,7 +260,7 @@ say "5/8 Wrappers do claude e do codex"
 # sub-scripts geram conteúdo (blocos de rc, units, o texto do protocolo no ~/.claude/CLAUDE.md)
 # que um `git pull` sozinho não atualiza. Eles são idempotentes, então re-rodar é barato; o que
 # não pode voltar é perguntar S/n pro que já está de pé.
-if [ -e "$HOME/.local/bin/cp-engine" ]; then
+if [ -e "$HOME/.local/bin/hangar-engine" ]; then
   ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados" || erro "wrappers do claude/codex falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
@@ -297,7 +332,7 @@ fi
 fi
 
 # ── 7/8 Rodar sozinho + sessões-irmãs + painel ───────────────────────────────
-say "7/8 Serviços, cp-send e painel"
+say "7/8 Serviços, hangar-send e painel"
 if ! command -v systemctl >/dev/null; then
   nota "serviços: sem systemd nesta máquina — rode backend e frontend na mão"
 elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
@@ -318,16 +353,16 @@ else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
 fi
 
-if [ -e "$HOME/.local/bin/cp-send" ]; then
+if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  ./scripts/install-cp-send.sh >/dev/null && ok "cp-send + skills atualizados" || erro "cp-send + skills falharam ao atualizar"
+  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || erro "hangar-send + skills falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
-elif [ "$CPSEND" = 1 ] && ask "Instalar cp-send + skills (sessões conversam entre si e se pareiam)?"; then
-  ./scripts/install-cp-send.sh
+elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
+  ./scripts/install-hangar-send.sh
 else
-  nota "pulado — depois: ./scripts/install-cp-send.sh"
+  nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
 
 # Sessões sobrevivendo a reboot: TPM + resurrect + continuum + um timer systemd que salva.
@@ -347,19 +382,35 @@ fi
 if ! { command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; }; then
   nota "painel do desktop: pulado (requer Hyprland + Quickshell)"
 # Detecta pelo SYMLINK, nao pela unit systemd: medido nesta maquina, o painel roda sob `flock`
-# direto (`qs -n -c claude-pocket`) e nao existe cp-panel.service — checar a unit dava "ausente"
+# direto (`qs -n -c hangar`) e nao existe hangar-panel.service — checar a unit dava "ausente"
 # num painel instalado e vivo.
-elif [ -e "$HOME/.local/bin/cp-panel-open" ]; then
+elif [ -e "$HOME/.local/bin/hangar-panel-open" ]; then
   ok "painel + tray já instalados"
   # Único passo que NÃO re-roda sozinho: o painel é a única coisa aqui que está VISIVELMENTE
   # em execução no teu desktop, e a forma como ele sobe pode divergir da que o script gera
   # (medido: rodando sob flock, sem unit systemd). Re-instalar por conta própria mudaria algo
   # que funciona, sem pedir. Os arquivos são symlink, então QML e scripts já vêm do git pull.
-  nota "atualizar de propósito (muda como o painel sobe): ./scripts/install-cp-panel.sh"
+  nota "atualizar de propósito (muda como o painel sobe): ./scripts/install-hangar-panel.sh"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
-  ./scripts/install-cp-panel.sh
+  ./scripts/install-hangar-panel.sh
+fi
+
+# ── Passos de atualização: marcar como já feitos ─────────────────────────────
+# Uma instalação do ZERO já satisfaz todo passo de `docs/atualizacoes/` — eles existem pra levar
+# uma máquina ANTIGA até aqui. Sem esta marca, a primeira vez que essa máquina apertasse Atualizar
+# no app, ela rodaria a história inteira de passos, todos já cumpridos por este instalador.
+# No --update NÃO se marca nada: ali a máquina é justamente a antiga, e os passos precisam rodar.
+if [ "$UPDATE" = 1 ]; then
+  :
+else
+  say "Passos de atualização"
+  if uv run --directory backend python -c "from app import atualizacoes; atualizacoes.marcar_todos()" 2>/dev/null; then
+    ok "marcados como já aplicados (instalação nova)"
+  else
+    nota "não consegui marcar agora — o app resolve no primeiro Atualizar"
+  fi
 fi
 
 # ── Atualizar sozinho no próximo git pull (opcional) ─────────────────────────

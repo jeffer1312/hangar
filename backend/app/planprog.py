@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-_log = logging.getLogger("claude_pocket.planprog")
+_log = logging.getLogger("hangar.planprog")
 
 PLANS_REL = os.path.join("docs", "superpowers", "plans")
 

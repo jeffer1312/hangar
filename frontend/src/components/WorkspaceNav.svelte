@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
-  type WorkspaceView = 'chat' | 'board' | 'canvas';
+  import type { WorkspaceView } from '../lib/workspaceCommands';
 
   interface Props {
     view: WorkspaceView;
@@ -11,11 +11,12 @@
   let { view, onSelect, onOpenCommand }: Props = $props();
 
   // Rotulos CURTOS de proposito: a coluna tem 248px por padrao, e "Conversa" + "Quadro" + "Canvas"
-  // + o botao de busca nao cabem sem cortar palavra no meio. O nome longo vive no title.
+  // + "Orq" + o botao de busca nao cabem sem cortar palavra no meio. O nome longo vive no title.
   const items: { id: WorkspaceView; label: string; title: string }[] = [
     { id: 'chat', label: m.shell_chat_curto(), title: m.shell_conversa() },
     { id: 'board', label: m.shell_quadro(), title: m.shell_quadro() },
     { id: 'canvas', label: m.shell_canvas(), title: m.shell_canvas() },
+    { id: 'orq', label: m.shell_orq_curto(), title: m.shell_orq() },
   ];
 </script>
 

@@ -1,18 +1,19 @@
 """Pareamento de sessões (feature "trabalhando juntas"): GRUPO de N sessões que colaboram em repos
 complementares (ex: front + back + POS). Mesmo padrão de sidecar do ThenLink (app/chain.py): dir
-irmão ".claude-pocket-pair", um JSON pequeno por MEMBRO, keyed pelo NOME:
+irmão ".hangar-pair", um JSON pequeno por MEMBRO, keyed pelo NOME:
 
     {"peers": ["outra", "mais-uma"], "task": "...", "gid": "ab12cd34"}
 
 peers = os OUTROS membros do grupo (cada sidecar lista todos menos o dono). gid = id estável do
 grupo (não muda quando membro entra/sai) — nomeia o arquivo de CONTRATO compartilhado. Formato
 legado {"peer": "x"} (1:1) é lido como {"peers": ["x"]}. O efeito de comportamento (as sessões se
-falarem via cp-send) vem do PROMPT que a API injeta; o sidecar persiste o vínculo pro badge/unpair."""
+falarem via hangar-send) vem do PROMPT que a API injeta; o sidecar persiste o vínculo pro badge/unpair."""
 import json
 import threading
 import uuid
 from pathlib import Path
 
+from app import atomico
 from app.config import settings
 from app.models import dumps_safe
 from app.pqueue import _sanitize
@@ -29,7 +30,7 @@ class PairMixError(ValueError):
 
 
 def _pair_dir() -> Path:
-    d = Path(settings.projects_dir).parent / ".claude-pocket-pair"
+    d = Path(settings.projects_dir).parent / ".hangar-pair"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -59,7 +60,7 @@ class PairLink:
         # Escrita atômica (tmp + replace), mesmo padrão do PromptQueue._write_atomic.
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(dumps_safe({"peers": peers, "task": task, "gid": gid}), encoding="utf-8")
-        tmp.replace(self.path)
+        atomico.substituir(tmp, self.path)
 
     def clear(self) -> None:
         self.path.unlink(missing_ok=True)

@@ -133,10 +133,20 @@
   // Título de um subagente que só o disco conhece: a primeira linha do prompt dele. O prompt de
   // skill começa com o cabeçalho do arquivo ("Base directory for this skill: …"), então a linha que
   // interessa é a primeira que não seja esse cabeçalho.
-  function tituloDoSub(s2: SubagentRun): string {
+  function tituloBaseDoSub(s2: SubagentRun): string {
     const linhas = (s2.prompt ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
     const util = linhas.find((l) => !/^base directory for this skill:/i.test(l) && !l.startsWith('#'));
     return (util ?? linhas[0] ?? s2.agentId).slice(0, 90);
+  }
+
+  // O AgentSwarm do Kimi dispara N subagentes com o MESMO prompt de abertura — o que muda (o item
+  // do lote) fica no meio do texto, então a primeira linha é idêntica nos quatro e a lista virava
+  // quatro linhas iguais, sem como saber qual é qual. Empatou, entra o agentId, que é o mesmo
+  // número que o terminal do Kimi mostra na coluna de cada um.
+  function tituloDoSub(s2: SubagentRun): string {
+    const base = tituloBaseDoSub(s2);
+    const repetido = subs.some((o) => o.agentId !== s2.agentId && tituloBaseDoSub(o) === base);
+    return repetido ? `${base} · ${s2.agentId}` : base;
   }
 
   // Abre pelo OBJETO. O `openSubagent` casa por prompt porque parte de uma linha do transcript; aqui
@@ -427,7 +437,10 @@
                         {#if s2.agentType}<span class="agent-tag">{s2.agentType}</span>{/if}
                       </span>
                       <span class="agent-now">
-                        {m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}
+                        <!-- Ilegivel nao mostra "0 chamadas": os campos vem zerados porque o
+                             transcript nao foi lido, e 0 ali seria afirmar que ele nao fez nada. -->
+                        {#if s2.ilegivel}{m.atividade_sub_ilegivel()}
+                        {:else}{#if s2.finished}{m.atividade_sub_concluido()} · {/if}{m.atividade_chamadas({ n: s2.toolCalls })}{#if s2.recent.length} · {s2.recent[s2.recent.length - 1].name}{/if}{/if}
                       </span>
                     </span>
                     <span class="agent-arrow" aria-hidden="true">›</span>
@@ -461,14 +474,21 @@
             {#if !subDetail}
               <p class="activity-empty">{m.atividade_sem_transcript()}</p>
             {:else}
-              <div class="ag-meta">
-                <span class="rodando">◐ {m.atividade_rodando()}</span>
-                <span>{m.atividade_chamadas({ n: subDetail.toolCalls })}</span>
-                {#if subDetail.agentType}<span>{subDetail.agentType}</span>{/if}
-                {#if subDetail.recent.length}
-                  <span class="ag-ultima">{subDetail.recent[subDetail.recent.length - 1].name}</span>
-                {/if}
-              </div>
+              <!-- Ilegivel: o transcript existe mas nao deu pra ler agora, entao TODO numero aqui
+                   viria zerado. Mostrar "◐ Rodando · 0 chamadas" seria afirmar o estado dele — a
+                   mesma mentira que a linha da lista ja evita, uma tela adiante. -->
+              {#if subDetail.ilegivel}
+                <div class="ag-meta"><span>{m.atividade_sub_ilegivel()}</span></div>
+              {:else}
+                <div class="ag-meta">
+                  <span class="rodando">◐ {m.atividade_rodando()}</span>
+                  <span>{m.atividade_chamadas({ n: subDetail.toolCalls })}</span>
+                  {#if subDetail.agentType}<span>{subDetail.agentType}</span>{/if}
+                  {#if subDetail.recent.length}
+                    <span class="ag-ultima">{subDetail.recent[subDetail.recent.length - 1].name}</span>
+                  {/if}
+                </div>
+              {/if}
 
               <!-- MESMO renderizador do chat: o arquivo do subagente e um jsonl no formato de
                    sempre, entao o backend converte com a `parse_line` do transcript e a UI reusa a
@@ -486,9 +506,10 @@
                     onCancel={() => {}}
                   />
                 </div>
-              {:else if subDetail.toolCalls > 0}
-                <!-- Ele JA chamou ferramentas, mas o transcript nao veio: e falha de leitura, nao
-                     agente parado. Dizer "ainda pensando" aqui seria mentir sobre o estado dele. -->
+              {:else if subDetail.ilegivel || subDetail.toolCalls > 0}
+                <!-- Ele JA chamou ferramentas (ou o proprio registro nao deu pra ler): e falha de
+                     leitura, nao agente parado. "Ainda pensando" aqui seria mentir sobre o estado
+                     dele — e no ilegivel o `toolCalls: 0` nao quer dizer "nao chamou nada". -->
                 <p class="activity-empty">{m.atividade_erro_transcript()}</p>
               {:else}
                 <p class="activity-empty">{m.atividade_pensando()}</p>

@@ -19,7 +19,7 @@ trabalho real de 15/08/2026 a espiral só foi enxergada de fora: o árbitro escr
 enquanto a Task 4 dava nove voltas na mesma família de defeito, e nenhuma dessas réguas percebeu que
 o problema era o desenho. Quem lê o registro **depois**, sem ter vivido, vê em dez minutos.
 
-## As quatro entradas
+## As cinco entradas
 
 ```bash
 # 1. o registro do árbitro — o diário: Task → hash → veredito, rodadas, decisões com data
@@ -44,7 +44,14 @@ git log --oneline <base>..<ponta>
 # 4. o que a PRÓPRIA SKILL ganhou durante a execução — é a evidência mais forte que existe
 git -C <repo-da-skill> log --oneline --since="<data-de-início>" -- skills/orchestrating-idea-to-push
 git -C <repo-da-skill> diff <commit-antes-do-trabalho>..HEAD -- skills/orchestrating-idea-to-push
+
+# 5. o eventos.jsonl — rodadas, vereditos e tempos por task JÁ contados pelo árbitro
+cat ~/.claude/orq-retros/<data>-<gid>/eventos.jsonl
 ```
+
+A quinta é a que dá número sem recontar na mão: rodadas, vereditos e tempo por task já vêm
+contados de lá, e a retro **confere a prosa contra ele** em vez de reconstruir de git e mtime.
+Execução antiga não tem o arquivo — aí valem as quatro de sempre, e isso se diz no relatório.
 
 A quarta é a que ninguém pensa em olhar, e é a que mais entrega: **toda régua que o árbitro precisou
 escrever no meio do trabalho é uma coisa que a skill não tinha.** Se ele teve que decidir, escrever e

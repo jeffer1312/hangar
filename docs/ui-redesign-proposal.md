@@ -1,4 +1,4 @@
-# claude-pocket — Mobile Redesign Proposal (+ critique)
+# hangar — Mobile Redesign Proposal (+ critique)
 
 Produced by the deep+competitive UI/UX research workflow (9 agents, ~632k tokens),
 then verified against the real code. Source decisions: docs/ui-redesign-requirements.md.
@@ -25,7 +25,7 @@ Extend `StateEvent` with `status` (parsed), `model`, `effort` (keep `status_line
 
 ### (a) Layout — 3 zones (account-level+slow = top bar; per-turn+actionable = composer; dated/precise/long = sheets)
 ```
-NAVBAR  ‹  claude-pocket ▾        5h 88%·s 38%   ← slim top bar
+NAVBAR  ‹  hangar ▾        5h 88%·s 38%   ← slim top bar
 ────────────────────────────────────────────
             MESSAGE LIST (unchanged)
 ────────────────────────────────────────────
@@ -48,7 +48,7 @@ row (right, tabular-nums); 5h/weekly% → NavBar chips (tap → UsageSheet w/ re
 
 ### (c) Sessions + project scanner
 - Sessions home: sort by activity+urgency; SessionCard = basename title + muted cwd; pulse only when working; filter input when >6.
-- In-chat switcher: NavBar title → `claude-pocket ▾` → sheet of other live sessions + `+ Nova`.
+- In-chat switcher: NavBar title → `hangar ▾` → sheet of other live sessions + `+ Nova`.
 - **Folder scanner** (core new feature): backend `GET /api/fs/scan?root&path` → subfolders [{name,path,is_git,has_claude_md,mtime}]; **allowlist of permitted roots in config.py**, realpath, reject `..`/symlink escape. Frontend: roots chips + search + single tappable drill-in column (row tap=select cwd, chevron=drill), skeleton/empty/denied states. Open-vs-New dedupe vs live tmux cwd. Feeds the same `createSession(name, cwd)`.
 - Slash commands: `GET /api/sessions/{name}/commands` (built-ins JSON + cwd scan of `.claude/commands`, skills, plugins). Two surfaces: inline `/` strip above textarea + `[/]` CommandSheet (grouped, source badges). Zero-arg → send; valueSet → submenu; opensPicker → bare cmd → awaiting_input/OptionButtons. Flag destructive (`/clear`,`/compact`,`/quit`).
 

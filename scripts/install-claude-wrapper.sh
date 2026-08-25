@@ -26,8 +26,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHELL_DIR="$SCRIPT_DIR/shell"
 STATUSLINE_JS="$SCRIPT_DIR/omniroute-statusline.js"
-BEGIN_MARK="# >>> claude-pocket >>>"
-END_MARK="# <<< claude-pocket <<<"
+BEGIN_MARK="# >>> hangar >>>"
+END_MARK="# <<< hangar <<<"
+# Marcador que este projeto usava antes do rename. O bloco velho é ARRANCADO antes de o novo
+# entrar (ensure_block): os dois fazem `source` dos mesmos wrappers, então deixá-lo pra trás
+# carregaria o wrapper duas vezes por terminal — e, pior, o bloco velho nunca mais seria
+# atualizado por nada. Mesma lista de nomes antigos que o install.ps1 já mantém no Windows.
+LEGACY_BEGIN="# >>> claude-pocket >>>"
+LEGACY_END="# <<< claude-pocket <<<"
 
 DO_TMUX=1
 DO_STATUS=""   # "", 1 or 0 — empty means "ask if interactive, else yes"
@@ -62,6 +68,16 @@ fi
 ensure_block() {
   local file="$1" payload="$2" tmp
   touch "$file"
+  if grep -qF "$LEGACY_BEGIN" "$file"; then
+    tmp="$(mktemp)"
+    awk -v b="$LEGACY_BEGIN" -v e="$LEGACY_END" '
+      $0==b {skip=1; next}
+      $0==e {skip=0; next}
+      skip {next}
+      {print}
+    ' "$file" >"$tmp" && mv "$tmp" "$file"
+    echo "  removed old (claude-pocket) managed block from $file"
+  fi
   if grep -qF "$BEGIN_MARK" "$file"; then
     tmp="$(mktemp)"
     awk -v b="$BEGIN_MARK" -v e="$END_MARK" -v p="$payload" '
@@ -104,18 +120,26 @@ install_fish() {
 # Helper chamado pelos wrappers de shell. Symlink absoluto preserva a descoberta do backend/.env
 # mesmo quando executado de qualquer cwd e atualiza automaticamente depois de git pull.
 mkdir -p "$HOME/.local/bin"
-chmod +x "$SCRIPT_DIR/cp-codex"
-ln -sfn "$SCRIPT_DIR/cp-codex" "$HOME/.local/bin/cp-codex"
-echo "  installed Codex helper -> $HOME/.local/bin/cp-codex"
-chmod +x "$SCRIPT_DIR/cp-engine"
-ln -sfn "$SCRIPT_DIR/cp-engine" "$HOME/.local/bin/cp-engine"
-echo "  installed engine helper -> $HOME/.local/bin/cp-engine"
+chmod +x "$SCRIPT_DIR/hangar-codex"
+ln -sfn "$SCRIPT_DIR/hangar-codex" "$HOME/.local/bin/hangar-codex"
+echo "  installed Codex helper -> $HOME/.local/bin/hangar-codex"
+chmod +x "$SCRIPT_DIR/hangar-engine"
+ln -sfn "$SCRIPT_DIR/hangar-engine" "$HOME/.local/bin/hangar-engine"
+echo "  installed engine helper -> $HOME/.local/bin/hangar-engine"
 
 # Helper de contas (claude-conta). Symlink absoluto, mesma regra dos dois acima: descoberta do
 # backend/.env preservada de qualquer cwd e atualização automática depois de git pull.
-chmod +x "$SCRIPT_DIR/cp-conta"
-ln -sfn "$SCRIPT_DIR/cp-conta" "$HOME/.local/bin/cp-conta"
-echo "  installed account helper -> $HOME/.local/bin/cp-conta"
+chmod +x "$SCRIPT_DIR/hangar-conta"
+ln -sfn "$SCRIPT_DIR/hangar-conta" "$HOME/.local/bin/hangar-conta"
+echo "  installed account helper -> $HOME/.local/bin/hangar-conta"
+
+# Nomes antigos (cp-*), como symlink PERMANENTE pro mesmo script. Não é período de transição: o
+# `cp-codex` está escrito dentro dos wrappers de shell que já vivem no rc do usuário, e um rc
+# antigo continua chamando o nome velho depois do git pull. Custa três links e evita um `codex`
+# que morre com "command not found" numa máquina que só faltava re-rodar este installer.
+for velho in codex engine conta; do
+    ln -sfn "$SCRIPT_DIR/hangar-$velho" "$HOME/.local/bin/cp-$velho"
+done
 
 # Point Claude Code's statusLine at scripts/omniroute-statusline.js so the app parses it reliably.
 install_statusline() {
@@ -190,7 +214,7 @@ set -g automatic-rename on
 set -g automatic-rename-format '#{b:pane_current_path}'
 # Terminal/WM title = SESSION NAME, not the cwd basename. Two sessions in the same repo get
 # distinct names (the wrapper appends -2, -3) but share a cwd basename, so a cwd title made them
-# indistinguishable to the window manager. cp-panel-open needs that title to pick the right window
+# indistinguishable to the window manager. hangar-panel-open needs that title to pick the right window
 # whenever the terminal runs single-instance (`kitty -1`), where every window shares one pid and
 # the pid->window map stops being a key. Session names are unique by construction; cwd is not.
 set -g set-titles on
@@ -201,15 +225,15 @@ TMUXCONF
 fi
 
 # --- extensoes do Pi ----------------------------------------------------------------------------
-# cp-state.ts: sem ela a sessao Pi aparece no app sempre "ociosa" (o estado vem do marcador, nao do
+# hangar-state.ts: sem ela a sessao Pi aparece no app sempre "ociosa" (o estado vem do marcador, nao do
 # pane). rich-status-line.ts: desenha o rodape E publica a linha INTEIRA no sidecar que o app le —
 # o que sai no terminal ja vem cortado na largura da janela (ver "Statusline por sidecar" no
 # CLAUDE.md), entao sem ela a sessao Pi em janela estreita fica sem contexto/cota no app.
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
 if command -v pi >/dev/null 2>&1; then
   mkdir -p "$PI_EXT_DIR"
-  ln -sfn "$SCRIPT_DIR/pi/cp-state.ts" "$PI_EXT_DIR/cp-state.ts"
-  echo "  linked cp-state.ts into $PI_EXT_DIR"
+  ln -sfn "$SCRIPT_DIR/pi/hangar-state.ts" "$PI_EXT_DIR/hangar-state.ts"
+  echo "  linked hangar-state.ts into $PI_EXT_DIR"
   # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
   # sobrescrever apagaria o trabalho dele. Avisa e deixa a decisao com quem sabe o que tem la.
   if [ -e "$PI_EXT_DIR/rich-status-line.ts" ] && [ ! -L "$PI_EXT_DIR/rich-status-line.ts" ]; then
@@ -238,16 +262,16 @@ if [ "$DO_STATUS" = 1 ]; then
   install_statusline
 fi
 
-# Sessões-irmãs: instala o cp-send junto (symlink + bloco no CLAUDE.md global). Idempotente —
+# Sessões-irmãs: instala o hangar-send junto (symlink + bloco no CLAUDE.md global). Idempotente —
 # era passo manual separado e máquina nova ficava sem o protocolo de pareamento sem ninguém avisar.
-CP_SEND_INSTALLER="$(dirname "$0")/install-cp-send.sh"
+CP_SEND_INSTALLER="$(dirname "$0")/install-hangar-send.sh"
 if [ -x "$CP_SEND_INSTALLER" ]; then
   echo
-  echo "cp-send (sessões-irmãs):"
+  echo "hangar-send (sessões-irmãs):"
   # Não-fatal: o trabalho principal (wrapper/tmux/statusline) já foi feito — falha aqui avisa e segue.
   "$CP_SEND_INSTALLER" || echo "aviso: install-cp-send falhou (não-fatal; wrapper já instalado)"
 else
-  echo "aviso: install-cp-send.sh não encontrado em $CP_SEND_INSTALLER — setup de sessões-irmãs PULADO"
+  echo "aviso: install-hangar-send.sh não encontrado em $CP_SEND_INSTALLER — setup de sessões-irmãs PULADO"
 fi
 
 echo

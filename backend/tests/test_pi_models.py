@@ -24,7 +24,7 @@ def _write_sidecar(tmp_path: Path, data, jsonl="/x/2026-07-28T01-55-09-315Z_abc.
 # ── sidecar ──────────────────────────────────────────────────────────────────
 def test_sidecar_path_keyed_by_jsonl_stem(tmp_path):
     p = pm.sidecar_path("/home/u/.pi/agent/sessions/2026-07-28T01-55-09-315Z_abc.jsonl", tmp_path)
-    assert p == tmp_path / ".claude-pocket-pi" / "models" / "2026-07-28T01-55-09-315Z_abc.json"
+    assert p == tmp_path / ".hangar-pi" / "models" / "2026-07-28T01-55-09-315Z_abc.json"
 
 
 def test_read_catalog_real_sidecar(tmp_path):
@@ -132,6 +132,28 @@ def test_send_pi_commands_key_sequence():
         call("s1", "/cp-think low", literal=True),
         call("s1", "Enter"),
     ]
+
+
+def test_send_pi_commands_pergunta_pela_linha_e_nao_pela_tela():
+    """Este era o caminho do 409 medido em 22/08/2026: com o aviso da nossa própria extensão
+    desenhado na faixa do composer, a troca de modelo pelo app era recusada com "composer do pi ja
+    tem texto" e o composer estava VAZIO. Quem sabe responder é a extensão, e ela precisa do pane —
+    então o comando resolve o pane e pergunta, em vez de raspar a tela."""
+    ti = TerminalInput()
+    vistos = {}
+
+    def falso_ocupado(name, pane_id=None):
+        vistos["args"] = (name, pane_id)
+        return False
+
+    with patch.object(terminal_input, "deliverable", return_value=True), \
+         patch.object(terminal_input, "_wait_input_ready", return_value=True), \
+         patch.object(terminal_input.agentpane, "pane_info", return_value=("pi", "%7")), \
+         patch.object(terminal_input, "_composer_ocupado_pi", falso_ocupado), \
+         patch("app.terminal_input.send_keys"), \
+         patch("time.sleep"):
+        ti.send_pi_commands("s1", ["/cp-think low"])
+    assert vistos["args"] == ("s1", "%7")
 
 
 def test_send_pi_commands_refuses_when_overlay_open():

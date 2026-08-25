@@ -68,7 +68,7 @@ def test_origem_diferente_nao_e_afetada(app):
 
 
 def test_loopback_nunca_bloqueia(app):
-    # cp-send/cp-panel batem no backend por 127.0.0.1 o tempo todo; quem esta na maquina ja le o .env.
+    # hangar-send/hangar-panel batem no backend por 127.0.0.1 o tempo todo; quem esta na maquina ja le o .env.
     c = cli(app, "127.0.0.1")
     for _ in range(auth._MAX_FAILS * 3):
         assert hit(c) == 401

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-pocket — persist & restore the live agent conversation per tmux session across reboot.
+# hangar — persist & restore the live agent conversation per tmux session across reboot.
 #
 # Why this exists: tmux-resurrect restores panes + cwd but NOT the agent CLI (it isn't in resurrect's
 # restore whitelist), and when an MCP server runs as a child it mis-captures that child (e.g.
@@ -12,8 +12,8 @@
 #
 # Providers (same detection as backend registry.provider_of_pane — argv0 of the pane's descendants):
 #   claude  id = uuid on the cmdline (--session-id/--resume)      -> claude --resume <uuid>
-#   kimi    id = ticket .claude-pocket-kimi/<pane>.json           -> kimi -S <session_id>
-#   pi      id = ticket .claude-pocket-pi/<pane>.json             -> pi --session <uuid>
+#   kimi    id = ticket .hangar-kimi/<pane>.json           -> kimi -S <session_id>
+#   pi      id = ticket .hangar-pi/<pane>.json             -> pi --session <uuid>
 # Kimi has no caller-chosen id (no --session-id; -S only resumes) and pi rewrites its argv, so for
 # both the per-pane ticket written by the app's hooks is the ONLY link pane -> session.
 # Codex is deliberately out: its session lives in the app-server sidecar, not in a pane command.
@@ -78,13 +78,13 @@ scan_pane() {
 
 # The cmdline uuid can be a GHOST: resume via the TUI picker (or /clear) keeps the wrapper's
 # throwaway --session-id on the cmdline while claude writes to another <uuid>.jsonl. The backend's
-# state_hook already records the REAL transcript per boot-id in <config>/.claude-pocket-active/
+# state_hook already records the REAL transcript per boot-id in <config>/.hangar-active/
 # <boot_id>.json = {"jsonl": <path>, ...} — trust that marker when it points at a live file.
 # The marker lives in the pane's OWN config dir: a session on another account writes it under
 # ~/.claude-<conta>, and reading ~/.claude there would silently fall back to the boot uuid.
 real_uuid() {  # <boot uuid> <config dir>
   local j
-  j=$(sed -n 's/.*"jsonl": *"\([^"]*\)".*/\1/p' "$2/.claude-pocket-active/$1.json" 2>/dev/null)
+  j=$(sed -n 's/.*"jsonl": *"\([^"]*\)".*/\1/p' "$2/.hangar-active/$1.json" 2>/dev/null)
   if [ -n "$j" ] && [ -f "$j" ]; then
     j=${j##*/}; printf '%s\n' "${j%.jsonl}"
   else
@@ -97,7 +97,7 @@ real_uuid() {  # <boot uuid> <config dir>
 # agent process belongs to the pane's PREVIOUS incarnation and would resume someone else's session.
 ticket_field() {  # <kimi|pi> <pane id> <agent pid> <json key>
   local tick data ts born
-  tick="$(_config_dir_of "$3")/.claude-pocket-$1/${2#%}.json"
+  tick="$(_config_dir_of "$3")/.hangar-$1/${2#%}.json"
   data=$(cat "$tick" 2>/dev/null) || return 1
   ts=$(sed -n 's/.*"ts" *: *\([0-9.]*\).*/\1/p' <<<"$data")
   born=$(_start_of "$3") || return 1
@@ -163,10 +163,10 @@ restore() {
       pi)     cmd="pi --session $id" ;;
       *)      echo "  $name: unknown provider '$prov'" >> "$LOG"; continue ;;
     esac
-    # Engine env is applied INSIDE the pane by cp-engine (os.execvpe), same as registry does when it
+    # Engine env is applied INSIDE the pane by hangar-engine (os.execvpe), same as registry does when it
     # spawns the session; the account is a plain env prefix because the pane already exists (the
     # `tmux new-session -e` the app uses is not available on a restored pane).
-    if [ -n "${engine:-}" ]; then cmd="cp-engine --exec $engine -- $cmd"; fi
+    if [ -n "${engine:-}" ]; then cmd="hangar-engine --exec $engine -- $cmd"; fi
     if [ -n "${cfg:-}" ]; then cmd="env CLAUDE_CONFIG_DIR=$(printf '%q' "$cfg") $cmd"; fi
     if tmux send-keys -t "=$name:." "$cmd" Enter; then
       echo "  $name: injected [$prov] $id${engine:+ engine=$engine}${cfg:+ conta=$cfg}" >> "$LOG"

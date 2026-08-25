@@ -6,9 +6,13 @@ import { buscarPaleta, aplicarPaleta, ligarAtualizacaoAoFocar } from './lib/desk
 import { applyBg, applyAppearance } from './lib/background';
 import { ensureCookie, getBaseUrl, getToken, dropActiveServer } from './lib/auth';
 import { localeAtual } from './lib/locale';
-import { configureApi, configureLocale } from '@hangar/core';
+import { configureApi, configureLocale, configureDiag } from '@hangar/core';
+import { registrar as registrarDiag, novoReq } from './lib/diag';
 
 configureLocale({ getLocale: localeAtual });
+// O diário de uso é da web (usa window/navigator e o auth daqui). O core só tem a tomada: sem este
+// registro, o `apiFetch` segue funcionando e não grava nada.
+configureDiag({ registrar: registrarDiag, novoReq });
 configureApi({
   getBaseUrl,
   getToken,

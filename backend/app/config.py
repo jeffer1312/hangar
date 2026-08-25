@@ -148,16 +148,16 @@ class Settings(BaseSettings):
     # default permissivo de proposito — o handshake tambem aceita o cookie `cp_token`, entao aceitar
     # origem arbitraria seria deixar qualquer site abrir um terminal na maquina.
     term_origins: str = ""
-    # CP_SERVER_ID: id DESTA maquina no peers.json (mesmo que o cp-send usa). Vazio = pareamento
+    # CP_SERVER_ID: id DESTA maquina no peers.json (mesmo que o hangar-send usa). Vazio = pareamento
     # cross-server desligado; quando setado, vira o endereco de resposta 'srv::sessao' que o backend
-    # remoto recebe pra registrar o vinculo reverso. Recado 1:1 cross-server segue so no cp-send.
+    # remoto recebe pra registrar o vinculo reverso. Recado 1:1 cross-server segue so no hangar-send.
     server_id: str = ""
     # Web Push (notificacao quando uma sessao fica awaiting_input). Par VAPID COMPARTILHADO entre os
     # servidores (single-user controla todos -> uma inscricao do celular serve os 3). Vazio = push
     # desligado (degrada gracioso: subscribe vira no-op). CP_VAPID_PUBLIC/PRIVATE/SUBJECT.
     vapid_public: str = ""
     vapid_private: str = ""
-    vapid_subject: str = "mailto:claude-pocket@local"
+    vapid_subject: str = "mailto:hangar@local"
     # Push extras (feature #2): "terminou" (working->idle apos turno longo) e "caiu" (dead). Cada um
     # com seu flag on/off; default ligado (mesmo padrao do awaiting, que nao tem flag proprio).
     notify_finished: bool = True   # CP_NOTIFY_FINISHED
@@ -177,7 +177,10 @@ class Settings(BaseSettings):
     # Stores only salt + auth verifier + ciphertext (zero-knowledge; tokens are encrypted client-side).
     sync: bool = False
     sync_bootstrap: str = ""        # CP_SYNC_BOOTSTRAP: one-time secret to gate first registration
-    sync_data: Path = Path.home() / ".claude-pocket" / "sync-vault.json"
+    # ~/.hangar/ (era ~/.claude-pocket/): quem move a pasta é migracao_sidecars.migrar, na subida,
+    # deixando link no caminho antigo. É o COFRE do cloud-sync — perder de vista este arquivo é a
+    # tela "Criar acesso" aparecendo pra quem já tinha conta.
+    sync_data: Path = Path.home() / ".hangar" / "sync-vault.json"
     sync_session_secret: str = ""   # CP_SYNC_SESSION_SECRET: HMAC key for the session cookie; empty -> random at boot
     sync_rate_max: int = 10         # CP_SYNC_RATE_MAX: failed sync logins allowed in the window before 429
     sync_rate_window: int = 300     # CP_SYNC_RATE_WINDOW: rate-limit window in seconds (default 5 min)
@@ -187,7 +190,7 @@ class Settings(BaseSettings):
     forwarded_allow_ips: str = "127.0.0.1"
     # CP_DEPLOY_SECRET: shared secret do webhook do GitHub (HMAC-SHA256). Vazio = endpoint de auto-deploy
     # desligado (retorna 404). O push na main dispara /api/deploy/github-webhook -> valida a assinatura ->
-    # start (nao-bloqueante) da unit systemd 'claude-pocket-deploy.service' (pull + build + restart).
+    # start (nao-bloqueante) da unit systemd 'hangar-deploy.service' (pull + build + restart).
     deploy_secret: str = ""
     # CP_EDITOR: binario do editor pro "abrir pasta no editor" (menu da sessao). So-desktop: abre na
     # maquina que roda o backend. Binario unico (sem args/shell) -> exec seguro com o cwd da sessao.
@@ -201,7 +204,7 @@ class Settings(BaseSettings):
     # do .env, com prefixo) OU GROQ_API_KEY (convencao do Groq/OpenAI SDK, ex: no Environment do systemd).
     # Vazio = transcricao desligada (o endpoint /transcribe responde 503). Ver docs/USAGE.md.
     groq_api_key: str = Field("", validation_alias=AliasChoices("CP_GROQ_API_KEY", "GROQ_API_KEY"))
-    # Dias que um anexo fica em <cwd>/.claude-pocket-uploads/. A pasta nunca era limpa e cresce pra
+    # Dias que um anexo fica em <cwd>/.hangar-uploads/. A pasta nunca era limpa e cresce pra
     # sempre dentro do projeto (video sobe ate 100 MiB por arquivo). 0 = nunca apagar.
     # Anexo apagado que ainda aparece numa conversa antiga vira o chip "não carregou" — visível,
     # não some calado.
@@ -235,7 +238,7 @@ def resolve_scan_roots(s: "Settings") -> list[Path]:
         # Tipo errado só acontece com o runtime-config.json editado na mão; cair no env é a
         # decisão (nunca derrubar o backend), mas calado não — esta é a fronteira do fs-scan.
         if raw is not None and not isinstance(raw, str):
-            logging.getLogger("claude_pocket.config").warning(
+            logging.getLogger("hangar.config").warning(
                 "scan_roots do runtime-config tem tipo %s; ignorando e usando o env", type(raw).__name__)
         raw = s.scan_roots
     out: list[Path] = []

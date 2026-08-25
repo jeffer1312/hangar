@@ -90,7 +90,7 @@ def test_sem_rg_no_path_avisa_uma_vez_e_devolve_vazio(tmp_path, monkeypatch, cap
     # O Popen tambem precisa falhar, senao o caso mede a maquina e nao o codigo: com o ripgrep
     # instalado o fallback "rg" (nome puro) ainda roda pelo PATH do SO e a busca DA certo.
     monkeypatch.setattr(search.subprocess, "Popen", _nao_existe)
-    with caplog.at_level("WARNING", logger="claude_pocket.search"):
+    with caplog.at_level("WARNING", logger="hangar.search"):
         assert search.search("needle", {}) == []
         assert search.search("needle", {}) == []
     avisos = [r for r in caplog.records if "ripgrep" in r.getMessage()]

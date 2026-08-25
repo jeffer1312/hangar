@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""hangar-panel-open <sessao> — abre a sessão tmux no desktop, sem duplicar cliente.
+
+Se já existe uma janela de terminal com a sessão attachada, FOCA ela. Só abre terminal novo
+quando não existe nenhuma: `tmux attach` num alvo já attachado cria um SEGUNDO cliente, e o
+tmux encolhe a sessão pro menor cliente — o terminal que já estava aberto ficaria espremido.
+
+Detecção primária por PID: `tmux list-clients` dá o pid do cliente attachado; subindo a
+ancestralidade (/proc) chega no processo do terminal, que é o pid da janela no `hyprctl clients`.
+
+Isso resolve sozinho quando o terminal roda um processo por janela (foot, alacritty, kitty sem
+`-1`). Em terminal SINGLE-INSTANCE (`kitty -1`) todas as janelas dividem UM pid, o pid deixa de
+ser chave, e aí o desempate é pelo TÍTULO — que só serve porque o `set-titles-string` gerenciado
+(ver install-claude-wrapper.sh) é `#S`, o nome da sessão, único por construção. Com o formato
+antigo `#{b:pane_current_path}` duas sessões no mesmo repo tinham o mesmo título e não havia
+desempate possível; esse caso ainda existe se o rice trocar o formato, e então a função recusa
+escolher em vez de chutar (abrir attach duplicado é visível; focar a janela errada é calado).
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+# resolve(): o script roda via symlink em ~/.local/bin — sem resolver, o import do módulo irmão
+# procuraria em ~/.local/bin em vez de scripts/ do repo. Mesmo prólogo do hangar-panel-action.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from hangar_panel_common import avisar  # noqa: E402
+from hangar_panel_common import comando_terminal as comando_terminal_comum  # noqa: E402
+
+TERM_CLASSES = {"kitty", "foot", "alacritty", "wezterm", "org.wezfurlong.wezterm"}
+
+
+def hypr_clients() -> list[dict]:
+    try:
+        out = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True,
+                             timeout=5, check=True).stdout
+        return json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        # Visível no log do quickshell: sem isto, hyprctl quebrado = "nenhuma janela" mudo, e o
+        # clique abre um attach duplicado sem pista do porquê.
+        print(f"hangar-panel-open: hyprctl clients falhou ({e}) — sem janela pra focar", file=sys.stderr)
+        return []
+
+
+def ppid_of(pid: int) -> int:
+    """PPID via /proc/<pid>/stat (campo 4, depois do ')' — comm pode conter espaço)."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            stat = f.read()
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def expected_title(name: str) -> str | None:
+    """Título que o terminal desta sessão deve estar exibindo, expandido pelo PRÓPRIO tmux.
+
+    Lê o `set-titles-string` configurado em vez de repetir o formato aqui: o rice pode trocá-lo
+    (hoje é `#{b:pane_current_path}`) e uma cópia aqui viraria mentira silenciosa no dia da troca.
+    """
+    try:
+        fmt = subprocess.run(["tmux", "show-options", "-gv", "set-titles-string"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        if not fmt:
+            return None
+        out = subprocess.run(["tmux", "display-message", "-p", "-t", name, fmt],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        return out or None
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"hangar-panel-open: não consegui expandir o título da sessão ({e})", file=sys.stderr)
+        return None
+
+
+def pick_by_title(clients: list[dict], addrs: list[str], name: str) -> str | None:
+    """Desempata entre janelas do MESMO processo usando o título.
+
+    Só é chamado quando um pid é dono de várias janelas — terminal em single-instance (`kitty -1`),
+    onde todas as janelas compartilham um pid e o mapa pid->janela deixa de ser chave. Empate que
+    o título não resolve (duas sessões no mesmo repo, com o formato de cwd) devolve None de
+    propósito: abrir um attach duplicado é chato mas visível; focar a janela errada é silencioso.
+    """
+    alvo = expected_title(name)
+    if not alvo:
+        # Sintoma igual ao empate lá embaixo (abre terminal em vez de focar), mas por outra causa —
+        # sem esta linha o primeiro deploy, antes de reaplicar o bloco do installer no ~/.tmux.conf,
+        # falha idêntico a "não deu pra escolher" e sem pista de que a config é que não está lá.
+        print(f"hangar-panel-open: sem título esperado para {name!r} — set-titles-string ausente/vazio "
+              f"(reaplique o bloco do install-claude-wrapper.sh) ou o tmux falhou", file=sys.stderr)
+        return None
+    candidatos = [c for c in clients if c.get("address") in addrs and c.get("title") == alvo]
+    if len(candidatos) == 1:
+        return candidatos[0]["address"]
+    print(f"hangar-panel-open: {len(addrs)} janelas no mesmo processo e o título "
+          f"{alvo!r} casa com {len(candidatos)} delas — não dá pra escolher sem chutar",
+          file=sys.stderr)
+    return None
+
+
+def tmux_client_pids(name: str) -> list[int]:
+    """Pids dos clientes attachados na sessão (vazio se sessão não existe/sem cliente)."""
+    try:
+        out = subprocess.run(["tmux", "list-clients", "-t", name, "-F", "#{client_pid}"],
+                             capture_output=True, text=True, timeout=5).stdout
+        return [int(p) for p in out.split()]
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        # Falha de invocação ≠ "sem cliente", mas o degrade é o mesmo (abrir terminal) — só não
+        # pode ser mudo. Sessão inexistente NÃO cai aqui (tmux sai !=0 com stdout vazio, sem check).
+        print(f"hangar-panel-open: tmux list-clients falhou ({e})", file=sys.stderr)
+        return []
+
+
+def find_window(name: str) -> str | None:
+    """Endereço da janela com a sessão attachada. Pid do cliente tmux > título. None se não há."""
+    clients = hypr_clients()
+    # LISTA por pid, não uma janela só: com `kitty -1` (single-instance) TODAS as janelas do kitty
+    # compartilham um pid, e o dict de valor único ficava com a última do hyprctl — então clicar em
+    # qualquer sessão focava sempre a mesma janela, calado. Um pid dono de N janelas não é chave.
+    by_pid: dict[int, list[str]] = {}
+    for c in clients:
+        if c.get("address"):
+            by_pid.setdefault(c.get("pid"), []).append(c["address"])
+    cpids = tmux_client_pids(name)
+    for cpid in cpids:
+        pid = cpid
+        for _ in range(5):  # sobe até 5 níveis (cobre wrapper/shell entre terminal e tmux)
+            pid = ppid_of(pid)
+            if pid <= 1:
+                break
+            addrs = by_pid.get(pid)
+            if not addrs:
+                continue
+            if len(addrs) == 1:
+                return addrs[0]     # um processo por janela (foot, alacritty, kitty sem -1)
+            return pick_by_title(clients, addrs, name)
+    # Sem cliente attachado = não há janela a focar. NÃO cai no título: com o set-titles-string
+    # de cwd, o título casaria a janela de OUTRA sessão do mesmo repo (foco errado silencioso).
+    if not cpids:
+        return None
+    # Fallback: cliente existe mas a ancestralidade não mapeou (terminal fora do hyprctl?) —
+    # título (comportamento antigo), exato antes de prefixo.
+    terms = [c for c in clients if str(c.get("class", "")).lower() in TERM_CLASSES]
+    for match in (lambda t: t == name, lambda t: t.startswith(name)):
+        for c in terms:
+            if match(str(c.get("title", ""))) and c.get("address"):
+                return c["address"]
+    return None
+
+
+def comando_terminal(term: str, name: str) -> list:
+    """ARGV do terminal que anexa em `name` — attach EXATO, nunca `new-session -A`.
+
+    O `-A` (attacha se existe, CRIA se não) parecia só cobrir a sessão que morre entre o poll e o
+    clique. O que ele cria é um SHELL com o nome da sessão do agente: na lista do app ele fica
+    idêntico a uma sessão de verdade, e o chat dela cai no transcript mais recente da pasta. Medido
+    em 24/08/2026 — a sessão `hangar` morreu ao nascer (login expirado), o clique aqui recriou um
+    fish com o mesmo nome, e o `claude --resume` que o usuário digitou nesse fish apareceu no app
+    como se o app tivesse retomado a conversa sozinho.
+
+    O `=nome:` é a mesma grafia do attach do backend (api._EMULADORES): sem o `=` o tmux cai em
+    prefix-match e anexa na sessão errada.
+    """
+    return comando_terminal_comum(
+        term, ["attach", "-t", f"={name}:"],
+        f"hangar-panel-open: a sessao {name} nao existe mais (nada foi criada).")
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("uso: hangar-panel-open <sessao>", file=sys.stderr)
+        return 2
+    name = sys.argv[1]
+
+    addr = find_window(name)
+    if addr:
+        # Sintaxe LUA obrigatória: neste rice o hyprctl (e o próprio socket IPC) roda o dispatch
+        # como Lua — o "focuswindow address:0x..." clássico é rejeitado como sintaxe inválida.
+        # `timeout` como nas outras três chamadas deste arquivo: sem ele, um hyprctl pendurado
+        # (IPC fora do ar) segura o script pra sempre e o `avisar` abaixo nunca chega a rodar —
+        # trocaria um clique sem pista por um clique sem pista E um processo parado.
+        try:
+            r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{addr}" }})'],
+                               capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            avisar(f"hangar-panel-open: hyprctl nao respondeu ao focar {name} ({e})")
+            return 1
+        if r.returncode != 0:
+            # Endereço obsoleto (janela fechou entre a varredura e o clique) ou IPC fora do ar: o
+            # clique não focou nada, e sem isto não sobrava pista nenhuma — nem janela nova, já
+            # que este ramo dá o trabalho por feito.
+            avisar(f"hangar-panel-open: nao consegui focar a janela de {name} "
+                   f"({(r.stderr or r.stdout or '').strip() or f'hyprctl saiu {r.returncode}'})")
+            return 1
+        return 0
+
+    term = next((t for t in ("kitty", "foot", "alacritty") if shutil.which(t)), None)
+    if not term:
+        # Sem terminal não há janela onde mostrar a recusa: aqui o stderr sozinho é um clique que
+        # não faz nada. `avisar` manda pro notify-send também.
+        avisar("hangar-panel-open: nenhum terminal conhecido encontrado (kitty/foot/alacritty)")
+        return 1
+    try:
+        os.execvp(term, comando_terminal(term, name))
+    except OSError as e:
+        # O `which` acima diz que o binário existia; entre ele e o exec o pacote pode ter sido
+        # atualizado ou o symlink quebrado. Sem isto vira traceback no stderr que ninguém lê —
+        # exatamente o clique-que-não-faz-nada que este arquivo passou a caçar.
+        avisar(f"hangar-panel-open: nao consegui abrir {term}: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

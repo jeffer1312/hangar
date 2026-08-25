@@ -1,7 +1,7 @@
 import type { AggSession } from '@hangar/core';
 import * as m from '../paraglide/messages';
 
-export type WorkspaceView = 'chat' | 'board' | 'canvas';
+export type WorkspaceView = 'chat' | 'board' | 'canvas' | 'orq';
 // Grupo do item no palette: rotulo traduzido (antes era union de literais pt).
 export type WorkspaceActionGroup = string;
 

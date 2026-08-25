@@ -1,6 +1,6 @@
 # tmux + Claude Code: fixing wrong/washed theme colors (teal / pink)
 
-claude-pocket needs `claude` running inside a `tmux` session. Inside tmux, Claude Code
+hangar needs `claude` running inside a `tmux` session. Inside tmux, Claude Code
 renders its theme colors **wrong** — the message/input bars come out teal, or pink /
 washed-out — while the **same** Claude renders correctly when run directly in the terminal
 (no tmux). This is a Claude Code behavior, not a tmux or terminal misconfiguration, and it

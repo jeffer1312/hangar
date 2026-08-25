@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import time
 from pathlib import Path
+from app import diag
 from app.adapters import get_adapter
 from app.adapters.codex.preview import CodexPreviewSource
 from app.pqueue import PromptQueue, _transcript_start_ts
@@ -129,7 +131,16 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     else:
         def _match(lbl: str) -> bool:
             return any(s and lbl.startswith(s) for s in pane_opts)
+        # Mesmo motivo do log do ramo de cima, que aqui faltava: reprovar CALADO deixa como unico
+        # sintoma "a tela ficou mais pobre" — a folha nativa com descricao e preview vira lista de
+        # rotulo truncado, e nao ha por onde comecar a investigar. Diagnostico de 25/08/2026 numa
+        # maquina Windows passou por isto: as opcoes tinham preview, entao este era o ramo, e o log
+        # nao tinha uma linha sequer sobre a pergunta. Loga os dois lados porque a causa e a
+        # DIFERENCA entre eles (rotulo do pane truncado num ponto que nao e prefixo, ou contagem
+        # diferente de opcoes).
         if len(first_opts) != len(pane_opts) or not all(_match(l) for l in first_opts):
+            _log.info("askq: sidecar com preview nao casa o menu, degrada p/ OptionButtons "
+                      "sidecar=%s pane=%s", sorted(first_opts), sorted(pane_opts))
             return None
     return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
 
@@ -140,7 +151,7 @@ _registry = SessionRegistry()
 # Instancia stateless pro stream de lista (separada do _registry do jsonl_watcher pra clareza).
 _list_registry = SessionRegistry()
 
-_log = logging.getLogger("claude_pocket.sse")
+_log = logging.getLogger("hangar.sse")
 
 # Snapshot compartilhado de registry.list() pros LOOPS do SSE (jsonl_watcher de cada conexao de chat
 # + list_events): cada um re-varria o /proc inteiro + tmux no proprio ciclo -> N conexoes = N
@@ -283,6 +294,15 @@ class _ListRefresher:
                 # "erro" de "offline". Ciclo bom seguinte re-emite 'sessions' e limpa o erro no front.
                 _log.warning("refresher da lista falhou; mantem snapshot anterior", exc_info=True)
                 if not self.errored:
+                    # No diário só na TRANSIÇÃO, igual ao evento: um refresher quebrado a cada poll
+                    # encheria o arquivo do dia com a mesma linha.
+                    # SÓ o tipo da exceção no diário, não a mensagem dela. Este caminho embrulha
+                    # `list_with_state`, que carrega o texto da pergunta pendente do
+                    # AskUserQuestion — um erro de serialização ali ecoaria conversa dentro de um
+                    # arquivo que promete não guardar nenhuma. A mensagem inteira vai no log local
+                    # (o `_log.warning` acima, com traceback), que não é o arquivo que se envia.
+                    diag.registrar("lista.refresher_falhou", "erro",
+                                   detalhe=type(sys.exc_info()[1]).__name__)
                     async with self._cond:
                         self.errored = True
                         self.version += 1

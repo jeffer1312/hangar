@@ -5,9 +5,11 @@ from typing import Callable, Optional
 
 from watchfiles import awatch
 
-_log = logging.getLogger("claude_pocket.hook_state")
+from app import atomico
 
-_SUBDIR = ".claude-pocket-state"
+_log = logging.getLogger("hangar.hook_state")
+
+_SUBDIR = ".hangar-state"
 
 
 class HookState:
@@ -74,7 +76,7 @@ class HookState:
                 try:
                     tmp = f.with_suffix(".json.tmp")
                     tmp.write_text(json.dumps({"state": "idle", "ts": cur[1]}), encoding="utf-8")
-                    tmp.replace(f)  # atomico, mesmo padrao do state_hook
+                    atomico.substituir(tmp, f)  # atomico, mesmo padrao do state_hook
                 except OSError:
                     # Mapa ja esta idle mas o sidecar ficou awaiting: proximo BOOT re-semeia o
                     # fantasma (load_existing le do disco). Logar e o rastro pra entender o retorno.
@@ -91,7 +93,7 @@ class HookState:
                 self._apply(f)
 
     async def watch(self, dirs: list[Path]) -> None:
-        # Loop longo: observa cada <config>/.claude-pocket-state e aplica cada mudanca.
+        # Loop longo: observa cada <config>/.hangar-state e aplica cada mudanca.
         self._dirs = list(dict.fromkeys([*self._dirs, *dirs]))
         watched = []
         for base in dirs:

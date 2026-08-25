@@ -18,11 +18,11 @@ _Q = [{"header": "Cor", "question": "Escolha", "multiSelect": True,
 def _layout(tmp_path: Path, questions=_Q, sid="sess-123",
             write_sidecar=True, sidecar_text=None):
     # Monta o layout <tmp>/projects/<proj>/<sid>.jsonl (so o PATH do jsonl importa, sem conteudo) e
-    # grava o sidecar do hook PreToolUse em <tmp>/.claude-pocket-askq/<sid>.json com stdin realista.
+    # grava o sidecar do hook PreToolUse em <tmp>/.hangar-askq/<sid>.json com stdin realista.
     proj = tmp_path / "projects" / "home-x"
     proj.mkdir(parents=True)
     jsonl = proj / f"{sid}.jsonl"
-    sc_dir = tmp_path / ".claude-pocket-askq"
+    sc_dir = tmp_path / ".hangar-askq"
     sc_dir.mkdir(parents=True)
     sc = sc_dir / f"{sid}.json"
     if write_sidecar:
@@ -181,3 +181,18 @@ def test_ask_question_event_prefix_match_tolerates_truncated_pane(tmp_path):
     jsonl, _ = _layout(tmp_path)  # _Q: A/B + X/Y
     assert _ask_question_event(_state_json("awaiting_input", options=["A", "B"]), jsonl) is not None
     assert _ask_question_event(_state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None
+
+
+def test_ask_question_event_preview_loga_quando_reprova(tmp_path, caplog):
+    # Reprovar no ramo de preview era MUDO: o sintoma era a folha nativa virar lista de rotulo
+    # truncado, sem uma linha de log. O ramo sem preview ja logava, e foi por ele que se achou o
+    # problema de 25/08/2026 — este teste garante que os dois lados aparecem no log.
+    one = [{"header": "Ordem", "question": "Como deixo?", "multiSelect": False,
+            "options": [{"label": "System no topo", "description": "d", "preview": "using Xunit;"},
+                        {"label": "Alfabético", "description": "d"}]}]
+    jsonl, _ = _layout(tmp_path, questions=one)
+    with caplog.at_level("INFO", logger="hangar.sse"):
+        assert _ask_question_event(
+            _state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None
+    assert "sidecar com preview nao casa o menu" in caplog.text
+    assert "Sim" in caplog.text and "System no topo" in caplog.text

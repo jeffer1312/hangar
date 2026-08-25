@@ -47,7 +47,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   let chaveUrl = $state('');
   let chaveSegredo = $state('');
   // Renomear: o apelido é do app, não do disco — renomear pasta mexeria em caminho que um CLI
-  // vivo tem aberto, e renomear motor quebraria o `cp-engine --exec <nome>` de sessão rodando.
+  // vivo tem aberto, e renomear motor quebraria o `hangar-engine --exec <nome>` de sessão rodando.
   let renomeando = $state<string | null>(null);   // id da credencial em edição
   let apelidoTexto = $state('');
   let salvandoApelido = $state(false);

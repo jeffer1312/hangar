@@ -67,7 +67,7 @@
         for (const e of evs) {
           if (e.kind !== 'user_msg' || !e.text) continue;
           const p = parsePeerMessage(e.text);
-          // Só recados vindos de OUTRO membro do grupo (ignora claude-pocket/terceiros).
+          // Só recados vindos de OUTRO membro do grupo (ignora hangar/terceiros).
           if (p && p.from !== owner && names.has(p.from)) {
             msgs.push({ from: p.from, to: owner, text: p.text, ts: e.ts ?? 0 });
           }

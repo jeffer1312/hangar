@@ -14,5 +14,5 @@ codex() {
                 command codex "$@"; return ;;
         esac
     fi
-    command cp-codex "$@"
+    command hangar-codex "$@"
 }

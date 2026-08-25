@@ -27,7 +27,7 @@ from app.config import settings, automations_enabled
 from app import runtime_config
 from app import push
 
-_log = logging.getLogger("claude_pocket.stall_watch")
+_log = logging.getLogger("hangar.stall_watch")
 
 # Sessoes ja notificadas na janela de stall atual. ponytail: set global — single-user, 1 backend;
 # reset natural quando a sessao sai de stalled (state muda ou last_activity avanca).

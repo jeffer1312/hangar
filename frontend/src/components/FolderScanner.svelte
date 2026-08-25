@@ -91,7 +91,7 @@
     return out;
   });
 
-  // Caminho exibido relativo ao PAI da raiz, ex: "pessoal/claude-pocket".
+  // Caminho exibido relativo ao PAI da raiz, ex: "pessoal/hangar".
   function relPath(p: string): string {
     if (!activeRoot) return p;
     const parent = activeRoot.path.replace(/\/[^/]+$/, '');

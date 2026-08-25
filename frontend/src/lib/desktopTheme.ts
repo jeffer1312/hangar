@@ -152,7 +152,7 @@ export function paletaEmCache(): Paleta | null {
 }
 
 // Confere a forma antes de confiar no JSON: hoje SO o backend deste repo responde este endpoint,
-// mas o app fala com VARIOS servidores (troca de servidor ativo, malha cp-send) — um deles rodando
+// mas o app fala com VARIOS servidores (troca de servidor ativo, malha hangar-send) — um deles rodando
 // versao velha, ou qualquer coisa respondendo 200 na mesma rota, e o front nao tem defesa propria
 // nenhuma sem isto. `unknown` -> checagem manual, nao cast: um cast (`as Paleta`) so engana o
 // compilador, nao troca o dado que chegou.

@@ -74,7 +74,7 @@ def test_saida_que_nao_e_json_nao_quebra_listagem():
 
 
 def test_limite_lido_com_linha_e_idade(tmp_path):
-    pasta = tmp_path / ".claude-pocket-status"
+    pasta = tmp_path / ".hangar-status"
     pasta.mkdir()
     (pasta / "s.json").write_text(json.dumps({"line": "⚡5h:3% 📅7d:1%", "ts": 1000.0}))
     limite = conta_estado._limite(tmp_path)
@@ -85,7 +85,7 @@ def test_limite_lido_com_linha_e_idade(tmp_path):
 
 
 def test_limite_sem_leitura_e_explicito(tmp_path):
-    # Pasta .claude-pocket-status nem existe: nada foi lido ainda. Não é zero nem ausente —
+    # Pasta .hangar-status nem existe: nada foi lido ainda. Não é zero nem ausente —
     # é um estado nomeado.
     limite = conta_estado._limite(tmp_path)
     assert limite.estado == "sem_leitura"
@@ -94,7 +94,7 @@ def test_limite_sem_leitura_e_explicito(tmp_path):
 
 
 def test_limite_pega_o_mais_recente(tmp_path):
-    pasta = tmp_path / ".claude-pocket-status"
+    pasta = tmp_path / ".hangar-status"
     pasta.mkdir()
     (pasta / "a.json").write_text(json.dumps({"line": "velha", "ts": 1.0}))
     (pasta / "b.json").write_text(json.dumps({"line": "nova", "ts": 2.0}))
@@ -107,7 +107,7 @@ def test_limite_pega_o_mais_recente(tmp_path):
 def test_limite_nao_quebra_com_sidecar_lixo(tmp_path):
     # Sidecar ilegível ou do tipo errado não derruba a listagem da conta (mesma regra do
     # statusline.read()): o válido continua sendo lido.
-    pasta = tmp_path / ".claude-pocket-status"
+    pasta = tmp_path / ".hangar-status"
     pasta.mkdir()
     (pasta / "lixo.json").write_text("não é json")
     (pasta / "errado.json").write_text("[1, 2]")
@@ -115,3 +115,25 @@ def test_limite_nao_quebra_com_sidecar_lixo(tmp_path):
     limite = conta_estado._limite(tmp_path)
     assert limite.estado == "lido"
     assert limite.linha == "⚡5h:3%"
+
+
+def test_email_ilegivel_nao_e_carimbado_como_bom():
+    """`errors="replace"` na leitura da CLI transforma byte ruim em `�` — e o campo seguia como se
+    fosse o endereço da pessoa, com a conta marcada `ok`.
+
+    Some o campo, não a conta: `loggedIn` é bool e não sofre do problema (byte ruim DENTRO da
+    estrutura quebraria o `json.loads`, que já vira `indisponivel`), e derrubar tudo pra
+    `indisponivel` custaria o botão Entrar por causa de um campo de texto.
+    """
+    login = conta_estado._estado_login(
+        {"loggedIn": True, "email": "jo�o@exemplo.com", "subscriptionType": "max"})
+    assert login.estado == "ok"
+    assert login.loggedIn is True
+    assert login.email is None
+    assert login.plano == "max"          # o campo bom ao lado do ruim continua valendo
+
+
+def test_plano_ilegivel_some_sozinho():
+    login = conta_estado._estado_login(
+        {"loggedIn": True, "email": "dev@example.com", "subscriptionType": "m�x"})
+    assert (login.email, login.plano) == ("dev@example.com", None)

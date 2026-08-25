@@ -11,7 +11,7 @@ backend/.env
 # cópia INTEIRA do .env — CP_AUTH_TOKEN e chaves VAPID — enquanto existe. Nunca commitado.
 backend/.env.lock
 backend/.env.*.tmp
-# peers de outros servidores (cp-send cross-server) — contém tokens
+# peers de outros servidores (hangar-send cross-server) — contém tokens
 backend/peers.json
 # launcher de projetos do painel — caminhos locais desta máquina (molde: projects.json.example)
 backend/projects.json
@@ -31,6 +31,8 @@ docs/superpowers/**/*.html
 # SDD progress ledger (scratch)
 .superpowers/
 
+.hangar-uploads/
+# nome antigo: pastas de anexo de antes do rename (migradas na primeira leitura, mas o link fica)
 .claude-pocket-uploads/
 
 # Video analysis scratch (video-analyzer skill)

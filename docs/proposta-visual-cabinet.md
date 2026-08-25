@@ -80,7 +80,7 @@ Prioridade: baixa a média — vale quando trocar de tema estiver valendo.
 `public/agent-avatars/avatar-01.svg … avatar-112.svg`: 112 avatares SVG
 prontos, atribuídos por hash do nome/slug do agente. No cockpit, cada sessão
 poderia ganhar um avatar determinístico do session-id — resolve a "parede de
-texto" da lista de sessões e dá cara pro pareamento (claude-pocket). Custo:
+texto" da lista de sessões e dá cara pro pareamento (hangar). Custo:
 copiar os SVGs (ou gerar versão própria) + 10 linhas de hash→índice.
 
 ## 6. Home/dashboard que a gente não tem (e eles têm)

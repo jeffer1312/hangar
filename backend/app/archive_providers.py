@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 from app.models import ChatEvent
 
-_log = logging.getLogger("claude_pocket.archive_providers")
+_log = logging.getLogger("hangar.archive_providers")
 
 PROVIDERS = ("pi", "kimi", "codex")
 

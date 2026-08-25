@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from app import runtime_config
+from app import atomico, runtime_config
 from app.config import settings
 
 # Sintese de voz. Mesma forma do transcribe.py: urllib da stdlib, sem dependencia nova, erro tipado
@@ -22,7 +22,7 @@ MODELO_PADRAO = "eleven_multilingual_v2"
 # aqui SE trocar MODELO_PADRAO, senao o servidor aceita texto que a ElevenLabs vai recusar.
 TETO_CARACTERES = 10_000
 VOZ_PADRAO = "ORgG8rwdAiMYRug8RJwR"
-CACHE_SUBDIR = ".claude-pocket-tts"
+CACHE_SUBDIR = ".hangar-tts"
 TIMEOUT_LOCAL = 180        # segundos: motor local na CPU e lento; abaixo disso corta texto longo
 RETENCAO_DIAS = 30
 
@@ -120,7 +120,7 @@ def _pedir(caminho: str, dados: bytes | None = None) -> bytes:
         headers={
             "xi-api-key": _chave(),
             "Content-Type": "application/json",
-            "User-Agent": "claude-pocket/1.0",
+            "User-Agent": "hangar/1.0",
         },
     )
     try:
@@ -286,7 +286,7 @@ def sintetizar(texto: str, voz: str, provedor: str, instrucao: str = "") -> tupl
     tmp = base / f"{h}.{os.getpid()}.tmp"
     try:
         tmp.write_bytes(audio)
-        tmp.replace(destino)
+        atomico.substituir(tmp, destino)
     except OSError as e:
         # Disco cheio/permissao negada aqui: o usuario ja PAGOU a chamada ao provedor (audio
         # baixado) — sem isto, a rota so captura TtsError e devolve 500 sem detail nenhum.

@@ -182,7 +182,7 @@
   );
 
   // ── Seções da Task 5: identificador desta máquina + máquinas que este servidor alcança ───────
-  // O backend/peers.json (lido também pelo cp-send) guarda id -> {base_url, token}; a rota
+  // O backend/peers.json (lido também pelo hangar-send) guarda id -> {base_url, token}; a rota
   // devolve a credencial MASCARADA — este front só exibe o que já chegou mascarado.
   const ID_OK = /^[a-z0-9][a-z0-9_-]{0,31}$/;   // espelho da regra do backend (fullmatch)
   const ID_DICA = () => m.peers_identificador_dica({ exemplos: 'casa, notebook' });
@@ -455,7 +455,7 @@
 
 <div class="ss-sep"></div>
 <!-- Identificador desta máquina (Task 5): é o CP_SERVER_ID, gravado no .env — o mesmo que o
-     cp-send usa no endereço de resposta srv::sessao. Vazio = pareamento entre servidores recusado. -->
+     hangar-send usa no endereço de resposta srv::sessao. Vazio = pareamento entre servidores recusado. -->
 <p class="ss-secao">{m.peers_esta_maquina()}</p>
 {#if !identificador}
   <p class="ss-legenda">{m.peers_legenda_identificador()}</p>

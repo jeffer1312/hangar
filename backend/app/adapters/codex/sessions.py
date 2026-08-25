@@ -6,18 +6,19 @@ a thread e ligar uma nova TUI tmux sob demanda (resume lazy). Este modulo grava 
 O historico do chat SEMPRE persiste no rollout JSONL do proprio Codex (~/.codex/sessions/...); aqui
 so guardamos o ponteiro pra ele + o thread_id necessario pro thread/resume.
 
-Local: ~/.claude-pocket/codex-sessions/<name>.json (mesma familia de ~/.claude-pocket usada pelo
+Local: ~/.hangar/codex-sessions/<name>.json (mesma familia de ~/.hangar usada pelo
 sync-vault). Global por usuario (sessao Codex nao pertence a um config-dir do Claude). Um arquivo
 por sessao, keyed pelo NOME sanitizado da sessao."""
 import json
 from pathlib import Path
 
+from app import atomico
 from app.names import sanitize_session_name
 
 
 def _dir() -> Path:
     # NAO cria o dir aqui (load/list nao devem ter efeito colateral); save() cria sob demanda.
-    return Path.home() / ".claude-pocket" / "codex-sessions"
+    return Path.home() / ".hangar" / "codex-sessions"
 
 
 def _sanitize(name: str) -> str:
@@ -52,7 +53,7 @@ def save(name: str, thread_id: str, rollout_path: str, cwd: str,
         "model": model,
         "effort": effort,
     }), encoding="utf-8")
-    tmp.replace(p)
+    atomico.substituir(tmp, p)
 
 
 def update_model(name: str, model: str | None, effort: str | None) -> None:
@@ -87,7 +88,7 @@ def rename(old: str, new: str) -> None:
     if not src.exists():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
-    src.replace(dst)
+    atomico.substituir(src, dst)
     meta = load(new)
     if meta is not None:
         save(new, meta["thread_id"], meta["rollout_path"], meta["cwd"],

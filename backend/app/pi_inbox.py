@@ -12,6 +12,18 @@ confirmação por mensagem — e mesmo ela atesta só que a extensão CHAMOU a A
 CHAVE = `pane_id` do tmux (`%33`), NÃO o stem do .jsonl: o caminho quente do envio não tem o stem
 à mão, e resolvê-lo certo pro Pi custaria um `registry.list()` (fork + /proc). O pane sai de graça
 do `tmux list-panes` que o envio já faz, e a extensão o conhece pelo TMUX_PANE.
+
+...MAS o pane só é único no tmux. No psmux (Windows) ele é numerado por SESSÃO, então TODA sessão
+Pi se declarava `%1` e as duas dividiam o MESMO slot de linha — a última a conectar ficava com ele.
+Medido em 22/08/2026, com `pi-teste` e `pi-medir` vivas: um `POST /input` endereçado à `pi-teste`
+respondeu `delivered: true` e a mensagem apareceu na conversa da `pi-medir`. É a mesma família do
+bug do bilhete pane→sessão (que o `paneKey()` da extensão já resolve com `PSMUX_SESSION`), numa
+porta que ficou de fora.
+
+Por isso a extensão declara uma CHAVE ao conectar: o nome da sessão do psmux quando existe, o pane
+quando não (tmux). Quem procura usa `linha_de()`, que tenta o nome primeiro e o pane depois — no
+tmux nada é registrado por nome, então o primeiro tento sempre erra e o caminho fica byte-idêntico
+ao de antes, sem nenhum teste de sistema operacional no meio.
 """
 from __future__ import annotations
 
@@ -25,12 +37,20 @@ import uuid
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from app import atomico
+
 _log = logging.getLogger(__name__)
 
 # Prazo da confirmação. Chute inicial: é chamada local, e a confirmação atesta só a CHAMADA, não o
 # turno do agente. Medir com dado real e trocar — do jeito que o terminal_input.py documenta as
 # constantes de tempo dele.
 PRAZO_ACK = 3.0
+
+# Prazo da PERGUNTA (`perguntar`), separado do PRAZO_ACK de propósito: uma pergunta é leitura de
+# estado dentro do processo do Pi (`ctx.ui.getEditorText()` é um acesso a string, não uma chamada
+# de rede), e quem espera por ela está segurando o `_send_lock` da sessão antes de digitar. Não
+# respondeu em 1s, não vale a pena esperar: quem pergunta tem plano B (raspar o pane).
+PRAZO_PERGUNTA = 1.0
 
 Envia = Callable[[dict], Awaitable[None]]
 
@@ -41,6 +61,12 @@ class Linha:
     def __init__(self, envia: Envia) -> None:
         self.envia = envia
         self.pendentes: dict[str, asyncio.Future] = {}
+        # Perguntas ficam num dicionário SEPARADO das entregas: a resposta de uma entrega é
+        # `(ok, erro)` e a de uma pergunta é o valor lido. Um dicionário só faria o `confirmar` de
+        # uma entrega resolver a future de uma pergunta com a tupla errada — e o desempacotamento
+        # estouraria dentro do `perguntar`, no caminho que existe justamente pra ser à prova de
+        # falha (o chamador tem plano B).
+        self.perguntas: dict[str, asyncio.Future] = {}
         # Serializa por sessão, igual ao _send_lock do caminho de tecla (terminal_input.py:508):
         # sem isso duas mensagens simultâneas chegam fora de ordem do outro lado.
         self.lock = asyncio.Lock()
@@ -63,6 +89,9 @@ class PiInbox:
             for fut in antiga.pendentes.values():
                 if not fut.done():
                     fut.set_result((False, "linha substituida"))
+            for fut in antiga.perguntas.values():
+                if not fut.done():
+                    fut.set_result(None)     # None = "nao sei" -> quem perguntou cai no plano B
         linha = Linha(envia)
         self._linhas[pane] = linha
         return linha
@@ -75,6 +104,9 @@ class PiInbox:
         for fut in linha.pendentes.values():
             if not fut.done():
                 fut.set_result((False, "linha caiu"))
+        for fut in linha.perguntas.values():
+            if not fut.done():
+                fut.set_result(None)
 
     def tem_linha(self, pane: str) -> bool:
         return pane in self._linhas
@@ -87,6 +119,16 @@ class PiInbox:
         if fut is not None and not fut.done():
             fut.set_result((ok, erro))
 
+    def responder(self, pane: str, msg_id: str, valor: str | None) -> None:
+        """Resposta de uma PERGUNTA. `valor=None` = a extensão não soube responder (versão antiga,
+        API ausente, sem contexto ainda) — que é diferente de `""`, "o campo está vazio"."""
+        linha = self._linhas.get(pane)
+        if linha is None:
+            return
+        fut = linha.perguntas.get(msg_id)
+        if fut is not None and not fut.done():
+            fut.set_result(valor)
+
     async def entregar(self, pane: str, texto: str, msg_id: str | None = None) -> str:
         """`sent` | `deferred` | `sem-linha`.
 
@@ -96,7 +138,7 @@ class PiInbox:
 
         `msg_id`: identidade ESTÁVEL entre reentregas da MESMA mensagem (achado ALTA da revisão
         02/08/2026 — "Porta A"). A extensão chama `sendUserMessage` ANTES de confirmar (ver
-        cp-state.ts) — se o ACK atrasar/perder, este método devolve "deferred" mas a instrução JÁ
+        hangar-state.ts) — se o ACK atrasar/perder, este método devolve "deferred" mas a instrução JÁ
         pode ter chegado no agente. Sem um id que sobreviva ao retry, a extensão não tem como saber
         que é a MESMA tentativa e chamaria `sendUserMessage` de novo. Quem tem uma identidade
         durável pra oferecer (o id da entrada na `PromptQueue`, ver `terminal_input.drain`/`send_prompt`)
@@ -135,6 +177,62 @@ class PiInbox:
                 return "deferred"
             return "sent"
 
+    async def perguntar(self, pane: str, o_que: str) -> str | None:
+        """Pergunta de LEITURA pra extensão. Devolve o valor, ou `None` quando não dá pra saber.
+
+        Existe porque ler a tela não responde a pergunta que o `terminal_input` precisa fazer antes
+        de digitar — "tem rascunho do usuário na caixa?". Medido 22/08/2026: o Pi desenha aviso de
+        extensão (`console.error`) DENTRO da faixa do composer, com o MESMO ANSI do texto digitado
+        (`\\x1b[0m … \\x1b[0m`), e o `cursor_flag` do psmux é 0 — não há nada na tela que separe
+        aviso de rascunho. Dentro do processo do Pi a pergunta é trivial: `ctx.ui.getEditorText()`
+        devolveu `""` com o aviso na faixa e o texto exato com um rascunho parado.
+
+        `None` cobre TODOS os "não sei" — sem linha, extensão velha que não entende a pergunta,
+        socket morto, prazo estourado. Nunca levanta: quem chama tem plano B e um erro aqui viraria
+        um envio travado por causa de uma leitura auxiliar.
+        """
+        linha = self._linhas.get(pane)
+        if linha is None:
+            return None
+        # SEM o `linha.lock`: a pergunta é leitura e não pode ficar atrás de uma entrega no meio do
+        # ACK (até 3s) — o lock existe pra ordenar ESCRITAS no agente, e duas respostas não se
+        # confundem porque cada uma tem seu id.
+        msg_id = uuid.uuid4().hex
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        linha.perguntas[msg_id] = fut
+        try:
+            await linha.envia({"id": msg_id, "pedir": o_que})
+        except Exception as e:                       # noqa: BLE001
+            _log.warning("pi_inbox: pergunta %r falhou pane=%s: %r", o_que, pane, e)
+            linha.perguntas.pop(msg_id, None)
+            self.remover(pane, linha)
+            return None
+        try:
+            return await asyncio.wait_for(fut, PRAZO_PERGUNTA)
+        except asyncio.TimeoutError:
+            # Nível debug, não warning: extensão anterior a esta versão simplesmente ignora um
+            # `pedir` que não conhece, e isso é normal até todo mundo dar /reload — não é defeito
+            # pra encher log.
+            _log.debug("pi_inbox: sem resposta pra %r em %.1fs pane=%s", o_que, PRAZO_PERGUNTA, pane)
+            return None
+        finally:
+            linha.perguntas.pop(msg_id, None)
+
+    def perguntar_sync(self, pane: str, o_que: str) -> str | None:
+        """Ponte pro mundo síncrono, igual à do `entregar_sync` (o `send_prompt` roda em thread)."""
+        loop = self._loop
+        if loop is None or pane not in self._linhas:
+            return None
+        fut = None
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self.perguntar(pane, o_que), loop)
+            return fut.result(PRAZO_PERGUNTA + 1.0)
+        except Exception as e:                       # noqa: BLE001
+            _log.debug("pi_inbox: ponte sync da pergunta falhou pane=%s: %r", pane, e)
+            if fut is not None:
+                fut.cancel()
+            return None
+
     def entregar_sync(self, pane: str, texto: str, msg_id: str | None = None) -> str:
         """Ponte pro mundo síncrono: o `send_prompt` roda em thread (o `_send_executor` do api.py),
         e a linha vive no loop do servidor. Sem isto, chamar `entregar` de lá não roda.
@@ -166,6 +264,24 @@ class PiInbox:
 
 
 INBOX = PiInbox()
+
+
+def linha_de(name: str | None, pane_id: str | None) -> str | None:
+    """A chave da linha DESTA sessão, ou None se ela não tem linha.
+
+    Nome primeiro, pane depois — e a ordem é o conserto (ver o topo do arquivo): no psmux o pane é
+    `%1` em toda sessão, então procurar por pane entrega na conversa errada. No tmux a extensão
+    nunca declara nome, o primeiro tento erra sempre e o resultado é o pane de sempre.
+
+    Ambiguidade teórica: uma sessão chamada literalmente `%1` casaria com a chave de pane de outra.
+    Nome de sessão criada pelo app passa por `sanitize_session_name`, que não deixa `%` passar; e
+    quem batiza uma sessão à mão de `%1` já tem problema maior com o próprio tmux.
+    """
+    if name and INBOX.tem_linha(name):
+        return name
+    if pane_id and INBOX.tem_linha(pane_id):
+        return pane_id
+    return None
 
 
 def escrever_endpoint() -> list[Path]:
@@ -201,7 +317,7 @@ def escrever_endpoint() -> list[Path]:
 
     destinos: list[Path] = []
     for cfg in cfgs:
-        alvo = Path(cfg.path) / ".claude-pocket-conn.json"
+        alvo = Path(cfg.path) / ".hangar-conn.json"
         tmp: Path | None = None
         try:
             alvo.parent.mkdir(parents=True, exist_ok=True)
@@ -215,7 +331,7 @@ def escrever_endpoint() -> list[Path]:
             tmp = Path(tmp_nome)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(json.dumps(dados))
-            tmp.replace(alvo)
+            atomico.substituir(tmp, alvo)
             destinos.append(alvo)
         except Exception as e:
             # Exception generica (nao só OSError) pelo mesmo motivo do try de cima: um sidecar

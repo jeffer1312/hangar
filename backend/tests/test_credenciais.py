@@ -37,10 +37,10 @@ def test_apelido_vazio_apaga(casa):
 
 
 def test_arquivo_ilegivel_nao_derruba(casa):
-    (casa / ".claude-pocket-apelidos.json").write_text("{isto nao e json", encoding="utf-8")
+    (casa / ".hangar-apelidos.json").write_text("{isto nao e json", encoding="utf-8")
     assert apelidos.ler() == {}
     # JSON válido do TIPO errado cai no mesmo lugar (precedente do statusline.read()).
-    (casa / ".claude-pocket-apelidos.json").write_text("[1,2]", encoding="utf-8")
+    (casa / ".hangar-apelidos.json").write_text("[1,2]", encoding="utf-8")
     assert apelidos.ler() == {}
 
 

@@ -1,18 +1,19 @@
 """Encadeamento de sessao (feature #12): vinculo 'then' de UM HOP (nao DAG) — quando a sessao FONTE
 termina, dispara um prompt na sessao ALVO. Sidecar JSON por sessao FONTE, mesmo padrao do PromptQueue
-(app/pqueue.py): dir irmao em ".claude-pocket-chain", keyed pelo NOME (sobrevive ao /clear, que so
+(app/pqueue.py): dir irmao em ".hangar-chain", keyed pelo NOME (sobrevive ao /clear, que so
 troca o session-id/transcript). One JSON pequeno por sessao (nao uma lista) pq so existe 1 vinculo
 por vez (one-shot: quem dispara consome e limpa — ver app.api._maybe_chain)."""
 import json
 from pathlib import Path
 
+from app import atomico
 from app.config import settings
 from app.models import dumps_safe
 from app.pqueue import _sanitize
 
 
 def _chain_dir() -> Path:
-    d = Path(settings.projects_dir).parent / ".claude-pocket-chain"
+    d = Path(settings.projects_dir).parent / ".hangar-chain"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -33,7 +34,7 @@ class ThenLink:
         # Escrita atomica (tmp + replace), mesmo padrao do PromptQueue._write_atomic.
         tmp = self.path.with_suffix(".json.tmp")
         tmp.write_text(dumps_safe({"target": target, "text": text}), encoding="utf-8")
-        tmp.replace(self.path)
+        atomico.substituir(tmp, self.path)
 
     def clear(self) -> None:
         # Idempotente: chamado tanto no clear explicito (usuario) quanto no one-shot pos-disparo.
@@ -46,4 +47,4 @@ class ThenLink:
         # (edge case raro; usuario reconfigura o alvo se precisar).
         self.path.with_suffix(".json.tmp").unlink(missing_ok=True)
         if self.path.exists():
-            self.path.replace(_chain_dir() / f"{_sanitize(new_name)}.json")
+            atomico.substituir(self.path, _chain_dir() / f"{_sanitize(new_name)}.json")

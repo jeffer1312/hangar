@@ -202,7 +202,7 @@ def test_gravar_identificador(env_tmp, cli):
     assert r.status_code == 200
     assert r.json() == {"identificador": "casa"}
     assert settings.server_id == "casa"           # o processo passa a parear na hora
-    assert "CP_SERVER_ID=casa" in env_tmp.read_text(encoding="utf-8")   # o cp-send lê daqui
+    assert "CP_SERVER_ID=casa" in env_tmp.read_text(encoding="utf-8")   # o hangar-send lê daqui
     assert cli.get("/api/peers/identificador", headers=AUTH).json() == {"identificador": "casa"}
 
 

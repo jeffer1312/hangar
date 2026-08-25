@@ -1,4 +1,4 @@
-# Claude Pocket — Frontend Design Brief
+# Hangar — Frontend Design Brief
 
 > Single source of truth for the build engineer.
 > Stack: Svelte 5 + Vite + TypeScript, PWA (manifest + service worker), no UI framework.
@@ -526,7 +526,7 @@ All buttons, list rows, and option items meet this threshold.
 `manifest.webmanifest`:
 ```json
 {
-  "name": "Claude Pocket",
+  "name": "Hangar",
   "short_name": "Pocket",
   "display": "standalone",
   "background_color": "#0d0d0f",
@@ -560,7 +560,7 @@ On first open (no token in localStorage), show the Login screen before any other
 ┌─────────────────────────────────────┐
 │ ████ safe-area-top ████████████████ │
 │                                     │
-│     Claude Pocket                   │  ← --text-xl, centered, top 80px
+│     Hangar                   │  ← --text-xl, centered, top 80px
 │                                     │
 │  URL do servidor                    │
 │  [http://192.168.x.x:8000        ]  │  ← default same-origin or last saved

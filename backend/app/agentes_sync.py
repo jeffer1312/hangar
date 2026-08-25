@@ -33,15 +33,39 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from app import atomico
 from app.adapters.kimi.sessions import kimi_home
 from app.engines import _NOME_OK  # mesma regra de nome do motor — uma fonte só (precedente: engine_probe)
 
-_log = logging.getLogger("claude_pocket.agentes_sync")
+_log = logging.getLogger("hangar.agentes_sync")
 
 ALVOS = ("pi", "kimi", "codex")
 
 
 # ---------------------------------------------------------------- caminhos
+
+def base_openai(base_url: str) -> str:
+    """A base no dialeto OpenAI: a raiz do provedor mais `/v1`.
+
+    O app guarda a RAIZ, sem `/v1`, porque é isso que os dois consumidores do lado Claude pedem: o
+    Claude Code monta `{raiz}/v1/messages` e o probe de modelos monta `{raiz}/v1/models`. Os três
+    agentes daqui querem a OUTRA forma — o Pi (`openai-completions`) e o Codex (`wire_api = "chat"`)
+    montam `{base}/chat/completions`, e o próprio `config.toml` do Kimi Code escreve
+    `https://api.kimi.com/coding/v1`.
+
+    Escrevendo a raiz crua, a credencial nascia apontando pra `https://opencode.ai/zen/chat/completions`
+    em vez de `.../zen/v1/chat/completions`. Relatado em 25/08/2026: a conta do OpenCode Zen cadastrada
+    pelo app aparecia no Pi com o endereço errado, e nada falhava até a primeira chamada. Conferido na
+    documentação dos seis provedores do catálogo — OpenCode Zen `/zen/v1`, Kimi Code `/coding/v1`,
+    OpenRouter `/api/v1`, Groq `/openai/v1`, DeepSeek `/v1`, Anthropic `/v1` — a regra é a mesma pra
+    todos, e é a mesma que o probe já assume ao montar `{raiz}/v1/models`.
+
+    Idempotente: o campo aceita as duas formas (a pessoa pode colar a URL como o provedor documenta),
+    então uma raiz que já termina em `/v1` não vira `/v1/v1`.
+    """
+    base = base_url.strip().rstrip("/")
+    return base if base.endswith("/v1") else f"{base}/v1"
+
 
 def _pi_dir(home: Path | None) -> Path:
     return (home / ".pi" / "agent") if home else (Path.home() / ".pi" / "agent")
@@ -99,7 +123,7 @@ def _gravar_preservando(caminho: Path, conteudo: str) -> None:
     modo = (caminho.stat().st_mode & 0o777) if caminho.exists() else 0o600
     tmp = caminho.with_name(f"{caminho.name}.tmp-hangar-{os.getpid()}")
     _escrever_restrito(tmp, conteudo, modo)
-    tmp.replace(caminho)
+    atomico.substituir(tmp, caminho)
 
 
 def _backup(caminho: Path) -> None:
@@ -173,11 +197,84 @@ def _gravar_bloco_toml(
 
 # ---------------------------------------------------------------- alvos
 
+# Provedores que o Pi JÁ conhece: ele traz o catálogo embutido e só precisa da credencial. A chave é
+# o começo da URL (sem esquema); o valor é o nome que o `auth.json` do Pi usa. Ordem importa —
+# `/zen/go` tem de ser testado antes de `/zen`, que é prefixo dele.
+#
+# Tirado da tabela "API Keys" de `docs/providers.md` do próprio Pi (0.84.2), e conferido ao vivo em
+# 25/08/2026: com um `auth.json` de UMA linha (`opencode-go`) e `models.json` VAZIO, o
+# `pi --list-models opencode-go` devolveu 13 modelos com contexto, saída máxima, raciocínio e
+# imagem — tudo certo, sem a gente escrever nada disso.
+_PI_EMBUTIDOS: tuple[tuple[str, str], ...] = (
+    ("opencode.ai/zen/go", "opencode-go"),
+    ("opencode.ai/zen", "opencode"),
+    ("api.kimi.com/coding", "kimi-coding"),
+    ("api.anthropic.com", "anthropic"),
+    ("openrouter.ai/api", "openrouter"),
+    ("api.groq.com/openai", "groq"),
+    ("api.deepseek.com", "deepseek"),
+    ("api.x.ai", "xai"),
+    ("api.minimax.io", "minimax"),
+    ("api.mistral.ai", "mistral"),
+    ("api.cerebras.ai", "cerebras"),
+    ("api.together.xyz", "together"),
+)
+
+
+def provedor_embutido_do_pi(base_url: str) -> str | None:
+    """Nome que o Pi usa pra este provedor, ou None se ele não conhecer o endereço."""
+    alvo = base_url.strip().rstrip("/")
+    alvo = alvo.split("://", 1)[-1].removeprefix("www.")
+    if alvo.endswith("/v1"):
+        alvo = alvo[:-3].rstrip("/")
+    for prefixo, nome_pi in _PI_EMBUTIDOS:
+        if alvo == prefixo or alvo.startswith(prefixo + "/"):
+            return nome_pi
+    return None
+
+
+def _gravar_auth_pi(pi_dir: Path, nome_pi: str, api_key: str) -> tuple[bool, str]:
+    """Grava SÓ a credencial em `auth.json`, sob o nome que o Pi usa pro provedor.
+
+    É o caminho bom: o Pi tem o catálogo dele e monta a configuração inteira sozinho — modelo,
+    janela, raciocínio e leitura de imagem. Escrever a lista de modelos por fora, como o caminho do
+    `models.json` faz, é sempre pior, porque a lista sai do `/v1/models` do provedor e ele pode não
+    dizer capacidade nenhuma (o OpenCode Zen devolve `{id, object, created, owned_by}` e nada mais —
+    foi assim que o muse-spark, que lê imagem, chegou ao Pi como texto puro).
+
+    NÃO sobrescreve credencial que não seja de chave de API. Uma entrada `oauth` ali é uma
+    assinatura logada (Claude Pro, ChatGPT, OpenRouter por OAuth): trocá-la por uma chave desloga a
+    pessoa daquele provedor no Pi, e sincronizar uma credencial nunca pode ter esse preço.
+    """
+    cfg = pi_dir / "auth.json"
+    dados: dict[str, Any] = {}
+    if cfg.exists():
+        try:
+            dados = json.loads(cfg.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            return False, "auth-invalido"
+        if not isinstance(dados, dict):
+            return False, "auth-invalido"
+    atual = dados.get(nome_pi)
+    if isinstance(atual, dict) and atual.get("type") != "api_key":
+        return False, f"credencial-nao-substituivel ({nome_pi} já está logado de outro jeito no Pi)"
+    dados[nome_pi] = {"type": "api_key", "key": api_key}
+    _backup(cfg)
+    _gravar_preservando(cfg, json.dumps(dados, indent=2, ensure_ascii=False) + "\n")
+    return True, f"{cfg} (provedor {nome_pi}; o Pi resolve os modelos)"
+
+
 def gravar_pi(
     nome: str, base_url: str, api_key: str, modelos: list[dict],
     *, home: Path | None = None,
 ) -> tuple[bool, str]:
-    """`~/.pi/agent/models.json` — JSON, chave em texto puro (formato deles)."""
+    """`~/.pi/agent/models.json` — JSON, chave em texto puro (formato deles).
+
+    Dois caminhos, e o primeiro é o preferido: provedor que o Pi já conhece recebe SÓ a credencial
+    em `auth.json` e se configura sozinho (ver `_gravar_auth_pi`). Endereço desconhecido — gateway
+    próprio, Ollama, um provedor novo — cai no `models.json`, onde a lista de modelos tem de vir de
+    nós mesmos.
+    """
     try:
         erro = _validar(nome, base_url, api_key)
         if erro:
@@ -185,6 +282,9 @@ def gravar_pi(
         d = _pi_dir(home)
         if not d.is_dir():
             return False, "nao-instalado"
+        nome_pi = provedor_embutido_do_pi(base_url)
+        if nome_pi:
+            return _gravar_auth_pi(d, nome_pi, api_key)
         cfg = d / "models.json"
         dados: dict[str, Any] = {}
         if cfg.exists():
@@ -199,15 +299,18 @@ def gravar_pi(
             if "providers" in dados:
                 return False, "config-invalido"
             provedores = {}
+        # Lido UMA vez (o arquivo passa de 240 KB aqui) e não por modelo.
+        catalogo = _catalogo_do_pi(d)
         # Substituição pelo nome já é a idempotência aqui (e é o que "atualizar a credencial"
         # significa) — em JSON não há o risco de redefinição que o TOML tem.
         provedores[nome] = {
-            "baseUrl": base_url,
+            "baseUrl": base_openai(base_url),
             # O app descobre modelo pelo /v1/models (dialeto OpenAI, engine_probe), então é esse o
             # dialeto que sabemos que a chave fala. "anthropic-messages" seria chute.
             "api": "openai-completions",
             "apiKey": api_key,
-            "models": [_modelo_pi(m) for m in modelos if isinstance(m, dict) and m.get("id")],
+            "models": [_modelo_pi(m, catalogo)
+                       for m in modelos if isinstance(m, dict) and m.get("id")],
         }
         dados["providers"] = provedores
         _backup(cfg)
@@ -218,18 +321,70 @@ def gravar_pi(
         return False, f"erro: {e}"
 
 
-def _modelo_pi(m: dict) -> dict[str, Any]:
+def _catalogo_do_pi(pi_dir: Path) -> dict[str, dict]:
+    """Índice `id do modelo -> entrada` do catálogo que o PRÓPRIO Pi mantém (`models-store.json`).
+
+    Existe por causa de uma perda medida em 25/08/2026: o `muse-spark-1.2-contributor` lê imagem, e
+    a credencial publicada por aqui chegou ao Pi como texto puro. Não foi bug de parse — o
+    `/v1/models` do OpenCode Zen devolve o shape OpenAI pelado (`{id, object, created, owned_by}`,
+    conferido ao vivo, 30 modelos), então a capacidade simplesmente NÃO está na resposta do
+    provedor, e nenhum campo a mais que o probe leia mudaria isso.
+
+    Isto não fere a regra de "campo que o provedor não informou não é inventado": não é chute, é a
+    MESMA tabela de onde o Pi tira as capacidades dos provedores dele (o `pi update` a atualiza), e
+    ela já traz o modelo certo — `opencode-go / muse-spark-1.2-contributor` com
+    `input: ["text", "image"]` e `contextWindow: 1048576`.
+
+    Casamento por id EXATO, nunca aproximado: `meta/muse-spark-1.2` e `muse-spark-1.2-contributor`
+    são entradas diferentes do catálogo, e colar a capacidade de uma na outra seria justamente o
+    chute que a regra proíbe. Catálogo ausente/ilegível devolve `{}` — volta a valer só o que o
+    provedor disse, que é o comportamento de antes.
+    """
+    try:
+        bruto = json.loads((pi_dir / "models-store.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(bruto, dict):
+        return {}
+    fora: dict[str, dict] = {}
+    for entrada in bruto.values():
+        if not isinstance(entrada, dict):
+            continue
+        for m in entrada.get("models") or []:
+            # `setdefault`: o mesmo id pode aparecer em mais de um provedor do catálogo. A primeira
+            # ocorrência vence — são o mesmo modelo, e escolher entre cópias iguais não vale um
+            # critério de desempate.
+            if isinstance(m, dict) and isinstance(m.get("id"), str):
+                fora.setdefault(m["id"], m)
+    return fora
+
+
+def _modelo_pi(m: dict, catalogo: dict[str, dict] | None = None) -> dict[str, Any]:
+    # O que o PROVEDOR disse vence sempre: ele reflete esta chave e este deployment, e o catálogo é
+    # uma tabela geral. O catálogo só preenche o que veio como "não sei" (vision None, sem
+    # context_length) e o que o probe nunca informa (reasoning).
+    cat = (catalogo or {}).get(m["id"]) or {}
+    vision = m.get("vision")
+    if vision is None:
+        entrada = cat.get("input")
+        vision = isinstance(entrada, list) and "image" in entrada
     out: dict[str, Any] = {
         "id": m["id"],
-        # `name` é o rótulo na lista do Pi; o id é a identidade que já temos, não um chute.
-        "name": m["id"],
-        # vision None = "o provedor não disse": declarar image aí faria o Pi mandar imagem pra um
-        # modelo que talvez recuse. Texto é o mínimo honesto.
-        "input": ["text", "image"] if m.get("vision") is True else ["text"],
+        # `name` do catálogo quando existe (é o rótulo bonito que o Pi já mostra pros provedores
+        # dele); senão o id, que é a identidade que já temos e não é chute.
+        "name": cat.get("name") if isinstance(cat.get("name"), str) else m["id"],
+        # vision desconhecida nas DUAS fontes = texto puro. Declarar image aí faria o Pi mandar
+        # imagem pra um modelo que talvez recuse.
+        "input": ["text", "image"] if vision is True else ["text"],
     }
-    if isinstance(m.get("context_length"), int):
-        out["contextWindow"] = m["context_length"]
-    # cost / maxTokens / reasoning: o probe não informa — omitidos de propósito.
+    janela = m.get("context_length")
+    if not isinstance(janela, int):
+        janela = cat.get("contextWindow")
+    if isinstance(janela, int):
+        out["contextWindow"] = janela
+    if isinstance(cat.get("reasoning"), bool):
+        out["reasoning"] = cat["reasoning"]
+    # cost / maxTokens seguem de fora: custo chutado aparece na tela do Pi como fato.
     return out
 
 
@@ -247,7 +402,7 @@ def gravar_kimi(
             return False, "nao-instalado"
         ini, fim = _sentinelas(nome)
         linhas = [ini, f"[providers.{_ts(nome)}]", 'type = "kimi"',
-                  f"api_key = {_ts(api_key)}", f"base_url = {_ts(base_url)}", ""]
+                  f"api_key = {_ts(api_key)}", f"base_url = {_ts(base_openai(base_url))}", ""]
         chaves_modelo = []
         for m in modelos:
             if not isinstance(m, dict) or not m.get("id"):
@@ -290,7 +445,7 @@ def gravar_codex(
         # Sem tabela de modelos: no Codex o modelo é escolhido na hora (`model` + `model_provider`),
         # não cadastrado. `wire_api = "chat"` casa com o dialeto que o probe usa (/v1/models OpenAI).
         bloco = "\n".join([ini, f"[model_providers.{_ts(nome)}]", f"name = {_ts(nome)}",
-                           f"base_url = {_ts(base_url)}", f"env_key = {_ts(var)}",
+                           f"base_url = {_ts(base_openai(base_url))}", f"env_key = {_ts(var)}",
                            'wire_api = "chat"', fim, ""])
         ok, motivo = _gravar_bloco_toml(d / "config.toml", nome, bloco,
                                         {"model_providers": [nome]})

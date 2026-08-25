@@ -12,7 +12,7 @@ const fs = require('fs');
 // cada render, então NUNCA pode esperar rede aqui. Contrato: o render lê um cache e desenha; se o
 // cache estiver velho, dispara este mesmo script destacado (`--refresh-usage`) e segue com o que tem.
 const USAGE_TTL_S = 60;
-const usageCache = eng => path.join(os.tmpdir(), `cp-engine-usage-${eng.replace(/[^\w.-]/g, '_')}.json`);
+const usageCache = eng => path.join(os.tmpdir(), `hangar-engine-usage-${eng.replace(/[^\w.-]/g, '_')}.json`);
 
 // {limit,used,resetTime} do provedor -> {pct, reset} que os chips já sabem desenhar.
 const janela = (lim, used, resetTime) => {
@@ -90,7 +90,7 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
 
-    // Sessão rodando em motor de terceiro (engines.json, via cp-engine --exec). O que o Claude Code
+    // Sessão rodando em motor de terceiro (engines.json, via hangar-engine --exec). O que o Claude Code
     // calcula com PREÇO da Anthropic deixa de valer aqui — e no Kimi Code, que é assinatura de valor
     // fixo, qualquer valor em dólar é ficção. Número errado é pior que número nenhum.
     const engine = process.env.CP_ENGINE || '';
@@ -293,7 +293,7 @@ process.stdin.on('end', () => {
       sevenDay = ' ' + c + '📅7d:' + Math.round(sd) + '%' + quotaAviso + resetStr + '\x1b[0m';
     }
 
-    // Nome da sessão tmux (= endereço da sessão no cp-send / claude-pocket)
+    // Nome da sessão tmux (= endereço da sessão no hangar-send / hangar)
     let tmuxSess = '';
     if (process.env.TMUX && process.env.TMUX_PANE) {
       try {
@@ -302,11 +302,11 @@ process.stdin.on('end', () => {
           { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         if (s) {
           tmuxSess = ' \x1b[95m📟 ' + s + '\x1b[0m';
-          // Pareamento (claude-pocket): sidecar <config>/.claude-pocket-pair/<sessao>.json -> chip 🤝.
+          // Pareamento (hangar): sidecar <config>/.hangar-pair/<sessao>.json -> chip 🤝.
           // Grupo = {peers: [...]} (legado 1:1 = {peer}); 1 par mostra o nome, N mostra "a,b".
           try {
             const pair = JSON.parse(fs.readFileSync(
-              path.join(claudeDir, '.claude-pocket-pair', s + '.json'), 'utf8'));
+              path.join(claudeDir, '.hangar-pair', s + '.json'), 'utf8'));
             const peers = pair.peers || (pair.peer ? [pair.peer] : []);
             if (peers.length) tmuxSess += ' \x1b[93m🤝 ' + peers.join(',') + '\x1b[0m';
           } catch {}
@@ -393,13 +393,13 @@ process.stdin.on('end', () => {
     try {
       const sid = data.session_id;
       if (sid) {
-        const sidecarDir = path.join(claudeDir, '.claude-pocket-status');
+        const sidecarDir = path.join(claudeDir, '.hangar-status');
         fs.mkdirSync(sidecarDir, { recursive: true });
         const alvo = path.join(sidecarDir, sid + '.json');
         // pid no tmp: este script roda a CADA render e ainda faz 4 execFileSync (git×2, tmux,
         // kubectl) com timeout de 1-2s, entao duas invocacoes da MESMA sessao se sobrepoem na
         // pratica. Com nome fixo as duas abririam o mesmo caminho em truncate e o rename podia
-        // promover bytes entrelacados — mesmo furo que scripts/cp_panel_common.py ja corrigiu
+        // promover bytes entrelacados — mesmo furo que scripts/hangar_panel_common.py ja corrigiu
         // usando nome unico.
         const tmp = alvo + '.' + process.pid + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify({

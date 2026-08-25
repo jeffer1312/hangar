@@ -129,12 +129,32 @@ function normEdit(e: unknown): { oldText: string; newText: string } | null {
 }
 
 /** Extrai a lista de edicoes do tool_input (Edit/MultiEdit do Claude, edit do Pi — case-insensitive).
+ * Write entra como edicao de oldText vazio (tudo adicao), que e como o proprio Claude Code desenha.
  * null = shape desconhecido (provider mudou o formato) -> o card cai no <pre> cru de sempre. */
 export function extractEdits(toolName: string | null | undefined, input: unknown): { oldText: string; newText: string }[] | null {
   if (!input || typeof input !== 'object') return null;
   const name = (toolName ?? '').toLowerCase();
-  if (name !== 'edit' && name !== 'multiedit') return null;
   const rec = input as Record<string, unknown>;
+  if (name === 'write') {
+    // Os tres providers escrevem arquivo com `content`, mudando so o nome do caminho (medido
+    // 24/08/2026 nos transcripts desta maquina: Claude `file_path`+`content`, Pi `path`+`content`,
+    // Kimi `path`+`content` e as vezes `mode: overwrite|append`). Quem le o caminho e o
+    // extractFilePath, entao aqui basta o conteudo.
+    //
+    // `mode: append` NAO ganha tratamento proprio: o diff mostra as linhas que ENTRARAM no arquivo,
+    // e no append e exatamente isso que elas sao — mais literal que no overwrite, onde nao temos o
+    // conteudo anterior pra comparar e "tudo adicao" ja e a aproximacao aceita. Conferido num append
+    // real (24/08/2026): o `content` tinha 27.004 bytes comecando em "### Task 0", enquanto o
+    // arquivo final ficou com 40.291 comecando no titulo — ou seja, o campo traz SO o trecho
+    // acrescentado. Se um dia vier o arquivo inteiro, o diff infla e este caso precisa de dono.
+    //
+    // Conteudo vazio (arquivo zerado) volta null de proposito: o diff diria "sem mudanca", enquanto
+    // o <pre> com o tool_result ainda diz "File created successfully".
+    return typeof rec.content === 'string' && rec.content !== ''
+      ? [{ oldText: '', newText: rec.content }]
+      : null;
+  }
+  if (name !== 'edit' && name !== 'multiedit') return null;
   const single = normEdit(rec);
   if (single) return [single];
   if (Array.isArray(rec.edits)) {

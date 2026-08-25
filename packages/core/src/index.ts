@@ -2,6 +2,8 @@ export * from './api';
 export * from './sessions';
 export * from './servers';
 export { configureApi } from './apiEnv';
+export { configureDiag, registrar as registrarDiag, novoReq as novoReqDiag } from './diag';
+export type { DiagSink, Evento as EventoDiag, Nivel as NivelDiag } from './diag';
 export type { ApiEnv, EventSourceLike } from './apiEnv';
 export * from './types';
 export * from './history';

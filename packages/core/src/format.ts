@@ -109,6 +109,27 @@ export function attentionFeed<T extends { name: string; state: State; last_activ
     );
 }
 
+// Caixa de marcação que o picker MULTI-select desenha na frente de cada opção — o texto chega
+// cru de state.classify ("[ ] backend", "[✓] app de desktop"). Aceita a caixa vazia, marcada
+// (✓/✔/x/X/*) e a que vem sem espaço nenhum.
+const CAIXA_DE_MARCACAO = /^\s*\[[\s✓✔xX*]*\]/;
+
+/**
+ * A pergunta pede MARCAÇÃO (várias opções) em vez de uma escolha só?
+ *
+ * Importa porque um toque numa opção dessas TOGGLA a caixa e não responde nada — a pergunta segue
+ * aberta esperando o passo de confirmar. Quem oferece "resposta rápida" de um toque (a tira de
+ * atenção) precisa saber a diferença: em 25/08/2026 ela mostrou um botão escrito "[ ] backend",
+ * e quem clicou achou que tinha respondido — a sessão continuou aguardando e a resposta teve de
+ * ser refeita dentro dela.
+ *
+ * `some`, não `every`: as linhas de escape do AskUserQuestion ("Chat about this") entram no mesmo
+ * menu sem caixa nenhuma.
+ */
+export function pedeMarcacao(options?: string[] | null): boolean {
+  return !!options?.length && options.some((o) => CAIXA_DE_MARCACAO.test(o));
+}
+
 // Ordenação compartilhada das LISTAS de sessões (Sidebar + SessionList): quem aguarda resposta
 // primeiro (realce de atenção), depois alfabético. Estável: rows só trocam de posição quando o
 // ESTADO muda, não a cada last_activity. O Board NÃO usa isto (colunas já separam por estado;
@@ -128,7 +149,7 @@ export function fmtWhen(mtime?: number | null): string {
   return new Date(mtime * 1000).toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' });
 }
 
-// Iniciais pra avatar/rail (identifica sem o nome inteiro). "claude-pocket" -> CP, "jeffer1312" -> JE.
+// Iniciais pra avatar/rail (identifica sem o nome inteiro). "api-front" -> AF, "jeffer1312" -> JE.
 // Duas palavras -> 1a letra de cada; uma só -> 2 primeiros chars. Puro/testável. Reusado pelo
 // avatar da conta (AccountMenu) e pelo rail recolhido da sidebar.
 export function initials(name: string): string {
@@ -229,7 +250,7 @@ export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[]
   return out;
 }
 
-// Recado de OUTRA sessão Claude (cp-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
+// Recado de OUTRA sessão Claude (hangar-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
 // (aviso pro grupo). Devolve remetente + texto sem o prefixo + scope; null = msg normal do usuário.
 // Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do Chat compara o cru).
 const _PEER_RE = /^\[(de|grupo):\s*([^\]]+)\]\s*/;
@@ -339,7 +360,7 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
     .map((s) => s.trim())
     .filter(Boolean)
     // Os DOIS separadores: no Windows o marcador traz o caminho nativo
-    // (`C:\cockpit\.claude-pocket-uploads\<arquivo>.png`), que não tem `/` nenhum — o split por `/`
+    // (`C:\cockpit\.hangar-uploads\<arquivo>.png`), que não tem `/` nenhum — o split por `/`
     // devolvia o caminho INTEIRO como se fosse o basename. Aí `uploadUrl` montava
     // `/uploads/C%3A%5C…` e o backend recusava com 400 "filename invalido" (resolve_upload rejeita
     // `\` de propósito, contra path traversal): no celular a foto virava o quadrinho de imagem

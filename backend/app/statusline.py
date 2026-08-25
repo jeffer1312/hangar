@@ -7,7 +7,7 @@ lia isso do pane e herdava o corte — o anel de contexto ficava "medicao indisp
 terminal estava estreito (medido 2026-07-30 numa sessão real).
 
 Contrato: quem RENDERIZA a linha grava a versao inteira em
-`<config>/.claude-pocket-status/<stem>.json` = {"line": str, "ts": epoch}, mesma chave dos outros
+`<config>/.hangar-status/<stem>.json` = {"line": str, "ts": epoch}, mesma chave dos outros
 marcadores (o stem do .jsonl da sessao). Aqui so se le. Sem arquivo -> None e o caller segue com o
 pane, que e o comportamento de antes: sessao sem o script instrumentado nao pode ficar sem linha
 nenhuma.
@@ -24,9 +24,9 @@ from typing import Optional
 
 from app.config import _backend_config_base, list_config_dirs
 
-_log = logging.getLogger("claude_pocket.statusline")
+_log = logging.getLogger("hangar.statusline")
 
-_SUBDIR = ".claude-pocket-status"
+_SUBDIR = ".hangar-status"
 _MAX_AGE = 86400.0
 
 # Config dirs sao estaveis (mudam quando o usuario cria um ~/.claude-outro), e list_config_dirs faz

@@ -12,7 +12,7 @@ from app.state import _RULE_RE, _is_boundary, _live_spinner
 # do .jsonl); duas copias so dariam a chance de uma envelhecer.
 from app.statusline import _dirs as _config_dirs
 
-_log = logging.getLogger("claude_pocket.preview")
+_log = logging.getLogger("hangar.preview")
 
 # Preview AO VIVO do bloco de assistente em andamento, lido do pane do tmux (capture-pane -p, texto
 # já composto: sem ANSI, sem cursor-move). É a ÚNICA fonte do texto em voo sem perder o REPL
@@ -171,7 +171,13 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 # exigida (palavra com maiuscula + parentese) e o que amarra a regra ao desenho real: "Used" em
 # prosa inglesa ("Used correctly, ...") tem a palavra seguinte minuscula e nao casa. Especifico do
 # Kimi, como o resto do chrome por provider — no Claude "Used" nem aparece.
-_KIMI_USED_RE = re.compile(r"^Used\s+[A-Z][\w-]*\s*\(")
+#
+# "Using" (a MESMA linha, com a ferramenta ainda EM EXECUCAO) entrou em 24/08/2026, medido: 900
+# amostras do pane numa sessao real, 323 com a linha, 321 delas "● Using Write (caminho)" seguida do
+# conteudo do arquivo numerado ("      1  # Titulo"). Sem isto o bloco de prosa anterior nao era cortado
+# ali, e a previa no celular virava o rotulo da TUI mais o arquivo inteiro em numero de linha — foi
+# o print que o usuario mandou. So o gerundio faltava: "Used" ja estava coberto desde 19/08.
+_KIMI_USED_RE = re.compile(r"^Us(?:ed|ing)\s+[A-Z][\w-]*\s*\(")
 
 # Painel de Todo da TUI do Kimi (medido nos quadros de 19/08/2026, durante o trabalho desta
 # costura): entre a regua e a caixa do composer ele desenha o header "  Todo" e os itens
@@ -339,7 +345,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
 
 # ── Previa publicada pelo PROPRIO agente (sidecar), preferida ao pane ─────────────────────────────
 # Mesmo contrato da statusline: quem tem o dado exato publica; o pane vira plano B. Aqui o publicador
-# e a extensao do Pi (scripts/pi/cp-state.ts), que recebe o texto do assistente token a token pelo
+# e a extensao do Pi (scripts/pi/hangar-state.ts), que recebe o texto do assistente token a token pelo
 # `message_update` — sem largura de janela, sem markdown ja pintado, sem precisar adivinhar o que e
 # desenho da TUI. Todas as regras deste arquivo (verbo de ferramenta, caixa do composer, spinner,
 # painel de Todos) existem so pra essa adivinhacao; pelo sidecar elas nem entram em cena.
@@ -350,7 +356,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
 #   ""    -> o agente disse que NAO ha texto em voo (turno fechou). E resposta, nao ausencia: cair
 #            no pane aqui traria de volta o bloco ja commitado como bolha duplicada.
 #   texto -> o bloco em voo, verbatim.
-_PREVIEW_SUBDIR = ".claude-pocket-preview"
+_PREVIEW_SUBDIR = ".hangar-preview"
 # Teto de idade: o publicador zera a previa no fim do turno, entao um texto parado por MUITO tempo
 # so acontece se a extensao morreu no meio (crash, /reload). Dai em diante o pane volta a mandar, em
 # vez de congelar na tela a ultima frase que ela alcancou a publicar.

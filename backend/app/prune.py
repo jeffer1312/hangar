@@ -1,6 +1,6 @@
 """Poda periodica de sidecars de sessao morta.
 
-O app espalha sidecars por sessao em `<config>/.claude-pocket-*`: statusline, estado,
+O app espalha sidecars por sessao em `<config>/.hangar-*`: statusline, estado,
 preview, fila, bilhetes pane->sessao e catalogo de modelos do Pi. Nada disso sumia quando a
 sessao morria (medido 18/08/2026: status 183, state 178, preview 142, fila 139 entradas,
 pi 5,7 MB — e o backend ativo acumula mais; a mais antiga de 01/07/2026).
@@ -26,13 +26,14 @@ longa duracao (unit systemd do usuario) acumulando para sempre. Periodica cobre 
 """
 
 import logging
+import re
 import time
 from pathlib import Path
 
 from app import tmux
 from app.config import _backend_config_base, list_config_dirs
 
-_log = logging.getLogger("claude_pocket.prune")
+_log = logging.getLogger("hangar.prune")
 
 # Idade minima (s) de um sidecar orfao para entrar na poda. 7 dias: preserva a materia-prima
 # de diagnostico de execucao morta recente (o caso t1/t2 da Task foi achado lendo sidecar de
@@ -43,16 +44,34 @@ _MIN_AGE = 7 * 86400.0
 _INTERVALO = 24 * 3600.0
 
 # Keyed pela chave de sessao (session_key do jsonl): statusline, estado, preview, askq e o
-# catalogo de modelos do Pi (subdir de .claude-pocket-pi).
-_STEM_KEYED = (".claude-pocket-status", ".claude-pocket-state", ".claude-pocket-preview",
-               ".claude-pocket-askq", ".claude-pocket-pi/models")
+# catalogo de modelos do Pi (subdir de .hangar-pi).
+_STEM_KEYED = (".hangar-status", ".hangar-state", ".hangar-preview",
+               ".hangar-askq", ".hangar-pi/models")
 # Keyed pelo NOME da sessao (sanitizado): a fila sobrevive ao /clear de proposito (o
 # session-id muda no /clear), entao o nome e a chave certa dela.
-_NOME_KEYED = ".claude-pocket-queue"
+_NOME_KEYED = ".hangar-queue"
 # Keyed pelo pane_id (bilhete pane->sessao do Pi e do Kimi). O tmux REUSA %pane_id, entao o
 # bilhete nunca decide quem e a sessao (isso e o frescor de pi_session_file) — a poda so tira
 # bilhete de pane que NAO existe mais; pane vivo nunca tem bilhete podado.
-_PANE_KEYED = (".claude-pocket-pi", ".claude-pocket-kimi")
+_PANE_KEYED = (".hangar-pi", ".hangar-kimi")
+
+# Sobra do `tmp+rename`: o processo morreu (kill -9, OOM, VM travando) entre o write e o rename e
+# ninguem recolhe — nenhum `except` roda num kill -9, e o proximo render escreve com OUTRO pid no
+# nome. Medido em 23/08/2026 nesta maquina: 31 arquivos, o mais antigo de 29/07, e um deles com o
+# conteudo `{"text":` — nove bytes, a escrita cortada no meio, que e exatamente o que o tmp+rename
+# existe pra nunca promover.
+#
+# Nao ha leitor: os quatro publicadores (preview_hook, state_hook, kimi_state_hook, os dois
+# statusline em js/ts e o hangar-state.ts) escrevem no tmp e renomeiam; quem consome le so o `.json`
+# final. Entao a chave de sessao nao entra na conta aqui — o criterio conservador do resto do
+# arquivo existe pra nao apagar sidecar que alguem AINDA le, e nao e o caso.
+#
+# Idade curta de proposito (1h, contra os 7 dias do resto): o unico risco e apagar o tmp de uma
+# escrita EM VOO, e essa vive milissegundos. Sete dias adiariam a limpeza sem comprar seguranca
+# nenhuma. Casa `.tmp`, `.tmp.<pid>` e `.tmp<pid>` — as quatro formas que os publicadores usam —,
+# ancorado no FIM do nome pra nunca pegar um `<chave>.json`/`<nome>.jsonl` de verdade.
+_MIN_AGE_TMP = 3600.0
+_TMP_RE = re.compile(r"\.tmp\.?\d*$")
 
 
 def _config_bases() -> list[Path]:
@@ -89,7 +108,8 @@ def _podar_dir(d: Path, chaves_vivas: set[str], agora: float, pattern: str = "*.
     """Apaga de UM diretorio os arquivos cuja chave nao esta viva E que passaram de _MIN_AGE.
 
     Falha-soft: arquivo que some no meio (sessao encerrando) ou sem stat nao derruba a
-    varredura. O .tmp meio-escrito nunca casa glob (suffix diferente).
+    varredura. O `.tmp` meio-escrito nao casa este glob (suffix diferente) — quem o recolhe e o
+    `_podar_tmp`, por outro criterio.
     """
     if not d.is_dir():
         return 0
@@ -104,6 +124,34 @@ def _podar_dir(d: Path, chaves_vivas: set[str], agora: float, pattern: str = "*.
                 continue
     except OSError:
         pass
+    return n
+
+
+def _podar_tmp(d: Path, agora: float) -> int:
+    """Sobra de `tmp+rename` em UM diretorio, por IDADE so — ver _MIN_AGE_TMP.
+
+    Varre tambem os subdiretorios de primeiro nivel: o catalogo de modelos do Pi mora em
+    `.hangar-pi/models`, e um `.tmp` la e tao orfao quanto os outros.
+    """
+    if not d.is_dir():
+        return 0
+    n = 0
+    try:
+        alvos = [d, *(x for x in d.iterdir() if x.is_dir())]
+    except OSError:
+        return 0
+    for alvo in alvos:
+        try:
+            for f in alvo.iterdir():
+                try:
+                    if (f.is_file() and _TMP_RE.search(f.name)
+                            and agora - f.stat().st_mtime >= _MIN_AGE_TMP):
+                        f.unlink()
+                        n += 1
+                except OSError:
+                    continue
+        except OSError:
+            continue
     return n
 
 
@@ -125,6 +173,17 @@ def _podar(bases: list[Path], chaves_stem: set[str], chaves_nome: set[str],
         _log.warning("prune: sem pane vivo (tmux fora?) — %s ficam", ", ".join(_PANE_KEYED))
     apagados: dict[str, int] = {}
     for base in bases:
+        # FORA dos guards de chave acima, e de proposito: `.tmp` orfao nao tem dono vivo pra
+        # proteger — "nao sei quem esta vivo" nao muda em nada o fato de ninguem ler aquele
+        # arquivo. Por dir de sidecar, seja ele keyed por stem, nome, pane ou por nada (o
+        # `.hangar-active`, que a poda normal nem visita, tambem acumulava).
+        try:
+            for d in sorted(base.glob(".hangar-*")):
+                n = _podar_tmp(d, agora)
+                if n:
+                    apagados[f"{d.name} (.tmp)"] = apagados.get(f"{d.name} (.tmp)", 0) + n
+        except OSError:
+            pass
         if chaves_stem:
             for sub in _STEM_KEYED:
                 apagados[sub] = apagados.get(sub, 0) + _podar_dir(base / sub, chaves_stem, agora)

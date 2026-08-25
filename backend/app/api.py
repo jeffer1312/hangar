@@ -13,15 +13,16 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import atomico
+from app import atomico, atualizacoes, atualizar, diag, migracao_sidecars, tmux
 from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
@@ -32,9 +33,11 @@ from app import model_args
 from app import filesearch, filetree, git_ops
 from app.filesearch import SearchError
 from app.filetree import FileError
+from app import orq
 from app import pi_catalog
 from app import cli_probe
 from app import pi_models
+from app import pi_inbox
 from app.pi_inbox import INBOX
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
@@ -87,7 +90,7 @@ from app.sync import sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
 
 class _BodyTooLarge(Exception):
@@ -189,6 +192,16 @@ async def _lifespan(app: FastAPI):
 
     renova_task.add_done_callback(_renova_done)
 
+    fetch_task = asyncio.create_task(_fetch_loop())
+
+    def _fetch_done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("_fetch_loop crashed", exc_info=exc)
+
+    fetch_task.add_done_callback(_fetch_done)
+
     prune_task = asyncio.create_task(_prune_loop())
 
     def _prune_done(t: asyncio.Task) -> None:
@@ -256,7 +269,45 @@ async def _lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="claude-pocket", lifespan=_lifespan)
+app = FastAPI(title="hangar", lifespan=_lifespan)
+
+
+@app.exception_handler(tmux.MuxIndisponivel)
+async def _mux_indisponivel(request: Request, exc: tmux.MuxIndisponivel):
+    """503 em QUALQUER rota que esbarre num multiplexador que não responde.
+
+    `registry.list()` levanta isto, e ele é chamado por umas quinze rotas (shell, loop, uploads,
+    plano, arquivos...). Tratar rota por rota deixaria as não-tocadas devolvendo 500 com traceback
+    justamente no cenário que esta mudança existe pra consertar — e a próxima rota a chamar `list()`
+    nasceria com o mesmo furo. Um handler só fecha todas de uma vez.
+
+    503 e não a lista vazia de antes: "não sei quais sessões existem" não pode continuar sendo
+    entregue como "você não tem nenhuma".
+    """
+    diag.registrar("mux.indisponivel", "erro", detalhe=f"{request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": erro("erro_mux_indisponivel",
+                                "o tmux não respondeu — a lista de sessões está indisponível",
+                                detalhe=str(exc))})
+
+
+@app.middleware("http")
+async def _correlaciona_diag(request: Request, call_next):
+    """Põe o `X-Hangar-Req` do front no contexto, pra o diário poder LIGAR as duas pontas.
+
+    Sem isto, a linha da tela ("POST /select devolveu 409") e a do servidor ("o cursor do picker não
+    convergiu") ficam soltas no arquivo, e amarrar uma na outra depende de comparar horário — que
+    empata assim que há duas telas abertas. Com o id, quem analisa segue a cadeia inteira de um
+    toque só.
+    """
+    token = diag.req_atual.set(request.headers.get("x-hangar-req", "")[:32])
+    try:
+        return await call_next(request)
+    finally:
+        diag.req_atual.reset(token)
+
+
 # Body-size ANTES do CORS no codigo -> CORS fica por FORA (envolve ate o 413, adicionando headers CORS
 # na rejeicao). Ver _BodySizeLimitMiddleware.
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_BYTES)
@@ -300,7 +351,7 @@ _WS_PINGS_SEM_RESPOSTA_MAX = 2
 
 # Aviso-uma-vez-ate-mudar da recusa de conexao (achado ALTA da revisao 02/08/2026): sem isto, um
 # token girado / bind mudado / firewall no meio faz TODA tentativa de retry da extensao (laco com
-# recuo, cp-state.ts) virar linha de log — e a mesma enxurrada que o retry em si tenta evitar do
+# recuo, hangar-state.ts) virar linha de log — e a mesma enxurrada que o retry em si tenta evitar do
 # lado dela. Mesma politica de terminal_input._avisa_deferred/_limpa_deferred: WARNING na 1a recusa
 # por host, calado ate uma conexao daquele host DAR CERTO (o que também reabre o aviso se a falha
 # voltar depois — nao e "avisa uma vez na vida do processo").
@@ -360,12 +411,17 @@ async def pi_inbox_ws(ws: WebSocket):
             await ws.close(code=1009)
             return
         primeira = json.loads(bruto)
-        pane = str(primeira.get("pane") or "")
+        # `chave` e o que a extensao declara como identidade da sessao: o nome do psmux quando
+        # existe, o pane quando nao (tmux). Extensao ANTIGA nao manda o campo e cai no pane, que e
+        # exatamente o comportamento de antes — ninguem precisa dar /reload pra continuar
+        # funcionando no Linux. Ver pi_inbox: no psmux o pane e `%1` em TODA sessao, e por isso a
+        # linha da segunda sessao Pi tomava o lugar da primeira.
+        pane = str(primeira.get("chave") or primeira.get("pane") or "")
         if not pane:
             await ws.close(code=1008)
             return
         linha = INBOX.registrar(pane, ws.send_json)
-        _log.info("pi_inbox: linha aberta pane=%s", pane)
+        _log.info("pi_inbox: linha aberta chave=%s", pane)
         pings_sem_resposta = 0
         while True:
             try:
@@ -393,8 +449,17 @@ async def pi_inbox_ws(ws: WebSocket):
             if msg.get("pong") or msg.get("ping"):
                 continue
             msg_id = str(msg.get("id") or "")
-            if msg_id:
-                INBOX.confirmar(pane, msg_id, bool(msg.get("ok")), msg.get("erro"))
+            if not msg_id:
+                continue
+            if "resposta" in msg:
+                # Resposta de PERGUNTA (leitura), nao confirmacao de entrega — chaves diferentes
+                # de proposito: a extensao responde `{id, resposta}` e nunca `ok`, entao uma
+                # mensagem jamais cai nos dois caminhos. `None` explicito (a extensao dizendo "nao
+                # sei") chega como None e o backend cai no plano B; string vazia e resposta.
+                valor = msg.get("resposta")
+                INBOX.responder(pane, msg_id, valor if isinstance(valor, str) else None)
+                continue
+            INBOX.confirmar(pane, msg_id, bool(msg.get("ok")), msg.get("erro"))
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -1131,7 +1196,44 @@ class ModelEffortBody(_StrictBody):
 async def list_sessions():
     # list_with_state: resolucao otimizada (1 scan /proc + 1 chamada tmux em lote) + estado vivo por
     # sessao (working/idle/awaiting_input) classificado do pane. async pq captura os panes concorrente.
+    # MuxIndisponivel nao e tratada aqui: o handler de `_mux_indisponivel` cobre esta rota e as
+    # outras quinze que chamam registry.list(). Um try/except so nesta seria a mesma resposta
+    # escrita duas vezes, e a que envelhece primeiro.
     return await registry.list_with_state()
+
+
+@app.post("/api/diag", dependencies=[Depends(require_auth)])
+async def diag_anotar(request: Request):
+    """Lote de eventos da TELA pro diário de uso (backend/app/diag.py).
+
+    Aceita o que reconhece e descarta o resto em silêncio — de propósito. Este endpoint não pode ser
+    um caminho que falha: ele descreve o uso, e um 400 aqui viraria um erro na tela causado pelo
+    próprio mecanismo de registrar erros.
+    """
+    try:
+        corpo = await request.json()
+    except Exception:                                # noqa: BLE001 — ver docstring
+        return {"gravadas": 0}
+    lote = corpo.get("eventos") if isinstance(corpo, dict) else corpo
+    return {"gravadas": await asyncio.to_thread(diag.anotar_da_tela, lote)}
+
+
+@app.get("/api/diag", dependencies=[Depends(require_auth)])
+async def diag_resumo(ultimas: int = 60):
+    resumo = await asyncio.to_thread(diag.resumo)
+    # As últimas linhas junto: a tela precisa PROVAR que está gravando, e um segundo pedido só pra
+    # isso seria mais latência pra mostrar a mesma coisa.
+    resumo["ultimas"] = await asyncio.to_thread(diag.ultimas, max(1, min(ultimas, 200)))
+    return resumo
+
+
+@app.get("/api/diag/arquivo", dependencies=[Depends(require_auth)])
+async def diag_arquivo():
+    # Baixa como anexo pra pessoa mandar no chat — é o único caminho do diário até quem analisa.
+    texto = await asyncio.to_thread(diag.ler_tudo)
+    return Response(
+        content=texto, media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="hangar-uso.jsonl"'})
 
 
 @app.get("/api/claude-configs", dependencies=[Depends(require_auth)], response_model=list[ConfigDirInfo])
@@ -1344,7 +1446,7 @@ async def create_session(body: CreateBody):
                         avisos = await asyncio.to_thread(ciclo.reconciliar,
                                                          sanitize_cwd(body.cwd))
                     except contas.ContaError as e:
-                        # ContaError já carrega status HTTP (o cp-conta imprime o detail). Deixar
+                        # ContaError já carrega status HTTP (o hangar-conta imprime o detail). Deixar
                         # escapar viraria 500 com traceback — o usuário não saberia por que a
                         # abertura falhou (ex: Windows sem Modo Desenvolvedor recusando symlink).
                         raise HTTPException(e.status, e.detail) from None
@@ -1418,7 +1520,7 @@ def rename_session(name: str, body: RenameBody):
     try:
         oq, nq = PromptQueue(name).path, PromptQueue(new).path
         if oq.exists():
-            oq.replace(nq)
+            atomico.substituir(oq, nq)
     except OSError:
         pass
     return {"ok": True, "name": new}
@@ -1670,7 +1772,7 @@ async def workflow_agent_detail(name: str, run_id: str, agent_id: str):
 async def peer_address(name: str):
     """Endereço do inbox nativo desta sessão (cross-session messaging), ou `null`.
 
-    Existe pro `cp-send` decidir com FATO se o caminho nativo alcança este alvo, em vez de supor
+    Existe pro `hangar-send` decidir com FATO se o caminho nativo alcança este alvo, em vez de supor
     pelo tipo da sessão: quem não tem socket (sessão aberta antes da liberação da Anthropic, Codex,
     Pi) não aparece no `ListAgents` de ninguém, e mandar o modelo usar `SendMessage` ali seria
     mandá-lo bater numa porta que não existe. `null` nunca é erro — é a resposta "aqui não tem".
@@ -1747,7 +1849,7 @@ async def events(name: str, request: Request):
 # decoracao da lista (git_summary/capture_pane via asyncio.to_thread) pode ocupar em rajada -> sem isto,
 # um burst de decoracao lenta atrasaria o POST /input. Poucos workers bastam (single-user; envios a uma
 # mesma sessao ja serializam no _send_lock do terminal_input).
-_send_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cp-send")
+_send_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hangar-send")
 
 
 def _send_thread(fn, *args):
@@ -1816,7 +1918,10 @@ def _send_one(name: str, text: str) -> dict:
     # reivindicavel por claim_undelivered. Upgrade completo precisa das DUAS coisas juntas: o
     # append() E o set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
     # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
-    is_pi = provider == "pi" and pane_id and INBOX.tem_linha(pane_id) and not stripped.startswith("/")
+    # `pi_inbox.linha_de` (nome primeiro, pane depois), nunca o pane cru: no psmux o pane e `%1`
+    # em toda sessao Pi e a busca por pane achava a linha da OUTRA — ver pi_inbox.
+    is_pi = (provider == "pi" and pi_inbox.linha_de(name, pane_id) is not None
+             and not stripped.startswith("/"))
     if is_pi:
         try:
             entry = PromptQueue(name).append(text, delivered=False, ts=t0)
@@ -2125,7 +2230,7 @@ async def broadcast(body: BroadcastBody):
 
 
 class PairBody(_StrictBody):
-    # peer (1) OU peers (N) — peers vence; peer fica por compat (cp-send --pair manda um só).
+    # peer (1) OU peers (N) — peers vence; peer fica por compat (hangar-send --pair manda um só).
     peer: str = ""
     peers: list[str] = []
     task: str = ""
@@ -2136,24 +2241,24 @@ def _group_text(me: str, others: list[str], task: str) -> str:
     quem = ", ".join(f"'{o}'" for o in others)
     exemplo = others[0]
     # Par remoto (srv::sessao): contrato compartilhado não sincroniza cross-server no MVP — some a
-    # linha do arquivo (cada máquina teria o seu, com gid diferente). cp-send já roteia srv::sessao.
+    # linha do arquivo (cada máquina teria o seu, com gid diferente). hangar-send já roteia srv::sessao.
     cross = any(peers.is_remote(o) for o in others)
     contrato = "" if cross else (
         f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
         f"{contract_path_for(me)} (markdown; criar se não existir, manter curto e atual). ")
     return (
-        f"[de: claude-pocket] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
+        f"[de: hangar] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
         f"Cada sessão mexe SÓ no próprio repo; quando precisar de algo de outro membro (contrato, "
         f"endpoint, tipo, dúvida), mande 1:1 por iniciativa própria. COMO mandar, nesta ordem: "
         f"se você TEM a ferramenta SendMessage e o membro aparece no seu ListAgents (sessão Claude "
         f"desta máquina), use SendMessage — a entrega é por socket, sem digitar no terminal, então "
         f"nada de texto cortado ou colado pela metade. Não tem a ferramenta, ou o membro não está "
         f"na lista (sessão de outra máquina 'servidor::sessao', Codex, Pi)? Aí é o Bash: "
-        f'cp-send {exemplo} "sua mensagem". Os dois chegam do mesmo jeito, como [de: <membro>]. '
+        f'hangar-send {exemplo} "sua mensagem". Os dois chegam do mesmo jeito, como [de: <membro>]. '
         f'AVISO pro grupo TODO (marco: "terminei minha parte", "contrato atualizado"): '
-        f'cp-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
+        f'hangar-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
         f"REGRA ANTI-LOOP: NUNCA responda um [grupo: ...] com --group (vira tempestade). Aviso de "
-        f"grupo é unidirecional; se precisar responder, faça 1:1 (cp-send <membro>) e só se necessário. "
+        f"grupo é unidirecional; se precisar responder, faça 1:1 (hangar-send <membro>) e só se necessário. "
         f"{contrato}"
         f"BRANCH: antes de trabalhar, rode git branch --show-current no SEU repo e alinhe pra "
         f"branch do ticket da tarefa (fetch+checkout) — re-verifique após restart/resume da sessão. "
@@ -2179,7 +2284,7 @@ async def _deliver(name: str, text: str) -> dict | None:
 @app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
 async def pair_session(name: str, body: PairBody):
     """Junta `name` e peer(s) num GRUPO de trabalho (une os grupos existentes de todos) e injeta
-    em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via cp-send por
+    em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via hangar-send por
     iniciativa própria, dentro do escopo da tarefa. Badge `pair_peers` aparece na lista."""
     others = [p for p in dict.fromkeys(body.peers or ([body.peer] if body.peer else [])) if p]
     if not others:
@@ -2238,7 +2343,7 @@ async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
     """Pareamento 1:1 entre máquinas. Registra o vínculo LOCAL (name.json peers=[srv::sessao];
     sidecar do remoto vive na máquina dele) e chama o /pair-remote do backend peer pra registrar o
     reverso + injetar o protocolo lá. Falha na chamada remota desfaz o vínculo local (mesmo racional
-    do 'grupo fantasma' do pair local). Transporte já provado pelo cp-send cross-server (peers.json)."""
+    do 'grupo fantasma' do pair local). Transporte já provado pelo hangar-send cross-server (peers.json)."""
     local_names = {s.name for s in await asyncio.to_thread(registry.list)}
     if name not in local_names:
         raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
@@ -2329,8 +2434,8 @@ async def unpair_remote(name: str, body: UnpairRemoteBody):
     ex = await asyncio.to_thread(pair.leave, name)
     warn = None
     if ex:
-        e = await _deliver(name, f"[de: claude-pocket] '{body.peer}' saiu do pareamento. "
-                                 "Volte a operar independente; use cp-send só quando o usuário pedir.")
+        e = await _deliver(name, f"[de: hangar] '{body.peer}' saiu do pareamento. "
+                                 "Volte a operar independente; use hangar-send só quando o usuário pedir.")
         if e:
             warn = erro("erro_pareamento_aviso_unpair", f"{name}: {_erro_texto(e)}",
                         sessao=name, erro=e)
@@ -2343,7 +2448,7 @@ class GroupMsgBody(_StrictBody):
 
 @app.post("/api/sessions/{name}/group-message", dependencies=[Depends(require_auth)])
 async def group_message(name: str, body: GroupMsgBody):
-    """Aviso pro GRUPO todo (cp-send --group): entrega o texto a CADA companheiro de `name` numa
+    """Aviso pro GRUPO todo (hangar-send --group): entrega o texto a CADA companheiro de `name` numa
     tacada, como `[grupo: <name>]`. Unidirecional por contrato (o prompt instrui a NUNCA responder
     um [grupo:] com --group) — é o que impede o loop de N sessões se avisando em cascata.
     Slash-command fora (mesmo racional do /broadcast)."""
@@ -2419,15 +2524,15 @@ async def unpair_session(name: str):
             # mão; se virar comum, enfileirar via pqueue como o /input faz.
             _log.warning("unpair: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
             errs.append({"sessao": p, "erro": str(ex)})
-    e = await _deliver(name, "[de: claude-pocket] Você saiu do grupo de trabalho "
-                             f"({', '.join(expeers)}). Volte a operar independente; use cp-send só "
+    e = await _deliver(name, "[de: hangar] Você saiu do grupo de trabalho "
+                             f"({', '.join(expeers)}). Volte a operar independente; use hangar-send só "
                              "quando o usuário pedir.")
     if e:
         errs.append({"sessao": name, "erro": e})
     resto = [p for p in expeers if not peers.is_remote(p)]
     for p in resto:
         ainda = [x for x in resto if x != p]
-        msg = (f"[de: claude-pocket] '{name}' saiu do grupo de trabalho. "
+        msg = (f"[de: hangar] '{name}' saiu do grupo de trabalho. "
                + (f"O grupo continua entre você e {', '.join(ainda)}."
                   if ainda else "O grupo foi dissolvido (só restava você); volte a operar independente."))
         e = await _deliver(p, msg)
@@ -2521,7 +2626,13 @@ def select(name: str, body: SelectBody):
     _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
-    terminal.select(name, body.option)
+    try:
+        terminal.select(name, body.option)
+    except terminal_input.DriveError as e:
+        # Cursor do picker nao convergiu pra opcao pedida: nada foi enviado (o Enter fica de fora).
+        # 409 com texto na tela em vez de 500 calado — sem isso o toque some sem nenhum sinal.
+        diag.registrar("opcao.nao_convergiu", "erro", sessao=name, detalhe=str(e))
+        raise HTTPException(409, detail=erro("erro_opcao_nao_convergiu", "não consegui marcar essa opção no terminal — tente de novo", detalhe=str(e)))
     return {"ok": True}
 
 
@@ -2637,6 +2748,93 @@ def _painel_disponivel() -> bool:
     return termsock.painel_disponivel()
 
 
+# ─── Atualizar ─────────────────────────────────────────────────────────────────────────────────
+
+def _mudancas_pendentes() -> list[dict]:
+    """Os commits que entraram em `origin/main` e ainda não estão aqui — o changelog da tela.
+
+    Título de commit, e não um `CHANGELOG.md` mantido à mão: as mensagens deste repo já são
+    descritivas, e um arquivo à parte seria uma segunda cópia pra envelhecer. Passo que merecer
+    texto próprio ganha um arquivo em `docs/atualizacoes/`, cujo corpo entra junto.
+    """
+    p = atualizar._git("log", "--format=%h%x00%s", "HEAD..origin/main", timeout=30)
+    if p.returncode != 0:
+        return []
+    linhas = []
+    for linha in p.stdout.splitlines():
+        sha, _, titulo = linha.partition("\x00")
+        if titulo:
+            linhas.append({"sha": sha, "titulo": titulo})
+    return linhas
+
+
+@app.get("/api/atualizacao", dependencies=[Depends(require_auth)])
+async def get_atualizacao(procurar: bool = False):
+    """Estado da atualização: as três versões, o que há de novo, e o que o motor está fazendo.
+
+    As TRÊS versões porque "a versão instalada" tem três respostas — o disco, o processo vivo e o
+    bundle que o navegador carregou — e elas divergem justamente na janela em que alguém está
+    atualizando. Comparar só o disco com `origin/main` diria "tudo em dia" pra quem está olhando
+    uma tela de dias atrás.
+
+    Tudo em `to_thread`: são chamadas de `git` (subprocess), e o precedente de 23/07 é que elas
+    nunca podem rodar na corrotina.
+    """
+    def _ler() -> dict:
+        # `procurar=1` vai à REDE antes de comparar. Sem isto, o botão "Procurar de novo" só relia
+        # o `origin/main` que já estava no disco — a foto do último fetch do laço, que roda a cada
+        # 30min — e respondia "Tudo em dia" com informação velha, afirmando ter procurado. Não é
+        # o padrão porque o polling da tela bate aqui a cada 2s durante uma atualização, e um
+        # `git fetch` nessa cadência é rede à toa.
+        if procurar:
+            atualizar._git("fetch", "origin", timeout=120)
+        pre = atualizar.checar()
+        mudancas = _mudancas_pendentes()
+        return {
+            "versoes": {"repo": diag._git_describe(), "backend": diag.VERSAO_EM_EXECUCAO},
+            "atualizacao_disponivel": bool(mudancas),
+            "mudancas": mudancas,
+            "passos": [{"id": s["id"], "titulo": s["titulo"], "texto": s["texto"]}
+                       for s in atualizacoes.pendentes()],
+            "pre_voo": pre,
+            # `estado_para_tela`, não `estado`: converte "rodando" com o processo morto na falha
+            # que ele não conseguiu escrever. Sem isso a tela fica presa numa atualização que já
+            # não existe, e só sai editando o JSON na mão.
+            "estado": atualizar.estado_para_tela(),
+        }
+    return await asyncio.to_thread(_ler)
+
+
+@app.post("/api/atualizacao/iniciar", dependencies=[Depends(require_auth)])
+async def post_atualizacao_iniciar():
+    """Lança a atualização e devolve na hora — ela roda FORA deste processo, que vai reiniciar."""
+    pre = await asyncio.to_thread(atualizar.checar)
+    if not pre.get("pode"):
+        faltando = pre.get("faltando") or []
+        raise HTTPException(409, detail=erro(
+            "erro_atualizacao_dependencia", f"falta o que a atualizacao precisa: {', '.join(faltando)}",
+            faltando=faltando))
+    r = await asyncio.to_thread(atualizar.iniciar, settings.port)
+    if not r.get("ok"):
+        raise HTTPException(409, detail=erro("erro_atualizacao_ja_rodando",
+                                             "ja existe uma atualizacao rodando"))
+    return r
+
+
+async def _fetch_loop():
+    """`git fetch` de tempos em tempos, senão `origin/main` é a foto do último pull de alguém.
+
+    Sem isto o botão simplesmente nunca apareceria numa máquina que ninguém puxa à mão. Fail-soft
+    e em `to_thread`: máquina sem rede não pode virar erro na tela nem derrubar o laço.
+    """
+    while True:
+        try:
+            await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
+        except Exception:                            # noqa: BLE001 — sem rede é o caso comum
+            _log.debug("fetch periodico falhou", exc_info=True)
+        await asyncio.sleep(1800)
+
+
 @app.get("/api/config", dependencies=[Depends(require_auth)])
 def get_config():
     """Config editavel pelo app + o que e so-leitura (exige reiniciar o servico).
@@ -2657,6 +2855,11 @@ def get_config():
             # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
             # sempre: o termsock nao pode ser importado no topo deste modulo.
             "terminal_panel": _painel_disponivel(),
+            # A versao do PROCESSO VIVO, nao a do checkout. Durante a janela entre o `git pull` e o
+            # restart as duas divergem, e e exatamente ai que o botao Atualizar vive: dizer a do
+            # disco aqui seria afirmar estar rodando codigo que ninguem carregou (o defeito que
+            # `diag.VERSAO_EM_EXECUCAO` corrigiu em f4013343).
+            "versao": diag.VERSAO_EM_EXECUCAO,
         },
     }
 
@@ -2904,9 +3107,44 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
     if not limpar:
         return {"path": path, "text": text}
     # `estilo` = o que a PILL do composer mostrava quando a pessoa falou. Vence a config do
-    # servidor (narrar._estilo_efetivo); ausente/desconhecido, a config manda como sempre.
+    # servidor (narrar.estilo_efetivo); ausente/desconhecido, a config manda como sempre.
     texto_limpo, aviso = await asyncio.to_thread(narrar.limpar_ditado, text, estilo)
-    return {"path": path, "text": texto_limpo, "raw": text, "aviso": aviso}
+    # `estilo_aplicado` = qual versao o texto de fato recebeu, pra barra do ditado no composer marcar
+    # o botao certo. NAO da pra deduzir na tela: o backend rebaixa briefing pra prosa em ditado curto
+    # e cai na config quando a pill ainda nao leu o servidor, entao marcar "Briefing" pelo que foi
+    # PEDIDO faria o botao mentir. Com aviso, o texto que voltou e o cru — nao um estilo. Idem
+    # quando limpar_ditado devolve o proprio texto sem tocar (ditado de menos de 5 palavras, ou
+    # comecando com "/"): ali nao houve estilo nenhum, e dizer "prosa" seria a mesma mentira.
+    aplicado = "cru" if (aviso or texto_limpo == text) else narrar.estilo_efetivo(text, estilo)
+    return {"path": path, "text": texto_limpo, "raw": text, "aviso": aviso,
+            "estilo_aplicado": aplicado}
+
+
+class RelimparBody(_StrictBody):
+    texto: str = Field(min_length=1)
+    estilo: str
+
+
+@app.post("/api/ditado/relimpar", dependencies=[Depends(require_auth)])
+async def relimpar_ditado(body: RelimparBody):
+    """Aplica OUTRO estilo ao texto CRU de um ditado que ja foi transcrito.
+
+    Sem audio e sem sessao de proposito. A parte cara (Whisper) ja foi paga na transcricao e o cru
+    volta de la no campo `raw`; trocar de estilo e so a limpeza de novo. Reenviar o audio custaria
+    uma segunda transcricao — dinheiro e ~10s — pra chegar no mesmo texto cru. E limpeza nao le nada
+    da sessao (nem cwd, nem provider), entao exigir `name` aqui so acrescentaria um registry.list()
+    e um 404 possivel num caminho que nao precisa de nenhum dos dois.
+
+    Estilo invalido e 400 e nao "cai no padrao": aqui a pessoa CLICOU num estilo, entao entregar
+    outro calado seria mentir sobre o botao que ela apertou (na transcricao o estilo e um palpite da
+    tela e cair na config e o certo)."""
+    if body.estilo not in narrar.ESTILOS_DITADO:
+        raise HTTPException(400, detail=erro(
+            "erro_estilo_invalido",
+            f"estilo '{body.estilo}' nao existe. Use um de: {', '.join(narrar.ESTILOS_DITADO)}."))
+    texto, aviso = await asyncio.to_thread(narrar.limpar_ditado, body.texto, body.estilo)
+    aplicado = "cru" if (aviso or texto == body.texto) else narrar.estilo_efetivo(body.texto, body.estilo)
+    return {"text": texto, "aviso": aviso, "estilo_aplicado": aplicado}
 
 
 @app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])
@@ -3011,6 +3249,30 @@ async def session_plans(name: str):
     if r is None:
         raise HTTPException(404, detail=erro("erro_sem_pasta_planos", "repo sem pasta de planos"))
     return r
+
+
+@app.get("/api/orq", dependencies=[Depends(require_auth)])
+async def orq_lista():
+    """Execucoes de orquestracao (eventos.jsonl escrito pelo arbitro), mais recentes primeiro.
+    A lista vem SEM os eventos crus — quem quer a linha do tempo pede o detalhe."""
+    execs = await asyncio.to_thread(orq.listar_execucoes, orq.raiz_padrao())
+
+    def _resumo(e):
+        d = asdict(e)
+        d.pop("eventos_execucao", None)
+        for t in d["tasks"]:
+            t.pop("eventos", None)
+        return d
+
+    return {"execucoes": [_resumo(e) for e in execs], "fichas": orq.fichas(execs)}
+
+
+@app.get("/api/orq/{exec_id}", dependencies=[Depends(require_auth)])
+async def orq_detalhe(exec_id: str):
+    e = await asyncio.to_thread(orq.detalhe, orq.raiz_padrao(), exec_id)
+    if e is None:
+        raise HTTPException(404, detail=erro("erro_nao_encontrado", "execucao nao encontrada"))
+    return asdict(e)
 
 
 class PlanPinBody(_StrictBody):
@@ -3318,12 +3580,21 @@ def list_runners(name: str):
 @app.post("/api/sessions/{name}/run", dependencies=[Depends(require_auth)],
           response_model=RunInfo)
 def start_runner(name: str, body: RunBody):
-    return runner.start_run(_session_cwd(name), body.command)
+    # RunnerError = "o play NAO aconteceu" (a sessao velha sobreviveu, ou o new-session falhou).
+    # Antes isso virava 200 com o estado da sessao VELHA dentro; 500 cru tambem nao serve, porque
+    # o texto diz o que houve e a tela do run mostra o detail, igual ao painel de projetos.
+    try:
+        return runner.start_run(_session_cwd(name), body.command)
+    except runner.RunnerError as e:
+        raise HTTPException(e.status, e.detail)
 
 
 @app.post("/api/sessions/{name}/run/stop", dependencies=[Depends(require_auth)])
 def stop_runner(name: str):
-    runner.stop_run(_session_cwd(name))
+    try:
+        runner.stop_run(_session_cwd(name))
+    except runner.RunnerError as e:
+        raise HTTPException(e.status, e.detail)   # `{"ok": True}` com o processo vivo era mentira
     return {"ok": True}
 
 
@@ -4004,14 +4275,14 @@ _engine_models_cache: dict[str, tuple[float, list[dict]]] = {}
 # eventos de semanas, nao de horas. Uma hora (o valor antigo) fazia o `/model` reaparecer no
 # terminal do usuario "sozinho" no meio de sessoes longas, e cada restart do backend zerava o
 # cache em memoria e relia tudo de novo — dai o espelho em DISCO, dentro do proprio config dir
-# (`.claude-pocket-models.json`): a leitura dirigida do picker vira acontecimento raro.
+# (`.hangar-models.json`): a leitura dirigida do picker vira acontecimento raro.
 # A chave e o config dir, nao a sessao: a lista vem da CONTA, e a mesma pra todas as sessoes dela.
 _CLAUDE_MODELS_TTL = 7 * 24 * 3600.0
 _claude_models_cache: dict[str, tuple[float, dict]] = {}
 
 
 def _models_cache_path(chave: str) -> Path:
-    return Path(chave) / ".claude-pocket-models.json"
+    return Path(chave) / ".hangar-models.json"
 
 
 def _models_cache_get(chave: str) -> dict | None:
@@ -4019,7 +4290,7 @@ def _models_cache_get(chave: str) -> dict | None:
     if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
         return hit[1]
     try:
-        bruto = json.loads(_models_cache_path(chave).read_text(encoding="utf-8"))
+        bruto = json.loads(migracao_sidecars.caminho_de_leitura(_models_cache_path(chave)).read_text(encoding="utf-8"))
         resp = bruto["resp"]
         if not isinstance(resp, dict) or time.time() - float(bruto["ts"]) >= _CLAUDE_MODELS_TTL:
             return None
@@ -4125,6 +4396,12 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
         try:
             return {"kind": "pi", "reduced": False,
                     "models": await asyncio.to_thread(pi_catalog.listar)}
+        except pi_catalog.PiAusente as e:
+            # Codigo proprio: "nao achei o pi" nao e "o pi falhou". Antes isso chegava como
+            # `[WinError 2] O sistema nao pode encontrar o arquivo especificado` dentro da mensagem
+            # de falha do comando — a pessoa ia procurar defeito no `pi --list-models` de um pi que
+            # nem estava instalado ali.
+            raise HTTPException(502, detail=erro("erro_pi_ausente", str(e), erro=str(e)))
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
     if provider == "kimi":
@@ -4206,7 +4483,7 @@ async def engine_model_set(name: str, body: EngineModelBody):
 
 # ── Modelo + raciocinio de uma sessao Pi ────────────────────────────────────────────────────────
 # Rotas separadas das do Claude (/model-effort, picker do TUI) e das do Codex (/models, app-server)
-# porque o mecanismo e um terceiro: a extensao cp-state.ts publica o catalogo num sidecar e expoe
+# porque o mecanismo e um terceiro: a extensao hangar-state.ts publica o catalogo num sidecar e expoe
 # dois comandos que aplicam a troca pela API do Pi. Ver app/pi_models.py pro porque de nao raspar
 # o TUI aqui.
 
@@ -4275,7 +4552,7 @@ async def _pi_catalog(name: str) -> tuple[dict, str]:
         # mesma (extensao velha/ausente) e o conserto e um comando.
         raise HTTPException(409, detail=erro("erro_catalogo_pi_indisponivel",
                                              "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh "
-                                             "e reinicie a sessao (extensao cp-state.ts desatualizada)"))
+                                             "e reinicie a sessao (extensao hangar-state.ts desatualizada)"))
     return cat, info.jsonl
 
 
