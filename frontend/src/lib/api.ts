@@ -819,6 +819,19 @@ export async function getPlan(name: string): Promise<PlanDetail | null> {
   return res.json() as Promise<PlanDetail>;
 }
 
+// Mesmo /plan, mas de UM servidor explícito — a tela Orq mostra a execução de qualquer máquina da
+// malha, e a sessão executora dela pode não estar no servidor ativo. `fetch` cru pelo mesmo motivo
+// do getPlan acima: 404 aqui é "sem plano ativo", não falha.
+export async function getPlanForServer(s: Server, name: string): Promise<PlanDetail | null> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/plan`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status}: ${await errorDetail(res)}`);
+  return res.json() as Promise<PlanDetail>;
+}
+
 // Um plano do repo, pro seletor. Inclui os NÃO começados (0/N) e os completos, que a eleição
 // automática descarta — são justamente os que o usuário precisa poder escolher na mão.
 export interface PlanListItem {

@@ -6,6 +6,7 @@
   import type { OrqExecucao, OrqFicha } from '../lib/types';
   import { duracaoLegivel } from '../lib/orq';
   import Spinner from '../components/Spinner.svelte';
+  import OrqAgora from '../components/OrqAgora.svelte';
 
   interface Props {
     onBack?: () => void;                       // só no celular: a tela é rota própria lá
@@ -71,6 +72,27 @@
   // Mesma chave de identidade do Costs: token entra (consertar credencial recarrega), rótulo não.
   const chaveServidores = $derived(servidores.map((s) => `${s.id}|${s.baseUrl}|${s.token}`).join('\n'));
   $effect(() => { chaveServidores; carregar(untrack(() => servidores)); });
+
+  // ── Execução viva ──────────────────────────────────────────────────────────
+  // `fim === null` = ninguém escreveu execucao_fim ainda. A faixa precisa dos EVENTOS (rodada,
+  // veredito), que só vêm no detalhe — então ela busca o detalhe daquela execução, uma vez.
+  const viva = $derived(linhas.find((l) => !l.exec.fim) ?? null);
+  let vivaComEventos = $state<ExecComServidor | null>(null);
+  $effect(() => {
+    const alvo = viva;
+    if (!alvo) { vivaComEventos = null; return; }
+    let vivo = true;
+    (async () => {
+      try {
+        const completo = await getOrqDetalheForServer(alvo.servidor, alvo.exec.id);
+        if (vivo) vivaComEventos = { exec: completo, servidor: alvo.servidor };
+      } catch {
+        // Sem o detalhe a faixa simplesmente não aparece — a lista abaixo continua inteira.
+        if (vivo) vivaComEventos = null;
+      }
+    })();
+    return () => { vivo = false; };
+  });
 
   // ── Detalhe ────────────────────────────────────────────────────────────────
   let aberta = $state<ExecComServidor | null>(null);
@@ -259,6 +281,14 @@
     </div>
   {:else}
     <!-- ── VISÃO GERAL ─────────────────────────────────────────────────── -->
+    {#if vivaComEventos}
+      <!-- Numa div DESTE componente: o `max-width` de `.orq > *` é CSS escopado, e Svelte só marca
+           elementos do próprio arquivo — a faixa vinha larga demais, fora do bloco. -->
+      <div class="faixa-agora">
+        <OrqAgora execucao={vivaComEventos.exec} servidor={vivaComEventos.servidor} {onNavigateToChat} />
+      </div>
+    {/if}
+
     <section class="kpis">
       <div class="kpi"><span class="v">{linhas.length}</span><span class="l">{m.orq_execucoes()}</span></div>
       <div class="kpi"><span class="v">{tempoSomado}</span><span class="l">{m.orq_tempo_somado()}</span></div>
