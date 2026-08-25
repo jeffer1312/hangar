@@ -239,6 +239,10 @@ if [ -d shell ] && [ -f shell/package.json ]; then
     else
       # Não derruba a atualização: o app funciona no navegador sem a janela nativa.
       falta "npm ci do shell/ falhou — a janela nativa pode não abrir (rode: cd shell && npm ci)"
+      # Marca canônica (não traduzida, não colorida): é como o motor da atualização sabe que algo
+      # ficou pra trás sem o instalador precisar falhar inteiro. Sem ela, a tela dizia "Atualizado"
+      # com a janela nativa quebrada, e a única pista era uma linha amarela perdida no log.
+      echo "##HANGAR-AVISO## a janela nativa (Electron) ficou com dependencias desatualizadas"
     fi
   else
     ok "janela nativa já com as dependências em dia"

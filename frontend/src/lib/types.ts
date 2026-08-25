@@ -644,6 +644,8 @@ export interface AtualizacaoEstado {
   log?: string[];
   /** Quando a etapa atual começou — a tela conta daqui pra mostrar que não travou. */
   etapa_inicio?: string;
+  /** Terminou bem, mas algo ficou pra trás (ex: dependências da janela nativa). */
+  avisos?: string[];
   commit_de?: string;
   commit_para?: string;
   ts?: string;

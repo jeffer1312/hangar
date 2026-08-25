@@ -1980,5 +1980,6 @@
   "atualizar_esconder_log": "esconder",
   "atualizar_procurar_curto": "Procurar atualização",
   "atualizar_procurar_falhou": "Não consegui falar com o servidor.",
-  "atualizar_com_mudancas_locais": "com alterações locais não salvas no repositório"
+  "atualizar_com_mudancas_locais": "com alterações locais não salvas no repositório",
+  "atualizar_com_avisos": "Atualizado, mas algo ficou pendente:"
 }

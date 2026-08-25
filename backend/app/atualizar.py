@@ -326,6 +326,10 @@ def _git(*args: str, timeout: float = _TIMEOUT_PADRAO) -> subprocess.CompletedPr
 # (`\x1b[31mX\x1b[0m tmux faltando`). Medido ao vivo em 25/08/2026, apertando o botão.
 _ANSI = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
+# Como os instaladores dizem "terminei bem, MAS algo ficou pra trás". Marca em texto puro, sem
+# tradução e sem cor, justamente pra sobreviver a idioma e a `_ANSI`.
+_MARCA_AVISO = "##HANGAR-AVISO##"
+
 
 def _cauda(p: subprocess.CompletedProcess, linhas: int = 12) -> str:
     """As últimas linhas do erro, sem cor de terminal — é o que a tela mostra."""
@@ -473,6 +477,14 @@ def _reaplicar(topologia: str) -> None:
         p = _rodar(["bash", str(REPO / "install.sh"), "--update"])
     if p.returncode != 0:
         raise RuntimeError(f"a instalacao nao terminou: {_cauda(p)}")
+    # Avisos: o instalador pode terminar bem e mesmo assim ter deixado algo pra trás (o `npm ci` da
+    # janela nativa é o caso). Sem isto a tela dizia "Atualizado" e pronto — o que ficou quebrado
+    # só aparecia como uma linha no meio do log, que ainda por cima pode ter rolado pra fora.
+    avisos = [linha.split(_MARCA_AVISO, 1)[1].strip()
+              for linha in (p.stdout or "").splitlines() if _MARCA_AVISO in linha]
+    if avisos:
+        _escrever(avisos=avisos)
+        _log.warning("a instalacao terminou com avisos: %s", "; ".join(avisos))
 
 
 def _avisar_sessoes() -> None:
@@ -574,7 +586,7 @@ def _executar(porta: int) -> dict:
 
     if not pre.get("pode"):
         falta = ", ".join(pre.get("faltando") or []) or pre.get("erro", "desconhecido")
-        return _falhou(f"falta o que a atualizacao precisa: {falta}")
+        return _falhou(f"falta o que a atualizacao precisa: {falta}", porta=porta)
 
     try:
         _etapa("resguardar")
@@ -591,6 +603,11 @@ def _executar(porta: int) -> dict:
         _aplicar_passos()
 
         _etapa("instalar")
+        # Avisa ANTES do installer, e não antes da etapa "reiniciar": no Windows quem derruba e
+        # sobe o backend é o próprio `install.ps1 -Update`, chamado aqui — lá o aviso chegava
+        # depois do fato consumado. No Linux nada muda de ordem observável (o restart vem depois de
+        # qualquer forma), e avisar alguns segundos mais cedo não atrapalha ninguém.
+        _avisar_sessoes()
         _reaplicar(pre["topologia"])
 
     except Exception as e:                           # noqa: BLE001 — ver abaixo: é deliberado
@@ -600,7 +617,7 @@ def _executar(porta: int) -> dict:
         # gira a barra pra sempre, e a pessoa não descobre nem que falhou nem por quê. Medido: a
         # lista de tipos que estava aqui não pegava `PassoFalhou`, e um passo com prova falha
         # produzia exatamente isso.
-        return _falhou(str(e), de=de)
+        return _falhou(str(e), de=de, porta=porta)
 
     # O restart fica FORA do try acima, e a diferença não é cosmética: tudo lá em cima falha com o
     # servidor velho ainda no ar (`no_ar=True` é verdade). Aqui não — `systemctl restart` para o
@@ -609,7 +626,6 @@ def _executar(porta: int) -> dict:
     # tudo como estava".
     try:
         _etapa("reiniciar")
-        _avisar_sessoes()
         _reiniciar(pre["topologia"])
     except Exception as e:                           # noqa: BLE001 — mesmo motivo do de cima
         return _voltar(de, f"o servidor nao reiniciou: {e}", pre["topologia"], porta)
@@ -623,15 +639,19 @@ def _executar(porta: int) -> dict:
     return estado()
 
 
-def _falhou(msg: str, de: str = "", no_ar: bool = True) -> dict:
+def _falhou(msg: str, de: str = "", no_ar: bool | None = None, porta: int = 8765) -> dict:
     """Falha sem reversão. `voltou=False` é literal: ninguém trouxe a máquina de volta.
 
-    `no_ar` tem padrão `True` porque o caso comum é falhar ANTES do restart — ali o servidor velho
-    nunca saiu do ar. Mas nem toda falha é dessas: um `systemctl restart` que falha já derrubou o
-    processo antigo, e o rollback pode ele mesmo não conseguir voltar. Quem sabe disso passa
-    `no_ar=False`, e a tela diz que o serviço precisa de atenção em vez de afirmar que está no ar.
+    `no_ar=None` (o padrão) MEDE, não supõe. O padrão anterior era `True`, apoiado em "o caso comum
+    é falhar antes do restart, e ali o servidor velho nunca saiu do ar" — e isso é falso no Windows:
+    lá quem reinicia é o `install.ps1 -Update`, chamado na etapa *instalar*, que derruba a instância
+    velha ANTES de subir a nova. Uma falha dele deixa a máquina sem servidor nenhum, e a tela
+    afirmava "o que estava no ar continua no ar" — o oposto do estado real, mandando a pessoa
+    embora de um servidor morto. Perguntar custa um GET local com teto curto.
     """
     _log.error("atualizacao falhou: %s", msg)
+    if no_ar is None:
+        no_ar = _subiu(porta, teto=5.0)
     _escrever(fase="pronto", ok=False, erro=msg, voltou=False, no_ar=no_ar)
     return estado()
 

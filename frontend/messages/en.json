@@ -1980,5 +1980,6 @@
   "atualizar_esconder_log": "hide",
   "atualizar_procurar_curto": "Check for updates",
   "atualizar_procurar_falhou": "Could not reach the server.",
-  "atualizar_com_mudancas_locais": "with local changes not committed to the repository"
+  "atualizar_com_mudancas_locais": "with local changes not committed to the repository",
+  "atualizar_com_avisos": "Updated, but something was left pending:"
 }

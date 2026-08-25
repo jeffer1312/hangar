@@ -778,6 +778,11 @@ if (Test-Path "$shellDir\package.json") {
             # Nao derruba a atualizacao: o app funciona no navegador sem a janela nativa.
             Falta "npm ci do shell\ falhou (exit $rcShell) - a janela nativa pode nao abrir"
             Nota 'rodar na mao:  cd shell ; npm ci'
+            # Marca canonica (nao traduzida, nao colorida): e como o motor da atualizacao sabe que
+            # algo ficou pra tras sem o instalador precisar falhar inteiro. Sem ela, a tela dizia
+            # "Atualizado" com a janela nativa quebrada, e a unica pista era uma linha amarela
+            # perdida no log.
+            Write-Host '##HANGAR-AVISO## a janela nativa (Electron) ficou com dependencias desatualizadas'
         }
     } else {
         Ok 'janela nativa ja com as dependencias em dia'

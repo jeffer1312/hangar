@@ -109,7 +109,10 @@
         });
         parar();
         lancamos = false;
-        if (estado.ok === true && !faltaReiniciar) concluir();
+        // Com pendência, NÃO recarrega sozinho: o reload some com a caixa, e com ela o único lugar
+        // onde o aviso aparece — a pessoa nunca saberia que a janela nativa ficou quebrada. Aqui
+        // ela lê e fecha quando quiser.
+        if (estado.ok === true && !faltaReiniciar && !avisos.length) concluir();
       } catch (e) {
         // REGISTRA, não engole. O `catch {}` vazio que estava aqui escondia exatamente a classe de
         // erro que esta instrumentação existe pra pegar — e não protegia nada: no navegador, uma
@@ -223,6 +226,10 @@
 
   const passosComTexto = $derived((dados?.passos ?? []).filter((p) => p.texto.trim()));
   const invalidos = $derived(estado.passos_invalidos ?? []);
+  /** O instalador terminou bem, mas deixou algo pra trás (ex: dependências da janela nativa). */
+  const avisos = $derived(estado.avisos ?? []);
+  const terminouComAvisos = $derived(estado.fase === 'pronto' && estado.ok === true
+                                     && avisos.length > 0);
   const decorrido = $derived.by(() => {
     if (!rodando || !estado.etapa_inicio) return '';
     const s = Math.max(0, Math.round((agoraMs - new Date(estado.etapa_inicio).getTime()) / 1000));
@@ -295,6 +302,16 @@
           <pre class="log" bind:this={logEl}>{log.join('\n')}</pre>
         {/if}
       {/if}
+
+    {:else if terminouComAvisos}
+      <h2 class="titulo">{m.atualizar_em_dia_titulo()}</h2>
+      <p class="sub">{m.atualizar_com_avisos()}</p>
+      <ul class="avisos">
+        {#each avisos as aviso (aviso)}<li>{aviso}</li>{/each}
+      </ul>
+      <div class="acoes">
+        <button class="bt primario" onclick={onClose}>{m.atualizar_fechar()}</button>
+      </div>
 
     {:else if faltaReiniciar}
       <!-- Não recarrega a página: o servidor ainda serve o código antigo, e um reload aqui só
@@ -422,6 +439,8 @@
 
   .aviso { margin: 0 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted);
            line-height: 1.5; }
+  .avisos { margin: 0 0 var(--space-4); padding-left: 1.1em; }
+  .avisos li { font-size: var(--text-sm); color: var(--text-primary); line-height: 1.6; }
 
   /* Terminalzinho: o que está rodando agora. Fechado por padrão — quem quer ver, abre. */
   /* `padding: 0` deixava o texto encostar na borda de foco e sair cortado ("sconder"). */

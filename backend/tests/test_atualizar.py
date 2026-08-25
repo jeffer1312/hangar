@@ -271,6 +271,58 @@ def test_hangar_send_ausente_nao_derruba_a_atualizacao(repo, monkeypatch):
     atualizar._avisar_sessoes()   # não levanta
 
 
+def test_falhou_mede_se_o_servidor_esta_no_ar(repo, monkeypatch):
+    """Supor "no ar" é mentira no Windows: lá o installer já derrubou o backend antes de falhar.
+
+    A tela dizia "o que estava no ar continua no ar" com a máquina sem servidor nenhum.
+    """
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: False)
+    assert atualizar._falhou("deu ruim")["no_ar"] is False
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    assert atualizar._falhou("deu ruim")["no_ar"] is True
+
+
+def test_aviso_do_instalador_chega_no_estado(repo, monkeypatch):
+    """O instalador pode terminar BEM e ter deixado algo pra trás (a janela nativa é o caso).
+
+    Sem isto a tela dizia "Atualizado" e pronto, e o que ficou quebrado era uma linha perdida no
+    meio do log — que ainda por cima pode rolar pra fora do teto de 400 linhas.
+    """
+    class P:
+        returncode = 0
+        stdout = ("instalando\n"
+                  "##HANGAR-AVISO## a janela nativa (Electron) ficou com dependencias desatualizadas\n"
+                  "pronto\n")
+        stderr = ""
+    monkeypatch.setattr(atualizar, "_rodar", lambda *a, **kw: P())
+    atualizar._reaplicar("systemd")
+    assert atualizar.estado()["avisos"] == [
+        "a janela nativa (Electron) ficou com dependencias desatualizadas"]
+
+
+def test_sem_marca_nao_inventa_aviso(repo, monkeypatch):
+    class P:
+        returncode = 0
+        stdout = "tudo certo por aqui\n"
+        stderr = ""
+    monkeypatch.setattr(atualizar, "_rodar", lambda *a, **kw: P())
+    atualizar._reaplicar("systemd")
+    assert not atualizar.estado().get("avisos")
+
+
+def test_avisa_as_sessoes_antes_do_instalador(repo, monkeypatch):
+    """No Windows quem reinicia é o próprio installer — avisar depois dele é avisar tarde."""
+    ordem = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: ordem.append("avisou"))
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: ordem.append("instalou"))
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: ordem.append("reiniciou"))
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    atualizar.executar()
+    assert ordem == ["avisou", "instalou", "reiniciou"]
+
+
 def test_windows_nao_pede_reinicio_manual(repo):
     """No Windows o restart já aconteceu na etapa anterior, dentro do `install.ps1 -Update`.
 
