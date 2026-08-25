@@ -145,7 +145,19 @@ def _etapa(chave: str, **extra) -> None:
 _TETO_LOG = 400          # linhas guardadas no estado: o suficiente pra entender, sem inchar o JSON
 
 
+# Só o processo da ATUALIZAÇÃO escreve no log. O backend também chama `_git` (o pré-voo e o
+# changelog do `GET /api/atualizacao`, que a tela pede a cada 2s), e `_log_do_estado` é
+# ler-mesclar-gravar sem trava: os dois processos disputavam o mesmo arquivo e o backend
+# SOBRESCREVIA o que o motor tinha acabado de escrever. Efeito visto no Windows em 25/08/2026 — a
+# caixa mostrava só os comandos do endpoint, nenhum do `fetch`/`merge`/`install`, e parecia travada
+# na etapa 4. Pior que o log perdido: `_escrever` mescla o dict inteiro, então a disputa podia
+# levar junto `fase`, `passo` e `etapa`.
+_SOU_O_MOTOR = False
+
+
 def _log_do_estado(texto: str) -> None:
+    if not _SOU_O_MOTOR:
+        return
     """Acrescenta uma linha ao log que a tela mostra.
 
     A pessoa que aperta o botão fica olhando "Instalando dependências" por mais de um minuto sem
@@ -472,6 +484,8 @@ def executar(porta: int = 8765) -> dict:
     Ordem herdada do `deploy.sh`: tudo que pode falhar acontece **antes** do restart. Uma falha no
     meio deixa a máquina na versão anterior, inteira — que é o requisito duro deste botão.
     """
+    global _SOU_O_MOTOR
+    _SOU_O_MOTOR = True     # daqui pra frente este processo é o dono do estado e do log
     try:
         return _executar(porta)
     finally:

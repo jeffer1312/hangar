@@ -36,6 +36,10 @@ def repo(tmp_path, monkeypatch):
     # verdade, e quem troca o `Popen` por um dublê acaba interceptando a sonda em vez do
     # lançamento. O que o prefixo faz está coberto por `test_lancamento_usa_escopo_systemd`.
     monkeypatch.setattr(atualizar.tmux, "_scope_prefix", lambda: [])
+    # Nos testes o processo FAZ o papel do motor. Em produção esta chave só liga dentro de
+    # `executar()`, pra o backend (que roda os mesmos `_git` no endpoint) não escrever no log e
+    # sobrescrever o que o motor gravou.
+    monkeypatch.setattr(atualizar, "_SOU_O_MOTOR", True)
     return d
 
 
@@ -286,6 +290,19 @@ def test_sem_restart_nao_cobra_prova_de_vida(repo, monkeypatch):
     monkeypatch.setattr(atualizar, "_subiu", _nunca)
     final = atualizar.executar()
     assert final["ok"] is True and final["reiniciar_manual"] is True
+
+
+def test_backend_nao_escreve_no_log_do_motor(repo, monkeypatch):
+    """O `GET /api/atualizacao` roda `git` a cada 2s e mescla-e-grava o MESMO estado.
+
+    Sem esta trava, o backend sobrescrevia o log que o processo da atualização tinha acabado de
+    escrever — e, como `_escrever` mescla o dict inteiro, a disputa podia levar junto `fase` e
+    `passo`. Visto no Windows: a caixa mostrava só os comandos do endpoint e parecia travada.
+    """
+    atualizar._escrever(fase="rodando", log=["$ do motor"])
+    monkeypatch.setattr(atualizar, "_SOU_O_MOTOR", False)    # este processo é o BACKEND
+    atualizar._rodar(["sh", "-c", "echo do backend"])
+    assert atualizar.estado()["log"] == ["$ do motor"]
 
 
 def test_log_guarda_o_comando_e_a_saida(repo):
