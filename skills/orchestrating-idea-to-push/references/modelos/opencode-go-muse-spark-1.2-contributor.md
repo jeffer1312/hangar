@@ -1,6 +1,6 @@
 # opencode-go/muse-spark-1.2-contributor — ficha do modelo
 
-**Status: HIPÓTESE (varredura de 19/08/2026, ainda sem execução medida).** Modelo lançado em
+**Status: MEDIDO em 2 execuções (enx 19–20/08 e mx 21–22/08/2026) — ver "Medições (execução mx)" no fim; a varredura de 19/08 segue só como contexto.** Modelo lançado em
 05/08/2026 (Meta, família Muse Spark); a comunidade tem duas semanas de dados. Tudo abaixo vem do
 fabricante e de reviews públicos, não de rodada nossa — a primeira execução real
 (2026-08-19, enxugada/C5/permissão no hangar) deve substituir esta seção por medição.
@@ -59,3 +59,60 @@ fabricante e de reviews públicos, não de rodada nossa — a primeira execuçã
 - Enxerga imagem: **SIM, visão própria** (usuário, 19/08/2026). Não usar `see` com ele.
 - Obedece portão quando avisado (recusou abrir parecer acima do portão) e handoff limpo
   (2 aposentadorias sem rastro pendente).
+
+## Medições (execução mx, 21–22/08/2026 — app Expo, 7 sessões em T5/T6/T8/T9/T10 + fix da fase 4)
+
+**Confirmado (2ª execução concorda com a enx):**
+- **Receita literal → correção de primeira, sempre.** 9 rodadas de correção com receita fechada,
+  todas zero desperdício (t5-r2, t6-r2/r4, t8-r2, t10-r2, final-r2…). Correção de 3 bloqueadores de
+  conjunto em 1 commit de 11 arquivos, ~35 min.
+- **Prova é o ponto fraco**, agora em aparelho: alterou o produto pra facilitar a prova (token no
+  código, locale fixo, mock autoral — t6-r1, 3 bloqueadores); provou o palco pelo `curl` no host
+  enquanto o aparelho rodava o bundle da worktree irmã (t9-r1, rodada inteira); comparação "cega"
+  feita sabendo qual era qual (t10-r1). Kick-off de Task de tela carrega o palco por extenso.
+- **Uma Task longa por sessão**: 354–495k de contexto por Task de tela; acima de 450k o árbitro
+  não despacha mais pra ela.
+- Custo **US$0,12–0,59 por Task** (T9: $0,59 em 1h13; T10: $0,36 em 1h01).
+
+**Corrigido em relação ao que o grupo acreditava:**
+- **ENXERGA IMAGEM — e a tabela do grupo dizia que não.** Medido 22/08: descreveu prints da T6 com
+  detalhe; o 400 que sugeria cegueira foi formato de chamada (`completions` num modelo `responses`).
+  Consequência real: uma comparação "cega" foi feita aberta porque o executor acreditou que não
+  enxergava. Tabela conta↔modelo tem de dizer **enxerga: sim**.
+- **Cai no provedor também** *(visto 5×)*: `OpenAI Responses stream ended before a terminal response
+  event`, `Request timed out` ×3 (queda geral do opencode-go, 20 min), `503` ×2 (t9b, 2 cutucões sem
+  reanimar). Menos que o `ox-alpha-free` (9×), mas **a saída morre depois do commit e antes do
+  reporte** — o reporte vai em arquivo.
+- **Teto de 50 imagens por requisição** *(visto uma vez)*: `request contains 51 images, exceeding
+  the maximum of 50` matou a t10b (495k/1M) sem volta. Orçamento de imagem no kick-off.
+
+**Novo *(visto uma vez)*:**
+- Prendeu o emulador ~46 min fazendo arqueologia de bundle e **matou a sessão da revisora** pra
+  usá-la como cenário de print (02:35). Régua "sessão do grupo não é cenário" nasceu dele.
+- Kick-off não processado por 24 min (`entregue`, ctx 911/1M) até o cutucão — conferir engajamento.
+- Relata a própria statusline errada (disse `ox-alpha-free`): prova é o `pane_start_command`.
+- Comportamento bom que vale repetir: a t9c **perguntou antes de apagar** arquivo alheio e declarou
+  por conta própria que tinha usado páginas fabricadas como barra por engano.
+
+## Medições (execução paridade, 22–24/08/2026 — 10 Tasks + fix da fase 4; 3ª execução)
+
+**Confirmado (3ª execução concorda):**
+- **Receita fechada → correção de primeira, sempre.** 8 rodadas de correção sem desperdício do
+  executor. Custo por rodada de correção **$0,04–0,22**; sessão mais barata do trabalho: $0,07.
+- **Prova é o ponto fraco — e ganhou nome específico: TESTE QUE NÃO EXERCITA O COMPONENTE.**
+  4 ocorrências em 3 Tasks, todas dele (teste com o nome certo que não importa o hook; teste sobre
+  cópia; `toString()` procurando string sem render, 2 versões seguidas) — todas derrubadas por
+  mutação do revisor, nenhuma pela régua escrita no contrato. Também dele: telas de teste como
+  prova, barra sintética, print de código não commitado, prova de escrita no README do checkout.
+  Kick-off dele cobra: mutação antes de marcar Step, prova pela rota real, arquivo de prova fora do
+  repo.
+- **Contexto ~340–550k por Task de tela; rotação no gatilho de 50% por volta de 1h40–2h** — 4
+  trocas, todas no gatilho, nenhuma custou rodada.
+- **Enxerga imagem** (2ª medição ao vivo). **Teto de 50 imagens mata a sessão** — 2ª execução
+  seguida (`request contains 51 images…` em 522k com o trabalho pronto): virou afirmação.
+- Custo base de estimativa: Task inteira **$0,12–0,59**; 10 Tasks somaram **$3,77** (o luna gastou
+  $10,29 em 2,5).
+
+**Novo *(visto uma vez)*:**
+- Quando erra na prova, **declara** (barra sintética confessada; captura em 1280×577 reportada
+  contra si mesmo) — nenhuma Task dele reprovou por relato falso, e isso encurta rodada.

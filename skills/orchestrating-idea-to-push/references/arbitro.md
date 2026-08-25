@@ -14,9 +14,15 @@ Você é o único que escreve no contrato.
 
 ## Você mantém DOIS arquivos, e só um deles é lido pelo time
 
-- **`grupo-<gid>.md` — o registro.** O diário da execução: progresso Task→hash→veredito, o que
-  cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à vontade. **Só você
-  lê.** Não mande esse caminho a ninguém.
+- **`~/.claude/orq-retros/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
+  Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à
+  vontade. **Só você lê.** Não mande esse caminho a ninguém.
+
+  > **O registro mora no diretório durável do trabalho, que nada gerencia** — não em
+  > `<config>/.claude-pocket-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
+  > Medido em 22/08/2026: um executor matou a última sessão viva do grupo e o diário inteiro de 10h
+  > sumiu com ela; o árbitro teve de reconstruir de memória. **As regras continuam lá** — é o caminho
+  > que o app mostra ao time.
 - **`regras-<gid>.md` — as regras.** O que **ainda vale**: intocáveis, gates, réguas de
   julgamento, barra, o que a revisão precisa cobrir, teto e contas. É o que entra no kick-off,
   e ele deve caber em duas páginas.
@@ -78,7 +84,12 @@ cheio, e não se aplica antes da terceira rodada.
 kick-off inteiro e as regras por alto: régua enterrada na página 5 de um arquivo de 200 linhas não
 alcança quem nasceu depois dela. Medido em 16/08/2026 com a régua "parecer não mora em `/tmp`",
 decidida de manhã: **duas** das três sessões abertas depois dela salvaram prova em `/tmp` assim
-mesmo, e você teve de copiar os arquivos à mão.
+mesmo, e você teve de copiar os arquivos à mão. **Caso obrigatório dessa regra: os invalidadores de
+prova visual** (tamanho/viewport, idioma dos dois lados, borda da captura, print auto-suficiente —
+ver `executor.md`) **vão repetidos no kick-off de TODA Task visual**, mesmo já estando no contrato:
+são a única classe de régua cuja violação não produz erro nenhum — a prova sai bonita e é lixo.
+Medido em 23/08/2026: a régua do idioma existia no contrato, o kick-off da sessão nova não a
+repetiu, e a comparação cega saiu com um lado em `pt` e outro em `en` — uma rodada inteira.
 
 **Você decide quando os outros dois não bastaram — não refaz o que eles fazem.** Verificação
 tem dono: o executor roda, o revisor re-roda. "Conferir", pra você, é metadado do git contra o
@@ -157,6 +168,20 @@ do trabalho.
 
 ## O ciclo de uma Task
 
+**Antes de cada passe de bola — cinco linhas, na ordem, sempre:**
+
+1. A régua nova deste achado já está no `regras-<gid>.md`? Se não, escreva AGORA, antes de avisar a
+   sessão — sessão avisada repete o padrão na variação seguinte (medido 22/08/2026: o mesmo `adb logcat`
+   pendurado 3×, 77 min).
+2. Kick-off/receita em arquivo; mensagem = caminho, via `"$(cat <<'EOF' … EOF)"` — nunca aspas duplas cruas.
+3. `entregue` lido? Agora confira engajamento: o ctx saiu do zero em 1 min? (medido: 24 min perdidos sem isso).
+4. Vigia reescrita com quem tem a bola AGORA (medido: 5 alarmes falsos numa execução, 10 na anterior).
+5. Registro: a linha do evento entra antes da próxima ação.
+
+Essas cinco não são novidade — as quatro primeiras já estavam escritas nesta página, em prosa, e mesmo
+assim foram furadas pelo árbitro numa execução de 24h. Régua em prosa não protege na hora do despacho;
+por isso viraram checklist, aqui em cima.
+
 1. Você libera **uma** Task ao executor.
 2. Ele executa, marca os Steps, roda as verificações, commita só os paths da Task e para.
 3. Ele reporta hash, saída dos testes, `git status --short`, riscos.
@@ -225,6 +250,12 @@ As cinco regras que saem disso, e as cinco são baratas:
 5. **Número que você reporta traz o escopo da medição** — o que entrou na conta e de onde. "Órfãos:
    746" sem dizer que só um diretório foi contado é um número errado com cara de medição, e quem
    corrigiu foi o executor.
+6. **Capacidade de modelo se prova NA SESSÃO, com uma leitura de 10 segundos — nunca se copia de
+   contrato de outro trabalho.** A instrução do árbitro vira fato para o executor: ele não tem como
+   conferir o que você afirma sobre ele mesmo. Medido em 22/08/2026: "você NÃO enxerga imagem",
+   copiado do contrato do plano anterior contra a tabela do plano atual, entrou num handoff, o
+   executor o reproduziu em caixa alta no reporte e a comparação cega da Task não foi feita — a
+   medição real (um `Read` num PNG) levou 10 segundos e derrubou a afirmação.
 
 ## A correção não passa por você
 
@@ -330,7 +361,7 @@ Depois do "pode ir", você decide. Estes três são **automáticos**, sem espera
 | Sessão sem reportar há 15 min | `cp-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca. **`working` também se confere**: olhe o ÚLTIMO comando dela — igual há 3 leituras é loop, não trabalho (medido 17/08/2026: 1.231× o mesmo comando por 3h, `working` o tempo todo) |
 | **Sessão do time sumiu e não foi você que fechou** | **abre outra e continua.** Não investigue. |
 | Escritor acima de **50% da própria janela** (500k numa de 1M) | **não recebe mais despacho: a troca vem ANTES da próxima rodada, sempre.** "No próximo marco" não existe — o marco pode não chegar (medido 17/08/2026: 65% da janela sem troca, cada chamada custando 2,6× a da primeira hora, numa Task que nunca fechou). E trocar não refaz prova: os prints vivem no diretório durável |
-| **Revisor acima de 85% da própria janela** | abre a substituta **antes** de a correção chegar — e **despachar rodada pra quem já avisou que passou é proibido** (medido: rodada mandada a 86%, estourou 100% no meio do julgamento) |
+| **Revisor acima de 50% da própria janela — OU cujo `ctx atual + custo medido de uma rodada` passe do teto** | abre a substituta **antes** de a correção chegar — e **despachar rodada pra quem já avisou que passou é proibido** (medido: rodada mandada a 86%, estourou 100% no meio do julgamento). O gatilho é igual ao do escritor (decisão do usuário, 23/08/2026, corrigindo o 85% que valia aqui: *"vc não abriu uma nova sessão pro review? ele já tava com mais de 600k"*). **Meça o custo de uma rodada na primeira Task e SOME antes de despachar**: uma rodada de julgamento de tela custou **~120k** (476k → 597k) — 483k está abaixo de 50%, mas 483k + 120k fecha em ~600k, então a substituta abre antes |
 | Mesma causa reprovada 2× | pede ao revisor receita com abordagem nova — ou rotaciona o revisor. Você não desenha receita. |
 
 **O gatilho é fração, não número absoluto.** O teto de 500k nasceu do escritor de janela de 1M e não
@@ -345,7 +376,7 @@ um modelo de **janela larga**, ele numa Task de tela desde a **rodada 1** é a e
 sustentam — 3 sessões cobriram as 4 Tasks e 8 pareceres da outra metade do mesmo trabalho, sem
 nenhuma compactação. Isso é **sugestão pro plano**, e quem escolhe é o usuário: janela larga pode
 não existir na conta dele, e **nenhuma régua deste tubo depende de ela existir** — sem ela, vale o
-gatilho de 85% acima, que é o que faz a rotação acontecer a tempo.
+gatilho de 50% + custo da rodada acima, que é o que faz a rotação acontecer a tempo.
 
 E a linha entre decidir e acordar o usuário:
 
@@ -361,6 +392,30 @@ E a linha entre decidir e acordar o usuário:
 | Outra sessão escrevendo na árvore | resolve com ela; não resolveu, **acorda** |
 | Item da fase 1 faltando no plano (sem teto, sem intocáveis) | **decide** o default conservador, registra como decisão sua, conta depois |
 | Task mexe em pixel e o plano não trouxe **barra** | **acorda** — ver abaixo. É a exceção da linha acima: barra não tem default conservador |
+
+### Perguntar tem NOTA — e abaixo de 8 o tubo não para
+
+A tabela acima diz **quando** acordar; esta régua diz **o que fazer enquanto a resposta não vem**
+(pedido do usuário, 24/08/2026: *"vc ficou mais de 6 hrs esperando uma resposta que não era difícil
+de saber o que fazer, isso não é autonomia (…) precisa de um timeout (…) um tipo de classificação"*).
+Três eixos; vale o **maior**:
+
+| Eixo | 0–3 | 4–7 | 8–10 |
+|---|---|---|---|
+| **Desfazer** | um commit desfaz | custa outra rodada | não desfaz: push, MR, dinheiro, apagar coisa do usuário |
+| **Autoria** | conserta o que ele já pediu | escolhe entre caminhos equivalentes | muda **o que o produto faz** — escopo, arquitetura, contrato público |
+| **Conta dele** | dentro da tabela | dentro da tabela, mas caro | **fora** da tabela |
+
+- **8+** → para e espera. São as que não voltam atrás.
+- **4–7** → **pergunta SEM parar**: declara a decisão, o padrão que vai seguir, e segue. O usuário
+  corrige quando ler.
+- **0–3** → decide, registra, conta depois.
+
+Medido em 22–24/08/2026: **~8h30 de fila parada em três perguntas que pontuavam 2, 2 e 6** — e nas
+três a resposta foi a recomendada ("qual modelo pra aplicar receita já fechada?" pontua 2 e custou
+~6h; "trocar pro modelo irmão do contrato?" pontua 2 e custou 2h; "rodada 4 ou replanejar?" pontua 6
+e custou 20 min). A régua rodou uma vez ainda no evento — abrir a fase 5 pontuou 1 e foi decidido
+sem perguntar.
 
 Parar **entre** Tasks é limpo; parar **durante** deixa a árvore num estado que ninguém
 entende depois. Ao acordar o usuário, entregue a decisão pronta: o que está em jogo, as
@@ -435,7 +490,7 @@ Use o script que já vem com a skill:
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 \
-  -d <config>/.claude-pocket-pair/grupo-<gid>.md
+  -d ~/.claude/orq-retros/<data>-<gid>/registro.md
 ```
 
 **Os minutos vão por flag (`-m 5`), NUNCA como número solto no fim.** Com mais de três sessões, o
@@ -462,12 +517,17 @@ todos os escritores, porque ali todos têm — uma vigia só, com todos eles den
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
-  -d ~/.claude/.claude-pocket-pair/grupo-<gid>.md
+  -d ~/.claude/orq-retros/<data>-<gid>/registro.md
 ```
 
-**Ninguém com a bola = vigia desarmada.** Time sem trabalho (tudo aprovado, esperando decisão do
-usuário) com a vigia viva só produz alarme falso e cutucão em sessão paga. Desarme, e rearme quando
-a bola voltar.
+**Ninguém com a bola = vigia desarmada — e a bola com o USUÁRIO também é ninguém com a bola.** Time
+sem trabalho (tudo aprovado, esperando decisão do usuário) com a vigia viva só produz alarme falso e
+cutucão em sessão paga. Desarme **antes** de perguntar ao usuário, e rearme quando a resposta
+chegar. Árbitro em `awaiting_input` esperando resposta humana não é árbitro caído — é o estado
+legítimo de quem já entregou a decisão; a vigia não distingue os dois, e quem distingue é você, que
+é justamente quem ela acorda. Medido em 24/08/2026: vigia deixada apontada para uma sessão que já
+tinha ENTREGADO disparou **dezenas** de alarmes em ~3h30 e cobrou silêncio de um registro que não
+tinha o que registrar.
 
 Medido em 17–18/08/2026: **dez alarmes falsos, todos da mesma família** — sessão parada por ordem do
 árbitro lida como sessão quebrada. Dois por sessões que a tabela do contrato previa e que o árbitro
@@ -497,12 +557,21 @@ foi exatamente o que aconteceu. Um `cp-send` entra como **prompt** e reanima tur
 `--tmux` é obrigatório: o `cp-send` normal **recusa** falar com sessão Claude da mesma máquina
 (rc=3, "use SendMessage"), e um script de shell não tem `SendMessage`.
 
-**3. Ela só dispara quando TODAS estão paradas.** Árbitro parado com alguém trabalhando é o estado
-**normal** — ele está esperando, e acordá-lo ali é ruído que gasta o token mais caro da mesa. A
-condição só fecha quando ninguém está com a bola. `sumiu` conta como parado: sessão morta também
-não está trabalhando. Duas exceções avisam na hora, sem esperar o silêncio: sessão **travada** (diz
-`working` mas não produz evento há 10 min) e sessão **sem cota** — as duas são paradas que não se
-desfazem sozinhas.
+**3. Ela dispara quando o DONO DA VEZ para — não quando todos param.** Árbitro parado com alguém
+trabalhando é o estado **normal** (ele está esperando, e acordá-lo ali é ruído). `sumiu` conta como
+parado: sessão morta também não está trabalhando. Duas exceções avisam na hora, sem esperar o
+silêncio: sessão **travada** (diz `working` mas não produz evento há 10 min) e sessão **sem cota**.
+
+> **Por que não "todas paradas", que era a regra até 22/08/2026.** Duas medições que a condição
+> antiga não concilia: em 14/08 o árbitro morreu por 2h30 e o time parou junto — por isso ele
+> **continua na lista**; e em 22/08 um executor ficou **mais de 30 minutos morto sem nenhum alarme**,
+> porque o árbitro, conversando com o usuário, contava como "trabalhando" e mascarava o silêncio dele.
+> Quem percebeu foi o usuário. Ou seja: com o árbitro dentro, a condição "todas paradas" fica cega
+> justamente para o caso que a vigia existe pra cobrir. O árbitro é vigiado por regra própria —
+> árbitro parado **com relato na fila** é alarme; árbitro respondendo ao usuário não mascara ninguém.
+>
+> Enquanto o script não distinguir os dois papéis, o paliativo é **tirar o árbitro da lista sempre
+> que houver executor com a bola** e devolvê-lo quando ninguém tiver.
 
 **A prova de que ela funciona é o alarme sintético CHEGAR.** Ao armar, a vigia dispara sozinha um
 `[vigia] ARMADA ...` para você, **pelo mesmo caminho dos alarmes reais** — se esse prompt chegou na
@@ -571,6 +640,10 @@ O que fazer, em ordem, sem perguntar a ninguém:
 1. **Leia o transcript da sessão morta** (`~/.claude*/projects/<cwd-sanitizado>/<uuid>.jsonl`, o mais
    recente, mensagens `type: "assistant"`). Ela pode ter **produzido** o parecer ou o reporte e
    morrido antes de enviar — nesse caso o trabalho não se perdeu e você nem precisa refazer.
+   **E olhe o pane antes de pedir qualquer coisa de novo**: `tmux capture-pane -p -t "=<nome>:" -S -200`.
+   Com o canal de saída morrendo (acontece em provedor instável), o reporte inteiro fica **na tela**,
+   completo, sem nunca ter saído. Medido em 22/08/2026: um reporte de Task com prints descritos um a um
+   estava ali o tempo todo; quem percebeu que a sessão "não conseguia enviar" foi o usuário.
 2. **Abra a substituta** pela receita de sempre (criar → provar → pedido em arquivo → conferir a
    entrega), com o kick-off completo: papel, HEAD esperado, intocáveis literais, contrato, plano, e o
    commit ou a receita da vez.
@@ -589,6 +662,27 @@ Trocar **no meio do portão** é permitido — e obrigatório — em dois casos:
 - **falha repetida na mesma causa** (a mesma classe de defeito voltando round após round), ou
 - **contexto acima de metade da própria janela** (~500k numa de 1M — a fração é que manda, ver
   "Autonomia — gatilhos").
+
+**Provedor caindo NÃO é motivo de troca; rendimento é.** Queda que a vigia reanima custa minutos, e
+trocar joga fora o contexto inteiro. A medida certa é **quanto a sessão anda entre as quedas**: troque
+quando o ctx mal se move de uma queda pra outra (medido em 22/08/2026: 9k de contexto em 35 minutos,
+numa Task que já ia em 2h36 sem commit — a substituta commitou em 20 min), ou quando a queda **não
+reanima em dois cutucões**. Um mesmo modelo caiu 8 vezes numa execução e ainda assim entregou a melhor
+prova visual dela: contar quedas não decide nada.
+
+**A passagem pra substituta tem TETO: 25 linhas, em arquivo** — HEAD, `git status`, o que está no disco
+sem commit, o que falta, e as armadilhas já conhecidas. Medido no mesmo trabalho: uma passagem de 14 KB
+não foi lida pela sucessora; a de 25 linhas foi, e ela continuou de onde a anterior parou.
+
+**Aposentar é um ATO, com mensagem — "parar de mandar trabalho" não aposenta ninguém.** Turno morto
+por provedor **volta a viver** e retoma de onde parou, e aí há dois escritores no mesmo palco. A
+ordem de parada diz: pare, não capture, não commite, **solte o palco sem matá-lo**, nada se perdeu.
+E **no mesmo ato, avise quem pode mandar receita pra ele** — o REPROVA vai direto do revisor ao
+executor, por desenho, e o revisor não sabe do endereço novo. Medido em 22–23/08/2026: uma sessão
+"aposentada" sem ordem escrita ressuscitou capturando no mesmo Metro, emulador e fixture da
+substituta (quem evitou os dois escritores foi ela perguntando, não o árbitro avisando); e uma
+receita foi despachada a uma sessão já fechada em 631k porque o revisor não tinha sido avisado.
+Avisado ANTES do fato (rodada seguinte), o caso não se repetiu.
 
 Não existe "espero o portão fechar pra trocar": o portão pode não fechar, e aí a sessão
 saturada continua produzindo rounds cada vez piores. O primeiro relatório factualmente
@@ -664,7 +758,11 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 - **Você respondendo "não parei" quando o usuário diz que você parou.** Queda de API é invisível de
   dentro: teu último turno parece ter acabado agora. Ele está olhando o relógio; você não. Aceite,
   confira o estado do par, e retome.
-- Executor no mesmo modelo/família do revisor.
+- **A SESSÃO que executou revisando o próprio commit** — inclusive depois de um `/clear`. Sessões
+  separadas no mesmo modelo estão liberadas: a independência do portão vem do CONTEXTO, não do
+  modelo (usuário, 23/08/2026: *"o modelo é agnóstico, ele não sabe o que ele executou (…) uma nova
+  sessão com o mesmo modelo, tudo bem"* — a redação antiga, "mesmo modelo/família", custou uma
+  inversão de time sem necessidade).
 - **Worktree removida sem conferir o rastro dela na configuração global** (`paralelo-worktree.md`):
   depois de removida, o rastro aponta pra um caminho que não existe mais e o estrago fica silencioso.
 

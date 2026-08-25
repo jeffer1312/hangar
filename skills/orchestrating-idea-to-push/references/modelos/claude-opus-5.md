@@ -98,3 +98,26 @@ conta dele.
   hora — e escopo"): baseline de duas horas antes, `ahead` sem `fetch`, autoria por correlação de
   horário, contagem de um diretório reportada como total, e "não é isso" a uma suspeita do usuário
   que estava certa — duas vezes.
+
+## Esforço `medium` (execução paridade, 22–24/08/2026) — *(visto uma vez cada; não é afirmação ainda)*
+
+- **Como REVISOR, qualidade indistinguível do `high`:** 3 bloqueadores reais numa Task (parecer de
+  449 linhas, dois só alcançáveis tocando o aparelho), o bloqueador de rótulo da seguinte medido na
+  tela, e **reprovou a própria receita com medição** (5 aberturas, 4 falhas) — provando
+  independência de capturas por md5 + relógio dentro do quadro. Nenhum bloqueador perdido
+  atribuível ao esforço. Consumo: **~120k por rodada de Task de tela** (476k → 597k) — é o número
+  que alimenta a régua de rotação (fração + custo da rodada).
+- **Como ÁRBITRO, sem erro de julgamento atribuível ao esforço:** segurou despacho com prova visual
+  pela metade (economizou ~120k de rodada do revisor), quebrou o hash único de propósito quando a
+  correção não coube num commit, apertou o critério de família na 2ª recidiva (o portão fechou em 1
+  rodada), levou decisão de replanejar pronta com a recomendação certa. Os dois erros dela (vigia
+  apontada pra sessão que já tinha entregado; ~6h de fila numa pergunta nota 2) são de **processo**
+  — o `high` cometeu equivalentes no mesmo trabalho (2h de fila numa escolha já autorizada; revisora
+  criada com effort errado por contrato omisso).
+- Leitura para o plano: `medium` serve para árbitro e revisor; o que decidiu a qualidade do portão
+  foram as réguas e a mutação, não o esforço. **Confirmar numa segunda execução antes de virar
+  recomendação.**
+- Armadilha de criação (mora no contrato de cada trabalho, não aqui): sessão Claude criada por API
+  **nasce em `high`** — o effort é um segundo passo, e a prova é a **statusline** (`medium✦`), não o
+  `pane_start_command`, que não mostra esforço. Uma revisora rodou uma Task inteira em `high` sem
+  ninguém notar até o usuário cobrar.

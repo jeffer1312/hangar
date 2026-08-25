@@ -97,6 +97,13 @@ Além do que o `writing-plans` já pede, o plano carrega:
   régua pegou a Montagem estourando (3h–6h → 10h50, documentado na hora); a de 16–17/08 não
   escreveu para as Tasks 1–5 e uma Task rodou **4h19 de captura com zero commits** sem nenhum
   número gritando. Plano sem esse arquivo não passa no portão de saída.
+  **Time com mais de um executor autorizado: a estimativa traz o consumo POR MODELO, não só por
+  Task** — em **cota e contexto** (as contas são assinatura; não há fatura por token pra analisar):
+  contexto esperado por Task, sessões por Task e qual conta/janela cada modelo gasta — e a régua de
+  quando o modelo pesado entra declarada junto. Medido em 23/08/2026: na mesma Task, um modelo
+  fechava rodadas em ~340–550k de contexto por sessão e o outro consumia a janela ~10× mais rápido
+  na mesma conta — os dois autorizados, e a linha única da estimativa não descrevia nenhum. As
+  fichas de `references/modelos/` são a fonte do número por modelo.
 - **Pré-condição externa com DONO**: todo Step cuja prova depende de coisa que o executor não
   controla no turno (servidor de pé, sessão tmux, conta de teste, elemento na tela) declara quem a
   cria — e o dono é **o próprio executor**, como Step anterior explícito ("suba o backend na porta
@@ -381,6 +388,27 @@ Antes de fechar o plano:
 O que você não conseguir rodar entra marcado: `<!-- NÃO VERIFICADO: … -->`. O executor trata isso
 como descrição, não como receita — e é infinitamente melhor que ele descobrir sozinho no meio da
 Task.
+
+Quatro coisas que o plano erra **calado**, e as quatro custaram rodada ou bloqueador em 21–22/08/2026:
+
+- **Toda afirmação sobre COMPORTAMENTO de lib externa leva a marca, ou o trecho do fonte instalado
+  colado junto** — não só o nome da API. "A opção X é um watchdog" e "depois do `error` a lib para de
+  reconectar" são exatamente as frases que erram sem avisar: as duas erraram no mesmo trabalho, a
+  primeira custou uma rodada e a segunda virou bloqueador de conjunto na revisão da branch. Nome de
+  API o `tsc` cobra; comportamento, ninguém.
+- **Task que MOVE arquivo lista os consumidores do caminho antigo** — e não são só imports: infra
+  (CI, deploy, instalador) e **testes que varrem a árvore** (`i18nGuard`, `boundary`) apontam por
+  string. A trava de texto cru que varria `frontend/src` ficou cega para os 6 módulos que foram pro
+  core e para o `mobile/` inteiro, e ninguém viu até a fase 4. Some a isso o `vi.mock`, que aponta
+  caminho por string e não aparece em busca por `import` nem no compilador.
+- **Estado compartilhado entre Tasks é decisão de desenho escrita no CABEÇALHO do plano**, não dentro
+  de uma Task. "Servidor ativo global × servidor da rota" atravessou 5 Tasks aprovadas uma a uma e só
+  apareceu na revisão do conjunto — como bloqueador número 1.
+- **O portão de saída da fase 1 não fecha com `___` no arquivo de estimativas.** A linha "cota dos
+  provedores" ficou em branco e o custo apareceu no meio do lote: `429` do provedor e quatro sessões
+  trocadas de conta às pressas. E **estime ≥2 sessões por Task em provedor que cai** — foram 23
+  sessões executoras para 10 Tasks; a ficha do modelo, em `references/modelos/`, diz quantas quedas
+  por hora esperar.
 
 ## Portão de saída da fase 1 — checklist fechado, agnóstico de método
 

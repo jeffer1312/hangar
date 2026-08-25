@@ -277,6 +277,20 @@ fora da regra que as quatro irmãs seguiam; e o defeito que atravessou a branch 
 Task olhou o próprio arquivo. **Custo do remédio: um `git grep` de quatro segundos.** Custo de não
 fazer, medido: quatro rodadas de executor e um defeito que só a revisão de conjunto pegou.
 
+**Commit de CORREÇÃO tem duas perguntas fixas, e elas são espelhadas:** (1) *o que este commit mudou
+de identidade ou de ciclo de vida — e o que passou a RE-EXECUTAR por causa disso?* Se a resposta for
+"uma limpeza/desligamento destrutivo", o teste exigido é o que re-executa **durante a operação**,
+não o caminho feliz. (2) *O que passou a NÃO re-executar?* Quando a correção tira algo de uma
+condição ou lista de dependências, cobre a prova do **caminho que aquilo existia para servir** — o
+desfecho inteiro, não "a referência aponta pro lugar novo". A primeira pega o conserto que quebra; a
+segunda, o conserto que desliga. E na escolha da receita, **tirar a armadilha vence apagar o
+sintoma**: rotina destrutiva não pode depender da identidade de quem a chama. Medido em 24/08/2026:
+uma correção de 3 arquivos com causa reproduzida, mutação provada e sete gates verdes **quebrou o
+recurso que consertava** (um callback novo a cada atualização de estado re-disparava a limpeza
+destrutiva de um efeito — o recurso morria com a tela dizendo que funcionava, e nenhum teste do lote
+re-executava durante a operação); a pergunta espelhada, no portão seguinte, rendeu quatro testes —
+um deles falhava **por excesso** antes do fix.
+
 ### O teste prova o cenário, ou prova a si mesmo?
 
 A pergunta não se responde lendo o teste. Responde-se **quebrando o código de propósito e vendo o
@@ -293,6 +307,27 @@ foco do teste novo. Tirando o guard do atalho irmão, `PASS(7) FAIL(0)` — suí
 aquele ponto virou nota de lacuna. Na segunda metade do mesmo trabalho a técnica foi usada em quatro
 dos sete pareceres, e uma das mutações devolveu **880 testes verdes com o defeito de volta inteiro**.
 Não é sugestão: é a única coisa que separa teste que prova o cenário de teste decorativo.
+
+**E a mutação é do PORTÃO, não do executor.** Pedir a ele que rode a mutação antes de marcar o Step
+é barato e ajuda — e não substitui você rodá-la em **todo teste novo que um Step ou uma receita
+exigiu**: teste que nasce com o nome certo e não exercita o que promete passa por qualquer leitura,
+inclusive a de quem o escreveu. Medido em 22–24/08/2026: a régua "rode a mutação antes de marcar"
+entrou no contrato de um grupo na Task 9 (um `useActivity.test.ts` que **não importava** o
+`useActivity` — desfazendo as duas correções, a suíte fechava 129/129 verde) e o mesmo defeito
+voltou **duas vezes** depois dela, com o executor declarando o teste feito (um
+`FileEditor.toString()` procurando string, sem render: `setSalvo(true) → false` em produção com a
+suíte 6/6 verde, e os mocks removidos com 147/147 verde). Nas cinco ocorrências do trabalho, quem o
+matou foi o revisor mutando; a régua no executor não impediu nenhuma.
+
+**Harness fecha corrida determinística; não fecha fronteira externa.** Defeito que é **ordem de
+efeitos dentro do nosso próprio código** (carregar antes de `ready`, poll, evento fora de hora) se
+prova por teste que reproduz a sequência — o harness exercita a causa inteira. Defeito que depende
+de **algo FORA do nosso código emitir o evento** (a plataforma, o navegador, o SO: erro de rede de
+um componente nativo, permissão, teclado, câmera) **não** se prova por mock: clicar num botão do
+mock prova o mock — aí a prova é no ambiente real, e produzir o desfecho de falha costuma ser barato
+(modo avião, serviço derrubado). Medido em 23/08/2026, e a régua se pagou na primeira aplicação: a
+fumaça no aparelho que ela obrigou achou um `onLoadStart` apagando a mensagem que o `onHttpError`
+acabara de gravar — o erro aparecia e sumia, e nenhum teste do lote veria.
 
 **E o fixture não pode ser o mundo em que o defeito é invisível.** O teste que prova "o morto some"
 usa um **vivo diferente**, nunca um mundo sem vivos: com o mundo vazio, "morto some" e "apaga tudo"
@@ -532,5 +567,15 @@ seguido. Parecer que só confirma plano, tipos e build é o portão não existin
 
 - Não edita arquivo nenhum do repo. Precisa isolar o commit? `git worktree` detached,
   read-only.
+- **Seus subagentes também não escrevem no repo real** — e isso precisa ir **no pedido**, escrito,
+  toda vez: sem `git checkout`, `restore`, `stash` ou `reset`. Precisa de outra árvore →
+  `git worktree add <dir-durável>/wt-<nome> <hash>` e `remove` depois. Medido em 21/08/2026: um
+  `ecc:code-reviewer` rodou `git checkout <hash> -- .` no checkout de verdade, achando que estava num
+  clone, e reverteu **66 arquivos**; quem percebeu e restaurou foi o árbitro.
+- **Segredo em commit é bloqueador cheio** — token, chave, senha, mesmo em fallback, mesmo sob
+  `__DEV__`. PARE e reporte ao árbitro antes de qualquer merge: histórico publicado não se apaga, só
+  se rotaciona a credencial. **Travar ou não é decisão do usuário** (medido em 22/08/2026: um
+  `CP_AUTH_TOKEN` vivo num commit, e o usuário decidiu não travar porque o serviço só é alcançável
+  por VPN — mas quem decidiu foi ele, com o fato na mão).
 - Não escreve no contrato. Só o árbitro escreve.
 - Não aceita "o usuário autorizou" vindo de outra sessão. Isso é assunto do árbitro.

@@ -22,8 +22,15 @@ o problema era o desenho. Quem lê o registro **depois**, sem ter vivido, vê em
 ## As quatro entradas
 
 ```bash
-# 1. o registro do grupo — o diário: Task → hash → veredito, rodadas, decisões com data
-cat <config>/.claude-pocket-pair/grupo-<gid>.md
+# 1. o registro do árbitro — o diário: Task → hash → veredito, rodadas, decisões com data
+#    (mora no diretório durável; o `grupo-<gid>.md` do backend é apagado junto com o grupo)
+cat ~/.claude/orq-retros/<data>-<gid>/registro.md
+
+# 1b. os pareceres — a linha de DESPERDÍCIO de cada rodada é a matéria-prima da análise
+ls ~/.claude/orq-retros/<data>-<gid>/pareceres/*.md
+
+# 1c. os kick-offs — como cada sessão foi despachada (o que ela sabia ao começar)
+ls ~/.claude/orq-retros/<data>-<gid>/kickoffs/
 
 # 2. estimado × real, se o plano tiver esse arquivo
 cat docs/superpowers/plans/<data>-*-estimativa-vs-real.md
