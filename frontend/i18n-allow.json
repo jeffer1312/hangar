@@ -10,10 +10,12 @@
       "kimi.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
       "deepseek.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
       "groq.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
-      "de primeira": "types.ts — trecho de COMENTÁRIO do campo `rodadas` do OrqTask (`0 = desconhecido, nunca \"de primeira\"`), lido pela heurística como string exibida; o rótulo da tela é m.orq_de_primeira()."
+      "de primeira": "types.ts — trecho de COMENTÁRIO do campo `rodadas` do OrqTask (`0 = desconhecido, nunca \"de primeira\"`), lido pela heurística como string exibida; o rótulo da tela é m.orq_de_primeira().",
+      "orq: falhou o detalhe da execução viva": "Orq.svelte — mensagem de console.error (diagnóstico pro desenvolvedor, nunca desenhada na tela); o usuário vê a faixa ausente, não este texto."
     }
   },
   "de primeira",
+  "orq: falhou o detalhe da execução viva",
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
   "'Exceção: identificador que ninguém decora de ouvido — hash de commit, id, token, caminho de URL —',",
   "'NÃO é resumo: mantenha TODA a informação, todos os passos e todos os nomes.',",

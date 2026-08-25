@@ -73,6 +73,20 @@
   const chaveServidores = $derived(servidores.map((s) => `${s.id}|${s.baseUrl}|${s.token}`).join('\n'));
   $effect(() => { chaveServidores; carregar(untrack(() => servidores)); });
 
+  // Revalidação periódica: sem ela a tela era uma FOTO do mount — a faixa "Agora" seguia
+  // mostrando como corrente uma task já aprovada até a pessoa sair e voltar, que é o oposto do
+  // que o nome dela promete. Não é SSE nem stream por card (invariante do board): é um fetch do
+  // MESMO endpoint que a tela já usa, e só enquanto a aba está à vista — `document.hidden` cobre
+  // o celular no bolso, onde o timer viraria rádio ligado à toa.
+  const REVALIDA_MS = 20_000;
+  $effect(() => {
+    const timer = setInterval(() => {
+      if (document.hidden || carregando) return;
+      carregar(untrack(() => servidores));
+    }, REVALIDA_MS);
+    return () => clearInterval(timer);
+  });
+
   // ── Execução viva ──────────────────────────────────────────────────────────
   // `fim === null` = ninguém escreveu execucao_fim ainda. A faixa precisa dos EVENTOS (rodada,
   // veredito), que só vêm no detalhe — então ela busca o detalhe daquela execução, uma vez.
@@ -80,14 +94,19 @@
   let vivaComEventos = $state<ExecComServidor | null>(null);
   $effect(() => {
     const alvo = viva;
-    if (!alvo) { vivaComEventos = null; return; }
+    // Detalhe aberto esconde a faixa: buscar mesmo assim seria um fetch a cada revalidação por
+    // uma coisa que ninguém está vendo.
+    if (!alvo || aberta) { vivaComEventos = null; return; }
     let vivo = true;
     (async () => {
       try {
         const completo = await getOrqDetalheForServer(alvo.servidor, alvo.exec.id);
         if (vivo) vivaComEventos = { exec: completo, servidor: alvo.servidor };
-      } catch {
-        // Sem o detalhe a faixa simplesmente não aparece — a lista abaixo continua inteira.
+      } catch (e) {
+        // Sem o detalhe a faixa simplesmente não aparece — a lista abaixo continua inteira. Mas
+        // vai pro console: credencial vencida só naquele servidor deixava a faixa sumir sem
+        // nenhum rastro de por quê.
+        console.error('orq: falhou o detalhe da execução viva', alvo.exec.id, e);
         if (vivo) vivaComEventos = null;
       }
     })();
@@ -106,8 +125,14 @@
     erroDetalhe = '';
     tasksAbertas = new Set();
     try {
-      detalhe = await getOrqDetalheForServer(linha.servidor, linha.exec.id);
+      const d = await getOrqDetalheForServer(linha.servidor, linha.exec.id);
+      // Guarda de identidade, mesma razão do `geracao` em `carregar`: tocar em A e depois em B
+      // antes de A responder desenhava a linha do tempo de A sob o cabeçalho de B — execução
+      // errada na tela, sem nenhum sinal de que estava errada.
+      if (aberta !== linha) return;
+      detalhe = d;
     } catch (e) {
+      if (aberta !== linha) return;
       erroDetalhe = e instanceof Error ? e.message : String(e);
     }
   }
