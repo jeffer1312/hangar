@@ -6,6 +6,7 @@ por subprocess, e um mock de `subprocess.run` testaria o mock, não o comportame
 """
 import json
 import subprocess
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -307,6 +308,27 @@ def test_dono_morto_vira_falha_na_tela(repo):
     assert "interrompida" in d["erro"]
     # Converteu no ARQUIVO: a conclusão não pode depender de quem perguntou.
     assert atualizar.estado()["fase"] == "pronto"
+
+
+def test_atualizacao_recem_lancada_nao_e_declarada_morta(repo):
+    """`iniciar()` grava "rodando" SEM pid — quem o grava é o motor, segundos depois.
+
+    Sem a guarda, o polling da tela (2s) matava toda atualização no berço: `_vivo(None)` é False.
+    """
+    atualizar._escrever(fase="rodando", passo=0, total=5, texto="Começando")   # sem pid, agora
+    assert atualizar.estado_para_tela()["fase"] == "rodando"
+
+
+def test_sem_pid_e_antigo_ainda_e_orfao(repo):
+    """Passada a janela de nascimento, "rodando" sem pid é abandono — não pode prender a tela."""
+    velho = (datetime.now().astimezone() - timedelta(seconds=600)).isoformat(timespec="seconds")
+    atualizar._escrever(fase="rodando", passo=0, total=5)
+    atualizar._escrever(ts=velho)          # o `_escrever` carimba `ts`; sobrescreve depois
+    caminho = atualizar._caminho_estado()
+    d = json.loads(caminho.read_text(encoding="utf-8"))
+    d["ts"] = velho
+    caminho.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    assert atualizar.estado_para_tela()["fase"] == "pronto"
 
 
 def test_dono_vivo_nao_e_declarado_morto(repo):

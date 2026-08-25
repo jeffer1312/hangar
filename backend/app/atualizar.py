@@ -95,6 +95,19 @@ def _caminho_estado() -> Path:
 
 # ─── Estado ────────────────────────────────────────────────────────────────────────────────────
 
+_JANELA_NASCIMENTO_S = 120.0    # tempo que o motor tem pra subir e registrar o pid dele
+
+
+def _recente(ts: str | None) -> bool:
+    if not ts:
+        return False
+    try:
+        idade = (datetime.now().astimezone() - datetime.fromisoformat(ts)).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return 0 <= idade < _JANELA_NASCIMENTO_S
+
+
 def estado_para_tela() -> dict:
     """O estado, com dono morto convertido em falha.
 
@@ -112,6 +125,12 @@ def estado_para_tela() -> dict:
         return atual
     dono = atual.get("pid")
     if _vivo(dono):
+        return atual
+    if not dono and _recente(atual.get("ts")):
+        # AINDA SEM PID e recém-escrito: é o motor subindo, não um órfão. `iniciar()` grava o
+        # estado antes do `Popen` (pra não correr com o motor), e quem grava o pid é o próprio
+        # motor, uns segundos depois — o tempo de o Python carregar. Sem esta guarda, o polling da
+        # tela (2s) declararia morta toda atualização recém-lançada.
         return atual
     _log.warning("atualizacao abandonada: o processo %s nao existe mais", dono)
     _escrever(fase="pronto", ok=False, voltou=False, no_ar=True,
