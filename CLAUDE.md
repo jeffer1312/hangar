@@ -779,6 +779,28 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**
   session creation fail (app and terminal both). Failing the probe, sessions are created without the
   scope and the backend logs a warning (commit `23da052`).
+- **Atualizar pelo app** (`app/atualizar.py` + `app/atualizacoes.py` + `docs/atualizacoes/`): o
+  botão faz tudo sozinho — decisão do usuário em 25/08/2026 —, `reset --hard` e reinstalador
+  incluídos, porque quem usa não administra nada e não deve precisar saber que passos existem.
+  Quatro coisas que o desenho decide de propósito:
+  - **Roda destacado do backend** (`setsid` / `DETACHED_PROCESS`), e o progresso mora em
+    `<config>/.hangar-update/estado.json`. A atualização reinicia o backend: dentro do processo ela
+    se mataria no meio, e a máquina ficaria com código novo no disco e processo velho no ar — o
+    estado que `install.ps1:1242` já registra como o pior. O arquivo é também o que deixa a tela
+    dizer "atualizando…" enquanto o servidor volta, em vez de "desconectado".
+  - **Automático não é irreversível.** `resguardar()` roda antes de qualquer coisa destrutiva: o
+    que estava no disco vai pra `resgate/<data-hora>` + stash, e a função **confere a ref** antes
+    de devolver. Falhou o resgate, a atualização para com o disco intacto. O único `reset --hard`
+    que não passa por ali é o rollback, cujo alvo é um commit da própria máquina de minutos antes.
+  - **O registro é do que JÁ RODOU aqui** (`aplicados.json`), não do intervalo de commits. O
+    intervalo fura em instalação nova e em quem reclonou ou resetou. Instalação do zero marca tudo
+    como aplicado (os dois installers), senão a primeira atualização roda a história inteira.
+  - **Passo só entra no registro depois da PROVA passar** — comando com exit 0 e efeito ausente é
+    a falha que o campo `prova` existe pra pegar. Passo novo: um arquivo em `docs/atualizacoes/`
+    (formato no README de lá), no mesmo commit que o exige. Os não destrutivos também rodam na
+    **subida do backend** (`main.py`), pelo motivo do `migracao_sidecars`: atualizar aqui é
+    `git pull` + reiniciar, e ninguém garante que o botão foi usado.
+
 - **Plan progress** (`app/planprog.py` + `registry._decorate_plan` + `PlanBar`/`PlanPanel.svelte`):
   the source of truth is the plan's own `.md` under `docs/superpowers/plans/` — no separate state
   file, `parse_plan` re-reads it and re-counts `- [x] **Step …**` on every discovery. Fenced blocks

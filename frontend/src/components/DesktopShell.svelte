@@ -15,7 +15,8 @@ import * as m from '../paraglide/messages';
   import Canvas from '../screens/Canvas.svelte';
   import Orq from '../screens/Orq.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
-  import { getConfig } from '../lib/api';
+  import { getConfig, getAtualizacao } from '../lib/api';
+  import AtualizarSheet from './AtualizarSheet.svelte';
   import { getActiveId, selectServer } from '../lib/auth';
   import { navMode } from '../lib/navMode.svelte';
   import type { AggSession } from '../lib/types';
@@ -132,6 +133,61 @@ import * as m from '../paraglide/messages';
     sessionsStore.retain();
     return () => sessionsStore.release();
   });
+
+  // ── Botão Atualizar (só desktop: quem atualiza está na máquina onde o repo vive) ──────────────
+  let atualizarAberto = $state(false);
+  let temAtualizacao = $state(false);
+  let mudancasN = $state(0);
+  // Qual falha já foi mostrada (o `ts` do estado). Guardado por viewer, no navegador: é conveniência
+  // de quem está olhando, não estado do servidor — outra máquina precisa ver a mesma falha.
+  const FALHA_VISTA = 'cp_atualizacao_falha_vista';
+  let falhaVista = $state(
+    (() => { try { return localStorage.getItem(FALHA_VISTA) ?? ''; } catch { return ''; } })(),
+  );
+  let falhaPendente = $state('');
+
+  function fecharAtualizar() {
+    atualizarAberto = false;
+    if (falhaPendente) {
+      falhaVista = falhaPendente;
+      falhaPendente = '';
+      try { localStorage.setItem(FALHA_VISTA, falhaVista); } catch { /* aba privada: reabre uma vez */ }
+    }
+  }
+
+  // Conferido na montagem e a cada 30min. O `fetch` de origin/main quem faz é o backend, no laço
+  // dele — aqui só se lê o resultado, e por isso este intervalo pode ser folgado.
+  onMount(() => {
+    let vivo = true;
+    const conferir = async () => {
+      try {
+        const d = await getAtualizacao();
+        if (!vivo) return;
+        temAtualizacao = d.atualizacao_disponivel;
+        mudancasN = d.mudancas.length;
+        // Atualização já em curso (outra aba a começou, ou esta página recarregou no meio): a
+        // caixa volta a abrir sozinha, senão o progresso corre sem ninguém vendo.
+        if (d.estado?.fase === 'rodando') atualizarAberto = true;
+        // FALHA também abre, e é o caso mais importante: a atualização derruba o backend e a
+        // página recarrega, então o erro acontece com a caixa fechada. Sem isto ele nunca chega
+        // em ninguém — a máquina fica na versão velha em silêncio, que é o pior desfecho possível.
+        // Uma vez só por falha: o `ts` do estado é a marca, e fechar a caixa a registra.
+        else if (d.estado?.fase === 'pronto' && d.estado.ok === false
+                 && d.estado.ts && d.estado.ts !== falhaVista) {
+          atualizarAberto = true;
+          falhaPendente = d.estado.ts;
+        }
+      } catch {
+        // Servidor fora do ar ou rota ausente (servidor mais antigo): sem aviso, sem erro na tela.
+      }
+    };
+    conferir();
+    const t = setInterval(conferir, 1800_000);
+    return () => { vivo = false; clearInterval(t); };
+  });
+
+  // Do store agregado que já está montado — nunca um fetch novo, e nunca um SSE a mais.
+  const sessoesTrabalhando = $derived(rows.filter((row) => row.state === 'working').length);
 
   $effect(() => {
     void currentKey;
@@ -353,6 +409,19 @@ import * as m from '../paraglide/messages';
                  {ctxDisponivel} />
   {/if}
 
+  {#if temAtualizacao && !atualizarAberto}
+    <!-- Faixa fina, atravessando a janela como a barra de abas: é aviso, não alerta. Some assim
+         que a caixa abre — dois lugares dizendo a mesma coisa ao mesmo tempo é ruído. -->
+    <div class="faixa-atualizar">
+      <span class="fa-ponto"></span>
+      <span class="fa-txt">{m.atualizar_aviso_barra()}
+        <small>{mudancasN === 1
+          ? m.atualizar_disponivel_sub_uma()
+          : m.atualizar_disponivel_sub({ n: mudancasN })}</small></span>
+      <button class="fa-bt" onclick={() => (atualizarAberto = true)}>{m.atualizar_ver()}</button>
+    </div>
+  {/if}
+
   <div class="shell-linha">
   <!-- ESCONDIDA, não desmontada, no modo abas: a barra do topo delega "nova sessão", "mais opções" e
        o menu de contexto da aba pra dentro da Sidebar (sidebarBridge). Um `{#if}` aqui tiraria ela do
@@ -505,9 +574,25 @@ import * as m from '../paraglide/messages';
     onClose={() => (commandOpen = false)}
     onOpenSession={openSession}
   />
+
+  <AtualizarSheet open={atualizarAberto} onClose={fecharAtualizar}
+                  trabalhando={sessoesTrabalhando} />
 </div>
 
 <style>
+  /* Faixa de aviso de versão nova. `transparent` de propósito: quem carrega o material é o shell,
+     e uma cor própria aqui viraria retângulo chapado sobre o papel de parede. */
+  .faixa-atualizar { display: flex; align-items: center; gap: var(--space-3);
+                     padding: var(--space-2) var(--space-4); background: transparent;
+                     border-bottom: 1px solid var(--border-subtle); }
+  .fa-ponto { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+              flex-shrink: 0; }
+  .fa-txt { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-primary); }
+  .fa-txt small { color: var(--text-muted); font-size: var(--text-xs); margin-left: var(--space-2); }
+  .fa-bt { flex-shrink: 0; border: 1px solid var(--border-subtle); background: var(--surface-raised);
+           color: var(--text-secondary); border-radius: var(--radius-md);
+           padding: var(--space-1) var(--space-3); font-family: inherit; font-size: var(--text-sm); }
+
   /* COLUNA, não linha: a barra do topo é a primeira faixa e atravessa a janela inteira — inclusive
      por cima do trilho, como no OpenCode (decisão do usuário, 10/08/2026). Antes ela vivia dentro
      da coluna do conteúdo e por isso começava onde a sidebar terminava.

@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import atomico, diag, migracao_sidecars, tmux
+from app import atomico, atualizacoes, atualizar, diag, migracao_sidecars, tmux
 from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
@@ -191,6 +191,16 @@ async def _lifespan(app: FastAPI):
                 _log.exception("renova_token.laco crashed", exc_info=exc)
 
     renova_task.add_done_callback(_renova_done)
+
+    fetch_task = asyncio.create_task(_fetch_loop())
+
+    def _fetch_done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("_fetch_loop crashed", exc_info=exc)
+
+    fetch_task.add_done_callback(_fetch_done)
 
     prune_task = asyncio.create_task(_prune_loop())
 
@@ -2738,6 +2748,83 @@ def _painel_disponivel() -> bool:
     return termsock.painel_disponivel()
 
 
+# ─── Atualizar ─────────────────────────────────────────────────────────────────────────────────
+
+def _mudancas_pendentes() -> list[dict]:
+    """Os commits que entraram em `origin/main` e ainda não estão aqui — o changelog da tela.
+
+    Título de commit, e não um `CHANGELOG.md` mantido à mão: as mensagens deste repo já são
+    descritivas, e um arquivo à parte seria uma segunda cópia pra envelhecer. Passo que merecer
+    texto próprio ganha um arquivo em `docs/atualizacoes/`, cujo corpo entra junto.
+    """
+    p = atualizar._git("log", "--format=%h%x00%s", "HEAD..origin/main", timeout=30)
+    if p.returncode != 0:
+        return []
+    linhas = []
+    for linha in p.stdout.splitlines():
+        sha, _, titulo = linha.partition("\x00")
+        if titulo:
+            linhas.append({"sha": sha, "titulo": titulo})
+    return linhas
+
+
+@app.get("/api/atualizacao", dependencies=[Depends(require_auth)])
+async def get_atualizacao():
+    """Estado da atualização: as três versões, o que há de novo, e o que o motor está fazendo.
+
+    As TRÊS versões porque "a versão instalada" tem três respostas — o disco, o processo vivo e o
+    bundle que o navegador carregou — e elas divergem justamente na janela em que alguém está
+    atualizando. Comparar só o disco com `origin/main` diria "tudo em dia" pra quem está olhando
+    uma tela de dias atrás.
+
+    Tudo em `to_thread`: são chamadas de `git` (subprocess), e o precedente de 23/07 é que elas
+    nunca podem rodar na corrotina.
+    """
+    def _ler() -> dict:
+        pre = atualizar.checar()
+        mudancas = _mudancas_pendentes()
+        return {
+            "versoes": {"repo": diag._git_describe(), "backend": diag.VERSAO_EM_EXECUCAO},
+            "atualizacao_disponivel": bool(mudancas),
+            "mudancas": mudancas,
+            "passos": [{"id": s["id"], "titulo": s["titulo"], "texto": s["texto"]}
+                       for s in atualizacoes.pendentes()],
+            "pre_voo": pre,
+            "estado": atualizar.estado(),
+        }
+    return await asyncio.to_thread(_ler)
+
+
+@app.post("/api/atualizacao/iniciar", dependencies=[Depends(require_auth)])
+async def post_atualizacao_iniciar():
+    """Lança a atualização e devolve na hora — ela roda FORA deste processo, que vai reiniciar."""
+    pre = await asyncio.to_thread(atualizar.checar)
+    if not pre.get("pode"):
+        faltando = pre.get("faltando") or []
+        raise HTTPException(409, detail=erro(
+            "erro_atualizacao_dependencia", f"falta o que a atualizacao precisa: {', '.join(faltando)}",
+            faltando=faltando))
+    r = await asyncio.to_thread(atualizar.iniciar, settings.port)
+    if not r.get("ok"):
+        raise HTTPException(409, detail=erro("erro_atualizacao_ja_rodando",
+                                             "ja existe uma atualizacao rodando"))
+    return r
+
+
+async def _fetch_loop():
+    """`git fetch` de tempos em tempos, senão `origin/main` é a foto do último pull de alguém.
+
+    Sem isto o botão simplesmente nunca apareceria numa máquina que ninguém puxa à mão. Fail-soft
+    e em `to_thread`: máquina sem rede não pode virar erro na tela nem derrubar o laço.
+    """
+    while True:
+        try:
+            await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
+        except Exception:                            # noqa: BLE001 — sem rede é o caso comum
+            _log.debug("fetch periodico falhou", exc_info=True)
+        await asyncio.sleep(1800)
+
+
 @app.get("/api/config", dependencies=[Depends(require_auth)])
 def get_config():
     """Config editavel pelo app + o que e so-leitura (exige reiniciar o servico).
@@ -2758,6 +2845,11 @@ def get_config():
             # Ela tambem responde False num POSIX sem `pty`. Import tardio pelo mesmo motivo de
             # sempre: o termsock nao pode ser importado no topo deste modulo.
             "terminal_panel": _painel_disponivel(),
+            # A versao do PROCESSO VIVO, nao a do checkout. Durante a janela entre o `git pull` e o
+            # restart as duas divergem, e e exatamente ai que o botao Atualizar vive: dizer a do
+            # disco aqui seria afirmar estar rodando codigo que ninguem carregou (o defeito que
+            # `diag.VERSAO_EM_EXECUCAO` corrigiu em f4013343).
+            "versao": diag.VERSAO_EM_EXECUCAO,
         },
     }
 

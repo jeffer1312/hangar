@@ -609,3 +609,57 @@ export interface OrqLista {
   execucoes: OrqExecucao[];
   fichas: OrqFicha[];
 }
+
+// ── Botão Atualizar ────────────────────────────────────────────────────────────────────────────
+
+export interface AtualizacaoMudanca {
+  sha: string;
+  titulo: string;
+}
+
+export interface AtualizacaoPasso {
+  id: string;
+  titulo: string;
+  texto: string;
+}
+
+/** O que o motor está fazendo agora. Vem do arquivo de estado, que sobrevive ao restart. */
+export interface AtualizacaoEstado {
+  fase?: 'rodando' | 'pronto';
+  etapa?: string;
+  passo?: number;
+  total?: number;
+  texto?: string;
+  ok?: boolean | null;
+  erro?: string;
+  resgate?: string | null;
+  /** O código anterior foi restaurado no disco. */
+  voltou?: boolean;
+  /** O servidor respondeu depois disso. Separado de `voltou`: reverter e não subir é um terceiro caso. */
+  no_ar?: boolean;
+  reiniciar_manual?: boolean;
+  commit_de?: string;
+  commit_para?: string;
+  ts?: string;
+}
+
+export interface AtualizacaoPreVoo {
+  pode: boolean;
+  faltando: string[];
+  branch?: string;
+  sujo?: number;
+  ahead?: number;
+  behind?: number;
+  divergiu?: boolean;
+  topologia?: 'systemd' | 'windows' | 'manual';
+}
+
+export interface Atualizacao {
+  /** `repo` é o disco; `backend` é o processo vivo. Divergem durante a atualização — é o ponto. */
+  versoes: { repo: string; backend: string };
+  atualizacao_disponivel: boolean;
+  mudancas: AtualizacaoMudanca[];
+  passos: AtualizacaoPasso[];
+  pre_voo: AtualizacaoPreVoo;
+  estado: AtualizacaoEstado;
+}

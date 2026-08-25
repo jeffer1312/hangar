@@ -5,6 +5,7 @@ import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 // diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
 import { registrar as registrarDiag, novoReq } from './diag';
 import type {
+  Atualizacao,
   SessionInfo,
   Provider,
   ChatEvent,
@@ -860,6 +861,16 @@ export function getConfig(): Promise<ConfigServidor> {
   // recusa conexao — sem teto, abrir Configuracoes prendia a folha em "Carregando..." pra sempre.
   // Quem precisa de outro prazo (ou de nenhum) passa o proprio signal no init.
   return apiFetch('/api/config', { signal: AbortSignal.timeout(8000) });
+}
+
+/** Estado do botão Atualizar. Sem teto de tempo curto: o pré-voo forka `git` e paga o disco frio. */
+export function getAtualizacao(): Promise<Atualizacao> {
+  return apiFetch('/api/atualizacao', { signal: AbortSignal.timeout(20000) });
+}
+
+/** Lança a atualização. Devolve na hora — ela roda fora do processo do backend, que vai reiniciar. */
+export function iniciarAtualizacao(): Promise<{ ok: boolean; pid: number }> {
+  return apiFetch('/api/atualizacao/iniciar', { method: 'POST' });
 }
 
 export function getConfigForServer(s: Server): Promise<ConfigServidor> {

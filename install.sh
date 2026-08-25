@@ -363,6 +363,22 @@ elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"
   ./scripts/install-hangar-panel.sh
 fi
 
+# ── Passos de atualização: marcar como já feitos ─────────────────────────────
+# Uma instalação do ZERO já satisfaz todo passo de `docs/atualizacoes/` — eles existem pra levar
+# uma máquina ANTIGA até aqui. Sem esta marca, a primeira vez que essa máquina apertasse Atualizar
+# no app, ela rodaria a história inteira de passos, todos já cumpridos por este instalador.
+# No --update NÃO se marca nada: ali a máquina é justamente a antiga, e os passos precisam rodar.
+if [ "$UPDATE" = 1 ]; then
+  :
+else
+  say "Passos de atualização"
+  if uv run --directory backend python -c "from app import atualizacoes; atualizacoes.marcar_todos()" 2>/dev/null; then
+    ok "marcados como já aplicados (instalação nova)"
+  else
+    nota "não consegui marcar agora — o app resolve no primeiro Atualizar"
+  fi
+fi
+
 # ── Atualizar sozinho no próximo git pull (opcional) ─────────────────────────
 # Hook post-merge: roda depois de todo `git pull` bem-sucedido. A escolha de atualizar continua
 # sendo tua — o pull é que dispara, e o pull você deu. Sem isto, um pull te deixa com código

@@ -1633,6 +1633,22 @@ if (-not $bash) {
     }
 }
 
+# -- Passos de atualizacao: marcar como ja feitos ----------------------------
+# Uma instalacao do ZERO ja satisfaz todo passo de docs\atualizacoes\ -- eles existem pra levar uma
+# maquina ANTIGA ate aqui. Sem esta marca, o primeiro Atualizar no app rodaria a historia inteira de
+# passos, todos ja cumpridos por este instalador. No -Update NAO se marca nada: ali a maquina e
+# justamente a antiga, e os passos precisam rodar.
+if (-not $Update) {
+    Titulo 'Passos de atualizacao'
+    $marcou = $false
+    try {
+        & uv run --directory "$raiz\backend" python -c "from app import atualizacoes; atualizacoes.marcar_todos()" 2>&1 | Out-Null
+        $marcou = ($LASTEXITCODE -eq 0)
+    } catch { $marcou = $false }
+    if ($marcou) { Ok 'marcados como ja aplicados (instalacao nova)' }
+    else { Nota 'nao consegui marcar agora -- o app resolve no primeiro Atualizar' }
+}
+
 # -- 7c/8 Atualizar sozinho no proximo git pull ------------------------------
 # Hook post-merge: roda depois de todo `git pull` bem-sucedido e re-aplica o que o pull NAO atualiza
 # sozinho (wrapper, build do front, tarefa agendada, config do multiplexador). No Linux quem instala

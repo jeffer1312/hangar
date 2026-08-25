@@ -1,0 +1,302 @@
+"""Motor da atualização: pré-voo, resgate, ordem das etapas, estado.
+
+Todo teste roda contra um repo git DE VERDADE criado em `tmp_path` — o módulo conversa com o git
+por subprocess, e um mock de `subprocess.run` testaria o mock, não o comportamento que importa
+(saber distinguir arquivo rastreado de solto, saber que uma branch de resgate ficou mesmo criada).
+"""
+import json
+import subprocess
+
+import pytest
+
+from app import atualizar
+
+
+def _git(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
+                          env={"HOME": str(repo), "GIT_CONFIG_GLOBAL": "/dev/null",
+                               "GIT_CONFIG_SYSTEM": "/dev/null", "PATH": "/usr/bin:/bin",
+                               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    """Repo com um commit na main, apontado como REPO do módulo."""
+    d = tmp_path / "repo"
+    d.mkdir()
+    _git(d, "init", "-b", "main")
+    (d / "a.txt").write_text("um\n", encoding="utf-8")
+    _git(d, "add", "a.txt")
+    _git(d, "commit", "-m", "primeiro")
+    monkeypatch.setattr(atualizar, "REPO", d)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    return d
+
+
+# ─── Estado ────────────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("conteudo", ["null", "[1, 2]", '"texto"', "{{quebrado"])
+def test_estado_exige_dict(repo, tmp_path, conteudo):
+    """JSON válido do tipo errado não levanta ValueError — e o `.get()` de quem lê morreria.
+
+    Mesmo furo que já derrubou a resolução de estado de TODAS as sessões no `statusline.read`.
+    """
+    alvo = atualizar._caminho_estado()
+    alvo.parent.mkdir(parents=True, exist_ok=True)
+    alvo.write_text(conteudo, encoding="utf-8")
+    assert atualizar.estado() == {}
+
+
+def test_escrever_mescla_e_nao_deixa_tmp(repo):
+    atualizar._escrever(fase="rodando", passo=1)
+    atualizar._escrever(passo=2)
+    e = atualizar.estado()
+    assert e["fase"] == "rodando" and e["passo"] == 2 and e["ts"]
+    assert not list(atualizar._base().glob("*.tmp"))
+
+
+# ─── Pré-voo ───────────────────────────────────────────────────────────────────────────────────
+
+def test_checar_repo_limpo(repo):
+    p = atualizar.checar()
+    assert p["branch"] == "main"
+    assert p["sujo"] == 0 and p["ahead"] == 0 and p["behind"] == 0
+    assert p["divergiu"] is False
+
+
+def test_arquivo_solto_nao_conta_como_sujo(repo):
+    """Um `.bak` largado na pasta não atrapalha fast-forward nenhum — não pode bloquear o botão."""
+    (repo / "solto.bak").write_text("x", encoding="utf-8")
+    assert atualizar.checar()["sujo"] == 0
+
+
+def test_arquivo_rastreado_modificado_conta(repo):
+    (repo / "a.txt").write_text("mudou\n", encoding="utf-8")
+    assert atualizar.checar()["sujo"] == 1
+
+
+def test_branch_diferente_aparece(repo):
+    _git(repo, "checkout", "-b", "experimento")
+    assert atualizar.checar()["branch"] == "experimento"
+
+
+def test_dependencia_faltando_recusa(repo, monkeypatch):
+    """Dependência ausente recusa ANTES de começar, nomeando o que falta (install.sh:90)."""
+    monkeypatch.setattr(atualizar.shutil, "which", lambda p: None if p == "uv" else "/usr/bin/" + p)
+    p = atualizar.checar()
+    assert p["pode"] is False and "uv" in p["faltando"]
+
+
+# ─── Resgate ───────────────────────────────────────────────────────────────────────────────────
+
+def test_repo_limpo_na_main_nao_cria_resgate(repo):
+    """Criar branch de resgate a cada pull de repo limpo só encheria o repo de refs mortas."""
+    assert atualizar.resguardar(atualizar.checar()) is None
+
+
+def test_resgate_guarda_mudanca_e_a_ref_existe(repo):
+    (repo / "a.txt").write_text("trabalho de alguem\n", encoding="utf-8")
+    nome = atualizar.resguardar(atualizar.checar())
+    assert nome and nome.startswith("resgate/")
+    assert _git(repo, "rev-parse", "--verify", f"refs/heads/{nome}").returncode == 0
+    assert "stash@{0}" in _git(repo, "stash", "list").stdout
+    # O stash tirou a mudança da árvore -> o fast-forward que vem depois não encontra obstáculo.
+    assert atualizar.checar()["sujo"] == 0
+
+
+def test_resgate_guarda_commit_local(repo):
+    (repo / "b.txt").write_text("dois\n", encoding="utf-8")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-m", "trabalho local")
+    alvo = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    pre = atualizar.checar()
+    pre["ahead"] = 1                      # sem upstream no repo de teste; o efeito é o mesmo
+    nome = atualizar.resguardar(pre)
+    assert _git(repo, "rev-parse", f"refs/heads/{nome}").stdout.strip() == alvo
+
+
+def test_resgate_que_falha_para_tudo(repo, monkeypatch):
+    """Sem prova de que há para onde voltar, nada destrutivo pode acontecer depois."""
+    def _falha(*args, **kw):
+        class P:
+            returncode = 1
+            stdout = ""
+            stderr = "erro de mentira"
+        return P()
+    monkeypatch.setattr(atualizar, "_git", _falha)
+    with pytest.raises(atualizar.FalhaDeResgate):
+        atualizar.resguardar({"sujo": 1, "ahead": 0, "branch": "main"})
+
+
+# ─── Ordem de executar() ───────────────────────────────────────────────────────────────────────
+
+def test_falha_no_meio_nao_reinicia(repo, monkeypatch):
+    """O requisito duro: falhar antes do restart deixa a máquina na versão anterior, inteira."""
+    chamou = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: chamou.append("puxar"))
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: chamou.append("passos"))
+    def _instalar_quebra(topologia):
+        chamou.append("instalar")
+        raise RuntimeError("build quebrou")
+    monkeypatch.setattr(atualizar, "_reaplicar", _instalar_quebra)
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: chamou.append("reiniciar"))
+
+    final = atualizar.executar()
+    assert "reiniciar" not in chamou
+    assert final["ok"] is False and "build quebrou" in final["erro"]
+
+
+def test_erro_inesperado_vira_estado_e_nao_traceback(repo, monkeypatch):
+    """Num processo destacado, exceção que escapa deixa o estado preso em "rodando" pra sempre.
+
+    A tela gira a barra e ninguém descobre que falhou. Foi o que aconteceu com `PassoFalhou`, que
+    não estava na lista de tipos capturados.
+    """
+    class ErroEstranho(Exception):
+        pass
+
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    def _explode():
+        raise ErroEstranho("passo com defeito")
+    monkeypatch.setattr(atualizar, "_aplicar_passos", _explode)
+
+    final = atualizar.executar()
+    assert final["fase"] == "pronto"
+    assert final["ok"] is False and "passo com defeito" in final["erro"]
+
+
+def test_dependencia_faltando_nao_toca_no_repo(repo, monkeypatch):
+    monkeypatch.setattr(atualizar.shutil, "which", lambda p: None if p == "npm" else "/usr/bin/" + p)
+    tocou = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: tocou.append("puxar"))
+    final = atualizar.executar()
+    assert tocou == []
+    assert final["ok"] is False and "npm" in final["erro"]
+
+
+def test_backend_que_nao_sobe_volta_pro_commit_anterior(repo, monkeypatch):
+    antes = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def _puxar_avanca(pre):
+        (repo / "c.txt").write_text("versao nova\n", encoding="utf-8")
+        _git(repo, "add", "c.txt")
+        _git(repo, "commit", "-m", "versao nova")
+
+    monkeypatch.setattr(atualizar, "_puxar", _puxar_avanca)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: False)
+
+    final = atualizar.executar()
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == antes
+    assert final["ok"] is False and "nao respondeu" in final["erro"]
+
+
+def test_pronto_marca_ok(repo, monkeypatch):
+    for nome in ("_puxar", "_aplicar_passos", "_reaplicar", "_reiniciar"):
+        monkeypatch.setattr(atualizar, nome,
+                            (lambda *a, **k: None) if nome != "_aplicar_passos" else (lambda: None))
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    final = atualizar.executar()
+    assert final["ok"] is True and final["fase"] == "pronto"
+
+
+# ─── Lançamento ────────────────────────────────────────────────────────────────────────────────
+
+def test_nao_inicia_duas_vezes(repo, monkeypatch):
+    import os as _os
+    atualizar._escrever(fase="rodando", pid=_os.getpid())
+    assert atualizar.iniciar()["erro"] == "ja_rodando"
+
+
+def test_pid_morto_nao_bloqueia(repo, monkeypatch):
+    """Máquina que desligou no meio de uma atualização não pode ficar travada para sempre."""
+    atualizar._escrever(fase="rodando", pid=999999)
+    lancou = []
+    class P:
+        pid = 4242
+    monkeypatch.setattr(atualizar.subprocess, "Popen", lambda *a, **k: (lancou.append(a), P())[1])
+    assert atualizar.iniciar()["ok"] is True
+    assert lancou
+
+
+def test_estado_do_lancamento_e_json_valido(repo, monkeypatch):
+    class P:
+        pid = 4242
+    monkeypatch.setattr(atualizar.subprocess, "Popen", lambda *a, **k: P())
+    atualizar.iniciar()
+    bruto = json.loads(atualizar._caminho_estado().read_text(encoding="utf-8"))
+    assert bruto["fase"] == "rodando" and bruto["pid"] == 4242
+
+
+# ─── Sessões vivas e o sistema ─────────────────────────────────────────────────────────────────
+
+def test_avisa_as_sessoes_antes_de_reiniciar(repo, monkeypatch):
+    ordem = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: ordem.append("avisou"))
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: ordem.append("reiniciou"))
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    atualizar.executar()
+    assert ordem == ["avisou", "reiniciou"]
+
+
+def test_hangar_send_ausente_nao_derruba_a_atualizacao(repo, monkeypatch):
+    """Aviso é cortesia: máquina sem `hangar-send` não pode ficar sem atualizar por causa dele."""
+    def _sem_binario(*a, **kw):
+        raise OSError("hangar-send: not found")
+    monkeypatch.setattr(atualizar, "_rodar", _sem_binario)
+    atualizar._avisar_sessoes()   # não levanta
+
+
+def test_windows_nao_reinicia_e_diz_isso(repo, monkeypatch):
+    """Sem cgroup lá, matar a árvore certa é o que ninguém mediu — melhor parar e avisar."""
+    atualizar._reiniciar("windows")
+    assert atualizar.estado()["reiniciar_manual"] is True
+
+
+def test_instalacao_na_mao_tambem_pede_reinicio(repo):
+    atualizar._reiniciar("manual")
+    assert atualizar.estado()["reiniciar_manual"] is True
+
+
+def test_sem_restart_nao_cobra_prova_de_vida(repo, monkeypatch):
+    """O backend velho continua respondendo: um `_subiu` verde ali não provaria nada."""
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: atualizar._escrever(reiniciar_manual=True))
+    def _nunca(*a, **kw):
+        raise AssertionError("_subiu nao devia ser chamado sem restart")
+    monkeypatch.setattr(atualizar, "_subiu", _nunca)
+    final = atualizar.executar()
+    assert final["ok"] is True and final["reiniciar_manual"] is True
+
+
+def test_lancamento_escolhe_o_modo_do_sistema(repo, monkeypatch):
+    """POSIX sai do grupo de processos com `setsid`; Windows usa DETACHED_PROCESS."""
+    capturado: dict = {}
+    class P:
+        pid = 1
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda *a, **kw: (capturado.update(kw), P())[1])
+
+    # A constante do módulo, NÃO `os.name`: patchar `os.name` leva o `pathlib` junto e o próximo
+    # `Path(...) / "x"` estoura com "cannot instantiate 'WindowsPath' on your system".
+    monkeypatch.setattr(atualizar, "_E_WINDOWS", False)
+    atualizar.iniciar()
+    assert capturado.get("start_new_session") is True
+    assert "creationflags" not in capturado
+
+    capturado.clear()
+    atualizar._escrever(fase="pronto", pid=0)
+    monkeypatch.setattr(atualizar, "_E_WINDOWS", True)
+    atualizar.iniciar()
+    assert capturado.get("creationflags")
+    assert "start_new_session" not in capturado
