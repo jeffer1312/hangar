@@ -406,20 +406,9 @@ import * as m from '../paraglide/messages';
     <SessionTabs {currentKey} onSelect={openSession}
                  onOpenConfig={() => abrirConfig('root', getActiveId())}
                  onIrParaContas={() => abrirConfig('contas', getActiveId())}
+                 temAtualizacao={temAtualizacao && !atualizarAberto}
+                 onAbrirAtualizar={() => (atualizarAberto = true)}
                  {ctxDisponivel} />
-  {/if}
-
-  {#if temAtualizacao && !atualizarAberto}
-    <!-- Faixa fina, atravessando a janela como a barra de abas: é aviso, não alerta. Some assim
-         que a caixa abre — dois lugares dizendo a mesma coisa ao mesmo tempo é ruído. -->
-    <div class="faixa-atualizar">
-      <span class="fa-ponto"></span>
-      <span class="fa-txt">{m.atualizar_aviso_barra()}
-        <small>{mudancasN === 1
-          ? m.atualizar_disponivel_sub_uma()
-          : m.atualizar_disponivel_sub({ n: mudancasN })}</small></span>
-      <button class="fa-bt" onclick={() => (atualizarAberto = true)}>{m.atualizar_ver()}</button>
-    </div>
   {/if}
 
   <div class="shell-linha">
@@ -580,18 +569,6 @@ import * as m from '../paraglide/messages';
 </div>
 
 <style>
-  /* Faixa de aviso de versão nova. `transparent` de propósito: quem carrega o material é o shell,
-     e uma cor própria aqui viraria retângulo chapado sobre o papel de parede. */
-  .faixa-atualizar { display: flex; align-items: center; gap: var(--space-3);
-                     padding: var(--space-2) var(--space-4); background: transparent;
-                     border-bottom: 1px solid var(--border-subtle); }
-  .fa-ponto { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
-              flex-shrink: 0; }
-  .fa-txt { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--text-primary); }
-  .fa-txt small { color: var(--text-muted); font-size: var(--text-xs); margin-left: var(--space-2); }
-  .fa-bt { flex-shrink: 0; border: 1px solid var(--border-subtle); background: var(--surface-raised);
-           color: var(--text-secondary); border-radius: var(--radius-md);
-           padding: var(--space-1) var(--space-3); font-family: inherit; font-size: var(--text-sm); }
 
   /* COLUNA, não linha: a barra do topo é a primeira faixa e atravessa a janela inteira — inclusive
      por cima do trilho, como no OpenCode (decisão do usuário, 10/08/2026). Antes ela vivia dentro

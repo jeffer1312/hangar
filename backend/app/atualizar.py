@@ -147,9 +147,15 @@ def _git(*args: str, timeout: float = _TIMEOUT_PADRAO) -> subprocess.CompletedPr
     return _rodar(["git", "-C", str(REPO), *args], timeout=timeout)
 
 
+# Códigos de cor do terminal. O `install.sh` colore a saída dele (verde pra ok, vermelho pra erro),
+# e esse texto vai INTEIRO pra tela do app — onde vira lixo visível no meio da frase
+# (`\x1b[31mX\x1b[0m tmux faltando`). Medido ao vivo em 25/08/2026, apertando o botão.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
 def _cauda(p: subprocess.CompletedProcess, linhas: int = 12) -> str:
-    """As últimas linhas do erro — é o que a tela mostra, então não pode ser o log inteiro."""
-    txt = (p.stderr or p.stdout or "").strip()
+    """As últimas linhas do erro, sem cor de terminal — é o que a tela mostra."""
+    txt = _ANSI.sub("", (p.stderr or p.stdout or "")).strip()
     return "\n".join(txt.splitlines()[-linhas:])
 
 

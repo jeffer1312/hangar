@@ -288,6 +288,18 @@ def test_sem_restart_nao_cobra_prova_de_vida(repo, monkeypatch):
     assert final["ok"] is True and final["reiniciar_manual"] is True
 
 
+def test_erro_nao_leva_cor_de_terminal_pra_tela(repo):
+    """O `install.sh` colore a saída, e ela vai inteira pra tela — sem limpar, vira lixo visível."""
+    class P:
+        returncode = 1
+        stdout = ""
+        stderr = "\x1b[1m1/8 Dependências\x1b[0m\n  \x1b[31mX\x1b[0m   tmux faltando"
+
+    saida = atualizar._cauda(P())
+    assert "\x1b" not in saida
+    assert "tmux faltando" in saida and "1/8 Dependências" in saida
+
+
 def test_reset_do_rollback_que_falha_nao_mente(repo, monkeypatch):
     """Seguir com o reset falhado reinstalaria em cima do código quebrado, dizendo que voltou."""
     real = atualizar._git

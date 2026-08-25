@@ -22,6 +22,9 @@ import * as m from '../paraglide/messages';
     currentKey: string | null;
     onSelect: (session: AggSession) => void;
     onOpenConfig: () => void;
+    /** Há versão nova: mostra o botão de atualizar ao lado do "+". */
+    temAtualizacao?: boolean;
+    onAbrirAtualizar?: () => void;
     /** Leva à aba Contas (a pílula de cota abre por lá) — construído pelo DesktopShell. */
     onIrParaContas: () => void;
     // Painel de contexto montado (o DesktopShell deriva: sessão aberta sem split, ou overlay).
@@ -29,7 +32,8 @@ import * as m from '../paraglide/messages';
     // alternar. Default true: a barra fora do shell não perde o controle.
     ctxDisponivel?: boolean;
   }
-  let { currentKey, onSelect, onOpenConfig, onIrParaContas, ctxDisponivel = true }: Props = $props();
+  let { currentKey, onSelect, onOpenConfig, onIrParaContas, ctxDisponivel = true,
+        temAtualizacao = false, onAbrirAtualizar = () => {} }: Props = $props();
 
   // Sem retain()/release(): DesktopShell é o owner do store (refcount do singleton SSE).
   const model = $derived(buildSessionTabs(sessionsStore.byServer));
@@ -189,6 +193,19 @@ import * as m from '../paraglide/messages';
   {/if}
 
   <button class="tab-action" onclick={() => sidebarBridge.openCreate()} aria-label={m.sessao_nova()} title={m.sessao_nova()}>+</button>
+  {#if temAtualizacao}
+    <!-- Aviso de versão nova: um botão como os vizinhos, ao lado do "+", no espaço que já existe.
+         Nasceu como faixa de largura inteira e ficou pesado demais para o que é — não é alerta, é
+         um recado que pode esperar. Some da barra assim que a caixa abre. -->
+    <button class="tab-action tab-atualizar" onclick={onAbrirAtualizar}
+      aria-label={m.atualizar_aviso_barra()} title={m.atualizar_aviso_barra()}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 5v9"/><path d="m8 10 4 4 4-4"/><path d="M5 19h14"/>
+      </svg>
+      <span class="tab-atualizar-dot" aria-hidden="true"></span>
+    </button>
+  {/if}
   <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label={m.tabs_mais_opcoes()} title={m.tabs_buscar_arquivo_custos()}>⋯</button>
   <!-- Pílula de cota (o medidor do super.engineering): entre o ⋯ e a engrenagem, no espaço morto
        da barra. Mostra a conta da sessão ativa (ou a pior, sem sessão); o clique abre o detalhe. -->
@@ -265,6 +282,20 @@ import * as m from '../paraglide/messages';
     height: 6px;
     border-radius: 50%;
     /* Anel da cor da barra: sobre a engrenagem o ponto encostava no traço do ícone e virava borrão. */
+    box-shadow: 0 0 0 1.5px var(--bg-base);
+  }
+  /* Botão de atualizar: mesmo peso dos vizinhos (herda .tab-action), com um ponto discreto no
+     canto — a mesma linguagem do ponto de servidor sobre a engrenagem. É recado, não alerta:
+     nada de cor de fundo nem faixa própria. */
+  .tab-atualizar { position: relative; }
+  .tab-atualizar-dot {
+    position: absolute;
+    right: 3px;
+    top: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
     box-shadow: 0 0 0 1.5px var(--bg-base);
   }
   .tabs-strip::-webkit-scrollbar { display: none; }
