@@ -682,10 +682,16 @@ if ($precisa) {
     $ErrorActionPreference = 'Continue'
     Push-Location "$raiz\frontend"
     try {
-        npm ci --silent
+        # Sem --silent no -Update: e o modo que o BOTAO Atualizar do app usa, e a caixinha da tela
+        # mostra esta saida ao vivo. Com --silent o npm nao imprime NADA, entao durante o minuto de
+        # `npm ci` a tela ficava sem barra andando e sem log novo — identica a uma travada, que foi
+        # exatamente a leitura de quem estava olhando (25/08/2026). No modo interativo o --silent
+        # continua, que e onde ele foi posto pra nao poluir o terminal de quem instala.
+        $quieto = if ($Update) { @() } else { @('--silent') }
+        npm ci @quieto
         $rcCi = $LASTEXITCODE
         if ($rcCi -eq 0) {
-            npm run build --silent
+            npm run build @quieto
             $rcBuild = $LASTEXITCODE
         } else {
             $rcBuild = -1

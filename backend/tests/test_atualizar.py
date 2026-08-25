@@ -297,6 +297,25 @@ def test_log_guarda_o_comando_e_a_saida(repo):
     assert "primeira" in texto and "segunda" in texto
 
 
+def test_comando_nao_abre_janela_no_windows(repo, monkeypatch):
+    """No Windows, cada comando de console abria um terminal preto na frente de quem usa.
+
+    Visto em 25/08/2026, no meio de uma atualização: subiu uma janela escrita "npm ci" por cima do
+    app. No Linux o defeito não existe (não há console a criar), então só a flag é verificável aqui.
+    """
+    visto = {}
+    class P:
+        stdout = iter([])
+        returncode = 0
+        def wait(self, timeout=None):
+            return 0
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda *a, **kw: (visto.update(kw), P())[1])
+    monkeypatch.setattr(atualizar, "_SEM_JANELA_WINDOWS", 0x08000000)
+    atualizar._rodar(["true"])
+    assert visto.get("creationflags") == 0x08000000
+
+
 def test_timeout_vale_mesmo_com_o_processo_calado(repo):
     """Iterando em `proc.stdout`, o relógio só era olhado quando chegava linha.
 

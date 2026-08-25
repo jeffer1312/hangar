@@ -642,6 +642,8 @@ export interface AtualizacaoEstado {
   passos_invalidos?: string[];
   /** Comandos e saída, pra tela poder mostrar o que está rodando agora. */
   log?: string[];
+  /** Quando a etapa atual começou — a tela conta daqui pra mostrar que não travou. */
+  etapa_inicio?: string;
   commit_de?: string;
   commit_para?: string;
   ts?: string;

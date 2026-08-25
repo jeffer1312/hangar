@@ -224,6 +224,47 @@ describe('ciclo de vida', () => {
     }
   });
 
+  it('mostra o tempo correndo na etapa', async () => {
+    // O `npm ci --silent` não imprime NADA: sem relógio, a tela é idêntica a uma travada durante
+    // o minuto inteiro em que ele roda.
+    const inicio = new Date(Date.now() - 75_000).toISOString();
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ estado: { fase: 'rodando', passo: 4, total: 5,
+                       texto: 'Instalando dependências', etapa_inicio: inicio } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    expect(document.body.textContent ?? '').toContain('1min 15s');
+  });
+
+  it('não fecha enquanto está atualizando', async () => {
+    // Fechar no meio não interrompe nada (o motor roda fora do navegador), mas some com a única
+    // janela que mostra o que está acontecendo — e reabrir depois ninguém descobre sozinho.
+    const fechou = vi.fn();
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ estado: { fase: 'rodando', passo: 3, total: 5, texto: 'x' } }),
+    );
+    montar({ onClose: fechou });
+    await tick();
+    await tick();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    expect(fechou).not.toHaveBeenCalled();
+  });
+
+  it('fecha normalmente quando NÃO está atualizando', async () => {
+    const fechou = vi.fn();
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(base());
+    montar({ onClose: fechou });
+    await tick();
+    await tick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await tick();
+    expect(fechou).toHaveBeenCalled();
+  });
+
   it('mostra o log dos comandos quando existe', async () => {
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
       base({ estado: { fase: 'rodando', passo: 4, total: 5, texto: 'Instalando dependências',

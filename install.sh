@@ -210,7 +210,11 @@ if [ -f "$DIST" ] && [ -z "$(find frontend/src frontend/package-lock.json fronte
                               frontend/vite.config.* -newer "$DIST" -print -quit 2>/dev/null)" ]; then
   ok "frontend já buildado e atualizado (nada mudou desde o último build)"
 else
-  (cd frontend && npm ci --silent && npm run build --silent)
+  # Sem --silent no --update (o modo que o BOTÃO Atualizar usa): a caixinha da tela mostra esta
+  # saída ao vivo, e com --silent o npm não imprime nada — a tela fica idêntica a uma travada
+  # durante o minuto do `npm ci`. No modo interativo o --silent fica, pra não poluir o terminal.
+  QUIETO=--silent; [ "$UPDATE" = 1 ] && QUIETO=
+  (cd frontend && npm ci $QUIETO && npm run build $QUIETO)
   ok "buildado em frontend/dist/"
 fi
 fi

@@ -127,6 +127,12 @@
     timer = null;
   }
 
+  /** Fecha, a não ser que a atualização esteja em curso — aí a caixa fica travada. */
+  function fecharSePuder() {
+    if (rodando) return;
+    onClose();
+  }
+
   /** Terminou bem, mas o servidor não reiniciou sozinho (Windows, instalação na mão). */
   const faltaReiniciar = $derived(estado.fase === 'pronto' && estado.ok === true
                                   && !!estado.reiniciar_manual);
@@ -194,6 +200,21 @@
 
   const passosComTexto = $derived((dados?.passos ?? []).filter((p) => p.texto.trim()));
   const invalidos = $derived(estado.passos_invalidos ?? []);
+  // Relógio da etapa atual. É o único sinal de vida que não depende do comando falar: o
+  // `npm ci --silent` não imprime NADA, então nem a barra anda nem o log ganha linha, e a tela
+  // fica idêntica a uma travada. Anda por conta própria, sem esperar resposta do servidor.
+  let agoraMs = $state(Date.now());
+  $effect(() => {
+    if (!rodando) return;
+    const t = setInterval(() => (agoraMs = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+  const decorrido = $derived.by(() => {
+    if (!rodando || !estado.etapa_inicio) return '';
+    const s = Math.max(0, Math.round((agoraMs - new Date(estado.etapa_inicio).getTime()) / 1000));
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}min ${String(s % 60).padStart(2, '0')}s`;
+  });
+
   const log = $derived(estado.log ?? []);
   // ABERTO por padrão. Ficava escondido atrás de um "ver o que está rodando", e a caixinha existe
   // exatamente pro minuto em que "Instalando dependências" parece travada — obrigar um clique ali
@@ -227,7 +248,13 @@
   );
 </script>
 
-<BottomSheet {open} {onClose} wide centered ariaLabel={m.atualizar_titulo()} persistent={rodando}>
+<!-- `onClose` filtrado, e não `persistent`: enquanto a atualização roda, a caixa NÃO fecha por
+     Escape, por clique fora nem pelo ×. Todos esses caminhos chamam `onClose`, então barrar aqui
+     cobre os três de uma vez, sem mexer no BottomSheet, que é compartilhado com meia dúzia de
+     telas. Fechar no meio não interrompe nada (o motor roda fora do navegador), mas some com a
+     única janela que mostra o que está acontecendo — e reabrir depois é uma dança que ninguém
+     descobre sozinho. -->
+<BottomSheet {open} onClose={fecharSePuder} wide centered ariaLabel={m.atualizar_titulo()}>
   <div class="cx">
     {#if carregando && !dados}
       <p class="msg">{m.atualizar_carregando()}</p>
@@ -240,7 +267,7 @@
       <div class="barra">
         <div class="fill" style:width="{((estado.passo ?? 0) / (estado.total || 1)) * 100}%"></div>
       </div>
-      <p class="etapa">{estado.texto ?? ''}</p>
+      <p class="etapa">{estado.texto ?? ''}{decorrido ? ` · ${decorrido}` : ''}</p>
       {#if trabalhando > 0}
         <p class="aviso">{aviso_sessoes}</p>
       {/if}
@@ -383,8 +410,10 @@
            line-height: 1.5; }
 
   /* Terminalzinho: o que está rodando agora. Fechado por padrão — quem quer ver, abre. */
+  /* `padding: 0` deixava o texto encostar na borda de foco e sair cortado ("sconder"). */
   .ver-log { border: 0; background: transparent; color: var(--accent); font-family: inherit;
-             font-size: var(--text-xs); padding: 0; margin-bottom: var(--space-2); }
+             font-size: var(--text-xs); padding: var(--space-1) var(--space-2);
+             margin-bottom: var(--space-2); border-radius: var(--radius-sm); }
   .log { margin: 0; max-height: 220px; overflow: auto; padding: var(--space-3);
          background: var(--surface-inset); border: 1px solid var(--border-subtle);
          border-radius: var(--radius-md); font-family: var(--font-mono, monospace);

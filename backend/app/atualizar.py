@@ -59,6 +59,12 @@ _E_WINDOWS = os.name == "nt"
 # os da API do Win32 e não mudam.
 _FLAGS_DESTACADO_WINDOWS = 0x00000200 | 0x00000008   # CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
 
+# CREATE_NO_WINDOW. Sem isto, cada comando de console que a atualização roda no Windows ABRE UMA
+# JANELA na frente de quem está usando — visto em 25/08/2026: um console preto escrito "npm ci"
+# subiu por cima do app no meio da atualização. No Linux não acontece (não há console a criar), e
+# por isso o defeito só aparece na máquina onde ninguém estava olhando o código.
+_SEM_JANELA_WINDOWS = 0x08000000 if os.name == "nt" else 0
+
 # Etapas, na ordem em que acontecem. O rótulo é o que a tela mostra — em português, dizendo o que
 # está acontecendo com a máquina, não o comando que roda.
 ETAPAS = (
@@ -121,10 +127,17 @@ def _escrever(**campos) -> None:
 
 
 def _etapa(chave: str, **extra) -> None:
-    """Marca a etapa atual. `passo`/`total` alimentam a barra da tela."""
+    """Marca a etapa atual. `passo`/`total` alimentam a barra da tela.
+
+    `etapa_inicio` existe pra tela poder mostrar um relógio correndo. Sem ele, uma etapa longa e
+    MUDA — `npm ci --silent` é literalmente sem saída — fica indistinguível de uma travada: nem a
+    barra anda, nem o log ganha linha. O relógio é o único sinal de vida que não depende do comando
+    resolver falar.
+    """
     idx = next((i for i, (k, _) in enumerate(ETAPAS) if k == chave), 0)
     _escrever(fase="rodando", etapa=chave, passo=idx + 1, total=len(ETAPAS),
-              texto=ETAPAS[idx][1], **extra)
+              texto=ETAPAS[idx][1],
+              etapa_inicio=datetime.now().astimezone().isoformat(timespec="seconds"), **extra)
 
 
 # ─── Rodar comando ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +181,7 @@ def _rodar(args: list[str], cwd: Path | None = None,
         args, cwd=str(cwd or REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
         env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"},
+        creationflags=_SEM_JANELA_WINDOWS,   # 0 no POSIX: `Popen` aceita e ignora
     )
     # A leitura vive numa THREAD, e o laço principal espera na fila com prazo. Iterar direto em
     # `proc.stdout` bloqueia dentro do `readline()`, então o relógio só era consultado quando uma
@@ -666,7 +680,9 @@ def iniciar(porta: int = 8765) -> dict:
     args = tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", str(porta)]
     extra: dict = {}
     if _E_WINDOWS:
-        extra["creationflags"] = _FLAGS_DESTACADO_WINDOWS
+        # Destacado E sem janela: o processo da atualização é de console, e sem o CREATE_NO_WINDOW
+        # ele abre um terminal preto na tela de quem apertou o botão.
+        extra["creationflags"] = _FLAGS_DESTACADO_WINDOWS | 0x08000000
     else:
         extra["start_new_session"] = True   # setsid: sai do grupo de processos do backend
 
