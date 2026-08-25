@@ -824,6 +824,36 @@ def iniciar(porta: int = 8765) -> dict:
     return {"ok": True, "pid": proc.pid}
 
 
+def reiniciar_agora() -> dict:
+    """Reinicia o servidor SEM atualizar nada. Devolve na hora; o restart roda destacado.
+
+    Existe pro caso em que o disco já está à frente do processo — um `git pull` feito à mão, ou uma
+    atualização que terminou sem reiniciar. Até aqui a tela só sabia dizer "entra no próximo
+    reinício" e a pessoa tinha de descobrir sozinha qual era o comando.
+
+    Destacado pelo mesmo motivo do `iniciar` (e com o mesmo escopo transiente): o
+    `systemctl --user restart` mata o cgroup da unit, e quem deu o comando de dentro dele morre
+    antes de o comando terminar.
+
+    Só `systemd` — nas outras topologias quem sabe derrubar e subir o servidor é o instalador, e
+    inventar um `kill` no processo de alguém seria pior que recusar.
+    """
+    topologia = _topologia()
+    if topologia != "systemd":
+        return {"ok": False, "erro": "topologia", "topologia": topologia}
+    proc = subprocess.Popen(
+        tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", "--reiniciar"],
+        cwd=str(REPO / "backend"),
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "pid": proc.pid}
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    executar(int(sys.argv[1]) if len(sys.argv) > 1 else 8765)
+    if len(sys.argv) > 1 and sys.argv[1] == "--reiniciar":
+        _avisar_sessoes()
+        _reiniciar(_topologia())
+    else:
+        executar(int(sys.argv[1]) if len(sys.argv) > 1 else 8765)

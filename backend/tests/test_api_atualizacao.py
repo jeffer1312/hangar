@@ -101,6 +101,26 @@ def test_dependencia_faltando_da_409_nomeando_o_que_falta():
     assert not ini.called
 
 
+def test_reiniciar_lanca_e_devolve_na_hora():
+    c = _client()
+    with patch("app.api.atualizar.reiniciar_agora", return_value={"ok": True, "pid": 7}) as rei:
+        r = c.post("/api/atualizacao/reiniciar", headers=_AUTH)
+    assert r.status_code == 200 and r.json()["pid"] == 7
+    assert rei.called
+
+
+def test_reiniciar_fora_do_systemd_da_409_dizendo_a_topologia():
+    """Windows/instalação na mão: quem sobe e derruba o servidor é o instalador, então recusa —
+    e a recusa nomeia a topologia, senão a tela só saberia dizer "não deu"."""
+    c = _client()
+    with patch("app.api.atualizar.reiniciar_agora",
+               return_value={"ok": False, "erro": "topologia", "topologia": "windows"}):
+        r = c.post("/api/atualizacao/reiniciar", headers=_AUTH)
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_reinicio_indisponivel"
+    assert r.json()["detail"]["params"]["topologia"] == "windows"
+
+
 def test_config_devolve_a_versao_do_processo():
     c = _client()
     with patch("app.api.diag.VERSAO_EM_EXECUCAO", "v8-processo"):

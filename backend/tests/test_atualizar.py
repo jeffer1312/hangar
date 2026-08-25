@@ -666,6 +666,34 @@ def test_lancamento_usa_escopo_systemd(repo, monkeypatch):
     assert "app.atualizar" in args_vistos
 
 
+def test_reiniciar_agora_lanca_destacado_e_no_escopo(repo, monkeypatch):
+    """Mesmo cuidado do lançamento da atualização: o `systemctl restart` mata o cgroup do backend,
+    então quem dá o comando tem de estar FORA dele — senão morre no meio do próprio comando."""
+    args_vistos: list[str] = []
+    capturado: dict = {}
+    class P:
+        pid = 3
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
+    monkeypatch.setattr(atualizar.tmux, "_scope_prefix",
+                        lambda: ["systemd-run", "--user", "--scope", "-q", "--"])
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda a, **kw: (args_vistos.extend(a), capturado.update(kw), P())[2])
+    r = atualizar.reiniciar_agora()
+    assert r == {"ok": True, "pid": 3}
+    assert args_vistos[:3] == ["systemd-run", "--user", "--scope"]
+    assert args_vistos[-1] == "--reiniciar"
+    assert capturado.get("start_new_session") is True
+
+
+def test_reiniciar_agora_recusa_fora_do_systemd(repo, monkeypatch):
+    """Windows e instalação na mão: quem derruba e sobe o servidor é o instalador. Recusa nomeando
+    a topologia — e NÃO lança processo nenhum, que é o que um `kill` inventado aqui faria."""
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "windows")
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("nao devia lancar")))
+    assert atualizar.reiniciar_agora() == {"ok": False, "erro": "topologia", "topologia": "windows"}
+
+
 def test_lancamento_escolhe_o_modo_do_sistema(repo, monkeypatch):
     """POSIX sai do grupo de processos com `setsid`; Windows usa DETACHED_PROCESS."""
     capturado: dict = {}

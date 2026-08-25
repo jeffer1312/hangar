@@ -2821,6 +2821,18 @@ async def post_atualizacao_iniciar():
     return r
 
 
+@app.post("/api/atualizacao/reiniciar", dependencies=[Depends(require_auth)])
+async def post_atualizacao_reiniciar():
+    """Reinicia o servidor sem atualizar nada — o caso do disco já estar à frente do processo."""
+    r = await asyncio.to_thread(atualizar.reiniciar_agora)
+    if not r.get("ok"):
+        raise HTTPException(409, detail=erro(
+            "erro_reinicio_indisponivel",
+            f"esta maquina nao reinicia sozinha (topologia {r.get('topologia')})",
+            topologia=r.get("topologia")))
+    return r
+
+
 async def _fetch_loop():
     """`git fetch` de tempos em tempos, senão `origin/main` é a foto do último pull de alguém.
 

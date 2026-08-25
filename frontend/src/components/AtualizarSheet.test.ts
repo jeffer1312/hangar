@@ -77,6 +77,35 @@ describe('em dia', () => {
     expect(txt).toContain('v1-velho');
     expect(txt).toContain(m.atualizar_precisa_reiniciar());
   });
+
+  it('divergiu no systemd: oferece o botão e ele chama o reinício', async () => {
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             pre_voo: { pode: true, faltando: [], topologia: 'systemd' } }),
+    );
+    const rei = vi.spyOn(api, 'reiniciarServidor').mockResolvedValue({ ok: true, pid: 1 });
+    montar();
+    await tick();
+    await tick();
+    const bt = [...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.includes(m.atualizar_reiniciar_botao()));
+    expect(bt).toBeTruthy();
+    bt!.click();
+    await tick();
+    expect(rei).toHaveBeenCalled();
+  });
+
+  it('fora do systemd não oferece botão nenhum — quem reinicia ali é o instalador', async () => {
+    // Sem isto o botão apareceria no Windows e só serviria pra devolver 409 na cara de quem clicou.
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             pre_voo: { pode: true, faltando: [], topologia: 'windows' } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    expect(document.body.textContent ?? '').not.toContain(m.atualizar_reiniciar_botao());
+  });
 });
 
 describe('versão nova', () => {

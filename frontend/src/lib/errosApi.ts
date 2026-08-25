@@ -264,6 +264,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_drive_fallback_falhou: (p) => m.erro_drive_fallback_falhou({ erro: fmtParam(p.erro) }),
   erro_catalogo_pi_indisponivel: () => m.erro_catalogo_pi_indisponivel(),
   erro_pi_recusou_troca: (p) => m.erro_pi_recusou_troca({ provider: String(p.provider), id: String(p.id), thinking: String(p.thinking) }),
+  erro_reinicio_indisponivel: () => m.erro_reinicio_indisponivel(),
 };
 
 export function mensagemDeErro(code: string, params: Parametros = {}): string | undefined {

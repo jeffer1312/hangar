@@ -881,6 +881,11 @@ export function iniciarAtualizacao(): Promise<{ ok: boolean; pid: number }> {
   return apiFetch('/api/atualizacao/iniciar', { method: 'POST' });
 }
 
+/** Reinicia o servidor sem atualizar nada (disco já à frente do processo). 409 fora do systemd. */
+export function reiniciarServidor(): Promise<{ ok: boolean; pid: number }> {
+  return apiFetch('/api/atualizacao/reiniciar', { method: 'POST' });
+}
+
 export function getConfigForServer(s: Server): Promise<ConfigServidor> {
   return apiFetchForServer(s, '/api/config');
 }

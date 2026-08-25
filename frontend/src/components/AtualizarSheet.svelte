@@ -16,7 +16,7 @@
    */
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
-  import { getAtualizacao, iniciarAtualizacao } from '../lib/api';
+  import { getAtualizacao, iniciarAtualizacao, reiniciarServidor } from '../lib/api';
   import * as diag from '../lib/diag';
   import { renderMarkdown } from '../lib/markdown';
   import type { Atualizacao } from '../lib/types';
@@ -262,6 +262,45 @@
         ? m.atualizar_falhou_voltou_fora()
         : m.atualizar_falhou_voltou(),
   );
+  /**
+   * Dá pra reiniciar daqui? Só quando o disco está à frente do processo E a máquina roda por
+   * systemd — nas outras topologias quem derruba e sobe o servidor é o instalador, e o backend
+   * recusa (409). Sem o botão, a única saída era descobrir o comando do serviço por conta.
+   */
+  const podeReiniciar = $derived(versoesDivergem && dados?.pre_voo?.topologia === 'systemd');
+  let reiniciando = $state(false);
+
+  const _TETO_VOLTAR_MS = 90_000;
+
+  async function reiniciar() {
+    reiniciando = true;
+    erroDeRede = '';
+    try {
+      await reiniciarServidor();
+      // O servidor cai agora, então falha de rede aqui é ESPERADA (mesmo desenho do polling da
+      // atualização). Espera ele voltar JÁ no código do disco — só aí a página recarrega; recarregar
+      // antes serviria o bundle antigo e a tela diria de novo que as versões divergem.
+      const limite = Date.now() + _TETO_VOLTAR_MS;
+      while (Date.now() < limite) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          const d = await getAtualizacao();
+          if (d.versoes.backend === d.versoes.repo) {
+            concluir();
+            return;
+          }
+        } catch {
+          // fora do ar no meio do restart: é o caminho normal
+        }
+      }
+      erroDeRede = m.atualizar_reinicio_demorou();
+    } catch (e) {
+      erroDeRede = e instanceof Error ? e.message : String(e);
+    } finally {
+      reiniciando = false;
+    }
+  }
+
   const resumo_mudancas = $derived(
     mudancas.length === 1
       ? m.atualizar_disponivel_sub_uma()
@@ -401,6 +440,11 @@
         <button class="bt secundario" onclick={() => carregar(false, true)} disabled={carregando}>
           {m.atualizar_procurar()}
         </button>
+        {#if podeReiniciar}
+          <button class="bt primario" onclick={reiniciar} disabled={reiniciando}>
+            {reiniciando ? m.atualizar_reiniciando() : m.atualizar_reiniciar_botao()}
+          </button>
+        {/if}
       </div>
     {/if}
   </div>
