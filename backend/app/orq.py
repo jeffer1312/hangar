@@ -61,8 +61,13 @@ def _int_ou_none(v) -> int | None:
 def _le_eventos(path: Path) -> list[dict]:
     out: list[dict] = []
     try:
-        texto = path.read_text(encoding="utf-8")
-    except OSError:
+        # `errors="replace"` e `ValueError` no except, os dois de propósito. O arquivo é append de
+        # um agente vivo, sem tmp+rename: um turno morto no meio da escrita deixa um caractere
+        # multi-byte cortado, e `UnicodeDecodeError` é ValueError — não OSError. Sem isto, UMA
+        # execução truncada derrubava a listagem INTEIRA com 500 (medido). `ValueError` também
+        # cobre o `embedded null byte` que um exec_id de URL com \x00 levanta no open.
+        texto = path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
         return out
     for linha in texto.splitlines():
         linha = linha.strip()
@@ -131,9 +136,19 @@ def _monta(exec_id: str, eventos: list[dict]) -> ExecucaoResumo:
 def listar_execucoes(raiz: Path) -> list[ExecucaoResumo]:
     out: list[ExecucaoResumo] = []
     try:
-        dirs = [d for d in raiz.iterdir() if d.is_dir()]
+        entradas = list(raiz.iterdir())
     except OSError:
         return out
+    # `is_dir()` protegido POR ENTRADA: junto do iterdir num try só, um symlink quebrado ou uma
+    # pasta sem permissão de stat abortava a lista inteira — e calada, sem o warning que o resto
+    # desta função usa. Uma execução com problema não pode apagar as outras da tela.
+    dirs: list[Path] = []
+    for d in entradas:
+        try:
+            if d.is_dir():
+                dirs.append(d)
+        except OSError:
+            _log.warning("orq: nao consegui inspecionar %s — fora da lista", d.name)
     for d in dirs:
         arq = d / "eventos.jsonl"
         eventos = _le_eventos(arq)
@@ -147,8 +162,12 @@ def listar_execucoes(raiz: Path) -> list[ExecucaoResumo]:
 
 
 def detalhe(raiz: Path, exec_id: str) -> ExecucaoResumo | None:
-    if "/" in exec_id or "\\" in exec_id or exec_id in (".", ".."):
-        return None  # exec_id vem de URL; nunca vira caminho fora da raiz
+    # exec_id vem de URL e vira NOME DE PASTA. A lista de proibidos leva `:` por causa do Windows,
+    # onde `D:foo` não tem separador nenhum e mesmo assim escapa da raiz — `Path("C:/base") /
+    # "D:foo"` resolve pra `D:foo`, relativo ao diretório corrente do OUTRO drive. Este repo roda
+    # em Windows (ConPTY/psmux), então não é hipótese.
+    if not exec_id or any(c in exec_id for c in "/\\:\x00") or exec_id in (".", ".."):
+        return None
     eventos = _le_eventos(raiz / exec_id / "eventos.jsonl")
     return _monta(exec_id, eventos) if eventos else None
 

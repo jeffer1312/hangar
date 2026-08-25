@@ -48,3 +48,29 @@ def test_lista_e_detalhe(api_client, tmp_path, monkeypatch):
 
 def test_sem_token_e_401(api_client):
     assert api_client.get("/api/orq").status_code == 401
+
+
+def test_exec_id_hostil_e_404_e_nao_500(api_client, tmp_path, monkeypatch):
+    # Null byte e nome de drive do Windows: os dois tem que sair como "nao encontrei", nunca como
+    # erro interno — 500 aqui e o endpoint admitindo que tentou abrir o caminho.
+    monkeypatch.setattr(orq, "raiz_padrao", lambda: tmp_path)
+    _semeia(tmp_path)
+    for hostil in ("x%00y", "D:foo", ".."):
+        r = api_client.get(f"/api/orq/{hostil}", headers=_H)
+        assert r.status_code == 404, f"{hostil} devolveu {r.status_code}"
+        # `..` nem chega ao endpoint: o roteador normaliza a URL e responde o 404 dele, com
+        # `detail` string. Os outros dois passam pelo guard e trazem o code do app.
+        detalhe = r.json()["detail"]
+        if isinstance(detalhe, dict):
+            assert detalhe["code"] == "erro_nao_encontrado"
+
+
+def test_execucao_corrompida_nao_derruba_a_listagem(api_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(orq, "raiz_padrao", lambda: tmp_path)
+    _semeia(tmp_path)
+    podre = tmp_path / "2026-08-23-truncada"
+    podre.mkdir()
+    (podre / "eventos.jsonl").write_bytes(b'{"ts": "t", "tipo": "task_inicio", "titulo": "caf\xc3')
+    r = api_client.get("/api/orq", headers=_H)
+    assert r.status_code == 200
+    assert [e["id"] for e in r.json()["execucoes"]] == ["2026-08-22-paridade"]

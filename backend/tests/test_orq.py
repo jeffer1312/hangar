@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest import mock
 
 from app import orq
 
@@ -101,6 +102,48 @@ def test_ordenacao_por_nome_de_diretorio(tmp_path):
 def test_detalhe_inexistente_e_traversal_sao_none(tmp_path):
     assert orq.detalhe(tmp_path, "nao-existe") is None
     assert orq.detalhe(tmp_path, "../fora") is None
+
+
+def test_drive_do_windows_e_null_byte_nao_viram_caminho(tmp_path):
+    # "D:foo" nao tem separador nenhum e mesmo assim sai da raiz no Windows (Path("C:/base") /
+    # "D:foo" -> "D:foo", relativo ao diretorio corrente do outro drive). O null byte nao chega a
+    # ser caminho: ele levanta ValueError no open, que virava 500 em vez de 404.
+    assert orq.detalhe(tmp_path, "D:foo") is None
+    assert orq.detalhe(tmp_path, "x\x00y") is None
+    assert orq.detalhe(tmp_path, "") is None
+
+
+def test_arquivo_com_byte_invalido_nao_derruba_as_outras_execucoes(tmp_path, caplog):
+    # O eventos.jsonl e append de agente vivo, sem tmp+rename: turno morto no meio da escrita
+    # deixa um caractere multi-byte cortado. UnicodeDecodeError e ValueError, nao OSError — sem o
+    # except certo, UMA execucao truncada zerava a listagem inteira com 500.
+    _grava(tmp_path, "2026-08-22-boa", _exec_basica())
+    podre = tmp_path / "2026-08-23-truncada"
+    podre.mkdir()
+    (podre / "eventos.jsonl").write_bytes(
+        b'{"ts": "t", "tipo": "task_inicio", "task": 1, "titulo": "caf\xc3')
+    execs = orq.listar_execucoes(tmp_path)
+    assert [e.id for e in execs] == ["2026-08-22-boa"]
+    assert "truncada" in caplog.text
+
+
+def test_entrada_que_falha_no_stat_nao_apaga_as_demais(tmp_path, caplog):
+    # is_dir() junto do iterdir num try so: uma entrada sem permissao abortava a comprehension
+    # inteira e a funcao devolvia [] em silencio.
+    _grava(tmp_path, "2026-08-22-boa", _exec_basica())
+    ruim = tmp_path / "2026-08-24-sem-stat"
+    ruim.mkdir()
+    real_is_dir = Path.is_dir
+
+    def is_dir_que_explode(self):
+        if self.name == "2026-08-24-sem-stat":
+            raise PermissionError("stat negado")
+        return real_is_dir(self)
+
+    with mock.patch.object(Path, "is_dir", is_dir_que_explode):
+        execs = orq.listar_execucoes(tmp_path)
+    assert [e.id for e in execs] == ["2026-08-22-boa"]
+    assert "sem-stat" in caplog.text
 
 
 def test_ficha_conta_aceita_e_nao_aceita(tmp_path):
