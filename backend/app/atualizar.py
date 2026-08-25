@@ -30,10 +30,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -167,26 +169,60 @@ def _rodar(args: list[str], cwd: Path | None = None,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
         env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"},
     )
+    # A leitura vive numa THREAD, e o laço principal espera na fila com prazo. Iterar direto em
+    # `proc.stdout` bloqueia dentro do `readline()`, então o relógio só era consultado quando uma
+    # linha chegava — um processo que trava CALADO (npm esperando um prompt, rede pendurada) nunca
+    # devolvia o controle e o timeout virava letra morta. Medido: `sh -c "sleep 5"` com prazo de 1s
+    # voltava normal, em 5s. Thread+fila em vez de `select` porque o Windows não faz select em pipe.
+    fila: queue.Queue[str | None] = queue.Queue()
+
+    def _ler() -> None:
+        try:
+            assert proc.stdout is not None
+            for bruta in proc.stdout:
+                fila.put(bruta)
+        finally:
+            fila.put(None)      # sentinela de fim; o `finally` garante que ela sempre vai
+
+    leitor = threading.Thread(target=_ler, name="atualizar-log", daemon=True)
+    leitor.start()
+
     pendentes: list[str] = []
     ultimo_flush = time.monotonic()
-    assert proc.stdout is not None
-    for bruta in proc.stdout:
-        linha = _ANSI.sub("", bruta).rstrip()
-        linhas.append(linha)
-        if linha:
-            pendentes.append(linha)
+    while True:
+        restante = limite - time.monotonic()
+        if restante <= 0:
+            proc.kill()
+            raise subprocess.TimeoutExpired(args, timeout)
+        try:
+            # Teto de 1s por espera: mesmo em silêncio total, o laço acorda pra reavaliar o prazo e
+            # pra despejar o que ficou pendente.
+            bruta = fila.get(timeout=min(1.0, restante))
+        except queue.Empty:
+            bruta = ""
+        if bruta is None:
+            break
+        if bruta:
+            linha = _ANSI.sub("", bruta).rstrip()
+            linhas.append(linha)
+            if linha:
+                pendentes.append(linha)
         agora = time.monotonic()
         # Agrupa por ~1s: uma escrita de arquivo por linha faria centenas de tmp+rename num npm ci.
         if pendentes and agora - ultimo_flush >= 1.0:
             _log_do_estado("\n".join(pendentes))
             pendentes = []
             ultimo_flush = agora
-        if agora > limite:
-            proc.kill()
-            raise subprocess.TimeoutExpired(args, timeout)
     if pendentes:
         _log_do_estado("\n".join(pendentes))
-    proc.wait()
+    try:
+        # COM prazo: o EOF do pipe não garante que o processo já saiu (um neto que herdou o fd pode
+        # tê-lo fechado antes). Sem teto aqui, um `waitpid` que não retorna prenderia a atualização
+        # no último ponto sem rede de segurança.
+        proc.wait(timeout=max(1.0, limite - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise
     if proc.returncode != 0:
         _log_do_estado(f"[saiu com {proc.returncode}]")
     # Mesma forma de retorno de antes: quem chama lê `.returncode`, `.stdout` e `.stderr`. O stderr

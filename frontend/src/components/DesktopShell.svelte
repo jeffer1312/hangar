@@ -132,7 +132,15 @@ import * as m from '../paraglide/messages';
   // Sidebar/Board montados: retain/release é refcount, não cria streams por consumidor.
   onMount(() => {
     sessionsStore.retain();
-    return () => sessionsStore.release();
+    return () => {
+      sessionsStore.release();
+      // Fecha a caixa ao desmontar o shell. O estado dela mora num store de MÓDULO (pra o botão da
+      // tela Sobre alcançá-la), e store de módulo não morre junto com o componente: o App desmonta
+      // este shell ao ir pra Custos/Arquivo, e o `BottomSheet` não chama `onClose` no destroy —
+      // então voltar pro chat reabria a caixa sozinha, sem ninguém ter pedido. Antes, com estado
+      // local, isso se resolvia por tabela.
+      atualizarUI.fechar();
+    };
   });
 
   // ── Botão Atualizar (só desktop: quem atualiza está na máquina onde o repo vive) ──────────────

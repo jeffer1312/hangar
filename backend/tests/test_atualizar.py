@@ -297,6 +297,19 @@ def test_log_guarda_o_comando_e_a_saida(repo):
     assert "primeira" in texto and "segunda" in texto
 
 
+def test_timeout_vale_mesmo_com_o_processo_calado(repo):
+    """Iterando em `proc.stdout`, o relógio só era olhado quando chegava linha.
+
+    Um processo que trava CALADO (npm num prompt, rede pendurada) nunca devolvia o controle e o
+    prazo virava letra morta — medido: `sleep 5` com teto de 1s voltava normal, em 5s.
+    """
+    import time as _t
+    inicio = _t.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        atualizar._rodar(["sh", "-c", "sleep 30"], timeout=2.0)
+    assert _t.monotonic() - inicio < 10, "nao respeitou o prazo"
+
+
 def test_log_registra_codigo_de_saida_ruim(repo):
     atualizar._rodar(["sh", "-c", "exit 7"])
     assert "[saiu com 7]" in "\n".join(atualizar.estado()["log"])
