@@ -152,6 +152,35 @@ def test_ultimas_pula_linha_corrompida_em_vez_de_derrubar():
     assert [l["evento"] for l in diag.ultimas()] == ["bom"]
 
 
+def test_cabecalho_traz_o_commit_e_o_sistema_do_servidor():
+    # O que o repositório NÃO conta: de qual commit veio a máquina que reportou. Sem isso a primeira
+    # pergunta da análise ("isso já foi corrigido?") não tem resposta.
+    diag.anotar_da_tela([{"evento": "x"}])
+    cab = json.loads(diag.ler_tudo().splitlines()[0])
+    assert cab["evento"] == "diag.formato"
+    assert "backend" in cab and "so_servidor" in cab
+    assert cab["dias_guardados"] == diag.DIAS_GUARDADOS
+    assert "chave de API" in cab["nao_contem"]
+
+
+def test_registrar_carimba_o_id_do_pedido_em_curso():
+    # É o que liga a linha da tela ("POST /select devolveu 409") à do servidor ("o cursor não
+    # convergiu"). Sem o id, amarrar as duas depende de comparar horário — que empata com duas
+    # telas abertas.
+    token = diag.req_atual.set("abc123-7")
+    try:
+        diag.registrar("opcao.nao_convergiu", "erro", sessao="pmw")
+    finally:
+        diag.req_atual.reset(token)
+    l = _linhas()[0]
+    assert l["req"] == "abc123-7" and l["origem"] == "servidor"
+
+
+def test_sem_pedido_em_curso_nao_inventa_id():
+    diag.registrar("qualquer")
+    assert "req" not in _linhas()[0]
+
+
 def test_ultimas_sem_arquivo_nenhum():
     assert diag.ultimas() == []
 
@@ -159,4 +188,8 @@ def test_ultimas_sem_arquivo_nenhum():
 def test_resumo_sem_pasta_nenhuma():
     assert diag.resumo() == {"dias": 0, "bytes": 0, "arquivos": [],
                              "dias_guardados": diag.DIAS_GUARDADOS}
-    assert diag.ler_tudo() == ""
+    # O download nunca vem vazio de verdade: a primeira linha é o cabeçalho com o commit do backend
+    # e o sistema, que é o que o repositório sozinho não conta.
+    linhas = diag.ler_tudo().splitlines()
+    assert len(linhas) == 1
+    assert json.loads(linhas[0])["evento"] == "diag.formato"

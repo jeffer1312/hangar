@@ -857,7 +857,6 @@
   "config_motores_erro_salvar": "Falha ao salvar",
   "config_motores_erro_sync": "Motor salvo, mas não deu pra publicar a chave nos outros agentes",
   "config_diag_titulo": "Diário de uso",
-  "config_diag_desc": "Registro local do que foi usado e do que falhou, dos últimos {dias} dias. Não sai daqui: só quando você baixa e envia. Não guarda conversa nem chave.",
   "config_diag_baixar": "Baixar diário",
   "config_diag_baixando": "Preparando…",
   "config_diag_tem": "{dias} dia(s) · {tam}",

@@ -93,6 +93,15 @@ export default defineConfig({
     __HANGAR_VERSION__: JSON.stringify(hangarVersion),
     __HANGAR_BUILD_DATE__: JSON.stringify(hangarBuildDate),
   },
+  build: {
+    // Sourcemap no build de produção porque o diário de uso (lib/diag.ts) grava o stack de erro de
+    // JS, e sem o mapa o stack aponta pra uma linha do bundle minificado — inútil pra quem vai
+    // achar o defeito, mesmo tendo o repositório: o bundle não corresponde a arquivo nenhum dele.
+    // Com o mapa, o par (versão do build + stack) leva ao arquivo e à linha de origem.
+    // Custo: arquivos .map ao lado do bundle, baixados só quando alguém abre o devtools. Este app
+    // é de uma pessoa por máquina, em LAN/VPN — não há terceiro de quem esconder o código.
+    sourcemap: true,
+  },
   server: {
     // Bind IPv4 loopback: vite default `localhost` resolve pra ::1 (IPv6-only) nesta maquina,
     // mas o `tailscale serve` proxia pra 127.0.0.1:5173 (IPv4) -> sem isto da 502. Forca IPv4.

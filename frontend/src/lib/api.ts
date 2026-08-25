@@ -3,7 +3,7 @@ import * as m from '../paraglide/messages';
 import { localeAtual } from './locale';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 // diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
-import { registrar as registrarDiag } from './diag';
+import { registrar as registrarDiag, novoReq } from './diag';
 import type {
   SessionInfo,
   Provider,
@@ -126,12 +126,16 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getBaseUrl();
   const url = `${base}${path}`;
   const t0 = Date.now();
+  // Id do pedido: vai no cabeçalho e na linha do diário dos DOIS lados, pra quem analisa seguir a
+  // cadeia (o toque na tela -> o que o servidor fez) sem depender de comparar horário.
+  const req = novoReq();
   let res: Response;
   try {
     res = await fetch(url, {
       ...init,
       headers: {
         'Content-Type': 'application/json',
+        'X-Hangar-Req': req,
         ...authHeaders(),
         ...(init?.headers ?? {}),
       },
@@ -139,7 +143,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (e) {
     // Rede caiu / servidor fora: nunca chegou a haver status. Distinguir isto de um 500 é metade
     // do diagnóstico de "sumiu do nada".
-    registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0,
+    registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req,
                     detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });
     throw e;
   }
@@ -152,12 +156,19 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const metodo = (init?.method ?? 'GET').toUpperCase();
   const acao = metodo !== 'GET';
   if (acao || !res.ok) {
+    // Falhou: junta o MOTIVO que o backend mandou no corpo. Só o status ("#409") diz que recusou e
+    // não por quê, e o `detail` do backend é exatamente a explicação ("o terminal está aberto",
+    // "sessão não encontrada — opção NÃO enviada"). Lido de um `clone()` porque o corpo só pode ser
+    // consumido uma vez e quem precisa dele de verdade é o `ensureOk` logo abaixo, que monta a
+    // mensagem da tela — tirar isso dele quebraria todo tratamento de erro do app.
+    const motivo = res.ok ? '' : await errorDetail(res.clone()).catch(() => '');
     registrarDiag({
       evento: acao ? 'acao' : 'leitura',
       nivel: res.ok ? 'ok' : (res.status >= 500 ? 'erro' : 'aviso'),
       codigo: String(res.status),
       ms: Date.now() - t0,
-      detalhe: `${metodo} ${rotaGenerica(path)}`,
+      req,
+      detalhe: [`${metodo} ${rotaGenerica(path)}`, motivo].filter(Boolean).join(' — '),
     });
   }
   await ensureOk(res);

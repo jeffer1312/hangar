@@ -857,7 +857,6 @@
   "config_motores_erro_salvar": "Failed to save",
   "config_motores_erro_sync": "Engine saved, but the key could not be published to the other agents",
   "config_diag_titulo": "Usage log",
-  "config_diag_desc": "Local record of what was used and what failed, for the last {dias} days. It never leaves this machine — only when you download and send it. It stores no conversation and no keys.",
   "config_diag_baixar": "Download log",
   "config_diag_baixando": "Preparing…",
   "config_diag_tem": "{dias} day(s) · {tam}",

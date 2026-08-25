@@ -21,6 +21,10 @@ export interface Evento {
   codigo?: string;
   detalhe?: string;
   ms?: number;
+  /** Id do pedido HTTP — o MESMO valor aparece na linha que o servidor gravou. */
+  req?: string;
+  /** Primeiras molduras do stack, em erro de JS. */
+  pilha?: string;
   // Plataforma: só no `app.abriu`, uma vez por carga de página (ver CLI abaixo).
   so?: string;
   navegador?: string;
@@ -32,6 +36,21 @@ export interface Evento {
 // Id curto desta aba. Amarra cada linha ao `app.abriu` que carrega a plataforma — mandar sistema,
 // navegador e resolução em TODA linha multiplicaria o arquivo por nada.
 const CLI = Math.random().toString(36).slice(2, 8);
+
+// Contador crescente desta aba. O `ts` tem milissegundos, mas duas linhas caem no mesmo ms com
+// facilidade (o lote é enviado junto) — e ordem errada num diário é como reconstruir causa e efeito
+// ao contrário. `seq` desempata sem depender do relógio.
+let seq = 0;
+
+/** Id curto de um pedido HTTP. Vai no cabeçalho `X-Hangar-Req` e na linha do diário dos DOIS lados. */
+export function novoReq(): string {
+  return `${CLI}-${(++seq).toString(36)}`;
+}
+
+// Última tela vista. Carimbada em TODA linha que não trouxer uma própria: sem isso um `js.erro` ou
+// uma ação que falhou diziam o quê e não ONDE, e "onde a pessoa estava" é metade da análise —
+// cruzar o horário do erro com o `tela.ver` anterior era trabalho manual em cima do arquivo.
+let telaCorrente = '';
 
 const FILA: Record<string, unknown>[] = [];
 const TETO_FILA = 200;        // pico de erro em laço não pode virar consumo de memória
@@ -69,6 +88,35 @@ export function detectarNavegador(ua: string): string {
 
 export { detectarSO };
 
+/**
+ * Erro que o NAVEGADOR emite e que não é defeito do app.
+ *
+ * O `ResizeObserver loop` é o caso: o Chrome dispara isso quando um callback de resize muda o
+ * layout e provoca outra passada — o próprio spec diz que é benigno, e o app usa ResizeObserver em
+ * vários lugares (terminal, canvas, composer). Na primeira meia hora de diário ele já era metade
+ * das linhas de erro, empurrando pra fora da prévia o que interessa. Filtrar ruído conhecido é o
+ * que mantém "erro" significando erro.
+ */
+export function ehRuidoDoNavegador(msg: string | undefined): boolean {
+  if (!msg) return false;
+  return /ResizeObserver loop/i.test(msg);
+}
+
+/**
+ * As primeiras molduras do stack, numa linha só.
+ *
+ * A mensagem sozinha ("Cannot read properties of undefined") não localiza nada: o app tem dezenas
+ * de lugares que poderiam produzi-la. O stack aponta o arquivo e a linha do bundle, e quem analisa
+ * tem o repositório e o sourcemap do mesmo build (`build.sourcemap` no vite.config) pra chegar no
+ * arquivo de origem. Três molduras: a primeira raramente basta (costuma ser um utilitário), e o
+ * stack inteiro estoura o teto de 300 do campo.
+ */
+export function molduras(erro: unknown, n = 3): string | undefined {
+  const stack = erro instanceof Error ? erro.stack : undefined;
+  if (!stack) return undefined;
+  return stack.split('\n').slice(1, 1 + n).map((l) => l.trim()).join(' <- ') || undefined;
+}
+
 async function enviar(): Promise<void> {
   timer = undefined;
   if (!FILA.length) return;
@@ -92,7 +140,8 @@ async function enviar(): Promise<void> {
 export function registrar(e: Evento): void {
   if (!ligado) return;
   if (FILA.length >= TETO_FILA) return;
-  FILA.push({ ...e, nivel: e.nivel ?? 'ok', cli: CLI });
+  FILA.push({ tela: telaCorrente || undefined, ...e, nivel: e.nivel ?? 'ok',
+              cli: CLI, seq: ++seq });
   // Erro vai na hora: se a página estiver prestes a quebrar, um lote de 4s depois não sai.
   if (e.nivel === 'erro') { clearTimeout(timer); void enviar(); return; }
   if (timer === undefined) timer = setTimeout(() => void enviar(), ESPERA_MS);
@@ -118,21 +167,25 @@ export function iniciar(versao: string, vista: 'desktop' | 'celular'): void {
   });
 
   window.addEventListener('error', (ev) => {
+    if (ehRuidoDoNavegador(ev.message)) return;
     registrar({ evento: 'js.erro', nivel: 'erro',
-                detalhe: `${ev.message} @ ${ev.filename ?? '?'}:${ev.lineno ?? 0}` });
+                detalhe: `${ev.message} @ ${ev.filename ?? '?'}:${ev.lineno ?? 0}:${ev.colno ?? 0}`,
+                pilha: molduras(ev.error) });
   });
   window.addEventListener('unhandledrejection', (ev) => {
     const r = ev.reason;
     registrar({ evento: 'js.promessa', nivel: 'erro',
-                detalhe: r instanceof Error ? `${r.name}: ${r.message}` : String(r) });
+                detalhe: r instanceof Error ? `${r.name}: ${r.message}` : String(r),
+                pilha: molduras(r) });
   });
   // `pagehide`, não `beforeunload`: no iOS o segundo não dispara ao trocar de app, e é justamente
   // o fim de sessão do celular que interessa registrar.
   window.addEventListener('pagehide', () => { clearTimeout(timer); void enviar(); });
 }
 
-/** Qual tela está à vista. É o "onde foi usado" — a pergunta de qual parte do app é usada. */
+/** Qual tela está à vista. É o "onde foi usado" — e o carimbo de ONDE de tudo que vier depois. */
 export function telaAtiva(tela: string): void {
+  telaCorrente = tela;
   registrar({ evento: 'tela.ver', tela });
 }
 

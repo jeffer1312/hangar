@@ -260,6 +260,24 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="hangar", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def _correlaciona_diag(request: Request, call_next):
+    """Põe o `X-Hangar-Req` do front no contexto, pra o diário poder LIGAR as duas pontas.
+
+    Sem isto, a linha da tela ("POST /select devolveu 409") e a do servidor ("o cursor do picker não
+    convergiu") ficam soltas no arquivo, e amarrar uma na outra depende de comparar horário — que
+    empata assim que há duas telas abertas. Com o id, quem analisa segue a cadeia inteira de um
+    toque só.
+    """
+    token = diag.req_atual.set(request.headers.get("x-hangar-req", "")[:32])
+    try:
+        return await call_next(request)
+    finally:
+        diag.req_atual.reset(token)
+
+
 # Body-size ANTES do CORS no codigo -> CORS fica por FORA (envolve ate o 413, adicionando headers CORS
 # na rejeicao). Ver _BodySizeLimitMiddleware.
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_BYTES)

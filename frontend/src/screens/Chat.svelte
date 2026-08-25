@@ -1232,10 +1232,16 @@
     es.onerror = () => {
       // Erro REAL (TCP RST). FECHA o es (senao o auto-retry nativo vira uma 2ª maquina de retry
       // martelando em paralelo) e reagenda com backoff. Half-open nao cai aqui -> watchdog cobre.
+      const estadoSSE = es?.readyState ?? 2;   // lido ANTES do close, que o zera pra CLOSED
       es?.close(); es = null;
       clearTimeout(watchdog);
+      // `readyState` é o que separa os dois motivos que dão o mesmo `onerror`: CONNECTING (0) = o
+      // navegador está tentando de novo (rede caiu, servidor reiniciou); CLOSED (2) = o servidor
+      // recusou de vez (401, 404, sessão morreu). Sem ele o diário registrava "caiu" e a análise
+      // parava aí.
+      const motivo = estadoSSE === 0 ? 'reconectando (rede/servidor)' : 'fechado pelo servidor';
       diag.registrar({ evento: 'sse.caiu', nivel: 'erro', tela: 'chat', sessao: sessionName,
-                       detalhe: `retry em ${sseRetryDelay}ms` });
+                       codigo: String(estadoSSE), ms: sseRetryDelay, detalhe: motivo });
       if (currentState === 'dead' || !alive) return;
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connectSSE, sseRetryDelay);

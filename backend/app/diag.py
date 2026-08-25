@@ -24,17 +24,26 @@ por tamanho embaralha justamente esse limite, e um dia movimentado apaga a seman
 cada dia é um arquivo, guardam-se sete, e o mais velho sai sozinho. O teto POR DIA continua
 existindo como rede contra laço maluco — ele para de gravar aquele dia em vez de encher o disco.
 """
+import contextvars
 import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import threading
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger("hangar.diag")
+
+# Id do pedido HTTP em curso, posto pelo middleware a partir do cabeçalho `X-Hangar-Req` que o
+# front manda. É o que LIGA a linha da tela ("mandei POST /select e voltou 409") à linha do servidor
+# ("o cursor do picker não convergiu") — sem ele as duas ficam soltas no arquivo, e reconstruir o
+# que causou o quê depende de adivinhar por horário, que empata quando há duas telas abertas.
+# contextvar, não parâmetro: `registrar` é chamado no fundo de handlers que não têm o request.
+req_atual: contextvars.ContextVar[str] = contextvars.ContextVar("hangar_req", default="")
 
 DIAS_GUARDADOS = 7
 # Teto por DIA. Não é pra economizar disco — é pra o arquivo continuar mandável por chat, que é o
@@ -54,6 +63,9 @@ _CAMPOS: dict[str, type] = {
     "detalhe": str,     # texto CURTO de diagnóstico — nunca conteúdo de conversa
     "ms": int,          # quanto demorou
     "cli": str,         # id curto da aba/janela: amarra a linha ao evento app.abriu dela
+    "req": str,         # id do pedido HTTP: amarra a linha da tela à do servidor (ver req_atual)
+    "seq": int,         # contador da aba: ordem inequívoca quando duas linhas caem no mesmo ms
+    "pilha": str,       # primeiras molduras do stack de um erro de JS
     # Plataforma. Vem UMA vez por carga de página, no evento `app.abriu`, e não em toda linha (que
     # multiplicaria o arquivo por nada) — o `cli` acima é o que liga as duas pontas.
     "so": str,          # Windows / macOS / Linux / Android / iOS
@@ -142,7 +154,8 @@ def registrar(evento: str, nivel: str = "ok", **campos: Any) -> None:
     diário nenhum.
     """
     try:
-        linha = _limpar({**campos, "evento": evento, "nivel": nivel})
+        linha = _limpar({**campos, "evento": evento, "nivel": nivel,
+                         "req": req_atual.get()})
         if linha:
             linha["origem"] = "servidor"
             _escrever([linha])
@@ -195,9 +208,40 @@ def anotar_da_tela(lote: Any) -> int:
     return _escrever(limpas)
 
 
+def _cabecalho() -> str:
+    """Primeira linha do download: o que o REPOSITÓRIO não pode contar.
+
+    Quem analisa tem o repo, então o dicionário de campos não precisa vir aqui — `_CAMPOS`, logo
+    acima, já é essa documentação, e repeti-la no arquivo só criaria uma segunda cópia pra
+    envelhecer. O que o repo NÃO diz é o estado da máquina de onde o diário veio: em qual commit o
+    backend está (o front manda o dele no `app.abriu`), qual sistema, e quantos dias o arquivo
+    guarda. Sem o commit não dá pra saber se o defeito relatado já foi corrigido, e é a primeira
+    pergunta de qualquer análise. JSON válido numa linha: não quebra parser de JSONL.
+    """
+    # Mesma fonte que o front usa pro `__HANGAR_VERSION__` (vite.config.ts): `git describe` no
+    # próprio checkout. Comparar a versão de quem reporta com a do repo é o primeiro passo de
+    # qualquer análise — sem ela não dá pra saber se o defeito já foi corrigido.
+    try:
+        v = subprocess.run(["git", "describe", "--tags", "--always", "--dirty"],
+                           cwd=Path(__file__).resolve().parents[2], capture_output=True,
+                           text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip()
+    except Exception:                                # noqa: BLE001 — cabeçalho nunca derruba o download
+        v = ""
+    return json.dumps({
+        "evento": "diag.formato",
+        "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        "backend": v,
+        "so_servidor": f"{os.name}/{sys.platform}",
+        "dias_guardados": DIAS_GUARDADOS,
+        "ordem": "mais antigo primeiro",
+        "campos_documentados_em": "backend/app/diag.py (_CAMPOS) e frontend/src/lib/diag.ts",
+        "nao_contem": "conversa, prompt, resposta do agente, chave de API, conteúdo de arquivo",
+    }, ensure_ascii=False)
+
+
 def ler_tudo() -> str:
     """Os sete dias concatenados, mais antigo primeiro — o corpo do download."""
-    partes = []
+    partes = [_cabecalho() + "\n"]
     for p in arquivos():
         try:
             partes.append(p.read_text(encoding="utf-8", errors="replace"))

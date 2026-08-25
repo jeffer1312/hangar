@@ -6,7 +6,7 @@
   // O que o arquivo contém e o que NÃO contém está em backend/app/diag.py e em lib/diag.ts. O texto
   // aqui repete a parte que importa pra quem vai enviar: fica na máquina, e não guarda conversa.
   import { getDiagResumo, baixarDiag, type ResumoDiag, type LinhaDiag } from '../../lib/api';
-  import { fmtBytes, relativeTime } from '../../lib/format';
+  import { fmtBytes } from '../../lib/format';
   import * as m from '../../paraglide/messages';
 
   let resumo = $state<ResumoDiag | null>(null);
@@ -14,12 +14,27 @@
   let baixando = $state(false);
   let recarregando = $state(false);
 
-  // Uma linha do diário virando texto de UMA linha na tela. O `detalhe` já vem curto do backend
-  // (teto de 300) e é o que carrega método+rota; o resto é contexto.
+  // Horário ABSOLUTO e de largura fixa, não "há 2 minutos": a coluna relativa varia de largura
+  // ("agora" vs "há 14 minutos") e transbordava por cima do nome do evento; e pra cruzar com um
+  // relato ("travou umas 10h50") o relógio é o que serve. Dia diferente de hoje ganha a data na
+  // frente — a prévia atravessa os sete dias guardados.
+  function quando(ts: string): string {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return '--:--:--';
+    const hora = d.toLocaleTimeString(undefined, { hour12: false });
+    const hoje = new Date();
+    const mesmoDia = d.toDateString() === hoje.toDateString();
+    return mesmoDia ? hora : `${d.getDate()}/${d.getMonth() + 1} ${hora}`;
+  }
+
+  // O contexto de UMA linha. O `detalhe` já vem curto do backend (teto de 300) e carrega
+  // método+rota; o resto é o que localiza o evento. O código HTTP só aparece quando NÃO deu certo:
+  // um "#200" em toda linha de ação é ruído que empurra pra fora o que importa.
   function contexto(l: LinhaDiag): string {
-    const partes = [l.detalhe, l.sessao, l.tela, l.codigo && `#${l.codigo}`,
-                    l.ms !== undefined && `${l.ms}ms`];
-    return partes.filter(Boolean).join(' · ');
+    const codigo = l.nivel && l.nivel !== 'ok' ? l.codigo : undefined;
+    const plataforma = l.so && `${l.so} · ${l.navegador ?? ''} · ${l.vista ?? ''} · ${l.tela_px ?? ''}`;
+    return [l.detalhe, plataforma, l.sessao, l.tela, codigo && `#${codigo}`,
+            l.ms !== undefined && `${l.ms}ms`].filter(Boolean).join(' · ');
   }
 
   async function carregar() {
@@ -60,8 +75,8 @@
 </script>
 
 <div class="diario">
-  <p class="desc">{m.config_diag_desc({ dias: String(resumo?.dias_guardados ?? 7) })}</p>
-
+  <!-- Só os marcadores: o parágrafo que ficava aqui dizia as MESMAS três coisas logo acima deles,
+       e ler a mesma frase duas vezes seguidas faz a tela parecer defeituosa. -->
   <ul class="regras">
     <li>{m.config_diag_regra_local()}</li>
     <li>{m.config_diag_regra_sem_conversa()}</li>
@@ -93,7 +108,7 @@
     <ol class="linhas">
       {#each resumo.ultimas as l, i (l.ts + l.evento + i)}
         <li class="linha {l.nivel ?? 'ok'}">
-          <span class="quando">{relativeTime(Date.parse(l.ts) / 1000)}</span>
+          <span class="quando">{quando(l.ts)}</span>
           <span class="evento">{l.evento}</span>
           <span class="ctx">{contexto(l)}</span>
         </li>
@@ -106,7 +121,6 @@
 
 <style>
   .diario { padding: var(--space-2) var(--space-4) var(--space-5); }
-  .desc { margin: 0 0 var(--space-3); color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.5; }
   .regras {
     margin: 0 0 var(--space-4);
     padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
@@ -162,12 +176,16 @@
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
+  /* Duas colunas fixas (relógio, evento) e o contexto ocupando o resto. `max-content` nas duas
+     primeiras: com `ch` a coluna do relógio ficava mais estreita que o texto e ele transbordava
+     POR CIMA do nome do evento (visto na tela em 25/08/2026). `min-width: 0` na terceira é o que
+     permite ela encolher — sem isso o grid estoura a largura do painel. */
   .linha {
     display: grid;
-    grid-template-columns: 7ch minmax(9ch, auto) 1fr;
+    grid-template-columns: max-content max-content 1fr;
     gap: var(--space-2);
     align-items: baseline;
-    padding: 3px var(--space-1);
+    padding: 4px var(--space-1);
     font-family: var(--font-mono);
     font-size: var(--text-xs);
     line-height: 1.5;
@@ -175,9 +193,15 @@
   }
   .linha:last-child { border-bottom: 0; }
   .quando { color: var(--text-muted); white-space: nowrap; }
-  .evento { color: var(--text-primary); font-weight: 600; }
-  /* A linha inteira rola na horizontal quando o contexto é longo — a tela nunca rola junto. */
-  .ctx { color: var(--text-secondary); overflow-x: auto; white-space: nowrap; }
+  .evento { color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+  /* QUEBRA, não rola: num painel estreito, rolagem horizontal por linha esconde o fim da mensagem
+     de erro — que é justamente o que a pessoa precisa ler antes de mandar o arquivo. */
+  .ctx {
+    color: var(--text-secondary);
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
   .linha.aviso .evento { color: var(--warning); }
   .linha.erro .evento { color: var(--error); }
   .vazio { margin: 0; padding: var(--space-4); text-align: center; color: var(--text-muted); font-size: var(--text-sm); }
