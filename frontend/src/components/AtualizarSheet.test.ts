@@ -165,6 +165,31 @@ describe('atualizando', () => {
   });
 });
 
+describe('ciclo de vida', () => {
+  it('desmontar o componente para o polling', async () => {
+    // Sem isto o timer sobrevive à destruição do DesktopShell (navegar pra Custos/Arquivo) e, ao
+    // terminar a atualização, chama location.reload() na cara de quem já estava noutra tela.
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+        base({ estado: { fase: 'rodando', passo: 1, total: 5, texto: 'x' } }),
+      );
+      montar();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2100);
+      const antes = spy.mock.calls.length;
+      expect(antes).toBeGreaterThan(1);   // estava mesmo pollando
+
+      unmount(comp!);
+      comp = null;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(spy.mock.calls.length).toBe(antes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('deu erro', () => {
   it('mostra o erro, o estado da máquina e a branch de resgate', async () => {
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(

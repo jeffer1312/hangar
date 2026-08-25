@@ -38,7 +38,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from app import atomico
+from app import atomico, tmux
 
 _log = logging.getLogger("hangar.atualizar")
 
@@ -263,8 +263,16 @@ def _puxar(pre: dict) -> None:
     m = _git("merge", "--ff-only", "origin/main", timeout=120)
     if m.returncode == 0:
         return
-    # ff-only falhou: ou divergiu, ou a árvore tem algo no caminho. Nos dois casos o `resguardar`
-    # já guardou tudo — este reset volta a máquina para o que `origin/main` diz, sem perder nada.
+
+    # ff-only falhou: ou divergiu, ou a árvore tem algo no caminho. Antes do reset, guarda também o
+    # que NÃO está rastreado — e este stash é diferente do que o `resguardar` já pode ter feito.
+    # Medido: um arquivo solto (um `.env` extra, um script) cujo nome COLIDE com um arquivo que
+    # chega no commit novo faz o ff-only ser recusado, e o `reset --hard` seguinte sobrescreve esse
+    # arquivo calado, com rc=0. Como `resguardar` só entra em ação quando há mudança em arquivo
+    # RASTREADO, esse caso passava direto pela rede de proteção — e "automático nunca é
+    # irreversível" deixava de valer justamente para o arquivo que ninguém versionou.
+    _git("stash", "push", "--include-untracked", "-m", "hangar antes do reset", timeout=120)
+
     r = _git("reset", "--hard", "origin/main", timeout=120)
     if r.returncode != 0:
         raise RuntimeError(f"nao consegui alinhar com o codigo novo: {_cauda(r)}")
@@ -350,6 +358,15 @@ def executar(porta: int = 8765) -> dict:
     Ordem herdada do `deploy.sh`: tudo que pode falhar acontece **antes** do restart. Uma falha no
     meio deixa a máquina na versão anterior, inteira — que é o requisito duro deste botão.
     """
+    try:
+        return _executar(porta)
+    finally:
+        # Solta a vez mesmo saindo por caminho de erro. O `finally` não cobre o processo ser MORTO
+        # (é pra isso que o lock guarda o pid e o dono morto é recolhido), mas cobre todo o resto.
+        _soltar_a_vez()
+
+
+def _executar(porta: int) -> dict:
     pre = checar()
     de = pre.get("commit", "")
     _escrever(fase="rodando", ok=None, erro=None, resgate=None,
@@ -377,9 +394,6 @@ def executar(porta: int = 8765) -> dict:
         _etapa("instalar")
         _reaplicar(pre["topologia"])
 
-        _etapa("reiniciar")
-        _avisar_sessoes()
-        _reiniciar(pre["topologia"])
     except Exception as e:                           # noqa: BLE001 — ver abaixo: é deliberado
         # `Exception`, e não uma lista de tipos. Isto roda num processo DESTACADO cuja única forma
         # de falar com alguém é o arquivo de estado: uma exceção que escape daqui mata o processo
@@ -388,6 +402,18 @@ def executar(porta: int = 8765) -> dict:
         # lista de tipos que estava aqui não pegava `PassoFalhou`, e um passo com prova falha
         # produzia exatamente isso.
         return _falhou(str(e), de=de)
+
+    # O restart fica FORA do try acima, e a diferença não é cosmética: tudo lá em cima falha com o
+    # servidor velho ainda no ar (`no_ar=True` é verdade). Aqui não — `systemctl restart` para o
+    # processo antigo ANTES de subir o novo, então um erro neste ponto deixa a máquina sem serviço
+    # nenhum, com código novo no disco. Esse caso tem que ir pro rollback, não pro "falhou e está
+    # tudo como estava".
+    try:
+        _etapa("reiniciar")
+        _avisar_sessoes()
+        _reiniciar(pre["topologia"])
+    except Exception as e:                           # noqa: BLE001 — mesmo motivo do de cima
+        return _voltar(de, f"o servidor nao reiniciou: {e}", pre["topologia"], porta)
 
     # Prova de vida só onde houve restart de verdade. Onde ele não acontece (Windows, instalação na
     # mão), o backend velho segue respondendo — checar aqui devolveria um "subiu" que não prova nada.
@@ -398,14 +424,16 @@ def executar(porta: int = 8765) -> dict:
     return estado()
 
 
-def _falhou(msg: str, de: str = "") -> dict:
-    """Falha ANTES do restart: nada foi revertido porque nada chegou a subir.
+def _falhou(msg: str, de: str = "", no_ar: bool = True) -> dict:
+    """Falha sem reversão. `voltou=False` é literal: ninguém trouxe a máquina de volta.
 
-    `voltou=False` aqui é literal — a máquina está na versão anterior porque a atualização parou no
-    meio, não porque alguém a trouxe de volta. Quem reverte de verdade é o `_voltar`.
+    `no_ar` tem padrão `True` porque o caso comum é falhar ANTES do restart — ali o servidor velho
+    nunca saiu do ar. Mas nem toda falha é dessas: um `systemctl restart` que falha já derrubou o
+    processo antigo, e o rollback pode ele mesmo não conseguir voltar. Quem sabe disso passa
+    `no_ar=False`, e a tela diz que o serviço precisa de atenção em vez de afirmar que está no ar.
     """
     _log.error("atualizacao falhou: %s", msg)
-    _escrever(fase="pronto", ok=False, erro=msg, voltou=False, no_ar=True)
+    _escrever(fase="pronto", ok=False, erro=msg, voltou=False, no_ar=no_ar)
     return estado()
 
 
@@ -418,7 +446,13 @@ def _voltar(commit: str, motivo: str, topologia: str, porta: int) -> dict:
     servidor.
     """
     _escrever(fase="rodando", texto="Voltando para a versão anterior")
-    _git("reset", "--hard", commit, timeout=120)
+    r = _git("reset", "--hard", commit, timeout=120)
+    if r.returncode != 0:
+        # O reset falhou (commit inválido, disco cheio, `.git` travado). Seguir daqui reinstalaria
+        # e reiniciaria em cima do código NÃO revertido — e o estado diria "voltei pra versão
+        # anterior" com a máquina rodando exatamente o que quebrou. Para aqui e conta a verdade.
+        return _falhou(f"{motivo}; e nao consegui voltar pra versao anterior: {_cauda(r)}",
+                       no_ar=False)
     try:
         _reaplicar(topologia)
         _reiniciar(topologia)
@@ -433,11 +467,14 @@ def _voltar(commit: str, motivo: str, topologia: str, porta: int) -> dict:
 
 
 def _aplicar_passos() -> None:
-    """Os passos que a versão exige. Implementado na Task 2; aqui é o ponto de entrada."""
-    try:
-        from app import atualizacoes
-    except ImportError:
-        return
+    """Os passos que a versão exige.
+
+    Import direto, sem `try/except ImportError`: o módulo existe no mesmo commit que este, e o
+    guard só serviria para transformar um defeito de importação em `atualizacoes.py` numa etapa que
+    passa em branco — a atualização terminaria `ok=True` com os passos pendentes intactos, dizendo
+    ter feito o que não fez.
+    """
+    from app import atualizacoes
     atualizacoes.aplicar_pendentes()
 
 
@@ -453,6 +490,45 @@ def _vivo(pid) -> bool:
     return True
 
 
+def _tomar_a_vez() -> bool:
+    """Só um lançamento por vez. `True` = a vez é sua.
+
+    Ler o estado e depois escrever era check-then-act, com janela real entre os dois: dois toques no
+    botão, um retry de rede ou duas abas lançavam DOIS processos, que rodariam `fetch`/`merge`/
+    `reset --hard` no mesmo repo ao mesmo tempo e disputariam a escrita do mesmo `estado.json`
+    (`_escrever` é ler-mesclar-gravar, sem lock). Aqui quem decide é o `O_CREAT|O_EXCL`, que é
+    atômico no sistema de arquivos: quem criar o arquivo ganha, e não há janela nenhuma.
+
+    O lock guarda o pid, então um processo morto (máquina desligada no meio) não trava a máquina
+    para sempre — o dono some, o lock é recolhido e o próximo lançamento passa.
+    """
+    trava = _base() / "rodando.lock"
+    trava.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):                                # 2ª volta só quando limpamos um lock morto
+        try:
+            fd = os.open(trava, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                dono = int(trava.read_text(encoding="utf-8").strip() or 0)
+            except (OSError, ValueError):
+                dono = 0
+            if _vivo(dono):
+                return False
+            # Dono morto: recolhe e tenta de novo. `missing_ok` porque outro processo pode ter
+            # chegado à mesma conclusão primeiro — aí ele leva a vez no `O_EXCL` da volta seguinte.
+            trava.unlink(missing_ok=True)
+            continue
+        else:
+            with os.fdopen(fd, "w") as f:
+                f.write(str(os.getpid()))
+            return True
+    return False
+
+
+def _soltar_a_vez() -> None:
+    (_base() / "rodando.lock").unlink(missing_ok=True)
+
+
 def iniciar(porta: int = 8765) -> dict:
     """Lança a atualização fora deste processo e devolve na hora.
 
@@ -460,11 +536,18 @@ def iniciar(porta: int = 8765) -> dict:
     POSIX e `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` no Windows, sem herdar os pipes daqui:
     o filho não pode morrer junto com o pai nem escrever no log do serviço que vai reiniciar.
     """
-    atual = estado()
-    if atual.get("fase") == "rodando" and _vivo(atual.get("pid")):
+    if not _tomar_a_vez():
         return {"ok": False, "erro": "ja_rodando"}
 
-    args = [sys.executable, "-m", "app.atualizar", str(porta)]
+    # `setsid` NÃO basta, e por pouco: ele tira o filho da sessão/grupo de processos, não do
+    # **cgroup**. Como este `Popen` acontece dentro do worker do FastAPI, o processo da atualização
+    # nasce no cgroup de `hangar-backend.service` — e a unit não declara `KillMode`, então o padrão
+    # é `control-group`. Consequência: o `systemctl --user restart` que a própria atualização dispara
+    # mata o cgroup inteiro e leva junto quem estava dando o comando, ANTES de ele escrever
+    # `fase=pronto`. O estado ficaria travado em "rodando" para sempre e a barra giraria sem fim —
+    # exatamente a falha que este módulo existe pra não ter. O repo já resolveu isso uma vez, pelo
+    # mesmo motivo: `tmux._scope_prefix()`, que envolve o servidor tmux num escopo transiente.
+    args = tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", str(porta)]
     extra: dict = {}
     if _E_WINDOWS:
         extra["creationflags"] = _FLAGS_DESTACADO_WINDOWS
@@ -476,6 +559,13 @@ def iniciar(porta: int = 8765) -> dict:
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         **extra,
     )
+    # O lock nasceu com o pid do BACKEND, que é quem tinha de vencer a corrida do `O_EXCL`. Agora
+    # passa a apontar pro filho: é ele que fica vivo enquanto a atualização roda, e o backend (que
+    # não morre) faria `_vivo` responder sim para sempre, travando a máquina no primeiro uso.
+    try:
+        (_base() / "rodando.lock").write_text(str(proc.pid), encoding="utf-8")
+    except OSError:
+        pass    # o lock já cumpriu o papel dele (a exclusão); errar aqui não pode barrar o resto
     _escrever(fase="rodando", ok=None, erro=None, pid=proc.pid,
               passo=0, total=len(ETAPAS), texto="Começando")
     return {"ok": True, "pid": proc.pid}

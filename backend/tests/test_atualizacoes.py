@@ -34,16 +34,28 @@ def test_le_frontmatter_e_corpo(passos):
 
 
 def test_valor_com_dois_pontos_sobrevive(passos):
-    _escreve(passos, "x", id="x", titulo="Um: com dois pontos", comando="echo a:b")
+    _escreve(passos, "x", id="x", titulo="Um: com dois pontos", comando="echo a:b", prova="true")
     (p,) = atualizacoes.todos()
     assert p["titulo"] == "Um: com dois pontos" and p["comando"] == "echo a:b"
 
 
 def test_sem_titulo_e_ignorado_sem_derrubar_o_resto(passos):
     """Arquivo malformado não pode travar a atualização de todo mundo."""
-    _escreve(passos, "quebrado", id="quebrado", comando="true")
+    _escreve(passos, "quebrado", id="quebrado", comando="true", prova="true")
     _escreve(passos, "bom", id="bom", titulo="Vale")
     assert [p["id"] for p in atualizacoes.todos()] == ["bom"]
+
+
+def test_comando_sem_prova_e_recusado(passos):
+    """Comando sem prova é o defeito que a feature existe pra eliminar: exit 0 vira "deu certo"."""
+    _escreve(passos, "sem-prova", id="sem-prova", titulo="Faz algo", comando="true")
+    assert atualizacoes.todos() == []
+
+
+def test_passo_so_de_texto_dispensa_prova(passos):
+    """Sem comando não há efeito a verificar — é só changelog."""
+    _escreve(passos, "so-texto", id="so-texto", titulo="Aviso", texto="Leia isso.")
+    assert [p["id"] for p in atualizacoes.todos()] == ["so-texto"]
 
 
 def test_readme_nao_e_passo(passos):
@@ -78,7 +90,7 @@ def test_passo_ja_aplicado_nao_fica_pendente(passos):
 def test_marcar_todos_nao_roda_nada(passos, tmp_path):
     """Instalação do zero: tudo já foi feito pelo instalador, nada pode rodar de novo."""
     marca = tmp_path / "rodou"
-    _escreve(passos, "um", id="um", titulo="Um", comando=f"touch {marca}")
+    _escreve(passos, "um", id="um", titulo="Um", comando=f"touch {marca}", prova=f"test -f {marca}")
     assert atualizacoes.marcar_todos() == 1
     assert not marca.exists()
     assert atualizacoes.pendentes() == []
@@ -102,7 +114,7 @@ def test_aplica_e_marca(passos, tmp_path):
 
 
 def test_comando_que_falha_nao_marca(passos):
-    _escreve(passos, "um", id="um", titulo="Um", comando="exit 3")
+    _escreve(passos, "um", id="um", titulo="Um", comando="exit 3", prova="true")
     with pytest.raises(atualizacoes.PassoFalhou):
         atualizacoes.aplicar_pendentes()
     assert atualizacoes.aplicados() == set()
@@ -120,8 +132,8 @@ def test_prova_que_falha_nao_marca(passos):
 def test_para_no_primeiro_erro(passos, tmp_path):
     """Passo costuma depender do anterior; seguir em frente deixaria estado que ninguém desenhou."""
     depois = tmp_path / "nao-deveria"
-    _escreve(passos, "1-quebra", id="1-quebra", titulo="Quebra", comando="exit 1")
-    _escreve(passos, "2-depois", id="2-depois", titulo="Depois", comando=f"touch {depois}")
+    _escreve(passos, "1-quebra", id="1-quebra", titulo="Quebra", comando="exit 1", prova="true")
+    _escreve(passos, "2-depois", id="2-depois", titulo="Depois", comando=f"touch {depois}", prova="true")
     with pytest.raises(atualizacoes.PassoFalhou):
         atualizacoes.aplicar_pendentes()
     assert not depois.exists()

@@ -38,6 +38,8 @@
 
   const INTERVALO = 2000;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** Esta tela mandou começar. Verdade a partir do POST, não do próximo fetch que der certo. */
+  let lancamos = $state(false);
 
   const estado = $derived(dados?.estado ?? {});
   const rodando = $derived(estado.fase === 'rodando');
@@ -57,7 +59,12 @@
     } catch (e) {
       // Durante o restart isto acontece por DESENHO. Só vira mensagem quando não há atualização em
       // curso — aí sim é o servidor fora do ar, e a pessoa precisa saber.
-      if (!rodando) erroDeRede = e instanceof Error ? e.message : String(e);
+      //
+      // `lancamos` e não só `rodando`: `rodando` sai do ÚLTIMO fetch que deu certo, então se o
+      // servidor cair antes de responder um `fase: rodando` sequer, ele ainda diz "ocioso" e a
+      // falha vira "desconectado" na tela — a frase que este desenho existe pra evitar, na hora
+      // exata em que ela é mais confusa.
+      if (!rodando && !lancamos) erroDeRede = e instanceof Error ? e.message : String(e);
     } finally {
       carregando = false;
     }
@@ -68,7 +75,10 @@
     timer = setTimeout(async () => {
       await carregar(true);
       if (open && rodando) agendar();
-      else if (open && estado.fase === 'pronto' && estado.ok === true && !faltaReiniciar) concluir();
+      else {
+        lancamos = false;   // acabou: erro de rede daqui pra frente é servidor fora do ar mesmo
+        if (open && estado.fase === 'pronto' && estado.ok === true && !faltaReiniciar) concluir();
+      }
     }, INTERVALO);
   }
 
@@ -93,6 +103,7 @@
     erroDeRede = '';
     try {
       await iniciarAtualizacao();
+      lancamos = true;
       await carregar(true);
       agendar();
     } catch (e) {
@@ -103,12 +114,16 @@
   }
 
   $effect(() => {
-    if (!open) {
+    if (open) carregar();
+    // Limpeza DEVOLVIDA, não feita no ramo `!open`: o `return` de lá só sai da função e não
+    // registra teardown nenhum, então o timer sobrevivia à DESTRUIÇÃO do componente. O
+    // `DesktopShell` some da árvore ao navegar pra Custos/Arquivo, e o polling continuava rodando
+    // solto — ao terminar a atualização ele chamava `location.reload()` na cara de quem já estava
+    // noutra tela.
+    return () => {
       if (timer) clearTimeout(timer);
       timer = null;
-      return;
-    }
-    carregar();
+    };
   });
 
   // Reabrir a caixa com uma atualização já em curso (outra aba a começou, ou a página recarregou no

@@ -79,8 +79,16 @@ def _passo(arquivo: Path) -> dict | None:
     ident = campos.get("id") or arquivo.stem
     if not campos.get("titulo"):
         # Falha aparece, mas não derruba a leitura: um arquivo malformado não pode impedir que os
-        # outros passos rodem — seria uma versão nova travando a atualização de todo mundo.
+        # outros passos rodem — seria uma versão nova travando a atualização de todo mundo. Quem
+        # pega o erro ANTES de ele sair da máquina de quem publica é `test_passos_declarados.py`.
         _log.warning("passo %s ignorado: falta 'titulo'", arquivo.name)
+        return None
+    if campos.get("comando") and not campos.get("prova"):
+        # Comando sem prova é literalmente o defeito que esta feature existe pra eliminar: "saiu com
+        # 0" vira "deu certo", o id entra no registro e o passo nunca mais roda — com o efeito dele
+        # ausente. Recusar é melhor que aplicar sem saber. Passo só de texto (sem comando) não
+        # precisa de prova: não há efeito a verificar.
+        _log.warning("passo %s ignorado: tem 'comando' mas nao tem 'prova'", arquivo.name)
         return None
     return {
         "id": ident,

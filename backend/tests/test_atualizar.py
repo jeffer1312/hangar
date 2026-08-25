@@ -32,6 +32,10 @@ def repo(tmp_path, monkeypatch):
     _git(d, "commit", "-m", "primeiro")
     monkeypatch.setattr(atualizar, "REPO", d)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    # Sem escopo systemd nos testes: `_scope_prefix` sonda o systemd com um `subprocess.run` de
+    # verdade, e quem troca o `Popen` por um dublê acaba interceptando a sonda em vez do
+    # lançamento. O que o prefixo faz está coberto por `test_lancamento_usa_escopo_systemd`.
+    monkeypatch.setattr(atualizar.tmux, "_scope_prefix", lambda: [])
     return d
 
 
@@ -206,15 +210,20 @@ def test_pronto_marca_ok(repo, monkeypatch):
 
 # ─── Lançamento ────────────────────────────────────────────────────────────────────────────────
 
-def test_nao_inicia_duas_vezes(repo, monkeypatch):
+def test_nao_inicia_duas_vezes(repo):
+    """Quem manda é o LOCK, não o estado: só ele fecha a janela entre checar e escrever."""
     import os as _os
-    atualizar._escrever(fase="rodando", pid=_os.getpid())
+    trava = atualizar._base() / "rodando.lock"
+    trava.parent.mkdir(parents=True, exist_ok=True)
+    trava.write_text(str(_os.getpid()), encoding="utf-8")   # dono vivo
     assert atualizar.iniciar()["erro"] == "ja_rodando"
 
 
 def test_pid_morto_nao_bloqueia(repo, monkeypatch):
     """Máquina que desligou no meio de uma atualização não pode ficar travada para sempre."""
-    atualizar._escrever(fase="rodando", pid=999999)
+    trava = atualizar._base() / "rodando.lock"
+    trava.parent.mkdir(parents=True, exist_ok=True)
+    trava.write_text("999999", encoding="utf-8")
     lancou = []
     class P:
         pid = 4242
@@ -277,6 +286,118 @@ def test_sem_restart_nao_cobra_prova_de_vida(repo, monkeypatch):
     monkeypatch.setattr(atualizar, "_subiu", _nunca)
     final = atualizar.executar()
     assert final["ok"] is True and final["reiniciar_manual"] is True
+
+
+def test_reset_do_rollback_que_falha_nao_mente(repo, monkeypatch):
+    """Seguir com o reset falhado reinstalaria em cima do código quebrado, dizendo que voltou."""
+    real = atualizar._git
+
+    def _git_falso(*args, **kw):
+        if args[:2] == ("reset", "--hard"):
+            class P:
+                returncode = 1
+                stdout = ""
+                stderr = "fatal: disco cheio"
+            return P()
+        return real(*args, **kw)
+
+    monkeypatch.setattr(atualizar, "_git", _git_falso)
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: pytest.fail("nao pode reinstalar"))
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: pytest.fail("nao pode reiniciar"))
+
+    final = atualizar._voltar("abc123", "o servidor caiu", "systemd", 1)
+    assert final["ok"] is False and final["voltou"] is False
+    assert final["no_ar"] is False and "nao consegui voltar" in final["erro"]
+
+
+def test_restart_que_falha_vai_pro_rollback(repo, monkeypatch):
+    """`systemctl restart` já derrubou o processo antigo: isto NÃO é "está tudo como estava"."""
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: None)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
+    def _quebra(t):
+        raise RuntimeError("systemctl nao subiu")
+    monkeypatch.setattr(atualizar, "_reiniciar", _quebra)
+    voltou = []
+    monkeypatch.setattr(atualizar, "_voltar",
+                        lambda c, m, t, p: (voltou.append(m), {"ok": False})[1])
+    atualizar.executar()
+    assert voltou and "nao reiniciou" in voltou[0]
+
+
+def test_arquivo_solto_que_colide_e_guardado_antes_do_reset(repo, monkeypatch):
+    """Não-rastreado que colide com o commit novo era sobrescrito calado pelo `reset --hard`.
+
+    `resguardar` não pega este caso (só olha rastreado), então o stash tem que acontecer no
+    fallback do próprio `_puxar` — senão "automático nunca é irreversível" deixa de valer pro
+    arquivo que ninguém versionou.
+    """
+    guardou = []
+    real = atualizar._git
+
+    def _espiao(*args, **kw):
+        if args[:2] == ("stash", "push"):
+            guardou.append(args)
+        if args[0] in ("fetch", "merge", "reset"):
+            class P:
+                returncode = 0 if args[0] in ("fetch", "reset") else 1
+                stdout = ""
+                stderr = "untracked working tree files would be overwritten"
+            return P()
+        return real(*args, **kw)
+
+    monkeypatch.setattr(atualizar, "_git", _espiao)
+    atualizar._puxar({"sujo": 0})
+    assert guardou, "nao guardou os nao-rastreados antes do reset"
+    assert "--include-untracked" in guardou[0]
+
+
+def test_duas_chamadas_so_uma_lanca(repo, monkeypatch):
+    """Check-then-act deixava dois processos rodarem `git reset` no mesmo repo ao mesmo tempo."""
+    import os as _os
+    lancados = []
+    class P:
+        pid = _os.getpid()      # dono VIVO: é o que o lock precisa achar na segunda chamada
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda *a, **k: (lancados.append(1), P())[1])
+    assert atualizar.iniciar()["ok"] is True
+    assert atualizar.iniciar().get("erro") == "ja_rodando"
+    assert len(lancados) == 1
+
+
+def test_lock_de_processo_morto_nao_trava_a_maquina(repo):
+    trava = atualizar._base() / "rodando.lock"
+    trava.parent.mkdir(parents=True, exist_ok=True)
+    trava.write_text("999999", encoding="utf-8")     # pid que não existe
+    assert atualizar._tomar_a_vez() is True
+
+
+def test_a_vez_e_solta_mesmo_quando_falha(repo, monkeypatch):
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: (_ for _ in ()).throw(RuntimeError("x")))
+    atualizar._tomar_a_vez()
+    atualizar.executar()
+    assert not (atualizar._base() / "rodando.lock").exists()
+
+
+def test_lancamento_usa_escopo_systemd(repo, monkeypatch):
+    """`setsid` não tira do CGROUP, e o restart mata o cgroup inteiro — junto com quem o ordenou.
+
+    Sem o escopo transiente, o `systemctl restart` disparado pela própria atualização a mata antes
+    de ela escrever o desfecho: o estado fica preso em "rodando" e a barra gira para sempre. Mesmo
+    motivo, e mesma solução, do `tmux._scope_prefix` (que existe porque o restart matava o servidor
+    tmux e todas as sessões).
+    """
+    args_vistos = []
+    class P:
+        pid = 1
+    monkeypatch.setattr(atualizar.tmux, "_scope_prefix",
+                        lambda: ["systemd-run", "--user", "--scope", "-q", "--"])
+    monkeypatch.setattr(atualizar.subprocess, "Popen",
+                        lambda a, **kw: (args_vistos.extend(a), P())[1])
+    atualizar.iniciar()
+    assert args_vistos[:3] == ["systemd-run", "--user", "--scope"]
+    assert "app.atualizar" in args_vistos
 
 
 def test_lancamento_escolhe_o_modo_do_sistema(repo, monkeypatch):
