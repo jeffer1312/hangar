@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
+  pedeMarcacao,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn, relativeTime,
   clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   untrackedReason,
@@ -137,6 +138,31 @@ describe('nextAwaiting', () => {
   it('returns itself when it is the only awaiting session', () => {
     const sessions = [{ name: 'a', state: 'awaiting_input' as const }];
     expect(nextAwaiting(sessions, 'a')).toBe('a');
+  });
+});
+
+describe('pedeMarcacao', () => {
+  it('reconhece o menu de marcação pela caixa na frente da opção', () => {
+    // Caso vivo de 25/08/2026: a tira de atenção mostrou "[ ] backend" como resposta rápida.
+    expect(pedeMarcacao(['[✓] app de desktop', '[ ] backend', '[ ] Type something'])).toBe(true);
+  });
+
+  it('basta UMA opção com caixa — o escape do AskUserQuestion vem sem ela', () => {
+    expect(pedeMarcacao(['[ ] app de desktop', '[ ] backend', 'Chat about this'])).toBe(true);
+  });
+
+  it('escolha única não pede marcação', () => {
+    expect(pedeMarcacao(['Gerar miniatura no backend', 'Remover exibição no front'])).toBe(false);
+  });
+
+  it('lista vazia ou ausente não pede marcação', () => {
+    expect(pedeMarcacao([])).toBe(false);
+    expect(pedeMarcacao(undefined)).toBe(false);
+    expect(pedeMarcacao(null)).toBe(false);
+  });
+
+  it('colchete no MEIO do texto não conta — só o que abre a linha', () => {
+    expect(pedeMarcacao(['Rodar com [--force]', 'Cancelar'])).toBe(false);
   });
 });
 

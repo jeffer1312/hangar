@@ -9,6 +9,7 @@
     type Motor, type ModeloProvedor,
   } from '../../lib/api';
   import type { Server } from '../../lib/auth';
+  import { sincronizarNosAgentes, type ResultadoSync } from '../../lib/credenciais';
   import * as m from '../../paraglide/messages';
 
   // Motores de modelo: rodar uma sessão em Kimi, num gateway próprio, ou em qualquer endpoint que
@@ -31,6 +32,11 @@
   let carregando = $state(false);
   let erro = $state('');
   let salvando = $state(false);
+  // Publicação da chave nos outros agentes (Pi/Kimi/Codex), feita depois de salvar. Estado próprio
+  // porque é passo separado: o motor já está salvo quando isto roda, e a falha aqui é informativa.
+  let sincronizando = $state(false);
+  let sync = $state<ResultadoSync | null>(null);
+  let syncErro = $state('');
   // engines.json existe mas não pôde ser lido: bate em `motores: {}` igual a "nunca configurou
   // nada" (o backend não pode derrubar sessão/SSE por um hand-edit ruim), mas a tela TEM que dizer
   // a diferença — senão o usuário vê "nenhum motor ainda", re-adiciona um, e a próxima gravação
@@ -144,6 +150,7 @@
       ...PADRAO_AVANCADO, existente: false,
     };
     modelos = []; erroBusca = ''; okBusca = ''; porQue = null;
+    sync = null; syncErro = '';
   }
 
   function editar(nome: string) {
@@ -175,6 +182,7 @@
       existente: true,
     };
     modelos = []; erroBusca = ''; okBusca = ''; porQue = null;
+    sync = null; syncErro = '';
   }
 
   // Motor salvo, key vazia, mas o endereço no formulário já não é o que está no disco: testar
@@ -255,10 +263,28 @@
       if (form.auto_compact_window) corpo.auto_compact_window = Number(form.auto_compact_window);
       if (form.max_output_tokens) corpo.max_output_tokens = Number(form.max_output_tokens);
 
+      const nome = form.nome.trim();
       motores = targetServer
-        ? (await putEngineForServer(targetServer, form.nome.trim(), corpo)).motores
-        : (await putEngine(form.nome.trim(), corpo)).motores;
+        ? (await putEngineForServer(targetServer, nome, corpo)).motores
+        : (await putEngine(nome, corpo)).motores;
       form = null;
+      // A chave também é dos OUTROS agentes. Quem cadastra por "Contas → + Nova conta" já sai daqui
+      // publicado no Pi, no Kimi e no Codex; quem cadastra por esta tela não saía — e foi assim que
+      // um motor "meta" cadastrado em 25/08/2026 nunca apareceu na lista de modelos do Pi, sem
+      // nenhum erro em lugar nenhum. Salvar de novo um motor antigo também o publica, que é como se
+      // conserta o que já está no disco sem precisar de botão novo.
+      //
+      // Depois do PUT e fora do try do salvar: publicar é passo SEPARADO — falhar aqui não pode
+      // desfazer nem sujar o motor, que vale pro Claude Code de qualquer jeito.
+      sincronizando = true;
+      syncErro = '';
+      try {
+        sync = await sincronizarNosAgentes(targetServer, `chave:${nome}`);
+      } catch (e) {
+        syncErro = e instanceof Error && e.message ? e.message : m.config_motores_erro_sync();
+      } finally {
+        sincronizando = false;
+      }
     } catch (e) {
       erro = e instanceof Error ? e.message : m.config_motores_erro_salvar();
     } finally {
@@ -546,6 +572,24 @@
       {/each}
     </div>
     {#if erro}<p class="aviso erro">{erro}</p>{/if}
+
+    <!-- Resultado da publicação nos outros agentes, por agente. Mesma leitura da folha de Nova
+         conta: "não instalado" é informação, não falha. -->
+    {#if sincronizando}<p class="aviso">{m.novacred_salvando_sync()}</p>{/if}
+    {#if syncErro}<p class="aviso erro">{syncErro}</p>{/if}
+    {#if sync}
+      <div class="sync-bloco">
+        <span class="sync-tit">{m.novacred_sync_titulo()}</span>
+        {#each Object.entries(sync.resultado) as [alvo, r] (alvo)}
+          <p class="sync-linha" class:pulado={!r.ok && r.motivo === 'nao-instalado'}
+             class:falhou={!r.ok && r.motivo !== 'nao-instalado'}>
+            <b>{alvo}</b>
+            {r.ok ? m.novacred_sync_ok() : (r.motivo === 'nao-instalado' ? m.novacred_sync_nao_instalado() : r.motivo)}
+          </p>
+        {/each}
+      </div>
+    {/if}
+
     <button class="btn primario largo" onclick={novo}>{m.config_motores_adicionar()}</button>
   {/if}
 </div>
@@ -709,6 +753,15 @@
   }
   .aviso { font-size: var(--text-sm); color: var(--text-muted); margin: var(--space-3) 0; }
   .aviso.erro { color: var(--error); }
+
+  /* Resultado da publicação por agente. Mesmas cores da folha de Nova conta: "não instalado aqui"
+     é esperado e fica apagado; falha de GRAVAÇÃO usa a cor de erro. */
+  .sync-bloco { margin: var(--space-3) 0; }
+  .sync-tit { font-size: 11.5px; color: var(--text-secondary); }
+  .sync-linha { margin: 3px 0 0; font-size: var(--text-xs); color: var(--text-secondary); }
+  .sync-linha b { color: var(--text-primary); font-weight: 600; margin-right: 6px; }
+  .sync-linha.pulado { color: var(--text-muted); }
+  .sync-linha.falhou { color: var(--error); }
   .btn {
     height: 40px; padding: 0 var(--space-4);
     border-radius: var(--radius-md);

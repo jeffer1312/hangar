@@ -11,7 +11,19 @@
       "deepseek.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
       "groq.com": "ProvedorIcone.svelte — DOMÍNIO comparado contra a base_url pra escolher a marca do provedor; é dado de host, não texto exibido (a tela não mostra a string em lugar nenhum). 'opencode.ai' e 'openrouter.ai' não caem na heurística; estes caem por terem .com.",
       "de primeira": "types.ts — trecho de COMENTÁRIO do campo `rodadas` do OrqTask (`0 = desconhecido, nunca \"de primeira\"`), lido pela heurística como string exibida; o rótulo da tela é m.orq_de_primeira().",
-      "orq: falhou o detalhe da execução viva": "Orq.svelte — mensagem de console.error (diagnóstico pro desenvolvedor, nunca desenhada na tela); o usuário vê a faixa ausente, não este texto."
+      "orq: falhou o detalhe da execução viva": "Orq.svelte — mensagem de console.error (diagnóstico pro desenvolvedor, nunca desenhada na tela); o usuário vê a faixa ausente, não este texto.",
+      "Android": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Windows": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Linux": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Electron": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Edge": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Opera": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Firefox": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Samsung": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Chrome": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "Safari": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
+      "tela.ver": "lib/diag.ts — VERBO de evento do diario de uso (o mesmo alfabeto de 'opcao.tocar', 'api.falhou'), chave de dado num arquivo JSONL. Nunca exibido.",
+      "sse.abrir": "screens/Chat.svelte — VERBO de evento do diario de uso (mesmo alfabeto de 'tela.ver', 'opcao.tocar'), chave de dado num arquivo JSONL. Nunca exibido."
     }
   },
   "de primeira",
@@ -194,5 +206,17 @@
   "anthropic.com",
   "kimi.com",
   "deepseek.com",
-  "groq.com"
+  "groq.com",
+  "Android",
+  "Windows",
+  "Linux",
+  "Electron",
+  "Edge",
+  "Opera",
+  "Firefox",
+  "Samsung",
+  "Chrome",
+  "Safari",
+  "tela.ver",
+  "sse.abrir"
 ]

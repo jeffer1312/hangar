@@ -110,16 +110,74 @@ def test_drain_skips_entries_before_start_ts(tmp_queue, tmp_path, monkeypatch):
     assert terminal_input.drain("cc", str(j)) == 0 and sent == []
 
 
-def test_select_option_three_navigates_then_enter():
+def _picker(cursor: int, n: int = 5) -> str:
+    # Picker cru como o pane desenha: a linha do cursor leva ❯, as outras nao.
+    return "\n".join(f"{'❯' if i == cursor else ' '} {i}. opcao {i}" for i in range(1, n + 1))
+
+
+@pytest.fixture
+def sem_espera(monkeypatch):
+    monkeypatch.setattr(terminal_input.time, "sleep", lambda _s: None)
+
+
+def test_select_ja_no_alvo_nao_navega(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker(3))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 3)
+    assert sk.call_args_list == [call("cc", "Enter")]
+
+
+def test_select_sobe_quando_o_cursor_esta_abaixo_do_alvo(sem_espera, monkeypatch):
+    # O caso do bug (25/08/2026): num multi-select o cursor fica onde a marcacao anterior parou,
+    # entao a opcao pedida pode estar ACIMA dele — as cegas so havia Down.
+    telas = iter([_picker(4), _picker(2)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "Up"), call("cc", "Up"), call("cc", "Enter")]
+
+
+def test_select_corrige_tecla_engolida(sem_espera, monkeypatch):
+    # Down engolido no redraw: pediu 3, so andou ate 2 -> corrige com mais um Down antes do Enter.
+    telas = iter([_picker(1), _picker(2), _picker(3)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 3)
+    assert sk.call_args_list == [
+        call("cc", "Down"), call("cc", "Down"),  # 1 -> 3 (a TUI so andou 1)
+        call("cc", "Down"),                       # correcao 2 -> 3
+        call("cc", "Enter"),
+    ]
+
+
+def test_select_nao_convergiu_nao_manda_enter(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker(1))  # cursor nunca sai de 1
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cc", 3)
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_select_sem_cursor_legivel_cai_no_caminho_aberto(sem_espera, monkeypatch):
+    # Picker do Pi (cursor ascii '>') ou pane ilegivel: sem numero pra ler, volta ao Down*(n-1).
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: "> 1. a\n  2. b\n  3. c")
     with patch.object(terminal_input, "send_keys") as sk:
         TerminalInput().select("cc", 3)
     assert sk.call_args_list == [call("cc", "Down"), call("cc", "Down"), call("cc", "Enter")]
 
 
-def test_select_option_one_just_enter():
+def test_select_pane_ilegivel_nao_derruba(sem_espera, monkeypatch):
+    def explode(_n):
+        raise RuntimeError("tmux morto")
+    monkeypatch.setattr(terminal_input, "_capture", explode)
     with patch.object(terminal_input, "send_keys") as sk:
-        TerminalInput().select("cc", 1)
-    assert sk.call_args_list == [call("cc", "Enter")]
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "Down"), call("cc", "Enter")]
+
+
+def test_select_option_zero_recusado():
+    with pytest.raises(ValueError):
+        TerminalInput().select("cc", 0)
 
 
 def test_interrupt_sends_escape():

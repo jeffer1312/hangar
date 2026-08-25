@@ -1454,11 +1454,46 @@ class TerminalInput:
             raise ValueError(f"key not allowed: {key!r}")
         send_keys(name, tmux_key)
 
+    # Rodadas de correcao do cursor. 3 e o teto do guard equivalente em answer_questions e nunca foi
+    # atingido; a 4a e folga barata (uma captura de pane).
+    _SELECT_TENTATIVAS = 4
+
     def select(self, name: str, option: int) -> None:
+        """Escolhe a opcao `option` (1-based) do picker cru, em MALHA FECHADA.
+
+        As cegas (Down*(n-1) + Enter) partia de duas suposicoes falsas, as duas medidas em
+        25/08/2026 num Windows: o cursor NAO comeca sempre na linha 1 — num menu multi-select ele
+        fica onde a marcacao anterior parou — e o Down ia em rajada, sem intervalo nenhum (era o
+        unico lugar do arquivo sem _NAV_GAP), entao um deles era engolido no redraw. Resultado
+        gravado em video: clicar na 3 marcava a 2, calado. Le a linha REAL do cursor e corrige,
+        mesma tatica do guard pre-Enter de answer_questions. Picker sem numeracao legivel pelo
+        _CURSOR_ROW (o do Pi usa '>' ascii) cai no caminho aberto de sempre, agora com intervalo.
+        Nao convergiu -> DriveError SEM Enter: opcao errada calada e pior que erro na tela.
+        """
         if option < 1:
             raise ValueError("option must be >= 1")
-        for _ in range(option - 1):
-            send_keys(name, "Down")
+
+        def tela() -> str:
+            try:
+                return _capture(name)
+            except Exception:
+                return ""  # pane ilegivel -> _cursor_row None -> caminho aberto, como antes
+
+        row = _cursor_row(tela())
+        if row is None:
+            for _ in range(option - 1):
+                send_keys(name, "Down")
+                time.sleep(_NAV_GAP)
+        else:
+            for _ in range(self._SELECT_TENTATIVAS):
+                if row is None or row == option:
+                    break
+                for _ in range(abs(option - row)):
+                    send_keys(name, "Down" if option > row else "Up")
+                    time.sleep(_NAV_GAP)
+                row = _cursor_row(tela())
+            if row is not None and row != option:
+                raise DriveError(f"cursor parou na linha {row}, esperava {option} — opcao NAO enviada")
         send_keys(name, "Enter")
 
     def interrupt(self, name: str, clear: bool = False) -> None:

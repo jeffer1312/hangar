@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import time
 from pathlib import Path
+from app import diag
 from app.adapters import get_adapter
 from app.adapters.codex.preview import CodexPreviewSource
 from app.pqueue import PromptQueue, _transcript_start_ts
@@ -283,6 +285,10 @@ class _ListRefresher:
                 # "erro" de "offline". Ciclo bom seguinte re-emite 'sessions' e limpa o erro no front.
                 _log.warning("refresher da lista falhou; mantem snapshot anterior", exc_info=True)
                 if not self.errored:
+                    # No diário só na TRANSIÇÃO, igual ao evento: um refresher quebrado a cada poll
+                    # encheria o arquivo do dia com a mesma linha.
+                    diag.registrar("lista.refresher_falhou", "erro",
+                                   detalhe=repr(sys.exc_info()[1])[:200])
                     async with self._cond:
                         self.errored = True
                         self.version += 1

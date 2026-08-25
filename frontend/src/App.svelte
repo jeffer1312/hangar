@@ -10,6 +10,7 @@
   import { parseHash, type Route } from './lib/route';
   import { parseConfig, comConfig, TELAS_DE_SERVIDOR, type TelaConfig } from './lib/configRoute';
   import { abrirConfig, fecharConfig } from './lib/configNav';
+  import * as diag from './lib/diag';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
   import Orq from './screens/Orq.svelte';
@@ -131,6 +132,12 @@
     return () => mq.removeEventListener('change', on);
   });
 
+  // Diário de uso (lib/diag.ts): liga assim que há credencial, e não antes — sem token o lote não
+  // teria pra onde ir. Registra a plataforma uma vez e passa a capturar erro de JS.
+  $effect(() => {
+    if (authenticated) diag.iniciar(__HANGAR_VERSION__, isDesktop ? 'desktop' : 'celular');
+  });
+
   const route: Route = $derived(
     syncEnabled === null
       ? { name: 'loading' }                                            // sondando o hub
@@ -138,6 +145,12 @@
         ? (syncReady ? parseHash(currentHash) : { name: 'login' })     // sync: exige sessao com chave
         : (authenticated ? parseHash(currentHash) : { name: 'login' }) // sem sync: regra antiga
   );
+
+  // "Onde o app foi usado": uma linha por tela que entra à vista. É o que responde qual parte do
+  // app é realmente usada — e, num defeito, de onde a pessoa vinha.
+  $effect(() => {
+    if (authenticated) diag.telaAtiva(route.name);
+  });
 
   // Painel de Configuracoes: segundo eixo do endereco (?config=&srv=, ver lib/configRoute.ts).
   const cfg = $derived(parseConfig(currentHash));

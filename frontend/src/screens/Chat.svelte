@@ -56,6 +56,7 @@
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '../lib/format';
+  import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
   import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';
@@ -1031,7 +1032,13 @@
     clearTimeout(watchdog);
     // Mesmo guard do onerror: sessao 'dead' nao ganha reconexao infinita de 25s (o estado final
     // ja chegou; reviver e acao do usuario via resume, nao do watchdog).
-    watchdog = setTimeout(() => { if (currentState !== 'dead') connectSSE(); }, 25000);
+    watchdog = setTimeout(() => {
+      // Conexão MEIO-ABERTA: 25s sem um único evento, nem o ping de 10s do backend. É o caso que
+      // não dispara `onerror` e que, sem registro, some sem deixar rastro.
+      diag.registrar({ evento: 'sse.mudo', nivel: 'aviso', tela: 'chat', sessao: sessionName,
+                       ms: 25000 });
+      if (currentState !== 'dead') connectSSE();
+    }, 25000);
   }
   // Qualquer evento recebido = conexao viva: rearma o watchdog E zera o backoff do onerror.
   function noteAlive() {
@@ -1057,6 +1064,11 @@
     if (es) { es.close(); es = null; }
 
     es = openEventStream(sessionName, lastEventId);
+    // Ciclo de vida da conexão no diário de uso. É o que faltava nos relatos de "a conversa parou"
+    // e "as sessões sumiram": sem isto não dá pra distinguir queda de rede, reconexão em laço e
+    // conexão viva com a lista congelada, e a análise vira chute.
+    diag.registrar({ evento: 'sse.abrir', tela: 'chat', sessao: sessionName,
+                     provider: sessionProvider });
     armWatchdog();
 
     es.addEventListener('message', (e: MessageEvent) => {
@@ -1222,6 +1234,8 @@
       // martelando em paralelo) e reagenda com backoff. Half-open nao cai aqui -> watchdog cobre.
       es?.close(); es = null;
       clearTimeout(watchdog);
+      diag.registrar({ evento: 'sse.caiu', nivel: 'erro', tela: 'chat', sessao: sessionName,
+                       detalhe: `retry em ${sseRetryDelay}ms` });
       if (currentState === 'dead' || !alive) return;
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connectSSE, sseRetryDelay);
@@ -1585,7 +1599,13 @@
     avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
   }
 
+  // Trava de um envio por vez (mesma do BoardCard): o /select agora le o cursor do picker, corrige
+  // e so entao da Enter — dois toques rapidos leriam a mesma tela e se atropelariam no meio.
+  let selBusy = $state(false);
+
   async function handleSelect(option: number) {
+    if (selBusy) return;
+    selBusy = true;
     clearTimeout(avisoErrTimer);
     avisoErr = '';
     try {
@@ -1593,6 +1613,8 @@
     } catch (err) {
       console.error('selectOption error:', err);
       mostrarAviso(err);
+    } finally {
+      selBusy = false;
     }
   }
 

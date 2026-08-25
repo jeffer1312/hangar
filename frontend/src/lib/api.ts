@@ -2,6 +2,8 @@ import { getBaseUrl, getToken, dropActiveServer, type Server } from './auth';
 import * as m from '../paraglide/messages';
 import { localeAtual } from './locale';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
+// diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
+import { registrar as registrarDiag } from './diag';
 import type {
   SessionInfo,
   Provider,
@@ -112,17 +114,52 @@ async function ensureOk(res: Response): Promise<void> {
   if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
 }
 
+// Rota sem o nome da sessão e sem id: `/api/sessions/api-front/select` vira
+// `/api/sessions/*/select`. É o que deixa o diário AGRUPÁVEL ("quantas vezes o /select falhou")
+// em vez de virar uma lista de caminhos únicos — e, de quebra, tira o nome da sessão de um lugar
+// onde ele não acrescenta nada (o campo `sessao` existe pra isso, quando o chamador o informa).
+export function rotaGenerica(path: string): string {
+  return path.split('?')[0].replace(/\/(sessions|servers|agents)\/[^/]+/g, '/$1/*');
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getBaseUrl();
   const url = `${base}${path}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders(),
-      ...(init?.headers ?? {}),
-    },
-  });
+  const t0 = Date.now();
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (e) {
+    // Rede caiu / servidor fora: nunca chegou a haver status. Distinguir isto de um 500 é metade
+    // do diagnóstico de "sumiu do nada".
+    registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0,
+                    detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });
+    throw e;
+  }
+  // O que entra no diário, e por quê:
+  //  - toda AÇÃO (POST/PUT/PATCH/DELETE), dando certo ou não. É o uso: enviar mensagem, responder
+  //    opção, criar/matar sessão, trocar modelo, salvar motor. Sem o caso de SUCESSO o arquivo só
+  //    responde "o que quebrou", e a pergunta era como o app está sendo usado.
+  //  - toda LEITURA que FALHA. O sucesso de GET fica de fora de propósito: o poll da lista e o
+  //    histórico dariam milhares de linhas por hora e afogariam o resto.
+  const metodo = (init?.method ?? 'GET').toUpperCase();
+  const acao = metodo !== 'GET';
+  if (acao || !res.ok) {
+    registrarDiag({
+      evento: acao ? 'acao' : 'leitura',
+      nivel: res.ok ? 'ok' : (res.status >= 500 ? 'erro' : 'aviso'),
+      codigo: String(res.status),
+      ms: Date.now() - t0,
+      detalhe: `${metodo} ${rotaGenerica(path)}`,
+    });
+  }
   await ensureOk(res);
   return res.json() as Promise<T>;
 }
@@ -1475,6 +1512,46 @@ export interface PreviewState {
   active: boolean;
   port: number | null;
   url: string | null;
+}
+
+// ── Diário de uso (lib/diag.ts + backend/app/diag.py) ────────────────────────────────────────
+export interface LinhaDiag {
+  ts: string;
+  evento: string;
+  nivel?: 'ok' | 'aviso' | 'erro';
+  origem?: 'tela' | 'servidor';
+  tela?: string;
+  sessao?: string;
+  provider?: string;
+  codigo?: string;
+  detalhe?: string;
+  ms?: number;
+  so?: string;
+  navegador?: string;
+  versao?: string;
+  vista?: string;
+  tela_px?: string;
+  cli?: string;
+}
+
+export interface ResumoDiag {
+  dias: number;
+  bytes: number;
+  arquivos: string[];
+  dias_guardados: number;
+  /** As linhas mais recentes, mais novas primeiro — a prova de que está gravando. */
+  ultimas: LinhaDiag[];
+}
+
+export function getDiagResumo(): Promise<ResumoDiag> {
+  return apiFetch('/api/diag');
+}
+
+/** Baixa o diário como arquivo. Sai da máquina só aqui, e por ação de quem usa. */
+export async function baixarDiag(): Promise<Blob> {
+  const res = await fetch(`${getBaseUrl()}/api/diag/arquivo`, { headers: authHeaders() });
+  if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+  return res.blob();
 }
 
 export function getPreview(): Promise<PreviewState> {

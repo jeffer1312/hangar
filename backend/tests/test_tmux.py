@@ -55,6 +55,41 @@ def test_list_sessions_empty_when_no_server():
         assert tmux.list_sessions() == []
 
 
+def test_timeout_do_tmux_nao_vira_lista_vazia():
+    # Caso do Windows (25/08/2026): as sessoes sumiam todas do app com o servidor ainda verde.
+    # `list-panes -a` estourando o timeout virava rc=1, que era lido como "zero sessoes" — e um
+    # snapshot vazio VALIDO faz o SSE mandar `[]` pro app, apagando a lista. Agora levanta, e quem
+    # ouve (o refresher da lista) segura o ultimo snapshot bom.
+    with patch.object(tmux, "RUN", side_effect=subprocess.TimeoutExpired(["tmux"], 5)):
+        for chamada in (tmux.list_panes_all, tmux.list_panes_active, tmux.list_sessions):
+            with pytest.raises(tmux.MuxIndisponivel):
+                chamada()
+
+
+def test_tmux_ausente_tambem_levanta():
+    # FileNotFoundError (tmux fora do PATH) e a mesma classe de "nao sei", nao "nao ha sessao".
+    with patch.object(tmux, "RUN", side_effect=FileNotFoundError("tmux")):
+        with pytest.raises(tmux.MuxIndisponivel):
+            tmux.list_panes_all()
+
+
+def test_sem_servidor_rodando_continua_sendo_lista_vazia():
+    # A contraparte: rc=1 vindo do PROPRIO tmux ("no server running") e resposta legitima de que
+    # nao ha sessao nenhuma — levantar aqui trocaria a lista vazia correta por um erro na tela.
+    fake = MagicMock(stdout="", returncode=1, stderr="no server running on /tmp/tmux-1000/default")
+    with patch.object(tmux, "RUN", return_value=fake):
+        assert tmux.list_panes_all() == {}
+        assert tmux.list_panes_active() == []
+        assert tmux.list_sessions() == []
+
+
+def test_falha_de_comando_que_nao_lista_segue_silenciosa():
+    # So a listagem separa os dois casos. send_keys com o tmux travado continua devolvendo False,
+    # sem levantar — levantar ali so trocaria um caminho de falha silencioso por outro.
+    with patch.object(tmux, "RUN", side_effect=subprocess.TimeoutExpired(["tmux"], 5)):
+        assert tmux.send_keys("cc", "oi") is False
+
+
 def test_list_panes_active_parses_pane_id():
     # #{pane_id} e o 5o campo (Task 5 do adapter Pi: bilhete da extensao e por-pane). Uma linha com o
     # formato ANTIGO de 4 campos tem de ser rejeitada, senao um tmux desatualizado alimentaria pid/cwd

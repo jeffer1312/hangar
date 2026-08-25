@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import atomico, migracao_sidecars
+from app import atomico, diag, migracao_sidecars, tmux
 from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
@@ -1148,7 +1148,48 @@ class ModelEffortBody(_StrictBody):
 async def list_sessions():
     # list_with_state: resolucao otimizada (1 scan /proc + 1 chamada tmux em lote) + estado vivo por
     # sessao (working/idle/awaiting_input) classificado do pane. async pq captura os panes concorrente.
-    return await registry.list_with_state()
+    try:
+        return await registry.list_with_state()
+    except tmux.MuxIndisponivel as e:
+        # O multiplexador nao respondeu: a lista e DESCONHECIDA. 503 (com o motivo) em vez de uma
+        # lista vazia com 200, que quem le nao tem como distinguir de "voce nao tem sessao nenhuma".
+        # No diario porque e EXATAMENTE o evento do relato "do nada as sessoes sumiram".
+        diag.registrar("lista.mux_indisponivel", "erro", detalhe=str(e))
+        raise HTTPException(503, detail=erro("erro_mux_indisponivel", "o tmux não respondeu — a lista de sessões está indisponível", detalhe=str(e)))
+
+
+@app.post("/api/diag", dependencies=[Depends(require_auth)])
+async def diag_anotar(request: Request):
+    """Lote de eventos da TELA pro diário de uso (backend/app/diag.py).
+
+    Aceita o que reconhece e descarta o resto em silêncio — de propósito. Este endpoint não pode ser
+    um caminho que falha: ele descreve o uso, e um 400 aqui viraria um erro na tela causado pelo
+    próprio mecanismo de registrar erros.
+    """
+    try:
+        corpo = await request.json()
+    except Exception:                                # noqa: BLE001 — ver docstring
+        return {"gravadas": 0}
+    lote = corpo.get("eventos") if isinstance(corpo, dict) else corpo
+    return {"gravadas": await asyncio.to_thread(diag.anotar_da_tela, lote)}
+
+
+@app.get("/api/diag", dependencies=[Depends(require_auth)])
+async def diag_resumo(ultimas: int = 60):
+    resumo = await asyncio.to_thread(diag.resumo)
+    # As últimas linhas junto: a tela precisa PROVAR que está gravando, e um segundo pedido só pra
+    # isso seria mais latência pra mostrar a mesma coisa.
+    resumo["ultimas"] = await asyncio.to_thread(diag.ultimas, max(1, min(ultimas, 200)))
+    return resumo
+
+
+@app.get("/api/diag/arquivo", dependencies=[Depends(require_auth)])
+async def diag_arquivo():
+    # Baixa como anexo pra pessoa mandar no chat — é o único caminho do diário até quem analisa.
+    texto = await asyncio.to_thread(diag.ler_tudo)
+    return Response(
+        content=texto, media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="hangar-uso.jsonl"'})
 
 
 @app.get("/api/claude-configs", dependencies=[Depends(require_auth)], response_model=list[ConfigDirInfo])
@@ -2541,7 +2582,13 @@ def select(name: str, body: SelectBody):
     _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
-    terminal.select(name, body.option)
+    try:
+        terminal.select(name, body.option)
+    except terminal_input.DriveError as e:
+        # Cursor do picker nao convergiu pra opcao pedida: nada foi enviado (o Enter fica de fora).
+        # 409 com texto na tela em vez de 500 calado — sem isso o toque some sem nenhum sinal.
+        diag.registrar("opcao.nao_convergiu", "erro", sessao=name, detalhe=str(e))
+        raise HTTPException(409, detail=erro("erro_opcao_nao_convergiu", "não consegui marcar essa opção no terminal — tente de novo", detalhe=str(e)))
     return {"ok": True}
 
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { selectOption } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
-  import { attentionFeed } from '../lib/format';
+  import { attentionFeed, pedeMarcacao } from '../lib/format';
   import type { AggSession } from '../lib/types';
   import * as m from '../paraglide/messages';
 
@@ -13,6 +13,10 @@
   let { rows, onOpenSession }: Props = $props();
   const feed = $derived(attentionFeed(rows));
   const first = $derived(feed[0] ?? null);
+  // Pergunta de marcação não tem resposta de um toque: o toque só liga/desliga a caixa e a pergunta
+  // continua aberta. Nesses casos a tira não oferece atalho nenhum — ela abre a sessão, que é onde
+  // dá pra marcar tudo e confirmar.
+  const respostaRapida = $derived(!!first?.options?.length && !pedeMarcacao(first.options));
   let busy = $state(false);
   // Recusa do backend ao responder daqui. O `catch {}` de antes dizia "o SSE agregado mantém o
   // estado correto" — e não mantém: a opção segue pendente, a sessão segue em awaiting e o botão
@@ -51,7 +55,7 @@
       <span class="server" style="color: {first.serverColor}">{first.serverLabel}</span>
     </button>
 
-    {#if first.options?.length}
+    {#if respostaRapida && first.options}
       <div class="quick-options" aria-label={m.atencao_respostas_rapidas()}>
         {#each first.options.slice(0, 2) as option, i}
           <button type="button" disabled={busy} onclick={() => pick(i + 1)}>{option}</button>

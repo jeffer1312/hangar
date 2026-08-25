@@ -108,9 +108,34 @@ def _wayland_display() -> str | None:
 _log = logging.getLogger("hangar.tmux")
 
 
+# Codigo de retorno que NENHUM multiplexador usa, reservado pra "nao consegui nem rodar o comando"
+# (travou e estourou o timeout, binario ausente, sem permissao) — em oposicao a "rodou e recusou",
+# que e o rc 1 do tmux dizendo, por exemplo, "no server running". Os dois continuam sendo `!= 0`,
+# entao todo caller de hoje se comporta igual; quem precisa separar os dois casos e so quem LISTA
+# sessoes, porque ali confundi-los significa dizer "voce nao tem sessao nenhuma" quando a verdade e
+# "nao sei". Ver MuxIndisponivel.
+RC_INDISPONIVEL = 240
+
+
+class MuxIndisponivel(RuntimeError):
+    """O multiplexador nao respondeu — a lista de sessoes e DESCONHECIDA, nao vazia.
+
+    Nasceu de um caso relatado em 25/08/2026 num Windows (psmux): as sessoes sumiam todas do app
+    do nada, com o servidor ainda verde, e so voltavam num "Reconectar". A causa e que
+    `list-panes -a` estourando os 5s de timeout virava rc=1, que as funcoes de listagem traduziam
+    pra "zero sessoes" — o refresher da lista via um snapshot vazio PERFEITAMENTE VALIDO, a
+    assinatura mudava e o SSE mandava `[]` pro app. Nada falhava em lugar nenhum: a conexao seguia
+    viva, o ping seguia chegando, e a tela ficava vazia ate o proximo poll bom.
+
+    Levantar aqui e o que reconecta esse caminho com a maquinaria que ja existia pra isso: o
+    refresher segura o ultimo snapshot bom e emite `list_error`, e o app mostra a lista de antes
+    com aviso em vez de apagar tudo.
+    """
+
+
 def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedProcess:
     # timeout: tmux travado nao pode prender o event loop / worker do threadpool pra sempre. Estouro ->
-    # trata como falha (returncode=1), igual ao tmux recusar; os callers ja checam returncode != 0.
+    # trata como falha (RC_INDISPONIVEL, que tambem e != 0); os callers ja checam returncode != 0.
     #
     # `input=` existe pro `load-buffer -`: o texto vai pela STDIN e escapa do teto de 16344 bytes do
     # COMANDO (medido 07/08/2026: `set-buffer -- <texto>` acima disso devolve rc=1 "command too
@@ -128,14 +153,24 @@ def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedPro
                 args, cp.returncode,
                 cp.stdout.decode("utf-8", "replace"), cp.stderr.decode("utf-8", "replace"))
         except (subprocess.TimeoutExpired, OSError) as e:
-            return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
+            _log.warning("tmux nao respondeu (%s): %s", args[1:3], e)
+            return subprocess.CompletedProcess(args, RC_INDISPONIVEL, stdout="", stderr=str(e))
     try:
         return RUN(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
                    timeout=5)
     except (subprocess.TimeoutExpired, OSError) as e:
         # OSError = tmux ausente (FileNotFoundError) / sem permissao; timeout = travado. Trata como
-        # falha (returncode=1) em vez de 500 com traceback — os callers ja checam returncode != 0.
-        return subprocess.CompletedProcess(args, 1, stdout="", stderr=str(e))
+        # falha (RC_INDISPONIVEL) em vez de 500 com traceback — os callers ja checam returncode != 0.
+        _log.warning("tmux nao respondeu (%s): %s", args[1:3], e)
+        return subprocess.CompletedProcess(args, RC_INDISPONIVEL, stdout="", stderr=str(e))
+
+
+def _exige_resposta(cp: subprocess.CompletedProcess) -> None:
+    # Guarda das funcoes que LISTAM sessoes: so elas separam "rodou e nao ha sessao" de "nao rodou".
+    # Nas outras (send-keys, capture-pane, kill) o rc != 0 de sempre ja basta, e levantar so trocaria
+    # um caminho de falha silencioso por outro.
+    if cp.returncode == RC_INDISPONIVEL:
+        raise MuxIndisponivel(cp.stderr.strip() or "sem resposta do multiplexador")
 
 
 def _pane_target(name: str) -> str:
@@ -243,6 +278,7 @@ def paste_via_clipboard(name: str, text: str) -> bool:
 
 def list_sessions() -> list[dict]:
     cp = _run(["tmux", "list-sessions", "-F", "#{session_name}\t#{pane_current_path}"])
+    _exige_resposta(cp)
     if cp.returncode != 0:
         return []
     out = []
@@ -260,6 +296,7 @@ def list_panes_active() -> list[dict]:
     # (ex: "%9") identifica o bilhete da extensao Pi (Task 3), que e por-pane, nao por-sessao.
     cp = _run(["tmux", "list-panes", "-a", "-F",
                "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"])
+    _exige_resposta(cp)
     if cp.returncode != 0:
         return []
     out: dict[str, dict] = {}
@@ -298,6 +335,7 @@ def list_panes_all() -> dict[str, list[dict]]:
     cp = _run(["tmux", "list-panes", "-a", "-F",
                "#{session_name}\t#{pane_active}\t#{pane_pid}\t#{pane_current_path}\t#{pane_id}"
                "\t#{@cp_hidden}"])
+    _exige_resposta(cp)
     if cp.returncode != 0:
         return {}
     out: dict[str, list[dict]] = {}

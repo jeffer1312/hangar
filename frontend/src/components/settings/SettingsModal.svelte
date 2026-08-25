@@ -7,6 +7,7 @@
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
+  import DiarioSettings from './DiarioSettings.svelte';
   import ServidoresSettings from './ServidoresSettings.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
   import ContasSettings from './ContasSettings.svelte';
@@ -87,6 +88,7 @@
     aparencia: m.config_modal_aparencia(),
     ditado: m.config_modal_ditado(),
     sobre: m.config_modal_sobre(),
+    diario: m.config_diag_titulo(),
     servidores: m.config_modal_servidores(),
     acesso: m.acesso_titulo(),
     contas: m.contas_titulo(),
@@ -105,6 +107,8 @@
       descricao: m.config_modal_desc_aparencia(), servidor: false },
     { id: 'ditado', secao: 'app', rotulo: m.config_modal_ditado(), icone: '🎤',
       descricao: m.config_modal_desc_ditado(), servidor: false },
+    { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: '🧾',
+      descricao: m.config_diag_linha_desc(), servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'ℹ️',
       descricao: m.config_modal_desc_sobre(), servidor: false },
     { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: '📶',
@@ -334,6 +338,8 @@
     <DictationSettings />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
+  {:else if telaAtual === 'diario'}
+    <DiarioSettings />
   {:else if telaAtual === 'sobre'}
     <SobreSettings />
   {:else if telaAtual === 'servidores'}

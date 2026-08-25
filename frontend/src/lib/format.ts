@@ -109,6 +109,27 @@ export function attentionFeed<T extends { name: string; state: State; last_activ
     );
 }
 
+// Caixa de marcação que o picker MULTI-select desenha na frente de cada opção — o texto chega
+// cru de state.classify ("[ ] backend", "[✓] app de desktop"). Aceita a caixa vazia, marcada
+// (✓/✔/x/X/*) e a que vem sem espaço nenhum.
+const CAIXA_DE_MARCACAO = /^\s*\[[\s✓✔xX*]*\]/;
+
+/**
+ * A pergunta pede MARCAÇÃO (várias opções) em vez de uma escolha só?
+ *
+ * Importa porque um toque numa opção dessas TOGGLA a caixa e não responde nada — a pergunta segue
+ * aberta esperando o passo de confirmar. Quem oferece "resposta rápida" de um toque (a tira de
+ * atenção) precisa saber a diferença: em 25/08/2026 ela mostrou um botão escrito "[ ] backend",
+ * e quem clicou achou que tinha respondido — a sessão continuou aguardando e a resposta teve de
+ * ser refeita dentro dela.
+ *
+ * `some`, não `every`: as linhas de escape do AskUserQuestion ("Chat about this") entram no mesmo
+ * menu sem caixa nenhuma.
+ */
+export function pedeMarcacao(options?: string[] | null): boolean {
+  return !!options?.length && options.some((o) => CAIXA_DE_MARCACAO.test(o));
+}
+
 // Ordenação compartilhada das LISTAS de sessões (Sidebar + SessionList): quem aguarda resposta
 // primeiro (realce de atenção), depois alfabético. Estável: rows só trocam de posição quando o
 // ESTADO muda, não a cada last_activity. O Board NÃO usa isto (colunas já separam por estado;

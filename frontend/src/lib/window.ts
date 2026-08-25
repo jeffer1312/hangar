@@ -17,6 +17,22 @@ export function nextWindowEnd(atBottom: boolean, len: number, windowEnd: number)
   return windowEnd;                  // lendo historico: congela
 }
 
+/** Mostrar a saída "ir pro fim"?
+ *
+ * Duas razões, e a segunda existe por um defeito medido em 25/08/2026. `atBottom` (folga < 64px)
+ * decide se a janela ACOMPANHA a cauda; `scrolledUp` (mais de UMA TELA do fim) decidia sozinho se a
+ * saída aparecia. Entre os dois havia faixa morta: rolado 100px pra cima, a janela congelava e o
+ * botão continuava escondido — o chat parava de atualizar sem nada na tela dizendo isso, e a única
+ * saída era sair da conversa e voltar. Relatado com a prévia do turno ainda correndo, ou seja:
+ * conexão boa, lista muda.
+ *
+ * `windowEnd < len` é o fato que importa — existe evento que a janela congelada não mostra —, e não
+ * a distância que a pessoa rolou.
+ */
+export function mostrarIrPraoFim(scrolledUp: boolean, windowEnd: number, len: number): boolean {
+  return scrolledUp || windowEnd < len;
+}
+
 /** A janela cabe INTEIRA na tela e ainda ha evento antigo fora dela?
  *
  * A janela conta EVENTOS CRUS, mas quem enche a tela sao as LINHAS renderizadas — e as duas contas

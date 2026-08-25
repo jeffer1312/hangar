@@ -17,7 +17,7 @@
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths, parsePeerMessage } from '../lib/format';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
-  import { windowStartFor, nextWindowEnd, precisaPreencher } from '../lib/window';
+  import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim } from '../lib/window';
 
   interface Props {
     events: ChatEvent[];
@@ -184,6 +184,14 @@
   // (o /history carrega tudo) -> revelar e so expandir a fatia, sem chamada ao backend.
   const windowStart = $derived(windowStartFor(windowEnd, WINDOW + extra));
   const hasOlder = $derived(windowStart > 0);   // ainda ha eventos fora da janela (acima)?
+  // Chegou mensagem que a janela CONGELADA nao mostra. `atBottom` falso congela a janela de
+  // proposito (quem esta lendo historico nao pode ser arrastado), mas ate 25/08/2026 a unica saida
+  // era o botao "ir pro fim", que so aparecia com `scrolledUp` — mais de UMA TELA do fim. Entre os
+  // 64px do `atBottom` e essa tela inteira havia uma faixa morta: o chat parava de atualizar, sem
+  // nada na tela dizendo isso, e a unica saida era sair da conversa e voltar (relatado ao vivo, com
+  // a prevía do turno ainda correndo — ou seja, conexao boa e lista muda). Agora quem manda na
+  // saida e ISTO, nao a distancia rolada.
+  const temNovasEscondidas = $derived(windowEnd < events.length);
   const visibleEvents = $derived(
     events.slice(windowStart, windowEnd).filter(ev => ev.kind !== 'tool_result')
   );
@@ -394,16 +402,17 @@
   </div>
 </section>
 
-{#if scrolledUp}
+{#if mostrarIrPraoFim(scrolledUp, windowEnd, events.length)}
   <!-- Botao "ir pro fim": aparece so quando rolou muito pra cima. Ao tocar, volta pra cauda E
        descarta a paginacao revelada -> nao fica montando paginas antigas que nao precisam. Volta ao
        `piso`, nao a zero: abaixo dele a lista deixa de ter rolagem e o preencherTela reveria tudo
        de novo no mesmo instante (pisca a lista inteira por nada). -->
   <button
     class="to-bottom"
+    class:tem-novas={temNovasEscondidas}
     style="bottom: calc({dockH}px + var(--space-3))"
     onclick={() => { extra = piso; atBottom = true; scrollToBottom(); }}
-    aria-label={m.msg_ir_ultima()}
+    aria-label={temNovasEscondidas ? m.msg_novas_abaixo() : m.msg_ir_ultima()}
   >
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
@@ -614,5 +623,24 @@
   .to-bottom:active {
     transform: scale(0.92);
     background: var(--bg-hover);
+  }
+
+  /* Com mensagem nova escondida, o botao deixa de ser "voltar pro fim" e passa a ser AVISO: sem
+     isso ele e um chevron cinza igual ao de sempre, e a pessoa nao tem como saber que a conversa
+     andou sem ela. */
+  .to-bottom.tem-novas {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .to-bottom.tem-novas::after {
+    content: '';
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg-base);
   }
 </style>
