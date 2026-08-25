@@ -800,6 +800,22 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     (formato no README de lá), no mesmo commit que o exige. Os não destrutivos também rodam na
     **subida do backend** (`main.py`), pelo motivo do `migracao_sidecars`: atualizar aqui é
     `git pull` + reiniciar, e ninguém garante que o botão foi usado.
+  - **Quem reinicia o serviço é diferente em cada sistema, e no Windows já é o installer.** No
+    Linux é `systemctl --user restart`; no Windows o `install.ps1 -Update` — chamado na etapa
+    anterior — já derruba a instância velha (`Pare-Servico`) e chama `Start-ScheduledTask`, e esse
+    bloco NÃO é pulado no modo `-Update` (o que ele pula é firewall/Tailscale e o hook). Há ainda
+    a tarefa `hangar-vigia`, que sobe a tarefa de novo se a porta não estiver escutando. Por isso
+    `_reiniciar` não faz nada no ramo Windows: marcar "falta reiniciar" ali fazia a tela pedir um
+    passo que já tinha sido dado. Medido em 25/08/2026 naquela máquina: três tarefas
+    (`hangar-backend`, `hangar-frontend`, `hangar-vigia`), backend como cadeia de três processos,
+    e todas em `Ready` mesmo com o servidor vivo — o `.vbs` não espera.
+  - **O installer matava a própria atualização, e a proteção é por COMANDO, não por linhagem.** O
+    `Pare-Servico` derruba a "instância anterior" casando o caminho do checkout mais `uv|python`, e
+    o motor roda como `<repo>\backend\.venv\Scripts\python.exe -m app.atualizar` — casa nos dois.
+    Ou seja, o instalador chamado PELA atualização matava quem o invocou, no meio dela (medido
+    25/08/2026: lock e processo morreram no minuto do "instância anterior derrubada"). A proteção
+    por linhagem já existia e não bastou; hoje há exclusão explícita de quem tem `app.atualizar` na
+    linha de comando. No Linux quem cobre isso é o escopo transiente do systemd, que lá não existe.
 
 - **Plan progress** (`app/planprog.py` + `registry._decorate_plan` + `PlanBar`/`PlanPanel.svelte`):
   the source of truth is the plan's own `.md` under `docs/superpowers/plans/` — no separate state

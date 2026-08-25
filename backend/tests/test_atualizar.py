@@ -271,10 +271,15 @@ def test_hangar_send_ausente_nao_derruba_a_atualizacao(repo, monkeypatch):
     atualizar._avisar_sessoes()   # não levanta
 
 
-def test_windows_nao_reinicia_e_diz_isso(repo, monkeypatch):
-    """Sem cgroup lá, matar a árvore certa é o que ninguém mediu — melhor parar e avisar."""
+def test_windows_nao_pede_reinicio_manual(repo):
+    """No Windows o restart já aconteceu na etapa anterior, dentro do `install.ps1 -Update`.
+
+    Ele derruba a instância velha e chama `Start-ScheduledTask` (bloco que o modo `-Update` NÃO
+    pula), e ainda há o `hangar-vigia` de rede. Marcar "falta reiniciar" aqui fazia a tela pedir um
+    passo que já tinha sido dado — medido na máquina Windows em 25/08/2026.
+    """
     atualizar._reiniciar("windows")
-    assert atualizar.estado()["reiniciar_manual"] is True
+    assert not atualizar.estado().get("reiniciar_manual")
 
 
 def test_instalacao_na_mao_tambem_pede_reinicio(repo):

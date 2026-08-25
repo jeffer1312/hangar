@@ -505,15 +505,21 @@ def _reiniciar(topologia: str) -> None:
         if p.returncode != 0:
             raise RuntimeError(f"nao consegui reiniciar o servidor: {_cauda(p)}")
     elif topologia == "windows":
-        # NÃO reinicia sozinho aqui, e isto é decisão, não pendência esquecida. No Linux quem leva
-        # os app-servers do Codex junto com o backend é o `KillMode=control-group` do systemd
-        # (conferido 25/08/2026: eles nascem como subprocessos diretos, sem escopo próprio). No
-        # Windows não há cgroup, e matar a árvore de processos certa é justamente o que ninguém
-        # mediu naquela máquina — escrever a sequência às cegas arrisca deixar app-server órfão
-        # escutando em loopback, ou pior, matar o processo errado. Então a atualização faz TUDO
-        # (código, passos, dependências, build) e para antes do restart, dizendo isso na tela.
-        # Quando alguém puder medir lá, este ramo vira o `taskkill` da árvore + o `.vbs` de sempre.
-        _escrever(reiniciar_manual=True)
+        # NADA a fazer aqui: o restart JÁ ACONTECEU na etapa anterior. O `install.ps1 -Update`
+        # derruba a instância velha (`Pare-Servico`) e chama `Start-ScheduledTask` para as tarefas
+        # `hangar-backend`/`hangar-frontend` — e esse bloco não é pulado no modo `-Update` (o que
+        # ele pula é só firewall/Tailscale e o hook). Ainda há o `hangar-vigia`, que confere se a
+        # porta está escutando e sobe a tarefa de novo se não estiver.
+        #
+        # Medido na máquina Windows em 25/08/2026: as três tarefas existem, o backend sobe como
+        # cadeia de três processos, e as tarefas ficam em `Ready` mesmo com o servidor vivo (o
+        # `.vbs` não espera). Antes disto, este ramo marcava "falta reiniciar o servidor" EM CIMA
+        # de um restart que já tinha acontecido — a tela mentia dizendo que faltava um passo.
+        #
+        # Reusar o instalador em vez de escrever um `taskkill` aqui não é preguiça: quem sabe o
+        # nome das tarefas, o caminho do checkout e como derrubar a cadeia inteira de processos
+        # é ele, e isso já está testado em produção.
+        pass
     else:
         # Instalação na mão: não há serviço para reiniciar, e inventar um `kill` no processo de
         # alguém seria pior que não reiniciar. A tela avisa que falta reiniciar à mão.
