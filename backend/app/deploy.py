@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request, HTTPException
 from app.config import settings
 from app.mensagens import erro
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
 deploy_router = APIRouter()
 

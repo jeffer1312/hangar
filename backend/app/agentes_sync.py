@@ -37,7 +37,7 @@ from app import atomico
 from app.adapters.kimi.sessions import kimi_home
 from app.engines import _NOME_OK  # mesma regra de nome do motor — uma fonte só (precedente: engine_probe)
 
-_log = logging.getLogger("claude_pocket.agentes_sync")
+_log = logging.getLogger("hangar.agentes_sync")
 
 ALVOS = ("pi", "kimi", "codex")
 

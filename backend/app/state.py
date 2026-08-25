@@ -11,7 +11,7 @@ from app.hook_state import hook_state
 from app.models import StateEvent
 from app.statusline import read as _sidecar_status
 
-_log = logging.getLogger("claude_pocket.state")
+_log = logging.getLogger("hangar.state")
 
 SPINNER_GLYPHS = "✻✽✶✺✢·∗✳✦✧"
 _OPTION_RE = re.compile(r"^\s*[❯>]?\s*\d+\.\s+(.*\S)\s*$")

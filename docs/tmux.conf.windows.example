@@ -1,4 +1,4 @@
-# Reference ~/.tmux.conf for Claude Code + claude-pocket on WINDOWS (psmux).
+# Reference ~/.tmux.conf for Claude Code + hangar on WINDOWS (psmux).
 #
 # Por que um arquivo separado do tmux.conf.example: aquele assume tmux no Linux (TPM +
 # systemd timer pra persistencia, `exec` no spawn). Aqui o multiplexador e o psmux
@@ -48,7 +48,7 @@ set -g cursor-blink off
 # do psmux e sim desenhado pela propria TUI do Claude Code — nenhuma config daqui resolve.
 
 # --- "COMO SE O PSMUX NAO ESTIVESSE LA" ------------------------------------------------
-# O multiplexador so existe pro claude-pocket conseguir ENVIAR teclas na sessao; o usuario
+# O multiplexador so existe pro hangar conseguir ENVIAR teclas na sessao; o usuario
 # nao deveria perceber que ele esta rodando. Opcoes abaixo conferidas na doc oficial
 # (docs/configuration.md do repo psmux/psmux) e no dump real desta maquina.
 set -g status off              # sem barra de status (ja acima; repetido aqui de proposito)
@@ -95,10 +95,10 @@ set -g default-terminal "xterm-256color"
 # O multiplexador nao propaga COLORTERM sozinho; sem isto o Claude comeca em 256 cores.
 set-environment -g COLORTERM truecolor
 set-environment -g CLAUDE_CODE_TMUX_TRUECOLOR 1
-# NOTA: o backend do claude-pocket ja injeta as duas vars nas sessoes que ELE cria
+# NOTA: o backend do hangar ja injeta as duas vars nas sessoes que ELE cria
 # (`new_session` em backend/app/tmux.py, via `-e`); as linhas acima cobrem sessao feita na mao.
 
-# --- Convencao do claude-pocket --------------------------------------------------------
+# --- Convencao do hangar --------------------------------------------------------
 # O multiplexador e detalhe de implementacao do app, nao algo que o usuario pediu.
 # Comente se quiser a barra de volta.
 set -g status off

@@ -91,7 +91,7 @@ def test_wait_input_ready_pi_timeout_avisa_uma_vez(caplog):
     ti._READY_TIMEOUT_WARNED.clear()
     with patch.object(ti, "_capture", lambda name: _PI_BOOT), \
          patch.object(ti.time, "sleep", lambda *_: None), \
-         caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
+         caplog.at_level("WARNING", logger="hangar.terminal_input"):
         assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
         assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
     assert len(caplog.records) == 1
@@ -529,7 +529,7 @@ def test_composer_ilegivel_avisa_uma_vez_por_sessao(caplog):
     # ela fica inerte PRA SEMPRE e ninguem descobre. Avisa uma vez, nao por envio.
     ti._COMPOSER_WARNED.clear()
     pane = "tela sem regua nenhuma\nnada aqui"
-    with caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
+    with caplog.at_level("WARNING", logger="hangar.terminal_input"):
         # cauda longa o bastante pra passar do _RESIDUO_MIN e chegar na checagem das reguas
         assert ti._composer_residuo(pane, "x\ncauda longa do recado aqui", "sessao-x") is None
         assert ti._composer_residuo(pane, "x\ncauda longa do recado aqui", "sessao-x") is None

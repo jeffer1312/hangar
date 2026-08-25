@@ -7,7 +7,7 @@ from watchfiles import awatch
 
 from app import atomico
 
-_log = logging.getLogger("claude_pocket.hook_state")
+_log = logging.getLogger("hangar.hook_state")
 
 _SUBDIR = ".hangar-state"
 

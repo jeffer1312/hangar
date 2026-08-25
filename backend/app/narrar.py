@@ -164,7 +164,7 @@ def chamar_chat(system: str, prompt: str, *, temperature: float, timeout: int,
             "Content-Type": "application/json",
             # O Cloudflare da Groq bane o UA padrao do urllib ("Python-urllib/..") com 403 code 1010
             # (mesmo achado do transcribe.py).
-            "User-Agent": "claude-pocket/1.0",
+            "User-Agent": "hangar/1.0",
         },
     )
     try:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-pocket — persist & restore the live agent conversation per tmux session across reboot.
+# hangar — persist & restore the live agent conversation per tmux session across reboot.
 #
 # Why this exists: tmux-resurrect restores panes + cwd but NOT the agent CLI (it isn't in resurrect's
 # restore whitelist), and when an MCP server runs as a child it mis-captures that child (e.g.

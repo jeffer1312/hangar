@@ -6,7 +6,7 @@ a thread e ligar uma nova TUI tmux sob demanda (resume lazy). Este modulo grava 
 O historico do chat SEMPRE persiste no rollout JSONL do proprio Codex (~/.codex/sessions/...); aqui
 so guardamos o ponteiro pra ele + o thread_id necessario pro thread/resume.
 
-Local: ~/.claude-pocket/codex-sessions/<name>.json (mesma familia de ~/.claude-pocket usada pelo
+Local: ~/.hangar/codex-sessions/<name>.json (mesma familia de ~/.hangar usada pelo
 sync-vault). Global por usuario (sessao Codex nao pertence a um config-dir do Claude). Um arquivo
 por sessao, keyed pelo NOME sanitizado da sessao."""
 import json
@@ -18,7 +18,7 @@ from app.names import sanitize_session_name
 
 def _dir() -> Path:
     # NAO cria o dir aqui (load/list nao devem ter efeito colateral); save() cria sob demanda.
-    return Path.home() / ".claude-pocket" / "codex-sessions"
+    return Path.home() / ".hangar" / "codex-sessions"
 
 
 def _sanitize(name: str) -> str:

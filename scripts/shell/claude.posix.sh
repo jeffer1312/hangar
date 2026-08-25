@@ -1,7 +1,7 @@
-# claude-pocket — `claude` wrapper (bash + zsh). Sourced from your rc by
+# hangar — `claude` wrapper (bash + zsh). Sourced from your rc by
 # scripts/install-claude-wrapper.sh. Fish has its own version: scripts/shell/claude.fish
 #
-# Makes every interactive `claude` trackable by the claude-pocket app:
+# Makes every interactive `claude` trackable by the hangar app:
 #  1. injects a unique --session-id  -> the backend binds the exact transcript (.jsonl), so two
 #     claudes in the SAME folder never leak into / overwrite each other.
 #  2. runs INSIDE tmux               -> the app only lists tmux sessions; a claude started outside

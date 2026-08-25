@@ -32,7 +32,7 @@ from pathlib import Path
 
 from app import atomico
 
-_log = logging.getLogger("claude_pocket.kimi.sessions")
+_log = logging.getLogger("hangar.kimi.sessions")
 
 
 def kimi_home() -> Path:

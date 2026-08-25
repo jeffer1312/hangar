@@ -116,7 +116,7 @@ def test_request_vai_pra_url_certa_e_com_user_agent(monkeypatch):
     narrar.narrar("texto", [], "explica isso")
     req = captured["req"]
     assert req.full_url.endswith("/chat/completions")
-    assert req.headers["User-agent"] == "claude-pocket/1.0"
+    assert req.headers["User-agent"] == "hangar/1.0"
     assert req.headers["Authorization"].startswith("Bearer ")
 
 

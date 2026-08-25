@@ -29,7 +29,7 @@ from app.config import list_config_dirs
 from app.mensagens import erro
 from app.conta_estado import EstadoLogin, _login_de
 
-_log = logging.getLogger("claude_pocket.credenciais")
+_log = logging.getLogger("hangar.credenciais")
 
 credenciais_router = APIRouter(prefix="/api/credenciais")
 

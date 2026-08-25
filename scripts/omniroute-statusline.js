@@ -293,7 +293,7 @@ process.stdin.on('end', () => {
       sevenDay = ' ' + c + '📅7d:' + Math.round(sd) + '%' + quotaAviso + resetStr + '\x1b[0m';
     }
 
-    // Nome da sessão tmux (= endereço da sessão no hangar-send / claude-pocket)
+    // Nome da sessão tmux (= endereço da sessão no hangar-send / hangar)
     let tmuxSess = '';
     if (process.env.TMUX && process.env.TMUX_PANE) {
       try {
@@ -302,7 +302,7 @@ process.stdin.on('end', () => {
           { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         if (s) {
           tmuxSess = ' \x1b[95m📟 ' + s + '\x1b[0m';
-          // Pareamento (claude-pocket): sidecar <config>/.hangar-pair/<sessao>.json -> chip 🤝.
+          // Pareamento (hangar): sidecar <config>/.hangar-pair/<sessao>.json -> chip 🤝.
           // Grupo = {peers: [...]} (legado 1:1 = {peer}); 1 par mostra o nome, N mostra "a,b".
           try {
             const pair = JSON.parse(fs.readFileSync(

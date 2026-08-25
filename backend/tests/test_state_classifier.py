@@ -123,7 +123,7 @@ def test_quoted_menu_in_scrollback_is_idle():
     """O assistente citou o menu nativo na propria mensagem ("❯ 1. Yes, switch to xhigh / 2. No,
     go back"). Esse "❯ N." vive no scrollback com o composer vivo (input box) renderizado ABAIXO,
     entao NAO e um widget selecionavel -> idle, nao awaiting_input (senao o app trava num menu
-    fantasma). Captura real do pane que travou o claude-pocket."""
+    fantasma). Captura real do pane que travou o hangar."""
     fx = Path(__file__).parent / "fixtures" / "pane_quoted_menu_scrollback.txt"
     state, _, _, options = classify(fx.read_text(encoding="utf-8"))
     assert state == "idle", f"menu citado virou {state} com opcoes {options}"

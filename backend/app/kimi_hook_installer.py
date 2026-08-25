@@ -25,7 +25,7 @@ from pathlib import Path
 from app import atomico
 from app.adapters.kimi.sessions import kimi_home
 
-_log = logging.getLogger("claude_pocket.kimi_hook_installer")
+_log = logging.getLogger("hangar.kimi_hook_installer")
 
 HOOK = str((Path(__file__).parent.parent / "hooks" / "kimi_state_hook.py").resolve())
 # sys.executable = o python do venv do backend (mesma razao do hook_installer do Claude).

@@ -28,7 +28,7 @@ try:
 except ImportError:      # Linux/macOS: só o ramo Windows da trava usa
     msvcrt = None
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
 # Ao lado de backend/.env e backend/peers.json (app/ -> backend/). Robusto a qual é o cwd do backend.
 _PEERS_FILE = Path(__file__).resolve().parent.parent / "peers.json"

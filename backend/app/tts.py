@@ -120,7 +120,7 @@ def _pedir(caminho: str, dados: bytes | None = None) -> bytes:
         headers={
             "xi-api-key": _chave(),
             "Content-Type": "application/json",
-            "User-Agent": "claude-pocket/1.0",
+            "User-Agent": "hangar/1.0",
         },
     )
     try:

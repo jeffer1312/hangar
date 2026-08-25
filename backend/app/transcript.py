@@ -12,7 +12,7 @@ from typing import AsyncIterator, Optional
 from watchfiles import awatch
 from app.models import ChatEvent
 
-_log = logging.getLogger("claude_pocket.transcript")
+_log = logging.getLogger("hangar.transcript")
 
 # Backfill do SSE: re-envia so as ULTIMAS N linhas do transcript em cada (re)conexao, nao o arquivo
 # inteiro. Antes o follow() comecava em pos=0 e re-shippava dezenas de MB a cada reconexao do mobile

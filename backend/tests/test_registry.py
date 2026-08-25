@@ -28,8 +28,8 @@ def _clear_jsonl_cache():
 
 
 def test_sanitize_cwd_matches_claude_scheme():
-    assert sanitize_cwd("/home/jeffer1312/Projetos/claude-pocket") == \
-        "-home-jeffer1312-Projetos-claude-pocket"
+    assert sanitize_cwd("/home/jeffer1312/Projetos/hangar") == \
+        "-home-jeffer1312-Projetos-hangar"
 
 
 # --- cmdline --session-id parsing (sinal DETERMINISTICO, funciona em idle) ---

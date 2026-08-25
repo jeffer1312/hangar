@@ -30,7 +30,7 @@ from typing import Any
 
 from app import atomico, contas, migracao_sidecars
 
-_log = logging.getLogger("claude_pocket.opencode_cota")
+_log = logging.getLogger("hangar.opencode_cota")
 
 _ARQUIVO = ".hangar-opencode.json"
 _URL = "https://opencode.ai/workspace/{}/go"

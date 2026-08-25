@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-_log = logging.getLogger("claude_pocket.procinfo")
+_log = logging.getLogger("hangar.procinfo")
 
 # Escolha da implementacao: por CAPACIDADE, uma vez, na importacao. Nao por nome de sistema —
 # "e unix?" responde SIM pro macOS, que nao tem /proc, e mandaria o Mac ler /proc/<pid>/fd pra

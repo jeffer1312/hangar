@@ -13,7 +13,7 @@ from threading import Lock, Timer
 from app import atomico
 from app.config import settings
 
-_log = logging.getLogger("claude_pocket.push")
+_log = logging.getLogger("hangar.push")
 _lock = Lock()  # ponytail: lock global — single-user, baixa frequencia; por-endpoint so se virar gargalo
 
 # Textos que o push monta sozinho, no idioma da inscricao (backend nao tem Paraglide e sao poucas

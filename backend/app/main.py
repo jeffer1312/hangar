@@ -73,11 +73,11 @@ def print_pairing(settings) -> None:
 
 
 def _setup_diag_logging() -> None:
-    # DIAG: garante que os logs "claude_pocket.*" (RESOLVE/SEND) saiam no stderr -> journald. O uvicorn
+    # DIAG: garante que os logs "hangar.*" (RESOLVE/SEND) saiam no stderr -> journald. O uvicorn
     # so configura os proprios loggers; sem isto, INFO de app propaga pro root (WARNING) e some.
     import logging
     import sys
-    cp = logging.getLogger("claude_pocket")
+    cp = logging.getLogger("hangar")
     if not cp.handlers:
         h = logging.StreamHandler(sys.stderr)
         h.setFormatter(logging.Formatter("%(levelname)s:     [%(name)s] %(message)s"))
@@ -93,7 +93,7 @@ def main():
     _setup_diag_logging()
     _state_dirs = list({Path(c.path) for c in list_config_dirs()}
                        | {_backend_config_base().resolve(), Path.home() / ".claude"})
-    # Renomeia os sidecars .claude-pocket-* pra .hangar-* (link no caminho antigo). ANTES de tudo
+    # Renomeia os sidecars .hangar-* pra .hangar-* (link no caminho antigo). ANTES de tudo
     # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
     # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
     migracao_sidecars.migrar(_state_dirs)

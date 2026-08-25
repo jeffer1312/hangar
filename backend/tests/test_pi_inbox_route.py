@@ -96,7 +96,7 @@ def test_recusa_por_token_agora_loga(caplog):
     """Achado ALTA da revisao 02/08/2026: ate aqui a recusa por token era MUDA — nem no terminal do
     Pi nem no log do backend sobrava rastro de por que a linha rapida nunca ligava."""
     client = _client()
-    with caplog.at_level("WARNING", logger="claude_pocket"):
+    with caplog.at_level("WARNING", logger="hangar"):
         with pytest.raises(Exception):
             with client.websocket_connect("/api/pi/inbox"):   # sem ?token=
                 pass
@@ -107,7 +107,7 @@ def test_recusa_por_token_loga_so_uma_vez_ate_acertar(caplog):
     """Cuidado com enxurrada: o retry da extensao roda em laco com recuo — logar TODA tentativa
     inundaria o journal. Aviso unico por host, ate uma conexao daquele host dar certo."""
     client = _client()
-    with caplog.at_level("WARNING", logger="claude_pocket"):
+    with caplog.at_level("WARNING", logger="hangar"):
         for _ in range(3):
             with pytest.raises(Exception):
                 with client.websocket_connect("/api/pi/inbox"):
@@ -121,7 +121,7 @@ def test_recusa_por_origem_agora_loga(monkeypatch, caplog):
     from app import api
     monkeypatch.setattr(api, "resolve_bind_ip", lambda s: "192.168.1.50")
     client = _client(host="192.168.1.99")
-    with caplog.at_level("WARNING", logger="claude_pocket"):
+    with caplog.at_level("WARNING", logger="hangar"):
         with pytest.raises(Exception):
             with client.websocket_connect("/api/pi/inbox?token=secret"):
                 pass
@@ -135,7 +135,7 @@ def test_recusa_para_e_conexao_boa_reabre_o_aviso(caplog):
     with client.websocket_connect("/api/pi/inbox?token=secret") as ws:
         ws.send_json({"pane": "%1"})
         ws.send_json({"pong": True})
-    with caplog.at_level("WARNING", logger="claude_pocket"):
+    with caplog.at_level("WARNING", logger="hangar"):
         with pytest.raises(Exception):
             with client.websocket_connect("/api/pi/inbox"):   # token errado de novo
                 pass

@@ -21,7 +21,7 @@ from app.mensagens import erro
 
 peers_router = APIRouter(prefix="/api/peers")
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
 # .env do backend (o MESMO que o hangar-send e o .env_file do Settings leem): é o único arquivo que
 # os dois enxergam — o identificador gravado aqui vale pro script e pra próxima subida do serviço.

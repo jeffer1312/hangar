@@ -26,7 +26,7 @@ def read_pending_askq(jsonl: str) -> AskQuestion | None:
         # O arquivo EXISTE mas nao da pra ler: contrato do hook quebrado (askq_capture.py velho, ou
         # o Claude Code mudou o shape do tool_input). Sem este log isso ficava indistinguivel do
         # caso normal acima e o stepper simplesmente nunca mais abriria, calado.
-        logging.getLogger("claude_pocket.askquestion").warning(
+        logging.getLogger("hangar.askquestion").warning(
             "sidecar do askq malformado jsonl=%s", jsonl, exc_info=True)
         return None
 

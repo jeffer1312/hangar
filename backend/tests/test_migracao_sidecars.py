@@ -74,6 +74,18 @@ def test_link_de_arquivo_no_posix_aponta_pro_novo(tmp_path):
     assert antigo.read_text(encoding="utf-8") == '{"url": "ws://x"}'
 
 
+def test_migrar_leva_a_pasta_de_dados_do_servidor(tmp_path, monkeypatch):
+    """`~/.claude-pocket/` não está dentro de config dir nenhum — e é onde mora o cofre do sync."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    cofre = tmp_path / ".claude-pocket"
+    cofre.mkdir()
+    (cofre / "sync-vault.json").write_text('{"v": 1}', encoding="utf-8")
+
+    m.migrar([tmp_path / ".claude"])
+
+    assert (tmp_path / ".hangar" / "sync-vault.json").read_text(encoding="utf-8") == '{"v": 1}'
+
+
 def test_upload_migra_pasta_do_projeto_na_primeira_leitura(tmp_path):
     """A pasta de anexos mora no cwd do PROJETO, fora do alcance da migração da subida."""
     from app.uploads import resolve_upload

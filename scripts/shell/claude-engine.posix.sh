@@ -1,4 +1,4 @@
-# claude-pocket — `claude-engine` (bash + zsh). Sourced do teu rc por
+# hangar — `claude-engine` (bash + zsh). Sourced do teu rc por
 # scripts/install-claude-wrapper.sh. Fish tem a própria: scripts/shell/claude-engine.fish
 #
 # Abre uma sessão Claude Code normal (tmux + --session-id + teu ~/.claude inteiro) rodando num MOTOR

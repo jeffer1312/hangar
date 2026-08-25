@@ -14,7 +14,7 @@ from app.pqueue import PromptQueue, _transcript_start_ts
 from app.state import _live_spinner, classify, is_overlay
 from app.tmux import send_keys
 
-_log = logging.getLogger("claude_pocket.terminal_input")
+_log = logging.getLogger("hangar.terminal_input")
 
 # Tempos de acomodacao do TUI entre toque e leitura do pane (o picker redesenha em overlay).
 _SETTLE = 0.3  # apos uma tecla de navegacao

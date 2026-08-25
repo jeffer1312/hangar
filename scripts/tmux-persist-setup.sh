@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Make your claude-pocket tmux sessions survive a reboot or OOM kill.
+# Make your hangar tmux sessions survive a reboot or OOM kill.
 #
 # One-time setup. Installs tmux-resurrect + tmux-continuum (via TPM) and a systemd
 # *user* timer that auto-saves the tmux layout every 15 min. On the next fresh tmux
@@ -7,7 +7,7 @@
 # and the programs that were running (incl. `claude`).
 #
 # Why a systemd timer instead of continuum's own auto-save?
-#   continuum hooks its periodic save into the tmux status line. The claude-pocket
+#   continuum hooks its periodic save into the tmux status line. The hangar
 #   reference conf runs with `status off`, which disables that hook — so continuum
 #   alone would NEVER auto-save. The timer drives the save from outside; continuum is
 #   kept only for restore-on-start. If you run with the status bar ON you don't need
@@ -61,7 +61,7 @@ for repo in tmux-plugins/tpm tmux-plugins/tmux-resurrect tmux-plugins/tmux-conti
 done
 
 # 2. Ensure ~/.tmux.conf carries the plugin block (append if missing)
-MARK="# >>> claude-pocket tmux-persist >>>"
+MARK="# >>> hangar tmux-persist >>>"
 if [[ -f "$CONF" ]] && grep -qF "tmux-plugins/tmux-resurrect" "$CONF"; then
   log "Plugin lines already present in $CONF — leaving as is"
 else
@@ -80,7 +80,7 @@ set -g @continuum-save-interval '0'   # save driven by systemd timer (status bar
 set -g @resurrect-hook-post-save-all    '$RESUME_SH save'
 set -g @resurrect-hook-post-restore-all '$RESUME_SH restore'
 run '$PLUGIN_DIR/tpm/tpm'             # keep TPM init at the very end
-# <<< claude-pocket tmux-persist <<<
+# <<< hangar tmux-persist <<<
 EOF
 fi
 
@@ -91,11 +91,11 @@ if ! grep -qF "tmux-claude-resume.sh" "$CONF"; then
   log "Appending claude-resume hooks to $CONF"
   cat >> "$CONF" <<EOF
 
-# >>> claude-pocket resume hooks >>>
+# >>> hangar resume hooks >>>
 # Bring the claude conversation back (not a bare shell): save name->uuid, restore via --resume.
 set -g @resurrect-hook-post-save-all    '$RESUME_SH save'
 set -g @resurrect-hook-post-restore-all '$RESUME_SH restore'
-# <<< claude-pocket resume hooks <<<
+# <<< hangar resume hooks <<<
 EOF
 fi
 
@@ -104,7 +104,7 @@ log "Installing systemd user timer (socket: $SOCKET)"
 mkdir -p "$SD_DIR"
 cat > "$SD_DIR/$SERVICE" <<EOF
 [Unit]
-Description=Save tmux state (resurrect) for claude-pocket
+Description=Save tmux state (resurrect) for hangar
 # Only run when a default tmux server is actually up.
 ConditionPathExists=$SOCKET
 

@@ -147,7 +147,7 @@ The app already renders Claude Code's native selection menus: `state.py classify
   check if `OptionButtons` appear. If not, capture the pane and extend `classify()`/the option
   parser to recognize the widget (and carry multi-select + per-option descriptions).
 - Why it matters: the user drives sessions from the phone; interactive prompts must be
-  answerable there (see memory `claude-pocket-app-interaction`).
+  answerable there (see memory `hangar-app-interaction`).
 
 ## 4. Pending fixes (batch — this session)
 - **Cost chip → top row of the composer** (a thin row above the textarea), so the model pill

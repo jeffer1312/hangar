@@ -140,7 +140,7 @@ _registry = SessionRegistry()
 # Instancia stateless pro stream de lista (separada do _registry do jsonl_watcher pra clareza).
 _list_registry = SessionRegistry()
 
-_log = logging.getLogger("claude_pocket.sse")
+_log = logging.getLogger("hangar.sse")
 
 # Snapshot compartilhado de registry.list() pros LOOPS do SSE (jsonl_watcher de cada conexao de chat
 # + list_events): cada um re-varria o /proc inteiro + tmux no proprio ciclo -> N conexoes = N

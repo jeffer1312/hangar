@@ -50,7 +50,7 @@ from app.adapters.kimi import sessions as kimi_sessions
 from app.auth import require_auth
 from app.config import list_config_dirs
 
-_log = logging.getLogger("claude_pocket.cotas")
+_log = logging.getLogger("hangar.cotas")
 
 cotas_router = APIRouter(prefix="/api/cotas")
 

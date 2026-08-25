@@ -252,7 +252,7 @@ def test_session_file_refuses_a_sidecar_when_the_pane_birth_is_unknown(monkeypat
     _sem_nascimento(monkeypatch, tmp_path)
     assert registry._proc_start_time(7) is None
 
-    with caplog.at_level("WARNING", logger="claude_pocket.registry"):
+    with caplog.at_level("WARNING", logger="hangar.registry"):
         assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
         assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
     # Uma vez, nao a cada poll: list() roda de segundo em segundo e um warning por varredura

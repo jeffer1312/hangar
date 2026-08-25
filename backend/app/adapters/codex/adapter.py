@@ -27,10 +27,10 @@ from app.pqueue import PromptQueue
 from app.state import StateEvent
 from app.transcript import ChatEvent, TranscriptTailer
 
-_log = logging.getLogger("claude_pocket.codex.adapter")
+_log = logging.getLogger("hangar.codex.adapter")
 
 # clientInfo do handshake initialize (ver docs/codex-app-server-contract.md).
-_CLIENT_INFO = {"name": "claude-pocket", "title": None, "version": "0.1.0"}
+_CLIENT_INFO = {"name": "hangar", "title": None, "version": "0.1.0"}
 # Codex pode EDITAR arquivos no cwd da sessao -> workspace-write (nao read-only do spike).
 _SANDBOX = "workspace-write"
 _APPROVAL = "never"

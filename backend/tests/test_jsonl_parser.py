@@ -473,7 +473,7 @@ def test_system_com_cara_de_recado_sem_ancora_registra_aviso(caplog):
     # ancora, o recado para de aparecer e ninguem fica sabendo. Nao vira bubble (o formato nao esta
     # provado), mas vira linha de log.
     conteudo = "Algum aviso novo do harness\n\nPrompt original: [de: outra-sessao] RODADA 3 ENTREGUE"
-    with caplog.at_level("WARNING", logger="claude_pocket.transcript"):
+    with caplog.at_level("WARNING", logger="hangar.transcript"):
         assert parse_line(_line({"type": "system", "uuid": "u9",
                                  "timestamp": "2026-08-18T00:36:42Z",
                                  "content": conteudo})) == []
@@ -483,7 +483,7 @@ def test_system_com_cara_de_recado_sem_ancora_registra_aviso(caplog):
 def test_system_ruido_comum_nao_registra_aviso(caplog):
     # Ruido de tooling (a maioria das entradas system) nao pode virar log: aviso que aparece
     # sempre e aviso que ninguem le.
-    with caplog.at_level("WARNING", logger="claude_pocket.transcript"):
+    with caplog.at_level("WARNING", logger="hangar.transcript"):
         assert parse_line(_line({"type": "system", "uuid": "u10",
                                  "timestamp": "2026-08-18T00:36:42Z",
                                  "content": "Kept model as claude-opus-5"})) == []

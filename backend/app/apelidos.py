@@ -19,7 +19,7 @@ from pathlib import Path
 
 from app import atomico, contas, migracao_sidecars
 
-_log = logging.getLogger("claude_pocket.apelidos")
+_log = logging.getLogger("hangar.apelidos")
 
 _ARQUIVO = ".hangar-apelidos.json"
 _MAX = 40                      # cabe na faixa do rodapé sem virar reticências

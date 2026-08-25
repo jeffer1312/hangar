@@ -79,7 +79,7 @@ def _scope_probe() -> bool:
 
 def _scope_prefix() -> list[str]:
     # Spawn the tmux SERVER in its OWN transient systemd scope so it does NOT inherit the
-    # backend service's cgroup. Without this, `systemctl restart claude-pocket-backend`
+    # backend service's cgroup. Without this, `systemctl restart hangar-backend`
     # SIGTERMs the whole control-group -> kills the tmux server and every session (incl. the
     # one driving this app). ponytail: gated on systemd-run + a user runtime dir; on non-systemd
     # hosts returns [] and spawns plainly, where the cgroup teardown problem doesn't exist.
@@ -105,7 +105,7 @@ def _wayland_display() -> str | None:
     return socks[0] if socks else None
 
 
-_log = logging.getLogger("claude_pocket.tmux")
+_log = logging.getLogger("hangar.tmux")
 
 
 def _run(args: list[str], input: bytes | None = None) -> subprocess.CompletedProcess:
@@ -739,7 +739,7 @@ def rename_session(old: str, new: str) -> bool:
 # No Windows a TUI do Claude Code entra em "modo paste" quando UM `send-keys -l` entrega mais que
 # ~1120 chars de uma vez (medido, psmux 3.3.7 + claude v2.1.218: 1120 chega inteiro, 1140 ja perde
 # o INICIO no submit) — o Enter envia so a CAUDA e o comeco some. Foi o corte do prompt de
-# pareamento: 1220 chars -> so os ~300 finais, SEM o "[de: claude-pocket]" do inicio, e a sessao
+# pareamento: 1220 chars -> so os ~300 finais, SEM o "[de: hangar]" do inicio, e a sessao
 # obedeceu o pedaco achando que era o usuario. O send-keys/psmux entregam 100% (o buffer do input
 # fica integro, medido via Home ate 1600 chars); quem corta e a TUI no SUBMIT. Fatiar em pedacos
 # abaixo do cliff, com pausa entre eles, faz a TUI ver DIGITACAO normal (nunca vira paste) e o texto

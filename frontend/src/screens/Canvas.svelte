@@ -184,7 +184,7 @@ import * as m from '../paraglide/messages';
         i++;
       }
       // Linha de grupo é EXCLUSIVA: estranho não preenche a sobra (card solo caindo do lado dos
-      // últimos membros parecia parte do grupo — o bug do claude-pocket "dentro" do ABC-1234).
+      // últimos membros parecia parte do grupo — o bug do hangar "dentro" do ABC-1234).
       if (group.length > 1 && i % cols !== 0) i += cols - (i % cols);
     }
     layout = next;

@@ -1,5 +1,5 @@
 [project]
-name = "claude-pocket-backend"
+name = "hangar-backend"
 version = "0.1.0"
 description = "Backend API bridging a phone to live Claude Code tmux sessions (chat + live state + input)"
 requires-python = ">=3.14"

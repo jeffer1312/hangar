@@ -15,7 +15,7 @@ from pathlib import Path
 
 from app.workflows import _session_dir
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
 
 def _subagents_dir(jsonl: str) -> Path:

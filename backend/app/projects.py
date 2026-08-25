@@ -21,7 +21,7 @@ from app import atomico, runner
 from app.models import ProjectStatus, RunInfo
 from app.procinfo import _TEM_PROC
 
-_log = logging.getLogger("claude_pocket.projects")
+_log = logging.getLogger("hangar.projects")
 
 if os.name == "nt":
     import msvcrt

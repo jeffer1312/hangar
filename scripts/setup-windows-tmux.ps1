@@ -36,8 +36,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$BeginMark = '# >>> claude-pocket windows-tmux >>>'
-$EndMark   = '# <<< claude-pocket windows-tmux <<<'
+$BeginMark = '# >>> hangar windows-tmux >>>'
+$EndMark   = '# <<< hangar windows-tmux <<<'
 $Example   = Join-Path (Split-Path -Parent $PSScriptRoot) 'docs\tmux.conf.windows.example'
 
 # PRECEDENCIA (docs/configuration.md do psmux): ele le o PRIMEIRO arquivo que existir, nesta
@@ -190,11 +190,15 @@ $padrao = '(?s)' + [regex]::Escape($BeginMark) + '.*?' + [regex]::Escape($EndMar
 $antes  = ([regex]::Matches($atual, $padrao)).Count
 $limpo  = [regex]::Replace($atual, $padrao, '')
 
-# Tambem tira o bloco LEGADO do instalador antigo (marcador generico `claude-pocket`), que e
-# quem duplicou. Sem isto, um `set -g status off` velho continuaria valendo junto do novo.
-$padraoLegado = '(?s)# >>> claude-pocket >>>.*?# <<< claude-pocket <<<\r?\n?'
-$legado = ([regex]::Matches($limpo, $padraoLegado)).Count
-$limpo  = [regex]::Replace($limpo, $padraoLegado, '')
+# Tambem tira os blocos LEGADOS: o do instalador antigo (marcador generico `claude-pocket`), que e
+# quem duplicou, e o deste mesmo script antes do rename (`claude-pocket windows-tmux`). Sem isto,
+# um `set -g status off` velho continuaria valendo junto do novo.
+$legado = 0
+foreach ($padraoLegado in @('(?s)# >>> claude-pocket >>>.*?# <<< claude-pocket <<<\r?\n?',
+                            '(?s)# >>> claude-pocket windows-tmux >>>.*?# <<< claude-pocket windows-tmux <<<\r?\n?')) {
+    $legado += ([regex]::Matches($limpo, $padraoLegado)).Count
+    $limpo   = [regex]::Replace($limpo, $padraoLegado, '')
+}
 
 # NORMALIZA a cauda antes de concatenar. Antes era `$limpo += "\n"` seguido de "$limpo`n$bloco" —
 # duas fontes de newline pro mesmo ponto de junção. Depois de arrancar o bloco, `$limpo` JA termina

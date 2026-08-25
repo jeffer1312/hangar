@@ -79,7 +79,7 @@ def test_sem_pane_de_agente_cai_no_ativo_e_loga(sessao, tmp_path, monkeypatch, c
     ativo = next(p for p in tmux.list_panes_active() if p["name"] == sessao)
     grupo = tmux.list_panes_all()[sessao]
 
-    with caplog.at_level(logging.WARNING, logger="claude_pocket.registry"):
+    with caplog.at_level(logging.WARNING, logger="hangar.registry"):
         escolhido = registry.SessionRegistry._agent_pane(grupo, {})
 
     assert escolhido["pane_id"] == ativo["pane_id"]

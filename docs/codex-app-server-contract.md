@@ -11,7 +11,7 @@
 Investigação de fatos reais contra a instalação local de `codex-cli 0.141.0`, feita
 100% em `/tmp` (sandbox read-only, sem tocar no repo). Todas as respostas abaixo são
 output real capturado, não suposição. Objetivo: decidir se dá pra integrar o
-Codex ao `claude-pocket` via `codex app-server` (JSON-RPC/stdio) ou se o fallback
+Codex ao `hangar` via `codex app-server` (JSON-RPC/stdio) ou se o fallback
 `codex exec --json` é o caminho mais seguro.
 
 **Veredito: `app-server` funcionou de forma estável na sequência testada** (init →
@@ -67,12 +67,12 @@ stdin aberto (pipe persistente), não `cat arquivo | codex app-server --stdio`.
 
 Request:
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"claude-pocket-spike","title":"spike","version":"0.0.1"},"capabilities":null}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"hangar-spike","title":"spike","version":"0.0.1"},"capabilities":null}}
 ```
 
 Response real:
 ```json
-{"id":1,"result":{"userAgent":"claude-pocket-spike/0.141.0 (CachyOS Linux Rolling Release; x86_64) tmux/3.7b (claude-pocket-spike; 0.0.1)","codexHome":"/home/jefferson/.codex","platformFamily":"unix","platformOs":"linux"}}
+{"id":1,"result":{"userAgent":"hangar-spike/0.141.0 (CachyOS Linux Rolling Release; x86_64) tmux/3.7b (hangar-spike; 0.0.1)","codexHome":"/home/jefferson/.codex","platformFamily":"unix","platformOs":"linux"}}
 ```
 Seguido, sem pedir, de uma notification `remoteControl/status/changed` (irrelevante
 pro nosso caso — só ignorar).
@@ -226,7 +226,7 @@ em ordem: `session_meta` (1×), `event_msg` (5×), `response_item` (5×),
 ```json
 {"timestamp":"2026-07-13T15:02:37.646Z","type":"session_meta","payload":{
   "id":"019f5c00-5d7d-7dd2-b2cb-085ca6d76251","cwd":"/tmp",
-  "originator":"claude-pocket-spike","cli_version":"0.141.0","source":"vscode",
+  "originator":"hangar-spike","cli_version":"0.141.0","source":"vscode",
   "model_provider":"openai","base_instructions":{"text":"...(system prompt completo)..."}
 }}
 ```

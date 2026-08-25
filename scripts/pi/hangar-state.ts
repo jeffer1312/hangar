@@ -242,10 +242,10 @@ function publishPreview(ctx: any, text: string, agora: boolean): void {
 //
 // A CHAVE é o TMUX_PANE, não o arquivo de sessão: é o que o backend resolve de graça no envio.
 // Os dois nomes, novo primeiro: no Windows a migração de nome (backend/app/migracao_sidecars.py)
-// não consegue deixar link num ARQUIVO solto sem privilégio, então lá o `.claude-pocket-conn.json`
+// não consegue deixar link num ARQUIVO solto sem privilégio, então lá o `.hangar-conn.json`
 // pode continuar sendo o único que existe. É resolvido a cada tentativa, não uma vez na carga: o
 // arquivo pode nascer (ou ser migrado) depois que a extensão subiu.
-const CONN_NOMES = [".hangar-conn.json", ".claude-pocket-conn.json"];
+const CONN_NOMES = [".hangar-conn.json", ".hangar-conn.json"];
 const achaConn = (): string | null =>
   CONN_NOMES.map((n) => path.join(base, n)).find((p) => fs.existsSync(p)) ?? null;
 

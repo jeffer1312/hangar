@@ -30,7 +30,9 @@ IDIOMA = "pt"
 # UMA pessoa (nome de projeto, de sessao, de cliente) entra pela config `ditado_vocabulario` e e
 # somado a este.
 VOCAB_BASE = (
-    "hangar-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
+    # `cp-send` fica junto do nome novo enquanto o comando antigo existir: é o que muita gente
+    # ainda fala, e sem ele a Whisper devolve "CP send" — que a limpeza tem ordem de preservar.
+    "hangar-send, cp-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
     "frontend, commit, merge request, deploy, endpoint, worktree, prompt, token"
 )
 # A Whisper le no maximo ~224 tokens de prompt e ignora calada o resto — uma lista que cresceu
@@ -110,7 +112,7 @@ def transcribe(content: bytes, filename: str | None) -> str:
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             # O Cloudflare da Groq bane o UA padrao do urllib ("Python-urllib/..") com 403 code 1010.
             # Um UA normal passa.
-            "User-Agent": "claude-pocket/1.0",
+            "User-Agent": "hangar/1.0",
         },
     )
     try:

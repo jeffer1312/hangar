@@ -30,7 +30,7 @@ from pathlib import Path
 
 from app import conta_estado, tmux
 
-_log = logging.getLogger("claude_pocket.login_conta")
+_log = logging.getLogger("hangar.login_conta")
 
 # O CLI do Claude imprime a URL OAuth como hiperlink OSC 8 no pane (medido em 17/08). A
 # regex casa o TEXTO da URL (a segunda ocorrência do par OSC 8), não o rótulo.

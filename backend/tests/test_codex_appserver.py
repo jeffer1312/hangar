@@ -220,7 +220,7 @@ async def test_real_codex_initialize_smoke():
     await client.start()
     try:
         result = await client.request("initialize", {
-            "clientInfo": {"name": "claude-pocket-test", "title": None, "version": "0.0.1"},
+            "clientInfo": {"name": "hangar-test", "title": None, "version": "0.0.1"},
             "capabilities": None,
         })
         assert result

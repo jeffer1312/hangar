@@ -346,6 +346,30 @@ for w in claude.posix.sh claude.fish claude.ps1 pi.posix.sh pi.fish; do
     fi
 done
 
+echo "== bloco gerenciado no rc (marcador novo entra, antigo sai) =="
+# O marcador virou `# >>> hangar >>>`. Um rc que ainda tenha o bloco do nome ANTIGO precisa
+# perdê-lo: os dois fazem `source` dos mesmos wrappers, e um rc com os dois carrega tudo
+# duas vezes por terminal — além de deixar pra trás um bloco que nenhum installer atualiza mais.
+# Roda a função de verdade do installer, extraída do arquivo (não uma cópia da lógica aqui).
+rc="$TMP/rc-teste"
+antigo='claude''-pocket'   # partido pra um rename em massa não reescrever a entrada deste teste
+printf 'export MINHA_VAR=1\n\n# >>> %s >>>\nsource "/caminho/velho/claude.posix.sh"\n# <<< %s <<<\n\nalias meu=ls\n' "$antigo" "$antigo" > "$rc"
+(
+    # shellcheck disable=SC1090
+    eval "$(awk '/^BEGIN_MARK=/,/^}/' "$REPO/scripts/install-claude-wrapper.sh")"
+    ensure_block "$rc" 'source "/caminho/novo/claude.posix.sh"' >/dev/null
+    ensure_block "$rc" 'source "/caminho/novo/claude.posix.sh"' >/dev/null   # idempotência
+)
+if grep -q "$antigo" "$rc"; then
+    echo "FAIL: bloco antigo continuou no rc"; fail=1
+fi
+if [ "$(grep -c '# >>> hangar >>>' "$rc")" != 1 ]; then
+    echo "FAIL: bloco novo não ficou exatamente uma vez"; fail=1
+fi
+if ! grep -q 'MINHA_VAR' "$rc" || ! grep -q 'alias meu=ls' "$rc"; then
+    echo "FAIL: o installer comeu conteúdo que não era dele"; fail=1
+fi
+
 if [ "$fail" = 0 ]; then
     echo "PASS: todos os wrappers"
 else

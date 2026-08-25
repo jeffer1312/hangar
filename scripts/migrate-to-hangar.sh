@@ -21,9 +21,10 @@
 # services-setup.sh, manifest com o nome novo). Este script mexe na MÁQUINA, não no conteúdo
 # do repo — se rodar num clone antigo, o passo 4 recria as units com o nome velho.
 #
-# NÃO muda (de propósito — são dados/ids internos, e renomear derruba pareamento e loop em
-# andamento): ~/.claude/.claude-pocket-pair/, .claude-pocket-uploads/, .claude-pocket-loop/,
-# .claude-pocket-status/, instância quickshell "claude-pocket", hangar-send/cp-*/CP_*.
+# NÃO muda (de propósito): as variáveis CP_* (o .env de instalação alheia quebraria) e o cookie
+# cp_token. As pastas de dados `~/.claude/.claude-pocket-*` NÃO são deste script: quem as renomeia
+# pra `.hangar-*` é o backend na subida (backend/app/migracao_sidecars.py), que deixa link no
+# caminho antigo pra hook e extensão de sessão já aberta continuarem acertando o alvo.
 set -euo pipefail
 
 OLD="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"

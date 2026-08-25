@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Open the LAN firewall so a phone on your network can reach claude-pocket.
+# Open the LAN firewall so a phone on your network can reach hangar.
 #
 # One-time setup — ufw/firewalld rules persist across reboots; you do NOT need to run this
 # every time you start the app. Raw nftables is the exception: the rule is runtime-only

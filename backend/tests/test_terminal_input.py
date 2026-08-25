@@ -358,7 +358,7 @@ def test_limpar_composer_desiste_com_teto_e_avisa(caplog):
     nosso = "mensagem comprida de teste que nao sai do composer"
     with patch("app.terminal_input.tmux.capture_pane", return_value=_pane_claude([f"❯ {nosso}"])), \
          patch.object(terminal_input, "send_keys") as sk, \
-         caplog.at_level("WARNING", logger="claude_pocket.terminal_input"):
+         caplog.at_level("WARNING", logger="hangar.terminal_input"):
         assert terminal_input._limpar_composer("cc", nosso, None) is False
     assert len(sk.call_args_list) == terminal_input._LIMPEZA_MAX_TECLAS
     assert "nao limpou" in caplog.text
@@ -522,7 +522,7 @@ def test_send_prompt_partial_loga_diagnostico_no_erro(monkeypatch, caplog):
         composer = ["❯ [Pasted text #1 +5 lines]"]
         return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
 
-    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+    with caplog.at_level("ERROR", logger="hangar.terminal_input"), \
          patch("app.terminal_input.tmux.has_session", return_value=True), \
          patch.object(terminal_input, "_capture", side_effect=capture), \
          patch.object(terminal_input, "send_keys", return_value=True):
@@ -643,7 +643,7 @@ def test_send_prompt_multilinha_com_falha_confirmada_no_meio_vira_partial(monkey
         composer = ["❯ primeira linha"]
         return "\n".join(["banner", "", _REGUA_R] + composer + [_REGUA_R, "? for shortcuts"])
 
-    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+    with caplog.at_level("ERROR", logger="hangar.terminal_input"), \
          patch("app.terminal_input.tmux.has_session", return_value=True), \
          patch.object(terminal_input, "_capture", side_effect=capture), \
          patch.object(terminal_input.tmux, "paste_text", return_value=False), \
@@ -769,7 +769,7 @@ def test_send_prompt_pi_ocupado_alem_do_limite_vira_erro_visivel(monkeypatch, ca
     monkeypatch.setattr(terminal_input.time, "sleep", lambda s: None)
     pane_ocupado = _pane_pi(["rascunho que nunca sai do composer"])
     total = terminal_input._OCUPADO_DEFER_LIMIT * 2 + 1   # passa por DUAS viradas da tregua
-    with caplog.at_level("ERROR", logger="claude_pocket.terminal_input"), \
+    with caplog.at_level("ERROR", logger="hangar.terminal_input"), \
          patch.object(terminal_input, "_capture", return_value=pane_ocupado), \
          patch.object(terminal_input, "send_keys") as sk:
         for _ in range(total):

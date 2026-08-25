@@ -26,8 +26,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHELL_DIR="$SCRIPT_DIR/shell"
 STATUSLINE_JS="$SCRIPT_DIR/omniroute-statusline.js"
-BEGIN_MARK="# >>> claude-pocket >>>"
-END_MARK="# <<< claude-pocket <<<"
+BEGIN_MARK="# >>> hangar >>>"
+END_MARK="# <<< hangar <<<"
+# Marcador que este projeto usava antes do rename. O bloco velho é ARRANCADO antes de o novo
+# entrar (ensure_block): os dois fazem `source` dos mesmos wrappers, então deixá-lo pra trás
+# carregaria o wrapper duas vezes por terminal — e, pior, o bloco velho nunca mais seria
+# atualizado por nada. Mesma lista de nomes antigos que o install.ps1 já mantém no Windows.
+LEGACY_BEGIN="# >>> claude-pocket >>>"
+LEGACY_END="# <<< claude-pocket <<<"
 
 DO_TMUX=1
 DO_STATUS=""   # "", 1 or 0 — empty means "ask if interactive, else yes"
@@ -62,6 +68,16 @@ fi
 ensure_block() {
   local file="$1" payload="$2" tmp
   touch "$file"
+  if grep -qF "$LEGACY_BEGIN" "$file"; then
+    tmp="$(mktemp)"
+    awk -v b="$LEGACY_BEGIN" -v e="$LEGACY_END" '
+      $0==b {skip=1; next}
+      $0==e {skip=0; next}
+      skip {next}
+      {print}
+    ' "$file" >"$tmp" && mv "$tmp" "$file"
+    echo "  removed old (claude-pocket) managed block from $file"
+  fi
   if grep -qF "$BEGIN_MARK" "$file"; then
     tmp="$(mktemp)"
     awk -v b="$BEGIN_MARK" -v e="$END_MARK" -v p="$payload" '

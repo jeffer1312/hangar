@@ -24,7 +24,7 @@ from typing import Optional
 
 from app.config import _backend_config_base, list_config_dirs
 
-_log = logging.getLogger("claude_pocket.statusline")
+_log = logging.getLogger("hangar.statusline")
 
 _SUBDIR = ".hangar-status"
 _MAX_AGE = 86400.0

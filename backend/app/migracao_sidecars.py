@@ -112,10 +112,16 @@ def migrar_base(base: Path) -> int:
 
 
 def migrar(bases) -> int:
-    """Migra cada diretório de configuração recebido (todos os perfis `~/.claude*`)."""
+    """Migra cada diretório de configuração recebido (todos os perfis `~/.claude*`) e o `~/.hangar`.
+
+    O `~/.claude-pocket/` é caso à parte porque não fica DENTRO de config dir nenhum: é a pasta de
+    dados do próprio servidor, e lá mora o cofre do cloud-sync (`sync-vault.json`). Deixá-lo pra
+    trás faz o hub nascer sem cofre e mostrar "Criar acesso" pra quem já tem conta.
+    """
     total = 0
     for base in {Path(b) for b in bases}:
         total += migrar_base(base)
+    total += migrar_caminho(Path.home() / ".claude-pocket", Path.home() / ".hangar")
     if total:
         _log.info("migracao: %d sidecar(s) renomeado(s) de .claude-pocket-* pra .hangar-*", total)
     return total

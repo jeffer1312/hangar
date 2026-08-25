@@ -43,7 +43,7 @@ from app.procinfo import (_proc_children_map, _descendant_pids, _open_jsonl, _cm
 # Sentinela: distingue "pid nao informado" (resolve sozinho via tmux) de "pid=None" (sem pane).
 _UNSET = object()
 
-_log = logging.getLogger("claude_pocket.registry")
+_log = logging.getLogger("hangar.registry")
 
 
 # Idade minima de um marcador awaiting_input pra que um pane raspado SEM menu o rebaixe pra idle

@@ -481,7 +481,7 @@ def test_new_session_sem_systemd_run_quebrado_ainda_cria(monkeypatch):
 # --- fatiamento de literal grande no Windows (corte do inicio pela TUI no submit) -----------------
 # No Windows a TUI do Claude Code come o COMECO de um send-keys -l acima de ~1120 chars (entra em
 # modo paste e o Enter envia so a cauda). Foi o corte do prompt de pareamento (1220 -> so ~300
-# finais, sem o "[de: claude-pocket]"). O send_keys fatia em pedacos <= _WIN_CHUNK com pausa, SO no
+# finais, sem o "[de: hangar]"). O send_keys fatia em pedacos <= _WIN_CHUNK com pausa, SO no
 # Windows. Estes testes travam as duas garantias: Windows fatia byte-exato; Linux fica intocado.
 
 def _captura_run(monkeypatch):

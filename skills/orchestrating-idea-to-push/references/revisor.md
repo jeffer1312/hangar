@@ -432,7 +432,7 @@ várias vezes mais caro pelo mesmo resultado.
 nasce no padrão do harness, que não é esse modelo — troque, **leia de volta** e confira antes de
 mandar trabalho. Ele não entra nesse laço: o que chega nele é o teu parecer.
 
-Receita completa, com o backend local do claude-pocket (troque nome, worktree e modelo):
+Receita completa, com o backend local do hangar (troque nome, worktree e modelo):
 
 ```bash
 # token do backend — o mesmo lugar de onde o hangar-send lê

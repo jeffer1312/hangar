@@ -12,7 +12,7 @@ from app.state import _RULE_RE, _is_boundary, _live_spinner
 # do .jsonl); duas copias so dariam a chance de uma envelhecer.
 from app.statusline import _dirs as _config_dirs
 
-_log = logging.getLogger("claude_pocket.preview")
+_log = logging.getLogger("hangar.preview")
 
 # Preview AO VIVO do bloco de assistente em andamento, lido do pane do tmux (capture-pane -p, texto
 # já composto: sem ANSI, sem cursor-move). É a ÚNICA fonte do texto em voo sem perder o REPL

@@ -18,7 +18,7 @@ from app.state import StateEvent
 @pytest.fixture(autouse=True)
 def _isolate_sidecar(tmp_path):
     # Sidecars duraveis redirecionados pra tmp -- mesmo padrao de test_codex_registry.py (evita
-    # os testes de model/effort tocarem ~/.claude-pocket/codex-sessions de verdade).
+    # os testes de model/effort tocarem ~/.hangar/codex-sessions de verdade).
     with patch.object(codex_sessions, "_dir", lambda: tmp_path / "codex-sessions"), \
          patch.object(codex_adapter, "ensure_tmux_tui"), \
          patch.object(codex_adapter.tmux, "has_session", return_value=True), \

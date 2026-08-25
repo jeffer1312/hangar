@@ -53,7 +53,7 @@ Consertada a colisão de irmãs (`svc-mailer-2` vs `svc-report-ai-2`), mas sobra
 
 ### 7. O venv da VPS está quebrado desde o rename ANTERIOR
 Medido pela sessão da VPS: os shebangs dos console scripts apontam pra
-`/home/jefferson/admin/claude-pocket/...` — caminho que não existe desde o `pocket → cockpit`.
+`/home/jefferson/admin/hangar/...` — caminho que não existe desde o `pocket → cockpit`.
 `backend/.venv/bin/pytest --version` falha. Ninguém percebeu porque a unit roda `uv run`, que
 resolve o interpretador sozinho. Um `uv sync` conserta; está no roteiro da janela de rename de lá.
 

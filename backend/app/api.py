@@ -88,7 +88,7 @@ from app.sync import sync_router
 from app.deploy import deploy_router
 from app import desktop_palette
 
-_log = logging.getLogger("claude_pocket")
+_log = logging.getLogger("hangar")
 
 
 class _BodyTooLarge(Exception):
@@ -257,7 +257,7 @@ async def _lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="claude-pocket", lifespan=_lifespan)
+app = FastAPI(title="hangar", lifespan=_lifespan)
 # Body-size ANTES do CORS no codigo -> CORS fica por FORA (envolve ate o 413, adicionando headers CORS
 # na rejeicao). Ver _BodySizeLimitMiddleware.
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_BYTES)
@@ -2160,7 +2160,7 @@ def _group_text(me: str, others: list[str], task: str) -> str:
         f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
         f"{contract_path_for(me)} (markdown; criar se não existir, manter curto e atual). ")
     return (
-        f"[de: claude-pocket] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
+        f"[de: hangar] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
         f"Cada sessão mexe SÓ no próprio repo; quando precisar de algo de outro membro (contrato, "
         f"endpoint, tipo, dúvida), mande 1:1 por iniciativa própria. COMO mandar, nesta ordem: "
         f"se você TEM a ferramenta SendMessage e o membro aparece no seu ListAgents (sessão Claude "
@@ -2347,7 +2347,7 @@ async def unpair_remote(name: str, body: UnpairRemoteBody):
     ex = await asyncio.to_thread(pair.leave, name)
     warn = None
     if ex:
-        e = await _deliver(name, f"[de: claude-pocket] '{body.peer}' saiu do pareamento. "
+        e = await _deliver(name, f"[de: hangar] '{body.peer}' saiu do pareamento. "
                                  "Volte a operar independente; use hangar-send só quando o usuário pedir.")
         if e:
             warn = erro("erro_pareamento_aviso_unpair", f"{name}: {_erro_texto(e)}",
@@ -2437,7 +2437,7 @@ async def unpair_session(name: str):
             # mão; se virar comum, enfileirar via pqueue como o /input faz.
             _log.warning("unpair: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
             errs.append({"sessao": p, "erro": str(ex)})
-    e = await _deliver(name, "[de: claude-pocket] Você saiu do grupo de trabalho "
+    e = await _deliver(name, "[de: hangar] Você saiu do grupo de trabalho "
                              f"({', '.join(expeers)}). Volte a operar independente; use hangar-send só "
                              "quando o usuário pedir.")
     if e:
@@ -2445,7 +2445,7 @@ async def unpair_session(name: str):
     resto = [p for p in expeers if not peers.is_remote(p)]
     for p in resto:
         ainda = [x for x in resto if x != p]
-        msg = (f"[de: claude-pocket] '{name}' saiu do grupo de trabalho. "
+        msg = (f"[de: hangar] '{name}' saiu do grupo de trabalho. "
                + (f"O grupo continua entre você e {', '.join(ainda)}."
                   if ainda else "O grupo foi dissolvido (só restava você); volte a operar independente."))
         e = await _deliver(p, msg)

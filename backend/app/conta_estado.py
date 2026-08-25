@@ -31,7 +31,7 @@ from app.auth import require_auth
 from app.config import list_config_dirs
 from app.mensagens import erro
 
-_log = logging.getLogger("claude_pocket.conta_estado")
+_log = logging.getLogger("hangar.conta_estado")
 
 conta_estado_router = APIRouter(prefix="/api/conta-estado")
 

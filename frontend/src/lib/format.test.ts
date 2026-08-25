@@ -61,7 +61,7 @@ describe('initials', () => {
   });
 
   it('takes first letter of each of two words', () => {
-    expect(initials('claude-pocket')).toBe('CP');
+    expect(initials('api-front')).toBe('AF');
   });
   it('splits on non-alphanumeric separators', () => {
     expect(initials('app_web')).toBe('AW');

@@ -128,7 +128,7 @@ export function fmtWhen(mtime?: number | null): string {
   return new Date(mtime * 1000).toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' });
 }
 
-// Iniciais pra avatar/rail (identifica sem o nome inteiro). "claude-pocket" -> CP, "jeffer1312" -> JE.
+// Iniciais pra avatar/rail (identifica sem o nome inteiro). "api-front" -> AF, "jeffer1312" -> JE.
 // Duas palavras -> 1a letra de cada; uma só -> 2 primeiros chars. Puro/testável. Reusado pelo
 // avatar da conta (AccountMenu) e pelo rail recolhido da sidebar.
 export function initials(name: string): string {

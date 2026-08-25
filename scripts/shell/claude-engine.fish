@@ -1,4 +1,4 @@
-# claude-pocket — `claude-engine` (fish). Instalado por scripts/install-claude-wrapper.sh.
+# hangar — `claude-engine` (fish). Instalado por scripts/install-claude-wrapper.sh.
 #
 # Abre uma sessão Claude Code normal (tmux + --session-id + teu ~/.claude inteiro: skills, hooks,
 # CLAUDE.md, plugins, statusline) rodando num MOTOR diferente da conta Anthropic. O motor vale só
