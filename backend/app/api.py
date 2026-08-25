@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -260,6 +260,26 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="hangar", lifespan=_lifespan)
+
+
+@app.exception_handler(tmux.MuxIndisponivel)
+async def _mux_indisponivel(request: Request, exc: tmux.MuxIndisponivel):
+    """503 em QUALQUER rota que esbarre num multiplexador que não responde.
+
+    `registry.list()` levanta isto, e ele é chamado por umas quinze rotas (shell, loop, uploads,
+    plano, arquivos...). Tratar rota por rota deixaria as não-tocadas devolvendo 500 com traceback
+    justamente no cenário que esta mudança existe pra consertar — e a próxima rota a chamar `list()`
+    nasceria com o mesmo furo. Um handler só fecha todas de uma vez.
+
+    503 e não a lista vazia de antes: "não sei quais sessões existem" não pode continuar sendo
+    entregue como "você não tem nenhuma".
+    """
+    diag.registrar("mux.indisponivel", "erro", detalhe=f"{request.method} {request.url.path}")
+    return JSONResponse(
+        status_code=503,
+        content={"detail": erro("erro_mux_indisponivel",
+                                "o tmux não respondeu — a lista de sessões está indisponível",
+                                detalhe=str(exc))})
 
 
 @app.middleware("http")
@@ -1166,14 +1186,10 @@ class ModelEffortBody(_StrictBody):
 async def list_sessions():
     # list_with_state: resolucao otimizada (1 scan /proc + 1 chamada tmux em lote) + estado vivo por
     # sessao (working/idle/awaiting_input) classificado do pane. async pq captura os panes concorrente.
-    try:
-        return await registry.list_with_state()
-    except tmux.MuxIndisponivel as e:
-        # O multiplexador nao respondeu: a lista e DESCONHECIDA. 503 (com o motivo) em vez de uma
-        # lista vazia com 200, que quem le nao tem como distinguir de "voce nao tem sessao nenhuma".
-        # No diario porque e EXATAMENTE o evento do relato "do nada as sessoes sumiram".
-        diag.registrar("lista.mux_indisponivel", "erro", detalhe=str(e))
-        raise HTTPException(503, detail=erro("erro_mux_indisponivel", "o tmux não respondeu — a lista de sessões está indisponível", detalhe=str(e)))
+    # MuxIndisponivel nao e tratada aqui: o handler de `_mux_indisponivel` cobre esta rota e as
+    # outras quinze que chamam registry.list(). Um try/except so nesta seria a mesma resposta
+    # escrita duas vezes, e a que envelhece primeiro.
+    return await registry.list_with_state()
 
 
 @app.post("/api/diag", dependencies=[Depends(require_auth)])

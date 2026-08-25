@@ -287,8 +287,13 @@ class _ListRefresher:
                 if not self.errored:
                     # No diário só na TRANSIÇÃO, igual ao evento: um refresher quebrado a cada poll
                     # encheria o arquivo do dia com a mesma linha.
+                    # SÓ o tipo da exceção no diário, não a mensagem dela. Este caminho embrulha
+                    # `list_with_state`, que carrega o texto da pergunta pendente do
+                    # AskUserQuestion — um erro de serialização ali ecoaria conversa dentro de um
+                    # arquivo que promete não guardar nenhuma. A mensagem inteira vai no log local
+                    # (o `_log.warning` acima, com traceback), que não é o arquivo que se envia.
                     diag.registrar("lista.refresher_falhou", "erro",
-                                   detalhe=repr(sys.exc_info()[1])[:200])
+                                   detalhe=type(sys.exc_info()[1]).__name__)
                     async with self._cond:
                         self.errored = True
                         self.version += 1

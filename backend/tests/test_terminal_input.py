@@ -150,6 +150,19 @@ def test_select_corrige_tecla_engolida(sem_espera, monkeypatch):
     ]
 
 
+def test_select_ilegivel_no_meio_da_correcao_nao_manda_enter(sem_espera, monkeypatch):
+    # Achado da revisão: a 1a leitura dá um número, a 2a vem ilegível (pane piscou, `❯ N.` sumiu).
+    # Tratar isso como convergência mandava o Enter às CEGAS — exatamente o "opção errada calada"
+    # que a malha fechada existe pra impedir. Diferente do pane ilegível na PRIMEIRA leitura, que
+    # cai no caminho aberto de sempre (caso abaixo).
+    telas = iter([_picker(1), "tela sem cursor nenhum"])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cc", 3)
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
 def test_select_nao_convergiu_nao_manda_enter(sem_espera, monkeypatch):
     monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker(1))  # cursor nunca sai de 1
     with patch.object(terminal_input, "send_keys") as sk:

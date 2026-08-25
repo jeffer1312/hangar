@@ -114,12 +114,20 @@ async function ensureOk(res: Response): Promise<void> {
   if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
 }
 
-// Rota sem o nome da sessão e sem id: `/api/sessions/api-front/select` vira
-// `/api/sessions/*/select`. É o que deixa o diário AGRUPÁVEL ("quantas vezes o /select falhou")
-// em vez de virar uma lista de caminhos únicos — e, de quebra, tira o nome da sessão de um lugar
-// onde ele não acrescenta nada (o campo `sessao` existe pra isso, quando o chamador o informa).
+// Segmentos cujo VALOR seguinte não pode ir pro diário como está.
+//
+// Duas razões diferentes, e a segunda é a que importa:
+//  - agrupar: `/api/sessions/api-front/select` vira `/api/sessions/*/select`, e aí dá pra contar
+//    "quantas vezes o /select falhou" em vez de ler uma lista de caminhos únicos;
+//  - NÃO VAZAR: em `/api/archive/<projeto>` o `<projeto>` é o slug do diretório do Claude Code, ou
+//    seja, o caminho real do projeto na máquina (`-home-fulano-Projetos-cliente-x`); em
+//    `/api/claude-configs/<nome>` é o rótulo da conta. O diário promete, no topo do lib/diag.ts,
+//    não guardar caminho de arquivo do projeto — e sem `archive` nesta lista ele guardava, em toda
+//    retomada de conversa arquivada (é POST, então entra mesmo dando certo).
+const SEGMENTOS_OPACOS = /\/(sessions|servers|agents|archive|claude-configs|projects)\/[^/]+/g;
+
 export function rotaGenerica(path: string): string {
-  return path.split('?')[0].replace(/\/(sessions|servers|agents)\/[^/]+/g, '/$1/*');
+  return path.split('?')[0].replace(SEGMENTOS_OPACOS, '/$1/*');
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -161,7 +169,20 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     // "sessão não encontrada — opção NÃO enviada"). Lido de um `clone()` porque o corpo só pode ser
     // consumido uma vez e quem precisa dele de verdade é o `ensureOk` logo abaixo, que monta a
     // mensagem da tela — tirar isso dele quebraria todo tratamento de erro do app.
-    const motivo = res.ok ? '' : await errorDetail(res.clone()).catch(() => '');
+    //
+    // try/catch em volta do CLONE, não só do `errorDetail`: `res.clone()` lança de forma SÍNCRONA
+    // quando o corpo já foi lido, e como ele é avaliado como argumento, um `.catch()` na chamada
+    // nunca chegaria a ser anexado — a exceção subiria e derrubaria o pedido de verdade (enviar
+    // mensagem, responder opção) por causa do código que só descreve o que aconteceu. O diário
+    // nunca pode derrubar o que ele registra.
+    let motivo = '';
+    if (!res.ok) {
+      try {
+        motivo = await errorDetail(res.clone());
+      } catch {
+        motivo = '';
+      }
+    }
     registrarDiag({
       evento: acao ? 'acao' : 'leitura',
       nivel: res.ok ? 'ok' : (res.status >= 500 ? 'erro' : 'aviso'),

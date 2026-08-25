@@ -10,13 +10,38 @@ const store = new Map<string, string>();
 (globalThis as any).document = { cookie: '' };
 (globalThis as any).window = { location: { origin: 'https://app.test' } };
 
-const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel } = await import('./api');
+const { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, isAbortError, transcribeFile, transcribeFileForServer, getModelOptions, setEngineModel, rotaGenerica } = await import('./api');
 const { mensagemDeErro, formataErro } = await import('./errosApi');
 const { listServers, getActiveId } = await import('./auth');
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 
 beforeEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('rotaGenerica — o que pode ir pro diário de uso', () => {
+  it('apaga o nome da sessão (agrupa, e não interessa: o campo `sessao` existe pra isso)', () => {
+    expect(rotaGenerica('/api/sessions/api-front/select')).toBe('/api/sessions/*/select');
+    expect(rotaGenerica('/api/sessions/api-front/history?limit=40')).toBe('/api/sessions/*/history');
+  });
+
+  it('apaga o projeto do Archive: ele É o caminho real do projeto na máquina', () => {
+    // Achado da revisão de 25/08/2026. `resumeArchivedConversation` é POST, então entrava no
+    // diário em TODO uso, dando certo — e o diário promete não guardar caminho de projeto.
+    expect(rotaGenerica('/api/archive/-home-fulano-Projetos-cliente-x'))
+      .toBe('/api/archive/*');
+    expect(rotaGenerica('/api/archive/-home-fulano-Projetos-cliente-x/abc-123/resume'))
+      .toBe('/api/archive/*/abc-123/resume');
+  });
+
+  it('apaga o nome da conta em claude-configs', () => {
+    expect(rotaGenerica('/api/claude-configs/conta-do-cliente')).toBe('/api/claude-configs/*');
+  });
+
+  it('rota sem segmento variável passa inteira', () => {
+    expect(rotaGenerica('/api/diag')).toBe('/api/diag');
+    expect(rotaGenerica('/api/sessions')).toBe('/api/sessions');
+  });
 });
 
 describe('explicit server settings API', () => {

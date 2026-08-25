@@ -1486,13 +1486,19 @@ class TerminalInput:
                 time.sleep(_NAV_GAP)
         else:
             for _ in range(self._SELECT_TENTATIVAS):
-                if row is None or row == option:
+                if row == option:
+                    break
+                if row is None:
+                    # Ilegivel NO MEIO da correcao (pane pisca, `❯ N.` some) NAO e convergencia:
+                    # sair do laco aqui como se fosse deixava o Enter ser mandado as cegas, que e
+                    # exatamente o "opcao errada calada" que este metodo existe pra evitar. Sem
+                    # linha pra corrigir, o laco nao tem o que fazer — cai no guard abaixo.
                     break
                 for _ in range(abs(option - row)):
                     send_keys(name, "Down" if option > row else "Up")
                     time.sleep(_NAV_GAP)
                 row = _cursor_row(tela())
-            if row is not None and row != option:
+            if row != option:
                 raise DriveError(f"cursor parou na linha {row}, esperava {option} — opcao NAO enviada")
         send_keys(name, "Enter")
 
