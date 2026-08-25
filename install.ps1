@@ -235,7 +235,7 @@ function Instale-ClaudeCode {
     # mandando editar nas Propriedades do Sistema. Sem ninguem fazer isso o `Tem 'claude'` abaixo
     # falhava e a instalacao inteira parava no passo 1 com "feche e abra o terminal", que nao
     # resolveria nada. Quem poe no PATH do usuario e este script (mesmo diretorio que o 7b ja usa
-    # pro cp-send).
+    # pro hangar-send).
     $rotulo = 'Claude Code'
     if (Tem 'claude') { Ok $rotulo; return $true }
     if ($SoChecar) { Falta "$rotulo - e o que o app pilota"; $script:pendencias += $rotulo; return $false }
@@ -283,7 +283,7 @@ Instale-ClaudeCode | Out-Null
 Instale 'Python'                'py'     'Python.Python.3.14'   'o backend e Python'        | Out-Null
 # 3.14, nao 3.13: backend/pyproject.toml exige >=3.14 (e .python-version = 3.14). Com o 3.13 o
 # `uv sync` ate funcionava - baixava um 3.14 gerenciado por conta propria - mas o Python do winget
-# virava peso morto, servindo so ao shim python3 do cp-send. Um Python so pros dois papeis.
+# virava peso morto, servindo so ao shim python3 do hangar-send. Um Python so pros dois papeis.
 Instale 'Node 20+'              'node'   'OpenJS.NodeJS.LTS'    'o frontend e Svelte'       | Out-Null
 Instale 'uv'                    'uv'     'astral-sh.uv'         'gerencia o venv do backend' | Out-Null
 
@@ -1482,16 +1482,16 @@ CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass
     Nota 'pulado - rodando na mao, fechar o terminal derruba o backend'
 }
 
-# -- 7b/8 cp-send + skills ---------------------------------------------------
-# O cp-send e bash falando com o backend por HTTP - nada nele exige unix. Faltavam tres coisas
+# -- 7b/8 hangar-send + skills ---------------------------------------------------
+# O hangar-send e bash falando com o backend por HTTP - nada nele exige unix. Faltavam tres coisas
 # no Windows, e sao estas que este passo resolve:
-#   1. um `python3` que exista (o instalador do Python cria python.exe e py.exe, e o cp-send
+#   1. um `python3` que exista (o instalador do Python cria python.exe e py.exe, e o hangar-send
 #      chama python3 dez vezes pra ler JSON);
 #   2. um lancador que o PowerShell enxergue, ja que o script nao tem extensao;
-#   3. rodar o proprio install-cp-send.sh - e ele quem cria o link, as skills e o bloco de
+#   3. rodar o proprio install-hangar-send.sh - e ele quem cria o link, as skills e o bloco de
 #      protocolo no ~/.claude/CLAUDE.md. Duplicar esse texto aqui daria duas fontes da verdade,
 #      e a que diverge silenciosamente e sempre a copia.
-Titulo '7b/8 cp-send (recado e pareamento entre sessoes)'
+Titulo '7b/8 hangar-send (recado e pareamento entre sessoes)'
 $bash = $null
 if (Tem 'git') {
     # O git fica em ...\cmd\git.exe; o bash mora em ...\bin\bash.exe do mesmo Git for Windows.
@@ -1500,7 +1500,7 @@ if (Tem 'git') {
     if (Test-Path $cand) { $bash = $cand }
 }
 if (-not $bash) {
-    Falta 'bash do Git for Windows nao encontrado - cp-send fica de fora'
+    Falta 'bash do Git for Windows nao encontrado - hangar-send fica de fora'
     Nota 'instale o Git e rode este instalador de novo'
 } else {
     $binUsuario = Join-Path $HOME '.local\bin'
@@ -1523,7 +1523,7 @@ if (-not $bash) {
         if ($c -and $c.Source -notlike '*WindowsApps*') { $pyExe = $c.Source; break }
     }
     if (-not $pyExe) {
-        Falta 'nenhum Python real encontrado (so o atalho da Store) - cp-send ficaria sem JSON'
+        Falta 'nenhum Python real encontrado (so o atalho da Store) - hangar-send ficaria sem JSON'
         Nota 'instale com:  winget install --id Python.Python.3.13'
     } else {
         # C:\Windows\py.exe -> /c/Windows/py.exe, que e a forma que o bash do MSYS executa.
@@ -1531,7 +1531,7 @@ if (-not $bash) {
         $arg = if ((Split-Path -Leaf $pyExe) -ieq 'py.exe') { ' -3' } else { '' }
         $shim = Join-Path $binUsuario 'python3'
         $corpoShim = "#!/bin/sh`n" +
-                     "# Gerado por hangar/install.ps1 - o cp-send chama python3.`n" +
+                     "# Gerado por hangar/install.ps1 - o hangar-send chama python3.`n" +
                      "exec '$pyMsys'$arg `"`$@`"`n"
         if (Escrever-Lancador $shim $corpoShim 'sh') { Ok "atalho python3 -> $pyExe$arg" }
         else { Ok 'atalho python3 ja atualizado' }
@@ -1539,52 +1539,52 @@ if (-not $bash) {
 
     # (2) lancador pro PowerShell: o script nao tem extensao, entao o Windows nao o executa
     # sozinho. O .cmd entrega tudo pro bash e repassa os argumentos.
-    $lancador = Join-Path $binUsuario 'cp-send.cmd'
+    $lancador = Join-Path $binUsuario 'hangar-send.cmd'
     # PATH com o nosso bin NA FRENTE: o Windows tem um python3.exe proprio no atalho da
     # Microsoft Store (%LOCALAPPDATA%\Microsoft\WindowsApps), que vem antes no PATH e responde
     # "Python nao foi encontrado". Sem a precedencia, o atalho que acabamos de escrever nunca e
-    # alcancado - medido, o install-cp-send.sh falhava mesmo com o atalho correto no lugar.
+    # alcancado - medido, o install-hangar-send.sh falhava mesmo com o atalho correto no lugar.
     $conteudo = "@echo off`r`n" +
                 "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                "`"$bash`" `"$raiz\scripts\cp-send`" %*`r`n"
-    if (Escrever-Lancador $lancador $conteudo 'cmd') { Ok "lancador cp-send.cmd criado em $binUsuario" }
-    else { Ok 'lancador cp-send.cmd ja atualizado' }
+                "`"$bash`" `"$raiz\scripts\hangar-send`" %*`r`n"
+    if (Escrever-Lancador $lancador $conteudo 'cmd') { Ok "lancador hangar-send.cmd criado em $binUsuario" }
+    else { Ok 'lancador hangar-send.cmd ja atualizado' }
 
-    # (2b) lancador pro cp-conta (helper de contas do claude-conta): sem ele o claude-conta.ps1
-    # falha com "cp-conta nao e reconhecido" antes de abrir o Claude.
-    # Pelo PYTHON, nao pelo bash: o cp-conta e um script Python (`#!/usr/bin/env python3`), e
+    # (2b) lancador pro hangar-conta (helper de contas do claude-conta): sem ele o claude-conta.ps1
+    # falha com "hangar-conta nao e reconhecido" antes de abrir o Claude.
+    # Pelo PYTHON, nao pelo bash: o hangar-conta e um script Python (`#!/usr/bin/env python3`), e
     # `bash arquivo` NAO honra shebang - le o arquivo como shell e estoura no docstring. Foi assim
-    # que este lancador nasceu quebrado (copia do cp-send.cmd, que e bash de verdade). O mesmo
+    # que este lancador nasceu quebrado (copia do hangar-send.cmd, que e bash de verdade). O mesmo
     # $pyExe/$arg do shim acima, que ja descarta o atalho da Store.
-    $lancadorConta = Join-Path $binUsuario 'cp-conta.cmd'
+    $lancadorConta = Join-Path $binUsuario 'hangar-conta.cmd'
     if (-not $pyExe) {
-        Falta 'cp-conta.cmd nao criado - precisa de um Python real (ver acima)'
+        Falta 'hangar-conta.cmd nao criado - precisa de um Python real (ver acima)'
     } else {
         $conteudoConta = "@echo off`r`n" +
-                         "`"$pyExe`"$arg `"$raiz\scripts\cp-conta`" %*`r`n"
-        if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador cp-conta.cmd criado em $binUsuario" }
-        else { Ok 'lancador cp-conta.cmd ja atualizado' }
+                         "`"$pyExe`"$arg `"$raiz\scripts\hangar-conta`" %*`r`n"
+        if (Escrever-Lancador $lancadorConta $conteudoConta 'cmd') { Ok "lancador hangar-conta.cmd criado em $binUsuario" }
+        else { Ok 'lancador hangar-conta.cmd ja atualizado' }
     }
 
-    # (2c) lancador pro cp-engine (motores de modelo). Sem ele o backend monta o comando do pane
-    # como `cp-engine --exec <motor> -- claude ...`, o pane morre no ato e o `tmux new-session`
+    # (2c) lancador pro hangar-engine (motores de modelo). Sem ele o backend monta o comando do pane
+    # como `hangar-engine --exec <motor> -- claude ...`, o pane morre no ato e o `tmux new-session`
     # devolve 0 assim mesmo: medido nesta VM, rc=0 na criacao e 3s depois a sessao ja nao existe.
     # O app reportava "sessao criada" e ela sumia calada. Hoje o backend recusa alto quando este
     # lancador falta (registry._exigir_cp_engine) — este bloco e o outro lado do conserto, o que
     # faz o motor de fato FUNCIONAR no Windows.
-    # Pelo PYTHON e nao pelo bash, mesmo motivo do cp-conta: o cp-engine e script Python
+    # Pelo PYTHON e nao pelo bash, mesmo motivo do hangar-conta: o hangar-engine e script Python
     # (`#!/usr/bin/env python3`) e `bash arquivo` nao honra shebang.
-    $lancadorEngine = Join-Path $binUsuario 'cp-engine.cmd'
+    $lancadorEngine = Join-Path $binUsuario 'hangar-engine.cmd'
     if (-not $pyExe) {
-        Falta 'cp-engine.cmd nao criado - precisa de um Python real (ver acima)'
+        Falta 'hangar-engine.cmd nao criado - precisa de um Python real (ver acima)'
     } else {
         $conteudoEngine = "@echo off`r`n" +
-                          "`"$pyExe`"$arg `"$raiz\scripts\cp-engine`" %*`r`n"
-        if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador cp-engine.cmd criado em $binUsuario" }
-        else { Ok 'lancador cp-engine.cmd ja atualizado' }
+                          "`"$pyExe`"$arg `"$raiz\scripts\hangar-engine`" %*`r`n"
+        if (Escrever-Lancador $lancadorEngine $conteudoEngine 'cmd') { Ok "lancador hangar-engine.cmd criado em $binUsuario" }
+        else { Ok 'lancador hangar-engine.cmd ja atualizado' }
     }
 
-    # (3) PATH do usuario, pra `cp-send` funcionar de qualquer terminal (e pro bash achar o shim).
+    # (3) PATH do usuario, pra `hangar-send` funcionar de qualquer terminal (e pro bash achar o shim).
     $pathUsuario = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($pathUsuario -notlike "*$binUsuario*") {
         [Environment]::SetEnvironmentVariable('Path', "$pathUsuario;$binUsuario", 'User')
@@ -1604,32 +1604,32 @@ if (-not $bash) {
     $anterior = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && ./scripts/install-cp-send.sh" 2>&1
+        $saida = & $bash '-lc' "export PATH='$binMsys':`$PATH; cd '$rota' && ./scripts/install-hangar-send.sh" 2>&1
     } finally { $ErrorActionPreference = $anterior }
     if ($LASTEXITCODE -eq 0) {
-        # O `ln -s` do Git Bash COPIA em vez de linkar, e o cp-send se localiza pelo proprio
+        # O `ln -s` do Git Bash COPIA em vez de linkar, e o hangar-send se localiza pelo proprio
         # caminho: `dirname $(realpath $0)/../backend/.env`. Com a copia em ~/.local/bin, ele
         # procura o .env em ~/.local/backend/ - que nao existe, e o --list falha dizendo que nao
         # acha o backend. Substituimos a copia por um lancador que chama o script NO REPO com
         # caminho absoluto: dentro dele, $0 volta a ser o do repo e a busca acerta.
-        $cpSendSh = Join-Path $binUsuario 'cp-send'
-        # PATH aqui TAMBEM, nao so no cp-send.cmd: quem chama por este caminho e o Git Bash
+        $cpSendSh = Join-Path $binUsuario 'hangar-send'
+        # PATH aqui TAMBEM, nao so no hangar-send.cmd: quem chama por este caminho e o Git Bash
         # (a ferramenta Bash de uma sessao Claude no Windows usa ele), e sem a precedencia o
         # python3 volta a ser o atalho da Microsoft Store. Os dois pontos de entrada precisam
         # da mesma garantia - consertar so um deles foi o que deixou o bug de pe.
         $corpoCp = "#!/bin/sh`n" +
                    "# Gerado por hangar/install.ps1 - ver comentario no instalador.`n" +
                    "PATH='$binMsys':`$PATH; export PATH`n" +
-                   "exec '$rota/scripts/cp-send' `"`$@`"`n"
+                   "exec '$rota/scripts/hangar-send' `"`$@`"`n"
         if (Escrever-Lancador $cpSendSh $corpoCp 'sh') {
-            Ok 'cp-send do ~/.local/bin aponta pro script do repo'
+            Ok 'hangar-send do ~/.local/bin aponta pro script do repo'
         }
-        Ok 'cp-send + skills instalados'
-        Nota 'teste (em terminal NOVO):  cp-send --list'
+        Ok 'hangar-send + skills instalados'
+        Nota 'teste (em terminal NOVO):  hangar-send --list'
     } else {
-        Falta 'install-cp-send.sh falhou:'
+        Falta 'install-hangar-send.sh falhou:'
         $saida | Select-Object -Last 12 | ForEach-Object { Nota "  $_" }
-        Nota "rodar na mao:  & '$bash' -lc 'cd $rota && ./scripts/install-cp-send.sh'"
+        Nota "rodar na mao:  & '$bash' -lc 'cd $rota && ./scripts/install-hangar-send.sh'"
     }
 }
 
@@ -1868,8 +1868,8 @@ $linhaQr
   - wrappers do `codex`, do `pi` e do `kimi`, e a extensao cp-state.ts do Pi. Sessao Codex, Pi
     ou Kimi aberta por voce no terminal nao aparece; criada pelo app, funciona.
   - resurrect/continuum abaixo, e mais nada desta lista: motor de modelo (tela Motores /
-    `CP_ENGINE`) PASSOU a funcionar aqui - o cp-engine roda o comando por subprocess no Windows
-    (o exec com env crasha la, medido) e o passo 7b instala o cp-engine.cmd.
+    `CP_ENGINE`) PASSOU a funcionar aqui - o hangar-engine roda o comando por subprocess no Windows
+    (o exec com env crasha la, medido) e o passo 7b instala o hangar-engine.cmd.
   - resurrect/continuum (sessoes sobreviverem a reboot): sao plugins de tmux em bash, e o
     psmux nao roda plugin de tmux. Fechou o Windows, as sessoes se foram.
 "@

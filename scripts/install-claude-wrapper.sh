@@ -104,18 +104,26 @@ install_fish() {
 # Helper chamado pelos wrappers de shell. Symlink absoluto preserva a descoberta do backend/.env
 # mesmo quando executado de qualquer cwd e atualiza automaticamente depois de git pull.
 mkdir -p "$HOME/.local/bin"
-chmod +x "$SCRIPT_DIR/cp-codex"
-ln -sfn "$SCRIPT_DIR/cp-codex" "$HOME/.local/bin/cp-codex"
-echo "  installed Codex helper -> $HOME/.local/bin/cp-codex"
-chmod +x "$SCRIPT_DIR/cp-engine"
-ln -sfn "$SCRIPT_DIR/cp-engine" "$HOME/.local/bin/cp-engine"
-echo "  installed engine helper -> $HOME/.local/bin/cp-engine"
+chmod +x "$SCRIPT_DIR/hangar-codex"
+ln -sfn "$SCRIPT_DIR/hangar-codex" "$HOME/.local/bin/hangar-codex"
+echo "  installed Codex helper -> $HOME/.local/bin/hangar-codex"
+chmod +x "$SCRIPT_DIR/hangar-engine"
+ln -sfn "$SCRIPT_DIR/hangar-engine" "$HOME/.local/bin/hangar-engine"
+echo "  installed engine helper -> $HOME/.local/bin/hangar-engine"
 
 # Helper de contas (claude-conta). Symlink absoluto, mesma regra dos dois acima: descoberta do
 # backend/.env preservada de qualquer cwd e atualização automática depois de git pull.
-chmod +x "$SCRIPT_DIR/cp-conta"
-ln -sfn "$SCRIPT_DIR/cp-conta" "$HOME/.local/bin/cp-conta"
-echo "  installed account helper -> $HOME/.local/bin/cp-conta"
+chmod +x "$SCRIPT_DIR/hangar-conta"
+ln -sfn "$SCRIPT_DIR/hangar-conta" "$HOME/.local/bin/hangar-conta"
+echo "  installed account helper -> $HOME/.local/bin/hangar-conta"
+
+# Nomes antigos (cp-*), como symlink PERMANENTE pro mesmo script. Não é período de transição: o
+# `cp-codex` está escrito dentro dos wrappers de shell que já vivem no rc do usuário, e um rc
+# antigo continua chamando o nome velho depois do git pull. Custa três links e evita um `codex`
+# que morre com "command not found" numa máquina que só faltava re-rodar este installer.
+for velho in codex engine conta; do
+    ln -sfn "$SCRIPT_DIR/hangar-$velho" "$HOME/.local/bin/cp-$velho"
+done
 
 # Point Claude Code's statusLine at scripts/omniroute-statusline.js so the app parses it reliably.
 install_statusline() {
@@ -238,16 +246,16 @@ if [ "$DO_STATUS" = 1 ]; then
   install_statusline
 fi
 
-# Sessões-irmãs: instala o cp-send junto (symlink + bloco no CLAUDE.md global). Idempotente —
+# Sessões-irmãs: instala o hangar-send junto (symlink + bloco no CLAUDE.md global). Idempotente —
 # era passo manual separado e máquina nova ficava sem o protocolo de pareamento sem ninguém avisar.
-CP_SEND_INSTALLER="$(dirname "$0")/install-cp-send.sh"
+CP_SEND_INSTALLER="$(dirname "$0")/install-hangar-send.sh"
 if [ -x "$CP_SEND_INSTALLER" ]; then
   echo
-  echo "cp-send (sessões-irmãs):"
+  echo "hangar-send (sessões-irmãs):"
   # Não-fatal: o trabalho principal (wrapper/tmux/statusline) já foi feito — falha aqui avisa e segue.
   "$CP_SEND_INSTALLER" || echo "aviso: install-cp-send falhou (não-fatal; wrapper já instalado)"
 else
-  echo "aviso: install-cp-send.sh não encontrado em $CP_SEND_INSTALLER — setup de sessões-irmãs PULADO"
+  echo "aviso: install-hangar-send.sh não encontrado em $CP_SEND_INSTALLER — setup de sessões-irmãs PULADO"
 fi
 
 echo

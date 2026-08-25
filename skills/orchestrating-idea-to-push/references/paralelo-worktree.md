@@ -138,8 +138,8 @@ principal**, onde o hook roda no lugar certo. Desligar hook do git é decisão d
 time.
 
 **Instalador NUNCA roda de dentro de worktree.** Symlink global apontando pra worktree morre com
-ela: medido em 17/08/2026, remover uma worktree de ensaio levou 6 symlinks (`cp-send`,
-`cp-engine`, 2 skills…), calou a vigia da máquina inteira e derrubou a statusline de toda sessão
+ela: medido em 17/08/2026, remover uma worktree de ensaio levou 6 symlinks (`hangar-send`,
+`hangar-engine`, 2 skills…), calou a vigia da máquina inteira e derrubou a statusline de toda sessão
 Claude. Setup de máquina roda do checkout principal, sempre — e ao remover worktree, confira o
 rastro: `ls -la ~/.local/bin | grep <worktree>`.
 

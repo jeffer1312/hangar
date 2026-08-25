@@ -435,13 +435,13 @@ mandar trabalho. Ele não entra nesse laço: o que chega nele é o teu parecer.
 Receita completa, com o backend local do claude-pocket (troque nome, worktree e modelo):
 
 ```bash
-# token do backend — o mesmo lugar de onde o cp-send lê
-E="$(dirname "$(realpath "$(command -v cp-send)")")/../backend/.env"
+# token do backend — o mesmo lugar de onde o hangar-send lê
+E="$(dirname "$(realpath "$(command -v hangar-send)")")/../backend/.env"
 T=$(grep '^CP_AUTH_TOKEN=' "$E" | cut -d= -f2-)
 API=http://127.0.0.1:8765
 
 # 1. criar, na worktree da Task
-cp-send --new verif-<task> <worktree> --provider pi
+hangar-send --new verif-<task> <worktree> --provider pi
 
 # 2. apontar pro modelo barato (o mesmo do executor serve)
 curl -s -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
@@ -452,7 +452,7 @@ curl -s -X POST -H "Authorization: Bearer $T" -H 'Content-Type: application/json
 curl -s -H "Authorization: Bearer $T" "$API/api/sessions/verif-<task>/pi/models"
 
 # 4. mandar o roteiro
-cp-send verif-<task> "<roteiro fechado>"
+hangar-send verif-<task> "<roteiro fechado>"
 
 # 5. no fim da Task, fechar (o app também esquece a sessão)
 curl -s -X DELETE -H "Authorization: Bearer $T" "$API/api/sessions/verif-<task>"

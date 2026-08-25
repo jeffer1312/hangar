@@ -36,7 +36,7 @@ import * as m from '../paraglide/messages';
     if (sentTo) return; // ja enviou (ou enviando) -> ignora toque duplo
     sentTo = target;
     try {
-      // Mesmo formato do cp-send: destino mostra o chip "de: <sessao>" (bolha peer).
+      // Mesmo formato do hangar-send: destino mostra o chip "de: <sessao>" (bolha peer).
       await sendInput(target, `[de: ${fromSession}] ${text}`);
       setTimeout(onClose, 700); // deixa o ✓ visivel um instante
     } catch {

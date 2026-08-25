@@ -1,7 +1,7 @@
 ---
 name: orquestrar
 description: |
-  Orquestra uma tarefa que atravessa VARIOS repos usando sessoes Claude pareadas do claude-pocket - esta sessao vira a LIDER, cria/pareia uma sessao visivel por repo (cp-send --new/--pair), escreve o contrato compartilhado do grupo, distribui o escopo, monitora os reportes e consolida o painel final pro usuario. Use quando o usuario pedir "orquestra", "coordena", "distribui essa tarefa/ticket entre os repos", "abre uma sessao pra cada repo", ou quando um ticket multi-repo precisar de trabalho paralelo em mais de um repo. NAO use para: tarefa de um repo so (sessao normal), exploracao read-only multi-repo (subagent Explore resolve), ou mandar um recado avulso (cp-send direto).
+  Orquestra uma tarefa que atravessa VARIOS repos usando sessoes Claude pareadas do claude-pocket - esta sessao vira a LIDER, cria/pareia uma sessao visivel por repo (hangar-send --new/--pair), escreve o contrato compartilhado do grupo, distribui o escopo, monitora os reportes e consolida o painel final pro usuario. Use quando o usuario pedir "orquestra", "coordena", "distribui essa tarefa/ticket entre os repos", "abre uma sessao pra cada repo", ou quando um ticket multi-repo precisar de trabalho paralelo em mais de um repo. NAO use para: tarefa de um repo so (sessao normal), exploracao read-only multi-repo (subagent Explore resolve), ou mandar um recado avulso (hangar-send direto).
 ---
 
 # orquestrar — sessão líder de um grupo de trabalho multi-repo
@@ -14,11 +14,11 @@ Toda a mecânica vem do claude-pocket e **já está pronta** — a skill só reg
 
 | Mecânica | Quem faz |
 |---|---|
-| Criar sessão visível (tmux + --session-id) | `cp-send --new <nome> <cwd>` (+ `--provider`/`--conta`/`--engine`/`--model`/`--effort`/`--permissao` — nasce já no modelo/esforço/permissão) |
-| Grupo de N sessões + protocolo injetado | `cp-send --pair <sessao> "<tarefa>"` (grupos se fundem) |
+| Criar sessão visível (tmux + --session-id) | `hangar-send --new <nome> <cwd>` (+ `--provider`/`--conta`/`--engine`/`--model`/`--effort`/`--permissao` — nasce já no modelo/esforço/permissão) |
+| Grupo de N sessões + protocolo injetado | `hangar-send --pair <sessao> "<tarefa>"` (grupos se fundem) |
 | Regras de conduta (só-meu-repo, anti-loop, branch, push=usuário) | prompt que o backend injeta no pair — **não reexplicar** |
 | Contrato compartilhado (PairSheet na UI) | `~/.claude/.hangar-pair/grupo-<gid>.md` |
-| Recado 1:1 / aviso de marco | `cp-send <sessao> "..."` / `cp-send --group "..."` |
+| Recado 1:1 / aviso de marco | `hangar-send <sessao> "..."` / `hangar-send --group "..."` |
 
 Subagent continua ok pra **leitura** (explorar outro repo, rastrear fluxo). Edição
 fora do cwd desta sessão = sessão pareada, sempre.
@@ -38,16 +38,16 @@ do usuário; só depois do ok.
 ### 2. Sessões — reusar antes de criar
 
 ```bash
-cp-send --list        # nome, estado, cwd das sessões vivas
+hangar-send --list        # nome, estado, cwd das sessões vivas
 ```
 
 - Já existe sessão viva no cwd do repo → **reusar** (perguntar ao usuário se ela está livre pra tarefa).
-- Não existe → `cp-send --new <tarefa>-<repo> <cwd>` (ex: `abc-1234-api-web`). Nunca `tmux new-session` cru.
+- Não existe → `hangar-send --new <tarefa>-<repo> <cwd>` (ex: `abc-1234-api-web`). Nunca `tmux new-session` cru.
 
 ### 3. Parear (uma chamada por sessão)
 
 ```bash
-cp-send --pair <sessao> "<tarefa>"
+hangar-send --pair <sessao> "<tarefa>"
 ```
 
 Grupos se fundem sozinhos — parear N sessões uma a uma resulta num grupo único.
@@ -85,7 +85,7 @@ também escreve na própria seção.
 ### 5. Kick-off (1:1, um por sessão)
 
 ```bash
-cp-send <sessao> "Tua parte na <tarefa>: <escopo específico>. Contrato: <path>. Ao terminar: roda a suíte completa, reporta a contagem (ex: 341/341) via cp-send <minha-sessao>. Bloqueio ou dúvida de interface → me manda 1:1."
+hangar-send <sessao> "Tua parte na <tarefa>: <escopo específico>. Contrato: <path>. Ao terminar: roda a suíte completa, reporta a contagem (ex: 341/341) via hangar-send <minha-sessao>. Bloqueio ou dúvida de interface → me manda 1:1."
 ```
 
 Só o escopo específico — protocolo geral já foi injetado no pair.
@@ -93,8 +93,8 @@ Só o escopo específico — protocolo geral já foi injetado no pair.
 ### 6. Monitorar
 
 - Reportes chegam como `[de: <sessao>]` → atualizar o status no contrato e resumir pro usuário nos marcos.
-- Sessão calada não é sessão travada: `cp-send --list` mostra o estado (`working`/`idle`/`awaiting_input`) — só cutucar se `idle` sem reporte ou `awaiting_input` (avisar o usuário: pode estar esperando permissão no terminal dela).
-- Marco global ("contrato atualizado", "back fechou") → `cp-send --group "..."` UMA vez.
+- Sessão calada não é sessão travada: `hangar-send --list` mostra o estado (`working`/`idle`/`awaiting_input`) — só cutucar se `idle` sem reporte ou `awaiting_input` (avisar o usuário: pode estar esperando permissão no terminal dela).
+- Marco global ("contrato atualizado", "back fechou") → `hangar-send --group "..."` UMA vez.
 - Decisão de rumo/escopo aparecendo no meio → usuário decide, não a líder nem o par.
 
 ### 7. Consolidar
@@ -109,7 +109,7 @@ sessão — a líder não manda ninguém pushar). Usuário deu ok → repassar a
 por sessão e cobrar o hash+branch+status de volta.
 
 Fim da tarefa: avisar o grupo (`--group`, uma vez), perguntar ao usuário se desfaz
-o pareamento (`cp-send --unpair` em cada sessão é decisão dele). O contrato fica —
+o pareamento (`hangar-send --unpair` em cada sessão é decisão dele). O contrato fica —
 é o registro do que foi combinado.
 
 ## Limites

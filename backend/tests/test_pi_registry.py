@@ -445,7 +445,7 @@ def test_create_pi_resume_sobe_pi_e_nao_claude(tmp_path, monkeypatch):
 
 
 def test_create_pi_refuses_an_engine(tmp_path, monkeypatch):
-    # `cp-engine --exec` so exporta ANTHROPIC_*/CLAUDE_CODE_*, que o pi ignora -> a sessao subiria
+    # `hangar-engine --exec` so exporta ANTHROPIC_*/CLAUDE_CODE_*, que o pi ignora -> a sessao subiria
     # na conta do proprio pi PARECENDO estar no motor pedido.
     from unittest.mock import patch
     reg = registry.SessionRegistry(projects_dir=tmp_path)

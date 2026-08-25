@@ -35,16 +35,16 @@ def test_build_multipart_sem_vocab_nao_manda_prompt():
 
 
 def test_build_multipart_com_vocab_manda_prompt():
-    body, _ = build_multipart("nota.webm", b"a", "cp-send, Hangar")
+    body, _ = build_multipart("nota.webm", b"a", "hangar-send, Hangar")
     assert b'name="prompt"' in body
-    assert "cp-send, Hangar".encode() in body
+    assert "hangar-send, Hangar".encode() in body
 
 
 def test_vocabulario_soma_base_e_config(monkeypatch):
     monkeypatch.setattr(mod_transcribe.runtime_config, "get",
                         lambda campo: "Acme, projeto-x" if campo == "ditado_vocabulario" else None)
     v = vocabulario()
-    assert "cp-send" in v          # a base do app continua
+    assert "hangar-send" in v          # a base do app continua
     assert "Acme, projeto-x" in v  # e o do usuario entra junto
 
 
@@ -75,7 +75,7 @@ def test_transcribe_manda_idioma_e_vocabulario_no_corpo_real(monkeypatch):
     assert b'name="language"' in body
     assert mod_transcribe.IDIOMA.encode() in body
     assert b'name="prompt"' in body
-    assert b"cp-send" in body                    # a base do app chegou
+    assert b"hangar-send" in body                    # a base do app chegou
     assert "Acme, projeto-x".encode() in body   # e o vocabulario do usuario tambem
 
 

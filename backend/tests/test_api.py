@@ -368,7 +368,7 @@ def test_broadcast_rejects_slash_commands(api_client):
 
 
 def test_group_message_delivers_to_peers_not_self(api_client):
-    # cp-send --group: entrega "[grupo: me] ..." a CADA companheiro, nunca à própria sessão.
+    # hangar-send --group: entrega "[grupo: me] ..." a CADA companheiro, nunca à própria sessão.
     with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
          patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
          patch("app.pqueue.PromptQueue.append"):
@@ -912,7 +912,7 @@ def test_create_pi_provider_routes_to_claude_create_with_provider(api_client):
 
 
 def test_create_pi_with_engine_is_refused(api_client):
-    # Motor so faz sentido no Claude: o env do cp-engine e Anthropic-only.
+    # Motor so faz sentido no Claude: o env do hangar-engine e Anthropic-only.
     with patch("app.api.registry.create") as cr:
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "p", "cwd": "/tmp", "provider": "pi", "engine": "kimi"})
@@ -1764,7 +1764,7 @@ def test_send_thread_isolated_from_saturated_default_executor():
 
 # --- Nucleo: broadcast e group-message tambem no pool dedicado de envio -------
 def test_broadcast_uses_send_thread(api_client, monkeypatch):
-    # broadcast e trafego cp-send entre sessoes = nucleo -> tem que ir pelo pool DEDICADO (_send_thread),
+    # broadcast e trafego hangar-send entre sessoes = nucleo -> tem que ir pelo pool DEDICADO (_send_thread),
     # nao pelo executor default que a decoracao satura.
     from app import api as api_mod
     calls = []

@@ -11,7 +11,7 @@ Medido em 26/07/2026 (claude 2.1.220), contra Kimi Code e OmniRoute reais:
   - MAX_CONTEXT_TOKENS move a janela; AUTO_COMPACT_WINDOW (o que a doc da Moonshot manda) é inerte.
 
 STDLIB PURA de propósito: o wrapper de shell importa este módulo com o `python3` do sistema, fora do
-venv do backend (ver scripts/cp-engine). Um `from app.config import …` aqui puxaria pydantic e
+venv do backend (ver scripts/hangar-engine). Um `from app.config import …` aqui puxaria pydantic e
 quebraria o terminal, deixando só o app funcionando. Há teste que trava isso.
 """
 import ipaddress
@@ -25,8 +25,8 @@ from pathlib import Path
 
 # UNICO import de `app` aqui, e ele nao fere a regra do stdlib-only: `app.atomico` tambem e
 # stdlib puro (os + time), e o `test_modulo_e_stdlib_pura` cobre os DOIS agora. O que aquela
-# sentinela barra e o que arrasta pydantic e quebra o `scripts/cp-engine`, que roda no python do
-# SISTEMA — e o cp-engine ja poe o backend no sys.path pra importar este modulo.
+# sentinela barra e o que arrasta pydantic e quebra o `scripts/hangar-engine`, que roda no python do
+# SISTEMA — e o hangar-engine ja poe o backend no sys.path pra importar este modulo.
 from app import atomico
 from typing import Any
 from urllib.parse import urlparse
@@ -61,7 +61,7 @@ _CAMPOS: dict[str, type] = {
 _OBRIGATORIOS = ("base_url", "api_key", "model")
 
 # Serializa read-modify-write: dois PUT ao mesmo tempo liam o mesmo estado e o último a gravar
-# apagava o motor do outro. Protege só ESTE processo (o backend); o cp-engine apenas lê.
+# apagava o motor do outro. Protege só ESTE processo (o backend); o hangar-engine apenas lê.
 _LOCK = threading.Lock()
 
 _NOME_OK = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -69,7 +69,7 @@ _PROIBIDO_NO_VALOR = "\n\r\x00"
 
 
 def caminho() -> Path:
-    # Fixo em ~/.claude: motor é ortogonal a perfil. Derivar de CLAUDE_CONFIG_DIR faria o cp-engine
+    # Fixo em ~/.claude: motor é ortogonal a perfil. Derivar de CLAUDE_CONFIG_DIR faria o hangar-engine
     # de um terminal com perfil alternativo ver ZERO motores enquanto o app mostra dois.
     return Path(os.environ.get("CP_ENGINES_FILE") or (Path.home() / ".claude" / "engines.json"))
 
@@ -111,7 +111,7 @@ def _estado() -> tuple[dict[str, Any], bool]:
 def listar() -> dict[str, dict[str, Any]]:
     """Motores gravados, com a api_key INTEIRA. Quem devolve ao cliente mascara na borda HTTP."""
     d, _corrompido = _estado()
-    # O nome vira parte de um `$SHELL -c` (registry.py monta `cp-engine --exec {nome} -- ...`).
+    # O nome vira parte de um `$SHELL -c` (registry.py monta `hangar-engine --exec {nome} -- ...`).
     # salvar() já barra nome fora do padrão, mas o arquivo é hand-editável (0600, mas ainda assim);
     # pular o registro corrupto em vez de derrubar a lista inteira — um motor ruim não pode tirar
     # os outros do ar.
@@ -181,7 +181,7 @@ def _normalizar(nome: str, dados: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(valor, str):
                 raise ValueError(f"{campo}: esperado texto")
             texto = valor.strip()
-            # Uma linha por variável é CONTRATO com o shell: `cp-engine --env` imprime CHAVE=VALOR e o
+            # Uma linha por variável é CONTRATO com o shell: `hangar-engine --env` imprime CHAVE=VALOR e o
             # claude-engine dá export nisso. Um \n aqui exportaria variável arbitraria (PATH, LD_*).
             if any(c in texto for c in _PROIBIDO_NO_VALOR):
                 raise ValueError(f"{campo}: sem quebra de linha nem caractere nulo")
@@ -298,7 +298,7 @@ def env_de(nome: str, modelo: str | None = None, context_window: int | None = No
     ACHANDO que é o motor escolhido — o pior tipo de falha, a silenciosa.
 
     ValueError se qualquer valor contém caractere proibido (\\n, \\r, \\x00): contrato com o shell
-    que `cp-engine --env` exporta (uma linha por variável). Se engines.json foi hand-editado ou
+    que `hangar-engine --env` exporta (uma linha por variável). Se engines.json foi hand-editado ou
     corrompido, rejeitamos em vez de silenciar.
     """
     e = listar()[nome]

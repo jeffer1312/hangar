@@ -9,9 +9,9 @@ Por que `--exec` e não `tmux -e`: a key iria para a linha de comando, e /proc/<
 por qualquer usuário da máquina (o systemd-run --scope ainda joga argv no journal). Com execvpe o
 ambiente é aplicado DENTRO do processo e, depois do exec, o cmdline é o do comando alvo.
 
-  cp-engine --list                       -> nome<TAB>label<TAB>modelo
-  cp-engine --env <motor>                -> CHAVE=VALOR por linha (diagnóstico)
-  cp-engine --exec <motor> [--model <id>] [--context <n>] -- <cmd> ...
+  hangar-engine --list                       -> nome<TAB>label<TAB>modelo
+  hangar-engine --env <motor>                -> CHAVE=VALOR por linha (diagnóstico)
+  hangar-engine --exec <motor> [--model <id>] [--context <n>] -- <cmd> ...
                                          -> executa cmd com o env do motor (substitui este processo)
 
 `--model`/`--context` são a escolha da tela de abertura: o env do motor tem que saber qual modelo
@@ -36,10 +36,10 @@ def _env_ou_morre(nome: str, modelo: str | None = None, context: int | None = No
         # hand-editado com um valor que viola o contrato de shell (\n/\r/\0 — ver env_de). Os dois
         # casos morrem igual: traceback aqui vazaria pro usuário errado (o wrapper de shell).
         if isinstance(e, ValueError):
-            print(f"cp-engine: motor '{nome}' inválido: {e}", file=sys.stderr)
+            print(f"hangar-engine: motor '{nome}' inválido: {e}", file=sys.stderr)
         else:
             disponiveis = ", ".join(sorted(engines.listar())) or "nenhum"
-            print(f"cp-engine: motor '{nome}' não existe (configurados: {disponiveis})", file=sys.stderr)
+            print(f"hangar-engine: motor '{nome}' não existe (configurados: {disponiveis})", file=sys.stderr)
         raise SystemExit(1)
 
 
@@ -67,7 +67,7 @@ def main(argv: list[str]) -> int:
         while i < corte:
             if argv[i] in ("--model", "--context"):
                 if i + 1 >= corte:
-                    print(f"cp-engine: {argv[i]} precisa de um valor", file=sys.stderr)
+                    print(f"hangar-engine: {argv[i]} precisa de um valor", file=sys.stderr)
                     return 2
                 if argv[i] == "--model":
                     modelo = argv[i + 1]
@@ -75,20 +75,20 @@ def main(argv: list[str]) -> int:
                     try:
                         context = int(argv[i + 1])
                     except ValueError:
-                        print("cp-engine: --context precisa de um número", file=sys.stderr)
+                        print("hangar-engine: --context precisa de um número", file=sys.stderr)
                         return 2
                 i += 2
             else:
-                print(f"cp-engine: opção desconhecida {argv[i]!r}", file=sys.stderr)
+                print(f"hangar-engine: opção desconhecida {argv[i]!r}", file=sys.stderr)
                 return 2
         env = _env_ou_morre(nome, modelo, context)
         cmd = argv[corte + 1:]
         if not cmd:
             # A guarda antiga (`argv[3] == "--"` com len>=5) garantia comando depois do `--`; a nova
-            # não. `cp-engine --exec kimi --model x --` passaria e `cmd[0]` estouraria IndexError —
+            # não. `hangar-engine --exec kimi --model x --` passaria e `cmd[0]` estouraria IndexError —
             # traceback cru, que é o oposto do que este parse existe pra fazer. O `except OSError` do
             # __main__ não pega IndexError.
-            print("cp-engine: falta o comando depois de --", file=sys.stderr)
+            print("hangar-engine: falta o comando depois de --", file=sys.stderr)
             return 2
         # execvpe substitui este processo: o pane do tmux passa a ser o próprio claude (dono do tty),
         # que é o que faz o send-keys do app chegar nele. Um wrapper que ficasse no meio quebraria isso.
@@ -128,5 +128,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv))
     except OSError as e:
-        print(f"cp-engine: falha ao executar: {e}", file=sys.stderr)
+        print(f"hangar-engine: falha ao executar: {e}", file=sys.stderr)
         sys.exit(126)

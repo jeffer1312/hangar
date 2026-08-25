@@ -196,7 +196,7 @@ implementa uma e o revisor revisa uma. Recorte a seção daquela Task mais o cab
 `/tmp`, que some no reboot — e mande esse caminho. No mesmo trabalho
 de 14/08: plano inteiro ~30k tokens, Task recortada ~2,9k.
 
-**Quem é do grupo sai do contrato, nunca de `cp-send --list`.** Sessão viva no mesmo
+**Quem é do grupo sai do contrato, nunca de `hangar-send --list`.** Sessão viva no mesmo
 diretório é só uma sessão viva no mesmo diretório — o usuário abre sessões pro que quiser, e
 elas não viram time por estarem ali. Contrato sumido ou vazio não autoriza deduzir o elenco:
 peça ao usuário quem é quem antes de mandar recado a alguém que não pediu pra participar.
@@ -221,25 +221,25 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
   que vai como caminho não tem crase para o shell comer.
 - **A escada de transporte, em ordem, e o degrau seguinte só depois de o anterior falhar:**
   **olhe o pane do destinatário** (overlay/menu aberto recusa digitação, e é o que o backend reporta
-  como "sessão indisponível") → `SendMessage` → `cp-send --tmux <sessao>` → `tmux send-keys` no
-  pane. `cp-send <sessao>` **recusa** falar com sessão Claude desta máquina (rc=3, "o caminho nativo
+  como "sessão indisponível") → `SendMessage` → `hangar-send --tmux <sessao>` → `tmux send-keys` no
+  pane. `hangar-send <sessao>` **recusa** falar com sessão Claude desta máquina (rc=3, "o caminho nativo
   alcança os dois lados") e manda usar `SendMessage`; com o `ListAgents` **vazio** — acontece — o
   nativo não tem endereço, e sobra o `--tmux`. Sessão Pi ou Codex não sofre disso: só o par
   Claude→Claude. Recusa **de quem recebe** não se contorna por outro transporte; recusa **da
   ferramenta**, sim — e o degrau usado vai no reporte, porque canal quebrado que ninguém registra é
   o mesmo susto duas vezes.
-- **`cp-send` recebe a mensagem como argumento, não por stdin.** Texto longo vai por heredoc
+- **`hangar-send` recebe a mensagem como argumento, não por stdin.** Texto longo vai por heredoc
   de aspas simples **dentro** de uma substituição:
 
   ```bash
-  cp-send <sessao> "$(cat <<'EOF'
+  hangar-send <sessao> "$(cat <<'EOF'
   ...texto livre, com crase e $ intactos...
   EOF
   )"
   ```
 
   Aspas duplas cruas fazem o shell comer crase e `$`, e receita mutilada é pior que receita
-  nenhuma. Heredoc solto (`cp-send <sessao> <<'EOF'`) devolve erro de uso — a mensagem não sai.
+  nenhuma. Heredoc solto (`hangar-send <sessao> <<'EOF'`) devolve erro de uso — a mensagem não sai.
 - **MODELO É DECISÃO DO USUÁRIO. Ninguém escolhe modelo.** A política de contas da máquina fica em
   **`~/.claude/orquestracao-contas.md`** — quais contas existem, quais são assinatura (troca livre
   dentro da conta), quais são travadas num modelo e quais são proibidas por cobrarem por token. O

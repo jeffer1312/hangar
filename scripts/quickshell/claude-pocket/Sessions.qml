@@ -194,7 +194,7 @@ Singleton {
 
     Process {
         id: fetcher
-        // Symlink do installer (mesmo padrão do cp-send). Caminho absoluto de propósito: o
+        // Symlink do installer (mesmo padrão do hangar-send). Caminho absoluto de propósito: o
         // quickshell sobe pelo compositor, sem garantia de ~/.local/bin no PATH.
         command: [Quickshell.env("HOME") + "/.local/bin/cp-panel-data"]
         stdout: StdioCollector {

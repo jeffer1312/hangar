@@ -148,9 +148,9 @@ class Settings(BaseSettings):
     # default permissivo de proposito — o handshake tambem aceita o cookie `cp_token`, entao aceitar
     # origem arbitraria seria deixar qualquer site abrir um terminal na maquina.
     term_origins: str = ""
-    # CP_SERVER_ID: id DESTA maquina no peers.json (mesmo que o cp-send usa). Vazio = pareamento
+    # CP_SERVER_ID: id DESTA maquina no peers.json (mesmo que o hangar-send usa). Vazio = pareamento
     # cross-server desligado; quando setado, vira o endereco de resposta 'srv::sessao' que o backend
-    # remoto recebe pra registrar o vinculo reverso. Recado 1:1 cross-server segue so no cp-send.
+    # remoto recebe pra registrar o vinculo reverso. Recado 1:1 cross-server segue so no hangar-send.
     server_id: str = ""
     # Web Push (notificacao quando uma sessao fica awaiting_input). Par VAPID COMPARTILHADO entre os
     # servidores (single-user controla todos -> uma inscricao do celular serve os 3). Vazio = push

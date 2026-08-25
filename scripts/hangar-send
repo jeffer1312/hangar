@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# cp-send — mensagem entre sessões Claude via hangar.
+# hangar-send — mensagem entre sessões Claude via hangar.
 #
-#   cp-send --list                 lista sessões vivas (nome, estado, cwd) — locais e remotas
-#   cp-send <sessao> <mensagem...> manda prompt pra sessão (fila durável se ocupada)
+#   hangar-send --list                 lista sessões vivas (nome, estado, cwd) — locais e remotas
+#   hangar-send <sessao> <mensagem...> manda prompt pra sessão (fila durável se ocupada)
 #                                  RECUSA (código 3) quando o caminho NATIVO do Claude Code alcança
 #                                  os dois lados — ver "Caminho nativo" abaixo. --tmux força este.
-#   cp-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
-#   cp-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
+#   hangar-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
+#   hangar-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
 #                                        badge 🤝 na UI + protocolo injetado nos dois lados)
-#   cp-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
-#   cp-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei", "contrato
+#   hangar-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
+#   hangar-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei", "contrato
 #                                  atualizado"). Chega como [grupo: X]. UNIDIRECIONAL — nunca
 #                                  responda um [grupo:] com --group (evita loop); responda 1:1.
-#   cp-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
+#   hangar-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
 #                                  truecolor, visível no app). cwd default = home.
 #                                  --provider <claude|codex|pi|kimi> escolhe o AGENTE da sessão
 #                                  nova (default claude). Ex: --provider kimi abre o Kimi Code.
@@ -26,12 +26,12 @@
 #                                  kimi não tem esforço por flag). SEMPRE prefira nascer no
 #                                  modelo/esforço certo a mandar /model no primeiro recado — a
 #                                  sessão trabalha ANTES de ler o recado.
-#   cp-send --help                 esta ajuda (o cabeçalho deste arquivo).
+#   hangar-send --help                 esta ajuda (o cabeçalho deste arquivo).
 #
 # OUTRA CONTA: cada conta é um config dir próprio (~/.claude-<nome>), com skills/hooks symlinkados
-# do ~/.claude e credenciais + transcritos separados. `cp-conta --list` mostra as configuradas,
-# `cp-conta --new <nome>` cria uma (o /login é interativo, feito na primeira sessão dela).
-# `cp-send --new <nome> <cwd> --conta 200-01` abre a sessão já logada naquela conta — o consumo vai
+# do ~/.claude e credenciais + transcritos separados. `hangar-conta --list` mostra as configuradas,
+# `hangar-conta --new <nome>` cria uma (o /login é interativo, feito na primeira sessão dela).
+# `hangar-send --new <nome> <cwd> --conta 200-01` abre a sessão já logada naquela conta — o consumo vai
 # pra assinatura DELA, não pra conta padrão. Sem o flag, nasce na conta padrão (~/.claude).
 #
 # Remetente é detectado pelo nome da sessão tmux atual e prefixado como "[de: X]",
@@ -115,7 +115,7 @@ import json, sys
 for s in json.load(sys.stdin):
     print("%-24s %-15s %s" % (s["name"], s["state"], s["cwd"]))'
     # Servidores do peers.json: mesmas colunas, nome prefixado servidor::sessao (é o endereço
-    # que o cp-send de envio aceita). Peer fora do ar não derruba a lista local — vira aviso.
+    # que o hangar-send de envio aceita). Peer fora do ar não derruba a lista local — vira aviso.
     if [[ -f "$PEERS_FILE" ]]; then
         peers_tsv=$(python3 -c 'import json, sys
 for k, v in json.load(open(sys.argv[1])).items():
@@ -149,7 +149,7 @@ fi
 # `display-message -p '#S'` NÃO é propriedade de quem chama: é a sessão do CLIENTE anexado, estado
 # global do servidor. Com um único cliente anexado (medido: `list-clients` devolvia só
 # `/dev/pts/9067: jeffer1312`), TODA sessão que perguntava recebia o mesmo nome. A sessão B rodava
-# `cp-send --unpair`, se identificava como A, e o backend desparava A -> o --unpair de uma desfazia o
+# `hangar-send --unpair`, se identificava como A, e o backend desparava A -> o --unpair de uma desfazia o
 # vínculo da OUTRA e o grupo de 2 se dissolvia (2x seguidas, sem ninguém pedir). Também assinava
 # recado com o nome errado. O env vem do pane, então é imune ao cliente anexado.
 #
@@ -195,7 +195,7 @@ me() {
 }
 
 if [[ "$1" == "--pair" ]]; then
-    peer="${2:?uso: cp-send --pair <sessao|servidor::sessao> [tarefa...]}"; shift 2
+    peer="${2:?uso: hangar-send --pair <sessao|servidor::sessao> [tarefa...]}"; shift 2
     # peer local (nome cru) OU remoto (servidor::sessao) — o backend local resolve o remoto via
     # peers.json + CP_SERVER_ID e registra o vínculo dos dois lados (/pair-remote). Cross-server é 1:1.
     body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2]}))' "$peer" "$*")
@@ -206,18 +206,18 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
+    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
     shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
         exit 2
     fi
     # Nome começando com '-' = o nome foi esquecido e uma FLAG virou nome. Sem esta guarda,
-    # `cp-send --new --engine kimi` criava uma sessão chamada "--engine", com cwd "kimi" e o motor
+    # `hangar-send --new --engine kimi` criava uma sessão chamada "--engine", com cwd "kimi" e o motor
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
+        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
@@ -230,7 +230,7 @@ if [[ "$1" == "--new" ]]; then
     # --conta: a sessão nova nasce em OUTRA CONTA Anthropic (config dir ~/.claude-<nome>), que é o
     # que o seletor de conta da tela "Nova sessão" já fazia pelo campo config_dir do POST. Sem o
     # flag, o único caminho era curl na API — e a ausência dele aqui vinha sendo lida como "não dá
-    # pra abrir noutra conta". Resolve pelo cp-conta (--prep reconcilia os atalhos e imprime o
+    # pra abrir noutra conta". Resolve pelo hangar-conta (--prep reconcilia os atalhos e imprime o
     # caminho), pra regra de nome/pasta continuar morando num lugar só.
     # --model/--effort/--permissao: repassados crus pro backend (CreateBody.model/effort/
     # permission_mode), que valida contra as listas fechadas de app/model_args.py — não duplicar
@@ -265,10 +265,10 @@ if [[ "$1" == "--new" ]]; then
     done
     cwd="${cwd:-$HOME}"
     # Conta inexistente para AQUI, antes do POST: o backend recusaria com 400, mas o erro do
-    # cp-conta já diz o nome errado e o `cp-conta --list` mostra os certos.
+    # hangar-conta já diz o nome errado e o `hangar-conta --list` mostra os certos.
     if [[ -n "$conta" ]]; then
-        config_dir=$("$(dirname "$(realpath "$0")")/cp-conta" --prep "$conta") || {
-            echo "erro: conta '$conta' indisponível — veja as configuradas com: cp-conta --list" >&2
+        config_dir=$("$(dirname "$(realpath "$0")")/hangar-conta" --prep "$conta") || {
+            echo "erro: conta '$conta' indisponível — veja as configuradas com: hangar-conta --list" >&2
             exit 2
         }
     fi
@@ -294,7 +294,7 @@ if sys.argv[8]:
 print(json.dumps(d))' \
            "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao")
     api POST /api/sessions "$body" >/dev/null
-    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]} — fala com ela via: cp-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]} — fala com ela via: hangar-send $name \"msg\""
     exit 0
 fi
 
@@ -306,7 +306,7 @@ fi
 
 if [[ "$1" == "--group" ]]; then
     shift
-    [[ $# -ge 1 ]] || { echo "uso: cp-send --group <mensagem...>" >&2; exit 2; }
+    [[ $# -ge 1 ]] || { echo "uso: hangar-send --group <mensagem...>" >&2; exit 2; }
     body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$*")
     resp=$(api POST "/api/sessions/$(me)/group-message" "$body")
     python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("aviso enviado ao grupo:", ", ".join(d["peers"])); w=d.get("warning"); print("  ⚠", w) if w else None' "$resp"
@@ -317,7 +317,7 @@ forcar_tmux=0
 if [[ "${1:-}" == "--tmux" ]]; then forcar_tmux=1; shift; fi
 
 target="$1"; shift
-[[ $# -ge 1 ]] || { echo "uso: cp-send [--tmux] <sessao|servidor::sessao> <mensagem...>" >&2; exit 2; }
+[[ $# -ge 1 ]] || { echo "uso: hangar-send [--tmux] <sessao|servidor::sessao> <mensagem...>" >&2; exit 2; }
 
 # Caminho nativo alcança os DOIS lados? Então este envio é o pior dos dois — recusa e diz o certo.
 # Só pro 1:1 LOCAL: cross-server (`::`) cai fora pelo teste do alvo, e --group/--pair/--new nem

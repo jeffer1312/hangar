@@ -59,10 +59,10 @@ o token, libera o firewall, oferece Tailscale e registra o backend pra subir no 
 com uma checagem que prova que o backend sobe de verdade.
 
 Lá o multiplexador é o [psmux](https://github.com/psmux/psmux) (tmux nativo de Windows, sobre
-ConPTY) — não existe `tmux` no Windows, e o WSL não é necessário. O `cp-send` (recado/pareamento
+ConPTY) — não existe `tmux` no Windows, e o WSL não é necessário. O `hangar-send` (recado/pareamento
 entre sessões) e o `claude-conta` vão junto, via o bash do Git for Windows. Três coisas **não**
 vão: os wrappers do `codex`, `pi` e `kimi` (sessão deles, só criada pelo app), os motores de modelo
-(tela Motores — o `cp-engine` depende de `execvpe`, que no Windows não substitui o processo) e os
+(tela Motores — o `hangar-engine` depende de `execvpe`, que no Windows não substitui o processo) e os
 plugins de persistência entre reboots.
 
 ## 2. Subir (3 partes)
@@ -349,7 +349,7 @@ claude-engine kimi       # abre uma sessão no motor "kimi"
 claude                   # continua na sua conta Anthropic, como sempre
 ```
 
-(`cp-engine --env` existe, mas é só diagnóstico interno — ele imprime a chave em texto puro no
+(`hangar-engine --env` existe, mas é só diagnóstico interno — ele imprime a chave em texto puro no
 stdout. Use `claude-engine`.)
 
 **O que muda numa sessão de motor:**
@@ -401,25 +401,25 @@ Avançado) para um programa que recebe o texto no stdin e devolve áudio (mp3 ou
 piper, ou o que você tiver instalado na máquina do servidor. Com a chave da ElevenLabs vazia e o
 comando configurado, a leitura usa o motor local automaticamente.
 
-## 5. Sessões-irmãs, pareamento e orquestração (cp-send)
+## 5. Sessões-irmãs, pareamento e orquestração (hangar-send)
 
-Sessões Claude da mesma máquina conversam entre si pelo backend via `scripts/cp-send`:
+Sessões Claude da mesma máquina conversam entre si pelo backend via `scripts/hangar-send`:
 
 ```bash
-cp-send --list                    # sessões vivas (nome, estado, cwd)
-cp-send api-fix "mensagem"        # manda prompt pra outra sessão (fila se ocupada)
-cp-send --pair api-fix "tarefa"   # pareia ESTA sessão com outra num grupo de trabalho
-cp-send --group "terminei"        # aviso de marco pro grupo todo (unidirecional)
-cp-send --new front ~/repo/front  # cria sessão nova gerenciada pelo app (visível na UI)
+hangar-send --list                    # sessões vivas (nome, estado, cwd)
+hangar-send api-fix "mensagem"        # manda prompt pra outra sessão (fila se ocupada)
+hangar-send --pair api-fix "tarefa"   # pareia ESTA sessão com outra num grupo de trabalho
+hangar-send --group "terminei"        # aviso de marco pro grupo todo (unidirecional)
+hangar-send --new front ~/repo/front  # cria sessão nova gerenciada pelo app (visível na UI)
 ```
 
 **Instalar** (uma vez por máquina; o passo 6/6 do `install.sh` também oferece):
 
 ```bash
-./scripts/install-cp-send.sh
+./scripts/install-hangar-send.sh
 ```
 
-O installer symlinka o `cp-send` em `~/.local/bin`, adiciona o bloco "Sessões-irmãs"
+O installer symlinka o `hangar-send` em `~/.local/bin`, adiciona o bloco "Sessões-irmãs"
 no `~/.claude/CLAUDE.md` global (toda sessão Claude nova passa a conhecer a ferramenta)
 e symlinka as skills do repo (`skills/*`) em `~/.claude/skills/`.
 
@@ -480,7 +480,7 @@ CP_AUTH_TOKEN=$(openssl rand -hex 24) CP_SYNC=1 CP_SYNC_BOOTSTRAP=$(openssl rand
 | App "congelou" no último estado | conexão SSE morreu calada (mobile/background). O watchdog reconecta; senão recarregue (pull-to-refresh). |
 | Não vejo código novo após mudar | PWA com service worker servindo JS velho → **hard reload** / limpar dados do site / re-adicionar o PWA. |
 | Backend reiniciar | precisa do cwd=`backend` (`python -m app.main` acha `app`). Sem `--reload` (trava SSE no SIGTERM). |
-| Pane de sessão de motor morre na hora, sem chat nenhum | `cp-engine` não está no PATH do **servidor tmux** (a sessão nasce via `cp-engine --exec`). Garanta que o PATH usado pelo tmux enxerga `cp-engine` (mesmo instalado pelo `install-claude-wrapper.sh`). |
+| Pane de sessão de motor morre na hora, sem chat nenhum | `hangar-engine` não está no PATH do **servidor tmux** (a sessão nasce via `hangar-engine --exec`). Garanta que o PATH usado pelo tmux enxerga `hangar-engine` (mesmo instalado pelo `install-claude-wrapper.sh`). |
 | Tela de Motores de modelo diz que não conseguiu ler o arquivo | `~/.claude/engines.json` foi editado à mão e ficou com JSON inválido — corrija-o (ou restaure um backup) antes de adicionar um motor novo; o app se recusa a gravar por cima de um arquivo que não conseguiu ler, pra não apagar os motores que já estavam lá. |
 
 ## 8. Segurança (resumo)

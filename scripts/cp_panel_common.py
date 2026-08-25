@@ -68,8 +68,8 @@ def enabled(cfg: object) -> bool:
     que está desligada: cada varredura pagava o timeout inteiro (4s) esperando host que não vai
     responder. Ausente = ligado, então peers.json antigo segue idêntico.
 
-    Vale só pra ENUMERAÇÃO (painel, cp-send --list). Endereçar explicitamente
-    (`cp-send pc::sessao`) continua resolvendo — senão "desativar" viraria "sumiu", e o usuário
+    Vale só pra ENUMERAÇÃO (painel, hangar-send --list). Endereçar explicitamente
+    (`hangar-send pc::sessao`) continua resolvendo — senão "desativar" viraria "sumiu", e o usuário
     ia levar um "servidor desconhecido" sem entender que foi ele mesmo que desligou."""
     return not (isinstance(cfg, dict) and cfg.get("enabled") is False)
 

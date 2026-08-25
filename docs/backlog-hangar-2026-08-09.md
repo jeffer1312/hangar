@@ -173,7 +173,7 @@ achado 5. Barato, mas depois de confirmar as animações novas no uso real.
   `migrate-to-hangar.sh` já é a versão corrigida (leva transcripts, repara as 9 worktrees).
 - **Janela da VPS**: update manual + rename de units/diretório + `uv sync`. Em execução.
 - **winboat**: migrada e verificada; o diretório segue `C:\cockpit` de propósito (três pontos presos
-  ao caminho: tarefas agendadas, os `.vbs` com `EncodedCommand` e o `cp-send`).
+  ao caminho: tarefas agendadas, os `.vbs` com `EncodedCommand` e o `hangar-send`).
 - **macbook-jefferson**: quando ligar, `git pull` e depois `./scripts/migrate-to-hangar.sh`.
 - **Tags `pre-hangar`** nas três máquinas: só saem depois da confirmação do app no celular com a
   build nova.

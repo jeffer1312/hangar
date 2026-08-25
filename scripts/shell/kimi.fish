@@ -67,7 +67,7 @@ function kimi
     # NAO usar `$run tmux ...` com $run possivelmente vazia: em fish, variavel vazia na posicao de
     # COMANDO e erro fatal (ver pi.fish, que documenta o caso). Por isso a chamada e duplicada nos
     # dois ramos. `sh -c` + exec mantem a MESMA forma dos outros wrappers. CP_SESSION_NAME: carimbo
-    # de identidade pro cp-send de dentro do pane (ver claude.fish).
+    # de identidade pro hangar-send de dentro do pane (ver claude.fish).
     # KIMI_CODE_TUI_FULL_SCREEN=1: fullscreen TUI experimental do Kimi 0.36+ (scroll proprio,
     # composer fixo). O -e do backend (app/tmux.py) cobre sessoes criadas pelo app; este cobre as
     # abertas pelo terminal. Caminho "ja dentro de tmux -> raw" nao passa aqui: quem cobre e o

@@ -15,9 +15,9 @@ function claude-engine
         # "não instalado" (comando não encontrado) de "zero motor configurado" (--list sempre sai
         # 0), senão as duas mensagens ficam iguais e mandam o usuário pro app justamente no caso em
         # que o app não vai adiantar nada.
-        set -l lista (cp-engine --list 2>/dev/null)
+        set -l lista (hangar-engine --list 2>/dev/null)
         if test $status -ne 0
-            echo "claude-engine: cp-engine não pôde ser executado — rode ./scripts/install-claude-wrapper.sh" >&2
+            echo "claude-engine: hangar-engine não pôde ser executado — rode ./scripts/install-claude-wrapper.sh" >&2
             return 1
         end
         if test -z "$lista"
@@ -29,9 +29,9 @@ function claude-engine
     end
 
     # Valida ANTES de abrir a sessão: motor inexistente abriria um pane que morre na cara do usuário.
-    cp-engine --env $argv[1] >/dev/null; or return 1
+    hangar-engine --env $argv[1] >/dev/null; or return 1
 
-    # CP_ENGINE é lido pelo wrapper `claude`, que prefixa o comando com `cp-engine --exec`. A key não
+    # CP_ENGINE é lido pelo wrapper `claude`, que prefixa o comando com `hangar-engine --exec`. A key não
     # passa por aqui em momento nenhum.
     set -lx CP_ENGINE $argv[1]
     set -e argv[1]

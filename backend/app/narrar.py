@@ -204,7 +204,7 @@ def narrar(texto: str, blocos: list[str], instrucao: str) -> str:
 
 
 # Limpeza do ditado. O usuario dita PROMPTS: nome de sessao, caminho, comando, chave de ticket. Um
-# modelo com liberdade pra "arrumar o texto" transforma cp-send em "CP send" e ABC-1234 em
+# modelo com liberdade pra "arrumar o texto" transforma hangar-send em "CP send" e ABC-1234 em
 # "ABC 1234" — e ai o ditado fica pior do que era.
 _REGRAS_DITADO = (
     "Você limpa transcrições de fala em português do Brasil. O texto abaixo foi ditado por uma "
@@ -240,7 +240,7 @@ _REGRAS_DITADO = (
     "traço' vira --, 'underline' vira _, 'arroba' vira @.\n"
     "   Entrada: 'abre o backend barra app barra narrar ponto py e roda o cp traço send traço "
     "traço list'\n"
-    "   Saída: 'Abre o backend/app/narrar.py e roda o cp-send --list.'\n"
+    "   Saída: 'Abre o backend/app/narrar.py e roda o hangar-send --list.'\n"
     "   Isso vale SÓ dentro de caminho, arquivo, comando ou endereço. 'Ponto' terminando frase e "
     "'barra' no sentido comum continuam palavras.\n"
     "Preserve EXATAMENTE como foram falados: nomes próprios, nomes de arquivo e caminhos, "
@@ -340,7 +340,7 @@ _SYSTEM_POR_ESTILO = {
 
 # Abaixo disto, briefing vira prosa. Estruturar exige ter mais de um assunto pra separar; num
 # ditado de uma frase nao ha o que agrupar, e o resultado medido foi a piada de um "**Objetivo**"
-# em cima de "Abre o backend/app/narrar.py e roda o cp-send --list.". O corte e em PALAVRAS porque
+# em cima de "Abre o backend/app/narrar.py e roda o hangar-send --list.". O corte e em PALAVRAS porque
 # o que decide e quantas ideias cabem ali: os ditados reais do usuario tem ~150, o comando tem 16.
 _MIN_PALAVRAS_BRIEFING = 40
 

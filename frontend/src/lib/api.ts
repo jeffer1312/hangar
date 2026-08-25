@@ -713,7 +713,7 @@ export async function steerSession(
 }
 
 // Pareamento ("trabalhando juntas"): o backend grava o vínculo simétrico e injeta o prompt de
-// pareamento nas DUAS sessões — daí em diante elas se falam via cp-send por iniciativa própria.
+// pareamento nas DUAS sessões — daí em diante elas se falam via hangar-send por iniciativa própria.
 // warning: falha PARCIAL de aviso (algum membro sem o prompt do grupo) — o backend reporta de
 // propósito; descartar isso virava "sucesso" mudo com membro que não sabe que está no grupo.
 export interface PairResult { ok: boolean; warning: string | EnvelopeErro | null }

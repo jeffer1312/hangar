@@ -22,7 +22,7 @@
 # Escape hatch: `command claude ...` runs the raw binary, bypassing this wrapper.
 claude() {
     # Motor de modelo (CP_ENGINE, setado por claude-engine): env aplicado DENTRO do pane por
-    # `cp-engine --exec`, não por `tmux -e` — tmux não herda o env do caller, e `-e TOKEN=…` deixaria
+    # `hangar-engine --exec`, não por `tmux -e` — tmux não herda o env do caller, e `-e TOKEN=…` deixaria
     # a key em /proc/<pid>/cmdline, legível por qualquer usuário. Array em vez de string para não
     # depender de word-splitting (zsh não faz em variável não-quotada). Construído ANTES do scan de
     # flags abaixo porque -c/--resume/--session-id saem por um early return e também precisam do
@@ -30,7 +30,7 @@ claude() {
     local -a pre
     pre=()
     if [ -n "${CP_ENGINE:-}" ]; then
-        pre=(cp-engine --exec "$CP_ENGINE" --)
+        pre=(hangar-engine --exec "$CP_ENGINE" --)
     fi
 
     local a
@@ -39,7 +39,7 @@ claude() {
         case "$a" in
             --session-id|--session-id=*|--resume|--resume=*|-c|--continue)
                 # mesmo bypass de `command` do caminho "só injeta o id" abaixo: sem motor, chama o
-                # binário direto (evita recursão na função); com motor, quem executa é o cp-engine
+                # binário direto (evita recursão na função); com motor, quem executa é o hangar-engine
                 # (processo à parte achado no PATH) — `command` não existiria pra ele executar.
                 if [ ${#pre[@]} -eq 0 ]; then
                     command claude "$@"
@@ -68,7 +68,7 @@ claude() {
 
     if [ -n "${TMUX:-}" ] || [ "$print" = 1 ] || [ ! -t 0 ]; then
         # `command` só faz sentido quando o QUEM roda é este próprio shell: bypassa a função `claude`
-        # para não recursar nela mesma. Com $pre setado, quem executa é o cp-engine (um processo
+        # para não recursar nela mesma. Com $pre setado, quem executa é o hangar-engine (um processo
         # separado, achado no PATH) — o execvpe dele nunca vê função de shell, então "command" viraria
         # só uma string a mais no argv (e um alvo inexistente pro execvpe procurar).
         if [ ${#pre[@]} -eq 0 ]; then
@@ -103,7 +103,7 @@ claude() {
 
     # Conta Claude (claude-conta setou CLAUDE_CONFIG_DIR): tmux NAO herda o env de quem chama —
     # sem repassar aqui, a sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao
-    # contrario da key do motor, que vai pelo `cp-engine --exec` justamente pra nao aparecer em
+    # contrario da key do motor, que vai pelo `hangar-engine --exec` justamente pra nao aparecer em
     # /proc/<pid>/cmdline): isto e um caminho, nao um segredo. Variavel vazia em posicao de
     # ARGUMENTO some da linha (a armadilha do `$run` acima e so para posicao de COMANDO).
     # Passado SEMPRE, nao so quando o chamador tem a variavel: o servidor tmux guarda o ambiente
@@ -119,7 +119,7 @@ claude() {
     # nao abre. Medido nesta maquina: 5/5 falhas com binario e gerenciador na mesma versao. O probe
     # (um fork) transforma "nao abre" em "abre sem scope proprio".
     # CP_SESSION_NAME: mesmo carimbo de identidade que o backend poe em new_session (app/tmux.py).
-    # Sem ele o cp-send de dentro desta sessao cai no `tmux display-message -p '#S'`, que devolve a
+    # Sem ele o hangar-send de dentro desta sessao cai no `tmux display-message -p '#S'`, que devolve a
     # sessao do CLIENTE anexado e nao a de quem chama — o `--unpair` de uma sessao desfazia o vinculo
     # da OUTRA. Sessao aberta no terminal e criada AQUI, nao pelo backend, entao o carimbo tem que
     # sair daqui tambem, senao o bug fica vivo justamente no caminho mais usado.

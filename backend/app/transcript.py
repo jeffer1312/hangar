@@ -81,10 +81,10 @@ _TASK_NOTIF_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 # O `message.content` NAO serve pra exibir: traz o embrulho <cross-session-message> mais um paragrafo
 # inteiro de instrucao sobre lavagem de permissao. Quem presta e o `origin.body`.
 #
-# Normaliza pro MESMO formato do cp-send ("[de: <sessao>] texto") de proposito: e o que o front ja
+# Normaliza pro MESMO formato do hangar-send ("[de: <sessao>] texto") de proposito: e o que o front ja
 # sabe ler (lib/format.ts parsePeerMessage) e o que alimenta a conversa do grupo no PairSheet, os
 # badges e a deduplicacao. Assim o caminho nativo entra sem uma linha de mudanca no front, e o
-# cp-send segue valendo pra tudo que o nativo nao faz (outra maquina iniciando, Codex/Pi, --group).
+# hangar-send segue valendo pra tudo que o nativo nao faz (outra maquina iniciando, Codex/Pi, --group).
 _PEER_WRAP_RE = re.compile(r"<cross-session-message\b([^>]*)>\n?(.*?)\n?</cross-session-message>",
                            re.DOTALL)
 _PEER_ATTR_RE = re.compile(r'([\w-]+)="([^"]*)"')
@@ -116,7 +116,7 @@ def _peer_nome(pid: Optional[int], fallback) -> str:
 
 
 def _peer_msg(obj: dict) -> Optional[str]:
-    """Recado nativo de uma entrada `type='user'`, no formato do cp-send ("[de: X] corpo").
+    """Recado nativo de uma entrada `type='user'`, no formato do hangar-send ("[de: X] corpo").
 
     Le SO o `origin` estruturado — NUNCA procura o embrulho no texto. Procurar no texto aqui fazia
     qualquer mensagem do usuario contendo `<cross-session-message ...>` (colar este proprio codigo

@@ -1,5 +1,5 @@
 """Escrita do peers.json via peers.py — gravar/regravar/apagar o arquivo que guarda os TOKENS
-da malha cross-server. O peers.json é lido pelo cp-send, pelas rotas de pareamento e pela lista
+da malha cross-server. O peers.json é lido pelo hangar-send, pelas rotas de pareamento e pela lista
 de origens permitidas do terminal: gravação torta ali derruba todo servidor remoto de uma vez.
 """
 import json

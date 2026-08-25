@@ -10,8 +10,8 @@
 #
 # Duas correções, e as duas importam:
 #   1. Ela olha o ÁRBITRO também. Juiz parado é o modo de falha que ninguém estava vigiando.
-#   2. Ela ACORDA por `cp-send --tmux`, que entra como prompt e reanima turno morto. O `--tmux` é
-#      OBRIGATÓRIO: o `cp-send` normal RECUSA falar com sessão Claude da mesma máquina (rc=3,
+#   2. Ela ACORDA por `hangar-send --tmux`, que entra como prompt e reanima turno morto. O `--tmux` é
+#      OBRIGATÓRIO: o `hangar-send` normal RECUSA falar com sessão Claude da mesma máquina (rc=3,
 #      "use SendMessage") — e um script de shell não tem SendMessage.
 #
 # A condição de disparo é conservadora de propósito: só quando TODAS estão paradas ao mesmo tempo.
@@ -75,7 +75,7 @@ ARB=${SESSOES[$((${#SESSOES[@]}-1))]}      # o último é o árbitro
 export ARB
 
 BASE=${CP_BASE:-http://127.0.0.1:8765}
-ENVFILE=${CP_ENV:-$(dirname "$(realpath "$(command -v cp-send)")")/../backend/.env}
+ENVFILE=${CP_ENV:-$(dirname "$(realpath "$(command -v hangar-send)")")/../backend/.env}
 T=$(grep '^CP_AUTH_TOKEN=' "$ENVFILE" | cut -d= -f2-)
 # Token vazio nao pode virar "nao consigo ler a API" cinco minutos depois: a vigia ficaria de pe,
 # com log limpo, sem vigiar nada — o mesmo modo de falha que o leitor em arquivo veio corrigir.
@@ -112,10 +112,10 @@ diario_avisado=0
 
 # ARMAMENTO PROVADO: o alarme sintético sai pelo MESMO caminho dos reais. Se ele não entrega, a
 # vigia NÃO fica de pé fingindo rede — sai com erro alto, que é o contrário de gritar pro vazio.
-cp-send --tmux "$ARB" "[vigia] ARMADA sobre: ${SESSOES[*]} (janela ${LIMITE}min${DIARIO:+, diario $DIARIO}). Esta mensagem E a prova do canal — se voce a leu, os alarmes chegam. Nao responda."
+hangar-send --tmux "$ARB" "[vigia] ARMADA sobre: ${SESSOES[*]} (janela ${LIMITE}min${DIARIO:+, diario $DIARIO}). Esta mensagem E a prova do canal — se voce a leu, os alarmes chegam. Nao responda."
 rc_arm=$?
 if [ "$rc_arm" -ne 0 ]; then
-  echo "[vigia] FALHA ao provar o canal com '$ARB' (cp-send --tmux rc=$rc_arm). NAO estou armada." >&2
+  echo "[vigia] FALHA ao provar o canal com '$ARB' (hangar-send --tmux rc=$rc_arm). NAO estou armada." >&2
   exit 1
 fi
 
@@ -197,7 +197,7 @@ for i in $(seq 1 1440); do
     mudos=$((mudos+1))
     if [ "$mudos" -eq 5 ]; then
       echo "[vigia] 5 leituras seguidas sem resposta de $BASE/api/sessions — nao estou vigiando nada"
-      cp-send --tmux "$ARB" "[vigia] Nao consigo ler /api/sessions ha 5 minutos. Enquanto isso eu NAO estou vigiando ninguem — confira o backend e me rearme." >/dev/null 2>&1
+      hangar-send --tmux "$ARB" "[vigia] Nao consigo ler /api/sessions ha 5 minutos. Enquanto isso eu NAO estou vigiando ninguem — confira o backend e me rearme." >/dev/null 2>&1
     fi
     continue
   fi
@@ -246,7 +246,7 @@ for i in $(seq 1 1440); do
       # ele tambem pode estar caido, e ai o usuario e que vinha olhar.
       # Cutuca UMA vez por parada (nudge=1) e segue avisando a cada LIMITE min enquanto durar.
       if [ "${NUDGE[$k]:-0}" -eq 0 ] && [ "${ESTADOS[$k]:-?}" != "sumiu" ] && [ "${ESTADOS[$k]:-?}" != "semcota" ]; then
-        cp-send --tmux "${SESSOES[$k]}" "[vigia] Voce esta parada ha ${LIMITE} min sem reportar. Se o seu ultimo turno morreu (timeout do provedor, tentativas estouradas, conexao cortada), CONTINUE de onde parou, sem recomecar e sem refazer o que ja estava feito. Se voce ja entregou e esta esperando veredito, ignore esta mensagem. Se voce esta travada esperando alguma coisa do arbitro, diga em uma linha o que e." >/dev/null 2>&1
+        hangar-send --tmux "${SESSOES[$k]}" "[vigia] Voce esta parada ha ${LIMITE} min sem reportar. Se o seu ultimo turno morreu (timeout do provedor, tentativas estouradas, conexao cortada), CONTINUE de onde parou, sem recomecar e sem refazer o que ja estava feito. Se voce ja entregou e esta esperando veredito, ignore esta mensagem. Se voce esta travada esperando alguma coisa do arbitro, diga em uma linha o que e." >/dev/null 2>&1
         NUDGE[$k]=1
         cutucada=" — CUTUQUEI ela agora (1a vez); se nao voltar, o turno nao morreu, ela esta travada de verdade"
       else
@@ -254,7 +254,7 @@ for i in $(seq 1 1440); do
       fi
       msg="[vigia] ${SESSOES[$k]} esta parada (${ESTADOS[$k]:-?}) ha ${LIMITE} min${cutucada}. Time: $resumo. Olhe o PANE dela: timeout de provedor com as tentativas estouradas, turno morto e reporte preso na fila nao se desfazem sozinhos."
       echo "$msg"
-      cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+      hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
       PSEQ[$k]=0
     fi
   done
@@ -277,8 +277,8 @@ for i in $(seq 1 1440); do
       if [ "${RSEQ[$k]:-0}" -ge "$REP_LIMITE" ] && [ "${RAVISO[$k]:-0}" -eq 0 ]; then
         msg="[vigia] ${SESSOES[$k]} parece em LOOP: diz working mas o ultimo comando e o MESMO ha ${RSEQ[$k]} leituras (~${RSEQ[$k]} min). Polling de espera nao e trabalho — olhe o pane: se ela re-checa a mesma condicao, mande-a PARAR e reportar o que espera (executor.md, teto de espera). Time: $resumo"
         echo "$msg"
-        cp-send --tmux "${SESSOES[$k]}" "[vigia] Voce repete o MESMO comando ha ~${RSEQ[$k]} min. Se e espera por condicao externa, o teto ja estourou: PARE de re-checar e reporte ao arbitro o que voce espera e o ultimo retorno (regra do executor.md)." >/dev/null 2>&1
-        cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+        hangar-send --tmux "${SESSOES[$k]}" "[vigia] Voce repete o MESMO comando ha ~${RSEQ[$k]} min. Se e espera por condicao externa, o teto ja estourou: PARE de re-checar e reporte ao arbitro o que voce espera e o ultimo retorno (regra do executor.md)." >/dev/null 2>&1
+        hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
         RAVISO[$k]=1
       fi
     else
@@ -292,7 +292,7 @@ for i in $(seq 1 1440); do
     idade=$(( $(date +%s) - $(stat -c %Y "$DIARIO" 2>/dev/null || echo 0) ))
     if [ "$idade" -ge 3600 ] && [ "$diario_avisado" -lt "$(( idade / 3600 ))" ]; then
       diario_avisado=$(( idade / 3600 ))
-      cp-send --tmux "$ARB" "[vigia] O registro ($DIARIO) esta ha $(( idade / 60 ))min sem uma escrita, com o grupo ativo. O registro se escreve NO EVENTO — se pareceres/merges aconteceram nesse intervalo, eles estao fora do diario." >/dev/null 2>&1
+      hangar-send --tmux "$ARB" "[vigia] O registro ($DIARIO) esta ha $(( idade / 60 ))min sem uma escrita, com o grupo ativo. O registro se escreve NO EVENTO — se pareceres/merges aconteceram nesse intervalo, eles estao fora do diario." >/dev/null 2>&1
       echo "[vigia] diario parado ha $(( idade / 60 ))min"
     fi
     [ "$idade" -lt 3600 ] && diario_avisado=0
@@ -306,7 +306,7 @@ for i in $(seq 1 1440); do
       if [ "$avisou_travado" != "$par_estados" ]; then
         msg="[vigia] Sessao TRAVADA: $resumo. Diz 'working' mas nao produz evento ha mais de 10 minutos — o caso classico e um picker/AskUserQuestion bloqueando o turno de quem disparou. Olhe o pane e destrave (POST /api/sessions/<nome>/select com {\"option\": N})."
         echo "$msg"
-        cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+        hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
         avisou_travado="$par_estados"
       fi
       ;;
@@ -319,7 +319,7 @@ for i in $(seq 1 1440); do
       if [ "$avisou_cota" != "$par_estados" ]; then
         msg="[vigia] Conta sem cota: $resumo. A sessao nao volta sozinha — abra a substituta numa conta PERMITIDA pelo contrato e mande o mesmo kick-off, com a Task em aberto."
         echo "$msg"
-        cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+        hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
         avisou_cota="$par_estados"
       fi
       ;;
@@ -330,7 +330,7 @@ for i in $(seq 1 1440); do
   if [ "$parados" -ge "$LIMITE" ]; then
     msg="[vigia] Ninguem esta com a bola ha ${LIMITE} min: $resumo (minuto $i). Se voce caiu (erro de API), isto e o que te traz de volta. Cheque se alguem entregou enquanto voce estava fora — relato preso na fila e veredito parado sao os dois jeitos de o tubo travar sem ninguem perceber."
     echo "$msg"
-    cp-send --tmux "$ARB" "$msg" >/dev/null 2>&1
+    hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
     avisos=$((avisos+1))
     parados=0
     if [ "$avisos" -ge 20 ]; then

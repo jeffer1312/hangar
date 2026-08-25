@@ -291,7 +291,7 @@ ShellRoot {
     }
 
     // Local: cp-panel-open foca a janela existente ou abre uma nova (attach cru duplicaria o
-    // cliente tmux e encolheria a sessão). Remota: web UI do servidor dono — só o cp-send fala
+    // cliente tmux e encolheria a sessão). Remota: web UI do servidor dono — só o hangar-send fala
     // com tmux remoto, abrir a UI é o equivalente útil no desktop.
     function activate(session: var): void {
         if (session.local) {

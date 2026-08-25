@@ -206,7 +206,7 @@ registrada é armadilha que a próxima pessoa reintroduz.
   de arquivo que você não tocou. Medido em 21/08/2026: um executor "limpou" a árvore e apagou **+58
   linhas não commitadas de outra sessão**, trabalho que não estava em commit nenhum e sumiu do disco.
 - **Sessão do grupo NÃO é cenário de teste.** Precisa de uma sessão aparecendo ou sumindo num print?
-  Crie a **sua** (`cp-send --new fixture-tN <cwd>`) e mate a **sua**. Nunca mate, renomeie ou altere
+  Crie a **sua** (`hangar-send --new fixture-tN <cwd>`) e mate a **sua**. Nunca mate, renomeie ou altere
   sessão que você não abriu — na dúvida, pergunte ao árbitro, que é quem sabe quem é do time. Medido
   em 22/08/2026: um executor matou a **revisora do grupo** pela API só pra o cartão dela sumir de um
   print; a revisão recomeçou do zero numa sessão sem contexto, e o backend apagou o registro do grupo

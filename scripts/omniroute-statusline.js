@@ -12,7 +12,7 @@ const fs = require('fs');
 // cada render, então NUNCA pode esperar rede aqui. Contrato: o render lê um cache e desenha; se o
 // cache estiver velho, dispara este mesmo script destacado (`--refresh-usage`) e segue com o que tem.
 const USAGE_TTL_S = 60;
-const usageCache = eng => path.join(os.tmpdir(), `cp-engine-usage-${eng.replace(/[^\w.-]/g, '_')}.json`);
+const usageCache = eng => path.join(os.tmpdir(), `hangar-engine-usage-${eng.replace(/[^\w.-]/g, '_')}.json`);
 
 // {limit,used,resetTime} do provedor -> {pct, reset} que os chips já sabem desenhar.
 const janela = (lim, used, resetTime) => {
@@ -90,7 +90,7 @@ process.stdin.on('end', () => {
   try {
     const data = JSON.parse(input);
 
-    // Sessão rodando em motor de terceiro (engines.json, via cp-engine --exec). O que o Claude Code
+    // Sessão rodando em motor de terceiro (engines.json, via hangar-engine --exec). O que o Claude Code
     // calcula com PREÇO da Anthropic deixa de valer aqui — e no Kimi Code, que é assinatura de valor
     // fixo, qualquer valor em dólar é ficção. Número errado é pior que número nenhum.
     const engine = process.env.CP_ENGINE || '';
@@ -293,7 +293,7 @@ process.stdin.on('end', () => {
       sevenDay = ' ' + c + '📅7d:' + Math.round(sd) + '%' + quotaAviso + resetStr + '\x1b[0m';
     }
 
-    // Nome da sessão tmux (= endereço da sessão no cp-send / claude-pocket)
+    // Nome da sessão tmux (= endereço da sessão no hangar-send / claude-pocket)
     let tmuxSess = '';
     if (process.env.TMUX && process.env.TMUX_PANE) {
       try {

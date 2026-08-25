@@ -10,7 +10,7 @@
 
 function claude {
     # Motor de modelo (Kimi, gateway proprio): mesma regra do wrapper POSIX - quando CP_ENGINE
-    # esta setado quem executa e o cp-engine, que aplica o env e da exec no claude.
+    # esta setado quem executa e o hangar-engine, que aplica o env e da exec no claude.
     # -CommandType Application: pega o BINARIO e nunca esta funcao (senao recursao infinita).
     # Por tipo, nao por sufixo: o instalador nativo poe claude.exe, o npm poe claude.cmd.
     $claudeExe = (Get-Command claude -CommandType Application -ErrorAction SilentlyContinue |
@@ -18,7 +18,7 @@ function claude {
     if (-not $claudeExe) { Write-Error 'claude nao encontrado no PATH'; return }
 
     $pre = @()
-    if ($env:CP_ENGINE) { $pre = @('cp-engine', '--exec', $env:CP_ENGINE, '--') }
+    if ($env:CP_ENGINE) { $pre = @('hangar-engine', '--exec', $env:CP_ENGINE, '--') }
 
     # Ja veio com id/retomada explicita? Nao inventa outro - repassa como esta. Injetar um
     # --session-id por cima de um --resume abriria uma conversa NOVA no lugar da pedida.
@@ -74,7 +74,7 @@ function claude {
 
     # Conta Claude (claude-conta setou CLAUDE_CONFIG_DIR): psmux NAO herda o env de quem chama —
     # sem repassar aqui, a sessao nasceria na conta padrao, calada. Aqui pode ir por `-e` (ao
-    # contrario da key do motor, que vai pelo `cp-engine --exec` justamente pra nao aparecer em
+    # contrario da key do motor, que vai pelo `hangar-engine --exec` justamente pra nao aparecer em
     # /proc/<pid>/cmdline): isto e um caminho, nao um segredo.
     # SO quando o chamador tem a variavel. O padrao explicito ($HOME\.claude) que ficava aqui era
     # medido como ERRADO em 22/08/2026: pro Claude Code, CLAUDE_CONFIG_DIR setado — mesmo apontando
@@ -93,7 +93,7 @@ function claude {
     # Sem `exec` e sem systemd-run, ao contrario do POSIX: nao ha shell intermediario dentro do
     # pane do psmux (ele roda o comando direto no ConPTY) e nao ha cgroup de servico pra escapar.
     # CP_SESSION_NAME: mesmo carimbo que o backend poe em new_session (app/tmux.py). Sem ele o
-    # cp-send de dentro da sessao cai no `display-message -p '#S'`, que devolve a sessao do CLIENTE
+    # hangar-send de dentro da sessao cai no `display-message -p '#S'`, que devolve a sessao do CLIENTE
     # anexado e nao a de quem chama -> o --unpair de uma sessao desfazia o vinculo da OUTRA.
     $cmd = @('tmux', 'new-session', '-s', $nome, '-c', (Get-Location).Path,
              '-e', 'COLORTERM=truecolor', '-e', 'CLAUDE_CODE_TMUX_TRUECOLOR=1',

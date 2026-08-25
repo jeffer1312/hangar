@@ -256,9 +256,9 @@ _PKG_PROVIDER = {"pi-coding-agent": "pi"}
 
 
 def _exigir_cp_engine() -> None:
-    """Recusa ALTO quando o `cp-engine` nao esta no PATH. Chamado antes de montar o prefixo.
+    """Recusa ALTO quando o `hangar-engine` nao esta no PATH. Chamado antes de montar o prefixo.
 
-    O `cp-engine --exec` vira o COMANDO do pane. Sem o lancador no PATH o pane morre no ato — e o
+    O `hangar-engine --exec` vira o COMANDO do pane. Sem o lancador no PATH o pane morre no ato — e o
     `tmux new-session` devolve 0 do mesmo jeito. Medido nesta VM (psmux 3.3.7): rc=0 na criacao e,
     tres segundos depois, `has-session` ja responde 1. Sem esta guarda o backend responde "sessao
     criada" pro celular e a sessao some sem deixar rastro, que e o pior modo de falha que existe
@@ -272,10 +272,10 @@ def _exigir_cp_engine() -> None:
     divergirem isto pode recusar uma criacao que funcionaria. Recusa visivel e com instrucao e
     melhor que sessao que evapora calada, e o conserto (instalar o lancador) serve pros dois.
     """
-    if shutil.which("cp-engine"):
+    if shutil.which("hangar-engine"):
         return
     raise ValueError(
-        "cp-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
+        "hangar-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
         "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
         "Windows, install.ps1.")
 
@@ -345,7 +345,7 @@ def name_of_pid(pid: int) -> Optional[str]:
 
     Existe pro recado nativo entre sessoes Claude (cross-session messaging): o transcript do destino
     traz `origin.verifiedPeerPid` do REMETENTE, e o app precisa do nome tmux — que e o endereco que
-    o cp-send, o pareamento e a UI usam. O `origin.name` que vem junto NAO serve: e o titulo da
+    o hangar-send, o pareamento e a UI usam. O `origin.name` que vem junto NAO serve: e o titulo da
     sessao ("Revisar novo modo de envio no backlog"), nao o nome (medido em 07/08/2026).
 
     Roda no parse do transcript, que vive num `to_thread` — o fork do tmux aqui nao toca o laco de
@@ -387,7 +387,7 @@ def inbox_socket_of(name: str) -> Optional[str]:
     (medido em 07/08/2026; o pid e o do processo `claude`). Ter o socket e o que torna a sessao
     alcancavel pelo `SendMessage` de outra — e o que o `ListAgents` de la vai listar.
 
-    Serve pro cp-send decidir, com FATO em vez de suposicao, se o caminho nativo existe pra este
+    Serve pro hangar-send decidir, com FATO em vez de suposicao, se o caminho nativo existe pra este
     alvo: sessao aberta antes da liberacao, sessao Codex/Pi ou sessao de outra maquina nao tem
     socket nenhum, e mandar o modelo usar `SendMessage` nesses casos seria mandar ele bater numa
     porta que nao existe.
@@ -1280,13 +1280,13 @@ class SessionRegistry:
             raise ValueError("sessoes Codex sao criadas via create_codex (async)")
         # Pi anda no MESMO caminho tmux do Claude, mas duas coisas daqui pra baixo sao Claude puro e
         # recusam alto em vez de "quase funcionar":
-        #  - motor: o `cp-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
+        #  - motor: o `hangar-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
         #    a sessao subiria na conta do proprio pi PARECENDO estar no motor pedido.
         # Resume do Pi passou a existir (branch `elif provider == "pi"` la embaixo, com
         # `pi --session-id <id>`); a recusa que morava aqui tornava aquele branch INALCANCAVEL.
         if provider == "pi" and engine:
             raise ValueError("motor so vale para provider claude")
-        # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (cp-engine so exporta
+        # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (hangar-engine so exporta
         # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
         if provider == "kimi" and engine:
             raise ValueError("motor so vale para provider claude")
@@ -1342,18 +1342,18 @@ class SessionRegistry:
             from app.adapters import get_adapter
             cmd = tmux.join_cmd(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
         if engine:
-            # `cp-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
+            # `hangar-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
             # exec o cmdline é o do claude, então a resolução de transcript por --session-id/--resume
             # continua funcionando.
             #
-            # Modelo e janela entram NO PREFIXO, não só no comando: o env que o cp-engine aplica
+            # Modelo e janela entram NO PREFIXO, não só no comando: o env que o hangar-engine aplica
             # exporta o mesmo modelo em cinco chaves e a janela em outra — a flag sozinha ganharia só
             # de ANTHROPIC_MODEL (ver engines.env_de). A janela vem do catálogo do provedor, resolvida
             # no backend (api.create_session); quem passa por aqui sem ela (ex: resume do Arquivo)
             # simplesmente não exporta a var — o CLI usa o default dele.
             _exigir_cp_engine()
-            pre = ["cp-engine", "--exec", engine]
+            pre = ["hangar-engine", "--exec", engine]
             if model:
                 pre += ["--model", model]
                 if context_window:
@@ -1706,7 +1706,7 @@ class SessionRegistry:
             # por que NADA aqui pode tocar o tmux antes de o comando inteiro estar pronto: recusar
             # depois do kill trocaria "resume recusado" por "sessao destruida e nao relancada".
             _exigir_cp_engine()
-            pre = ["cp-engine", "--exec", motor]
+            pre = ["hangar-engine", "--exec", motor]
             if modelo:
                 pre += ["--model", modelo]
                 if janela:

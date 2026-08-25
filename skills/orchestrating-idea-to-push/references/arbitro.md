@@ -358,7 +358,7 @@ Depois do "pode ir", você decide. Estes três são **automáticos**, sem espera
 
 | Medida | Ação |
 |---|---|
-| Sessão sem reportar há 15 min | `cp-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca. **`working` também se confere**: olhe o ÚLTIMO comando dela — igual há 3 leituras é loop, não trabalho (medido 17/08/2026: 1.231× o mesmo comando por 3h, `working` o tempo todo) |
+| Sessão sem reportar há 15 min | `hangar-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca. **`working` também se confere**: olhe o ÚLTIMO comando dela — igual há 3 leituras é loop, não trabalho (medido 17/08/2026: 1.231× o mesmo comando por 3h, `working` o tempo todo) |
 | **Sessão do time sumiu e não foi você que fechou** | **abre outra e continua.** Não investigue. |
 | Escritor acima de **50% da própria janela** (500k numa de 1M) | **não recebe mais despacho: a troca vem ANTES da próxima rodada, sempre.** "No próximo marco" não existe — o marco pode não chegar (medido 17/08/2026: 65% da janela sem troca, cada chamada custando 2,6× a da primeira hora, numa Task que nunca fechou). E trocar não refaz prova: os prints vivem no diretório durável |
 | **Revisor acima de 50% da própria janela — OU cujo `ctx atual + custo medido de uma rodada` passe do teto** | abre a substituta **antes** de a correção chegar — e **despachar rodada pra quem já avisou que passou é proibido** (medido: rodada mandada a 86%, estourou 100% no meio do julgamento). O gatilho é igual ao do escritor (decisão do usuário, 23/08/2026, corrigindo o 85% que valia aqui: *"vc não abriu uma nova sessão pro review? ele já tava com mais de 600k"*). **Meça o custo de uma rodada na primeira Task e SOME antes de despachar**: uma rodada de julgamento de tela custou **~120k** (476k → 597k) — 483k está abaixo de 50%, mas 483k + 120k fecha em ~600k, então a substituta abre antes |
@@ -551,10 +551,10 @@ entregado às 03:32, o relato ficou preso na fila, o revisor não tinha o que re
 inteiro parou 2h30**. Do lado de dentro isso é invisível: o turno seguinte parece continuar de onde
 o anterior parou.
 
-**2. Ele acorda por `cp-send --tmux`, não por `echo`.** Um `echo` num processo de fundo só vira
+**2. Ele acorda por `hangar-send --tmux`, não por `echo`.** Um `echo` num processo de fundo só vira
 notificação se o turno do árbitro estiver **vivo** — com ele morto, a vigia grita para o vazio, que
-foi exatamente o que aconteceu. Um `cp-send` entra como **prompt** e reanima turno morto. O
-`--tmux` é obrigatório: o `cp-send` normal **recusa** falar com sessão Claude da mesma máquina
+foi exatamente o que aconteceu. Um `hangar-send` entra como **prompt** e reanima turno morto. O
+`--tmux` é obrigatório: o `hangar-send` normal **recusa** falar com sessão Claude da mesma máquina
 (rc=3, "use SendMessage"), e um script de shell não tem `SendMessage`.
 
 **3. Ela dispara quando o DONO DA VEZ para — não quando todos param.** Árbitro parado com alguém
@@ -627,7 +627,7 @@ pergunta às 23h custa uma resposta; a falta dela custou 3 intervenções de mad
 
 ## Sessão que morre não é caso de investigação
 
-Sessão do time desaparecida (some do `cp-send --list` e do tmux) sem você ter mandado fechar: **abra
+Sessão do time desaparecida (some do `hangar-send --list` e do tmux) sem você ter mandado fechar: **abra
 outra e siga**. Autonomia é isso — o trabalho não pode parar porque uma sessão caiu.
 
 O usuário fecha sessão quando quer, a máquina reinicia, o processo morre. Nada disso é incidente;
@@ -735,7 +735,7 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 | "Mandei o recado, agora é esperar" | Espere enquanto ele trabalha. **Ocioso sem reportar** → verifica. |
 | "Vou cutucar pra saber como vai" | Ruído. Quem está `working` não se interrompe. |
 | "Confirmo pro executor que o REPROVA é válido" | Ele já tem a receita. Tua confirmação é a rodada que você tirou. |
-| "A vigia me avisa se algo parar" | Só se ela estiver viva, vigiando os três, e acordando por `cp-send --tmux`. Confira as três coisas. |
+| "A vigia me avisa se algo parar" | Só se ela estiver viva, vigiando os três, e acordando por `hangar-send --tmux`. Confira as três coisas. |
 | "Eu não parei, meu último turno foi agora" | Do lado de dentro sempre parece isso. Quem tem o relógio é o usuário. |
 | "Confiro o achado do revisor rapidinho" | Conferir achado é revisar de novo: mesmo resultado, pago duas vezes. Revisor fraco se conserta no revisor — forma cobrada, rotação. |
 | "Rodo eu a verificação, é mais rápido que pedir" | Verificação tem dono: executor roda, revisor re-roda. A tua conferência é relato×repo, em metadado. |
@@ -832,18 +832,18 @@ dele**: sai do contrato, como o de todo mundo — mas quem cria e confere é ele
 Vale para toda sessão que você cria. Os cinco passos são **uma unidade**: o turno não fecha
 no meio deles.
 
-1. **Criar na conta padrão do agente:** `cp-send --new <nome> <cwd>`, **sem** `--engine`.
+1. **Criar na conta padrão do agente:** `hangar-send --new <nome> <cwd>`, **sem** `--engine`.
    Motor de provedor entra **só** quando o plano nomeou um: `--engine <motor>`.
    *"Sessão de <agente>"* quer dizer a conta padrão dele. Modelo daquele fabricante
    acessível por gateway, roteador ou API **não é** uma sessão dele — é outro provedor
    servindo um modelo parecido, com outra conta e outro comportamento.
 
-   **Modelo, esforço e permissão vão NO PRÓPRIO `cp-send --new`** (desde 25/08/2026):
+   **Modelo, esforço e permissão vão NO PRÓPRIO `hangar-send --new`** (desde 25/08/2026):
    `--model <id>`, `--effort <nivel>` e `--permissao <modo>`. O contrato que nomeia modelo e
    thinking (o caso normal quando o time roda em Pi) cabe no comando — a sessão já nasce nele:
 
    ```bash
-   cp-send --new <nome> <repo> --provider pi --model <provider>/<id> --effort <nivel>
+   hangar-send --new <nome> <repo> --provider pi --model <provider>/<id> --effort <nivel>
    ```
 
    No Pi o `--effort` vira `--thinking` (aceita também `off|minimal`); no Kimi só `--model`;
@@ -851,7 +851,7 @@ no meio deles.
    da regex, nível fora da lista fechada ou provider desconhecido devolvem 400 e a sessão **não
    nasce** — nunca uma sessão que parece estar no modelo certo e não está. O caminho alternativo
    (criar sem os flags e trocar depois por `/cp-model` + `/cp-think`) funciona, mas deixa a sessão
-   viva um intervalo no modelo errado, e contradiz o passo 2 abaixo. (Instalação com `cp-send`
+   viva um intervalo no modelo errado, e contradiz o passo 2 abaixo. (Instalação com `hangar-send`
    antigo, sem os flags: o POST direto na API com `model`/`effort`/`permission_mode` no corpo
    continua valendo como plano B.)
 
@@ -884,7 +884,7 @@ no meio deles.
    Junto: **prova por sidecar de status tem que casar o `session-id` com o da sessão viva** — o
    diretório guarda um arquivo por id e não os apaga quando a sessão morre. Dois daqueles três
    leram o sidecar da sessão morta que ocupava o pane antes, e o valor saiu certo por coincidência.
-3. **Escrever o pedido num arquivo** e entregar com `cp-send <nome> "$(cat <arquivo>)"`.
+3. **Escrever o pedido num arquivo** e entregar com `hangar-send <nome> "$(cat <arquivo>)"`.
    Pedido longo digitado direto na linha quebra: `|`, `$`, crase e `|` de "SIM | NÃO" viram
    comando, e a mensagem sai mutilada ou não sai.
 4. **Conferir o retorno.** `entregue -> <nome>` é entrega. Qualquer outra coisa — `404`,

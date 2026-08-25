@@ -18,7 +18,7 @@ import pytest
 
 from app import engines as eng
 
-CLI = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "cp-engine"
+CLI = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "hangar-engine"
 
 
 @pytest.fixture(autouse=True)
@@ -100,7 +100,7 @@ def test_motor_desconhecido_estoura_em_vez_de_env_vazio():
 
 
 def test_valor_com_quebra_de_linha_e_recusado():
-    # `cp-engine --env` imprime CHAVE=VALOR por linha e o shell dá export nisso: um \n na key
+    # `hangar-engine --env` imprime CHAVE=VALOR por linha e o shell dá export nisso: um \n na key
     # exportaria uma variável arbitrária (ex: PATH) no shell que vai rodar o claude.
     for campo, valor in (("api_key", "sk-x\nPATH=/tmp/evil"),
                          ("model", "k3\nHOME=/tmp"),
@@ -223,7 +223,7 @@ def test_env_de_rejeita_json_envenenado_em_multiplos_campos():
 
 def test_env_de_rejeita_context_window_envenenado_hand_editado():
     # context_window é int por contrato (salvar() barra qualquer outra coisa), mas o arquivo é
-    # hand-editável: escrever uma string com \n faz `cp-engine --env` emitir uma linha extra (medido
+    # hand-editável: escrever uma string com \n faz `hangar-engine --env` emitir uma linha extra (medido
     # ao vivo). str(int(...)) tem que estourar em vez de deixar passar.
     d = _kimi()
     eng.salvar("kimi", d)
@@ -282,7 +282,7 @@ def test_remover_recusa_gravar_por_cima_de_arquivo_corrompido():
 
 
 def test_listar_pula_nome_invalido_sem_derrubar_os_outros():
-    # registry.py interpola o nome num `$SHELL -c` (cp-engine --exec {nome} -- ...). salvar() já
+    # registry.py interpola o nome num `$SHELL -c` (hangar-engine --exec {nome} -- ...). salvar() já
     # barra nome fora do padrão, mas o JSON é hand-editável; um registro corrupto não pode tirar os
     # outros motores do ar.
     eng.salvar("kimi", _kimi())
@@ -333,7 +333,7 @@ def test_cli_list_uma_linha_por_motor():
 
 
 def test_cli_exec_aplica_o_env_no_processo_filho():
-    # O CORAÇÃO da feature: o env entra no processo que substitui o cp-engine, não em linha de comando.
+    # O CORAÇÃO da feature: o env entra no processo que substitui o hangar-engine, não em linha de comando.
     eng.salvar("kimi", _kimi())
     r = _cli("--exec", "kimi", "--", sys.executable, "-c",
              "import os;print(os.environ['ANTHROPIC_MODEL'], os.environ['CP_ENGINE'])")
@@ -368,7 +368,7 @@ def test_cli_exec_de_motor_inexistente_nao_roda_o_comando():
 
 def test_cli_env_de_motor_envenenado_sai_com_erro_e_nome_do_campo():
     # engines.json é hand-editável; env_de agora levanta ValueError (não só KeyError) pra valor com
-    # \n/\r/\0. cp-engine tem que morrer igual nos dois casos — traceback aqui vazaria pro usuário
+    # \n/\r/\0. hangar-engine tem que morrer igual nos dois casos — traceback aqui vazaria pro usuário
     # errado (o wrapper de shell) em vez de uma mensagem clara.
     d = _kimi()
     eng.salvar("kimi", d)
@@ -410,14 +410,14 @@ def _nomes_importados_de_app(caminho: pathlib.Path) -> set[str]:
 
 
 # Unico modulo de `app` que o engines.py pode importar. Entrou porque o `os.replace` cru falha no
-# Windows quando outro processo tem o destino aberto (e o cp-engine LE o engines.json — e
+# Windows quando outro processo tem o destino aberto (e o hangar-engine LE o engines.json — e
 # exatamente esse leitor), e duplicar a retentativa aqui seria uma segunda verdade. Qualquer nome
 # novo nesta lista tem que ser stdlib puro, e o caso abaixo cobra isso.
 _APP_PERMITIDO = {"atomico"}
 
 
 def test_modulo_e_stdlib_pura():
-    # O cp-engine importa este módulo com o python3 do SISTEMA (sem venv). Um import de app.config
+    # O hangar-engine importa este módulo com o python3 do SISTEMA (sem venv). Um import de app.config
     # puxaria pydantic e quebraria o terminal, deixando só o app funcionando — falha assimétrica,
     # chata de diagnosticar. Sentinela, não prova: barra os culpados conhecidos.
     importados = _importados_de(pathlib.Path(eng.__file__))
@@ -634,7 +634,7 @@ def test_cli_exec_janela_do_modelo_em_motor_sem_janela_configurada():
 
 
 def test_cli_exec_com_modelo_e_janela_aplica_env_no_filho():
-    # O parse novo do cp-engine: `--model` e `--context` viram parte do env, não do cmdline.
+    # O parse novo do hangar-engine: `--model` e `--context` viram parte do env, não do cmdline.
     eng.salvar("kimi", _kimi())
     r = _cli("--exec", "kimi", "--model", "k3-256k", "--context", "262144", "--",
              sys.executable, "-c",
@@ -645,7 +645,7 @@ def test_cli_exec_com_modelo_e_janela_aplica_env_no_filho():
 
 
 def test_cli_exec_sem_flags_novas_continua_igual():
-    # A forma antiga (`cp-engine --exec <motor> -- <cmd>`) não pode regredir: é o que o backend
+    # A forma antiga (`hangar-engine --exec <motor> -- <cmd>`) não pode regredir: é o que o backend
     # usava até a Task 3 e continua sendo o caminho de sessão sem escolha.
     eng.salvar("kimi", _kimi())
     r = _cli("--exec", "kimi", "--", sys.executable, "-c",
@@ -681,7 +681,7 @@ def test_cli_exec_opcao_desconhecida_erro_limpo():
 
 
 def test_cli_exec_sem_comando_depois_do_separador_erro_limpo():
-    # `cp-engine --exec kimi --model x --` passaria do parse e `cmd[0]` estouraria IndexError —
+    # `hangar-engine --exec kimi --model x --` passaria do parse e `cmd[0]` estouraria IndexError —
     # traceback cru, o oposto do que este parse existe pra fazer.
     eng.salvar("kimi", _kimi())
     r = _cli("--exec", "kimi", "--model", "k3-256k", "--")

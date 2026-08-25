@@ -161,7 +161,7 @@ class ApelidoBody(BaseModel):
 def definir_apelido(body: ApelidoBody) -> dict:
     """Renomeia a credencial NA TELA. Não toca na pasta nem no engines.json: renomear pasta de
     conta mexeria em caminho que um CLI vivo tem aberto, e renomear motor quebraria o
-    `cp-engine --exec <nome>` das sessões que já estão rodando nele."""
+    `hangar-engine --exec <nome>` das sessões que já estão rodando nele."""
     mapa = apelidos.definir(body.id, body.apelido)
     return {"id": body.id, "apelido": mapa.get(body.id)}
 

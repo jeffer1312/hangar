@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """CLI de contas Claude, para o wrapper de shell chamar.
 
-Mesma razão de existir do cp-engine: a regra mora num lugar SÓ. O backend importa app.contas
+Mesma razão de existir do hangar-engine: a regra mora num lugar SÓ. O backend importa app.contas
 direto; o shell não pode (não tem venv), então chama este script com o python3 do sistema.
 
-  cp-conta --list          -> um nome de conta por linha
-  cp-conta --prep <nome>   -> refaz os atalhos e imprime o caminho do config dir
-  cp-conta --new <nome>    -> cria a conta e imprime o caminho
+  hangar-conta --list          -> um nome de conta por linha
+  hangar-conta --prep <nome>   -> refaz os atalhos e imprime o caminho do config dir
+  hangar-conta --new <nome>    -> cria a conta e imprime o caminho
 """
 import sys
 from pathlib import Path
@@ -37,10 +37,10 @@ def main(argv: list[str]) -> int:
                 # registry.sanitize_cwd. A varredura do que já existe cobre todo projeto conhecido;
                 # projeto novo aberto pelo terminal ganha a memória na abertura seguinte.
                 for aviso in contas.reconciliar(nome):
-                    print(f"cp-conta: {aviso}", file=sys.stderr)
+                    print(f"hangar-conta: {aviso}", file=sys.stderr)
                 print(contas.caminho(nome))
         except contas.ContaError as e:
-            print(f"cp-conta: {e.detail}", file=sys.stderr)
+            print(f"hangar-conta: {e.detail}", file=sys.stderr)
             return 1
         return 0
 
@@ -52,6 +52,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv))
     except OSError as e:
-        # Mesma borda do cp-engine: traceback aqui vazaria pro usuario errado (o wrapper de shell).
-        print(f"cp-conta: falha ao executar: {e}", file=sys.stderr)
+        # Mesma borda do hangar-engine: traceback aqui vazaria pro usuario errado (o wrapper de shell).
+        print(f"hangar-conta: falha ao executar: {e}", file=sys.stderr)
         sys.exit(126)

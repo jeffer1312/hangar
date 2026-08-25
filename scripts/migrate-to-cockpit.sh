@@ -12,7 +12,7 @@
 #   3b. copia as memórias do projeto pro slug novo (a pasta é chaveada pelo path);
 #   4. troca as units systemd claude-pocket-* pelas claude-cockpit-* (services-setup.sh)
 #      e migra a claude-pocket-deploy.service se existir (servidores com webhook);
-#   5. re-roda install-cp-send.sh (cp-send + skills) e, se Hyprland+Quickshell,
+#   5. re-roda install-hangar-send.sh (hangar-send + skills) e, se Hyprland+Quickshell,
 #      install-cp-panel.sh (painel/tray).
 #
 # NÃO muda (de propósito — são dados/ids internos): ~/.claude/.claude-pocket-pair/,
@@ -99,8 +99,8 @@ if [[ -f "$SD/claude-pocket-deploy.service" ]]; then
     log "unit de deploy migrada pra claude-cockpit-deploy.service"
 fi
 
-# ── 5. Re-instalar symlinks (cp-send, skills, painel) ────────────────────────
-./scripts/install-cp-send.sh
+# ── 5. Re-instalar symlinks (hangar-send, skills, painel) ────────────────────────
+./scripts/install-hangar-send.sh
 if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
     ./scripts/install-cp-panel.sh
 fi
@@ -112,6 +112,6 @@ if command -v systemctl >/dev/null && [[ -f "$SD/claude-cockpit-backend.service"
         && log "serviços claude-cockpit-* ativos" \
         || echo "AVISO: serviço não subiu — ver: journalctl --user -u claude-cockpit-backend.service" >&2
 fi
-command -v cp-send >/dev/null && cp-send --list >/dev/null 2>&1 && log "cp-send ok (backend respondendo)" \
-    || echo "AVISO: cp-send --list falhou — backend fora?" >&2
+command -v hangar-send >/dev/null && hangar-send --list >/dev/null 2>&1 && log "hangar-send ok (backend respondendo)" \
+    || echo "AVISO: hangar-send --list falhou — backend fora?" >&2
 log "migração concluída. Clone em: $NEW"

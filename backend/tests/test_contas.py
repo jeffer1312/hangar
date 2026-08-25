@@ -495,7 +495,7 @@ def test_arquivo_colidindo_com_nome_temporario_nao_e_apagado(casa):
 
 
 def test_modulo_e_stdlib_pura():
-    """O cp-conta importa este módulo com o python3 do SISTEMA (sem venv). A prova é o import
+    """O hangar-conta importa este módulo com o python3 do SISTEMA (sem venv). A prova é o import
     num interpretador SEM site-packages (`-S`): qualquer dependência não-stdlib falharia ali,
     com o rastro do culpado no stderr. A varredura de AST fica como diagnóstico rápido."""
     raiz = pathlib.Path(contas.__file__).resolve().parent.parent

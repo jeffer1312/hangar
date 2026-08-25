@@ -78,13 +78,13 @@ node scripts/test-pi-cp-state.mjs          # cp-state.ts: fork de subagente do P
 
 Sessions must run as `claude --session-id <uuid>` **inside tmux** — `scripts/install-claude-wrapper.sh`
 sets this up. A `claude` without an id, or outside tmux, is invisible to the app or flagged ⚠ no id.
-The same installer also wraps interactive `codex`: it calls the local backend through `scripts/cp-codex`,
+The same installer also wraps interactive `codex`: it calls the local backend through `scripts/hangar-codex`,
 creates a managed Codex app-server/TUI pair, and attaches the caller to that tmux session. Codex
 subcommands/advanced flags remain raw; `command codex` is the explicit bypass.
 
-## Sessões-irmãs (cp-send) + pareamento
+## Sessões-irmãs (hangar-send) + pareamento
 
-Sessões Claude da MESMA máquina se falam via `scripts/cp-send` (`--list`, `<sessao> "msg"`,
+Sessões Claude da MESMA máquina se falam via `scripts/hangar-send` (`--list`, `<sessao> "msg"`,
 `--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd] [--engine <motor>] [--provider ...]
 [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>]` — a sessão já NASCE no
 modelo/esforço/permissão pedidos, validados pelo backend via `app/model_args.py`) — tudo sobre a
@@ -99,12 +99,12 @@ uma Kimi/GPT no mesmo trabalho: o par continua no MESMO `~/.claude` — skills, 
 compartilhado, PairSheet, tudo igual —, só o motor difere, e o consumo vai pra conta do provedor.
 O flag só repassa `engine` pro `POST /api/sessions`, então motor inexistente volta `400 motor
 invalido` e a sessão **não** nasce (nunca uma sessão que parece estar no motor e não está). O texto
-do protocolo que as sessões leem vive no heredoc de `scripts/install-cp-send.sh` — editar o
+do protocolo que as sessões leem vive no heredoc de `scripts/install-hangar-send.sh` — editar o
 `~/.claude/CLAUDE.md` direto é perdido no próximo sync.
 
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
 `orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
-cp-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
+hangar-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
 `orchestrating-idea-to-push` — conduz UM trabalho da ideia ao push: research, spec/plano com
 o usuário, e daí em diante autônomo — um executor, um revisor independente de outra família
 por commit, portão entre as Tasks, e uma sessão fresca revisando a branch no fim. O revisor
@@ -121,21 +121,21 @@ depois de cada merge. `SKILL.md` é roteador: cada sessão lê só a página do 
 **Instalar/atualizar numa máquina** (após `git pull`):
 
 ```bash
-./scripts/install-cp-send.sh          # symlink ~/.local/bin/cp-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
-./scripts/install-claude-wrapper.sh   # symlink ~/.local/bin/cp-engine + wrapper claude-engine — sem isto,
+./scripts/install-hangar-send.sh          # symlink ~/.local/bin/hangar-send + skills/* + bloco "Sessões-irmãs" no ~/.claude/CLAUDE.md (idempotente)
+./scripts/install-claude-wrapper.sh   # symlink ~/.local/bin/hangar-engine + wrapper claude-engine — sem isto,
                                        # motor configurado pelo celular abre um pane que morre na hora
                                        # (tmux new-session ainda retorna 0, o app reporta sucesso calado)
 systemctl --user restart hangar-backend.service   # API de pareamento/preview
 npm --prefix frontend run build                          # só se o front for servido estático (vite dev pega via HMR)
 ```
 
-Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o cp-send.
+Sessões Claude já abertas não releem o CLAUDE.md global — só as novas conhecem o hangar-send.
 Escopo: pareamento e `--group` só dentro da mesma máquina. Recado 1:1 e `--list` alcançam OUTROS
 servidores via endereço `servidor::sessao`: `backend/peers.json` (id → base_url+token, gitignored;
 ver `peers.json.example`) + `CP_SERVER_ID` no `backend/.env`. Peer com `"enabled": false` sai da
 VARREDURA (painel e `--list`) mas segue endereçável por `servidor::sessao` — é pra máquina que
 você sabe que está desligada, senão cada poll paga o timeout de 4s esperando ela (id desta máquina, endereço de
-resposta do `[de: id::sessao]`). Só o cp-send muda — o backend nem sabe da feature.
+resposta do `[de: id::sessao]`). Só o hangar-send muda — o backend nem sabe da feature.
 
 ## SSE event model
 
@@ -280,10 +280,10 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   a session can run on a non-Anthropic provider — only env vars change inside that session's process,
   `~/.claude` (skills, hooks, transcript) stays the SAME. Single source of truth at
   `~/.claude/engines.json` (0600). Four invariants: (1) `engines.py` is **stdlib-only** — an
-  `app.config` import there would pull in pydantic and break `scripts/cp-engine`, which the shell
+  `app.config` import there would pull in pydantic and break `scripts/hangar-engine`, which the shell
   calls with the system `python3`; (2) it's `ANTHROPIC_AUTH_TOKEN`, **never** `ANTHROPIC_API_KEY`
   (that one writes `customApiKeyResponses` into the global `~/.claude.json`); (3) the env is applied
-  by `cp-engine --exec <engine> -- claude …` (`os.execvpe` inside the pane) and **never** via
+  by `hangar-engine --exec <engine> -- claude …` (`os.execvpe` inside the pane) and **never** via
   `tmux -e`, because the key would land in `/proc/<pid>/cmdline`, world-readable — tmux doesn't
   inherit the caller's env, so there's no "just export it" path; (4) the context-window var is
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` — `CLAUDE_CODE_AUTO_COMPACT_WINDOW` measured inert on both
@@ -380,7 +380,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     frase literal 3/3. Toda regra nova aqui **nasce com exemplo**, e com um contra-exemplo quando ela
     pode generalizar demais ("o ponto principal", "a barra de rolagem" não podem virar pontuação).
   - **Vocabulário vai pra Whisper, não pro LLM.** O `prompt` da API é enviesamento de decodificação,
-    e é onde `cp-send` para de sair "CP send". Consertar depois é impossível por construção: a
+    e é onde `hangar-send` para de sair "CP send". Consertar depois é impossível por construção: a
     limpeza tem ordem explícita de **preservar** nome próprio como veio, então o que a Whisper errou
     chega errado no fim. `VOCAB_BASE` (termos do app, valem pra todo mundo) + `ditado_vocabulario`
     (o que é de uma pessoa só), truncados em `_VOCAB_MAX` porque a API corta em ~224 tokens **calada**.

@@ -40,7 +40,7 @@ _MAX_ORIGINS = 512
 # ponytail: dict por processo, zera no restart. Nao e limitador distribuido — e um backend so.
 _fails: dict[str, list[float]] = {}
 
-# Loopback e o proprio dono na maquina: cp-send, cp-panel e os scripts locais batem aqui o tempo
+# Loopback e o proprio dono na maquina: hangar-send, cp-panel e os scripts locais batem aqui o tempo
 # todo, e quem esta logado ali le o backend/.env sem esforco nenhum — o token nao defende disso.
 # Bloquear loopback so quebraria a ferramenta local. Atras de proxy (tailscale serve, traefik) o
 # IP real chega via X-Forwarded-For, que o uvicorn resolve por CP_FORWARDED_ALLOW_IPS.

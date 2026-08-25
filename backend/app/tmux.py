@@ -177,7 +177,7 @@ _CLIP_LOCK = threading.RLock()
 #   invisivel no terminal e dentro do que a sessao recebe.
 #
 # E vai por STDIN, nao por argumento: o argv e visivel na maquina inteira (a mesma razao pela qual
-# `cp-engine` existe em vez de `tmux -e`), e o quoting ja provou mutilar texto no caminho pro
+# `hangar-engine` existe em vez de `tmux -e`), e o quoting ja provou mutilar texto no caminho pro
 # Windows — uma aspa da mensagem do usuario morria com "unexpected EOF while looking for matching
 # quote".
 _CLIP_CMD = [
@@ -511,12 +511,12 @@ def new_session(name: str, cwd: str, command: str, config_dir: str | None = None
     # sessao no `.claude.json` errado (a tela de boas-vindas). O valor calculado aqui nao muda.
     cfg = config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or _config_dir_padrao()
     # CP_SESSION_NAME: identidade CARIMBADA no nascimento — "quem sou eu" pra tudo que roda dentro do
-    # pane (o cp-send usa pra assinar recado, parear e desparear). Antes o cp-send perguntava
+    # pane (o hangar-send usa pra assinar recado, parear e desparear). Antes o hangar-send perguntava
     # `tmux display-message -p '#S'`, que NAO e propriedade de quem chama: e a "sessao corrente",
     # resolvida pelo CLIENTE anexado — estado global do servidor. Com um unico cliente anexado (medido
     # nesta maquina: `list-clients` devolvia so `/dev/pts/9067: jeffer1312`), TODA sessao que
     # perguntava recebia o mesmo nome, o da sessao do cliente. Resultado: a sessao B rodava
-    # `cp-send --unpair` pra sair do grupo, se identificava como A e o backend desparava A — o
+    # `hangar-send --unpair` pra sair do grupo, se identificava como A e o backend desparava A — o
     # `--unpair` de uma sessao desfazia o vinculo da OUTRA, e o grupo de 2 se dissolvia inteiro
     # (aconteceu 2x seguidas, sem ninguem pedir). Ancorar em `$TMUX_PANE` NAO resolve no Windows: o
     # psmux numera pane id por sessao, entao `%1` existe nas duas e o alvo fica ambiguo (o tmux real

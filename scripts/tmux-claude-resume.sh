@@ -163,10 +163,10 @@ restore() {
       pi)     cmd="pi --session $id" ;;
       *)      echo "  $name: unknown provider '$prov'" >> "$LOG"; continue ;;
     esac
-    # Engine env is applied INSIDE the pane by cp-engine (os.execvpe), same as registry does when it
+    # Engine env is applied INSIDE the pane by hangar-engine (os.execvpe), same as registry does when it
     # spawns the session; the account is a plain env prefix because the pane already exists (the
     # `tmux new-session -e` the app uses is not available on a restored pane).
-    if [ -n "${engine:-}" ]; then cmd="cp-engine --exec $engine -- $cmd"; fi
+    if [ -n "${engine:-}" ]; then cmd="hangar-engine --exec $engine -- $cmd"; fi
     if [ -n "${cfg:-}" ]; then cmd="env CLAUDE_CONFIG_DIR=$(printf '%q' "$cfg") $cmd"; fi
     if tmux send-keys -t "=$name:." "$cmd" Enter; then
       echo "  $name: injected [$prov] $id${engine:+ engine=$engine}${cfg:+ conta=$cfg}" >> "$LOG"

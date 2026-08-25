@@ -328,7 +328,7 @@ fi
 echo "== carimbo de identidade (CP_SESSION_NAME) =="
 # Por que ESTATICO e nao comportamental: o ramo que cria sessao so roda com stdin em TTY
 # (`[ ! -t 0 ]` manda pro bypass), entao exercita-lo exigiria pty + fake tmux — e o que se quer
-# travar aqui e mais simples: que nenhum `new-session` fique SEM o carimbo. Sem ele o cp-send de
+# travar aqui e mais simples: que nenhum `new-session` fique SEM o carimbo. Sem ele o hangar-send de
 # dentro do pane cai no `display-message -p '#S'` (sessao do CLIENTE anexado) e o --unpair de uma
 # sessao desfaz o vinculo da OUTRA — aconteceu 2x. O backend ja carimba em app/tmux.py; estes
 # wrappers criam sessao POR CONTA, entao precisam carimbar tambem.

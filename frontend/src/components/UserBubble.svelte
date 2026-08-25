@@ -5,7 +5,7 @@ import * as m from '../paraglide/messages';
     text: string;
     ts?: number | null;
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade
-    from?: string | null;          // recado de OUTRA sessao (cp-send): nome da sessao remetente
+    from?: string | null;          // recado de OUTRA sessao (hangar-send): nome da sessao remetente
     scope?: 'peer' | 'group' | null; // 'group' = aviso pro grupo todo ([grupo: X]) -> chip distinto
     onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (botao ↗)
     onOpenPeer?: (() => void) | null; // tap no chip "de: X" -> abre o chat da sessao remetente
@@ -79,7 +79,7 @@ import * as m from '../paraglide/messages';
     word-break: break-word;
   }
 
-  /* Recado de OUTRA sessao Claude (cp-send): borda/fundo accent pra nao passar por msg do usuario. */
+  /* Recado de OUTRA sessao Claude (hangar-send): borda/fundo accent pra nao passar por msg do usuario. */
   .bubble.peer {
     background: var(--accent-dim);
     border: 1px solid var(--accent);

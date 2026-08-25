@@ -1,6 +1,6 @@
 """Resolução de servidores peer + chamadas outbound pro backend do outro server. peers.json
-(backend/peers.json, gitignored — MESMO arquivo que o cp-send lê) mapeia server_id ->
-{base_url, token}. Só o pareamento cross-server usa isto; recado 1:1 e --list seguem no cp-send
+(backend/peers.json, gitignored — MESMO arquivo que o hangar-send lê) mapeia server_id ->
+{base_url, token}. Só o pareamento cross-server usa isto; recado 1:1 e --list seguem no hangar-send
 (bash). Sem httpx no hot path: urllib da stdlib (mesmo padrão de transcribe.py), chamado numa thread
 pelo caller async — os POSTs de pareamento são ação de usuário, não hot path.
 

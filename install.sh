@@ -8,7 +8,7 @@
 #   ./install.sh --no-frontend   # só o backend (o PWA já roda noutro lugar)
 #   ./install.sh --no-wrapper --no-services --no-cp-send --no-panel   # pula partes
 #
-# Os sub-scripts (services-setup.sh, lan-setup.sh, install-cp-send.sh, ...) continuam
+# Os sub-scripts (services-setup.sh, lan-setup.sh, install-hangar-send.sh, ...) continuam
 # rodáveis sozinhos; este aqui só faz com que um comando baste.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -44,7 +44,7 @@ fail() { erro "$*"; exit 1; }
 # Toda pergunta lê do TERMINAL, nunca do stdin do script. Sob `curl … | bash` (e sob o
 # bootstrap.sh) o stdin é o cano do curl: um `read` normal recebia EOF na hora, devolvia string
 # vazia — e vazio aqui vale como "sim". O instalador aceitaria firewall, serviços, Tailscale e
-# cp-send sem ninguém ter respondido nada. Sem terminal (CI, cron), a resposta é NÃO.
+# hangar-send sem ninguém ter respondido nada. Sem terminal (CI, cron), a resposta é NÃO.
 if { exec 3</dev/tty; } 2>/dev/null; then TEM_TTY=1; else TEM_TTY=0; fi
 
 ask() { # ask "pergunta" -> 0/1 (em --yes, sempre sim; sem terminal, sempre não)
@@ -225,7 +225,7 @@ say "5/8 Wrappers do claude e do codex"
 # sub-scripts geram conteúdo (blocos de rc, units, o texto do protocolo no ~/.claude/CLAUDE.md)
 # que um `git pull` sozinho não atualiza. Eles são idempotentes, então re-rodar é barato; o que
 # não pode voltar é perguntar S/n pro que já está de pé.
-if [ -e "$HOME/.local/bin/cp-engine" ]; then
+if [ -e "$HOME/.local/bin/hangar-engine" ]; then
   ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados" || erro "wrappers do claude/codex falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
@@ -297,7 +297,7 @@ fi
 fi
 
 # ── 7/8 Rodar sozinho + sessões-irmãs + painel ───────────────────────────────
-say "7/8 Serviços, cp-send e painel"
+say "7/8 Serviços, hangar-send e painel"
 if ! command -v systemctl >/dev/null; then
   nota "serviços: sem systemd nesta máquina — rode backend e frontend na mão"
 elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
@@ -318,16 +318,16 @@ else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
 fi
 
-if [ -e "$HOME/.local/bin/cp-send" ]; then
+if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  ./scripts/install-cp-send.sh >/dev/null && ok "cp-send + skills atualizados" || erro "cp-send + skills falharam ao atualizar"
+  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || erro "hangar-send + skills falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
-elif [ "$CPSEND" = 1 ] && ask "Instalar cp-send + skills (sessões conversam entre si e se pareiam)?"; then
-  ./scripts/install-cp-send.sh
+elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
+  ./scripts/install-hangar-send.sh
 else
-  nota "pulado — depois: ./scripts/install-cp-send.sh"
+  nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
 
 # Sessões sobrevivendo a reboot: TPM + resurrect + continuum + um timer systemd que salva.

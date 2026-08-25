@@ -118,7 +118,7 @@ function pi
     # claude.posix.sh, que documenta a mesma escolha.
     # `sh -c` exporta CP_PI_SESSION DENTRO do próprio pane antes do exec pi — ver o comentário de
     # cabeçalho pra o porquê. $0 vira "_" (placeholder), $1 o uuid, o resto ($@) os args originais.
-    # CP_SESSION_NAME: carimbo de identidade pro cp-send de dentro do pane (ver claude.fish).
+    # CP_SESSION_NAME: carimbo de identidade pro hangar-send de dentro do pane (ver claude.fish).
     if command -q systemd-run; and set -q XDG_RUNTIME_DIR; and systemd-run --user --scope --collect -q -- true >/dev/null 2>&1
         if test $own_session -eq 1
             systemd-run --user --scope --collect -q -- tmux new-session -s $name -c "$PWD" -e "CP_SESSION_NAME=$name" \

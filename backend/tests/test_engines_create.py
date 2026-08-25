@@ -1,6 +1,6 @@
 """Criar/retomar sessão com motor.
 
-O motor é aplicado prefixando o comando com `cp-engine --exec`, não com `tmux -e`: assim a key não
+O motor é aplicado prefixando o comando com `hangar-engine --exec`, não com `tmux -e`: assim a key não
 aparece em /proc/<pid>/cmdline (legível por qualquer usuário) e o tmux.py não muda.
 E o motor tem que sobreviver aos DOIS resumes — senão uma sessão Kimi ressuscita na conta Anthropic
 continuando um transcript de Kimi, calado.
@@ -22,7 +22,7 @@ _EXIGIR_ORIGINAL = reg._exigir_cp_engine
 @pytest.fixture(autouse=True)
 def _isola(tmp_path, monkeypatch):
     monkeypatch.setattr(eng, "caminho", lambda: tmp_path / "engines.json")
-    # A guarda que recusa quando o `cp-engine` nao esta no PATH e sobre o AMBIENTE do servidor, nao
+    # A guarda que recusa quando o `hangar-engine` nao esta no PATH e sobre o AMBIENTE do servidor, nao
     # sobre a montagem do comando, que e o assunto deste arquivo. Sem desliga-la aqui, todos estes
     # casos passariam a depender de o lancador estar instalado na maquina que roda a suite — verde
     # no Linux (onde o install-claude-wrapper.sh o poe no PATH) e vermelho no Windows, pelo
@@ -39,10 +39,10 @@ def test_recusa_alto_quando_o_cp_engine_nao_esta_no_path(monkeypatch):
     entao reporta "sessao criada" pra uma sessao que evaporou.
     """
     monkeypatch.setattr(reg.shutil, "which", lambda nome: None)
-    with pytest.raises(ValueError, match="cp-engine"):
+    with pytest.raises(ValueError, match="hangar-engine"):
         _EXIGIR_ORIGINAL()
 
-    monkeypatch.setattr(reg.shutil, "which", lambda nome: "/qualquer/cp-engine")
+    monkeypatch.setattr(reg.shutil, "which", lambda nome: "/qualquer/hangar-engine")
     _EXIGIR_ORIGINAL()           # com o lancador no PATH, passa calado
 
 
@@ -66,7 +66,7 @@ def test_create_com_motor_prefixa_o_comando(tmp_path, monkeypatch):
     _motor()
     visto = {}
     info = _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), engine="kimi")
-    assert visto["command"].startswith("cp-engine --exec kimi -- claude --session-id ")
+    assert visto["command"].startswith("hangar-engine --exec kimi -- claude --session-id ")
     assert info.engine == "kimi"
 
 
@@ -137,7 +137,7 @@ def test_resume_de_pane_vivo_preserva_o_motor(tmp_path, monkeypatch):
     visto = {}
     r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
     info = r.resume("s", sid)
-    assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"
+    assert visto["command"] == f"hangar-engine --exec kimi -- claude --resume {sid}"
     assert info.engine == "kimi"
 
 
@@ -159,11 +159,11 @@ def test_resume_do_arquivo_aceita_motor(tmp_path, monkeypatch):
     r = _reg(tmp_path, monkeypatch, visto)
     sid = "11111111-2222-3333-4444-555555555555"
     info = r.create("s", str(tmp_path), resume_session_id=sid, engine="kimi")
-    assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"
+    assert visto["command"] == f"hangar-engine --exec kimi -- claude --resume {sid}"
     assert info.engine == "kimi"
 
 
-# ── Task 3: escolha de modelo/janela entra no prefixo cp-engine ────────────────────────────────
+# ── Task 3: escolha de modelo/janela entra no prefixo hangar-engine ────────────────────────────────
 
 
 def test_create_com_escolha_poe_modelo_e_esforco_no_comando(tmp_path, monkeypatch):
@@ -183,7 +183,7 @@ def test_create_com_motor_e_escolha_remonta_o_prefixo_com_modelo_e_janela(tmp_pa
     _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), engine="kimi",
                                               model="k3-256k", context_window=262144)
     assert visto["command"].startswith(
-        "cp-engine --exec kimi --model k3-256k --context 262144 -- claude --session-id ")
+        "hangar-engine --exec kimi --model k3-256k --context 262144 -- claude --session-id ")
 
 
 def test_create_com_motor_e_modelo_sem_janela_omite_o_context(tmp_path, monkeypatch):
@@ -194,7 +194,7 @@ def test_create_com_motor_e_modelo_sem_janela_omite_o_context(tmp_path, monkeypa
     _reg(tmp_path, monkeypatch, visto).create("s", str(tmp_path), engine="kimi",
                                               model="k3-256k", context_window=None)
     assert visto["command"].startswith(
-        "cp-engine --exec kimi --model k3-256k -- claude --session-id ")
+        "hangar-engine --exec kimi --model k3-256k -- claude --session-id ")
 
 
 def test_resume_preserva_modelo_e_janela_do_pane(tmp_path, monkeypatch):
@@ -208,7 +208,7 @@ def test_resume_preserva_modelo_e_janela_do_pane(tmp_path, monkeypatch):
     r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
     info = r.resume("s", sid)
     assert visto["command"] == (
-        f"cp-engine --exec kimi --model k3-256k --context 262144 -- "
+        f"hangar-engine --exec kimi --model k3-256k --context 262144 -- "
         f"claude --resume {sid} --model k3-256k --effort high")
     assert info.engine == "kimi"
 
@@ -249,7 +249,7 @@ def test_resume_com_modelo_sem_janela_omite_o_context(tmp_path, monkeypatch):
     r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
     r.resume("s", sid)
     assert visto["command"] == (
-        f"cp-engine --exec kimi --model k3-256k -- claude --resume {sid} --model k3-256k --effort high")
+        f"hangar-engine --exec kimi --model k3-256k -- claude --resume {sid} --model k3-256k --effort high")
 
 
 def test_resume_sem_modelo_no_pane_nao_poe_flags_nem_context(tmp_path, monkeypatch):
@@ -260,7 +260,7 @@ def test_resume_sem_modelo_no_pane_nao_poe_flags_nem_context(tmp_path, monkeypat
     visto = {}
     r, sid = _prep_resume(tmp_path, monkeypatch, visto, "kimi")
     r.resume("s", sid)
-    assert visto["command"] == f"cp-engine --exec kimi -- claude --resume {sid}"
+    assert visto["command"] == f"hangar-engine --exec kimi -- claude --resume {sid}"
 
 
 def test_resume_le_a_janela_antes_de_matar_o_pane(tmp_path, monkeypatch):
@@ -284,7 +284,7 @@ def test_resume_le_a_janela_antes_de_matar_o_pane(tmp_path, monkeypatch):
     monkeypatch.setattr(reg.tmux, "kill_session", _kill)
     r.resume("s", sid)
     assert visto["command"] == (
-        f"cp-engine --exec kimi --model k3-256k --context 262144 -- "
+        f"hangar-engine --exec kimi --model k3-256k --context 262144 -- "
         f"claude --resume {sid} --model k3-256k --effort high")
 
 

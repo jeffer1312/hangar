@@ -17,7 +17,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
 
 # O que se dita neste app e prompt pra agente: nome de ferramenta, comando, caminho e sigla. Sao
-# exatamente as palavras que a Whisper mais erra, porque nenhuma delas e portugues ("cp-send" sai
+# exatamente as palavras que a Whisper mais erra, porque nenhuma delas e portugues ("hangar-send" sai
 # "CP send", "Kimi K3" sai "QIMI K3"). O campo `prompt` da Whisper e vocabulario, nao instrucao:
 # ele so enviesa a decodificacao pra grafia certa dessas palavras. Consertar aqui e melhor que
 # consertar depois no LLM — a limpeza tem ordem explicita de PRESERVAR nome proprio como veio,
@@ -30,7 +30,7 @@ IDIOMA = "pt"
 # UMA pessoa (nome de projeto, de sessao, de cliente) entra pela config `ditado_vocabulario` e e
 # somado a este.
 VOCAB_BASE = (
-    "cp-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
+    "hangar-send, tmux, Claude Code, Codex, Kimi, Pi, Opus, Sonnet, Haiku, SSE, JSONL, backend, "
     "frontend, commit, merge request, deploy, endpoint, worktree, prompt, token"
 )
 # A Whisper le no maximo ~224 tokens de prompt e ignora calada o resto — uma lista que cresceu

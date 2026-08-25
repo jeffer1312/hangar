@@ -5,7 +5,7 @@ merge de servidor, sem HTTP na mão.
 
 Saída: {"sessions": [...], "errors": [...], "servers": [...]} — sessão local tem server=null e
 address=<nome>;
-remota tem server=<id> e address=<id>::<nome> (o mesmo endereço que o cp-send aceita).
+remota tem server=<id> e address=<id>::<nome> (o mesmo endereço que o hangar-send aceita).
 Servidor fora do ar entra em errors e NÃO derruba o resto (painel degrada, não some).
 
 servers[] lista TODO peer do peers.json com {id, enabled, ok, error} — inclusive o desligado,

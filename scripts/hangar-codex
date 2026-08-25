@@ -34,7 +34,7 @@ def _api(method: str, path: str, body: dict | None = None):
     token = os.environ.get("CP_AUTH_TOKEN") or env.get("CP_AUTH_TOKEN")
     port = os.environ.get("CP_PORT") or env.get("CP_PORT") or "8765"
     if not token:
-        raise SystemExit(f"cp-codex: CP_AUTH_TOKEN ausente em {_repo() / 'backend' / '.env'}")
+        raise SystemExit(f"hangar-codex: CP_AUTH_TOKEN ausente em {_repo() / 'backend' / '.env'}")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
@@ -80,7 +80,7 @@ def _resume_target(cwd: str) -> str | None:
     escolhida = sessions[-1]
     if len(sessions) > 1:
         outras = ", ".join(s["name"] for s in sessions[:-1])
-        print(f"cp-codex: {len(sessions)} sessoes Codex neste diretorio; retomando a mais recente "
+        print(f"hangar-codex: {len(sessions)} sessoes Codex neste diretorio; retomando a mais recente "
               f"({escolhida['name']}). Outras: {outras}", file=sys.stderr)
     return escolhida["name"]
 
@@ -108,7 +108,7 @@ def _create(cwd: str, prompt: str | None) -> str:
 
 def main() -> int:
     if len(sys.argv) > 2:
-        print("uso: cp-codex [prompt]", file=sys.stderr)
+        print("uso: hangar-codex [prompt]", file=sys.stderr)
         return 2
     prompt = sys.argv[1] if len(sys.argv) == 2 else None
     cwd = os.getcwd()
@@ -124,7 +124,7 @@ def main() -> int:
         if not resumed:
             name = _create(cwd, prompt)
     except RuntimeError as exc:
-        print(f"cp-codex: {exc}", file=sys.stderr)
+        print(f"hangar-codex: {exc}", file=sys.stderr)
         return 1
     verbo = "retomando" if resumed else "gerenciado pelo Cockpit"
     print(f"Codex {verbo}: {name} (detach: Ctrl-b d)", file=sys.stderr)

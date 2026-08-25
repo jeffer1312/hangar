@@ -1359,7 +1359,7 @@ async def create_session(body: CreateBody):
                         avisos = await asyncio.to_thread(ciclo.reconciliar,
                                                          sanitize_cwd(body.cwd))
                     except contas.ContaError as e:
-                        # ContaError já carrega status HTTP (o cp-conta imprime o detail). Deixar
+                        # ContaError já carrega status HTTP (o hangar-conta imprime o detail). Deixar
                         # escapar viraria 500 com traceback — o usuário não saberia por que a
                         # abertura falhou (ex: Windows sem Modo Desenvolvedor recusando symlink).
                         raise HTTPException(e.status, e.detail) from None
@@ -1685,7 +1685,7 @@ async def workflow_agent_detail(name: str, run_id: str, agent_id: str):
 async def peer_address(name: str):
     """Endereço do inbox nativo desta sessão (cross-session messaging), ou `null`.
 
-    Existe pro `cp-send` decidir com FATO se o caminho nativo alcança este alvo, em vez de supor
+    Existe pro `hangar-send` decidir com FATO se o caminho nativo alcança este alvo, em vez de supor
     pelo tipo da sessão: quem não tem socket (sessão aberta antes da liberação da Anthropic, Codex,
     Pi) não aparece no `ListAgents` de ninguém, e mandar o modelo usar `SendMessage` ali seria
     mandá-lo bater numa porta que não existe. `null` nunca é erro — é a resposta "aqui não tem".
@@ -1762,7 +1762,7 @@ async def events(name: str, request: Request):
 # decoracao da lista (git_summary/capture_pane via asyncio.to_thread) pode ocupar em rajada -> sem isto,
 # um burst de decoracao lenta atrasaria o POST /input. Poucos workers bastam (single-user; envios a uma
 # mesma sessao ja serializam no _send_lock do terminal_input).
-_send_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cp-send")
+_send_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hangar-send")
 
 
 def _send_thread(fn, *args):
@@ -2143,7 +2143,7 @@ async def broadcast(body: BroadcastBody):
 
 
 class PairBody(_StrictBody):
-    # peer (1) OU peers (N) — peers vence; peer fica por compat (cp-send --pair manda um só).
+    # peer (1) OU peers (N) — peers vence; peer fica por compat (hangar-send --pair manda um só).
     peer: str = ""
     peers: list[str] = []
     task: str = ""
@@ -2154,7 +2154,7 @@ def _group_text(me: str, others: list[str], task: str) -> str:
     quem = ", ".join(f"'{o}'" for o in others)
     exemplo = others[0]
     # Par remoto (srv::sessao): contrato compartilhado não sincroniza cross-server no MVP — some a
-    # linha do arquivo (cada máquina teria o seu, com gid diferente). cp-send já roteia srv::sessao.
+    # linha do arquivo (cada máquina teria o seu, com gid diferente). hangar-send já roteia srv::sessao.
     cross = any(peers.is_remote(o) for o in others)
     contrato = "" if cross else (
         f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
@@ -2167,11 +2167,11 @@ def _group_text(me: str, others: list[str], task: str) -> str:
         f"desta máquina), use SendMessage — a entrega é por socket, sem digitar no terminal, então "
         f"nada de texto cortado ou colado pela metade. Não tem a ferramenta, ou o membro não está "
         f"na lista (sessão de outra máquina 'servidor::sessao', Codex, Pi)? Aí é o Bash: "
-        f'cp-send {exemplo} "sua mensagem". Os dois chegam do mesmo jeito, como [de: <membro>]. '
+        f'hangar-send {exemplo} "sua mensagem". Os dois chegam do mesmo jeito, como [de: <membro>]. '
         f'AVISO pro grupo TODO (marco: "terminei minha parte", "contrato atualizado"): '
-        f'cp-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
+        f'hangar-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
         f"REGRA ANTI-LOOP: NUNCA responda um [grupo: ...] com --group (vira tempestade). Aviso de "
-        f"grupo é unidirecional; se precisar responder, faça 1:1 (cp-send <membro>) e só se necessário. "
+        f"grupo é unidirecional; se precisar responder, faça 1:1 (hangar-send <membro>) e só se necessário. "
         f"{contrato}"
         f"BRANCH: antes de trabalhar, rode git branch --show-current no SEU repo e alinhe pra "
         f"branch do ticket da tarefa (fetch+checkout) — re-verifique após restart/resume da sessão. "
@@ -2197,7 +2197,7 @@ async def _deliver(name: str, text: str) -> dict | None:
 @app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
 async def pair_session(name: str, body: PairBody):
     """Junta `name` e peer(s) num GRUPO de trabalho (une os grupos existentes de todos) e injeta
-    em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via cp-send por
+    em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via hangar-send por
     iniciativa própria, dentro do escopo da tarefa. Badge `pair_peers` aparece na lista."""
     others = [p for p in dict.fromkeys(body.peers or ([body.peer] if body.peer else [])) if p]
     if not others:
@@ -2256,7 +2256,7 @@ async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
     """Pareamento 1:1 entre máquinas. Registra o vínculo LOCAL (name.json peers=[srv::sessao];
     sidecar do remoto vive na máquina dele) e chama o /pair-remote do backend peer pra registrar o
     reverso + injetar o protocolo lá. Falha na chamada remota desfaz o vínculo local (mesmo racional
-    do 'grupo fantasma' do pair local). Transporte já provado pelo cp-send cross-server (peers.json)."""
+    do 'grupo fantasma' do pair local). Transporte já provado pelo hangar-send cross-server (peers.json)."""
     local_names = {s.name for s in await asyncio.to_thread(registry.list)}
     if name not in local_names:
         raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
@@ -2348,7 +2348,7 @@ async def unpair_remote(name: str, body: UnpairRemoteBody):
     warn = None
     if ex:
         e = await _deliver(name, f"[de: claude-pocket] '{body.peer}' saiu do pareamento. "
-                                 "Volte a operar independente; use cp-send só quando o usuário pedir.")
+                                 "Volte a operar independente; use hangar-send só quando o usuário pedir.")
         if e:
             warn = erro("erro_pareamento_aviso_unpair", f"{name}: {_erro_texto(e)}",
                         sessao=name, erro=e)
@@ -2361,7 +2361,7 @@ class GroupMsgBody(_StrictBody):
 
 @app.post("/api/sessions/{name}/group-message", dependencies=[Depends(require_auth)])
 async def group_message(name: str, body: GroupMsgBody):
-    """Aviso pro GRUPO todo (cp-send --group): entrega o texto a CADA companheiro de `name` numa
+    """Aviso pro GRUPO todo (hangar-send --group): entrega o texto a CADA companheiro de `name` numa
     tacada, como `[grupo: <name>]`. Unidirecional por contrato (o prompt instrui a NUNCA responder
     um [grupo:] com --group) — é o que impede o loop de N sessões se avisando em cascata.
     Slash-command fora (mesmo racional do /broadcast)."""
@@ -2438,7 +2438,7 @@ async def unpair_session(name: str):
             _log.warning("unpair: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
             errs.append({"sessao": p, "erro": str(ex)})
     e = await _deliver(name, "[de: claude-pocket] Você saiu do grupo de trabalho "
-                             f"({', '.join(expeers)}). Volte a operar independente; use cp-send só "
+                             f"({', '.join(expeers)}). Volte a operar independente; use hangar-send só "
                              "quando o usuário pedir.")
     if e:
         errs.append({"sessao": name, "erro": e})

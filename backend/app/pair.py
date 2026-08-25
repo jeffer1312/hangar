@@ -7,7 +7,7 @@ irmão ".hangar-pair", um JSON pequeno por MEMBRO, keyed pelo NOME:
 peers = os OUTROS membros do grupo (cada sidecar lista todos menos o dono). gid = id estável do
 grupo (não muda quando membro entra/sai) — nomeia o arquivo de CONTRATO compartilhado. Formato
 legado {"peer": "x"} (1:1) é lido como {"peers": ["x"]}. O efeito de comportamento (as sessões se
-falarem via cp-send) vem do PROMPT que a API injeta; o sidecar persiste o vínculo pro badge/unpair."""
+falarem via hangar-send) vem do PROMPT que a API injeta; o sidecar persiste o vínculo pro badge/unpair."""
 import json
 import threading
 import uuid

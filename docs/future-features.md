@@ -211,15 +211,15 @@ número + contexto (caro, e o arquivo pode ter mudado desde a edição). No git 
 **Observação registrada de passagem:** ele comentou que a saída do **Bash** no card *"não mostra de
 uma forma boa"*. Não foi investigado — assunto separado deste item.
 
-## 7. cp-send: pergunta com resposta rastreada (`ask`/`pending`) — avaliado 2026-08-08, não construído
+## 7. hangar-send: pergunta com resposta rastreada (`ask`/`pending`) — avaliado 2026-08-08, não construído
 
-Hoje o cp-send é **tiro e esquece**. Quem manda um recado pro par depende do texto do protocolo
-(heredoc do `install-cp-send.sh`) pra que o outro lado responda, e não existe lugar nenhum que
+Hoje o hangar-send é **tiro e esquece**. Quem manda um recado pro par depende do texto do protocolo
+(heredoc do `install-hangar-send.sh`) pra que o outro lado responda, e não existe lugar nenhum que
 saiba *"eu perguntei X e ainda não voltou"*. Recado perdido — sessão que leu e não respondeu, ou
 morreu no meio — some sem deixar rastro, e quem perguntou só descobre relendo o próprio chat.
 
-**A ideia**: um segundo verbo ao lado do recado. `cp-send --ask <sessao> "pergunta"` gera um id de
-correlação, grava a pendência, e a resposta do outro lado (`--reply <id>`) fecha a linha. `cp-send
+**A ideia**: um segundo verbo ao lado do recado. `hangar-send --ask <sessao> "pergunta"` gera um id de
+correlação, grava a pendência, e a resposta do outro lado (`--reply <id>`) fecha a linha. `hangar-send
 --pending` lista o que está em aberto, dos dois lados (o que eu perguntei, o que me perguntaram).
 
 **Onde encaixa no que já existe**: o `pqueue` já é fila durável por sessão e já sobrevive a

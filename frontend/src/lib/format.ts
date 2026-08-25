@@ -229,7 +229,7 @@ export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[]
   return out;
 }
 
-// Recado de OUTRA sessão Claude (cp-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
+// Recado de OUTRA sessão Claude (hangar-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
 // (aviso pro grupo). Devolve remetente + texto sem o prefixo + scope; null = msg normal do usuário.
 // Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do Chat compara o cru).
 const _PEER_RE = /^\[(de|grupo):\s*([^\]]+)\]\s*/;
