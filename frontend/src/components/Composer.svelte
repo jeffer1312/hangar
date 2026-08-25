@@ -210,7 +210,7 @@
   // de novo, mesmo com o audio ja gravado e o texto cru ja na mao.
   //
   // - `url`: objectURL do proprio File que foi gravado (o backend tambem salva em
-  //   .claude-pocket-uploads, mas o blob ja esta na aba -> player sem round-trip).
+  //   .hangar-uploads, mas o blob ja esta na aba -> player sem round-trip).
   // - `before`: o que havia no campo antes deste ditado, pra toda troca remontar a MESMA
   //   concatenacao trocando so a parte ditada.
   // - `cache`: estilo -> texto ja obtido. Reclicar num estilo por onde ja passou e instantaneo e de

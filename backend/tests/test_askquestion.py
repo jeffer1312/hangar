@@ -18,11 +18,11 @@ _Q = [{"header": "Cor", "question": "Escolha", "multiSelect": True,
 def _layout(tmp_path: Path, questions=_Q, sid="sess-123",
             write_sidecar=True, sidecar_text=None):
     # Monta o layout <tmp>/projects/<proj>/<sid>.jsonl (so o PATH do jsonl importa, sem conteudo) e
-    # grava o sidecar do hook PreToolUse em <tmp>/.claude-pocket-askq/<sid>.json com stdin realista.
+    # grava o sidecar do hook PreToolUse em <tmp>/.hangar-askq/<sid>.json com stdin realista.
     proj = tmp_path / "projects" / "home-x"
     proj.mkdir(parents=True)
     jsonl = proj / f"{sid}.jsonl"
-    sc_dir = tmp_path / ".claude-pocket-askq"
+    sc_dir = tmp_path / ".hangar-askq"
     sc_dir.mkdir(parents=True)
     sc = sc_dir / f"{sid}.json"
     if write_sidecar:

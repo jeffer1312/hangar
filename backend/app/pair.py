@@ -1,6 +1,6 @@
 """Pareamento de sessões (feature "trabalhando juntas"): GRUPO de N sessões que colaboram em repos
 complementares (ex: front + back + POS). Mesmo padrão de sidecar do ThenLink (app/chain.py): dir
-irmão ".claude-pocket-pair", um JSON pequeno por MEMBRO, keyed pelo NOME:
+irmão ".hangar-pair", um JSON pequeno por MEMBRO, keyed pelo NOME:
 
     {"peers": ["outra", "mais-uma"], "task": "...", "gid": "ab12cd34"}
 
@@ -30,7 +30,7 @@ class PairMixError(ValueError):
 
 
 def _pair_dir() -> Path:
-    d = Path(settings.projects_dir).parent / ".claude-pocket-pair"
+    d = Path(settings.projects_dir).parent / ".hangar-pair"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

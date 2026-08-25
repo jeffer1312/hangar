@@ -53,9 +53,9 @@ def _total(apagados: dict[str, int]) -> int:
 def test_viva_nao_some_mesmo_velha(tmp_path):
     """Sidecar de sessao viva NAO e apagado, por mais velho que seja: a chave manda."""
     base = tmp_path / "cfg"
-    _escreve(base, ".claude-pocket-status", "aaa", _AGORA, 60)     # 60 dias
-    _escreve(base, ".claude-pocket-queue", "sessao", _AGORA, 60, ".jsonl")
-    _escreve(base, ".claude-pocket-pi", "42", _AGORA, 60)
+    _escreve(base, ".hangar-status", "aaa", _AGORA, 60)     # 60 dias
+    _escreve(base, ".hangar-queue", "sessao", _AGORA, 60, ".jsonl")
+    _escreve(base, ".hangar-pi", "42", _AGORA, 60)
     apagados = prune._podar([base], {"aaa"}, {"sessao"}, {"42"}, _AGORA)
     assert _total(apagados) == 0
 
@@ -63,40 +63,40 @@ def test_viva_nao_some_mesmo_velha(tmp_path):
 def test_morta_velha_some(tmp_path):
     """Sidecar de sessao morta com >= _MIN_AGE some, em todos os tipos de chave."""
     base = tmp_path / "cfg"
-    _escreve(base, ".claude-pocket-state", "morto-stem", _AGORA, 8)
-    _escreve(base, ".claude-pocket-pi/models", "morto-model", _AGORA, 8)
-    _escreve(base, ".claude-pocket-queue", "morto-nome", _AGORA, 8, ".jsonl")
-    _escreve(base, ".claude-pocket-pi", "999", _AGORA, 8)
-    _escreve(base, ".claude-pocket-kimi", "888", _AGORA, 8)
+    _escreve(base, ".hangar-state", "morto-stem", _AGORA, 8)
+    _escreve(base, ".hangar-pi/models", "morto-model", _AGORA, 8)
+    _escreve(base, ".hangar-queue", "morto-nome", _AGORA, 8, ".jsonl")
+    _escreve(base, ".hangar-pi", "999", _AGORA, 8)
+    _escreve(base, ".hangar-kimi", "888", _AGORA, 8)
     apagados = prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)
-    assert apagados[".claude-pocket-state"] == 1
-    assert apagados[".claude-pocket-pi/models"] == 1
-    assert apagados[".claude-pocket-queue"] == 1
-    assert apagados[".claude-pocket-pi"] == 1
-    assert apagados[".claude-pocket-kimi"] == 1
-    assert not (base / ".claude-pocket-state" / "morto-stem.json").exists()
+    assert apagados[".hangar-state"] == 1
+    assert apagados[".hangar-pi/models"] == 1
+    assert apagados[".hangar-queue"] == 1
+    assert apagados[".hangar-pi"] == 1
+    assert apagados[".hangar-kimi"] == 1
+    assert not (base / ".hangar-state" / "morto-stem.json").exists()
 
 
 def test_morta_recente_nao_some(tmp_path):
     """Sidecar de sessao morta RECENTE nao some: a poda preserva a materia-prima de
     diagnostico — decisao da Task, registrada no reporte (leitura ja recusa velho)."""
     base = tmp_path / "cfg"
-    _escreve(base, ".claude-pocket-status", "morreu-ontem", _AGORA, 1)
+    _escreve(base, ".hangar-status", "morreu-ontem", _AGORA, 1)
     assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
 
 
 def test_borda_exata(tmp_path):
     """A borda e >= _MIN_AGE: exatamente na idade cai; um segundo antes, nao."""
     base = tmp_path / "cfg"
-    _escreve(base, ".claude-pocket-status", "na-borda", _AGORA, prune._MIN_AGE / 86400)
-    assert prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)[".claude-pocket-status"] == 1
-    _escreve(base, ".claude-pocket-status", "quase", _AGORA, prune._MIN_AGE / 86400 - 1e-6)
+    _escreve(base, ".hangar-status", "na-borda", _AGORA, prune._MIN_AGE / 86400)
+    assert prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)[".hangar-status"] == 1
+    _escreve(base, ".hangar-status", "quase", _AGORA, prune._MIN_AGE / 86400 - 1e-6)
     assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
 
 
 def test_arquivo_sem_stat_nao_derruba(tmp_path):
     base = tmp_path / "cfg"
-    f = _escreve(base, ".claude-pocket-status", "sumiu", _AGORA, 30)
+    f = _escreve(base, ".hangar-status", "sumiu", _AGORA, 30)
     f.unlink()  # some entre o glob e o stat
     assert _total(prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)) == 0
 
@@ -106,7 +106,7 @@ def test_tmp_em_voo_nao_e_recolhido(tmp_path):
     acabou de ser escrito: o unico risco desta limpeza e apagar uma escrita EM VOO, e ela vive
     milissegundos."""
     base = tmp_path / "cfg"
-    d = base / ".claude-pocket-status"
+    d = base / ".hangar-status"
     d.mkdir(parents=True)
     (d / "aaa.json.tmp.123").write_text("x", encoding="utf-8")
     (d / "aaa.jsonl").write_text("x", encoding="utf-8")
@@ -123,14 +123,14 @@ def test_tmp_orfao_velho_some(tmp_path):
     renomeiam, e quem consome le so o `.json`. Um kill -9 entre as duas coisas nao roda `except`
     nenhum, e o proximo render escreve com OUTRO pid no nome."""
     base = tmp_path / "cfg"
-    d = base / ".claude-pocket-preview"
+    d = base / ".hangar-preview"
     d.mkdir(parents=True)
     for nome in ("a.json.tmp", "b.json.4321.tmp", "c.json.tmp.99", "d.json.tmp1234"):
         f = d / nome
         f.write_text('{"text":', encoding="utf-8")   # o corte no meio, como veio do disco real
         _mtime(f, _AGORA, 2)
     apagados = prune._podar([base], {"outra-viva"}, {"outra-sessao"}, {"1"}, _AGORA)
-    assert apagados[".claude-pocket-preview (.tmp)"] == 4
+    assert apagados[".hangar-preview (.tmp)"] == 4
     assert list(d.iterdir()) == []
 
 
@@ -139,7 +139,7 @@ def test_tmp_orfao_some_mesmo_sem_saber_quem_esta_vivo(tmp_path):
     apagar sidecar que alguem AINDA le — e ninguem le um `.tmp`. Sem isto a limpeza nao aconteceria
     justamente na primeira varredura do boot, quando e comum nao haver sessao nenhuma."""
     base = tmp_path / "cfg"
-    d = base / ".claude-pocket-status"
+    d = base / ".hangar-status"
     d.mkdir(parents=True)
     f = d / "a.json.777.tmp"
     f.write_text("x", encoding="utf-8")
@@ -149,9 +149,9 @@ def test_tmp_orfao_some_mesmo_sem_saber_quem_esta_vivo(tmp_path):
 
 
 def test_tmp_orfao_no_subdir_do_pi_tambem(tmp_path):
-    """O catalogo de modelos do Pi mora em `.claude-pocket-pi/models` — um nivel abaixo."""
+    """O catalogo de modelos do Pi mora em `.hangar-pi/models` — um nivel abaixo."""
     base = tmp_path / "cfg"
-    d = base / ".claude-pocket-pi" / "models"
+    d = base / ".hangar-pi" / "models"
     d.mkdir(parents=True)
     f = d / "aaa.json.5.tmp"
     f.write_text("x", encoding="utf-8")
@@ -161,10 +161,10 @@ def test_tmp_orfao_no_subdir_do_pi_tambem(tmp_path):
 
 
 def test_tmp_orfao_no_active_que_a_poda_normal_nem_visita(tmp_path):
-    """`.claude-pocket-active` e keyed por boot_id, entao nao esta em nenhuma das tres familias da
+    """`.hangar-active` e keyed por boot_id, entao nao esta em nenhuma das tres familias da
     poda por chave — e acumulava tmp do mesmo jeito (um deles nesta maquina)."""
     base = tmp_path / "cfg"
-    d = base / ".claude-pocket-active"
+    d = base / ".hangar-active"
     d.mkdir(parents=True)
     f = d / "aaa.json.tmp"
     f.write_text("x", encoding="utf-8")
@@ -192,14 +192,14 @@ def test_conjunto_vazio_de_chaves_NAO_apaga_nada(tmp_path):
     (list_panes_all devolve {} com rc!=0, sem levantar) fazia a 1a varredura do boot virar
     limpeza por idade sobre os dirs todos — o bloqueador do parecer G3 rev1."""
     base = tmp_path / "cfg"
-    _escreve(base, ".claude-pocket-status", "velho-stem", _AGORA, 30)
-    _escreve(base, ".claude-pocket-queue", "velho-fila", _AGORA, 30, ".jsonl")
-    _escreve(base, ".claude-pocket-pi", "9", _AGORA, 30)
+    _escreve(base, ".hangar-status", "velho-stem", _AGORA, 30)
+    _escreve(base, ".hangar-queue", "velho-fila", _AGORA, 30, ".jsonl")
+    _escreve(base, ".hangar-pi", "9", _AGORA, 30)
     apagados = prune._podar([base], set(), set(), set(), _AGORA)
     assert _total(apagados) == 0
-    assert (base / ".claude-pocket-status" / "velho-stem.json").exists()
-    assert (base / ".claude-pocket-queue" / "velho-fila.jsonl").exists()
-    assert (base / ".claude-pocket-pi" / "9.json").exists()
+    assert (base / ".hangar-status" / "velho-stem.json").exists()
+    assert (base / ".hangar-queue" / "velho-fila.jsonl").exists()
+    assert (base / ".hangar-pi" / "9.json").exists()
 
 
 # ── prune_sidecars: chaves resolvidas dos infos ───────────────────────────────
@@ -207,19 +207,19 @@ def test_conjunto_vazio_de_chaves_NAO_apaga_nada(tmp_path):
 def test_prune_usa_session_key_kimi(tmp_path):
     """A chave do Kimi e o sessionDir (session_key do wire.jsonl), nao 'wire'."""
     base = tmp_path / "cfg"
-    _escreve(base, ".claude-pocket-state", "vivo-kimi", _AGORA, 30)
-    _escreve(base, ".claude-pocket-state", "morto-kimi", _AGORA, 30)
+    _escreve(base, ".hangar-state", "vivo-kimi", _AGORA, 30)
+    _escreve(base, ".hangar-state", "morto-kimi", _AGORA, 30)
     infos = _infos("vivo-kimi")
     with patch.object(prune, "_pane_ids_vivos", return_value=set()):
         apagados = prune.prune_sidecars(infos=infos, agora=_AGORA, bases=[base])
-    assert apagados[".claude-pocket-state"] == 1 and _total(apagados) == 1  # so o morto caiu
+    assert apagados[".hangar-state"] == 1 and _total(apagados) == 1  # so o morto caiu
 
 
 def test_prune_sanitiza_nome_da_fila(tmp_path):
     """O arquivo da fila e o nome SANITIZADO; nome vivo com caractere invalido protege o
     arquivo sanitizado correspondente."""
     base = tmp_path / "cfg"
-    _escreve(base, ".claude-pocket-queue", "minha-sessao", _AGORA, 30, ".jsonl")
+    _escreve(base, ".hangar-queue", "minha-sessao", _AGORA, 30, ".jsonl")
     infos = _infos("minha/sessao")
     with patch.object(prune, "_pane_ids_vivos", return_value=set()):
         apagados = prune.prune_sidecars(infos=infos, agora=_AGORA, bases=[base])

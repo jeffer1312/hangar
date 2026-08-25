@@ -586,7 +586,7 @@ def test_send_prompt_texto_longo_com_comeco_visivel_e_cauda_cortada_envia(monkey
               "todas no pi ,")
     texto = (comeco + "\nAs vezes dps de rodar um subagnt ele aparece essa sugestão, não tem nd "
              "digitado aí\npelo terminal e escrever vai, mas se tá usando a visualização no pane\n"
-             ".claude-pocket-uploads/1785666473-67f17f.png")
+             ".hangar-uploads/1785666473-67f17f.png")
 
     estado = {"colado": False, "enter": False}
 

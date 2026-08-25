@@ -26,7 +26,7 @@ from pathlib import Path
 # niveis que ESTE modelo aceita vem do sidecar (`levels`), porque variam por modelo.
 LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
-_SUBDIR = ".claude-pocket-pi"
+_SUBDIR = ".hangar-pi"
 
 
 class PiModelError(Exception):

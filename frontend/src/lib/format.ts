@@ -339,7 +339,7 @@ export function parseImageMessage(text: string): { caption: string; filenames: s
     .map((s) => s.trim())
     .filter(Boolean)
     // Os DOIS separadores: no Windows o marcador traz o caminho nativo
-    // (`C:\cockpit\.claude-pocket-uploads\<arquivo>.png`), que não tem `/` nenhum — o split por `/`
+    // (`C:\cockpit\.hangar-uploads\<arquivo>.png`), que não tem `/` nenhum — o split por `/`
     // devolvia o caminho INTEIRO como se fosse o basename. Aí `uploadUrl` montava
     // `/uploads/C%3A%5C…` e o backend recusava com 400 "filename invalido" (resolve_upload rejeita
     // `\` de propósito, contra path traversal): no celular a foto virava o quadrinho de imagem

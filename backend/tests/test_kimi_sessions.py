@@ -118,8 +118,8 @@ from app import registry as _registry
 
 @_pytest.mark.parametrize("lixo", ["null", "[1, 2, 3]", '"uma string"', "42"])
 def test_bilhete_nao_dict_devolve_none_em_vez_de_estourar(monkeypatch, tmp_path, lixo):
-    for sub, fn in ((".claude-pocket-kimi", _registry.kimi_session_file),
-                    (".claude-pocket-pi", _registry.pi_session_file)):
+    for sub, fn in ((".hangar-kimi", _registry.kimi_session_file),
+                    (".hangar-pi", _registry.pi_session_file)):
         cfg = tmp_path / sub.lstrip(".")
         (cfg / sub).mkdir(parents=True, exist_ok=True)
         (cfg / sub / "123.json").write_text(lixo, encoding="utf-8")
@@ -131,8 +131,8 @@ def test_bilhete_dict_normal_ainda_e_lido(monkeypatch, tmp_path):
     # Contra-prova: a guarda de tipo nao pode recusar bilhete legitimo. Sem ts confiavel o frescor
     # reprova (devolve None), entao o que este teste garante e que o caminho NAO estoura.
     cfg = tmp_path / "cfg"
-    (cfg / ".claude-pocket-kimi").mkdir(parents=True)
-    (cfg / ".claude-pocket-kimi" / "123.json").write_text(
+    (cfg / ".hangar-kimi").mkdir(parents=True)
+    (cfg / ".hangar-kimi" / "123.json").write_text(
         _json.dumps({"session_id": "session_abc", "cwd": "/w", "ts": 1.0}), encoding="utf-8")
     monkeypatch.setattr(_registry, "_config_dir_of", lambda pid: cfg)
     assert _registry.kimi_session_file("%123", pid=7, cwd="/w") is None
@@ -168,7 +168,7 @@ def test_dois_panes_do_psmux_geram_bilhetes_DISTINTOS(tmp_path):
                    {"CLAUDE_CONFIG_DIR": str(tmp_path), "TMUX_PANE": "%1",
                     "PSMUX_SESSION": sessao})
 
-    d = tmp_path / ".claude-pocket-kimi"
+    d = tmp_path / ".hangar-kimi"
     nomes = sorted(p.name for p in d.glob("*.json"))
     assert nomes == ["alfa.json", "beta.json"], "um bilhete por SESSAO, nao um so por '%1'"
     assert json.loads((d / "alfa.json").read_text(encoding="utf-8"))["session_id"] == "session_aaa"
@@ -179,13 +179,13 @@ def test_sem_psmux_a_chave_continua_sendo_o_pane(tmp_path):
     """Contra-prova do ramo POSIX: sem PSMUX_SESSION a chave e o %N, como sempre foi."""
     _roda_hook({"hook_event_name": "SessionStart", "session_id": "session_ccc", "cwd": "/w"},
                {"CLAUDE_CONFIG_DIR": str(tmp_path), "TMUX_PANE": "%7"})
-    d = tmp_path / ".claude-pocket-kimi"
+    d = tmp_path / ".hangar-kimi"
     assert [p.name for p in d.glob("*.json")] == ["7.json"]
 
 
 def test_backend_resolve_cada_pane_pro_bilhete_da_sua_sessao(monkeypatch, tmp_path):
     """A outra ponta: com o mesmo `%1` nos dois, o backend tem de separar pelo PSMUX_SESSION."""
-    d = tmp_path / ".claude-pocket-kimi"
+    d = tmp_path / ".hangar-kimi"
     d.mkdir(parents=True)
     (d / "alfa.json").write_text(json.dumps({"session_id": "session_aaa", "cwd": "/w", "ts": 1.0}),
                                  encoding="utf-8")

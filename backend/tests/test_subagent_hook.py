@@ -69,7 +69,7 @@ def _rodar(payload: dict, monkeypatch):
 
 
 def _sidecar(casa: Path) -> dict:
-    alvo = casa / ".claude-pocket-subagents" / "55ccea64-756b-4883-813e-de7679e19973.json"
+    alvo = casa / ".hangar-subagents" / "55ccea64-756b-4883-813e-de7679e19973.json"
     return json.loads(alvo.read_text(encoding="utf-8"))
 
 
@@ -134,11 +134,11 @@ def test_payload_sem_agent_id_nao_grava_nada(casa, monkeypatch):
     p = _inicio()
     del p["agent_id"]
     _rodar(p, monkeypatch)
-    assert not (casa / ".claude-pocket-subagents").exists()
+    assert not (casa / ".hangar-subagents").exists()
 
 
 def test_sidecar_corrompido_nao_derruba(casa, monkeypatch):
-    alvo = casa / ".claude-pocket-subagents" / "55ccea64-756b-4883-813e-de7679e19973.json"
+    alvo = casa / ".hangar-subagents" / "55ccea64-756b-4883-813e-de7679e19973.json"
     alvo.parent.mkdir(parents=True)
     alvo.write_text("{isto nao e json", encoding="utf-8")
     _rodar(_inicio(), monkeypatch)
@@ -150,7 +150,7 @@ def test_chave_e_o_stem_do_transcript_nao_o_session_id(casa, monkeypatch):
     continua o mesmo e o .jsonl muda — usar o id deixaria o painel preso na conversa antiga."""
     _rodar(_inicio(), monkeypatch)
     # `.lock` é a trava entre hooks concorrentes (ver `_trava`) — o que importa aqui é o SIDECAR.
-    nomes = sorted(p.name for p in (casa / ".claude-pocket-subagents").iterdir()
+    nomes = sorted(p.name for p in (casa / ".hangar-subagents").iterdir()
                    if p.suffix == ".json")
     assert nomes == ["55ccea64-756b-4883-813e-de7679e19973.json"]
 
@@ -180,7 +180,7 @@ def test_dois_hooks_ao_mesmo_tempo_nao_perdem_atualizacao(casa, monkeypatch):
         original(alvo, agentes)
 
     monkeypatch.setattr(hook, "_gravar", lento)
-    alvo = casa / ".claude-pocket-subagents" / "55ccea64-756b-4883-813e-de7679e19973.json"
+    alvo = casa / ".hangar-subagents" / "55ccea64-756b-4883-813e-de7679e19973.json"
 
     def roda(agent_id):
         p = _inicio(agent_id=agent_id)

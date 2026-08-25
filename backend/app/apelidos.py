@@ -17,11 +17,11 @@ import os
 import threading
 from pathlib import Path
 
-from app import atomico, contas
+from app import atomico, contas, migracao_sidecars
 
 _log = logging.getLogger("claude_pocket.apelidos")
 
-_ARQUIVO = ".claude-pocket-apelidos.json"
+_ARQUIVO = ".hangar-apelidos.json"
 _MAX = 40                      # cabe na faixa do rodapé sem virar reticências
 _lock = threading.Lock()
 
@@ -37,7 +37,7 @@ def ler() -> dict[str, str]:
     `statusline.read()` exigindo dict).
     """
     try:
-        bruto = json.loads(_caminho().read_text(encoding="utf-8"))
+        bruto = json.loads(migracao_sidecars.caminho_de_leitura(_caminho()).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     if not isinstance(bruto, dict):

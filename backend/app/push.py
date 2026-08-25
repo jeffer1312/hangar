@@ -59,7 +59,7 @@ _coalesce_timer: Timer | None = None
 
 
 def _file() -> Path:
-    d = Path(settings.projects_dir).parent / ".claude-pocket-push"
+    d = Path(settings.projects_dir).parent / ".hangar-push"
     d.mkdir(parents=True, exist_ok=True)
     return d / "subs.json"
 

@@ -19,7 +19,7 @@ Você é o único que escreve no contrato.
   vontade. **Só você lê.** Não mande esse caminho a ninguém.
 
   > **O registro mora no diretório durável do trabalho, que nada gerencia** — não em
-  > `<config>/.claude-pocket-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
+  > `<config>/.hangar-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
   > Medido em 22/08/2026: um executor matou a última sessão viva do grupo e o diário inteiro de 10h
   > sumiu com ela; o árbitro teve de reconstruir de memória. **As regras continuam lá** — é o caminho
   > que o app mostra ao time.

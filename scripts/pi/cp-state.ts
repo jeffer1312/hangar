@@ -1,6 +1,6 @@
 // scripts/pi/cp-state.ts
 // Publica o estado da sessao Pi no MESMO marcador que o hook do Claude escreve
-// (<config>/.claude-pocket-state/<session_id>.json), entao o HookState do backend le os dois sem
+// (<config>/.hangar-state/<session_id>.json), entao o HookState do backend le os dois sem
 // saber a diferenca. Escrita atomica (tmp + rename) pelo mesmo motivo do state_hook.py: o watcher
 // pode ler no meio da escrita e um JSON pela metade viraria marcador ignorado.
 //
@@ -14,8 +14,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const base = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-const dir = path.join(base, ".claude-pocket-state");
-const paneDir = path.join(base, ".claude-pocket-pi");
+const dir = path.join(base, ".hangar-state");
+const paneDir = path.join(base, ".hangar-pi");
 
 // O arquivo da sessao vem do ctx do handler, NAO do ambiente. Medido na Task 0 (fato 6): o processo
 // do pi nao tem NENHUMA var PI_* no /proc/<pid>/environ e `process.env.PI_SESSION_FILE` e undefined
@@ -58,7 +58,7 @@ function writeAtomic(target: string, data: unknown): void {
 // `getSessionFile`/`getSessionId` foram lidos de um `ctx: any` (nao ha tipo publico), entao sao o
 // candidato numero 1 a sumir ou lancar num upgrade do Pi — e `?.` protege contra o elo ausente, nao
 // contra a chamada que lanca. Mas calado tambem nao: sem o console.error, uma permissao errada em
-// ~/.claude/.claude-pocket-state (ou disco cheio) quebra o rastreio de TODA sessao Pi pra sempre,
+// ~/.claude/.hangar-state (ou disco cheio) quebra o rastreio de TODA sessao Pi pra sempre,
 // indistinguivel de "extensao nao instalada" e sem rastro em lugar nenhum. Os erros de fs do Node ja
 // carregam o caminho que falhou; o rotulo diz qual escrita era.
 function guard(what: string, fn: () => void): void {
@@ -183,7 +183,7 @@ function publishModels(pi: ExtensionAPI, ctx: any): void {
 //
 // O pane continua como plano B do lado do backend: sessao Pi aberta ANTES desta extensao existir
 // (ou sem /reload) nao publica nada, e previa nenhuma seria pior que previa raspada.
-const previewDir = path.join(base, ".claude-pocket-preview");
+const previewDir = path.join(base, ".hangar-preview");
 
 // Coalescencia: `message_update` dispara por TOKEN. Escrever a cada um seria um write por caractere
 // num arquivo que o backend le a cada 150ms — trabalho jogado fora dos dois lados. Guarda o ultimo
@@ -241,7 +241,13 @@ function publishPreview(ctx: any, text: string, agora: boolean): void {
 // session.prompt), então o usuário continua digitando no terminal normalmente.
 //
 // A CHAVE é o TMUX_PANE, não o arquivo de sessão: é o que o backend resolve de graça no envio.
-const connFile = path.join(base, ".claude-pocket-conn.json");
+// Os dois nomes, novo primeiro: no Windows a migração de nome (backend/app/migracao_sidecars.py)
+// não consegue deixar link num ARQUIVO solto sem privilégio, então lá o `.claude-pocket-conn.json`
+// pode continuar sendo o único que existe. É resolvido a cada tentativa, não uma vez na carga: o
+// arquivo pode nascer (ou ser migrado) depois que a extensão subiu.
+const CONN_NOMES = [".hangar-conn.json", ".claude-pocket-conn.json"];
+const achaConn = (): string | null =>
+  CONN_NOMES.map((n) => path.join(base, n)).find((p) => fs.existsSync(p)) ?? null;
 
 let socket: WebSocket | null = null;
 let tentativa = 0;
@@ -357,8 +363,9 @@ function conectar(pi: ExtensionAPI): void {
     if (desligando || socket) return;
     const pane = process.env.TMUX_PANE;
     if (!pane) return;                       // fora do tmux o backend não tem como nos achar
-    if (!fs.existsSync(connFile)) {
-      avisaConectividade(false, "sidecar .claude-pocket-conn.json ainda nao existe");
+    const connFile = achaConn();
+    if (!connFile) {
+      avisaConectividade(false, "sidecar .hangar-conn.json ainda nao existe");
       reagendar(pi);
       return;   // backend não subiu ou não escreveu ainda
     }

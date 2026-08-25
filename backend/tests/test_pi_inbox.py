@@ -384,14 +384,14 @@ def test_endpoint_vai_pra_todos_os_config_dirs(tmp_path, monkeypatch):
                                  ConfigDirInfo(path=str(b), label="B", active=False)])
     escritos = pi_inbox.escrever_endpoint()
     assert len(escritos) == 2
-    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    d = json.loads((a / ".hangar-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://127.0.0.1:")
     if os.name == "posix":
         # So o resto do caso vale no Windows: la nao ha bit de modo (o st_mode volta 0o666 e quem
         # decide acesso e a ACL), entao a asserção testaria o os.stat, nao o pi_inbox. A protecao
         # do token PRECISA existir la tambem — mas por ACL, e isso ainda nao esta implementado;
         # esconder a lacuna atras de um assert que nao roda seria pior que deixa-la visivel.
-        assert (a / ".claude-pocket-conn.json").stat().st_mode & 0o777 == 0o600, "tem token dentro"
+        assert (a / ".hangar-conn.json").stat().st_mode & 0o777 == 0o600, "tem token dentro"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="modo 0600 nao existe no Windows (quem manda e a ACL)")
@@ -433,7 +433,7 @@ def test_endpoint_usa_o_bind_real_do_backend(tmp_path, monkeypatch):
                         lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
     monkeypatch.setattr("app.config.resolve_bind_ip", lambda s: "192.168.1.50")
     pi_inbox.escrever_endpoint()
-    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    d = json.loads((a / ".hangar-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://192.168.1.50:")
 
 
@@ -448,7 +448,7 @@ def test_endpoint_bind_0000_ainda_aponta_pro_loopback(tmp_path, monkeypatch):
                         lambda: [ConfigDirInfo(path=str(a), label="A", active=True)])
     monkeypatch.setattr("app.config.resolve_bind_ip", lambda s: "0.0.0.0")
     pi_inbox.escrever_endpoint()
-    d = json.loads((a / ".claude-pocket-conn.json").read_text(encoding="utf-8"))
+    d = json.loads((a / ".hangar-conn.json").read_text(encoding="utf-8"))
     assert d["url"].startswith("ws://127.0.0.1:")
 
 

@@ -165,7 +165,7 @@ def test_resolve_uses_active_marker_for_resumed_transcript(tmp_path):
     proj.mkdir(parents=True)
     real = proj / "deadbeef-0000-0000-0000-000000000000.jsonl"  # transcript resumido (existe)
     real.write_text("{}")
-    mk = tmp_path / ".claude-pocket-active"   # config_base = projects.parent = tmp_path
+    mk = tmp_path / ".hangar-active"   # config_base = projects.parent = tmp_path
     mk.mkdir()
     (mk / f"{_UUID}.json").write_text(_json.dumps({"jsonl": str(real), "ts": 1.0}))
     reg = SessionRegistry(projects_dir=projects)
@@ -268,7 +268,7 @@ def test_resolve_marker_unsticks_fd_lock_after_clear(tmp_path):
     pre = str(proj / "aaaa0000-0000-0000-0000-000000000000.jsonl")   # transcript PRE-clear (fd-locked)
     post = proj / "bbbb1111-0000-0000-0000-000000000000.jsonl"       # transcript POS-clear (marcador)
     post.write_text("{}")
-    mk = tmp_path / ".claude-pocket-active"   # config_base = projects.parent = tmp_path
+    mk = tmp_path / ".hangar-active"   # config_base = projects.parent = tmp_path
     mk.mkdir()
     reg = SessionRegistry(projects_dir=projects)
     # poll 1: fd ABERTO no transcript PRE-clear -> trava em `pre`
@@ -414,7 +414,7 @@ async def test_list_with_state_demotes_phantom_awaiting(tmp_path, monkeypatch):
     import time as _time
     from app.hook_state import HookState
     from app.models import SessionInfo
-    sd = tmp_path / ".claude-pocket-state"
+    sd = tmp_path / ".hangar-state"
     sd.mkdir(parents=True)
     marker_f = sd / "abc.json"
     marker_f.write_text(_json.dumps({"state": "awaiting_input", "ts": _time.time() - 200}))
@@ -826,7 +826,7 @@ def test_marker_by_pids_matches_descendant_and_newest(tmp_path):
     import json as _json
     import os as _os
     from app.registry import _marker_by_pids
-    d = tmp_path / ".claude-pocket-active"
+    d = tmp_path / ".hangar-active"
     d.mkdir()
     j1 = tmp_path / "a.jsonl"; j1.write_text("x", encoding="utf-8")
     j2 = tmp_path / "b.jsonl"; j2.write_text("x", encoding="utf-8")

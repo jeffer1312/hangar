@@ -13,6 +13,7 @@ from app.hook_installer import (
     ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
+from app import migracao_sidecars
 from app.hook_state import hook_state
 from app.pi_inbox import escrever_endpoint
 
@@ -90,6 +91,12 @@ def main():
     _saida_utf8()   # antes de qualquer print: o QR abaixo quebra em cp1252
     startup_guard(settings)
     _setup_diag_logging()
+    _state_dirs = list({Path(c.path) for c in list_config_dirs()}
+                       | {_backend_config_base().resolve(), Path.home() / ".claude"})
+    # Renomeia os sidecars .claude-pocket-* pra .hangar-* (link no caminho antigo). ANTES de tudo
+    # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
+    # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
+    migracao_sidecars.migrar(_state_dirs)
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()
     ensure_state_hooks_installed()
@@ -101,7 +108,6 @@ def main():
     ensure_kimi_hooks_installed()
     # Endereço pra extensão do Pi ligar de volta (ver pi_inbox.escrever_endpoint).
     escrever_endpoint()
-    _state_dirs = list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.load_existing(_state_dirs)
     print_pairing(settings)
     # workers=1 explicito: o cache de classe SessionRegistry._jsonl_cache e compartilhado SO dentro de

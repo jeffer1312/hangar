@@ -10,12 +10,12 @@ from app import pricing
 @pytest.fixture(autouse=True)
 def _pricing_isolado(tmp_path, monkeypatch):
     """Os leitores resolvem PROVEDOR via pricing, então sem isto o teste lê o cache real em
-    ~/.claude/.claude-pocket-pricing/ e passa ou falha conforme o estado da máquina — não do
+    ~/.claude/.hangar-pricing/ e passa ou falha conforme o estado da máquina — não do
     código. Mesma fixture do test_pricing.py.
 
     `ct._CACHE_DIR` também precisa de isolamento agora que `linhas_claude` delega pro transcript
     (Task 2): sem isto, cada teste grava um arquivo de cache real em
-    ~/.claude/.claude-pocket-custos/ — lixo que se acumula a cada rodada da suíte."""
+    ~/.claude/.hangar-custos/ — lixo que se acumula a cada rodada da suíte."""
     monkeypatch.setattr(pricing, "_CACHE_DIR", tmp_path / "pricing")
     monkeypatch.setattr(ct, "_CACHE_DIR", tmp_path / "custos")
     # getattr: `cs.invalidar_cache` só nasce na Task 6; até lá o no-op mantém a fixture válida

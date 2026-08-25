@@ -22,7 +22,7 @@ MODELO_PADRAO = "eleven_multilingual_v2"
 # aqui SE trocar MODELO_PADRAO, senao o servidor aceita texto que a ElevenLabs vai recusar.
 TETO_CARACTERES = 10_000
 VOZ_PADRAO = "ORgG8rwdAiMYRug8RJwR"
-CACHE_SUBDIR = ".claude-pocket-tts"
+CACHE_SUBDIR = ".hangar-tts"
 TIMEOUT_LOCAL = 180        # segundos: motor local na CPU e lento; abaixo disso corta texto longo
 RETENCAO_DIAS = 30
 

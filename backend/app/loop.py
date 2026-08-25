@@ -1,5 +1,5 @@
 """Loop runner (harness bloco A): objetivo -> executa -> verifica -> re-prompta -> para.
-Sidecar JSON por sessao FONTE em ".claude-pocket-loop", keyed pelo NOME (sobrevive ao /clear),
+Sidecar JSON por sessao FONTE em ".hangar-loop", keyed pelo NOME (sobrevive ao /clear),
 mesmo padrao do chain/pqueue. Um loop por sessao; loop novo sobrescreve o anterior.
 Spec: docs/superpowers/specs/2026-07-22-loop-runner-design.md"""
 import json
@@ -31,7 +31,7 @@ _lock = threading.Lock()
 
 
 def _loop_dir() -> Path:
-    d = Path(settings.projects_dir).parent / ".claude-pocket-loop"
+    d = Path(settings.projects_dir).parent / ".hangar-loop"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

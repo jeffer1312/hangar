@@ -17,7 +17,7 @@ def test_save_upload_writes_into_cwd_subdir(tmp_path):
     p = Path(path)
     assert p.exists()
     assert p.read_bytes() == PNG
-    assert p.parent == tmp_path / ".claude-pocket-uploads"
+    assert p.parent == tmp_path / ".hangar-uploads"
     assert p.suffix == ".png"
 
 
@@ -36,7 +36,7 @@ def test_save_upload_no_extension_falls_back_to_bin(tmp_path):
 def test_save_upload_ext_is_sanitized(tmp_path):
     # filename hostil: a extensao e reduzida a [a-z0-9]; o nome continua gerado pelo servidor.
     p = Path(save_upload(str(tmp_path), b"data", "../../etc/passwd.p ng;rm"))
-    assert p.parent == tmp_path / ".claude-pocket-uploads"
+    assert p.parent == tmp_path / ".hangar-uploads"
     assert p.suffix == ".pngrm"  # 'p ng;rm' -> 'pngrm'
 
 

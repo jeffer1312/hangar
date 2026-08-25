@@ -18,10 +18,10 @@ entregam (medido em 18/08/2026 contra a CLI 2.1.234, com um hook de despejo):
 em `<projeto>/<sessao>/subagents/agent-<id>.jsonl`. Com ele o app pode abrir a conversa do
 subagente inteira, em vez de só contar quantos existem.
 
-Contrato do sidecar — mesmo formato dos outros marcadores do app (`<config>/.claude-pocket-*`),
+Contrato do sidecar — mesmo formato dos outros marcadores do app (`<config>/.hangar-*`),
 chaveado pelo stem do .jsonl da SESSÃO:
 
-    <config>/.claude-pocket-subagents/<stem>.json
+    <config>/.hangar-subagents/<stem>.json
     {"agentes": [{"id","tipo","inicio","fim","ultima_msg","transcript"}], "ts"}
 
 Três decisões que valem comentário:
@@ -57,7 +57,7 @@ try:                    # Windows: mesmo mecanismo que contas.py e peers.py já 
 except ImportError:
     msvcrt = None
 
-_SUBDIR = ".claude-pocket-subagents"
+_SUBDIR = ".hangar-subagents"
 # Teto de itens guardados por sessão. 60 cobre com folga o pior caso visto (um lote de workflow) sem
 # deixar o arquivo crescer sem fim numa sessão de horas.
 _MAX = 60

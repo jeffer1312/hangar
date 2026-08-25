@@ -11,7 +11,7 @@ import tomllib
 from pathlib import Path
 from typing import Optional
 
-from app import atomico
+from app import atomico, migracao_sidecars
 from app.config import settings
 from app.models import Runner, RunInfo
 from app.tmux import _scope_prefix, alvo_de_kill
@@ -125,12 +125,12 @@ def detect_runners(cwd: str) -> list[Runner]:
 
 
 def _prefs_path() -> Path:
-    return Path(settings.projects_dir).parent / ".claude-pocket-runner.json"
+    return Path(settings.projects_dir).parent / ".hangar-runner.json"
 
 
 def _load_prefs() -> dict:
     try:
-        data = json.loads(_prefs_path().read_text(encoding="utf-8"))
+        data = json.loads(migracao_sidecars.caminho_de_leitura(_prefs_path()).read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}

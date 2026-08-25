@@ -24,7 +24,7 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in
   `~/.kimi-code/config.toml` (no pane scraping for state). The pane↔session link is the hook's
-  ticket (`~/.claude/.claude-pocket-kimi/<pane>.json`) — the CLI has no caller-chosen session-id.
+  ticket (`~/.claude/.hangar-kimi/<pane>.json`) — the CLI has no caller-chosen session-id.
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
   (native AskUserQuestion stepper), `uploads.py`, `git_ops.py`, `commands.py`, `workflows.py`,
@@ -89,7 +89,7 @@ Sessões Claude da MESMA máquina se falam via `scripts/cp-send` (`--list`, `<se
 [--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>]` — a sessão já NASCE no
 modelo/esforço/permissão pedidos, validados pelo backend via `app/model_args.py`) — tudo sobre a
 API local do backend (`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`,
-sidecars em `<config>/.claude-pocket-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
+sidecars em `<config>/.hangar-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
 mostra chip 🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado
 `<a>__<b>.md` + split view desktop).
 
@@ -272,7 +272,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   goal → sessão trabalha → idle dispara tick (`_on_hook_transition`, dentro do `_work`, só com
   `sent == 0`) → roda `check_cmd` (exit 0 = `done`) ou procura `LOOP_DONE` (→ `done_claimed`,
   que SÓ fecha com confirmação humana via `/loop/resolve`) → senão re-prompta com a cauda do erro.
-  Sidecar em `.claude-pocket-loop/<nome>.json` (sobrevive `/clear`); guardrails: max_iters,
+  Sidecar em `.hangar-loop/<nome>.json` (sobrevive `/clear`); guardrails: max_iters,
   branch≠main, kill-switch `automations_enabled`, anti-estagnação (mesma cauda 2×). Loop ativo
   **suprime o chain** da sessão. Campos `loop_status/loop_iter/loop_max` fluem no `/api/sessions`
   e no `sig` do SSE (badge 🔁 nas 2 views). Spec/decisões: docs/superpowers/specs/2026-07-22-*.md.
@@ -332,7 +332,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `(1/301)`, 10 rows visible) — not enumerable from the pane and not navigable by counting `Down`;
   and there is no `/thinking` command (it lives inside `/settings` → "Thinking level", a submenu).
   So the Pi extension we already ship publishes a catalog sidecar
-  (`<config>/.claude-pocket-pi/models/<jsonl-stem>.json`, same key as the state marker) and registers
+  (`<config>/.hangar-pi/models/<jsonl-stem>.json`, same key as the state marker) and registers
   `/cp-model <provider> <id>` + `/cp-think <level>`, which the backend types with `send-keys` and Pi
   applies through `pi.setModel()` / `pi.setThinkingLevel()`. Two invariants: (1) the thinking levels
   are **per model** (glm-5.2 → off/low/medium/high/xhigh; k3 → low/high/max), so they come from the
@@ -466,7 +466,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   várias linhas, mas quando a quebra cai em cima do par de contexto ele vira `💬 769k/238 770k…`.
   Nos dois casos o painel dizia "medição indisponível" **por causa do tamanho do terminal**.
   Contrato: quem RENDERIZA publica a linha inteira (sem ANSI) em
-  `<config>/.claude-pocket-status/<stem>.json` = `{"line", "ts"}` — mesma chave dos outros
+  `<config>/.hangar-status/<stem>.json` = `{"line", "ts"}` — mesma chave dos outros
   marcadores (o stem do `.jsonl`) — e `statusline.read()` a prefere ao pane, caindo nele quando não
   há sidecar (sessão sem instrumentação **nunca** pode ficar sem linha nenhuma). Três detalhes que
   já custaram bug: (1) o tmp do `tmp+rename` leva o **pid**, porque o script do Claude roda a cada
@@ -478,7 +478,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   só passa a publicar depois de `/reload`** (o Pi carrega extensão na largada), enquanto o lado
   Claude vale na hora, por ser script executado a cada render. O publicador do **Kimi Code**
   (`~/.kimi-code/statusline.js`, fora do repo porque o `tui.toml` aponta pra lá) segue o lado
-  Claude: script a cada render, sidecar em `~/.claude/.claude-pocket-status/<sessionId>.json` —
+  Claude: script a cada render, sidecar em `~/.claude/.hangar-status/<sessionId>.json` —
   a chave é o `sessionId` do stdin, o mesmo que `session_key()` extrai do `wire.jsonl`. A linha
   dele replica os marcadores do Claude (`🤖 K3 (high✦)`, `📁 dir [branch*]`, `⚡5h`, `📅7d`,
   `🕐 HH:MM ⏱`) com duas diferenças de formato: o contexto vem como par **rotulado e sozinho**
@@ -527,7 +527,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - **Prévia ao vivo: sidecar do agente primeiro, pane depois** (`preview.read_sidecar` +
   `scripts/pi/cp-state.ts`): mesmo contrato da statusline, agora pro texto **em voo**. A extensão do
   Pi recebe o bloco do assistente token a token (`message_update`) e publica o **último bloco de
-  texto** em `<config>/.claude-pocket-preview/<stem>.json` = `{"text", "ts"}`; `PreviewBroker._loop`
+  texto** em `<config>/.hangar-preview/<stem>.json` = `{"text", "ts"}`; `PreviewBroker._loop`
   o prefere e só cai no `capture-pane` quando não há sidecar. É o que tira a prévia do Pi da
   adivinhação: todo o `extract_assistant_text` (verbo de ferramenta, caixa do composer, spinner,
   painel de Todos) existe só pra separar prosa de desenho de TUI, e um quadro do spinner em `*`

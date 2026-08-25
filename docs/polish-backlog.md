@@ -495,7 +495,7 @@ a hypothesis and then read as fact, contradicting a code comment three files awa
 machine's clipboard itself through `wl-paste` (which is why `tmux.py:292` (`new_session`) propagates
 `WAYLAND_DISPLAY`), so the terminal only ever delivers the **keystroke** — no image bytes cross it on
 any path. The PTY gains nothing here. Separately, the app's own attachments never touch the terminal
-at all: an upload is saved to `<cwd>/.claude-pocket-uploads/` and the prompt carries the **path** as
+at all: an upload is saved to `<cwd>/.hangar-uploads/` and the prompt carries the **path** as
 text (`Composer.svelte:917`), which is also why a phone attachment works when the phone's clipboard
 is not the machine's.
 

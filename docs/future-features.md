@@ -123,11 +123,11 @@ running **Agent(...)** subagents and **Workflow** runs (mirrors what the termina
 
 ## 2. Attachments — send + view images (audio later)
 - **Send images** — ✅ DONE (2026-06-25): `POST /api/sessions/{name}/upload` (raw bytes) saves to
-  `<cwd>/.claude-pocket-uploads/`; the composer has a 📎 picker + paste-into-textarea; on send it
+  `<cwd>/.hangar-uploads/`; the composer has a 📎 picker + paste-into-textarea; on send it
   uploads and sends `"<caption>\n📎 imagem: <path>"` and the assistant reads the path. Lazy
   (upload-on-send, no orphan if cancelled).
 - **CLEANUP / retention (deferred — needed):** uploaded images pile up in
-  `.claude-pocket-uploads/` forever. Add a retention sweep — on backend startup (and/or periodic),
+  `.hangar-uploads/` forever. Add a retention sweep — on backend startup (and/or periodic),
   delete files older than N days (e.g. 7d) or keep the last N. Simple, no extra endpoint. (User
   explicitly flagged this; deferred but must happen.)
 - **View images** that appear in the chat: the transcript can carry image content blocks

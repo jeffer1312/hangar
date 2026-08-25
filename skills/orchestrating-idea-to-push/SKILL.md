@@ -137,7 +137,7 @@ próprio desvio, e o árbitro só descobre relendo o arquivo.
 | `~/.claude/orq-retros/<data>-<gid>/registro.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
 | `regras-<gid>.md` — **as regras** | o que **ainda vale**: intocáveis, gates, réguas, barra, o que a revisão cobre, teto e contas | executor e revisor |
 
-> **O registro mora no diretório durável do trabalho, que nada gerencia.** `<config>/.claude-pocket-pair/`
+> **O registro mora no diretório durável do trabalho, que nada gerencia.** `<config>/.hangar-pair/`
 > é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo (medido 22/08/2026, quando um executor
 > matou a última sessão viva e o diário de 10h sumiu). As **regras** continuam lá — é o caminho que o
 > app mostra ao time.
@@ -162,7 +162,7 @@ nunca tirar nada.
 **Teto: 200 linhas.** Antes de mandar cada kick-off, o árbitro mede:
 
 ```bash
-wc -l <config>/.claude-pocket-pair/regras-<gid>.md
+wc -l <config>/.hangar-pair/regras-<gid>.md
 ```
 
 Passou → **compacta antes de enviar**. Compactar não é resumir: é tirar o que **deixou de valer** —

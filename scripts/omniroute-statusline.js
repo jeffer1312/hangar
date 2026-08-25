@@ -302,11 +302,11 @@ process.stdin.on('end', () => {
           { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
         if (s) {
           tmuxSess = ' \x1b[95m📟 ' + s + '\x1b[0m';
-          // Pareamento (claude-pocket): sidecar <config>/.claude-pocket-pair/<sessao>.json -> chip 🤝.
+          // Pareamento (claude-pocket): sidecar <config>/.hangar-pair/<sessao>.json -> chip 🤝.
           // Grupo = {peers: [...]} (legado 1:1 = {peer}); 1 par mostra o nome, N mostra "a,b".
           try {
             const pair = JSON.parse(fs.readFileSync(
-              path.join(claudeDir, '.claude-pocket-pair', s + '.json'), 'utf8'));
+              path.join(claudeDir, '.hangar-pair', s + '.json'), 'utf8'));
             const peers = pair.peers || (pair.peer ? [pair.peer] : []);
             if (peers.length) tmuxSess += ' \x1b[93m🤝 ' + peers.join(',') + '\x1b[0m';
           } catch {}
@@ -393,7 +393,7 @@ process.stdin.on('end', () => {
     try {
       const sid = data.session_id;
       if (sid) {
-        const sidecarDir = path.join(claudeDir, '.claude-pocket-status');
+        const sidecarDir = path.join(claudeDir, '.hangar-status');
         fs.mkdirSync(sidecarDir, { recursive: true });
         const alvo = path.join(sidecarDir, sid + '.json');
         // pid no tmp: este script roda a CADA render e ainda faz 4 execFileSync (git×2, tmux,

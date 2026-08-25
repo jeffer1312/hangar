@@ -166,7 +166,7 @@ def _marker_by_pids(config_base: Path, pids: list[int], exclude: set[str]) -> Op
     # claude que disparou o evento. Se esse pid e DESCENDENTE deste pane, o marcador e desta sessao
     # — resolve sessao BARE (sem --session-id no cmdline) de forma deterministica, sem chute por
     # mtime. Varios marcadores casando (ex: restart do claude no mesmo pane) -> o mais recente vence.
-    d = config_base / ".claude-pocket-active"
+    d = config_base / ".hangar-active"
     pidset = set(pids)
     best: tuple[float, str] | None = None
     try:
@@ -190,11 +190,11 @@ def _marker_by_pids(config_base: Path, pids: list[int], exclude: set[str]) -> Op
 
 
 def _active_marker_jsonl(config_base: Path, sid: str, exclude: set[str]) -> Optional[str]:
-    # Marcador do hook (state_hook.py): <config>/.claude-pocket-active/<boot_id>.json = {"jsonl": <path>}
+    # Marcador do hook (state_hook.py): <config>/.hangar-active/<boot_id>.json = {"jsonl": <path>}
     # = o transcript REALMENTE ativo daquele boot_id. Sinal DETERMINISTICO pro caso resume/clear, onde
     # o <boot_id>.jsonl do cmdline NUNCA nasce (o claude escreve no <uuid> resumido) -> sem isto resolvia
     # pro path fantasma = chat vazio. So vale se o arquivo existe e nao e de um auxiliar (subagente/daemon).
-    p = config_base / ".claude-pocket-active" / f"{sid}.json"
+    p = config_base / ".hangar-active" / f"{sid}.json"
     try:
         j = json.loads(p.read_text(encoding="utf-8")).get("jsonl")
     except (OSError, ValueError):
@@ -501,7 +501,7 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
     conversa de outro agente.
     """
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    ticket = Path(base) / ".claude-pocket-pi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
+    ticket = Path(base) / ".hangar-pi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     sid = _pi_sid_of(pid) if pid else None
     try:
         # encoding explicito: o bilhete guarda o CAMINHO do transcript, e no Windows o default e
@@ -586,7 +586,7 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
     base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
     # Mesma chave do bilhete do Pi, pelo mesmo motivo: no psmux o %N nao e unico e dois panes Kimi
     # dividiriam um bilhete so (ver _chave_do_bilhete).
-    ticket = Path(base) / ".claude-pocket-kimi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
+    ticket = Path(base) / ".hangar-kimi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
     try:
         data = json.loads(ticket.read_text(encoding="utf-8"))   # mesmo motivo do pi_session_file
         if not isinstance(data, dict):

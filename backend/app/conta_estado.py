@@ -36,7 +36,7 @@ _log = logging.getLogger("claude_pocket.conta_estado")
 conta_estado_router = APIRouter(prefix="/api/conta-estado")
 
 # Mesmo subdiretório do statusline.py — é a FONTE da leitura de limite.
-_STATUS_SUBDIR = ".claude-pocket-status"
+_STATUS_SUBDIR = ".hangar-status"
 # A chamada à CLI é um processo externo por conta, e a tela lista todas de uma vez: cache curto.
 # 30s é curto o bastante pra um login novo (OAuth leva minutos) aparecer sem refresh manual e
 # longo o bastante pra não pagar N subprocesses a cada montagem da aba.
@@ -183,7 +183,7 @@ def _login_de(cfg) -> EstadoLogin:
 def _limite(dir_conta: Path) -> EstadoLimite:
     """Último limite lido: o sidecar de status mais recente DENTRO da conta.
 
-    O publisher da statusline escreve em `<config>/.claude-pocket-status/<stem>.json` com o
+    O publisher da statusline escreve em `<config>/.hangar-status/<stem>.json` com o
     `ts` da escrita; a conta pode ter várias sessões (vários stems) — vale o mais novo, que é
     a leitura que o usuário viu por último. Sem teto de idade de propósito: "dado velho parece
     velho" — a idade vai no JSON e o front esmaece; jogar fora por idade faria a conta parecer

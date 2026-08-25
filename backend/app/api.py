@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import atomico
+from app import atomico, migracao_sidecars
 from app.auth import require_auth, require_loopback
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
@@ -4066,14 +4066,14 @@ _engine_models_cache: dict[str, tuple[float, list[dict]]] = {}
 # eventos de semanas, nao de horas. Uma hora (o valor antigo) fazia o `/model` reaparecer no
 # terminal do usuario "sozinho" no meio de sessoes longas, e cada restart do backend zerava o
 # cache em memoria e relia tudo de novo — dai o espelho em DISCO, dentro do proprio config dir
-# (`.claude-pocket-models.json`): a leitura dirigida do picker vira acontecimento raro.
+# (`.hangar-models.json`): a leitura dirigida do picker vira acontecimento raro.
 # A chave e o config dir, nao a sessao: a lista vem da CONTA, e a mesma pra todas as sessoes dela.
 _CLAUDE_MODELS_TTL = 7 * 24 * 3600.0
 _claude_models_cache: dict[str, tuple[float, dict]] = {}
 
 
 def _models_cache_path(chave: str) -> Path:
-    return Path(chave) / ".claude-pocket-models.json"
+    return Path(chave) / ".hangar-models.json"
 
 
 def _models_cache_get(chave: str) -> dict | None:
@@ -4081,7 +4081,7 @@ def _models_cache_get(chave: str) -> dict | None:
     if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL:
         return hit[1]
     try:
-        bruto = json.loads(_models_cache_path(chave).read_text(encoding="utf-8"))
+        bruto = json.loads(migracao_sidecars.caminho_de_leitura(_models_cache_path(chave)).read_text(encoding="utf-8"))
         resp = bruto["resp"]
         if not isinstance(resp, dict) or time.time() - float(bruto["ts"]) >= _CLAUDE_MODELS_TTL:
             return None

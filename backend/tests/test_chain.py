@@ -8,7 +8,7 @@ from app.chain import ThenLink
 
 @pytest.fixture(autouse=True)
 def _tmp_chain_dir(tmp_path, monkeypatch):
-    # _chain_dir() = settings.projects_dir.parent / ".claude-pocket-chain" -> redireciona pro tmp.
+    # _chain_dir() = settings.projects_dir.parent / ".hangar-chain" -> redireciona pro tmp.
     monkeypatch.setattr(chain.settings, "projects_dir", tmp_path / "projects")
     return tmp_path
 

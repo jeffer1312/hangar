@@ -356,7 +356,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
 #   ""    -> o agente disse que NAO ha texto em voo (turno fechou). E resposta, nao ausencia: cair
 #            no pane aqui traria de volta o bloco ja commitado como bolha duplicada.
 #   texto -> o bloco em voo, verbatim.
-_PREVIEW_SUBDIR = ".claude-pocket-preview"
+_PREVIEW_SUBDIR = ".hangar-preview"
 # Teto de idade: o publicador zera a previa no fim do turno, entao um texto parado por MUITO tempo
 # so acontece se a extensao morreu no meio (crash, /reload). Dai em diante o pane volta a mandar, em
 # vez de congelar na tela a ultima frase que ela alcancou a publicar.

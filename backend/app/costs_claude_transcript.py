@@ -45,7 +45,7 @@ CACHE_VERSAO = 1
 # Medido em 01/08/2026: 2.714 arquivos assim, contra 446 de conversa — cresce toda semana.
 _DIR_SUBAGENTE = "subagents"
 
-_CACHE_DIR = Path.home() / ".claude" / ".claude-pocket-custos"
+_CACHE_DIR = Path.home() / ".claude" / ".hangar-custos"
 _lock = threading.Lock()
 _mem: dict[str, dict[str, tuple[tuple[int, int], dict | None]]] = {}
 

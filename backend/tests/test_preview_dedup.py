@@ -353,13 +353,13 @@ def test_caixa_do_composer_do_pi_tambem_corta():
 
 
 # ── Previa vinda do AGENTE (sidecar) em vez do pane ────────────────────────────────────────────
-# Contrato: a extensao do Pi publica o bloco em voo em <config>/.claude-pocket-preview/<stem>.json.
+# Contrato: a extensao do Pi publica o bloco em voo em <config>/.hangar-preview/<stem>.json.
 # O pane vira plano B — sessao sem a extensao (ou aberta antes dela) nao pode ficar sem previa.
 
 def _sidecar(tmp_path, monkeypatch, payload, stem="s1"):
     import json as _json
     from app import preview as _prev
-    d = tmp_path / ".claude-pocket-preview"
+    d = tmp_path / ".hangar-preview"
     d.mkdir(parents=True, exist_ok=True)
     if payload is not None:
         (d / f"{stem}.json").write_text(_json.dumps(payload), encoding="utf-8")
@@ -396,7 +396,7 @@ def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):
     # JSON valido do tipo errado nao levanta ValueError: sem o guard o .get() explodia dentro do
     # loop do broker (mesmo acidente que ja derrubou a resolucao de estado pela statusline).
     from app.preview import read_sidecar
-    d = tmp_path / ".claude-pocket-preview"
+    d = tmp_path / ".hangar-preview"
     d.mkdir(parents=True)
     (d / "s1.json").write_text("null", encoding="utf-8")
     (d / "s2.json").write_text("{isso nao e json", encoding="utf-8")
@@ -571,7 +571,7 @@ def test_kimi_enfase_na_resposta_nao_e_confundida_com_rascunho():
 # eleita como bloco em voo e a previa mostrava o status como texto, quando o ToolCard da chamada ja
 # chega pelo tool.call do wire.
 _KIMI_USED = (
-    "● Used ReadMediaFile (…rojetos/hangar/.claude-pocket-uploads/1787141544-3efdfc.png)"
+    "● Used ReadMediaFile (…rojetos/hangar/.hangar-uploads/1787141544-3efdfc.png)"
     " · image (image/jpeg, 49.1 KB)\n"
 )
 

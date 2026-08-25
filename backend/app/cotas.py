@@ -1,7 +1,7 @@
 """Cota por conta lida NA FONTE do provedor (janelas 5h/7d), não no sidecar de statusline.
 
 Por que existe (medido 18/08/2026): a faixa do rodapé tirava o limite do último sidecar de
-statusline DENTRO da pasta da conta. Numa máquina onde `<conta>/.claude-pocket-status` é um
+statusline DENTRO da pasta da conta. Numa máquina onde `<conta>/.hangar-status` é um
 symlink pra pasta da conta padrão — o caso desta aqui — as três contas liam o MESMO arquivo e
 desenhavam o MESMO número; e mesmo sem o symlink, conta sem sessão aberta nunca teve leitura
 nenhuma. Cota não é propriedade da sessão, é da CREDENCIAL: quem responde tem que ser o provedor.

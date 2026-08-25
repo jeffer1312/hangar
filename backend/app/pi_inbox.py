@@ -317,7 +317,7 @@ def escrever_endpoint() -> list[Path]:
 
     destinos: list[Path] = []
     for cfg in cfgs:
-        alvo = Path(cfg.path) / ".claude-pocket-conn.json"
+        alvo = Path(cfg.path) / ".hangar-conn.json"
         tmp: Path | None = None
         try:
             alvo.parent.mkdir(parents=True, exist_ok=True)

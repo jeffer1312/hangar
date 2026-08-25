@@ -10,7 +10,7 @@ from app.pqueue import PromptQueue
 
 @pytest.fixture(autouse=True)
 def _tmp_queue_dir(tmp_path, monkeypatch):
-    # _queue_dir() = settings.projects_dir.parent / ".claude-pocket-queue" -> redireciona pro tmp.
+    # _queue_dir() = settings.projects_dir.parent / ".hangar-queue" -> redireciona pro tmp.
     monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
     return tmp_path
 

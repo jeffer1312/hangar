@@ -3,7 +3,7 @@
 # Falha em silencio (nunca trava o prompt). Espelha o padrao do state_hook.py. Usado pelo backend.
 #
 # E o publicador de previa do CLAUDE CODE — o par do scripts/pi/cp-state.ts do Pi, pelo MESMO
-# contrato (<config>/.claude-pocket-preview/<stem>.json = {"text","ts"}), que preview.read_sidecar
+# contrato (<config>/.hangar-preview/<stem>.json = {"text","ts"}), que preview.read_sidecar
 # ja consome pra qualquer provider. O evento e o MessageDisplay (Claude Code >= 2.1.152): dispara
 # ENQUANTO o texto do assistente e exibido, com `delta` INCREMENTAL — medido em 2.1.233, uma
 # resposta de 5 paragrafos chegou em 6 eventos (index 0..5, final no ultimo), markdown cru.
@@ -22,7 +22,7 @@ import os
 import sys
 import time
 
-_SUBDIR = ".claude-pocket-preview"
+_SUBDIR = ".hangar-preview"
 
 
 def _publicar(base: str, stem: str, payload: dict) -> None:
@@ -69,7 +69,7 @@ try:
     tp = o.get("transcript_path") or ""
     stem = os.path.basename(tp)[:-6] if tp.endswith(".jsonl") else o.get("session_id")
     # basename SEMPRE, nos dois ramos: o stem vira nome de arquivo em _publicar, e um session_id
-    # malformado com `/` ou `..` escaparia do .claude-pocket-preview/ (achado da review).
+    # malformado com `/` ou `..` escaparia do .hangar-preview/ (achado da review).
     stem = os.path.basename(stem) if isinstance(stem, str) else None
     base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
     if stem and event == "Stop":

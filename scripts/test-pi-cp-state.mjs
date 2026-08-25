@@ -50,10 +50,10 @@ const sessao = (file, modelo) => ({
 const A = path.join(cfg, "2026-08-12T12-40-06-359Z_aaaa.jsonl");   // a conversa do usuario
 const C = path.join(cfg, "2026-08-12T13-10-00-000Z_cccc.jsonl");   // /tree ou /resume do usuario
 
-const bilhete = () => JSON.parse(fs.readFileSync(path.join(cfg, ".claude-pocket-pi", "999.json"), "utf8")).file;
-const temCatalogo = (f) => fs.existsSync(path.join(cfg, ".claude-pocket-pi", "models", `${path.basename(f, ".jsonl")}.json`));
-const temEstado = (f) => fs.existsSync(path.join(cfg, ".claude-pocket-state", `${path.basename(f, ".jsonl")}.json`));
-const temPreview = (f) => fs.existsSync(path.join(cfg, ".claude-pocket-preview", `${path.basename(f, ".jsonl")}.json`));
+const bilhete = () => JSON.parse(fs.readFileSync(path.join(cfg, ".hangar-pi", "999.json"), "utf8")).file;
+const temCatalogo = (f) => fs.existsSync(path.join(cfg, ".hangar-pi", "models", `${path.basename(f, ".jsonl")}.json`));
+const temEstado = (f) => fs.existsSync(path.join(cfg, ".hangar-state", `${path.basename(f, ".jsonl")}.json`));
+const temPreview = (f) => fs.existsSync(path.join(cfg, ".hangar-preview", `${path.basename(f, ".jsonl")}.json`));
 
 // ── caso real 1: o SUBAGENTE (PI_SUBAGENT_DEPTH=1) nao publica nada ─────────────────────────────
 process.env.PI_SUBAGENT_DEPTH = "1";
@@ -72,7 +72,7 @@ await disparar(piFilho, "message_update", { message: { role: "assistant", conten
 await disparar(piFilho, "message_end", { message: { role: "assistant" } });
 await new Promise((r) => setTimeout(r, 250));   // folga pro coalesce de previa (150ms), se existisse
 
-for (const d of [".claude-pocket-state", ".claude-pocket-pi", ".claude-pocket-preview"]) {
+for (const d of [".hangar-state", ".hangar-pi", ".hangar-preview"]) {
   assert.ok(!fs.existsSync(path.join(cfg, d)), `${d} nao pode existir: subagente nao escreve nada`);
 }
 delete process.env.PI_SUBAGENT_DEPTH;
@@ -111,7 +111,7 @@ process.env.PSMUX_SESSION = "pi teste/2";
 const piPsmux = fakePi();
 (await import("./pi/cp-state.ts?psmux=1")).default(piPsmux);
 await disparar(piPsmux, "session_start", sessao(A, "gpt-5.6-sol"));
-const noPsmux = path.join(cfg, ".claude-pocket-pi", "pi-teste-2.json");
+const noPsmux = path.join(cfg, ".hangar-pi", "pi-teste-2.json");
 assert.ok(fs.existsSync(noPsmux), "no psmux o bilhete e do NOME da sessao, sanitizado pra arquivo");
 assert.equal(JSON.parse(fs.readFileSync(noPsmux, "utf8")).file, A);
 delete process.env.PSMUX_SESSION;

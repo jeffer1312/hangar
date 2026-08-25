@@ -16,7 +16,7 @@ def _run(payload: dict, config_dir: Path) -> None:
 
 
 def _sidecar(config_dir: Path, stem: str) -> dict:
-    return json.loads((config_dir / ".claude-pocket-preview" / f"{stem}.json").read_text())
+    return json.loads((config_dir / ".hangar-preview" / f"{stem}.json").read_text())
 
 
 def _md(delta: str, index: int, *, mid: str = "m1", tp: str = "/x/projects/p/abc.jsonl",
@@ -60,7 +60,7 @@ def test_stop_zera_a_previa(tmp_path):
 
 def test_texto_de_subagente_nao_vira_previa(tmp_path):
     _run(_md("prosa de subagente", 0, agent_id="ag-1"), tmp_path)
-    assert not (tmp_path / ".claude-pocket-preview" / "abc.json").exists()
+    assert not (tmp_path / ".hangar-preview" / "abc.json").exists()
 
 
 def test_continuacao_sem_sidecar_anterior_publica_so_o_delta(tmp_path):
@@ -81,7 +81,7 @@ def test_session_id_hostil_nao_escapa_do_diretorio(tmp_path):
     payload["session_id"] = "../../fora"
     _run(payload, tmp_path)
     assert not (tmp_path.parent / "fora.json").exists()
-    assert (tmp_path / ".claude-pocket-preview" / "fora.json").exists()
+    assert (tmp_path / ".hangar-preview" / "fora.json").exists()
 
 
 def test_delta_retardatario_depois_do_stop_nao_ressuscita_previa(tmp_path):
@@ -96,11 +96,11 @@ def test_delta_retardatario_depois_do_stop_nao_ressuscita_previa(tmp_path):
 def test_evento_desconhecido_nao_escreve_nada(tmp_path):
     _run({"hook_event_name": "Notification", "session_id": "s",
           "transcript_path": "/x/projects/p/abc.jsonl"}, tmp_path)
-    assert not (tmp_path / ".claude-pocket-preview").exists()
+    assert not (tmp_path / ".hangar-preview").exists()
 
 
 def test_stdin_quebrado_sai_zero_sem_escrever(tmp_path):
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(tmp_path)}
     r = subprocess.run([sys.executable, HOOK], input=b"{nao e json", env=env, timeout=10)
     assert r.returncode == 0
-    assert not (tmp_path / ".claude-pocket-preview").exists()
+    assert not (tmp_path / ".hangar-preview").exists()

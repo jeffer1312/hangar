@@ -99,7 +99,7 @@ _log = logging.getLogger(__name__)
 
 URL = "https://models.dev/api.json"
 SNAPSHOT = Path(__file__).with_name("pricing_data.json")
-_CACHE_DIR = Path.home() / ".claude" / ".claude-pocket-pricing"
+_CACHE_DIR = Path.home() / ".claude" / ".hangar-pricing"
 _TTL = 24 * 3600
 
 # Prefixos de provedor que o Pi e os gateways grudam no id. A ordem não importa: só um casa.

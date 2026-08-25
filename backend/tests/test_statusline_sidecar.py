@@ -5,7 +5,7 @@ from app import statusline
 
 
 def _publica(tmp_path, stem, line, ts=None):
-    d = tmp_path / ".claude-pocket-status"
+    d = tmp_path / ".hangar-status"
     d.mkdir(exist_ok=True)
     (d / f"{stem}.json").write_text(json.dumps(
         {"line": line, "ts": time.time() if ts is None else ts}))
@@ -45,7 +45,7 @@ def test_broken_json_does_not_raise(monkeypatch, tmp_path):
     # Escrita parcial: o publisher usa tmp+rename, mas o contrato aqui e nao explodir de qualquer
     # jeito — sidecar e conveniencia, o pane e a rede.
     _dirs(monkeypatch, tmp_path)
-    d = tmp_path / ".claude-pocket-status"
+    d = tmp_path / ".hangar-status"
     d.mkdir(exist_ok=True)
     (d / "meio.json").write_text('{"line": "cor')
     assert statusline.read("meio") is None
@@ -56,7 +56,7 @@ def test_valid_json_that_is_not_an_object_does_not_raise(monkeypatch, tmp_path):
     # AttributeError, que ninguem pega: em registry.list_with_state derruba a resolucao de estado de
     # TODAS as sessoes; em StateMonitor.stream() mata a stream daquela sessao.
     _dirs(monkeypatch, tmp_path)
-    d = tmp_path / ".claude-pocket-status"
+    d = tmp_path / ".hangar-status"
     d.mkdir(exist_ok=True)
     for nome, conteudo in (("nulo", "null"), ("lista", "[1,2]"), ("texto", '"linha"')):
         (d / f"{nome}.json").write_text(conteudo)

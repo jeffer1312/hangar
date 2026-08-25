@@ -173,7 +173,7 @@ def paleta_vermelha():
 
 @pytest.fixture
 def models_cache_em_tmp(tmp_path, monkeypatch):
-    # O cache de modelos tem espelho em DISCO dentro do config dir (.claude-pocket-models.json):
+    # O cache de modelos tem espelho em DISCO dentro do config dir (.hangar-models.json):
     # sem o redirecionamento, os testes das rotas de model-options ESCREVEM no ~/.claude real de
     # quem roda a suite, e os testes seguintes leem esse cache no lugar do mock. NAO e autouse
     # global de proposito: a versao autouse derrubava os mocks de test_tmux quando rodava na

@@ -497,7 +497,7 @@ export interface PiModelsResponse {
 }
 
 // Um anexo já enviado pra sessão (GET /api/sessions/{name}/uploads) — a galeria lista o diretório
-// <cwd>/.claude-pocket-uploads. expires_in_days vem do backend (só ele conhece o prazo de retenção);
+// <cwd>/.hangar-uploads. expires_in_days vem do backend (só ele conhece o prazo de retenção);
 // null = retenção desligada e PODE ser <= 0: o prune só roda no próximo upload, então um anexo
 // vencido continua aparecendo até lá.
 export interface UploadFile {

@@ -73,13 +73,13 @@ DRIFT_TETO = 3
 # escrita através do symlink clobberava o compartilhado — medido 2026-08-19, o primeiro boot de
 # uma conta nova regravou o settings.json de TODAS as contas sem 14 chaves (enabledPlugins etc),
 # desligando os plugins em todo lugar.
-# `.claude-pocket-apelidos.json` entrou 2026-08-21: o backend só lê/grava pelo caminho
+# `.hangar-apelidos.json` entrou 2026-08-21: o backend só lê/grava pelo caminho
 # compartilhado (apelidos._caminho), então o atalho dentro da conta não serve pra nada — e uma
 # CÓPIA real deixada de eras antigas numa conta fazia _resolver_colisao "subir" o arquivo velho
 # por cima do compartilhado, apagando os apelidos (aconteceu 19/08 08:52, mesma janela do
 # incidente do settings.json).
 _NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json",
-              ".claude-pocket-apelidos.json"}
+              ".hangar-apelidos.json"}
 
 
 def compartilhado() -> Path:

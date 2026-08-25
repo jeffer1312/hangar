@@ -9,7 +9,7 @@ from app import atomico
 
 _log = logging.getLogger("claude_pocket.hook_state")
 
-_SUBDIR = ".claude-pocket-state"
+_SUBDIR = ".hangar-state"
 
 
 class HookState:
@@ -93,7 +93,7 @@ class HookState:
                 self._apply(f)
 
     async def watch(self, dirs: list[Path]) -> None:
-        # Loop longo: observa cada <config>/.claude-pocket-state e aplica cada mudanca.
+        # Loop longo: observa cada <config>/.hangar-state e aplica cada mudanca.
         self._dirs = list(dict.fromkeys([*self._dirs, *dirs]))
         watched = []
         for base in dirs:

@@ -17,7 +17,7 @@ Toda a mecânica vem do claude-pocket e **já está pronta** — a skill só reg
 | Criar sessão visível (tmux + --session-id) | `cp-send --new <nome> <cwd>` (+ `--provider`/`--conta`/`--engine`/`--model`/`--effort`/`--permissao` — nasce já no modelo/esforço/permissão) |
 | Grupo de N sessões + protocolo injetado | `cp-send --pair <sessao> "<tarefa>"` (grupos se fundem) |
 | Regras de conduta (só-meu-repo, anti-loop, branch, push=usuário) | prompt que o backend injeta no pair — **não reexplicar** |
-| Contrato compartilhado (PairSheet na UI) | `~/.claude/.claude-pocket-pair/grupo-<gid>.md` |
+| Contrato compartilhado (PairSheet na UI) | `~/.claude/.hangar-pair/grupo-<gid>.md` |
 | Recado 1:1 / aviso de marco | `cp-send <sessao> "..."` / `cp-send --group "..."` |
 
 Subagent continua ok pra **leitura** (explorar outro repo, rastrear fluxo). Edição
@@ -59,8 +59,8 @@ no kick-off.
 Path: ler `gid` do próprio sidecar e montar o caminho —
 
 ```bash
-gid=$(python3 -c "import json;print(json.load(open('$HOME/.claude/.claude-pocket-pair/<minha-sessao>.json'))['gid'])")
-# contrato: ~/.claude/.claude-pocket-pair/grupo-$gid.md
+gid=$(python3 -c "import json;print(json.load(open('$HOME/.claude/.hangar-pair/<minha-sessao>.json'))['gid'])")
+# contrato: ~/.claude/.hangar-pair/grupo-$gid.md
 ```
 
 Escrever (curto, vivo — o PairSheet exibe ele):

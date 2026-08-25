@@ -779,7 +779,7 @@ describe('parseImageMessage', () => {
     // só por `/` devolvia o caminho inteiro como basename: a URL virava
     // `/uploads/C%3A%5C…`, o backend respondia 400 e a foto aparecia quebrada no celular.
     const out = parseImageMessage(
-      `${cap} — 📎 imagem: C:\\cockpit\\.claude-pocket-uploads\\1787356601-230c76.png`,
+      `${cap} — 📎 imagem: C:\\cockpit\\.hangar-uploads\\1787356601-230c76.png`,
     )!;
     expect(out.caption).toBe(cap);
     expect(out.filenames).toEqual(['1787356601-230c76.png']);

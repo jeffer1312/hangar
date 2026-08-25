@@ -519,7 +519,7 @@ cp-send --pair <sessao> "<trab> — o papel de cada sessão está no contrato gr
 
 Papel se declara **no kick-off e na tabela do contrato**, e o contrato diz explicitamente que, se um
 aviso de grupo contradisser a tabela, vale a tabela. Se você já errou isto, conserte o estado, não
-só o texto: os sidecars ficam em `<config>/.claude-pocket-pair/<sessao>.json`, campo `task`, e dá
+só o texto: os sidecars ficam em `<config>/.hangar-pair/<sessao>.json`, campo `task`, e dá
 pra reescrever direto (tmp+rename) sem disparar broadcast novo.
 
 Ordem obrigatória: `--new` → `--pair` → ler o `gid` no próprio sidecar → **escrever o

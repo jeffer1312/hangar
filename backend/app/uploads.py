@@ -4,11 +4,28 @@ import secrets
 import time
 from pathlib import Path
 
+from app import migracao_sidecars
+
 # Qualquer tipo de arquivo (imagem, video, pdf, ...). A extensao vem do filename do cliente,
 # sanitizada; o NOME e gerado pelo servidor (sem path traversal). O assistente le/preview pelo path.
 MAX_BYTES = 100 * 1024 * 1024  # 100 MiB
-UPLOAD_SUBDIR = ".claude-pocket-uploads"
+UPLOAD_SUBDIR = ".hangar-uploads"
+_UPLOAD_SUBDIR_ANTIGO = ".claude-pocket-uploads"
 _EXT_RE = re.compile(r"[^a-z0-9]")
+
+
+def _base(cwd: str) -> Path:
+    """A pasta de anexos do projeto, migrando o nome antigo na primeira vez que se olha pra ela.
+
+    Esta é a única pasta do app que mora no diretório do PROJETO, e não num `~/.claude*` — a
+    migração da subida do backend (app/migracao_sidecars.py) não tem como enumerar todos os cwds.
+    Aqui ela sai de graça: quem faz upload ou pede um anexo já sabe o cwd. Sem isso, todo anexo
+    mandado antes do rename viraria 404 no histórico, porque a mensagem antiga cita o caminho
+    absoluto com o nome velho.
+    """
+    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    migracao_sidecars.migrar_caminho(base.with_name(_UPLOAD_SUBDIR_ANTIGO), base)
+    return base
 
 
 class UploadError(Exception):
@@ -28,7 +45,7 @@ def _safe_ext(filename: str | None) -> str:
 
 
 def save_upload(cwd: str, content: bytes, filename: str | None) -> str:
-    """Salva os bytes em <cwd>/.claude-pocket-uploads/ com nome gerado pelo servidor
+    """Salva os bytes em <cwd>/.hangar-uploads/ com nome gerado pelo servidor
     (nunca o filename do cliente -> sem path traversal). Devolve o path absoluto.
     Levanta UploadError(status, detail) em arquivo vazio / grande demais."""
     if not content:
@@ -37,7 +54,7 @@ def save_upload(cwd: str, content: bytes, filename: str | None) -> str:
         raise UploadError(413, "arquivo maior que 100 MiB")
 
     ext = _safe_ext(filename)
-    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    base = _base(cwd)
     base.mkdir(parents=True, exist_ok=True)
     fname = f"{int(time.time())}-{secrets.token_hex(3)}.{ext}"
     dest = base / fname
@@ -58,7 +75,7 @@ def prune_old(cwd: str, days: int) -> int:
     """
     if days <= 0:
         return 0
-    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    base = _base(cwd)
     if not base.is_dir():
         return 0
     corte = time.time() - days * 86400
@@ -83,7 +100,7 @@ def list_uploads(cwd: str, retention_days: int) -> list[dict]:
     alguém enviar o próximo. Mentir "0.1 dia" esconderia justamente o arquivo prestes a sumir.
     Erro de arquivo individual pula o item — a galeria inteira não pode cair por um stat quebrado.
     """
-    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    base = _base(cwd)
     if not base.is_dir():
         return []
     agora = time.time()
@@ -109,11 +126,11 @@ def list_uploads(cwd: str, retention_days: int) -> list[dict]:
 
 
 def resolve_upload(cwd: str, filename: str) -> str:
-    """Resolve <cwd>/.claude-pocket-uploads/<filename> com seguranca, pra servir o arquivo.
+    """Resolve <cwd>/.hangar-uploads/<filename> com seguranca, pra servir o arquivo.
     Rejeita filename com separador/.. (400) e arquivo inexistente (404)."""
     if "/" in filename or "\\" in filename or ".." in filename or not filename:
         raise UploadError(400, "filename invalido")
-    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
+    base = _base(cwd)
     real_base = os.path.realpath(base)
     real = os.path.realpath(base / filename)
     if real != os.path.join(real_base, filename):

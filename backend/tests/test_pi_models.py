@@ -24,7 +24,7 @@ def _write_sidecar(tmp_path: Path, data, jsonl="/x/2026-07-28T01-55-09-315Z_abc.
 # ── sidecar ──────────────────────────────────────────────────────────────────
 def test_sidecar_path_keyed_by_jsonl_stem(tmp_path):
     p = pm.sidecar_path("/home/u/.pi/agent/sessions/2026-07-28T01-55-09-315Z_abc.jsonl", tmp_path)
-    assert p == tmp_path / ".claude-pocket-pi" / "models" / "2026-07-28T01-55-09-315Z_abc.json"
+    assert p == tmp_path / ".hangar-pi" / "models" / "2026-07-28T01-55-09-315Z_abc.json"
 
 
 def test_read_catalog_real_sidecar(tmp_path):

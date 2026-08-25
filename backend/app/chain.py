@@ -1,6 +1,6 @@
 """Encadeamento de sessao (feature #12): vinculo 'then' de UM HOP (nao DAG) — quando a sessao FONTE
 termina, dispara um prompt na sessao ALVO. Sidecar JSON por sessao FONTE, mesmo padrao do PromptQueue
-(app/pqueue.py): dir irmao em ".claude-pocket-chain", keyed pelo NOME (sobrevive ao /clear, que so
+(app/pqueue.py): dir irmao em ".hangar-chain", keyed pelo NOME (sobrevive ao /clear, que so
 troca o session-id/transcript). One JSON pequeno por sessao (nao uma lista) pq so existe 1 vinculo
 por vez (one-shot: quem dispara consome e limpa — ver app.api._maybe_chain)."""
 import json
@@ -13,7 +13,7 @@ from app.pqueue import _sanitize
 
 
 def _chain_dir() -> Path:
-    d = Path(settings.projects_dir).parent / ".claude-pocket-chain"
+    d = Path(settings.projects_dir).parent / ".hangar-chain"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

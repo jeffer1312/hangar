@@ -23,7 +23,7 @@ _MAX_ENTRIES = 1000
 def _queue_dir() -> Path:
     # Sidecar FORA do transcript do Claude Code (nunca toca no arquivo dele). Fica ao lado de
     # projects/, no diretorio de config (~/.claude-work por padrao).
-    d = Path(settings.projects_dir).parent / ".claude-pocket-queue"
+    d = Path(settings.projects_dir).parent / ".hangar-queue"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
