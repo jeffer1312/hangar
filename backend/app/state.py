@@ -33,6 +33,13 @@ _BOX_SPLIT_RE = re.compile(r"\s{2,}[│─╭╮╰╯┌┐└┘├┤┬┴�
 # viraria menu fantasma.
 _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
 _PI_CURSOR_RE = re.compile(r"^\s*>\s*\d+\.\s", re.M)
+# SEGUNDO marcador "N. " na mesma linha do cursor: a marca de uma lista digitada CORRIDA (rascunho no
+# composer), porque no menu cada opcao ocupa a propria linha. Procurado SO no que vem depois do
+# primeiro marcador (ver o uso) — aplicado na linha inteira ele casaria o proprio cursor, que e
+# exatamente "❯ 1. " e mataria todo menu de verdade. Exige espaco antes e depois do numero de
+# proposito: sem isso "versao 2.1" ou "R$ 2.50" dentro de uma opcao legitima matariam o menu, e
+# recusar aqui significa uma sessao que pede resposta e nao avisa.
+_MARCADOR_EMBUTIDO_RE = re.compile(r"\s\d+\.\s")
 _RULE_RE = re.compile(r"^[\s─]*─{10,}[\s─]*$")  # a horizontal rule (the input box border)
 # Rodape da caixa ARREDONDADA do composer (`╰───╯`), que e como o Pi desenha o input — ele nunca
 # imprime a regua reta do Claude. Sem esta ancora um pane do Pi nao casava nada e o fallback
@@ -170,6 +177,28 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     if any(ln.lstrip()[:1] == "❯" and not _CURSOR_RE.match(ln)
            for ln in lines[cursor + 1:]):
         return None
+    # O proprio COMPOSER com um rascunho que comeca em numero. O composer desenha `❯ ` na frente do
+    # que a pessoa digita, entao "1. sim pode editar 2. mostra a data" vira `❯ 1. sim pode editar
+    # 2. ...` — identico a um cursor de opcao pras regras acima, e a guarda anterior nao alcanca (o
+    # cursor E o composer, nao ha linha `❯` ABAIXO dele). Visto ao vivo em 25/08/2026: a sessao
+    # estava ociosa, com o turno fechado, e o app anunciou "aguardando sua resposta" com UMA opcao
+    # falsa e o marcador de fim de turno no lugar da pergunta.
+    #
+    # O que separa os dois e a FORMA da lista, nao o texto: num menu cada opcao ocupa a propria
+    # linha, e num rascunho os numeros vem corridos. Exigir o rodape de navegacao (a trava do Pi,
+    # duas linhas acima) NAO serve aqui — medido: o menu nativo do Claude da fixture
+    # pane_awaiting_input.txt nao desenha rodape nenhum, e a trava mataria a deteccao dele.
+    # A busca vale so no LABEL — o pedaco antes da borda do box. A AskUserQuestion com `preview`
+    # desenha o box NA MESMA LINHA da opcao, e o que ele mostra costuma ser arquivo (README,
+    # changelog) com lista numerada dentro: olhar a linha inteira lia o "1. "/"2. " do PREVIEW como
+    # rascunho e matava um menu de verdade — o defeito INVERSO deste conserto, e o pior dos dois
+    # (sessao parada esperando resposta, e o app calado). Mesmo corte que `classify` ja faz pra
+    # montar o label.
+    marca = _CURSOR_RE.match(lines[cursor]) or _PI_CURSOR_RE.match(lines[cursor])
+    if marca:
+        label = _BOX_SPLIT_RE.split(lines[cursor][marca.end():])[0]
+        if _MARCADOR_EMBUTIDO_RE.search(label):
+            return None
     # Subindo do cursor, o topo do picker e o CHIP header (☐/☑ da AskUserQuestion) ou um boundary
     # (bullet/spinner do menu nativo, que nao tem chip). Parar no chip mantem FORA do bloco uma
     # LISTA NUMERADA EM PROSA da mensagem do assistente — ela vive acima do chip e, sem essa
@@ -225,7 +254,10 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
         options = [_BOX_SPLIT_RE.split(m.group(1))[0].strip()
                    for m in (_OPTION_RE.match(ln) for ln in region) if m]
         options = [o for o in options if o]
-        if options:
+        # DUAS opcoes, no minimo: escolher entre uma coisa so nao e escolha, e todo menu real medido
+        # tem de 3 a 5 (as cinco fixtures de pane deste repo). Uma sozinha e sinal de que o bloco foi
+        # montado em cima de texto que apenas PARECE lista — o rascunho no composer e o caso vivo.
+        if len(options) >= 2:
             return ("awaiting_input", None, _question(region), options)
 
     spinner = _live_spinner(pane_text)

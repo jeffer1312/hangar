@@ -404,6 +404,102 @@ def test_pi_question_picker_is_awaiting_input():
                        "Aberto por padrão, recolhível", "Type something."]
 
 
+def test_rascunho_numerado_no_composer_nao_e_menu():
+    """O composer com um rascunho que comeca em numero NAO e uma pergunta.
+
+    Visto ao vivo em 25/08/2026: o usuario digitou "1. sim pode editar 2. mostra a data com rotulo
+    neutro" e deixou parado no composer. O Claude Code desenha `❯ ` na frente do que se digita, entao
+    a linha ficou identica a um cursor de opcao — o app anunciou "aguardando sua resposta" com UMA
+    opcao falsa e o marcador de fim de turno no lugar da pergunta, com a sessao ociosa.
+
+    A guarda de "prosa citada" nao alcanca este caso: ela procura um composer ABAIXO do cursor, e
+    aqui o cursor E o composer.
+    """
+    pane = (
+        "  Está tudo andando: revisor no portão da folha.\n"
+        "\n"
+        "* Baked for 1m 52s\n"
+        "\n"
+        "❯ 1. sim pode editar 2. mostra a data com rótulo neutro\n"
+        "  🤖 Opus5·1M (high+) │ 📁 meu-projeto\n"
+    )
+    state, _, _, options = classify(pane)
+    assert state == "idle"
+    assert options is None
+
+
+def test_rascunho_numerado_no_composer_do_pi_nao_e_menu():
+    # Mesma coisa no cursor do Pi ("> N."), que desenha o rodape de navegacao por outro motivo.
+    pane = (
+        "Resposta anterior do agente.\n"
+        "> 1. pode subir 2. depois me avisa\n"
+        "↑↓ navigate • Enter to select • Esc to cancel\n"
+    )
+    state, *_ = classify(pane)
+    assert state == "idle"
+
+
+def test_opcao_com_numero_no_texto_continua_sendo_menu():
+    """Contra-exemplo da guarda acima: "2.1" dentro de uma opcao legitima nao pode matar o menu.
+
+    Recusar aqui e PIOR que o bug que a guarda conserta — vira sessao que pede resposta e nao avisa
+    ninguem. Por isso o marcador embutido exige espaco dos dois lados do numero."""
+    pane = (
+        "Qual versão instalar?\n"
+        "\n"
+        "❯ 1. Instalar a versão 2.1 do pacote\n"
+        "  2. Manter a atual\n"
+        "  3. Cancelar\n"
+    )
+    state, _, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert options == ["Instalar a versão 2.1 do pacote", "Manter a atual", "Cancelar"]
+
+
+def test_preview_com_lista_numerada_nao_mata_o_menu():
+    """A AskUserQuestion com `preview` desenha o box NA MESMA LINHA da opcao, e o que ele mostra
+    costuma ser arquivo (README, changelog) com lista numerada dentro.
+
+    Achado de revisao: a guarda do rascunho, olhando a linha INTEIRA, lia o "1. instale 2. configure"
+    do PREVIEW como lista corrida digitada e recusava o menu — o defeito inverso, e o pior dos dois
+    (sessao parada esperando resposta com o app calado). Ela vale so no label, antes da borda do box.
+    """
+    pane = (
+        "Qual README usar de exemplo?\n"
+        "\n"
+        "❯ 1. Padrao          │ Passos: 1. instale  2. configure  │\n"
+        "  2. Minimo          │ (nada)                            │\n"
+    )
+    state, _, _, options = classify(pane)
+    assert state == "awaiting_input"
+    assert options == ["Padrao", "Minimo"]
+
+
+def test_numero_colado_no_texto_nao_e_marcador():
+    # O marcador embutido exige espaco dos DOIS lados: "v2. Confirmar" e texto da opcao, nao um
+    # segundo item de lista. Sem a exigencia do espaco antes, este menu legitimo morreria.
+    pane = (
+        "Qual caminho?\n"
+        "\n"
+        "❯ 1. Migrar pra v2. Confirmar depois\n"
+        "  2. Ficar na v1\n"
+    )
+    state, *_ = classify(pane)
+    assert state == "awaiting_input"
+
+
+def test_uma_opcao_sozinha_nao_e_menu():
+    # Escolher entre uma coisa so nao e escolha: todo menu real medido tem de 3 a 5 opcoes, e uma
+    # sozinha e sinal de bloco montado em cima de texto que apenas PARECE lista.
+    pane = (
+        "Texto qualquer da conversa.\n"
+        "\n"
+        "❯ 1. isto aqui e um rascunho\n"
+    )
+    state, *_ = classify(pane)
+    assert state == "idle"
+
+
 def test_pi_cursor_citation_without_live_footer_is_not_a_menu():
     # "> 1." CITADO em prosa (o rodape da citacao subiu no scrollback) nao e picker vivo — sem a
     # trava do rodape-no-fundo isto travava a sessao num menu fantasma.
