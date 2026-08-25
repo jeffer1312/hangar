@@ -289,11 +289,20 @@ for i in $(seq 1 1440); do
   # DIÁRIO parado: registro do árbitro é rede da retrospectiva; >60min sem escrita com o grupo
   # ativo é o árbitro trabalhando sem deixar rastro (medido: 6h45 sem uma linha). Re-avisa por hora.
   if [ -n "$DIARIO" ] && [ -f "$DIARIO" ]; then
-    idade=$(( $(date +%s) - $(stat -c %Y "$DIARIO" 2>/dev/null || echo 0) ))
+    # O eventos.jsonl é irmão do registro no mesmo diretório, e parado durante trabalho é a MESMA
+    # falha — então a cobrança olha o MAIS VELHO dos dois, e nomeia o que parou.
+    parado=$DIARIO
+    mtime=$(stat -c %Y "$DIARIO" 2>/dev/null || echo 0)
+    eventos="$(dirname "$DIARIO")/eventos.jsonl"
+    if [ -f "$eventos" ]; then
+      mtime_ev=$(stat -c %Y "$eventos" 2>/dev/null || echo 0)
+      if [ "$mtime_ev" -lt "$mtime" ]; then parado=$eventos; mtime=$mtime_ev; fi
+    fi
+    idade=$(( $(date +%s) - mtime ))
     if [ "$idade" -ge 3600 ] && [ "$diario_avisado" -lt "$(( idade / 3600 ))" ]; then
       diario_avisado=$(( idade / 3600 ))
-      hangar-send --tmux "$ARB" "[vigia] O registro ($DIARIO) esta ha $(( idade / 60 ))min sem uma escrita, com o grupo ativo. O registro se escreve NO EVENTO — se pareceres/merges aconteceram nesse intervalo, eles estao fora do diario." >/dev/null 2>&1
-      echo "[vigia] diario parado ha $(( idade / 60 ))min"
+      hangar-send --tmux "$ARB" "[vigia] O rastro ($parado) esta ha $(( idade / 60 ))min sem uma escrita, com o grupo ativo. Registro e eventos.jsonl se escrevem NO EVENTO — se pareceres/merges aconteceram nesse intervalo, eles estao fora do rastro." >/dev/null 2>&1
+      echo "[vigia] rastro parado ha $(( idade / 60 ))min ($parado)"
     fi
     [ "$idade" -lt 3600 ] && diario_avisado=0
   fi

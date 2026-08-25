@@ -528,10 +528,13 @@ uma sessão parada perguntando.
 
 Motor inexistente devolve `400` e a sessão não nasce. Ver os motores: `claude-engine`.
 
-### Nascem DOIS arquivos, e cada um tem um leitor
+### Nascem TRÊS arquivos, e cada um tem um leitor
 
 - **`regras-<gid>.md`** — o que executor e revisor leem. Só o que **ainda vale**. Duas páginas.
 - **`grupo-<gid>.md`** — o registro, que só o árbitro lê. Progresso, histórico, decisões com data.
+- **`eventos.jsonl`** — uma linha JSON por acontecimento, escrita pelo árbitro no diretório
+  durável abaixo. Ninguém do time lê; quem lê é máquina — as telas de orquestração do app e a
+  retrospectiva. Contrato dos tipos e dos campos: `references/arbitro.md`.
 
 E um **diretório durável pros artefatos do trabalho**, decidido agora e escrito nas regras e no
 primeiro kick-off de cada sessão:

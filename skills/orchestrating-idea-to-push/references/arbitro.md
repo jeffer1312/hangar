@@ -12,7 +12,7 @@ Você é o único que escreve no contrato.
 > depois do lançamento — a ordem existia, mas mora na seção "Fase 4", que é a última coisa que
 > parece urgente na hora de lançar. Este índice não é régua nova: é o mapa das que já existem.
 
-## Você mantém DOIS arquivos, e só um deles é lido pelo time
+## Você mantém TRÊS arquivos, e só um deles é lido pelo time
 
 - **`~/.claude/orq-retros/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
   Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à
@@ -26,6 +26,23 @@ Você é o único que escreve no contrato.
 - **`regras-<gid>.md` — as regras.** O que **ainda vale**: intocáveis, gates, réguas de
   julgamento, barra, o que a revisão precisa cobrir, teto e contas. É o que entra no kick-off,
   e ele deve caber em duas páginas.
+- **`~/.claude/orq-retros/<data>-<gid>/eventos.jsonl` — o esqueleto que máquina lê.** Uma
+  linha JSON por acontecimento, escrita NO EVENTO, junto da linha de prosa do registro — não
+  "depois". Tipos fechados: `execucao_inicio` (plano, branch, gid), `task_inicio` (task,
+  titulo, executor, par), `entrega` (task, rodada, commit), `veredito` (task, rodada,
+  resultado `aprova|reprova|devolvido` — o MESMO vocabulário do parecer —, sessao, motivo
+  curto quando houver), `sessao_trocada` (de, para, motivo), `execucao_fim` (resultado).
+  `ts` sempre ISO-8601 com offset (`date -Iseconds`); `task` e `rodada` são números, e
+  `rodada` começa em 1 — rodada desconhecida é rodada OMITIDA, nunca 0. Campo extra pode;
+  tipo novo não — o app agrega por esses seis. Prosa, contexto e julgamento continuam no
+  registro.md; o jsonl alimenta as telas de orquestração e as fichas com número.
+  Exemplo de linha, no fecho de uma rodada:
+
+      {"ts": "2026-08-25T14:02:11-03:00", "tipo": "veredito", "task": 7, "rodada": 3,
+       "resultado": "aprova", "sessao": "mx2-rev-t7", "commit": "8c34563b"}
+
+  Valide quando quiser com `python3 <repo>/scripts/orq-valida-eventos.py <arquivo>` (sai 0
+  se o contrato fecha).
 
 **A fronteira é o tipo do conteúdo, não o assunto: já aconteceu → registro; ainda vale →
 regras.** Decisão nova entra nas regras; o registro anota a data e aponta pra lá. É o que
@@ -42,10 +59,13 @@ alguma frase dali **muda o que a próxima sessão faz**. Se muda, ela pertence �
 forma de régua — não de relato.
 
 **E o registro se escreve NO EVENTO, não "depois".** Parecer chegou, merge feito, sessão trocada →
-a linha entra **antes da próxima ação**. Não existe "atualizo no fim do dia": medido em
+a linha de prosa entra no registro **E** a linha JSON entra no `eventos.jsonl`, **antes da
+próxima ação**. Não existe "atualizo no fim do dia": medido em
 17/08/2026, o registro de uma execução parou às 10:39 e as 6h45 seguintes — justamente as duas
 Tasks mais caras — ficaram sem diário; a retrospectiva virou arqueologia de git e mtime. A vigia
-cobra o mtime do arquivo (flag `--diario`), mas a vigia é rede, não desculpa.
+cobra o mtime do arquivo (flag `--diario`), e a cobrança vale para os **dois** arquivos:
+registro parado ou `eventos.jsonl` parado durante trabalho é a mesma falha. Mas a vigia é rede,
+não desculpa.
 
 ### Você é o único que reescreve as regras — e por isso tem teto
 
