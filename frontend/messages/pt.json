@@ -1975,5 +1975,7 @@
   "atualizar_disponivel_sub_uma": "1 mudança desde a sua versão.",
   "atualizar_pronto_reiniciar": "Atualizado. Falta reiniciar o servidor para o código novo entrar — nesta máquina o app não faz isso sozinho.",
   "atualizar_falhou_voltou_fora": "O código anterior foi restaurado, mas o servidor não voltou a responder. Nada foi perdido — o serviço precisa ser reiniciado à mão.",
-  "atualizar_passos_invalidos": "Atenção: {n} arquivo(s) de atualização estão malformados e foram ignorados: {lista}"
+  "atualizar_passos_invalidos": "Atenção: {n} arquivo(s) de atualização estão malformados e foram ignorados: {lista}",
+  "atualizar_ver_log": "ver o que está rodando",
+  "atualizar_esconder_log": "esconder"
 }

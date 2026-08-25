@@ -1975,5 +1975,7 @@
   "atualizar_disponivel_sub_uma": "1 change since your version.",
   "atualizar_pronto_reiniciar": "Updated. The server still needs a restart for the new code to take effect — on this machine the app does not do that by itself.",
   "atualizar_falhou_voltou_fora": "The previous code was restored, but the server is not responding. Nothing was lost — the service needs a manual restart.",
-  "atualizar_passos_invalidos": "Warning: {n} update file(s) are malformed and were ignored: {lista}"
+  "atualizar_passos_invalidos": "Warning: {n} update file(s) are malformed and were ignored: {lista}",
+  "atualizar_ver_log": "show what is running",
+  "atualizar_esconder_log": "hide"
 }

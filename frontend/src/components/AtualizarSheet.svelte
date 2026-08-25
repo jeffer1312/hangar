@@ -17,6 +17,7 @@
   import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
   import { getAtualizacao, iniciarAtualizacao } from '../lib/api';
+  import * as diag from '../lib/diag';
   import { renderMarkdown } from '../lib/markdown';
   import type { Atualizacao } from '../lib/types';
 
@@ -37,7 +38,7 @@
   let verTudo = $state(false);
 
   const INTERVALO = 2000;
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
   /** Esta tela mandou começar. Verdade a partir do POST, não do próximo fetch que der certo. */
   let lancamos = $state(false);
 
@@ -70,24 +71,48 @@
     }
   }
 
+  /**
+   * `setInterval`, e NÃO uma corrente de `setTimeout` que se reagenda.
+   *
+   * A corrente tem um ponto único de falha: se um elo não chega a reagendar — por uma exceção que
+   * escape, por um `await` que nunca resolva, por qualquer caminho que devolva antes da última
+   * linha — o acompanhamento morre calado e a barra congela na etapa em que estava, sem erro
+   * nenhum na tela. Aconteceu em 25/08/2026, numa máquina que já tinha a correção anterior desse
+   * mesmo laço: a tela ficou parada em "Etapa 4 de 5" enquanto o servidor terminava e reiniciava.
+   *
+   * Um relógio fixo não depende do tique anterior ter dado certo. O tique decide se encerra; se um
+   * deles falhar, o próximo vem do mesmo jeito, dois segundos depois.
+   */
   function agendar() {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(async () => {
-      await carregar(true);
-      if (!open) return;
-      // Só PRONTO encerra o acompanhamento. Antes, qualquer tique que não visse `rodando` caía no
-      // encerramento — inclusive o tique em que o servidor ainda estava reiniciando e não
-      // respondia. Aí o polling parava mudo (nada reagendava), a barra congelava sem erro nenhum,
-      // e `lancamos` voltava a false bem no meio do restart, liberando a mensagem de
-      // "desconectado". Restart de serviço passa dos 2s do intervalo com folga: era o caso comum,
-      // não a borda.
-      if (estado.fase === 'pronto') {
+    if (timer) return;   // já há um relógio andando
+    timer = setInterval(async () => {
+      try {
+        await carregar(true);
+        // No diário: sem isto, uma tela que para de acompanhar não deixa rastro NENHUM, e o que
+        // sobra pra investigar é o print de quem estava olhando. Aconteceu em 25/08/2026.
+        diag.registrar({
+          evento: 'atualizacao.tique',
+          detalhe: `fase=${estado.fase ?? '-'} passo=${estado.passo ?? 0}/${estado.total ?? 0}`
+            + (erroDeRede ? ' sem-rede' : ''),
+        });
+        if (!open || estado.fase !== 'pronto') return;
+        diag.registrar({
+          evento: 'atualizacao.pronto',
+          detalhe: `ok=${estado.ok === true} recarrega=${!faltaReiniciar}`,
+        });
+        parar();
         lancamos = false;
         if (estado.ok === true && !faltaReiniciar) concluir();
-        return;
+      } catch {
+        // Nunca deixa uma exceção escapar do tique: ela mataria o `setInterval` em alguns
+        // ambientes e traria de volta exatamente o congelamento que este desenho evita.
       }
-      agendar();
     }, INTERVALO);
+  }
+
+  function parar() {
+    if (timer) clearInterval(timer);
+    timer = null;
   }
 
   /** Terminou bem, mas o servidor não reiniciou sozinho (Windows, instalação na mão). */
@@ -97,9 +122,18 @@
   /** Terminou bem: recarrega a página para sair do bundle antigo (o do build anterior, em cache). */
   async function concluir() {
     try {
-      const reg = await navigator.serviceWorker?.getRegistration();
-      await reg?.update();
-      reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
+      // COM TETO DE TEMPO. `reg.update()` vai à rede buscar o service worker novo, e o servidor
+      // acabou de reiniciar — a promessa pode ficar pendurada indefinidamente. Sem o teto, o
+      // `reload()` abaixo nunca executava e a tela ficava parada na última etapa, sem erro nenhum,
+      // parecendo travada. Medido em 25/08/2026, na primeira atualização feita de fora daqui.
+      await Promise.race([
+        (async () => {
+          const reg = await navigator.serviceWorker?.getRegistration();
+          await reg?.update();
+          reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
+        })(),
+        new Promise((r) => setTimeout(r, 3000)),
+      ]);
     } catch {
       // Sem service worker (aba comum, navegador antigo) o reload sozinho já basta.
     }
@@ -129,8 +163,7 @@
     // solto — ao terminar a atualização ele chamava `location.reload()` na cara de quem já estava
     // noutra tela.
     return () => {
-      if (timer) clearTimeout(timer);
-      timer = null;
+      parar();
     };
   });
 
@@ -142,6 +175,15 @@
 
   const passosComTexto = $derived((dados?.passos ?? []).filter((p) => p.texto.trim()));
   const invalidos = $derived(estado.passos_invalidos ?? []);
+  const log = $derived(estado.log ?? []);
+  let logAberto = $state(false);
+  let logEl = $state<HTMLElement | null>(null);
+
+  // Rola pro fim a cada linha nova: o interessante é sempre a última, e é o que um terminal faz.
+  $effect(() => {
+    void log.length;
+    if (logAberto && logEl) logEl.scrollTop = logEl.scrollHeight;
+  });
 
   // Duas frases, não uma com `{n}`: com uma só a tela escrevia "1 sessões estão trabalhando".
   const aviso_sessoes = $derived(
@@ -179,6 +221,16 @@
       <p class="etapa">{estado.texto ?? ''}</p>
       {#if trabalhando > 0}
         <p class="aviso">{aviso_sessoes}</p>
+      {/if}
+      {#if log.length}
+        <!-- Sem isto, "Instalando dependências" fica mais de um minuto parada e a leitura natural
+             é que travou. Aqui dá pra ver o comando rodando e a saída dele. -->
+        <button class="ver-log" onclick={() => (logAberto = !logAberto)}>
+          {logAberto ? m.atualizar_esconder_log() : m.atualizar_ver_log()}
+        </button>
+        {#if logAberto}
+          <pre class="log" bind:this={logEl}>{log.join('\n')}</pre>
+        {/if}
       {/if}
 
     {:else if faltaReiniciar}
@@ -307,6 +359,15 @@
 
   .aviso { margin: 0 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted);
            line-height: 1.5; }
+
+  /* Terminalzinho: o que está rodando agora. Fechado por padrão — quem quer ver, abre. */
+  .ver-log { border: 0; background: transparent; color: var(--accent); font-family: inherit;
+             font-size: var(--text-xs); padding: 0; margin-bottom: var(--space-2); }
+  .log { margin: 0; max-height: 220px; overflow: auto; padding: var(--space-3);
+         background: var(--surface-inset); border: 1px solid var(--border-subtle);
+         border-radius: var(--radius-md); font-family: var(--font-mono, monospace);
+         font-size: var(--text-xs); line-height: 1.5; color: var(--text-secondary);
+         white-space: pre-wrap; word-break: break-word; }
 
   .erro-caixa { background: var(--surface-inset); border: 1px solid var(--border-subtle);
                 border-left: 3px solid var(--erro, #d97070); border-radius: var(--radius-md);

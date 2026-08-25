@@ -53,6 +53,18 @@ describe('em dia', () => {
     expect(txt).not.toContain(m.atualizar_versao_servidor());
   });
 
+  it('sem commit novo, mas com o servidor atrasado, ainda diz o que fazer', async () => {
+    // O caso de quem puxou pela linha de comando e não reiniciou: não há nada a baixar, mas a
+    // máquina não está rodando o que tem no disco. Sem isto a informação existia e era inalcançável.
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ atualizacao_disponivel: false, versoes: { repo: 'v2-novo', backend: 'v1-velho' } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    expect(document.body.textContent ?? '').toContain(m.atualizar_precisa_reiniciar());
+  });
+
   it('mostra as duas quando divergem, com o aviso de reiniciar', async () => {
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
       base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' } }),
@@ -188,6 +200,44 @@ describe('ciclo de vida', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('um tique que estoura NÃO mata o acompanhamento', async () => {
+    // A corrente de setTimeout tinha ponto único de falha: um elo que não reagendasse (exceção,
+    // await pendurado, retorno cedo) matava tudo calado, e a barra congelava na etapa em que
+    // estava. Aconteceu em produção com a tela parada em "Etapa 4 de 5".
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(api, 'getAtualizacao');
+      spy.mockResolvedValueOnce(base({ estado: { fase: 'rodando', passo: 4, total: 5, texto: 'x' } }));
+      spy.mockRejectedValueOnce(new Error('caiu'));
+      spy.mockImplementationOnce(() => { throw new Error('estourou sincrono'); });
+      spy.mockResolvedValue(base({ estado: { fase: 'rodando', passo: 4, total: 5, texto: 'x' } }));
+      montar();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(8000);
+      const ate = spy.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(spy.mock.calls.length).toBeGreaterThan(ate);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('mostra o log dos comandos quando existe', async () => {
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ estado: { fase: 'rodando', passo: 4, total: 5, texto: 'Instalando dependências',
+                       log: ['$ bash install.sh --update', 'npm ci: ok'] } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    expect(document.body.textContent ?? '').toContain(m.atualizar_ver_log());
+    const botao = [...document.querySelectorAll('button')]
+      .find((b) => b.textContent?.trim() === m.atualizar_ver_log());
+    botao?.click();
+    await tick();
+    expect(document.body.textContent ?? '').toContain('$ bash install.sh --update');
   });
 
   it('desmontar o componente para o polling', async () => {

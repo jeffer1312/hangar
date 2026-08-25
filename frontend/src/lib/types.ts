@@ -640,6 +640,8 @@ export interface AtualizacaoEstado {
   reiniciar_manual?: boolean;
   /** Arquivos de `docs/atualizacoes/` que o app ignorou por estarem malformados. */
   passos_invalidos?: string[];
+  /** Comandos e saída, pra tela poder mostrar o que está rodando agora. */
+  log?: string[];
   commit_de?: string;
   commit_para?: string;
   ts?: string;

@@ -127,6 +127,22 @@ def _etapa(chave: str, **extra) -> None:
 
 # ─── Rodar comando ─────────────────────────────────────────────────────────────────────────────
 
+_TETO_LOG = 400          # linhas guardadas no estado: o suficiente pra entender, sem inchar o JSON
+
+
+def _log_do_estado(linha: str) -> None:
+    """Acrescenta uma linha ao log que a tela mostra.
+
+    A pessoa que aperta o botão fica olhando "Instalando dependências" por mais de um minuto sem
+    nenhum sinal de vida — a leitura natural disso é que travou (aconteceu, 25/08/2026). Guardar o
+    comando e a saída dele no próprio estado deixa a tela abrir um terminalzinho: o `estado.json`
+    já é lido por polling e sobrevive ao restart, então não precisa de canal novo.
+    """
+    atual = estado().get("log") or []
+    atual.append(linha)
+    _escrever(log=atual[-_TETO_LOG:])
+
+
 def _rodar(args: list[str], cwd: Path | None = None,
            timeout: float = _TIMEOUT_PADRAO) -> subprocess.CompletedProcess:
     """Um comando, com a saída capturada em texto.
@@ -136,11 +152,21 @@ def _rodar(args: list[str], cwd: Path | None = None,
     22/08/2026, registrado no CLAUDE.md). `LC_ALL=C` no git pela mesma razão do `git_ops._run`: a
     saída aqui é lida por código, e mensagem traduzida quebraria a leitura calada.
     """
-    return subprocess.run(
+    _log_do_estado("$ " + " ".join(args))
+    p = subprocess.run(
         args, cwd=str(cwd or REPO), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=timeout,
         env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"},
     )
+    saida = _ANSI.sub("", (p.stdout or "") + (p.stderr or "")).strip()
+    if saida:
+        # Só o fim: um `npm ci` despeja centenas de linhas, e o que interessa a quem está olhando a
+        # tela é o desfecho, não o inventário de pacotes.
+        for linha in saida.splitlines()[-25:]:
+            _log_do_estado(linha)
+    if p.returncode != 0:
+        _log_do_estado(f"[saiu com {p.returncode}]")
+    return p
 
 
 def _git(*args: str, timeout: float = _TIMEOUT_PADRAO) -> subprocess.CompletedProcess:
@@ -383,7 +409,7 @@ def _executar(porta: int) -> dict:
     de = pre.get("commit", "")
     _escrever(fase="rodando", ok=None, erro=None, resgate=None,
               commit_de=de, commit_para=None, pid=os.getpid(),
-              reiniciar_manual=False)
+              reiniciar_manual=False, log=[])
 
     if not pre.get("pode"):
         falta = ", ".join(pre.get("faltando") or []) or pre.get("erro", "desconhecido")

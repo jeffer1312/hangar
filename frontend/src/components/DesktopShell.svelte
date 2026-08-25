@@ -163,7 +163,12 @@ import * as m from '../paraglide/messages';
       try {
         const d = await getAtualizacao();
         if (!vivo) return;
-        temAtualizacao = d.atualizacao_disponivel;
+        // Duas razões para o botão existir, não uma. A segunda: o código novo já está no disco mas
+        // o servidor ainda roda o anterior — quem puxou pela linha de comando e não reiniciou. A
+        // caixa sabe dizer isso, mas sem esta condição não havia como CHEGAR nela: o botão só
+        // nascia com commit novo no GitHub, e nesse caso não há nenhum.
+        temAtualizacao = d.atualizacao_disponivel
+          || d.versoes.repo !== d.versoes.backend;
         mudancasN = d.mudancas.length;
         // Atualização já em curso (outra aba a começou, ou esta página recarregou no meio): a
         // caixa volta a abrir sozinha, senão o progresso corre sem ninguém vendo.
