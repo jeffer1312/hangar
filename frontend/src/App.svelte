@@ -12,6 +12,7 @@
   import { abrirConfig, fecharConfig } from './lib/configNav';
   import Login from './screens/Login.svelte';
   import SessionList from './screens/SessionList.svelte';
+  import Orq from './screens/Orq.svelte';
   import Costs from './screens/Costs.svelte';
   import Archive from './screens/Archive.svelte';
   import Chat from './screens/Chat.svelte';
@@ -439,7 +440,7 @@
     <DesktopShell
       currentSession={route.name === 'chat' ? route.sessionName : null}
       currentKey={route.name === 'chat' ? (route.serverId ?? '') + '::' + route.sessionName : null}
-      view={route.name === 'board' ? 'board' : route.name === 'canvas' ? 'canvas' : 'chat'}
+      view={route.name === 'board' ? 'board' : route.name === 'canvas' ? 'canvas' : route.name === 'orq' ? 'orq' : 'chat'}
       overlaySession={(route.name === 'board' || route.name === 'canvas') && route.sessionName && route.serverId
         ? { name: route.sessionName, serverId: route.serverId }
         : null}
@@ -448,9 +449,14 @@
       onCloseOverlay={() => navigateTo(route.name === 'canvas' ? '#/canvas' : '#/board')}
       onToggleBoard={() => navigateTo(route.name === 'board' ? '#/' : '#/board')}
       onToggleCanvas={() => navigateTo(route.name === 'canvas' ? '#/' : '#/canvas')}
+      onToggleOrq={() => navigateTo(route.name === 'orq' ? '#/' : '#/orq')}
       onNavigateToChat={navigateToChat}
       onCompare={navigateToCompare}
     />
+  {:else if route.name === 'orq'}
+    <!-- Orquestração TEM tela no celular (diferente do quadro/canvas): é leitura, não arrasto de
+         card, e é a tela que o usuário abre longe da máquina. -->
+    <Orq onBack={navigateToSessions} onNavigateToChat={navigateToChat} />
   {:else if route.name === 'sessions' || route.name === 'board' || route.name === 'canvas'}
     <!-- Quadro/canvas são só desktop: no mobile caem na lista normal (em vez de tela em branco). -->
     <SessionList

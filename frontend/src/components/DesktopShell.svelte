@@ -13,6 +13,7 @@ import * as m from '../paraglide/messages';
   import Chat from '../screens/Chat.svelte';
   import Board from '../screens/Board.svelte';
   import Canvas from '../screens/Canvas.svelte';
+  import Orq from '../screens/Orq.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { getConfig } from '../lib/api';
   import { getActiveId, selectServer } from '../lib/auth';
@@ -44,13 +45,14 @@ import * as m from '../paraglide/messages';
     onCloseOverlay: () => void;
     onToggleBoard: () => void;
     onToggleCanvas: () => void;
+    onToggleOrq: () => void;
     onNavigateToChat: (name: string) => void;
     onCompare: (ids: { serverId: string; name: string }[]) => void;
   }
   let {
     currentSession, currentKey = null, view, overlaySession,
     onOpenBoardSession, onOpenCanvasSession, onCloseOverlay, onToggleBoard, onToggleCanvas,
-    onNavigateToChat, onCompare,
+    onToggleOrq, onNavigateToChat, onCompare,
   }: Props = $props();
 
   let commandOpen = $state(false);
@@ -154,6 +156,10 @@ import * as m from '../paraglide/messages';
       onNavigateToChat(target.name);
     } else if (next === 'board') {
       onToggleBoard();
+    } else if (next === 'orq') {
+      // Caso EXPLÍCITO, não `else`: o `else` final cai no canvas, e uma visualização nova
+      // acrescentada sem entrada aqui abriria o canvas em silêncio, sem erro de tipo.
+      onToggleOrq();
     } else {
       onToggleCanvas();
     }
@@ -183,6 +189,14 @@ import * as m from '../paraglide/messages';
       keywords: ['canvas', m.shell_org_curto()],
       group: m.nav_navegacao(),
       run: () => selectView('canvas'),
+    },
+    {
+      id: 'view:orq',
+      title: m.shell_orq(),
+      detail: m.shell_orq_detalhe(),
+      keywords: ['orq', 'orquestracao', m.shell_orq()],
+      group: m.nav_navegacao(),
+      run: () => selectView('orq'),
     },
   ];
   const workspaceActions = $derived(
@@ -271,6 +285,8 @@ import * as m from '../paraglide/messages';
     if (view === 'board' || view === 'canvas') {
       return overlaySession ? [workspaceSessionKey(overlaySession)] : [];
     }
+    // Orq não monta Chat nenhum: sessão na tela é lista vazia, e o terminal fecha ao navegar pra cá.
+    if (view === 'orq') return [];
     void currentKey;
     if (!currentSession || currentSession === 'null' || currentSession === 'undefined') return [];
     // O SPLIT (par) segue o ativo de proposito: o Chat do split ja e ativo-based (nao recebe
@@ -346,6 +362,7 @@ import * as m from '../paraglide/messages';
     <Sidebar {currentSession} onSelect={onNavigateToChat} {onCompare}
              boardActive={view === 'board'}
              canvasActive={view === 'canvas'}
+             orqActive={view === 'orq'}
              onWorkspaceActionsChange={handleSidebarActionsChange}
              {view} onSelectView={selectView} onOpenCommand={() => (commandOpen = true)}
              onCollapsedChange={(v) => (barraRecolhida = v)}
@@ -361,7 +378,12 @@ import * as m from '../paraglide/messages';
       </div>
     {/if}
 
-    {#if view === 'board' || view === 'canvas'}
+    {#if view === 'orq'}
+      <!-- Sem overlay de card: quem abre sessão daqui vai pro chat normal. -->
+      <div class="workspace-view">
+        <Orq onNavigateToChat={onNavigateToChat} />
+      </div>
+    {:else if view === 'board' || view === 'canvas'}
       <div class="workspace-view">
         {#if view === 'board'}
           <Board onOpenSession={onOpenBoardSession} />

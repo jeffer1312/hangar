@@ -61,6 +61,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     onCompare: (ids: { serverId: string; name: string }[]) => void;
     boardActive: boolean;      // quadro aberto -> destaca o toggle e recolhe a sidebar pro rail
     canvasActive: boolean;     // canvas aberto -> mesmo tratamento do quadro (destaca + recolhe)
+    orqActive: boolean;        // orquestração aberta -> idem (a tela é larga, quer o rail)
     onWorkspaceActionsChange?: (actions: WorkspaceAction[]) => void;
     // Seletor de view (Conversa/Quadro/Canvas) + ⌘K: morava flutuando no topo da .desktop-main e
     // pousava em cima do texto do chat (a conversa nao tem o padding-top que board/canvas tem).
@@ -82,7 +83,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     overlaySession: { name: string; serverId: string } | null;
   }
   let {
-    currentSession, onSelect, onCompare, boardActive, canvasActive,
+    currentSession, onSelect, onCompare, boardActive, canvasActive, orqActive,
     onWorkspaceActionsChange, view, onSelectView, onOpenCommand, onCollapsedChange,
     ctxDisponivel = true, overlaySession,
   }: Props = $props();
@@ -101,7 +102,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Quadro OU canvas aberto -> força o recolhido (as colunas/canvas querem a largura); sair restaura
   // o pin como estava ANTES de entrar. O override mexe so no `forced` da store, nunca na preferencia:
   // o cleanup roda a cada mudanca de `overviewActive`, entao sair do board volta o valor do usuario.
-  const overviewActive = $derived(boardActive || canvasActive);
+  const overviewActive = $derived(boardActive || canvasActive || orqActive);
   $effect(() => {
     sidebarPin.setForced(overviewActive ? true : null);
     return () => sidebarPin.setForced(null);
@@ -489,7 +490,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   const filesInContext = $derived(
     isDesktopLargo && ctxDisponivel && !ctxPanel.recolhido && gitSheet !== null
       && ((overlaySession !== null && overlaySession.name === gitSheet.name)
-        || (!boardActive && !canvasActive && gitSheet.name === currentSession)),
+        || (!boardActive && !canvasActive && !orqActive && gitSheet.name === currentSession)),
   );
 
   function closeGitSheet() {

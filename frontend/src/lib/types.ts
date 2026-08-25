@@ -549,3 +549,63 @@ export interface PathDiff {
   // `""` = arquivo novo (tudo é adição); `null` = não há versão na base ou o arquivo é grande demais.
   original: string | null;
 }
+
+// ── Orquestração (GET /api/orq, /api/orq/{id}) ────────────────────────
+// Espelha as dataclasses de backend/app/orq.py. `eventos`/`eventos_execucao` só vêm no DETALHE —
+// a lista os corta pra não trafegar a linha do tempo inteira de toda execução.
+export interface OrqEvento {
+  ts: string;
+  tipo: 'execucao_inicio' | 'task_inicio' | 'entrega' | 'veredito' | 'sessao_trocada' | 'execucao_fim';
+  task?: number;
+  rodada?: number;
+  resultado?: string;
+  sessao?: string;
+  commit?: string;
+  motivo?: string;
+  de?: string;
+  para?: string;
+  titulo?: string;
+  executor?: string;
+  par?: string;
+  ts_aproximado?: boolean;
+}
+
+export interface OrqTask {
+  task: number;
+  titulo: string;
+  executor: string;
+  par: string;
+  rodadas: number;      // 0 = desconhecido (o arquivo omitiu a rodada), nunca "de primeira"
+  resultado: string | null;
+  inicio: string | null;
+  fim: string | null;
+  eventos?: OrqEvento[];
+}
+
+export interface OrqExecucao {
+  id: string;
+  plano: string;
+  branch: string;
+  gid: string;
+  inicio: string | null;
+  fim: string | null;          // null = execução viva
+  resultado: string | null;
+  tasks: OrqTask[];
+  eventos_execucao?: OrqEvento[];
+  voltas: number;
+  aprovadas_primeira: number;
+  reconstruida: boolean;
+}
+
+export interface OrqFicha {
+  par: string;
+  aceitas: number;
+  nao_aceitas: number;
+  aprovadas_primeira: number;
+  rodadas_media: number;
+}
+
+export interface OrqLista {
+  execucoes: OrqExecucao[];
+  fichas: OrqFicha[];
+}

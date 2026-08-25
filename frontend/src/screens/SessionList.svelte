@@ -839,6 +839,10 @@ import { intlLocale } from '../lib/locale';
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>
         {m.nav_arquivo()}
       </button>
+      <button class="drawer-nav-item" onclick={() => { drawerOpen = false; window.location.hash = '#/orq'; }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4"/><circle cx="12" cy="9" r="2"/><path d="M6 21v-4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4"/><path d="M6 13V9"/><path d="M18 13V9"/></svg>
+        {m.shell_orq()}
+      </button>
       <button class="drawer-nav-item" onclick={() => { drawerOpen = false; window.location.hash = '#/costs'; }}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
         {m.nav_custos()}

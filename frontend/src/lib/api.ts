@@ -17,6 +17,8 @@ import type {
   WorkflowAgentDetail,
   AnswerItem,
   CostReport,
+  OrqExecucao,
+  OrqLista,
   ResumeResult,
   RunnersResponse,
   RunInfo,
@@ -193,6 +195,18 @@ export async function fetchCostsForServer(s: Server, period: string): Promise<Pa
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<Partial<CostReport>>;
+}
+
+// Execuções de orquestração de UM servidor (baseUrl+token explícitos), sem mexer no ativo — a tela
+// Orq soma TODOS os servidores da malha, como o `sessionsStore` já faz com as sessões; buscar só do
+// ativo mostraria meia verdade sem dizer que é meia. Prazo maior que o dos fan-outs de 4s porque
+// aqui o servidor lê disco (um diretório por execução) em vez de responder de memória.
+export function getOrqForServer(s: Server): Promise<OrqLista> {
+  return apiFetchForServer<OrqLista>(s, '/api/orq');
+}
+
+export function getOrqDetalheForServer(s: Server, id: string): Promise<OrqExecucao> {
+  return apiFetchForServer<OrqExecucao>(s, `/api/orq/${encodeURIComponent(id)}`);
 }
 
 // Cauda do histórico de UMA sessão de um servidor específico — cards do quadro kanban.

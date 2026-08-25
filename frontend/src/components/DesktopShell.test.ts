@@ -97,6 +97,7 @@ function montar(currentSession: string | null) {
       onCloseOverlay: vi.fn(),
       onToggleBoard: vi.fn(),
       onToggleCanvas: vi.fn(),
+      onToggleOrq: vi.fn(),
       onNavigateToChat: vi.fn(),
       onCompare: vi.fn(),
     },
@@ -228,6 +229,7 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
         onCloseOverlay,
         onToggleBoard: vi.fn(),
         onToggleCanvas: vi.fn(),
+      onToggleOrq: vi.fn(),
         onNavigateToChat: vi.fn(),
         onCompare: vi.fn(),
       },
@@ -269,7 +271,8 @@ describe('DesktopShell — empty state compensa a faixa (follow-up visual)', () 
         view: 'chat',
         overlaySession: null,
         onOpenBoardSession: vi.fn(), onOpenCanvasSession: vi.fn(), onCloseOverlay: vi.fn(),
-        onToggleBoard: vi.fn(), onToggleCanvas: vi.fn(), onNavigateToChat: vi.fn(), onCompare: vi.fn(),
+        onToggleBoard: vi.fn(), onToggleCanvas: vi.fn(), onToggleOrq: vi.fn(),
+        onNavigateToChat: vi.fn(), onCompare: vi.fn(),
       },
     });
     return { el, comp: comp as never };

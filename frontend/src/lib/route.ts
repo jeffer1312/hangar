@@ -15,6 +15,9 @@ export type Route =
   // Canvas livre: visualização irmã do quadro (#/canvas), mesmos campos overlay do board de
   // propósito — o servidor ativo e a espiada seguem a mesma regra pras duas rotas.
   | { name: 'canvas'; sessionName: string | null; serverId: string | null }
+  // Orquestração (#/orq): histórico das execuções da skill + a faixa da execução viva. Sem campos
+  // de overlay — quem abre sessão aqui é o chat normal, não um card.
+  | { name: 'orq' }
   | { name: 'compare'; ids: CompareId[] };
 
 export function parseHash(hash: string): Route {
@@ -63,6 +66,7 @@ export function parseHash(hash: string): Route {
     };
   }
   if (path === '/archive') return { name: 'archive' };
+  if (path === '/orq') return { name: 'orq' };
   // Quadro kanban (visualização irmã da lista+chat) — só existe no desktop; no mobile o render
   // trata board como a lista normal. ANTES do regex de 2 segmentos: só pra deixar explícito que o
   // quadro puro é a forma base (os dois padrões não se sobrepõem — o regex exige serverId+nome).
