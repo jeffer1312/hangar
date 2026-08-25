@@ -14,7 +14,7 @@ Toda a mecânica vem do claude-pocket e **já está pronta** — a skill só reg
 
 | Mecânica | Quem faz |
 |---|---|
-| Criar sessão visível (tmux + --session-id) | `cp-send --new <nome> <cwd>` |
+| Criar sessão visível (tmux + --session-id) | `cp-send --new <nome> <cwd>` (+ `--provider`/`--conta`/`--engine`/`--model`/`--effort`/`--permissao` — nasce já no modelo/esforço/permissão) |
 | Grupo de N sessões + protocolo injetado | `cp-send --pair <sessao> "<tarefa>"` (grupos se fundem) |
 | Regras de conduta (só-meu-repo, anti-loop, branch, push=usuário) | prompt que o backend injeta no pair — **não reexplicar** |
 | Contrato compartilhado (PairSheet na UI) | `~/.claude/.claude-pocket-pair/grupo-<gid>.md` |

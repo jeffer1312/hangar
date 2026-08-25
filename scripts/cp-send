@@ -19,6 +19,13 @@
 #                                  --engine <motor> nasce num motor de ~/.claude/engines.json
 #                                  (outro modelo, conta do provedor — ver "Par noutro modelo").
 #                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo).
+#                                  --model <id> a sessão já ABRE nesse modelo (opus, sonnet,
+#                                  haiku, claude-opus-5…) — vale pra claude, pi e kimi.
+#                                  --effort <low|medium|high|xhigh|max> já abre nesse esforço
+#                                  (claude; no pi vira --thinking, que aceita também off/minimal;
+#                                  kimi não tem esforço por flag). SEMPRE prefira nascer no
+#                                  modelo/esforço certo a mandar /model no primeiro recado — a
+#                                  sessão trabalha ANTES de ler o recado.
 #   cp-send --help                 esta ajuda (o cabeçalho deste arquivo).
 #
 # OUTRA CONTA: cada conta é um config dir próprio (~/.claude-<nome>), com skills/hooks symlinkados
@@ -199,7 +206,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>]}"
+    name="${1:?uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
     shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
@@ -210,7 +217,7 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>]" >&2
+        echo "uso: cp-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
@@ -225,7 +232,10 @@ if [[ "$1" == "--new" ]]; then
     # flag, o único caminho era curl na API — e a ausência dele aqui vinha sendo lida como "não dá
     # pra abrir noutra conta". Resolve pelo cp-conta (--prep reconcilia os atalhos e imprime o
     # caminho), pra regra de nome/pasta continuar morando num lugar só.
-    cwd=""; engine=""; provider=""; conta=""; config_dir=""
+    # --model/--effort/--permissao: repassados crus pro backend (CreateBody.model/effort/
+    # permission_mode), que valida contra as listas fechadas de app/model_args.py — não duplicar
+    # os valores aqui, senão o script envelhece separado do backend (mesma regra do --provider).
+    cwd=""; engine=""; provider=""; conta=""; config_dir=""; model=""; effort=""; permissao=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --engine)
@@ -237,6 +247,15 @@ if [[ "$1" == "--new" ]]; then
             --provider)
                 [[ -n "$provider" ]] && { echo "erro: --provider informado duas vezes" >&2; exit 2; }
                 provider="${2:?uso: --provider <claude|codex|pi|kimi>}"; shift 2 ;;
+            --model)
+                [[ -n "$model" ]] && { echo "erro: --model informado duas vezes" >&2; exit 2; }
+                model="${2:?uso: --model <id>}"; shift 2 ;;
+            --effort)
+                [[ -n "$effort" ]] && { echo "erro: --effort informado duas vezes" >&2; exit 2; }
+                effort="${2:?uso: --effort <low|medium|high|xhigh|max>}"; shift 2 ;;
+            --permissao)
+                [[ -n "$permissao" ]] && { echo "erro: --permissao informado duas vezes" >&2; exit 2; }
+                permissao="${2:?uso: --permissao <acceptEdits|auto|bypassPermissions|manual|dontAsk|plan>}"; shift 2 ;;
             # Token com '-' na frente que não é --engine/--provider é opção errada (--engines,
             # -engine). Aceitar como cwd fazia o erro aparecer no token SEGUINTE, apontando o inocente.
             -*) echo "erro: opção desconhecida '$1'" >&2; exit 2 ;;
@@ -258,16 +277,24 @@ if [[ "$1" == "--new" ]]; then
     # parece estar no motor e não está.
     # config_dir vazio -> a chave SOME do payload (não vai null): o backend trata ausência como
     # conta padrão, e mandar null por um campo que ele valida contra list_config_dirs é pedir 400.
+    # model/effort/permissao vazios -> as chaves SOMEM do payload (None é o default do CreateBody;
+    # mandar "" seria validado e recusado).
     body=$(python3 -c 'import json,sys
 d = {"name": sys.argv[1], "cwd": sys.argv[2],
      "engine": sys.argv[3] or None,
      "provider": sys.argv[4] or "claude"}
 if sys.argv[5]:
     d["config_dir"] = sys.argv[5]
+if sys.argv[6]:
+    d["model"] = sys.argv[6]
+if sys.argv[7]:
+    d["effort"] = sys.argv[7]
+if sys.argv[8]:
+    d["permission_mode"] = sys.argv[8]
 print(json.dumps(d))' \
-           "$name" "$cwd" "$engine" "$provider" "$config_dir")
+           "$name" "$cwd" "$engine" "$provider" "$config_dir" "$model" "$effort" "$permissao")
     api POST /api/sessions "$body" >/dev/null
-    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]} — fala com ela via: cp-send $name \"msg\""
+    echo "sessão criada: $name ($cwd)${provider:+ [$provider]}${engine:+ [motor: $engine]}${conta:+ [conta: $conta]}${model:+ [modelo: $model]}${effort:+ [esforço: $effort]}${permissao:+ [permissão: $permissao]} — fala com ela via: cp-send $name \"msg\""
     exit 0
 fi
 

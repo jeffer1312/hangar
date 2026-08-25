@@ -85,8 +85,10 @@ subcommands/advanced flags remain raw; `command codex` is the explicit bypass.
 ## Sessões-irmãs (cp-send) + pareamento
 
 Sessões Claude da MESMA máquina se falam via `scripts/cp-send` (`--list`, `<sessao> "msg"`,
-`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd] [--engine <motor>]`) — tudo sobre a API
-local do backend (`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`,
+`--pair <sessao> "tarefa"`, `--unpair`, `--new <nome> [cwd] [--engine <motor>] [--provider ...]
+[--conta <nome>] [--model <id>] [--effort <nivel>] [--permissao <modo>]` — a sessão já NASCE no
+modelo/esforço/permissão pedidos, validados pelo backend via `app/model_args.py`) — tudo sobre a
+API local do backend (`/input`, `/pair`, fila durável). Pareamento = vínculo simétrico (`app/pair.py`,
 sidecars em `<config>/.claude-pocket-pair/`) + prompt de protocolo injetado nas duas sessões; a UI
 mostra chip 🤝 (Composer), badges nas listas, PairSheet (conversa do par + contrato compartilhado
 `<a>__<b>.md` + split view desktop).

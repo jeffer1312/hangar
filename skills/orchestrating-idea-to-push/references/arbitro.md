@@ -838,24 +838,22 @@ no meio deles.
    acessível por gateway, roteador ou API **não é** uma sessão dele — é outro provedor
    servindo um modelo parecido, com outra conta e outro comportamento.
 
-   **`cp-send --new` NÃO carrega modelo nem nível de esforço.** Ele aceita
-   `[cwd] [--engine <motor>] [--provider <claude|pi>]` e mais nada. O contrato que nomeia modelo e
-   thinking (o caso normal quando o time roda em Pi) **não cabe nesse comando** — a sessão nasceria
-   no padrão do binário. Quem carrega os quatro campos é a API:
+   **Modelo, esforço e permissão vão NO PRÓPRIO `cp-send --new`** (desde 25/08/2026):
+   `--model <id>`, `--effort <nivel>` e `--permissao <modo>`. O contrato que nomeia modelo e
+   thinking (o caso normal quando o time roda em Pi) cabe no comando — a sessão já nasce nele:
 
    ```bash
-   T=$(grep '^CP_AUTH_TOKEN=' <repo>/backend/.env | cut -d= -f2-)
-   curl -s -X POST http://127.0.0.1:8765/api/sessions \
-     -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
-     -d '{"name":"<nome>","cwd":"<repo>","provider":"pi",
-          "model":"<provider>/<id>","effort":"<nivel>"}'
+   cp-send --new <nome> <repo> --provider pi --model <provider>/<id> --effort <nivel>
    ```
 
-   O backend valida **antes** de qualquer efeito em disco: modelo fora da regex, nível fora da lista
-   fechada ou provider desconhecido devolvem 400 e a sessão **não nasce** — nunca uma sessão que
-   parece estar no modelo certo e não está. O caminho alternativo (criar pelo `cp-send` e trocar
-   depois por `/cp-model` + `/cp-think`) funciona, mas deixa a sessão viva um intervalo no modelo
-   errado, e contradiz o passo 2 abaixo.
+   No Pi o `--effort` vira `--thinking` (aceita também `off|minimal`); no Kimi só `--model`;
+   `--permissao` é só Claude. O backend valida **antes** de qualquer efeito em disco: modelo fora
+   da regex, nível fora da lista fechada ou provider desconhecido devolvem 400 e a sessão **não
+   nasce** — nunca uma sessão que parece estar no modelo certo e não está. O caminho alternativo
+   (criar sem os flags e trocar depois por `/cp-model` + `/cp-think`) funciona, mas deixa a sessão
+   viva um intervalo no modelo errado, e contradiz o passo 2 abaixo. (Instalação com `cp-send`
+   antigo, sem os flags: o POST direto na API com `model`/`effort`/`permission_mode` no corpo
+   continua valendo como plano B.)
 
 2. **Provar o que nasceu**, lendo o motor/modelo **real** da sessão, nunca o que você pediu.
    Divergiu do plano → apague e recrie. Sessão errada recebendo o pedido é trabalho inteiro no lugar
