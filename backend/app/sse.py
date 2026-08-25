@@ -131,7 +131,16 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     else:
         def _match(lbl: str) -> bool:
             return any(s and lbl.startswith(s) for s in pane_opts)
+        # Mesmo motivo do log do ramo de cima, que aqui faltava: reprovar CALADO deixa como unico
+        # sintoma "a tela ficou mais pobre" — a folha nativa com descricao e preview vira lista de
+        # rotulo truncado, e nao ha por onde comecar a investigar. Diagnostico de 25/08/2026 numa
+        # maquina Windows passou por isto: as opcoes tinham preview, entao este era o ramo, e o log
+        # nao tinha uma linha sequer sobre a pergunta. Loga os dois lados porque a causa e a
+        # DIFERENCA entre eles (rotulo do pane truncado num ponto que nao e prefixo, ou contagem
+        # diferente de opcoes).
         if len(first_opts) != len(pane_opts) or not all(_match(l) for l in first_opts):
+            _log.info("askq: sidecar com preview nao casa o menu, degrada p/ OptionButtons "
+                      "sidecar=%s pane=%s", sorted(first_opts), sorted(pane_opts))
             return None
     return {"event": "ask_question", "data": json.dumps(payload.model_dump(), ensure_ascii=False)}
 
