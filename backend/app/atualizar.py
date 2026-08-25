@@ -841,6 +841,9 @@ def reiniciar_agora() -> dict:
     topologia = _topologia()
     if topologia != "systemd":
         return {"ok": False, "erro": "topologia", "topologia": topologia}
+    # Limpa a falha do reinício ANTERIOR: sem isso a tela mostraria pra sempre o erro de uma
+    # tentativa que já passou, inclusive depois de um reinício que deu certo.
+    _escrever(reinicio_erro=None)
     proc = subprocess.Popen(
         tmux._scope_prefix() + [sys.executable, "-m", "app.atualizar", "--reiniciar"],
         cwd=str(REPO / "backend"),
@@ -850,10 +853,25 @@ def reiniciar_agora() -> dict:
     return {"ok": True, "pid": proc.pid}
 
 
+def executar_reinicio() -> None:
+    """O reinício em si, já dentro do processo destacado.
+
+    O `except` NÃO é zelo: o `stderr` deste processo vai pro `/dev/null` (o `Popen` de
+    `reiniciar_agora` não pode escrever no log do serviço que está prestes a reiniciar), então uma
+    exceção aqui não deixaria rastro em lugar NENHUM — nem log, nem estado — e a tela ficaria
+    esperando um servidor que nunca cai, sem saber por quê. O estado é o único canal que sobrevive
+    a este processo, e é dele que a tela lê.
+    """
+    try:
+        _avisar_sessoes()
+        _reiniciar(_topologia())
+    except Exception as e:                           # noqa: BLE001 — ver docstring
+        _escrever(reinicio_erro=f"{type(e).__name__}: {e}")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     if len(sys.argv) > 1 and sys.argv[1] == "--reiniciar":
-        _avisar_sessoes()
-        _reiniciar(_topologia())
+        executar_reinicio()
     else:
         executar(int(sys.argv[1]) if len(sys.argv) > 1 else 8765)

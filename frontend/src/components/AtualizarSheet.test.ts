@@ -95,6 +95,45 @@ describe('em dia', () => {
     expect(rei).toHaveBeenCalled();
   });
 
+  it('desmontar no meio da espera do restart não recarrega a tela de quem saiu', async () => {
+    // O laço da espera é solto (não é um $effect), então a destruição do DesktopShell o deixava
+    // rodando: ao ver as versões baterem ele chamava location.reload() em quem já tinha navegado.
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+        base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+               pre_voo: { pode: true, faltando: [], topologia: 'systemd' } }),
+      );
+      vi.spyOn(api, 'reiniciarServidor').mockResolvedValue({ ok: true, pid: 1 });
+      montar();
+      await vi.advanceTimersByTimeAsync(0);
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent?.includes(m.atualizar_reiniciar_botao()))!.click();
+      await vi.advanceTimersByTimeAsync(2100);
+      const antes = spy.mock.calls.length;
+
+      unmount(comp!);
+      comp = null;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(spy.mock.calls.length).toBe(antes);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reinício que falhou aparece na tela, não só no servidor', async () => {
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ versoes: { repo: 'v2-novo', backend: 'v1-velho' },
+             estado: { reinicio_erro: 'RuntimeError: nao consegui reiniciar o servidor' } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    const txt = document.body.textContent ?? '';
+    expect(txt).toContain(m.atualizar_reinicio_falhou());
+    expect(txt).toContain('nao consegui reiniciar o servidor');
+  });
+
   it('fora do systemd não oferece botão nenhum — quem reinicia ali é o instalador', async () => {
     // Sem isto o botão apareceria no Windows e só serviria pra devolver 409 na cara de quem clicou.
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(

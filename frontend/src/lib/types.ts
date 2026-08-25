@@ -638,6 +638,8 @@ export interface AtualizacaoEstado {
   /** O servidor respondeu depois disso. Separado de `voltou`: reverter e não subir é um terceiro caso. */
   no_ar?: boolean;
   reiniciar_manual?: boolean;
+  /** O último reinício pedido pela tela falhou. Escrito pelo processo destacado, único canal dele. */
+  reinicio_erro?: string | null;
   /** Arquivos de `docs/atualizacoes/` que o app ignorou por estarem malformados. */
   passos_invalidos?: string[];
   /** Comandos e saída, pra tela poder mostrar o que está rodando agora. */

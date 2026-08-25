@@ -1956,6 +1956,7 @@
   "atualizar_reiniciar_botao": "Reiniciar servidor",
   "atualizar_reiniciando": "Reiniciando…",
   "atualizar_reinicio_demorou": "O servidor não voltou em 90 segundos. Veja o log do serviço antes de tentar de novo.",
+  "atualizar_reinicio_falhou": "O último reinício falhou:",
   "erro_reinicio_indisponivel": "Esta máquina não reinicia o servidor sozinha — aqui quem derruba e sobe ele é o instalador.",
   "atualizar_procurar": "Procurar de novo",
   "atualizar_disponivel_titulo": "Versão nova disponível",

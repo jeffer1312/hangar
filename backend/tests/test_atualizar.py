@@ -685,6 +685,30 @@ def test_reiniciar_agora_lanca_destacado_e_no_escopo(repo, monkeypatch):
     assert capturado.get("start_new_session") is True
 
 
+def test_reinicio_que_falha_deixa_rastro_no_estado(repo, monkeypatch):
+    """O processo do reinício é destacado e tem o stderr no /dev/null: exceção aqui não vai pra log
+    nenhum. Sem gravar no estado, um `systemctl` que falha some por completo e a tela fica esperando
+    um servidor que nunca cai."""
+    monkeypatch.setattr(atualizar, "_avisar_sessoes", lambda: None)
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
+    monkeypatch.setattr(atualizar, "_reiniciar",
+                        lambda topo: (_ for _ in ()).throw(RuntimeError("systemctl explodiu")))
+    atualizar.executar_reinicio()
+    assert "systemctl explodiu" in atualizar.estado()["reinicio_erro"]
+
+
+def test_reiniciar_agora_limpa_a_falha_anterior(repo, monkeypatch):
+    """Falha de ontem não pode ficar na tela depois de um reinício novo."""
+    class P:
+        pid = 5
+    atualizar._escrever(reinicio_erro="RuntimeError: da vez passada")
+    monkeypatch.setattr(atualizar, "_topologia", lambda: "systemd")
+    monkeypatch.setattr(atualizar.tmux, "_scope_prefix", lambda: [])
+    monkeypatch.setattr(atualizar.subprocess, "Popen", lambda a, **kw: P())
+    atualizar.reiniciar_agora()
+    assert atualizar.estado()["reinicio_erro"] is None
+
+
 def test_reiniciar_agora_recusa_fora_do_systemd(repo, monkeypatch):
     """Windows e instalação na mão: quem derruba e sobe o servidor é o instalador. Recusa nomeando
     a topologia — e NÃO lança processo nenhum, que é o que um `kill` inventado aqui faria."""

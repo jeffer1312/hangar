@@ -1956,6 +1956,7 @@
   "atualizar_reiniciar_botao": "Restart server",
   "atualizar_reiniciando": "Restarting…",
   "atualizar_reinicio_demorou": "The server did not come back within 90 seconds. Check the service log before trying again.",
+  "atualizar_reinicio_falhou": "The last restart failed:",
   "erro_reinicio_indisponivel": "This machine does not restart the server on its own — here the installer is what stops and starts it.",
   "atualizar_procurar": "Check again",
   "atualizar_disponivel_titulo": "New version available",

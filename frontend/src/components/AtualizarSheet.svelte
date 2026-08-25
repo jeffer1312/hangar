@@ -272,6 +272,16 @@
 
   const _TETO_VOLTAR_MS = 90_000;
 
+  /**
+   * O componente ainda existe? A espera do restart é um laço solto (não um `$effect`), e o
+   * `DesktopShell` que monta esta folha SAI da árvore quando alguém navega pra Custos/Arquivo.
+   * Sem esta bandeira o laço continuava rodando depois da destruição e chamava `location.reload()`
+   * na tela em que a pessoa já estava — o mesmo defeito que a limpeza do `agendar()` resolveu logo
+   * abaixo, por outra porta. `$effect` sem leitura reativa: roda uma vez, limpa na destruição.
+   */
+  let vivo = true;
+  $effect(() => () => { vivo = false; });
+
   async function reiniciar() {
     reiniciando = true;
     erroDeRede = '';
@@ -283,8 +293,10 @@
       const limite = Date.now() + _TETO_VOLTAR_MS;
       while (Date.now() < limite) {
         await new Promise((r) => setTimeout(r, 2000));
+        if (!vivo) return;
         try {
           const d = await getAtualizacao();
+          if (!vivo) return;
           if (d.versoes.backend === d.versoes.repo) {
             concluir();
             return;
@@ -428,6 +440,12 @@
           <span class="val">{dados?.versoes.backend ?? '—'}</span>
         </div>
         <p class="aviso">{m.atualizar_precisa_reiniciar()}</p>
+        {#if estado.reinicio_erro}
+          <!-- O processo que reinicia é destacado e tem o stderr no /dev/null: sem esta linha, um
+               reinício que falhou não aparece em lugar nenhum e a tela só saberia dizer que o
+               servidor não voltou. -->
+          <p class="erro-linha">{m.atualizar_reinicio_falhou()} {estado.reinicio_erro}</p>
+        {/if}
       {/if}
       {#if invalidos.length}
         <!-- O aviso não pode viver só no log: quem lê os arquivos de passo é o processo destacado,
