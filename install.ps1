@@ -744,6 +744,46 @@ if ($precisa) {
     Ok 'frontend ja buildado e atualizado (nada mudou no git desde o ultimo build)'
 }
 
+# -- Janela nativa (Electron, shell\) -----------------------------------------
+# So as DEPENDENCIAS, nunca o `npm run dist`. O `git pull` traz o `main.cjs` novo, e quem roda o
+# app a partir do repo ja o executa no proximo start — mas se o `package-lock.json` do shell mudar
+# (Electron novo, dependencia nova), a janela roda com dependencia velha e nada avisa. Empacotar
+# (NSIS/AppImage) e outra coisa: leva minutos e produz um INSTALADOR, que alguem ainda tem que
+# instalar — publicacao, nao atualizacao, e nao cabe num botao que roda sozinho.
+$shellDir = "$raiz\shell"
+if (Test-Path "$shellDir\package.json") {
+    # Compara com `node_modules\.package-lock.json`, que o npm reescreve a CADA instalacao — e nao
+    # com a PASTA node_modules, cuja data nao acompanha o que aconteceu dentro dela (medido: pasta
+    # de 16/08 com lock de 22/08, o que faria o `npm ci` rodar em toda atualizacao, a toa).
+    $marcaShell = "$shellDir\node_modules\.package-lock.json"
+    $lock = "$shellDir\package-lock.json"
+    $precisaShell = (-not (Test-Path $marcaShell)) -or
+                    ((Test-Path $lock) -and ((Get-Item $lock).LastWriteTime -gt (Get-Item $marcaShell).LastWriteTime))
+    if ($precisaShell) {
+        Titulo 'Janela nativa (Electron)'
+        $eapAnterior = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        Push-Location $shellDir
+        try {
+            $quietoShell = if ($Update) { @() } else { @('--silent') }
+            npm ci @quietoShell
+            $rcShell = $LASTEXITCODE
+        } finally {
+            Pop-Location
+            $ErrorActionPreference = $eapAnterior
+        }
+        if ($rcShell -eq 0) {
+            Ok 'dependencias da janela instaladas'
+        } else {
+            # Nao derruba a atualizacao: o app funciona no navegador sem a janela nativa.
+            Falta "npm ci do shell\ falhou (exit $rcShell) - a janela nativa pode nao abrir"
+            Nota 'rodar na mao:  cd shell ; npm ci'
+        }
+    } else {
+        Ok 'janela nativa ja com as dependencias em dia'
+    }
+}
+
 # -- 5/8 Wrapper do claude ---------------------------------------------------
 # Sem ele um `claude` que VOCE abre no terminal e invisivel pro app: nao tem --session-id (o
 # backend nao sabe qual transcript e daquela sessao) e nao vive num pane (nao ha estado nem

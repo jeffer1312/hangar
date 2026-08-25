@@ -219,6 +219,32 @@ else
 fi
 fi
 
+# ── Janela nativa (Electron, shell/) ──────────────────────────────────────────
+# Só as DEPENDÊNCIAS, nunca o `npm run dist`. O `git pull` traz o `main.cjs` novo, e quem roda o
+# app a partir do repo já o executa no próximo start — mas se o `package-lock.json` do shell mudar
+# (Electron novo, dependência nova), a janela roda com dependência velha e nada avisa. Empacotar
+# (AppImage/NSIS) é outra coisa: leva minutos e produz um INSTALADOR, que alguém ainda tem que
+# instalar — publicação, não atualização, e não cabe num botão que roda sozinho.
+if [ -d shell ] && [ -f shell/package.json ]; then
+  # Compara com `node_modules/.package-lock.json`, que o npm reescreve a CADA instalação — e não
+  # com a pasta `node_modules`, cuja data não acompanha o que aconteceu dentro dela. Medido aqui:
+  # a pasta era de 16/08 e o lock de 22/08, então a condição dava "precisa" toda vez e um `npm ci`
+  # de minutos rodaria em cada atualização, à toa.
+  MARCA_SHELL=shell/node_modules/.package-lock.json
+  if [ ! -f "$MARCA_SHELL" ] || [ shell/package-lock.json -nt "$MARCA_SHELL" ]; then
+    say "Janela nativa (Electron)"
+    QUIETO_SHELL=--silent; [ "$UPDATE" = 1 ] && QUIETO_SHELL=
+    if (cd shell && npm ci $QUIETO_SHELL); then
+      ok "dependências da janela instaladas"
+    else
+      # Não derruba a atualização: o app funciona no navegador sem a janela nativa.
+      falta "npm ci do shell/ falhou — a janela nativa pode não abrir (rode: cd shell && npm ci)"
+    fi
+  else
+    ok "janela nativa já com as dependências em dia"
+  fi
+fi
+
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
 # Sem eles um `claude` que VOCÊ abre no terminal é invisível pro app: sem --session-id o backend
 # não sabe qual transcript é daquela sessão, e fora do tmux não há pane pra ler estado nem
