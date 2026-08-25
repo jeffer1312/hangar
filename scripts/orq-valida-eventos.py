@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Valida um eventos.jsonl contra o contrato da skill (arbitro.md).
+Uso: python3 scripts/orq-valida-eventos.py <arquivo> [...]
+Sai 0 se todos válidos; imprime linha e defeito de cada inválida."""
+import json
+import sys
+
+TIPOS = {
+    "execucao_inicio": {"plano", "branch", "gid"},
+    "task_inicio": {"task", "titulo", "executor", "par"},
+    "entrega": {"task", "rodada"},
+    "veredito": {"task", "rodada", "resultado", "sessao"},
+    "sessao_trocada": {"de", "para"},
+    "execucao_fim": {"resultado"},
+}
+RESULTADOS = {"aprova", "reprova", "devolvido"}
+
+
+def valida(path: str) -> int:
+    erros = 0
+    for i, linha in enumerate(open(path, encoding="utf-8"), 1):
+        linha = linha.strip()
+        if not linha:
+            continue
+        try:
+            ev = json.loads(linha)
+        except ValueError as e:
+            print(f"{path}:{i}: json invalido — {e}"); erros += 1; continue
+        tipo = ev.get("tipo")
+        if tipo not in TIPOS:
+            print(f"{path}:{i}: tipo desconhecido {tipo!r}"); erros += 1; continue
+        if "ts" not in ev:
+            print(f"{path}:{i}: sem ts"); erros += 1
+        faltam = TIPOS[tipo] - ev.keys()
+        if faltam:
+            print(f"{path}:{i}: {tipo} sem {sorted(faltam)}"); erros += 1
+        for campo in ("task", "rodada"):
+            if campo in ev and campo in TIPOS[tipo] and not isinstance(ev[campo], int):
+                print(f"{path}:{i}: {campo} nao e numero ({ev[campo]!r})"); erros += 1
+        if tipo == "veredito" and ev.get("resultado") not in RESULTADOS:
+            print(f"{path}:{i}: resultado {ev.get('resultado')!r} fora de {sorted(RESULTADOS)}"); erros += 1
+    return erros
+
+
+if __name__ == "__main__":
+    total = sum(valida(p) for p in sys.argv[1:])
+    sys.exit(1 if total else 0)
