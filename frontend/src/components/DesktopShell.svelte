@@ -16,6 +16,7 @@ import * as m from '../paraglide/messages';
   import Orq from '../screens/Orq.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { getConfig, getAtualizacao } from '../lib/api';
+  import { atualizarUI } from '../lib/atualizarUI.svelte';
   import AtualizarSheet from './AtualizarSheet.svelte';
   import { getActiveId, selectServer } from '../lib/auth';
   import { navMode } from '../lib/navMode.svelte';
@@ -135,9 +136,11 @@ import * as m from '../paraglide/messages';
   });
 
   // ── Botão Atualizar (só desktop: quem atualiza está na máquina onde o repo vive) ──────────────
-  let atualizarAberto = $state(false);
+  // Estado da caixa num store, e não numa variável daqui: quem PEDE a abertura nem sempre é
+  // vizinho de quem DESENHA. O botão da tela Sobre vive dentro do modal de Configurações, montado
+  // lá no App — passar callback de lá até aqui atravessaria três componentes que não têm nada a
+  // ver com atualização.
   let temAtualizacao = $state(false);
-  let mudancasN = $state(0);
   // Qual falha já foi mostrada (o `ts` do estado). Guardado por viewer, no navegador: é conveniência
   // de quem está olhando, não estado do servidor — outra máquina precisa ver a mesma falha.
   const FALHA_VISTA = 'cp_atualizacao_falha_vista';
@@ -147,7 +150,7 @@ import * as m from '../paraglide/messages';
   let falhaPendente = $state('');
 
   function fecharAtualizar() {
-    atualizarAberto = false;
+    atualizarUI.fechar();
     if (falhaPendente) {
       falhaVista = falhaPendente;
       falhaPendente = '';
@@ -169,17 +172,16 @@ import * as m from '../paraglide/messages';
         // nascia com commit novo no GitHub, e nesse caso não há nenhum.
         temAtualizacao = d.atualizacao_disponivel
           || d.versoes.repo !== d.versoes.backend;
-        mudancasN = d.mudancas.length;
         // Atualização já em curso (outra aba a começou, ou esta página recarregou no meio): a
         // caixa volta a abrir sozinha, senão o progresso corre sem ninguém vendo.
-        if (d.estado?.fase === 'rodando') atualizarAberto = true;
+        if (d.estado?.fase === 'rodando') atualizarUI.abrir();
         // FALHA também abre, e é o caso mais importante: a atualização derruba o backend e a
         // página recarrega, então o erro acontece com a caixa fechada. Sem isto ele nunca chega
         // em ninguém — a máquina fica na versão velha em silêncio, que é o pior desfecho possível.
         // Uma vez só por falha: o `ts` do estado é a marca, e fechar a caixa a registra.
         else if (d.estado?.fase === 'pronto' && d.estado.ok === false
                  && d.estado.ts && d.estado.ts !== falhaVista) {
-          atualizarAberto = true;
+          atualizarUI.abrir();
           falhaPendente = d.estado.ts;
         }
       } catch {
@@ -411,8 +413,8 @@ import * as m from '../paraglide/messages';
     <SessionTabs {currentKey} onSelect={openSession}
                  onOpenConfig={() => abrirConfig('root', getActiveId())}
                  onIrParaContas={() => abrirConfig('contas', getActiveId())}
-                 temAtualizacao={temAtualizacao && !atualizarAberto}
-                 onAbrirAtualizar={() => (atualizarAberto = true)}
+                 {temAtualizacao}
+                 onAbrirAtualizar={() => atualizarUI.abrir()}
                  {ctxDisponivel} />
   {/if}
 
@@ -569,7 +571,7 @@ import * as m from '../paraglide/messages';
     onOpenSession={openSession}
   />
 
-  <AtualizarSheet open={atualizarAberto} onClose={fecharAtualizar}
+  <AtualizarSheet open={atualizarUI.aberta} onClose={fecharAtualizar}
                   trabalhando={sessoesTrabalhando} />
 </div>
 

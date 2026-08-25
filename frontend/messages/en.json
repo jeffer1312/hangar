@@ -1977,5 +1977,8 @@
   "atualizar_falhou_voltou_fora": "The previous code was restored, but the server is not responding. Nothing was lost — the service needs a manual restart.",
   "atualizar_passos_invalidos": "Warning: {n} update file(s) are malformed and were ignored: {lista}",
   "atualizar_ver_log": "show what is running",
-  "atualizar_esconder_log": "hide"
+  "atualizar_esconder_log": "hide",
+  "atualizar_procurar_curto": "Check for updates",
+  "atualizar_procurar_falhou": "Could not reach the server.",
+  "atualizar_com_mudancas_locais": "with local changes not committed to the repository"
 }

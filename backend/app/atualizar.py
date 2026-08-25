@@ -130,7 +130,7 @@ def _etapa(chave: str, **extra) -> None:
 _TETO_LOG = 400          # linhas guardadas no estado: o suficiente pra entender, sem inchar o JSON
 
 
-def _log_do_estado(linha: str) -> None:
+def _log_do_estado(texto: str) -> None:
     """Acrescenta uma linha ao log que a tela mostra.
 
     A pessoa que aperta o botão fica olhando "Instalando dependências" por mais de um minuto sem
@@ -138,8 +138,11 @@ def _log_do_estado(linha: str) -> None:
     comando e a saída dele no próprio estado deixa a tela abrir um terminalzinho: o `estado.json`
     já é lido por polling e sobrevive ao restart, então não precisa de canal novo.
     """
+    # Guarda uma LINHA por item, mesmo recebendo um bloco. O teto conta itens, então blocos
+    # multi-linha o furariam: medido, 400 blocos de 2 linhas viraram 801 linhas no estado que a
+    # tela relê a cada 2s. Quebrar aqui mantém `_TETO_LOG` querendo dizer o que ele diz.
     atual = estado().get("log") or []
-    atual.append(linha)
+    atual.extend(texto.splitlines() or [texto])
     _escrever(log=atual[-_TETO_LOG:])
 
 
@@ -153,20 +156,43 @@ def _rodar(args: list[str], cwd: Path | None = None,
     saída aqui é lida por código, e mensagem traduzida quebraria a leitura calada.
     """
     _log_do_estado("$ " + " ".join(args))
-    p = subprocess.run(
-        args, cwd=str(cwd or REPO), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=timeout,
+    # Saída lida AO VIVO, linha a linha, e não com `capture_output` no fim. O `install.sh --update`
+    # é um comando só que leva mais de um minuto (npm ci + build): esperando ele terminar pra
+    # escrever, a caixinha da tela fica parada exatamente durante a espera que ela existe pra
+    # explicar — que foi o que aconteceu com quem estava olhando, em 25/08/2026.
+    linhas: list[str] = []
+    limite = time.monotonic() + timeout
+    proc = subprocess.Popen(
+        args, cwd=str(cwd or REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
         env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"},
     )
-    saida = _ANSI.sub("", (p.stdout or "") + (p.stderr or "")).strip()
-    if saida:
-        # Só o fim: um `npm ci` despeja centenas de linhas, e o que interessa a quem está olhando a
-        # tela é o desfecho, não o inventário de pacotes.
-        for linha in saida.splitlines()[-25:]:
-            _log_do_estado(linha)
-    if p.returncode != 0:
-        _log_do_estado(f"[saiu com {p.returncode}]")
-    return p
+    pendentes: list[str] = []
+    ultimo_flush = time.monotonic()
+    assert proc.stdout is not None
+    for bruta in proc.stdout:
+        linha = _ANSI.sub("", bruta).rstrip()
+        linhas.append(linha)
+        if linha:
+            pendentes.append(linha)
+        agora = time.monotonic()
+        # Agrupa por ~1s: uma escrita de arquivo por linha faria centenas de tmp+rename num npm ci.
+        if pendentes and agora - ultimo_flush >= 1.0:
+            _log_do_estado("\n".join(pendentes))
+            pendentes = []
+            ultimo_flush = agora
+        if agora > limite:
+            proc.kill()
+            raise subprocess.TimeoutExpired(args, timeout)
+    if pendentes:
+        _log_do_estado("\n".join(pendentes))
+    proc.wait()
+    if proc.returncode != 0:
+        _log_do_estado(f"[saiu com {proc.returncode}]")
+    # Mesma forma de retorno de antes: quem chama lê `.returncode`, `.stdout` e `.stderr`. O stderr
+    # foi fundido no stdout (a tela precisa dos dois em ORDEM), então `stderr` vem vazio e o
+    # `_cauda` cai no stdout — que é o comportamento que ele já tinha quando não havia stderr.
+    return subprocess.CompletedProcess(args, proc.returncode, "\n".join(linhas), "")
 
 
 def _git(*args: str, timeout: float = _TIMEOUT_PADRAO) -> subprocess.CompletedProcess:
@@ -405,11 +431,16 @@ def executar(porta: int = 8765) -> dict:
 
 
 def _executar(porta: int) -> dict:
+    # Zera o log ANTES do pré-voo, não depois. O `checar()` roda `git status`, `rev-parse` e o
+    # `systemctl list-unit-files` — todos passam pelo `_log_do_estado`, que lê, mescla e regrava o
+    # estado. Zerando depois, todo esse trabalho ia pro lixo e a etapa de checagem nunca aparecia
+    # no terminalzinho, mesmo tendo sido registrada.
+    _escrever(fase="rodando", ok=None, erro=None, resgate=None,
+              commit_de="", commit_para=None, pid=os.getpid(),
+              reiniciar_manual=False, log=[])
     pre = checar()
     de = pre.get("commit", "")
-    _escrever(fase="rodando", ok=None, erro=None, resgate=None,
-              commit_de=de, commit_para=None, pid=os.getpid(),
-              reiniciar_manual=False, log=[])
+    _escrever(commit_de=de)
 
     if not pre.get("pode"):
         falta = ", ".join(pre.get("faltando") or []) or pre.get("erro", "desconhecido")

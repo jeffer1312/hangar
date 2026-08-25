@@ -288,6 +288,41 @@ def test_sem_restart_nao_cobra_prova_de_vida(repo, monkeypatch):
     assert final["ok"] is True and final["reiniciar_manual"] is True
 
 
+def test_log_guarda_o_comando_e_a_saida(repo):
+    """É o que a tela mostra na caixinha — sem isso a etapa longa parece travada."""
+    atualizar._rodar(["sh", "-c", "echo primeira; echo segunda"])
+    log = atualizar.estado()["log"]
+    texto = "\n".join(log)
+    assert "$ sh -c echo primeira; echo segunda" in texto
+    assert "primeira" in texto and "segunda" in texto
+
+
+def test_log_registra_codigo_de_saida_ruim(repo):
+    atualizar._rodar(["sh", "-c", "exit 7"])
+    assert "[saiu com 7]" in "\n".join(atualizar.estado()["log"])
+
+
+def test_log_do_comando_perde_a_cor_de_terminal(repo):
+    atualizar._rodar(["sh", "-c", "printf '\\033[31mvermelho\\033[0m\\n'"])
+    texto = "\n".join(atualizar.estado()["log"])
+    assert "vermelho" in texto and "\x1b" not in texto
+
+
+def test_log_tem_teto(repo):
+    """Sem teto, um comando falante incharia o estado que a tela lê a cada 2s."""
+    atualizar._rodar(["sh", "-c", f"seq 1 {atualizar._TETO_LOG * 2}"])
+    linhas = atualizar.estado()["log"]
+    assert len(linhas) <= atualizar._TETO_LOG
+    # Corta o começo, não o fim: o que interessa a quem está olhando é a última linha.
+    assert str(atualizar._TETO_LOG * 2) in "\n".join(linhas)
+
+
+def test_saida_do_comando_volta_inteira_mesmo_com_log_cortado(repo):
+    """Quem CHAMA precisa do texto completo (o `_cauda` monta a mensagem de erro a partir dele)."""
+    p = atualizar._rodar(["sh", "-c", "echo alfa; echo beta 1>&2"])
+    assert "alfa" in p.stdout and "beta" in p.stdout      # stderr é fundido, e em ordem
+
+
 def test_erro_nao_leva_cor_de_terminal_pra_tela(repo):
     """O `install.sh` colore a saída, e ela vai inteira pra tela — sem limpar, vira lixo visível."""
     class P:

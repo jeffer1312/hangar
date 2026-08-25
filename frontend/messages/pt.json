@@ -1977,5 +1977,8 @@
   "atualizar_falhou_voltou_fora": "O código anterior foi restaurado, mas o servidor não voltou a responder. Nada foi perdido — o serviço precisa ser reiniciado à mão.",
   "atualizar_passos_invalidos": "Atenção: {n} arquivo(s) de atualização estão malformados e foram ignorados: {lista}",
   "atualizar_ver_log": "ver o que está rodando",
-  "atualizar_esconder_log": "esconder"
+  "atualizar_esconder_log": "esconder",
+  "atualizar_procurar_curto": "Procurar atualização",
+  "atualizar_procurar_falhou": "Não consegui falar com o servidor.",
+  "atualizar_com_mudancas_locais": "com alterações locais não salvas no repositório"
 }

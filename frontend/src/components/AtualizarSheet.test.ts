@@ -232,12 +232,16 @@ describe('ciclo de vida', () => {
     montar();
     await tick();
     await tick();
-    expect(document.body.textContent ?? '').toContain(m.atualizar_ver_log());
+    // ABERTO por padrão: a caixinha existe pro minuto em que a etapa parece travada, e exigir um
+    // clique ali é esconder a resposta bem na hora da pergunta.
+    expect(document.body.textContent ?? '').toContain('$ bash install.sh --update');
+    expect(document.body.textContent ?? '').toContain(m.atualizar_esconder_log());
+
     const botao = [...document.querySelectorAll('button')]
-      .find((b) => b.textContent?.trim() === m.atualizar_ver_log());
+      .find((b) => b.textContent?.trim() === m.atualizar_esconder_log());
     botao?.click();
     await tick();
-    expect(document.body.textContent ?? '').toContain('$ bash install.sh --update');
+    expect(document.body.textContent ?? '').not.toContain('$ bash install.sh --update');
   });
 
   it('desmontar o componente para o polling', async () => {

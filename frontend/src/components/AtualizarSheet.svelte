@@ -41,6 +41,8 @@
   let timer: ReturnType<typeof setInterval> | null = null;
   /** Esta tela mandou começar. Verdade a partir do POST, não do próximo fetch que der certo. */
   let lancamos = $state(false);
+  /** Último estado já registrado no diário — evita dezenas de linhas idênticas por atualização. */
+  let ultimaMarca = '';
 
   const estado = $derived(dados?.estado ?? {});
   const rodando = $derived(estado.fase === 'rodando');
@@ -90,11 +92,15 @@
         await carregar(true);
         // No diário: sem isto, uma tela que para de acompanhar não deixa rastro NENHUM, e o que
         // sobra pra investigar é o print de quem estava olhando. Aconteceu em 25/08/2026.
-        diag.registrar({
-          evento: 'atualizacao.tique',
-          detalhe: `fase=${estado.fase ?? '-'} passo=${estado.passo ?? 0}/${estado.total ?? 0}`
-            + (erroDeRede ? ' sem-rede' : ''),
-        });
+        // Só quando MUDA. A cada tique eram dezenas de linhas idênticas (`fase=rodando passo=4/5`)
+        // por atualização, diluindo num arquivo cujo valor é justamente o evento raro. O que
+        // interessa investigar é onde parou de mudar — e isso a última linha diz igual.
+        const marca = `${estado.fase ?? '-'} ${estado.passo ?? 0}/${estado.total ?? 0}`
+          + (erroDeRede ? ' sem-rede' : '');
+        if (marca !== ultimaMarca) {
+          ultimaMarca = marca;
+          diag.registrar({ evento: 'atualizacao.tique', detalhe: marca });
+        }
         if (!open || estado.fase !== 'pronto') return;
         diag.registrar({
           evento: 'atualizacao.pronto',
@@ -103,9 +109,15 @@
         parar();
         lancamos = false;
         if (estado.ok === true && !faltaReiniciar) concluir();
-      } catch {
-        // Nunca deixa uma exceção escapar do tique: ela mataria o `setInterval` em alguns
-        // ambientes e traria de volta exatamente o congelamento que este desenho evita.
+      } catch (e) {
+        // REGISTRA, não engole. O `catch {}` vazio que estava aqui escondia exatamente a classe de
+        // erro que esta instrumentação existe pra pegar — e não protegia nada: no navegador, uma
+        // rejeição não cancela o `setInterval`, e ainda viraria `unhandledrejection`, que o app já
+        // manda pro diário sozinho. Ou seja, engolir piorava o rastro em vez de proteger o laço.
+        diag.registrar({
+          evento: 'atualizacao.tique.erro', nivel: 'erro',
+          detalhe: e instanceof Error ? e.message : String(e),
+        });
       }
     }, INTERVALO);
   }
@@ -126,14 +138,21 @@
       // acabou de reiniciar — a promessa pode ficar pendurada indefinidamente. Sem o teto, o
       // `reload()` abaixo nunca executava e a tela ficava parada na última etapa, sem erro nenhum,
       // parecendo travada. Medido em 25/08/2026, na primeira atualização feita de fora daqui.
-      await Promise.race([
+      const trocou = await Promise.race([
         (async () => {
           const reg = await navigator.serviceWorker?.getRegistration();
           await reg?.update();
           reg?.waiting?.postMessage({ type: 'SKIP_WAITING' });
+          return true;
         })(),
-        new Promise((r) => setTimeout(r, 3000)),
+        new Promise<boolean>((r) => setTimeout(() => r(false), 3000)),
       ]);
+      if (!trocou) {
+        // O teto venceu: a página vai recarregar do mesmo jeito (melhor que travar), mas pode
+        // voltar servida pelo service worker ANTIGO — e aí a tela diria "atualizado" mostrando o
+        // bundle de antes, sem nada denunciando. Fica no diário pra essa suspeita ser verificável.
+        diag.registrar({ evento: 'atualizacao.sw_timeout', nivel: 'aviso' });
+      }
     } catch {
       // Sem service worker (aba comum, navegador antigo) o reload sozinho já basta.
     }
@@ -176,7 +195,10 @@
   const passosComTexto = $derived((dados?.passos ?? []).filter((p) => p.texto.trim()));
   const invalidos = $derived(estado.passos_invalidos ?? []);
   const log = $derived(estado.log ?? []);
-  let logAberto = $state(false);
+  // ABERTO por padrão. Ficava escondido atrás de um "ver o que está rodando", e a caixinha existe
+  // exatamente pro minuto em que "Instalando dependências" parece travada — obrigar um clique ali
+  // é esconder a resposta bem na hora da pergunta. Quem não quiser, fecha.
+  let logAberto = $state(true);
   let logEl = $state<HTMLElement | null>(null);
 
   // Rola pro fim a cada linha nova: o interessante é sempre a última, e é o que um terminal faz.
