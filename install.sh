@@ -6,7 +6,7 @@
 #   ./install.sh --check      # só diz o que falta e sai, sem instalar nada
 #   ./install.sh --update        # re-aplica só o que um `git pull` não atualiza sozinho
 #   ./install.sh --no-frontend   # só o backend (o PWA já roda noutro lugar)
-#   ./install.sh --no-wrapper --no-services --no-cp-send --no-panel   # pula partes
+#   ./install.sh --no-wrapper --no-services --no-hangar-send --no-panel   # pula partes
 #
 # Os sub-scripts (services-setup.sh, lan-setup.sh, install-hangar-send.sh, ...) continuam
 # rodáveis sozinhos; este aqui só faz com que um comando baste.
@@ -27,7 +27,8 @@ for arg in "$@"; do
     --update)      UPDATE=1; YES=1 ;;
     --no-wrapper)  WRAPPER=0 ;;
     --no-services) SERVICES=0 ;;
-    --no-cp-send)  CPSEND=0 ;;
+    # O nome antigo do flag segue aceito: está no histórico de comando de quem já instala assim.
+    --no-hangar-send|--no-cp-send)  CPSEND=0 ;;
     --no-panel)    PANEL=0 ;;
     --no-frontend) FRONTEND=0 ;;
     *) echo "flag desconhecida: $arg"; exit 1 ;;

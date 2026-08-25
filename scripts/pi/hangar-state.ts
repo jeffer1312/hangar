@@ -316,9 +316,9 @@ function avisaConectividade(conectada: boolean, motivo?: string): void {
   if (linhaConectada === conectada) return;
   linhaConectada = conectada;
   if (conectada) {
-    console.error("[hangar-state] linha do pocket conectada");
+    console.error("[hangar-state] linha do hangar conectada");
   } else {
-    console.error(`[hangar-state] linha do pocket indisponivel${motivo ? ": " + motivo : ""} — ` +
+    console.error(`[hangar-state] linha do hangar indisponivel${motivo ? ": " + motivo : ""} — ` +
                   "caindo pro envio por tecla ate reconectar");
   }
 }

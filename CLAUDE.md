@@ -162,6 +162,34 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 
 ## Conventions & gotchas (read before touching UI / backend lifecycle)
 
+- **O nome antigo (`claude-pocket`) só existe em ponte de compatibilidade** (rename de 25/08/2026).
+  O código conhece **um** nome: as pastas de dados são `<config>/.hangar-*`, o cofre do sync é
+  `~/.hangar/`, os comandos são `hangar-send`/`hangar-engine`/`hangar-codex`/`hangar-conta` e
+  `hangar-panel-*`, a instância do quickshell é `hangar`, e o logger é `hangar.*`. Escreva com o
+  nome novo; nunca leia o antigo em código novo. O que resta do velho é, todo ele, migração:
+  - `backend/app/migracao_sidecars.py`, chamado na **subida** do backend (`main.py`), renomeia
+    `.claude-pocket-*` → `.hangar-*` em todo perfil `~/.claude*` e deixa **link** no caminho antigo.
+    O link é o que impede a máquina de se partir no meio da atualização: hook, extensão do Pi e o
+    publicador de statusline do Kimi (`~/.kimi-code/statusline.js`, que nem mora neste repo) podem
+    estar vivos e desatualizados, escrevendo no nome velho — e caem na pasta nova. Startup, e não
+    installer, porque atualizar é `git pull` + reiniciar o serviço; rodar `install-*.sh` não é
+    garantido. Ele **nunca funde** duas pastas: destino já existente para naquele item, com aviso.
+  - `.json` SOLTOS (`apelidos`, `conn`, `models`, `runner`, `opencode`) leem os dois caminhos, novo
+    primeiro (`migracao_sidecars.caminho_de_leitura`), porque no Windows link de ARQUIVO exige
+    privilégio — para pasta há junção (`mklink /J`), para arquivo não há equivalente. **Escrita
+    sempre no nome novo.**
+  - `<cwd>/.hangar-uploads/` é a única pasta que mora no projeto, fora do alcance da migração da
+    subida: `uploads._base()` a migra na primeira leitura daquele cwd, senão todo anexo antigo
+    citado por caminho absoluto no histórico viraria 404.
+  - **Marcador de bloco gerenciado** (rc do shell, `~/.tmux.conf`, `keybinds.lua`, o bloco
+    "Sessões-irmãs" do `~/.claude/CLAUDE.md`) virou `hangar`, e cada installer **arranca o bloco do
+    marcador antigo antes** de escrever o novo — sem isso o arquivo do usuário fica com os dois, um
+    deles ensinando o comando velho e que nenhum installer atualiza mais.
+  - `cp-send` e companhia continuam existindo como **symlink permanente** pro mesmo script (rc
+    antigo e sessão Claude já aberta chamam o nome velho); as variáveis `CP_*` e o cookie
+    `cp_token` **não mudam** — quebrariam o `.env` de instalação alheia. A documentação ensina só o
+    nome novo.
+
 - **Two views: mobile & desktop (820px breakpoint).** `App.svelte` switches on
   `matchMedia('(min-width: 820px)')`: desktop → `DesktopShell` (which uses `Sidebar.svelte`), mobile →
   `SessionList.svelte`. Lots of UI has a per-view path (the session list is the clearest — `Sidebar` vs
@@ -345,7 +373,7 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   (`terminal_input._composer_ocupado_pi` + `pi_inbox.perguntar` + `responderPergunta` in
   `scripts/pi/hangar-state.ts`). Pi prints extension notices (`console.error`) **inside the composer
   band**, with the same ANSI as typed text; measured 22-23/08/2026, `cursor_flag` is 0 either way.
-  So the anti-paste guard counted our own `[hangar-state] linha do pocket conectada` as a draft and
+  So the anti-paste guard counted our own `[hangar-state] linha do hangar conectada` as a draft and
   every `/cp-model`/`/cp-think` came back **409 with the composer empty**. Recognizing each phrase by
   regex is whack-a-mole (`/reload` draws a fourth one no regex of ours knows), and the "compare two
   captures — a notice is static, a draft changes" upgrade the code itself proposed **was measured and

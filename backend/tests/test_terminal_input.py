@@ -190,7 +190,7 @@ def test_pergunta_pela_linha_vence_a_tela(monkeypatch):
     de modelo pelo app era recusada com 409 "composer do pi ja tem texto"."""
     linha = _com_linha(monkeypatch, "")
     with patch.object(terminal_input, "_capture",
-                      return_value=_pane_pi([" [hangar-state] linha do pocket conectada"])):
+                      return_value=_pane_pi([" [hangar-state] linha do hangar conectada"])):
         assert terminal_input._composer_ocupado_pi("pi-x", "%1") is False
     assert linha.perguntas == [("pi-x", "editor")]      # psmux: a chave é o NOME da sessão
 

@@ -75,7 +75,7 @@ def vocabulario() -> str:
 def build_multipart(filename: str, content: bytes, vocab: str = "") -> tuple[bytes, str]:
     """Monta um corpo multipart/form-data (model + response_format + language + prompt + file) e
     devolve (body, boundary). Separado da chamada de rede pra ser testavel sem tocar na Groq."""
-    boundary = "----claudepocket" + secrets.token_hex(16)
+    boundary = "----hangar" + secrets.token_hex(16)
     b = boundary.encode()
     parts: list[bytes] = []
     campos = [("model", GROQ_MODEL), ("response_format", "text"), ("language", IDIOMA)]
