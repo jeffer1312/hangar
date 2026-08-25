@@ -13,6 +13,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -32,6 +33,7 @@ from app import model_args
 from app import filesearch, filetree, git_ops
 from app.filesearch import SearchError
 from app.filetree import FileError
+from app import orq
 from app import pi_catalog
 from app import cli_probe
 from app import pi_models
@@ -3064,6 +3066,30 @@ async def session_plans(name: str):
     if r is None:
         raise HTTPException(404, detail=erro("erro_sem_pasta_planos", "repo sem pasta de planos"))
     return r
+
+
+@app.get("/api/orq", dependencies=[Depends(require_auth)])
+async def orq_lista():
+    """Execucoes de orquestracao (eventos.jsonl escrito pelo arbitro), mais recentes primeiro.
+    A lista vem SEM os eventos crus — quem quer a linha do tempo pede o detalhe."""
+    execs = await asyncio.to_thread(orq.listar_execucoes, orq.raiz_padrao())
+
+    def _resumo(e):
+        d = asdict(e)
+        d.pop("eventos_execucao", None)
+        for t in d["tasks"]:
+            t.pop("eventos", None)
+        return d
+
+    return {"execucoes": [_resumo(e) for e in execs], "fichas": orq.fichas(execs)}
+
+
+@app.get("/api/orq/{exec_id}", dependencies=[Depends(require_auth)])
+async def orq_detalhe(exec_id: str):
+    e = await asyncio.to_thread(orq.detalhe, orq.raiz_padrao(), exec_id)
+    if e is None:
+        raise HTTPException(404, detail=erro("erro_nao_encontrado", "execucao nao encontrada"))
+    return asdict(e)
 
 
 class PlanPinBody(_StrictBody):
