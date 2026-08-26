@@ -230,3 +230,42 @@ def test_env_var_of_le_o_environ_real_no_psutil(via_psutil):
     # Leitura real no dispatch psutil: o environ do pytest tem PATH; a chave volta igual.
     esperado = psutil.Process(os.getpid()).environ().get("PATH")
     assert procinfo._env_var_of(os.getpid(), "PATH") == esperado
+
+
+def test_pid_vivo_no_psutil_pergunta_ao_psutil(via_psutil, monkeypatch):
+    """Fora do Linux quem responde e o psutil, nunca `os.kill(pid, 0)`.
+
+    No Windows esse `os.kill` e `TerminateProcess`: perguntar MATA. Medido em 26/08/2026 — a
+    checagem "o motor da atualizacao ainda esta vivo?", feita a cada poll da tela, derrubava o
+    motor no meio da etapa de instalar. Por isso o teste trava a DELEGACAO: espionar `os.kill` nao
+    serviria, porque no Linux o proprio psutil o usa (`_psposix.pid_exists`) e o espiao acusaria
+    quem esta certo.
+    """
+    perguntados = []
+    monkeypatch.setattr(procinfo.psutil, "pid_exists",
+                        lambda pid: perguntados.append(pid) or pid == os.getpid())
+    assert procinfo.pid_vivo(os.getpid()) is True
+    assert procinfo.pid_vivo(2 ** 22) is False
+    assert perguntados == [os.getpid(), 2 ** 22]
+    assert procinfo.pid_vivo(0) is False       # pid invalido nem chega no psutil
+    assert len(perguntados) == 2
+
+
+@so_com_proc
+def test_pid_vivo_no_proc():
+    assert procinfo.pid_vivo(os.getpid()) is True
+    assert procinfo.pid_vivo(-1) is False
+
+
+@so_com_proc
+def test_pid_vivo_de_outro_dono_e_vivo(monkeypatch):
+    """Processo de outro usuario esta VIVO — e os dois erros do `os.kill` sao `OSError`.
+
+    O ramo psutil ja respondia True aqui; com um `except OSError` unico o ramo /proc respondia
+    False, e o mesmo pid tinha resposta diferente por sistema. Custo real: `_tomar_a_vez` recolhe o
+    lock de uma atualizacao viva e solta um segundo `git reset --hard` no mesmo repo.
+    """
+    def _sem_permissao(pid, sig):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(os, "kill", _sem_permissao)
+    assert procinfo.pid_vivo(os.getpid()) is True

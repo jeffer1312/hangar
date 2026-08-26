@@ -747,7 +747,10 @@ def test_lancamento_escolhe_o_modo_do_sistema(repo, monkeypatch):
     """POSIX sai do grupo de processos com `setsid`; Windows usa DETACHED_PROCESS."""
     capturado: dict = {}
     class P:
-        pid = 1
+        # Pid que NAO existe: o lock fica com o pid do filho, e o segundo `iniciar()` deste teste só
+        # passa se o dono anterior estiver morto. `1` (init) parecia servir e nao serve — ele e vivo
+        # e de outro dono, e `pid_vivo` responde a verdade sobre ele desde 26/08/2026.
+        pid = 2 ** 22
     monkeypatch.setattr(atualizar.subprocess, "Popen",
                         lambda *a, **kw: (capturado.update(kw), P())[1])
 

@@ -238,6 +238,34 @@ def _pids_com_config_dir(alvo: Path) -> tuple[list[int], bool]:
     return achados, True
 
 
+def pid_vivo(pid: int) -> bool:
+    """Aquele processo ainda existe? Pergunta que NAO pode ter efeito colateral.
+
+    `os.kill(pid, 0)` responde isso no POSIX e no Windows faz outra coisa: qualquer sinal que nao
+    seja CTRL_C_EVENT/CTRL_BREAK_EVENT vira `TerminateProcess` (o mesmo fato que `runner.py` ja
+    anotava do outro lado, onde MATAR e a intencao). Medido em 26/08/2026 na maquina Windows de
+    quem usa: o `estado_para_tela` da atualizacao chamava isso a cada poll da tela pra saber se o
+    motor seguia vivo — e MATAVA o motor no meio da etapa de instalar, com o log congelado na
+    ultima linha escrita e a tela dizendo "a atualizacao foi interrompida". A pergunta derrubava
+    exatamente o que ela existia pra observar.
+    """
+    if pid <= 0:
+        return False
+    if not _TEM_PROC:
+        return psutil.pid_exists(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Vivo, e de outro dono. Os dois erros sao `OSError`, e o `except` unico que estava aqui
+        # dizia "morto" pros dois — resposta que o ramo psutil ja dava certa, entao o mesmo pid
+        # respondia diferente conforme o sistema. Dizer "morto" de um processo vivo aqui recolhe o
+        # lock da atualizacao e larga dois `git reset --hard` no mesmo repo.
+        return True
+    return True
+
+
 def _proc_start_time(pid: int) -> Optional[float]:
     if not _TEM_PROC:
         return _start_time_psutil(pid)

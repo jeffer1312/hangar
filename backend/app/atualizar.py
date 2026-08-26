@@ -40,7 +40,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from app import atomico, tmux
+from app import atomico, procinfo, tmux
 
 _log = logging.getLogger("hangar.atualizar")
 
@@ -725,13 +725,12 @@ def _aplicar_passos() -> None:
 # ─── Lançar destacado ──────────────────────────────────────────────────────────────────────────
 
 def _vivo(pid) -> bool:
+    # `procinfo` e a unica camada que sabe em que sistema estamos: no Windows perguntar com
+    # `os.kill(pid, 0)` MATA o processo (ver procinfo.pid_vivo) — e aqui o processo e a propria
+    # atualizacao em curso.
     if not isinstance(pid, int) or pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-    except (OSError, ProcessLookupError):
-        return False
-    return True
+    return procinfo.pid_vivo(pid)
 
 
 def _tomar_a_vez() -> bool:
