@@ -5,10 +5,13 @@ O árbitro é dono do resto do arquivo; o app troca só a linha do papel (orq_md
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import orq_md, pair
+
+_log = logging.getLogger(__name__)
 
 CABECALHO = ("papel", "sessão", "provider", "conta", "modelo", "esforço")
 SECAO = "Quem é quem"
@@ -63,7 +66,13 @@ def gid_por_sessao(nome: str) -> str | None:
     for p in pair._pair_dir().glob("regras-*.md"):
         if p.stem == f"regras-{GID_PADRAO}":
             continue
-        texto, mtime = orq_md.ler_arquivo(p)
+        try:
+            texto, mtime = orq_md.ler_arquivo(p)
+        except (OSError, ValueError) as e:
+            # Um contrato ilegível (encoding quebrado por edição à mão) não pode tirar a tela de
+            # TODAS as sessões — pula este e diz qual foi.
+            _log.warning("regras ilegível, ignorado: %s (%s)", p, e)
+            continue
         if any(_casa_nome(r.sessao, nome) for r in ler(texto)):
             achados.append((mtime, p.stem.removeprefix("regras-")))
     return max(achados)[1] if achados else None
