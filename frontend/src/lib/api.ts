@@ -152,8 +152,17 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (e) {
     // Rede caiu / servidor fora: nunca chegou a haver status. Distinguir isto de um 500 é metade
     // do diagnóstico de "sumiu do nada".
-    registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req,
-                    detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });
+    //
+    // CANCELAMENTO não entra: o Chat aborta o /history em voo a cada troca de sessão e a cada
+    // remontagem da tela, e o `fetch` lança igual. Registrado como erro, cada navegação virava uma
+    // "queda de rede" no diário — em 26/08/2026 as duas únicas do dia eram exatamente isso, e a
+    // queda de verdade, se tivesse havido, estaria indistinguível no meio. `TimeoutError` (o teto
+    // de tempo) segue entrando: aquilo é falha, não navegação — a mesma linha que `isAbortError`
+    // já traça pro resto do app.
+    if (!isAbortError(e)) {
+      registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req,
+                      detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });
+    }
     throw e;
   }
   // O que entra no diário, e por quê:

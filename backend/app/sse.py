@@ -640,6 +640,14 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             if event == "__reset__":
                 # Troca de transcript (ex: /clear). Re-binda o tailer no jsonl novo, zera o estado de
                 # suppress/preview, e manda 'reset' pro front recarregar o history do zero.
+                #
+                # LOGA como o __reprovider__ ao lado: este `reset` APAGA a conversa da tela e manda
+                # recarregar, então quando alguém relata "o chat ficou vazio" a primeira pergunta é
+                # se houve reset — e sem esta linha ela não tinha resposta, porque era o único dos
+                # dois caminhos que não deixava rastro nenhum (26/08/2026).
+                _log.info("sse: transcript trocou name=%s %s -> %s", name,
+                          Path(current_jsonl).name if current_jsonl else None,
+                          Path(data).name if data else None)
                 tasks.remove(tail_task)
                 tail_task.cancel()
                 tasks.remove(stats_task)

@@ -54,6 +54,7 @@ _NOME = re.compile(r"^uso-(\d{4}-\d{2}-\d{2})\.jsonl$")
 
 # Campos aceitos numa linha vinda da tela. Ver a regra de conteúdo no topo do módulo.
 _CAMPOS: dict[str, type] = {
+    "ts": str,          # horário do EVENTO na tela (ISO-8601). Ver _ts_da_tela
     "evento": str,      # verbo curto: "opcao.tocar", "sessao.abrir", "api.falhou", "js.erro"
     "nivel": str,       # ok | aviso | erro  (ver _NIVEIS)
     "tela": str,        # ONDE foi usado: chat, quadro, canvas, tira, config, terminal, arquivos…
@@ -136,6 +137,27 @@ def _podar() -> None:
                 _log.debug("diag: nao deu pra apagar %s", p.name, exc_info=True)
 
 
+def _ts_da_tela(bruto: str) -> str:
+    """Horário mandado pela tela, no fuso e no formato do arquivo. Vazio = não serve, usa o do envio.
+
+    A tela agrupa o lote por até 4s antes de mandar, então carimbar tudo na chegada colava eventos
+    distintos no mesmo instante e apagava a ordem — foi isso que impediu de reconstruir uma corrida
+    entre remontagem e recarga em 26/08/2026.
+
+    Só aceita horário do MESMO dia local do servidor: o arquivo é um por dia (`caminho_do_dia`), e
+    um relógio errado no aparelho gravaria linha datada de outro dia dentro dele. Nesse caso o
+    horário do envio é o menos errado dos dois, e o `seq` da aba continua ordenando as linhas.
+    """
+    try:
+        quando = datetime.fromisoformat(bruto).astimezone()
+    except ValueError:
+        return ""
+    agora = datetime.now().astimezone()
+    if quando.date() != agora.date():
+        return ""
+    return quando.isoformat(timespec="milliseconds")
+
+
 def _limpar(bruto: Any) -> dict[str, Any] | None:
     """Uma linha da tela virando uma linha do arquivo. Campo fora de `_CAMPOS` é DESCARTADO."""
     if not isinstance(bruto, dict):
@@ -157,6 +179,10 @@ def _limpar(bruto: Any) -> dict[str, Any] | None:
             if not valor:
                 continue
         fora[campo] = valor
+    if "ts" in fora:
+        fora["ts"] = _ts_da_tela(fora["ts"])
+        if not fora["ts"]:
+            del fora["ts"]
     if fora.get("nivel") not in _NIVEIS:
         # Nível ausente ou inventado vira "ok". Recusar a linha inteira por causa dele perderia o
         # evento, que é o dado; e deixar passar um valor livre quebraria qualquer contagem por nível.
@@ -186,6 +212,9 @@ def _escrever(linhas: list[dict[str, Any]]) -> int:
         return 0
     arq = caminho_do_dia()
     arq.parent.mkdir(parents=True, exist_ok=True)
+    # `**linha` DEPOIS do ts: a linha que trouxe horário próprio (o da tela, ver _ts_da_tela) fica
+    # com ele; quem não trouxe — os eventos do próprio backend — herda o do envio, que pra eles é o
+    # mesmo instante.
     agora = datetime.now().astimezone().isoformat(timespec="milliseconds")
     texto = "".join(
         json.dumps({"ts": agora, **linha}, ensure_ascii=False) + "\n" for linha in linhas

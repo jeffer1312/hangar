@@ -1225,6 +1225,10 @@
     // bolhas antigas (ids diferentes) -> zera tudo e recarrega o history do jsonl novo (vem limpo).
     es.addEventListener('reset', () => {
       noteAlive();
+      // No diário também, não só no journal do servidor: o journal só existe no Linux, e este
+      // evento é o único que APAGA a conversa da tela — sem ele registrado, "ficou vazio" e "nunca
+      // carregou" são indistinguíveis no arquivo que a pessoa manda.
+      diag.registrar({ evento: 'chat.reset', tela: 'chat', sessao: sessionName });
       lastEventId = null;   // transcript trocado (/clear): id do arquivo antigo não vale mais
       events = [];
       idIndex.clear();
@@ -1282,7 +1286,17 @@
       // Sem sobreposicao a appendTail re-ancorou na cauda (background longo demais): o historico
       // antigo saiu da lista e volta em segundo plano, como na abertura.
       if (events[0]?.id !== head) loadOlderInBackground(g);
-    } catch { /* offline momentaneo: o connectSSE/onerror cuida do re-sync */ }
+    } catch (err) {
+      // Com bolha na tela, seguir calado está certo: é um blip, e o SSE re-sincroniza.
+      // Com a lista VAZIA, não: o `connectSSE` abaixo retoma pelo `lastEventId`, e quando um
+      // `reset` acabou de zerar a lista esse id também foi zerado — não há de onde retomar e
+      // ninguém mais recarrega. O resultado era a tela sem uma bolha, sem aviso e sem o botão de
+      // tentar de novo, até sair da sessão e voltar (relatado em 26/08/2026).
+      if (!isAbortError(err) && g === histGen && alive && events.length === 0) {
+        error = isTimeoutError(err) ? m.chat_historico_sem_resposta()
+          : err instanceof Error ? err.message : m.chat_erro_carregar_historico();
+      }
+    }
     if (g !== histGen || !alive) return;
     connectSSE();
   }

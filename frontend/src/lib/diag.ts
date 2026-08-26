@@ -140,8 +140,13 @@ async function enviar(): Promise<void> {
 export function registrar(e: Evento): void {
   if (!ligado) return;
   if (FILA.length >= TETO_FILA) return;
-  FILA.push({ tela: telaCorrente || undefined, ...e, nivel: e.nivel ?? 'ok',
-              cli: CLI, seq: ++seq });
+  // Horário do EVENTO, não do envio. O lote sai até ESPERA_MS depois e o backend carimbava um
+  // único instante no lote inteiro: eventos separados por segundos apareciam colados, e a ordem —
+  // que é tudo quando se investiga corrida entre remontagem, recarga e reconexão — sumia do
+  // arquivo (medido 26/08/2026: 4s de diferença entre o diário e o log do servidor pro MESMO
+  // evento). Em UTC porque é o que o `toISOString` dá de graça; o backend converte pro fuso dele.
+  FILA.push({ ts: new Date().toISOString(), tela: telaCorrente || undefined, ...e,
+              nivel: e.nivel ?? 'ok', cli: CLI, seq: ++seq });
   // Erro vai na hora: se a página estiver prestes a quebrar, um lote de 4s depois não sai.
   if (e.nivel === 'erro') { clearTimeout(timer); void enviar(); return; }
   if (timer === undefined) timer = setTimeout(() => void enviar(), ESPERA_MS);
