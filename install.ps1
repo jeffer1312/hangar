@@ -1321,6 +1321,14 @@ $tarefas = @(
 # -Force sobrescreve.
 $jaAgendado = Get-ScheduledTask -TaskName $tarefas[0].Nome -ErrorAction SilentlyContinue
 $registrou = $jaAgendado -or (Pergunte '  Registrar backend e frontend pra subir no seu logon?')
+# As duas nascem FORA do try de proposito. `$subiu` e lido la embaixo (install.ps1:1842) pra
+# decidir a pendencia 'backend no ar'; enquanto ele morava dentro do try, uma excecao no registro
+# deixava a variavel INDEFINIDA -> $false -> pendencia inventada com a porta 8765 aberta e o
+# backend respondendo. `$iniciou` diz se alguma tarefa chegou a ser (re)iniciada: sem isso, esperar
+# 40s pela porta depois de um estouro que nem chegou no Start-ScheduledTask so mede o processo
+# ORFAO que ficou de pe, e reportar "ok" ali seria pior que a pendencia falsa.
+$subiu = $false
+$iniciou = $false
 if ($registrou) {
     try {
         foreach ($t in $tarefas) {
@@ -1358,8 +1366,35 @@ if ($registrou) {
             $gatilho = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $cfg = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
-            Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
-                -Settings $cfg -Force | Out-Null
+            # Register em try PROPRIO, e o unico ponto deste passo que precisa de permissao de
+            # ESCRITA. O XML em C:\Windows\System32\Tasks\<nome> pertence a quem registrou: um
+            # install.ps1 rodado ELEVADO deixa as tres tarefas com dono BUILTIN\Administradores, e
+            # o usuario fica so com Read+Synchronize. O botao Atualizar do app roda NAO elevado,
+            # entao o `-Force` volta Acesso negado. Medido em 26/08/2026: essa unica excecao pulava
+            # o Pare-Servico, o Start-ScheduledTask e a checagem de porta DE UMA VEZ - o backend
+            # seguia no ar com 4 commits e ~8h de atraso (o pior estado que o CLAUDE.md descreve:
+            # codigo novo no disco, processo velho no ar) enquanto a tela dizia so "nao deu pra
+            # registrar as tarefas".
+            # Tarefa que JA existe nao precisa de registro pra ser reiniciada: parar e iniciar sao
+            # permitidos sem elevacao (medido na hangar-vigia: Start-ScheduledTask OK, LastRunTime
+            # avancou). Entao o registro vira RESSALVA e o restart continua. Se a tarefa NAO existe
+            # nao ha o que reaproveitar - rethrow, que e o caso que o catch de fora ja cobria.
+            $reaproveitou = $false
+            try {
+                Register-ScheduledTask -TaskName $t.Nome -Action $acao -Trigger $gatilho `
+                    -Settings $cfg -Force | Out-Null
+            } catch {
+                if (-not (Get-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue)) { throw }
+                $reaproveitou = $true
+                Falta "sem permissao pra re-registrar $($t.Nome) - reaproveitando a tarefa existente ($_)"
+                # A ressalva importa: a tarefa guarda o caminho do .vbs e o diretorio DENTRO dela,
+                # entao a que sobrou aponta pro estado de quando foi registrada. Se o repo mudou de
+                # lugar (ou o uv), reaproveitar sobe o caminho ANTIGO - e isso nao da pra consertar
+                # sem elevacao.
+                Nota "  ela ainda aponta pro caminho de quando foi registrada; se o repo mudou de lugar, so um re-registro conserta"
+                Nota "  numa janela ELEVADA:  Unregister-ScheduledTask -TaskName $($t.Nome) -Confirm:`$false"
+                Nota '  e depois rode este instalador de novo SEM elevacao (ele recria a tarefa com o seu usuario como dono)'
+            }
             # Registrar NAO inicia: o gatilho e "no logon", entao sem isto nada sobe ate o
             # proximo login e a pessoa abre o navegador numa porta morta logo apos instalar.
             # O equivalente no Linux (`systemctl --user enable --now`) liga na hora - o `--now`
@@ -1367,38 +1402,52 @@ if ($registrou) {
             $mortos = Pare-Servico -Nome $t.Nome -Porta $t.Porta -Padrao $t.Padrao -Exe $t.ExeProc
             if ($mortos -gt 0) { Nota "  instancia anterior derrubada ($mortos processo(s)) antes de subir" }
             Start-ScheduledTask -TaskName $t.Nome -ErrorAction SilentlyContinue
-            Ok "tarefa $($t.Nome) registrada e iniciada"
+            $iniciou = $true
+            if ($reaproveitou) { Ok "tarefa $($t.Nome) reaproveitada e reiniciada" } else { Ok "tarefa $($t.Nome) registrada e iniciada" }
         }
-        # Iniciar nao e subir: a tarefa ja morreu na largada por bug de codificacao, e o instalador
+    } catch {
+        Falta "nao deu pra registrar as tarefas: $_"
+        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
+    }
+
+    # Iniciar nao e subir: a tarefa ja morreu na largada por bug de codificacao, e o instalador
     # dizia "iniciada" e seguia. Confere a porta antes de afirmar qualquer coisa.
     # -State Listen e $portaBack, nao 8765 cravado. Sem o -State Listen um socket em TIME_WAIT do
     # processo que o Pare-Servico acabou de matar ja contava como "subiu", e o instalador declarava
     # sucesso apontando pro cadaver - o bug original (instancia velha) de volta, agora com uma
     # mensagem verde na frente afirmando o contrario.
-    $subiu = $false
-    # 40s, nao 15s: o boot medido nesta maquina e ~15s (comentario da vigia, mais abaixo), e o
-    # caminho feliz sai no primeiro acerto - o teto so paga quando o boot for mais lento (disco,
-    # antivirus, primeira sincronizacao do uv). Achado IMPORTANTE da revisao final: com 15s, um
-    # boot de 16s virava alarme falso, entrava em $pendencias e derrubava o instalador inteiro
-    # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
-    # estava alguns segundos atrasado.
-    foreach ($i in 1..40) {
-        if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
-        Start-Sleep -Seconds 1
-    }
-    if ($subiu) {
-        Ok "backend respondendo em 127.0.0.1:$portaBack"
+    #
+    # FORA do try acima: enquanto estava dentro, qualquer excecao no registro pulava esta checagem
+    # inteira e `$subiu` ficava indefinido - o gate de install.ps1:1842 lia $false e somava a
+    # pendencia 'backend no ar' com a porta ABERTA. Um "Acesso negado" no registro matava o restart
+    # e a verificacao juntos, e a atualizacao falhava em silencio justamente no que importa.
+    if ($iniciou) {
+        # 40s, nao 15s: o boot medido nesta maquina e ~15s (comentario da vigia, mais abaixo), e o
+        # caminho feliz sai no primeiro acerto - o teto so paga quando o boot for mais lento (disco,
+        # antivirus, primeira sincronizacao do uv). Achado IMPORTANTE da revisao final: com 15s, um
+        # boot de 16s virava alarme falso, entrava em $pendencias e derrubava o instalador inteiro
+        # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
+        # estava alguns segundos atrasado.
+        foreach ($i in 1..40) {
+            if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+            Start-Sleep -Seconds 1
+        }
+        if ($subiu) {
+            Ok "backend respondendo em 127.0.0.1:$portaBack"
+        } else {
+            Falta 'o backend NAO subiu em 40s - o app nao vai conectar'
+            Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
+        }
     } else {
-        Falta 'o backend NAO subiu em 40s - o app nao vai conectar'
-        Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
+        # Nao chegou nem a iniciar (o catch acima disparou antes do Start-ScheduledTask). Nao se
+        # olha a porta aqui de proposito: o que estivesse escutando seria o processo ORFAO da
+        # instalacao anterior, e chamar isso de "backend respondendo" e a mentira que este passo
+        # inteiro existe pra nao contar. Fica sem $subiu -> a pendencia la embaixo e VERDADEIRA.
+        Falta 'nenhuma tarefa chegou a ser iniciada - o que estiver na porta e a instancia ANTIGA'
     }
     Nota 'Log (inclui o QR de pareamento):'
     Nota "  $env:LOCALAPPDATA\hangar\hangar-backend.log"
     Nota 'Remover depois: Unregister-ScheduledTask -TaskName hangar-backend'
-    } catch {
-        Falta "nao deu pra registrar as tarefas: $_"
-        Nota 'Sem isso, o backend so roda enquanto o terminal estiver aberto.'
-    }
 
     # Vigia registrada em try/catch PROPRIO, separado do de cima: achado IMPORTANTE da revisao
     # final. Antes, os dois viviam sob o MESMO try, e uma falha AQUI (na vigia) saia com a mensagem
