@@ -2815,24 +2815,36 @@ def _espera_escolha_kimi(name: str, jsonl: str, req_id: str, pede_feedback: bool
     return False
 
 
-def _select_aprovacao_kimi(name: str, info, option: int) -> dict | None:
-    """Escolhe no painel de APROVACAO do Kimi (plano/comando/arquivo). None = nao ha aprovacao
-    pendente, e o `/select` segue pelo caminho generico.
+def _select_aprovacao_kimi(name: str, info, option: int) -> dict:
+    """Escolhe no painel de APROVACAO do Kimi (plano/comando/arquivo).
 
     As opcoes vem do WIRE (`read_pending_interaction`), nao do pane — e a mesma fonte que o estado
-    usou pra desenhar os botoes, entao o numero que chega aqui casa com o que a pessoa leu."""
+    usou pra desenhar os botoes, entao o numero que chega aqui casa com o que a pessoa leu.
+
+    Sem pedido pendente, 409 — NUNCA cair no `terminal.select` generico. Ele conta a linha do cursor
+    e, quando nao acha (`_cursor_row` so le `❯`, e o Kimi desenha `▶`), manda Down x(n-1) + Enter as
+    CEGAS. Numa sessao Kimi isso nao tem alvo: ou o painel ja fechou e as teclas caem na conversa em
+    execucao, ou ele esta aberto e o Enter confirma a linha errada — nos dois casos a rota devolveria
+    {"ok": true}, que e o sucesso falso que este projeto proibe. E nao ha o que perder: `_menu_block`
+    exige cursor `❯`/`>`, entao o pane do Kimi nunca produziu opcao por raspagem — este endpoint so
+    e alcancavel, nesse provider, pelos botoes que o wire desenhou."""
     from app.adapters.kimi.transcript import read_pending_interaction
     jsonl = info.jsonl if info else None
     pend = read_pending_interaction(jsonl) if jsonl else None
     if pend is None:
-        return None
+        # Cobre "ja foi respondida no terminal" e "nao deu pra ler o wire agora" — pro usuario a
+        # saida e a mesma (nada foi enviado, olhe a sessao). O caso ilegivel nao some calado: o
+        # `_objetos_da_cauda` loga uma vez por arquivo.
+        raise HTTPException(409, detail=erro(
+            "erro_sem_pergunta_kimi",
+            "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
     escolhas = pend["escolhas"]
     if not 1 <= option <= len(escolhas):
         raise HTTPException(409, detail=erro(
             "erro_opcao_fora_da_lista",
             f"opção {option} não existe neste pedido (são {len(escolhas)}) — opção NÃO enviada"))
     try:
-        terminal_input.select_kimi(name, option)
+        terminal_input.select_kimi(name, option, jsonl, pend["id"])
     except ValueError as e:
         raise HTTPException(409, str(e))
     except terminal_input.DriveError as e:
@@ -2883,13 +2895,11 @@ def select(name: str, body: SelectBody):
     if not _session_exists(name):
         raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
     # Kimi: os botoes de aprovacao (plano/comando/arquivo) sao desenhados a partir do WIRE, entao a
-    # escolha volta pelo wire tambem — tecla numerica + `interaction.resolved` como prova. Sem
-    # aprovacao pendente cai no caminho generico, que e o comportamento de sempre.
+    # escolha volta pelo wire tambem — tecla numerica + `interaction.resolved` como prova. O drive
+    # generico abaixo NAO atende este provider em hipotese nenhuma (ver _select_aprovacao_kimi).
     info = next((s for s in registry.list() if s.name == name), None)
     if getattr(info, "provider", "claude") == "kimi":
-        res = _select_aprovacao_kimi(name, info, body.option)
-        if res is not None:
-            return res
+        return _select_aprovacao_kimi(name, info, body.option)
     try:
         terminal.select(name, body.option)
     except terminal_input.DriveError as e:

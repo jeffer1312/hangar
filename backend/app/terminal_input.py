@@ -993,7 +993,7 @@ def feedback_kimi_aberto(name: str) -> bool:
     return bool(_KIMI_APROV_FEEDBACK_RE.search(_capture(name)))
 
 
-def select_kimi(name: str, option: int) -> None:
+def select_kimi(name: str, option: int, jsonl: str, req_id: str) -> None:
     """Escolhe a opcao `option` (1-based) do painel de APROVACAO do Kimi pela TECLA NUMERICA.
 
     Nao conta linha e nao manda (n-1)xDown como o `select` generico, por dois motivos medidos: o
@@ -1003,7 +1003,14 @@ def select_kimi(name: str, option: int) -> None:
 
     Painel fora da tela -> DriveError SEM digitar: numero solto no composer viraria texto na
     conversa. Quem confirma a entrega e o caller (`interaction.resolved` no wire, ou o campo de
-    texto abrindo quando a escolha pede justificativa)."""
+    texto abrindo quando a escolha pede justificativa).
+
+    `req_id` e o pedido que a pessoa VIU quando escolheu, reconferido no wire no ultimo instante
+    antes da tecla. Sem ele o guard so sabia que ha ALGUM painel na tela: se o pedido de agora for
+    respondido no terminal e outro abrir no mesmo piscar, a tecla acertaria o painel novo — com os
+    rotulos do antigo. Aprovar um plano que a pessoa nao leu e o pior desfecho possivel aqui, e a
+    releitura fecha a janela ate o ultimo microssegundo. Import local: `app.adapters` importa o
+    KimiAdapter, que importa este modulo."""
     if option < 1:
         raise ValueError("option must be >= 1")
     if option > 9:
@@ -1012,6 +1019,12 @@ def select_kimi(name: str, option: int) -> None:
         raise ValueError("o painel de aprovacao do Kimi so aceita as opcoes 1..9")
     if not aprovacao_kimi_no_pane(_capture(name)):
         raise DriveError("painel de aprovacao do Kimi nao esta aberto no pane")
+    from app.adapters.kimi.transcript import read_pending_interaction
+    agora = read_pending_interaction(jsonl)
+    if agora is None or agora["id"] != req_id:
+        raise DriveError(
+            f"o pedido pendente mudou entre a leitura e a tecla ({req_id} -> "
+            f"{agora['id'] if agora else 'nenhum'}); nao digitado")
     send_keys(name, str(option), literal=True)   # literal: "1" e caractere, nao nome de tecla
 
 

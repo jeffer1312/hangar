@@ -198,29 +198,44 @@ def pane_e_teclas(monkeypatch):
     return estado, teclas
 
 
-def test_select_kimi_manda_o_numero_e_nada_mais(pane_e_teclas):
+def test_select_kimi_manda_o_numero_e_nada_mais(pane_e_teclas, tmp_path):
     estado, teclas = pane_e_teclas
     estado["pane"] = _PANE_APROVACAO
-    ti.select_kimi("s", 3)
+    wire = _write(tmp_path, [_req("approval_1")])
+    ti.select_kimi("s", 3, wire, "approval_1")
     # UMA tecla: o painel faz `Number(printable)-1` e ja submete. Nada de (n-1)xDown + Enter — o
     # cursor do Kimi e `▶`, que o _cursor_row nao le, entao contar linha ali seria as cegas.
     assert teclas == [("3", True)]
 
 
-def test_select_kimi_recusa_sem_o_painel_na_tela(pane_e_teclas):
+def test_select_kimi_recusa_sem_o_painel_na_tela(pane_e_teclas, tmp_path):
     estado, teclas = pane_e_teclas
     estado["pane"] = "conversa qualquer, sem painel\n"
+    wire = _write(tmp_path, [_req("approval_1")])
     with pytest.raises(ti.DriveError):
-        ti.select_kimi("s", 1)
+        ti.select_kimi("s", 1, wire, "approval_1")
     # Numero solto no composer viraria texto na conversa: nada pode ter sido digitado.
     assert teclas == []
 
 
-def test_select_kimi_recusa_opcao_de_dois_digitos(pane_e_teclas):
+def test_select_kimi_recusa_se_o_pedido_trocou_entre_a_leitura_e_a_tecla(pane_e_teclas, tmp_path):
+    # Corrida estreita e real: o pedido que a pessoa viu e respondido no terminal e outro abre no
+    # mesmo piscar. Sem reconferir o id, a tecla acerta o painel NOVO com os rotulos do antigo —
+    # aprovando um plano que ninguem leu. O painel na tela nao distingue os dois.
     estado, teclas = pane_e_teclas
     estado["pane"] = _PANE_APROVACAO
+    wire = _write(tmp_path, [_req("approval_1"), _resolved("approval_1"), _req("approval_2")])
+    with pytest.raises(ti.DriveError):
+        ti.select_kimi("s", 1, wire, "approval_1")
+    assert teclas == []
+
+
+def test_select_kimi_recusa_opcao_de_dois_digitos(pane_e_teclas, tmp_path):
+    estado, teclas = pane_e_teclas
+    estado["pane"] = _PANE_APROVACAO
+    wire = _write(tmp_path, [_req("approval_1")])
     with pytest.raises(ValueError):
-        ti.select_kimi("s", 10)
+        ti.select_kimi("s", 10, wire, "approval_1")
     assert teclas == []
 
 
@@ -342,7 +357,8 @@ def test_select_no_kimi_manda_a_tecla_e_confirma_pelo_wire(cliente, tmp_path):
         r = cliente.post("/api/sessions/k1/select", json={"option": 1}, headers=_h())
     assert r.status_code == 200
     assert r.json() == {"ok": True, "feedback_pendente": False}
-    sel.assert_called_once_with("k1", 1)
+    # O id do pedido vai junto: o drive reconfere no wire, no ultimo instante antes da tecla.
+    sel.assert_called_once_with("k1", 1, wire, "approval_1")
     # O caminho generico (contar linha + Down/Enter) NAO pode ser usado aqui: o cursor do Kimi e
     # `▶`, que o _cursor_row nao le, entao ele iria as cegas.
     generico.assert_not_called()
@@ -382,13 +398,29 @@ def test_select_no_kimi_opcao_fora_da_lista_nao_digita_nada(cliente, tmp_path):
     sel.assert_not_called()
 
 
-def test_select_no_kimi_sem_aprovacao_pendente_cai_no_caminho_generico(cliente, tmp_path):
-    # Picker cru do Kimi (que nao e aprovacao) continua indo pelo drive de sempre.
+def test_select_no_kimi_sem_aprovacao_pendente_e_409_nunca_o_drive_generico(cliente, tmp_path):
+    # O generico conta a linha do cursor e, sem achar (`_cursor_row` so le `❯`, o Kimi desenha `▶`),
+    # manda Down x(n-1) + Enter as CEGAS — teclas soltas numa sessao em execucao, com {"ok": true}
+    # de resposta. Nada se perde ao recusar: `_menu_block` exige `❯`/`>`, entao o pane do Kimi nunca
+    # produziu opcao por raspagem e este endpoint so e alcancavel pelos botoes vindos do wire.
     wire = _write(tmp_path, [_req("approval_1"), _resolved("approval_1")])
     with patch("app.api.registry.list", return_value=_sessao_kimi(wire)), \
          patch("app.api.terminal_input.select_kimi") as sel, \
          patch("app.api.terminal.select") as generico:
         r = cliente.post("/api/sessions/k1/select", json={"option": 2}, headers=_h())
-    assert r.status_code == 200
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_sem_pergunta_kimi"
     sel.assert_not_called()
-    generico.assert_called_once_with("k1", 2)
+    generico.assert_not_called()
+
+
+def test_select_no_kimi_com_wire_ilegivel_tambem_recusa(cliente, tmp_path):
+    # Wire que nao da pra ler devolve o MESMO None de "nao ha pedido" — e a diferenca entre os dois
+    # nao pode virar tecla as cegas. O caso ilegivel deixa rastro no log, nao na tela.
+    with patch("app.api.registry.list", return_value=_sessao_kimi(str(tmp_path / "sumiu.jsonl"))), \
+         patch("app.api.terminal_input.select_kimi") as sel, \
+         patch("app.api.terminal.select") as generico:
+        r = cliente.post("/api/sessions/k1/select", json={"option": 1}, headers=_h())
+    assert r.status_code == 409
+    sel.assert_not_called()
+    generico.assert_not_called()

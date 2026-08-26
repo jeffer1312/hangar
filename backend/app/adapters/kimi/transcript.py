@@ -176,6 +176,7 @@ def resposta_chegou(jsonl: str, call_id: str) -> bool:
 
 
 _CORTE_AVISADO: set[str] = set()
+_LEITURA_AVISADA: set[str] = set()
 
 
 def _objetos_da_cauda(jsonl: str, marca: str, avisa_corte: bool = False) -> list[dict] | None:
@@ -195,6 +196,13 @@ def _objetos_da_cauda(jsonl: str, marca: str, avisa_corte: bool = False) -> list
             f.seek(max(0, size - _PENDQ_TAIL_BYTES))
             tail = f.read().decode("utf-8", errors="replace")
     except OSError:
+        # "Nao deu pra ler" e resposta legitima aqui (o None existe pra isso), mas nao pode ser
+        # INVISIVEL: quem consome vira 409 pro usuario ou "sem botao" na tela, e sem esta linha as
+        # duas coisas ficariam indistinguiveis de "nao ha nada pendente". Uma por arquivo, mesma
+        # disciplina do aviso de corte abaixo: quem chama e o poll.
+        if jsonl not in _LEITURA_AVISADA:
+            _LEITURA_AVISADA.add(jsonl)
+            _log.warning("kimi: nao deu pra ler a cauda de %s", jsonl, exc_info=True)
         return None
     linhas = tail.splitlines()
     if size > _PENDQ_TAIL_BYTES:

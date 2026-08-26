@@ -583,10 +583,14 @@ export function summarizeToolInput(
     // `questions` e uma lista de OBJETOS, e o fallback generico la embaixo faria String() nela:
     // o card saia literalmente "AskUserQuestion [object Object]". A linha util e a pergunta (a
     // primeira, quando ha varias abas) — as opcoes o usuario ve no stepper, que abre por cima.
-    const qs = Array.isArray(input['questions']) ? input['questions'] : [];
-    const primeira = qs[0] as Record<string, unknown> | undefined;
-    const texto = primeira ? String(primeira['question'] ?? '') : '';
-    return texto ? summarizeText(texto, TOOL_MAX) : '';
+    const qs: unknown[] = Array.isArray(input['questions']) ? input['questions'] : [];
+    const primeira = qs[0];
+    // `typeof === 'string'`, nao `String(...)`: se `question` vier como objeto (outro agente, outra
+    // versao), o String() reproduz o MESMO "[object Object]" um nivel mais fundo. Aqui forma
+    // inesperada vira linha vazia, que e o cartao sem resumo — nunca lixo na tela.
+    const texto = primeira && typeof primeira === 'object'
+      ? (primeira as Record<string, unknown>)['question'] : undefined;
+    return typeof texto === 'string' && texto ? summarizeText(texto, TOOL_MAX) : '';
   }
   if (name === 'WebFetch') {
     return one('url') ? summarizeText(one('url'), TOOL_MAX) : summarizeValues(strList(input['urls']), MULTI_KEYS.urls);

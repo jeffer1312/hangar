@@ -651,6 +651,10 @@ describe('summarizeToolInput', () => {
                                   options: [{ label: '1 linha' }, { label: '2 linhas' }] }] };
     expect(summarizeToolInput('AskUserQuestion', input)).toBe('O README deve ter 1 ou 2 linhas?');
     expect(summarizeToolInput('AskUserQuestion', { questions: [] })).toBe('');
+    // Forma inesperada vira linha vazia, nunca o mesmo "[object Object]" um nivel mais fundo.
+    expect(summarizeToolInput('AskUserQuestion', { questions: [{ question: { t: 'x' } }] })).toBe('');
+    expect(summarizeToolInput('AskUserQuestion', { questions: ['cru'] })).toBe('');
+    expect(summarizeToolInput('AskUserQuestion', { questions: 'nao e lista' })).toBe('');
   });
 
   it('Grep/Glob mostram o padrao entre aspas (nao o diretorio), com o onde depois', () => {

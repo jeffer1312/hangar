@@ -1114,6 +1114,8 @@ class SessionRegistry:
                         a = aprovacao_kimi(i.jsonl, lambda nome=i.name: tmux.capture_pane(nome))
                     except Exception:
                         a = None
+                        _log.debug("capture_pane falhou lendo aprovacao de %s", i.name,
+                                   exc_info=True)
                     if a is not None:
                         aprov[i.name] = a
                 return corr, aprov
