@@ -651,6 +651,61 @@ def test_confirm_ainda_redigita_com_estado_conhecido_ocioso(tmp_path, monkeypatc
     assert row["delivered"] is False and row["attempts"] == 1
 
 
+# 26/08/2026, relatado de uma maquina Windows: a mesma mensagem entrou 3x na conversa (18:27,
+# 18:33, 18:37 — uma por fim de turno) e terminou com a tarja "nao chegou na sessao". Sao os 2
+# requeues do reconcile + a desistencia. O oraculo de "chegou?" e `committed_user_lines`, e ele
+# engolia OSError devolvendo o set montado ATE o erro: leitura que falha respondia "nada chegou",
+# e isso autoriza redigitar. No Windows ler o .jsonl que o Claude Code esta escrevendo pode voltar
+# WinError 32. Regra: oraculo que nao conseguiu ler nao decide nada.
+
+def test_committed_user_lines_none_quando_nao_da_pra_ler(tmp_path):
+    import json
+    # Diretorio no lugar do arquivo: IsADirectoryError no Linux, PermissionError no Windows — os
+    # dois sao OSError, que e a familia que o antigo `except` engolia.
+    assert pqueue.committed_user_lines(str(tmp_path)) is None
+    # E o contraste, pra "None" nao virar o retorno de tudo: arquivo legivel devolve set.
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "oi"}}) + "\n",
+                 encoding="utf-8")
+    assert pqueue.committed_user_lines(str(j)) == {"oi"}
+
+
+def test_confirm_nao_decide_com_transcript_ilegivel(tmp_path, monkeypatch, caplog):
+    # MESMO cenario do teste de cima (estado provadamente ocioso + texto ausente), que redigita de
+    # proposito — o que muda e so o oraculo nao ter conseguido ler. Aqui nao se toca na fila: a
+    # entrada segue entregue-nao-confirmada e visivel como bolha, e o proximo fim de turno reolha.
+    import logging
+    import time as _t
+    import app.api as api
+    monkeypatch.setattr(api, "committed_user_lines", lambda *a, **k: None)
+    with caplog.at_level(logging.WARNING, logger="hangar"):
+        chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
+    assert chamou == []                        # nada de re-drenar -> nada de segunda digitacao
+    assert row["delivered"] is True
+    assert not row.get("attempts")
+    assert "desistiu" not in row and "confirmed" not in row
+    # Tirar o guard NAO pode passar neste teste por acidente: sem ele o None desce ate o
+    # reconcile, estoura TypeError e o `except Exception` de _confirm_and_drain engole — a fila
+    # fica intacta pelo motivo ERRADO e as tres asserts acima continuariam verdes. O que separa os
+    # dois e QUAL linha foi registrada.
+    assert "confirmacao adiada" in caplog.text
+    assert "confirmacao de entrega falhou" not in caplog.text
+
+
+def test_linha_mais_parecida_aponta_o_quase_igual():
+    # O log do REQUEUE precisa mostrar CONTRA O QUE a comparacao falhou. Caso desenhado a partir do
+    # relato: o texto tem uma barra invertida a mais que a linha gravada no transcript.
+    texto = r"pode gerar os scripts e colar no servidor (\\servidor\SQL\banco.sql)"
+    committed = {r"pode gerar os scripts e colar no servidor (\servidor\SQL\banco.sql)",
+                 "outra coisa completamente diferente"}
+    assert pqueue.linha_mais_parecida(texto, committed) == \
+        r"pode gerar os scripts e colar no servidor (\servidor\SQL\banco.sql)"
+    # Sem nada parecido, None — melhor calar do que apontar uma linha aleatoria como "a candidata".
+    assert pqueue.linha_mais_parecida(texto, {"nada a ver"}) is None
+    assert pqueue.linha_mais_parecida("", committed) is None
+
+
 def test_confirm_adia_enquanto_trabalha(tmp_path, monkeypatch):
     # Guard que ja existia: mid-turn nao se mexe na fila (nem confirma, nem redigita).
     import time as _t

@@ -1,5 +1,7 @@
 import asyncio
+import difflib
 import json
+import logging
 import os
 import re
 import threading
@@ -15,6 +17,8 @@ from app import atomico
 from app.config import settings
 from app.models import ChatEvent, dumps_safe, scrub_surrogates
 from app.transcript import parse_obj
+
+_log = logging.getLogger("hangar.pqueue")
 
 # Limite de entradas mantidas no sidecar (poda no append pra nao crescer sem fim).
 _MAX_ENTRIES = 1000
@@ -205,8 +209,16 @@ def _chaves_de_commit(text: str) -> set[str]:
     return out
 
 
-def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
+def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str] | None:
     """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
+
+    None = NAO DEU PRA LER o transcript. Nunca um set vazio nesse caso, e a diferenca e o bug:
+    quem chama isto usa o resultado como oraculo de "chegou na sessao?", e um set vazio responde
+    "NADA chegou" — o `reconcile_delivered` entao re-enfileira TODA entrega pendente e o `drain`
+    REDIGITA a mensagem do usuario dentro da conversa. Ate 26/08/2026 o `except OSError` aqui
+    devolvia o set parcial montado ate o erro, ou seja: falha de leitura autorizava redigitacao.
+    No Windows isso nao e hipotetico — ler o .jsonl que o Claude Code esta escrevendo pode voltar
+    WinError 32 (arquivo em uso). Oraculo que falhou nao decide nada; ver `_confirm_and_drain`.
     Fontes CRUAS, sem o filtro de meta do parser: (a) entradas `user` — mensagem entregue MID-TURN
     e injetada depois vem embrulhada em meta que o parse_obj descartaria; (b) `queue-operation`
     enqueue — a fila INTERNA do Claude Code registra o texto NO MOMENTO da digitacao, antes de
@@ -283,9 +295,26 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str]:
                     for b in content:
                         if isinstance(b, dict) and b.get("type") == "text":
                             add(str(b.get("text", "")))
-    except OSError:
-        pass
+    except OSError as e:
+        # LOGA e devolve None: `pass` com o set meio montado era pior que nao ler nada — virava
+        # "estas 40 chegaram e as suas nao", e a que faltava era redigitada.
+        _log.warning("nao deu pra ler o transcript %s pra confirmar entregas: %s", jsonl, e)
+        return None
     return out
+
+
+def linha_mais_parecida(texto: str, committed: set[str]) -> str | None:
+    """A linha do transcript mais parecida com `texto`, ou None se nenhuma passa de 60%.
+
+    So roda no caminho de FALHA (o log do requeue). Existe porque `REQUEUE name=X n=1` nao diz
+    NADA sobre o porque: o oraculo e comparacao de string, entao o que resolve o proximo caso e o
+    diff — um espaco a mais, uma barra invertida comida pelo multiplexador, um prefixo que o
+    harness prependou. Sem isso a proxima ocorrencia custa a mesma leitura de codigo desta.
+    """
+    if not texto or not committed:
+        return None
+    perto = difflib.get_close_matches(texto, list(committed), n=1, cutoff=0.6)
+    return perto[0] if perto else None
 
 
 class PromptQueue:

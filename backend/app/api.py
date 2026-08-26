@@ -44,7 +44,8 @@ from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus, session_key)
 from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError, PIN_NONE
-from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
+from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
+                        linha_mais_parecida)
 from app.prune import prune_loop as _prune_loop
 from app.renova_token import laco as _renova_token_loop
 from app.chain import ThenLink
@@ -765,6 +766,17 @@ def _confirm_and_drain(name: str) -> None:
             m = corrige_ocioso_kimi(m, info.jsonl)
         # Kimi espera MAIS antes de declarar perdida (30s contra 8s): ver o comentario no else.
         grace = _CONFIRM_GRACE_KIMI if info.provider == "kimi" else _CONFIRM_GRACE
+        # UMA leitura do oraculo pros dois ramos. None = nao deu pra ler o transcript (ver
+        # committed_user_lines): sai SEM decidir e SEM reagendar. Sem reagendar de proposito — um
+        # Timer a cada `grace` contra um arquivo que nao abre e tempestade sem fim; o proximo fim
+        # de turno (`_on_hook_transition`) ou a proxima mensagem chamam isto de novo, e ate la a
+        # entrada fica visivel como bolha "na fila". Falha VISIVEL, nunca mensagem duplicada.
+        committed = committed_user_lines(info.jsonl, info.provider)
+        if committed is None:
+            _log.warning("confirmacao adiada name=%s: transcript ilegivel agora (nada foi "
+                         "reenfileirado nem dado por perdido)", name)
+            return
+        inicio_ts = _transcript_start_ts(info.jsonl)
         if m and m[0] == "working":
             # Turno vivo: REDIGITAR e DESISTIR no meio do turno sao perigosos (o texto pode ainda
             # estar na fila interna da TUI — desistiu viraria aviso falso de "nao chegou" sobre
@@ -774,7 +786,7 @@ def _confirm_and_drain(name: str) -> None:
             # fila inteira como bolha fantasma a cada reconexao do SSE. `confirm_only` carimba so
             # o provado e deixa o resto pra proxima checagem (reagendada la embaixo).
             q.reconcile_delivered(
-                committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
+                committed, inicio_ts,
                 time.time(),
                 grace=grace,
                 confirm_only=True,
@@ -804,12 +816,23 @@ def _confirm_and_drain(name: str) -> None:
             # o que se estica e o PRAZO (grace=30s): cobre o tempo entre a TUI aceitar o texto e ele
             # aparecer no wire.jsonl, sem nunca digitar duas vezes.
             requeued = q.reconcile_delivered(
-                committed_user_lines(info.jsonl, info.provider), _transcript_start_ts(info.jsonl),
+                committed, inicio_ts,
                 time.time(),
                 grace=grace,
                 max_attempts=max_attempts,
             )
             if requeued:
+                # Log com o TEXTO e com a linha mais parecida do transcript. `REQUEUE name=X n=1`
+                # sozinho nao diz nada: o oraculo e comparacao de string, entao o que resolve o
+                # caso e o DIFF (um espaco a mais, uma barra invertida comida pelo multiplexador,
+                # um prefixo prependado pelo harness). E redigitar e a acao destrutiva daqui —
+                # quando ela sai errada, o usuario ve a propria mensagem entrar 3x na conversa,
+                # e sem estas duas linhas so restava reler o codigo.
+                for r in requeued:
+                    txt = str(r.get("text") or "").strip()
+                    _log.info("REQUEUE name=%s id=%s tentativa=%s texto=%r | mais parecida no "
+                              "transcript=%r", name, r.get("id"), r.get("attempts"), txt[:200],
+                              (linha_mais_parecida(txt, committed) or "")[:200])
                 _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
                 drain(name, info.jsonl, info.provider)
         # Sobrou entrada AINDA DENTRO do prazo (o reconcile a pulou por "recente demais")? Volta a
