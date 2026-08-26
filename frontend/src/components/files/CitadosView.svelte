@@ -12,8 +12,9 @@
     carregando: boolean;      // ainda sem evento nenhum: skeleton
     parcial: boolean;         // histórico ainda não fechou (histGap != ''): aviso
     onAbrir: (c: Citado) => void;
+    selecionado?: string | null;   // path aberto no visor (relativo, ou o cru de um externo)
   }
-  let { citados, carregando, parcial, onAbrir }: Props = $props();
+  let { citados, carregando, parcial, onAbrir, selecionado = null }: Props = $props();
 
   let filtro = $state('');
   const visiveis = $derived.by(() => {
@@ -51,7 +52,9 @@
 {:else}
   <div class="lista">
     {#each visiveis as c (c.cru)}
-      <button type="button" class="no" onclick={() => onAbrir(c)}
+      <button type="button" class="no" class:sel={selecionado !== null && (selecionado === c.relativo || selecionado === c.cru)}
+              aria-current={selecionado !== null && (selecionado === c.relativo || selecionado === c.cru) ? 'true' : undefined}
+              onclick={() => onAbrir(c)}
               title={c.relativo === null ? m.arq_abrir_fora() : c.relativo}>
         <span class="l1">
           <span class="ico" aria-hidden="true"><FileIcon nome={c.nome} /></span>
@@ -95,6 +98,8 @@
     cursor: pointer; min-height: 0; min-width: 0; overflow: hidden;
   }
   .no:hover { background: var(--bg-hover); }
+  .no.sel { background: var(--accent-dim); }
+  .no.sel .nome { color: var(--text-primary); }
   .no:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
   .l1 { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 13px; line-height: 1.35; }
   .ico { width: 16px; flex: none; display: grid; place-items: center; }

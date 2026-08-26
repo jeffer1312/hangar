@@ -236,7 +236,7 @@
 
     {#if vista === 'citados' && events}
       <div class="corpo">
-        <CitadosView {citados} carregando={events.length === 0} parcial={histGap !== ''} onAbrir={abrirCitado} />
+        <CitadosView {citados} carregando={events.length === 0} parcial={histGap !== ''} onAbrir={abrirCitado} selecionado={store.selecionado} />
       </div>
     {:else}
     <FileSearchBar {q} {mode} {onBusca} />
