@@ -11,7 +11,7 @@ from app import pi_inbox
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
-from app.state import _live_spinner, classify, is_overlay
+from app.state import _live_spinner, classify, is_overlay, aprovacao_kimi_no_pane
 from app.tmux import send_keys
 
 _log = logging.getLogger("hangar.terminal_input")
@@ -972,6 +972,47 @@ def picker_kimi_aberto(name: str) -> bool:
     """O picker do Kimi ainda esta na tela? Usado como PROVA de que nada foi submetido quando a
     confirmacao pelo transcript estoura o prazo."""
     return _kimi_picker_aberto(_capture(name))
+
+
+# Painel de APROVACAO do Kimi: o desenho na TELA. Mora no state.py junto dos outros regexes de pane
+# (`_aprovacao_kimi_no_pane`), porque quem decide o ESTADO tambem precisa dele — o wire sozinho nao
+# distingue "painel aberto agora" de "pedido que ficou sem resposta numa execucao anterior".
+_KIMI_APROV_FEEDBACK_RE = re.compile(r"Type feedback")
+
+
+def aprovacao_kimi_aberta(name: str) -> bool:
+    """O painel de aprovacao do Kimi ainda esta na tela? PROVA de que a tecla nao pegou."""
+    return aprovacao_kimi_no_pane(_capture(name))
+
+
+def feedback_kimi_aberto(name: str) -> bool:
+    """O painel de aprovacao abriu o campo de texto (escolha `Revise` / `Reject with feedback`)?
+
+    E a confirmacao de entrega DESSAS escolhas: elas nao geram `interaction.resolved` na hora — o
+    painel troca o rodape e fica esperando a justificativa, que a pessoa escreve pelo composer."""
+    return bool(_KIMI_APROV_FEEDBACK_RE.search(_capture(name)))
+
+
+def select_kimi(name: str, option: int) -> None:
+    """Escolhe a opcao `option` (1-based) do painel de APROVACAO do Kimi pela TECLA NUMERICA.
+
+    Nao conta linha e nao manda (n-1)xDown como o `select` generico, por dois motivos medidos: o
+    cursor do Kimi e `▶`, que o `_cursor_row` nao le (entao la o drive cairia no caminho ABERTO, as
+    cegas), e o painel trata numero como escolha direta — `handleInput` faz `Number(printable)-1` e
+    chama `selectAndSubmit`, sem passar pelo cursor. Menos tecla, nenhum drift.
+
+    Painel fora da tela -> DriveError SEM digitar: numero solto no composer viraria texto na
+    conversa. Quem confirma a entrega e o caller (`interaction.resolved` no wire, ou o campo de
+    texto abrindo quando a escolha pede justificativa)."""
+    if option < 1:
+        raise ValueError("option must be >= 1")
+    if option > 9:
+        # O painel le UM caractere ("1".."9" — `buildNumericHint` para no 9). Digitar "10" mandaria
+        # o "1", que ja escolhe e fecha o painel, e o "0" cairia no composer como texto.
+        raise ValueError("o painel de aprovacao do Kimi so aceita as opcoes 1..9")
+    if not aprovacao_kimi_no_pane(_capture(name)):
+        raise DriveError("painel de aprovacao do Kimi nao esta aberto no pane")
+    send_keys(name, str(option), literal=True)   # literal: "1" e caractere, nao nome de tecla
 
 
 def answer_question_kimi(name: str, answers: list[dict], questions: list[dict]) -> None:

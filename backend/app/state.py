@@ -384,6 +384,62 @@ def _kimi_mtime_da_sessao(jsonl: str) -> Optional[float]:
         return None
 
 
+# Painel de APROVACAO do Kimi (plano/comando/arquivo), pelo RODAPE. E outro desenho — e outro
+# rodape — que o `_FOOTER_RE` e o picker de pergunta do terminal_input nao enxergam: la o `↵` vem
+# antes de "choose", aqui antes de "confirm". Os dois textos foram lidos do binario do Kimi 0.34.0
+# (`ApprovalPanelComponent.render`), e conferidos num painel real:
+#   `↑/↓ select · 1/2/3 choose · ↵ confirm[ · ctrl+e preview]`   e   `Type feedback · ↵ submit.`
+# ponytail: CALIBRATION KNOB — se o Kimi trocar o rodape, e aqui que se ajusta, num lugar so.
+_KIMI_APROV_RE = re.compile(r"↵\s*confirm|Type feedback")
+
+
+def aprovacao_kimi_no_pane(pane: str) -> bool:
+    """O painel de aprovacao do Kimi esta desenhado NESTE quadro do pane?"""
+    return bool(_KIMI_APROV_RE.search(pane))
+
+
+def aprovacao_kimi(jsonl: Optional[str],
+                   pane_get: Callable[[], str]) -> Optional[tuple[str, list[str]]]:
+    """(pergunta, opcoes) do painel de APROVACAO do Kimi, ou None.
+
+    O painel — plano, comando, arquivo — nunca chegou ao app porque este modulo so sabe ler o cursor
+    `❯` do Claude e o `>` do Pi, e o Kimi desenha `▶`. Ensinar o glifo aos regexes era o remendo: o
+    Kimi ja publica `interaction.request` no wire, com tudo que o painel usa pra se desenhar, e
+    QUAIS sao as opcoes so o evento estruturado diz sem depender de largura de janela nem de
+    rascunho no composer (medido: a 3a opcao voltava grudada no texto do composer).
+
+    Duas fontes, cada uma respondendo o que sabe: o WIRE diz *o que* esta sendo perguntado, o PANE
+    diz que o painel esta na tela AGORA. Exigir as duas nao e cinto e suspensorio — o wire sozinho
+    nao distingue "pendente" de "ficou sem resposta numa execucao anterior": retomar uma sessao
+    (`kimi -S`) reabre o MESMO wire.jsonl, entao um `interaction.request` que morreu sem
+    `interaction.resolved` continua la, e a sessao nova nasceria mostrando botoes de um painel que
+    nao existe — e que nunca resolveriam (o `select_kimi` recusa, 409 a cada toque). O rodape ja era
+    obrigatorio pra DIGITAR; sem ele aqui, as duas pontas discordavam.
+
+    `pane_get` e CALLABLE, e a ordem (wire primeiro, tela depois) e o que deixa isso barato nos dois
+    chamadores: o `StateMonitor` ja tem o quadro na mao e devolve ele de graca, e a LISTA — que roda
+    pra toda sessao a cada poll — so paga o `capture-pane` quando ja ha pedido pendente, o que e
+    raro. Capturar antes de perguntar seria a tempestade de forks que o fast-path de marcador
+    (list_with_state) existe pra evitar. Pane ilegivel: quem passa o callable decide; aqui uma
+    excecao sobe, e na lista ela vira "sem botao" (sem prova de tela, sem botao).
+
+    Import LOCAL de proposito: `app.adapters` importa o KimiAdapter, que importa este modulo — no
+    topo isso seria ciclo. Mesma tatica do `LoopLink` no laco do StateMonitor.
+
+    Devolve None quando nao ha aprovacao pendente E quando o wire nao deu pra ler: nos dois casos o
+    estado segue pelo caminho de sempre (marcador/pane), que e o comportamento anterior a isto."""
+    if not jsonl:
+        return None
+    from app.adapters.kimi.transcript import read_pending_interaction
+    pend = read_pending_interaction(jsonl)
+    if not pend or not aprovacao_kimi_no_pane(pane_get()):
+        return None
+    pergunta = pend["titulo"]
+    if pend["resumo"]:
+        pergunta = f"{pergunta}\n{pend['resumo']}"
+    return pergunta, [e["label"] for e in pend["escolhas"]]
+
+
 def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S):
     """Kimi: marcador 'idle' velho + transcript crescendo = turno ANDANDO, nao sessao parada.
 
@@ -418,8 +474,11 @@ def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_
     Preserva o caso que criou esta funcao: prompt ENFILEIRADO na TUI grava `turn.prompt` sem
     disparar hook nenhum, entao a fronteira o pega. E continua sem raspar pane.
 
-    So corrige idle -> working. 'awaiting_input' segue seu caminho (a pergunta so existe no pane) e
-    'working' ja esta certo.
+    So corrige idle -> working; 'working' ja esta certo. 'awaiting_input' segue seu caminho — mas
+    ATENCAO: quem decide isso, no Kimi, ja nao e so o pane. O painel de aprovacao (plano, comando,
+    arquivo) sai do proprio wire, por `aprovacao_kimi`, e vence esta correcao nos dois chamadores
+    (StateMonitor e a lista) — com o painel aberto o turno segue ABERTO, entao aqui a sessao seria
+    promovida a "working" e sumiria da coluna de quem espera resposta.
 
     SEM teto de idade, por decisao. A tentacao e dizer "transcript parado ha 10min nao prova nada" e
     voltar pro marcador — resolveria o caso do Kimi que MORRE no meio do turno (os dois numeros
@@ -514,6 +573,16 @@ class StateMonitor:
             pane = await asyncio.to_thread(tmux.capture_pane, self.name)
             state, label, question, options = classify(pane)
             spinner = _live_spinner(pane)
+
+            # Aprovacao do Kimi: vem do WIRE, nao do pane (ver `aprovacao_kimi`). Vence o classify
+            # de proposito — enquanto o painel esta aberto o pane ainda mostra o spinner do turno,
+            # que sem isto ganharia a disputa e a sessao apareceria "trabalhando" com os botoes
+            # escondidos. So o Kimi passa `transcript_get`, entao os outros providers nem chegam
+            # aqui. Le disco -> to_thread, mesma regra do capture_pane acima.
+            if self.transcript_get is not None:
+                aprov = await asyncio.to_thread(aprovacao_kimi, self.transcript_get(), lambda: pane)
+                if aprov is not None:
+                    state, label, question, options = "awaiting_input", None, aprov[0], aprov[1]
 
             if state == "awaiting_input":
                 # Menu real (AskUserQuestion/permissão) -> estado autoritativo, sem debounce.

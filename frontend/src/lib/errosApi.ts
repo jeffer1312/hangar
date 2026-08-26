@@ -141,6 +141,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_sessao_recado_nao_enfileirado: () => m.erro_sessao_recado_nao_enfileirado(),
   erro_sessao_opcao_nao_enviada: () => m.erro_sessao_opcao_nao_enviada(),
   erro_opcao_nao_convergiu: (p) => m.erro_opcao_nao_convergiu({ detalhe: String(p.detalhe) }),
+  erro_opcao_fora_da_lista: () => m.erro_opcao_fora_da_lista(),
   erro_mux_indisponivel: (p) => m.erro_mux_indisponivel({ detalhe: String(p.detalhe) }),
   erro_workflow_inexistente: () => m.erro_workflow_inexistente(),
   erro_agente_inexistente: () => m.erro_agente_inexistente(),

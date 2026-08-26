@@ -24,7 +24,7 @@ from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
-                       status_line as _pane_status)
+                       aprovacao_kimi, status_line as _pane_status)
 from app.statusline import read as _sidecar_status
 from app.hook_state import hook_state
 from app.planprog import plan_progress, plano_escondido
@@ -1090,16 +1090,51 @@ class SessionRegistry:
         # sessoes e conexoes, nao so pra dona do arquivo grande.
         kimis = [i for i in infos if getattr(i, "provider", "claude") == "kimi"]
         corrigidos: dict[str, object] = {}
+        # Aprovacao pendente do Kimi (plano/comando/arquivo): sai do WIRE, nao do pane — ver
+        # state.aprovacao_kimi. Aqui isso e o que faz o card mostrar "aguardando" com os botoes: no
+        # painel aberto o turno segue ABERTO no wire, entao `corrige_ocioso_kimi` promove a sessao
+        # pra "working" e ela some da coluna de quem espera resposta. Vai na MESMA thread da
+        # correcao — as duas leem o rabo do mesmo arquivo.
+        aprovacoes: dict[str, tuple[str, list[str]]] = {}
         if kimis:
             brutos = {i.name: hook_state.get_state(_sid(i.jsonl)) for i in kimis}
-            corrigidos = await asyncio.to_thread(
-                lambda: {i.name: _kimi_corrige_ocioso(i, brutos[i.name]) for i in kimis})
+
+            def _kimi_sweep():
+                corr, aprov = {}, {}
+                for i in kimis:
+                    corr[i.name] = _kimi_corrige_ocioso(i, brutos[i.name])
+                    # O pane responde a outra metade da pergunta ("o painel esta na tela AGORA?"),
+                    # sem a qual uma sessao RETOMADA sobre um wire com pedido orfao nasceria com
+                    # botoes de um painel inexistente (ver state.aprovacao_kimi). O callable so e
+                    # chamado DEPOIS de o wire dizer que ha pedido pendente, que e raro — este
+                    # caminho nao acrescenta captura nenhuma ao poll normal. (O sweep de statusline,
+                    # mais abaixo, captura por conta propria; e outro orcamento, com TTL.)
+                    # Pane ilegivel -> sem prova de tela, sem botao.
+                    try:
+                        a = aprovacao_kimi(i.jsonl, lambda nome=i.name: tmux.capture_pane(nome))
+                    except Exception:
+                        a = None
+                    if a is not None:
+                        aprov[i.name] = a
+                return corr, aprov
+
+            corrigidos, aprovacoes = await asyncio.to_thread(_kimi_sweep)
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         for info in infos:
             # Sessoes Codex nao vivem no tmux -> nunca raspar o pane (capture_pane erraria numa
             # sessao inexistente). O estado vivo (working/idle) chega em runtime pelo adapter via SSE;
             # aqui fica o default idle + last_activity do rollout.
             if getattr(info, "provider", "claude") == "codex":
+                info.last_activity = _jsonl_mtime(info.jsonl)
+                continue
+            aprov = aprovacoes.get(info.name)
+            if aprov is not None:
+                # Wire manda: o painel de aprovacao esta na tela AGORA. Nao entra no `pending` (nao
+                # ha o que raspar — os rotulos nao estao no pane em formato que este modulo leia) e
+                # nao mexe no hook_state: o marcador volta a valer sozinho quando a aprovacao for
+                # resolvida, sem promover/rebaixar nada.
+                info.state = "awaiting_input"
+                info.question, info.options = aprov
                 info.last_activity = _jsonl_mtime(info.jsonl)
                 continue
             marker = (corrigidos[info.name] if info.name in corrigidos

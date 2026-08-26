@@ -644,6 +644,15 @@ describe('summarizeToolInput', () => {
     expect(summarizeToolInput('Read', { file_path: '/a.ts', offset: 0 })).toBe('/a.ts');   // 0 nao e recorte
   });
 
+  it('AskUserQuestion mostra a pergunta, nunca [object Object]', () => {
+    // `questions` e lista de OBJETOS: no fallback generico o card saia "AskUserQuestion
+    // [object Object]" (visto numa sessao Kimi). As opcoes ficam com o stepper, que abre por cima.
+    const input = { questions: [{ question: 'O README deve ter 1 ou 2 linhas?', header: 'README',
+                                  options: [{ label: '1 linha' }, { label: '2 linhas' }] }] };
+    expect(summarizeToolInput('AskUserQuestion', input)).toBe('O README deve ter 1 ou 2 linhas?');
+    expect(summarizeToolInput('AskUserQuestion', { questions: [] })).toBe('');
+  });
+
   it('Grep/Glob mostram o padrao entre aspas (nao o diretorio), com o onde depois', () => {
     expect(summarizeToolInput('Grep', { pattern: 'foo', path: '/tmp' })).toBe('"foo" em /tmp');
     expect(summarizeToolInput('Glob', { pattern: '**/*.ts' })).toBe('"**/*.ts"');

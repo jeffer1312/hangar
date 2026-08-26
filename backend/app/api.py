@@ -2791,6 +2791,71 @@ def _espera_resposta_kimi(jsonl: str | None, call_id: str,
     return False
 
 
+# Prazo pra escolha no painel de aprovacao do Kimi aterrissar (mesmo criterio do picker).
+_APROV_KIMI_TIMEOUT = 5.0
+
+
+def _espera_escolha_kimi(name: str, jsonl: str, req_id: str, pede_feedback: bool,
+                         timeout: float = _APROV_KIMI_TIMEOUT) -> bool:
+    """True quando a escolha no painel de aprovacao do Kimi esta comprovadamente entregue.
+
+    Duas provas, porque as escolhas do painel terminam de dois jeitos diferentes: a comum vira
+    `interaction.resolved` no wire, e a que pede justificativa (`Revise`, `Reject with feedback`)
+    NAO resolve nada na hora — o painel troca o rodape por um campo de texto e espera a pessoa
+    escrever. Sem a segunda prova, escolher `Revise` gastaria o prazo inteiro e voltaria erro numa
+    tecla que pegou."""
+    from app.adapters.kimi.transcript import interacao_resolvida
+    limite = time.monotonic() + timeout
+    while time.monotonic() < limite:
+        if interacao_resolvida(jsonl, req_id):
+            return True
+        if pede_feedback and terminal_input.feedback_kimi_aberto(name):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _select_aprovacao_kimi(name: str, info, option: int) -> dict | None:
+    """Escolhe no painel de APROVACAO do Kimi (plano/comando/arquivo). None = nao ha aprovacao
+    pendente, e o `/select` segue pelo caminho generico.
+
+    As opcoes vem do WIRE (`read_pending_interaction`), nao do pane — e a mesma fonte que o estado
+    usou pra desenhar os botoes, entao o numero que chega aqui casa com o que a pessoa leu."""
+    from app.adapters.kimi.transcript import read_pending_interaction
+    jsonl = info.jsonl if info else None
+    pend = read_pending_interaction(jsonl) if jsonl else None
+    if pend is None:
+        return None
+    escolhas = pend["escolhas"]
+    if not 1 <= option <= len(escolhas):
+        raise HTTPException(409, detail=erro(
+            "erro_opcao_fora_da_lista",
+            f"opção {option} não existe neste pedido (são {len(escolhas)}) — opção NÃO enviada"))
+    try:
+        terminal_input.select_kimi(name, option)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except terminal_input.DriveError as e:
+        # O wire dizia pendente e o painel ja saiu da tela: respondido no terminal entre o toque e
+        # aqui. Mesmo caso (e mesma frase) do picker do Kimi no /answer.
+        diag.registrar("aprovacao_kimi.painel_fechado", "erro", sessao=name, detalhe=str(e))
+        raise HTTPException(409, detail=erro(
+            "erro_sem_pergunta_kimi",
+            "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
+    if not _espera_escolha_kimi(name, jsonl, pend["id"], escolhas[option - 1]["requires_feedback"]):
+        # Prazo estourado NAO prova que nada pegou — pode ser o Kimi demorando pra gravar. Igual ao
+        # /answer do picker: so se o painel CONTINUA na tela e que a tecla comprovadamente nao pegou.
+        if terminal_input.aprovacao_kimi_aberta(name):
+            raise HTTPException(409, detail=erro(
+                "erro_opcao_nao_convergiu", "não consegui marcar essa opção no terminal — tente de novo",
+                detalhe="o painel de aprovação continua aberto e nada foi resolvido no wire"))
+        raise HTTPException(409, detail=erro(
+            "erro_sem_confirmacao_resposta",
+            "resposta enviada, mas nao deu pra confirmar a tempo — "
+            "confira na sessao antes de responder de novo"))
+    return {"ok": True, "feedback_pendente": escolhas[option - 1]["requires_feedback"]}
+
+
 def _recusa_se_painel_aberto(name: str) -> None:
     # Com o painel anexado, a janela do tmux esta no tamanho DELE (~120x20). Quem conta linha no
     # pane — o seletor de opcao, o stepper do AskUserQuestion (terminal_input.answer_questions /
@@ -2817,6 +2882,14 @@ def select(name: str, body: SelectBody):
     _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
+    # Kimi: os botoes de aprovacao (plano/comando/arquivo) sao desenhados a partir do WIRE, entao a
+    # escolha volta pelo wire tambem — tecla numerica + `interaction.resolved` como prova. Sem
+    # aprovacao pendente cai no caminho generico, que e o comportamento de sempre.
+    info = next((s for s in registry.list() if s.name == name), None)
+    if getattr(info, "provider", "claude") == "kimi":
+        res = _select_aprovacao_kimi(name, info, body.option)
+        if res is not None:
+            return res
     try:
         terminal.select(name, body.option)
     except terminal_input.DriveError as e:
