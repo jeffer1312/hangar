@@ -490,6 +490,24 @@ def test_create_pins_fresh_jsonl_not_existing_mtime(tmp_path):
     assert "--session-id" in ns.call_args[0][2]
 
 
+def test_create_limpa_pareamento_de_sessao_morta_fora_do_kill(tmp_path, monkeypatch):
+    # Sessao que morre FORA do kill() (pane fechado na mao, maquina reiniciada) deixa o sidecar do
+    # grupo no disco — ele e keyed pelo NOME. Sem a limpeza no create(), a sessao nova de mesmo nome
+    # nascia dentro de um grupo que ja nao existe (badge preso, contrato de outro trabalho).
+    from app import pair
+    monkeypatch.setattr(pair.settings, "projects_dir", str(tmp_path / "projects"))
+    pair.join("cc", "outra", "tarefa")
+    assert pair.PairLink("cc").get() is not None
+    (tmp_path / "-home-u-p").mkdir()
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True):
+        reg.create("cc", "/home/u/p")
+    assert pair.PairLink("cc").get() is None
+    # grupo de 1 nao existe: o companheiro tambem sai, senao ficaria apontando pra um fantasma
+    assert pair.PairLink("outra").get() is None
+
+
 def test_create_rejects_duplicate_name(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "has_session", return_value=True):

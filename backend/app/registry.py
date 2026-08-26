@@ -1390,6 +1390,10 @@ class SessionRegistry:
         # Mesmo motivo, pro vinculo 'then' (feature #12): nome reusado nao deve herdar um encadeamento
         # de uma sessao antiga e ja morta.
         ThenLink(name).clear()
+        # E pro PAREAMENTO, pelo mesmo motivo: o kill() ja tira a sessao do grupo, mas quem morre
+        # FORA dele (pane fechado na mao, maquina reiniciada) deixa o sidecar keyed pelo nome no
+        # disco — e a sessao nova de mesmo nome nascia dentro de um grupo que nao existe mais.
+        self._clear_pair(name)
         # Fixa o jsonl FRESCO no cache na hora: resolve() devolve este uuid mesmo antes do claude
         # escrever o arquivo, evitando o fallback newest-by-mtime pescar um jsonl ja existente da pasta.
         # Pi (jsonl=None) nao entra no cache — nao ha path a fixar, e a resolucao dele nem passa por aqui.
@@ -1467,6 +1471,7 @@ class SessionRegistry:
             raise
         PromptQueue(name).clear()
         ThenLink(name).clear()
+        self._clear_pair(name)  # mesmo motivo do create(): grupo orfao de sessao morta fora do kill
         return SessionInfo(name=name, cwd=cwd, jsonl=rollout_path, provider="codex")
 
     def rename(self, old: str, new: str) -> None:
@@ -1577,11 +1582,13 @@ class SessionRegistry:
     def _clear_pair(name: str) -> None:
         # Sessão morta SAI do grupo (leave: sob lock, atualiza os demais membros): sem isto os
         # companheiros apontariam pra um fantasma (badge preso). Best-effort, nunca bloqueia o
-        # kill — mas LOGA: engolir calado deixava o badge-fantasma indiagnosticável.
+        # kill nem a criação — mas LOGA: engolir calado deixava o badge-fantasma indiagnosticável.
         try:
             pair_leave(name)
         except Exception as e:
-            _log.warning("kill(%s): falha ao sair do grupo de pareamento: %r", name, e)
+            # Sem "kill(...)" no texto: o create() também chama isto (nome reusado de sessão morta
+            # fora do kill), e a falha aparecia no log como se fosse de um encerramento.
+            _log.warning("_clear_pair(%s): falha ao sair do grupo de pareamento: %r", name, e)
 
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da
