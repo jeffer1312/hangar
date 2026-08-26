@@ -156,8 +156,6 @@
 
   onMount(() => {
     store.recarregar();
-    // Selecao lembrada (localStorage) sem conteudo = pagina recarregada: reabre o arquivo.
-    if (store.selecionado && !store.conteudo) store.abrir(store.selecionado);
   });
 
   // Breadcrumb da selecao: raiz › pasta › subpasta (o arquivo em si fica na arvore). Clicar num

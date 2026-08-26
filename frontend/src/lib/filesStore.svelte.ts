@@ -71,8 +71,8 @@ export class FilesStore {
   private cortePorPasta = new SvelteMap<string, boolean>();
 
   private readonly sessao: string;
-  // Chave de persistencia (serverId::sessao): pastas abertas + arquivo selecionado sobrevivem
-  // ao recarregar a pagina. Vazia = nao persiste (testes/instancia solta).
+  // Chave de persistencia (serverId::sessao): as pastas abertas sobrevivem ao recarregar a
+  // pagina (a selecao nao — ver _restaurar). Vazia = nao persiste (testes/instancia solta).
   private readonly chaveLS: string;
 
   constructor(sessao: string, chave = '') {
@@ -96,9 +96,10 @@ export class FilesStore {
     try {
       const raw = localStorage.getItem(this.chaveLS);
       if (!raw) return;
-      const d = JSON.parse(raw) as { abertos?: unknown; selecionado?: unknown };
+      // So as PASTAS abertas voltam. A selecao nao: reabrir o visor no Ctrl+R cobria o chat com
+      // um arquivo que ninguem pediu de novo (medido 26/08 — e vinha vazio, "sem diferencas").
+      const d = JSON.parse(raw) as { abertos?: unknown };
       if (Array.isArray(d.abertos)) for (const p of d.abertos) if (typeof p === 'string') this.abertos.add(p);
-      if (typeof d.selecionado === 'string') this.selecionado = d.selecionado;
     } catch {
       // storage bloqueado ou JSON velho: comeca vazio, como sempre comecou
     }
@@ -107,7 +108,7 @@ export class FilesStore {
   private _persistir() {
     if (!this.chaveLS) return;
     try {
-      localStorage.setItem(this.chaveLS, JSON.stringify({ abertos: [...this.abertos], selecionado: this.externo ? null : this.selecionado }));
+      localStorage.setItem(this.chaveLS, JSON.stringify({ abertos: [...this.abertos] }));
     } catch {
       // idem: persistir e conveniencia, nunca erro
     }
