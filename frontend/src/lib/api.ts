@@ -1210,6 +1210,11 @@ export function readFile(name: string, path: string): Promise<FileContent> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/read?${q}`);
 }
 
+// Visão "citados": quais caminhos citados existem (relativo resolvido) e quais não.
+export function resolverCitados(name: string, caminhos: string[]): Promise<{ ok: Record<string, { relativo: string | null; real: string }>; faltam: string[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/resolver`, { method: 'POST', body: JSON.stringify({ caminhos }) });
+}
+
 export function searchFiles(name: string, q: string, mode: 'names' | 'contents'): Promise<SearchResult> {
   const qs = new URLSearchParams({ q, mode });
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/files/search?${qs}`);

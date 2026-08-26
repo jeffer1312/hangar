@@ -12,8 +12,8 @@
   import FileTree from './FileTree.svelte';
   import FileIcon from './FileIcon.svelte';
   import CitadosView from './CitadosView.svelte';
-  import { SvelteSet } from 'svelte/reactivity';
-  import { fileUrl, searchFiles } from '../../lib/api';
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+  import { fileUrl, resolverCitados, searchFiles } from '../../lib/api';
   import { acumularCitados, estadoVazio, type Citado } from '../../lib/arquivosCitados';
   import type { ChatEvent } from '../../lib/types';
 
@@ -55,11 +55,58 @@
       if (atual !== estado) estado = atual;
     });
   });
+  // Só entra na lista o que o servidor confirmou que EXISTE (decisão do usuário, 26/08): os
+  // caminhos novos vão em lote pro /files/resolver, que também acerta o relativo de quem foi
+  // citado a partir de outra pasta. Quem falta vai pro `ocultos` e nunca aparece.
+  const resolvidos = new SvelteMap<string, { relativo: string | null; real: string }>();
+  // `pendentes` = na fila, ainda não mandados; `emVoo` = já num POST. Separados pra um lote
+  // novo não reenviar o que o anterior ainda está resolvendo.
+  const pendentes = new Set<string>();
+  const emVoo = new Set<string>();
+  let timerResolver: ReturnType<typeof setTimeout> | null = null;
+  let vivo = true;
+  function agendarResolver(ms: number) {
+    if (timerResolver) clearTimeout(timerResolver);
+    timerResolver = setTimeout(async () => {
+      timerResolver = null;
+      const lote = [...pendentes];
+      if (!lote.length) return;
+      pendentes.clear();
+      lote.forEach((c) => emVoo.add(c));
+      try {
+        const r = await resolverCitados(sessionName, lote);
+        if (!vivo) return;
+        for (const [cru, v] of Object.entries(r.ok)) resolvidos.set(cru, v);
+        for (const cru of r.faltam) ocultos.add(cru);
+      } catch {
+        // Servidor fora: volta pra fila e tenta de novo daqui a pouco — sem isto o lote que
+        // falhou sumia da lista até chegar uma citação nova.
+        if (!vivo) return;
+        lote.forEach((c) => pendentes.add(c));
+        agendarResolver(5000);
+      } finally {
+        lote.forEach((c) => emVoo.delete(c));
+      }
+    }, ms);
+  }
+  $effect(() => {
+    const novos = estado.lista.map((c) => c.cru)
+      .filter((cru) => !resolvidos.has(cru) && !ocultos.has(cru) && !emVoo.has(cru) && !pendentes.has(cru));
+    if (!novos.length) return;
+    novos.forEach((c) => pendentes.add(c));
+    agendarResolver(250);
+  });
+  onDestroy(() => { vivo = false; if (timerResolver) clearTimeout(timerResolver); });
+
   // Mesmo arquivo citado de dois jeitos (absoluto pela tool, relativo na prosa) é UM item.
   const citados = $derived.by(() => {
     const porChave = new Map<string, Citado>();
-    for (const c of estado.lista) {
-      const k = c.relativo ?? c.cru;
+    for (const bruto of estado.lista) {
+      const res = resolvidos.get(bruto.cru);
+      if (!res) continue;
+      const c = { ...bruto, relativo: res.relativo };
+      // Chave = caminho REAL: `~/x`, `/home/.../x` e o symlink viram um item só.
+      const k = res.real;
       const j = porChave.get(k);
       if (!j) { porChave.set(k, c); continue; }
       const origens = { ...j.origens };

@@ -3765,6 +3765,20 @@ def files_search(name: str, q: str, mode: str = "names"):
         raise _erro_arq(e)
 
 
+class ResolverBody(_StrictBody):
+    caminhos: list[str]
+
+
+@app.post("/api/sessions/{name}/files/resolver", dependencies=[Depends(require_auth)])
+def files_resolver(name: str, body: ResolverBody):
+    """Visão "citados": confere de uma vez quais caminhos citados existem (e resolve os relativos
+    a outra pasta pelo sufixo). Quem não existe não entra na lista."""
+    try:
+        return filesearch.resolver(_session_cwd(name), body.caminhos)
+    except SearchError as e:
+        raise _erro_arq(e)
+
+
 @app.post("/api/sessions/{name}/git/path-diff", dependencies=[Depends(require_auth)])
 def git_path_diff(name: str, body: GitPathDiffBody):
     try:
