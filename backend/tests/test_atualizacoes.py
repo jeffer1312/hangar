@@ -26,29 +26,29 @@ def _escreve(pasta, nome, **campos):
 
 def test_le_frontmatter_e_corpo(passos):
     _escreve(passos, "2026-01-01-um", id="2026-01-01-um", titulo="Primeiro",
-             comando="true", prova="true", destrutivo="false", texto="Texto pra pessoa ler.")
+             comando="echo oi", prova="docs", destrutivo="false", texto="Texto pra pessoa ler.")
     (p,) = atualizacoes.todos()
     assert p["id"] == "2026-01-01-um" and p["titulo"] == "Primeiro"
-    assert p["comando"] == "true" and p["destrutivo"] is False
+    assert p["comando"] == "echo oi" and p["prova"] == ["docs"] and p["destrutivo"] is False
     assert p["texto"] == "Texto pra pessoa ler."
 
 
 def test_valor_com_dois_pontos_sobrevive(passos):
-    _escreve(passos, "x", id="x", titulo="Um: com dois pontos", comando="echo a:b", prova="true")
+    _escreve(passos, "x", id="x", titulo="Um: com dois pontos", comando="echo a:b", prova="docs")
     (p,) = atualizacoes.todos()
     assert p["titulo"] == "Um: com dois pontos" and p["comando"] == "echo a:b"
 
 
 def test_sem_titulo_e_ignorado_sem_derrubar_o_resto(passos):
     """Arquivo malformado não pode travar a atualização de todo mundo."""
-    _escreve(passos, "quebrado", id="quebrado", comando="true", prova="true")
+    _escreve(passos, "quebrado", id="quebrado", comando="echo oi", prova="docs")
     _escreve(passos, "bom", id="bom", titulo="Vale")
     assert [p["id"] for p in atualizacoes.todos()] == ["bom"]
 
 
 def test_comando_sem_prova_e_recusado(passos):
     """Comando sem prova é o defeito que a feature existe pra eliminar: exit 0 vira "deu certo"."""
-    _escreve(passos, "sem-prova", id="sem-prova", titulo="Faz algo", comando="true")
+    _escreve(passos, "sem-prova", id="sem-prova", titulo="Faz algo", comando="echo oi")
     assert atualizacoes.todos() == []
 
 
@@ -90,7 +90,7 @@ def test_passo_ja_aplicado_nao_fica_pendente(passos):
 def test_marcar_todos_nao_roda_nada(passos, tmp_path):
     """Instalação do zero: tudo já foi feito pelo instalador, nada pode rodar de novo."""
     marca = tmp_path / "rodou"
-    _escreve(passos, "um", id="um", titulo="Um", comando=f"touch {marca}", prova=f"test -f {marca}")
+    _escreve(passos, "um", id="um", titulo="Um", comando=f"touch {marca}", prova=str(marca))
     assert atualizacoes.marcar_todos() == 1
     assert not marca.exists()
     assert atualizacoes.pendentes() == []
@@ -107,14 +107,14 @@ def test_destrutivo_pode_ficar_de_fora(passos):
 
 def test_aplica_e_marca(passos, tmp_path):
     marca = tmp_path / "feito"
-    _escreve(passos, "um", id="um", titulo="Um", comando=f"touch {marca}", prova=f"test -f {marca}")
+    _escreve(passos, "um", id="um", titulo="Um", comando=f"touch {marca}", prova=str(marca))
     assert atualizacoes.aplicar_pendentes() == ["um"]
     assert marca.exists()
     assert atualizacoes.aplicados() == {"um"}
 
 
 def test_comando_que_falha_nao_marca(passos):
-    _escreve(passos, "um", id="um", titulo="Um", comando="exit 3", prova="true")
+    _escreve(passos, "um", id="um", titulo="Um", comando="exit 3", prova="docs")
     with pytest.raises(atualizacoes.PassoFalhou):
         atualizacoes.aplicar_pendentes()
     assert atualizacoes.aplicados() == set()
@@ -122,18 +122,26 @@ def test_comando_que_falha_nao_marca(passos):
 
 def test_prova_que_falha_nao_marca(passos):
     """Comando com exit 0 e efeito ausente é justamente o que a prova existe pra pegar."""
-    _escreve(passos, "um", id="um", titulo="Um", comando="true", prova="false")
+    _escreve(passos, "um", id="um", titulo="Um", comando="echo oi", prova="nao-existe")
     with pytest.raises(atualizacoes.PassoFalhou) as e:
         atualizacoes.aplicar_pendentes()
-    assert "verificacao" in str(e.value)
+    assert "nao deixou" in str(e.value)
     assert atualizacoes.aplicados() == set()
+
+
+def test_prova_nao_passa_pelo_shell(passos):
+    """`cmd.exe` não tem `test` nem `true`: a prova é caminho, e caminho existe nos dois sistemas."""
+    _escreve(passos, "um", id="um", titulo="Um", comando="echo oi", prova="docs backend/nao-existe")
+    with pytest.raises(atualizacoes.PassoFalhou) as e:
+        atualizacoes.aplicar_pendentes()
+    assert "backend/nao-existe" in str(e.value) and "docs" not in str(e.value).split(":")[-1]
 
 
 def test_para_no_primeiro_erro(passos, tmp_path):
     """Passo costuma depender do anterior; seguir em frente deixaria estado que ninguém desenhou."""
     depois = tmp_path / "nao-deveria"
-    _escreve(passos, "1-quebra", id="1-quebra", titulo="Quebra", comando="exit 1", prova="true")
-    _escreve(passos, "2-depois", id="2-depois", titulo="Depois", comando=f"touch {depois}", prova="true")
+    _escreve(passos, "1-quebra", id="1-quebra", titulo="Quebra", comando="exit 1", prova="docs")
+    _escreve(passos, "2-depois", id="2-depois", titulo="Depois", comando=f"touch {depois}", prova="docs")
     with pytest.raises(atualizacoes.PassoFalhou):
         atualizacoes.aplicar_pendentes()
     assert not depois.exists()
@@ -142,7 +150,7 @@ def test_para_no_primeiro_erro(passos, tmp_path):
 def test_rodar_duas_vezes_nao_repete(passos, tmp_path):
     contador = tmp_path / "n"
     _escreve(passos, "um", id="um", titulo="Um",
-             comando=f"echo x >> {contador}", prova=f"test -f {contador}")
+             comando=f"echo x >> {contador}", prova=str(contador))
     atualizacoes.aplicar_pendentes()
     atualizacoes.aplicar_pendentes()
     assert contador.read_text().count("x") == 1

@@ -1,8 +1,7 @@
 ---
 id: 2026-08-26-orquestracao-e-arquivos-citados
 titulo: Modal Orquestração (papéis e contas do time) e aba Arquivos com "citados" e ícones
-comando: true
-prova: test -f frontend/src/lib/fileIcons.generated.ts && test -f backend/app/orq_politica.py
+prova: frontend/src/lib/fileIcons.generated.ts backend/app/orq_politica.py
 destrutivo: false
 ---
 

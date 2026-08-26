@@ -11,10 +11,16 @@ até faz a conta sozinho, mas fura em dois casos que acontecem de verdade: insta
 resetou (o intervalo mente). Guardar os ids aplicados num sidecar é o padrão de migração de banco
 (Django, Rails, Flyway) e não depende de saber o passado da máquina.
 
-**A prova é o que separa "rodou" de "deu certo".** Um passo só entra no registro depois do seu
-comando de verificação passar. Sem isso, "sucesso" quer dizer "o comando saiu com 0", que foi
+**A prova é o que separa "rodou" de "deu certo".** Um passo só entra no registro depois que a
+verificação dele passa. Sem isso, "sucesso" quer dizer "o comando saiu com 0", que foi
 exatamente o que produziu o `-Update` dizendo ok com o processo antigo ainda no ar
 (`install.ps1:1242`).
+
+**A prova é uma lista de CAMINHOS, não um comando.** Ela era shell (`test -f ...`), e isso
+quebrou no Windows em 26/08/2026: `cmd.exe` não tem `test` nem `true`, então o primeiro passo
+publicado morreu com "'true' não é reconhecido como um comando interno ou externo" e a
+atualização parou no meio. Caminho existe ou não existe nos dois sistemas — a prova mais comum,
+portátil por construção, sem shell nenhum.
 """
 from __future__ import annotations
 
@@ -94,7 +100,7 @@ def _passo(arquivo: Path) -> dict | None:
         "id": ident,
         "titulo": campos["titulo"],
         "comando": campos.get("comando", "").strip(),
-        "prova": campos.get("prova", "").strip(),
+        "prova": campos.get("prova", "").split(),
         "destrutivo": campos.get("destrutivo", "").strip().lower() in ("true", "sim", "1"),
         "texto": corpo,
         "arquivo": arquivo.name,
@@ -192,6 +198,17 @@ def _rodar(linha: str) -> subprocess.CompletedProcess:
     )
 
 
+def _existe(caminho: str) -> bool:
+    """Caminho da prova: absoluto, com `~`, ou relativo à raiz do repo.
+
+    ponytail: espaço separa um caminho do outro, então caminho COM espaço não é expressável aqui.
+    `shlex.split` resolveria no Linux e estragaria no Windows (ele come a barra invertida de
+    `C:\\dir\\x`). Quem escreve estes passos somos nós, e nenhum caminho do repo tem espaço.
+    """
+    p = Path(caminho).expanduser()
+    return (p if p.is_absolute() else REPO / p).exists()
+
+
 class PassoFalhou(Exception):
     def __init__(self, passo: dict, motivo: str):
         super().__init__(f"{passo['titulo']}: {motivo}")
@@ -207,12 +224,11 @@ def aplicar(passo: dict) -> None:
             cauda = "\n".join((p.stderr or p.stdout or "").strip().splitlines()[-8:])
             raise PassoFalhou(passo, cauda or f"saiu com {p.returncode}")
 
-    if passo["prova"]:
-        v = _rodar(passo["prova"])
-        if v.returncode != 0:
-            # Comando ok e prova falhando é o caso que o registro existe pra pegar: sem isto o
-            # passo entraria como aplicado e nunca mais rodaria, com o efeito dele ausente.
-            raise PassoFalhou(passo, "o passo rodou mas a verificacao nao passou")
+    faltando = [c for c in passo["prova"] if not _existe(c)]
+    if faltando:
+        # Comando ok e prova falhando é o caso que o registro existe pra pegar: sem isto o
+        # passo entraria como aplicado e nunca mais rodaria, com o efeito dele ausente.
+        raise PassoFalhou(passo, "o passo rodou mas nao deixou: " + " ".join(faltando))
 
     marcar(passo["id"])
     _log.info("passo aplicado: %s (%s)", passo["id"], passo["titulo"])
