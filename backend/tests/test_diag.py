@@ -220,6 +220,28 @@ def test_horario_impossivel_cai_no_do_envio(ruim):
     assert datetime.fromisoformat(_linhas()[0]["ts"]).date() == date.today()
 
 
+def test_horario_no_futuro_nao_passa_na_frente_das_linhas_do_backend():
+    # Aparelho adiantado, ainda dentro do dia (o teste do dia não pega). Evento no futuro não
+    # existe: quando a linha chega, ele já aconteceu. Deixar passar poria a linha da tela à frente
+    # das do backend, que sempre levam a hora da chegada — e é a ordem entre as duas fontes que se
+    # lê quando se investiga uma corrida.
+    adiantado = (datetime.now().astimezone() + timedelta(hours=5)).isoformat(timespec="milliseconds")
+    diag.anotar_da_tela([{"evento": "sse.abrir", "ts": adiantado}])
+    assert datetime.fromisoformat(_linhas()[0]["ts"]) <= datetime.now().astimezone()
+
+
+def test_atraso_da_fila_em_segundo_plano_continua_valendo():
+    # O oposto do caso acima: a aba em segundo plano segura a fila e despeja muito depois. Esse
+    # horário antigo é o verdadeiro — recusá-lo devolveria o defeito que o campo veio corrigir.
+    agora = datetime.now().astimezone()
+    # A virada do dia é o teto: 40min antes das 00:20 cairia no dia anterior e a recusa seria a
+    # outra regra, não esta.
+    atraso = min(timedelta(minutes=40), agora - agora.replace(hour=0, minute=0, second=0, microsecond=0))
+    atrasado = (agora - atraso).isoformat(timespec="milliseconds")
+    diag.anotar_da_tela([{"evento": "sse.abrir", "ts": atrasado}])
+    assert datetime.fromisoformat(_linhas()[0]["ts"]) == datetime.fromisoformat(atrasado)
+
+
 def test_relogio_do_aparelho_em_outro_dia_nao_datila_linha_fora_do_arquivo():
     # O arquivo é UM POR DIA. Um aparelho com a data errada gravaria, dentro do arquivo de hoje,
     # linha datada de outro dia — aí o horário do envio é o menos errado dos dois.

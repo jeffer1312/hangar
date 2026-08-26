@@ -158,7 +158,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     // "queda de rede" no diário — em 26/08/2026 as duas únicas do dia eram exatamente isso, e a
     // queda de verdade, se tivesse havido, estaria indistinguível no meio. `TimeoutError` (o teto
     // de tempo) segue entrando: aquilo é falha, não navegação — a mesma linha que `isAbortError`
-    // já traça pro resto do app.
+    // já traça pro resto do app. Quem for abortar por um motivo NOVO (um teto de tempo escrito à
+    // mão, por exemplo, em vez do `AbortSignal.timeout`) precisa saber disto: por este caminho a
+    // falha some do diário sem deixar rastro.
     if (!isAbortError(e)) {
       registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req,
                       detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });

@@ -1073,6 +1073,12 @@
 
     es.addEventListener('message', (e: MessageEvent) => {
       noteAlive();
+      // Chegou conversa: o aviso de "não carregou o histórico" não pode continuar na frente dela.
+      // A tela de erro SUBSTITUI a lista inteira ({:else if error}), então um erro aceso por uma
+      // carga que falhou ficava preso mesmo depois de o SSE se recuperar sozinho e voltar a
+      // entregar mensagens — o mesmo sintoma que este trabalho veio consertar, entrando por outra
+      // porta. Quem apagava o aviso era só o toque em "tentar de novo".
+      if (error) error = '';
       // Guarda a posição de retomada. Só o transcript carrega id ("<stem>:<offset>"); state/preview/
       // ping vêm sem, de propósito — o último id visto tem que ser sempre o do transcript, senão a
       // retomada apontaria pro lugar errado e pularia mensagens.

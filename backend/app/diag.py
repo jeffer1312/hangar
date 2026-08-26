@@ -97,6 +97,10 @@ VERSAO_EM_EXECUCAO = _git_describe()
 _NIVEIS = ("ok", "aviso", "erro")
 _TETO_DETALHE = 300
 _TETO_LOTE = 50        # linhas por POST: acima disso é ruído ou cliente com defeito
+# Quanto o relógio do aparelho pode estar à frente do servidor e o horário dele ainda valer. Não é
+# tolerância a relógio errado — é o trânsito do POST mais a diferença de arredondamento. Ver
+# `_ts_da_tela`.
+_FOLGA_ADIANTADO = timedelta(minutes=1)
 
 # Serializa o append: duas telas (celular e desktop) mandam lote ao mesmo tempo e o arquivo é um só.
 _LOCK = threading.Lock()
@@ -147,13 +151,19 @@ def _ts_da_tela(bruto: str) -> str:
     Só aceita horário do MESMO dia local do servidor: o arquivo é um por dia (`caminho_do_dia`), e
     um relógio errado no aparelho gravaria linha datada de outro dia dentro dele. Nesse caso o
     horário do envio é o menos errado dos dois, e o `seq` da aba continua ordenando as linhas.
+
+    E recusa horário no FUTURO, que nenhum evento pode ter: ele já aconteceu quando chegou aqui.
+    Um aparelho adiantado (ainda dentro do dia, então o teste acima não pega) poria linhas da tela
+    à frente de linhas do backend, que sempre levam a hora da chegada — e a ordem entre as duas
+    fontes é justamente o que se lê numa corrida de reconexão. O ATRASO, ao contrário, é legítimo
+    e fica livre: a aba em segundo plano segura a fila e despeja tudo junto muito depois.
     """
     try:
         quando = datetime.fromisoformat(bruto).astimezone()
     except ValueError:
         return ""
     agora = datetime.now().astimezone()
-    if quando.date() != agora.date():
+    if quando.date() != agora.date() or quando > agora + _FOLGA_ADIANTADO:
         return ""
     return quando.isoformat(timespec="milliseconds")
 
