@@ -13,7 +13,7 @@
   import FileIcon from './FileIcon.svelte';
   import CitadosView from './CitadosView.svelte';
   import { SvelteSet } from 'svelte/reactivity';
-  import { fileUrl } from '../../lib/api';
+  import { fileUrl, searchFiles } from '../../lib/api';
   import { acumularCitados, estadoVazio, type Citado } from '../../lib/arquivosCitados';
   import type { ChatEvent } from '../../lib/types';
 
@@ -66,17 +66,32 @@
       for (const [o, n] of Object.entries(c.origens)) origens[o as keyof typeof origens] = (origens[o as keyof typeof origens] ?? 0) + (n ?? 0);
       porChave.set(k, { ...j, origens, ultimoTs: Math.max(j.ultimoTs, c.ultimoTs), primeiroTs: Math.min(j.primeiroTs, c.primeiroTs) });
     }
-    return [...porChave.values()].sort((a, b) => b.ultimoTs - a.ultimoTs);
+    return [...porChave.values()].filter((c) => !ocultos.has(c.cru)).sort((a, b) => b.ultimoTs - a.ultimoTs);
   });
-  const apagados = new SvelteSet<string>();
+  // Citado que não abre SOME da lista (decisão do usuário, 26/08): item cinza e morto só
+  // ocupava lugar e não dava pra clicar de novo.
+  const ocultos = new SvelteSet<string>();
+  const MIDIA = /\.(png|jpe?g|gif|webp|svg|avif|bmp|mp4|mov|webm|mkv|m4v|avi|mp3|wav|m4a|ogg|flac|aac|pdf|html?)$/i;
+  // O resultado vem do RETORNO do store (desta abertura), nao do estado global: dois cliques
+  // rapidos resolvem fora de ordem, e o estado no fim do await e o da abertura mais nova.
   async function abrirCitado(c: Citado) {
     if (c.relativo === null) {
-      window.open(fileUrl(sessionName, c.cru), '_blank', 'noopener');
+      // Fora do cwd: texto abre no visor do app; mídia/pdf/html vão pro navegador.
+      if (MIDIA.test(c.cru)) { window.open(fileUrl(sessionName, c.cru), '_blank', 'noopener'); return; }
+      if (!(await store.abrirExterno(c.cru, fileUrl(sessionName, c.cru)))) ocultos.add(c.cru);
       return;
     }
-    await store.abrir(c.relativo);
-    // 404 no readFile: o store solta a seleção e deixa o erro — é o sinal de "apagado".
-    if (store.erro && store.selecionado !== c.relativo) apagados.add(c.cru);
+    if (await store.abrir(c.relativo)) return;
+    // O caminho citado era relativo a OUTRA pasta (`tests/x.py` dentro de um `cd backend &&`):
+    // procura pelo nome e abre o que termina com o mesmo sufixo, antes de desistir. Homonimo em
+    // duas pastas: o sufixo mais longo (o `relativo` inteiro) vence; so o nome puro e o plano B.
+    try {
+      const r = await searchFiles(sessionName, c.nome, 'names');
+      const hit = r.hits.find((h) => h.path === c.relativo || h.path.endsWith('/' + c.relativo))
+        ?? r.hits.find((h) => h.path === c.nome || h.path.endsWith('/' + c.nome));
+      if (hit && await store.abrir(hit.path)) return;
+    } catch { /* busca falhou: cai no esconder */ }
+    ocultos.add(c.cru);
   }
 
   // svelte-ignore state_referenced_locally — captura intencional: o App remonta este painel
@@ -174,7 +189,7 @@
 
     {#if vista === 'citados' && events}
       <div class="corpo">
-        <CitadosView {citados} carregando={events.length === 0} parcial={histGap !== ''} {apagados} onAbrir={abrirCitado} />
+        <CitadosView {citados} carregando={events.length === 0} parcial={histGap !== ''} onAbrir={abrirCitado} />
       </div>
     {:else}
     <FileSearchBar {q} {mode} {onBusca} />

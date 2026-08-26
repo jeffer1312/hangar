@@ -11,10 +11,9 @@
     citados: Citado[];
     carregando: boolean;      // ainda sem evento nenhum: skeleton
     parcial: boolean;         // histórico ainda não fechou (histGap != ''): aviso
-    apagados: ReadonlySet<string>;
     onAbrir: (c: Citado) => void;
   }
-  let { citados, carregando, parcial, apagados, onAbrir }: Props = $props();
+  let { citados, carregando, parcial, onAbrir }: Props = $props();
 
   let filtro = $state('');
   const visiveis = $derived.by(() => {
@@ -52,8 +51,7 @@
 {:else}
   <div class="lista">
     {#each visiveis as c (c.cru)}
-      {@const morto = apagados.has(c.cru)}
-      <button type="button" class="no" class:morto onclick={() => onAbrir(c)}
+      <button type="button" class="no" onclick={() => onAbrir(c)}
               title={c.relativo === null ? m.arq_abrir_fora() : c.relativo}>
         <span class="l1">
           <span class="ico" aria-hidden="true"><FileIcon nome={c.nome} /></span>
@@ -61,7 +59,7 @@
           <span class="hora">{hora(c.ultimoTs)}</span>
         </span>
         <span class="l2">
-          <span class="pasta">{c.pasta}{morto ? ` · ${m.arq_apagado()}` : ''}</span>
+          <span class="pasta">{c.pasta}</span>
           <span class="chips">
             {#each chips(c) as ch (ch.o)}
               <span class="chip {ch.o === 'voce' ? 'chip-voce' : ch.o === 'citado' || ch.o === 'tool' ? '' : ch.o === 'Read' || ch.o === 'Bash' ? 'chip-leu' : 'chip-escreveu'}">{rotulo(ch.o)}{ch.n > 1 ? ` ×${ch.n}` : ''}</span>
@@ -98,7 +96,6 @@
   }
   .no:hover { background: var(--bg-hover); }
   .no:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
-  .no.morto { opacity: 0.5; }
   .l1 { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 13px; line-height: 1.35; }
   .ico { width: 16px; flex: none; display: grid; place-items: center; }
   .nome { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }

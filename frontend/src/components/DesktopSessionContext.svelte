@@ -204,23 +204,10 @@ import * as m from '../paraglide/messages';
        vive no ctxPanel (modulo): o App remonta este painel por {#key} a cada troca de sessao,
        e um $state local devolveria o usuario pra Contexto com Arquivos aberta. Recolhido, o
        painel some e a barra some junto — sem porta fantasma. -->
-  <div class="abas" role="tablist" aria-label={m.ctx_painel_titulo()}>
-    <button type="button" id="aba-ctx-contexto" class="aba" class:sel={ctxPanel.aba === 'contexto'}
-            role="tab" aria-selected={ctxPanel.aba === 'contexto'} aria-controls="painel-ctx-contexto"
-            onclick={() => (ctxPanel.aba = 'contexto')}>
-      {m.ctx_aba_contexto()}
-    </button>
-    <button type="button" id="aba-ctx-arquivos" class="aba" class:sel={ctxPanel.aba === 'arquivos'}
-            role="tab" aria-selected={ctxPanel.aba === 'arquivos'} aria-controls="painel-ctx-arquivos"
-            onclick={() => (ctxPanel.aba = 'arquivos')}>
-      {m.arq_aba()}
-    </button>
-  </div>
-
-  {#if ctxPanel.aba === 'contexto'}
-  <div id="painel-ctx-contexto" role="tabpanel" aria-labelledby="aba-ctx-contexto" class="ctx-tab">
+  <!-- Acoes da sessao (Terminal, Rodar, Anexos, Atividade) ficam ACIMA das abas: valem pra
+       sessao inteira, nao pra aba Contexto — e ninguem devia trocar de aba pra achar o Terminal. -->
   {#if hasActions}
-    <div class="ctx-actions">
+    <div class="ctx-actions" role="toolbar" aria-label={m.ctx_painel_titulo()}>
       {#if onOpenTerminal}
         <button class="ctx-action terminal-btn" class:alert={terminalAlert} onclick={onOpenTerminal} aria-label={m.ctx_terminal()}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -267,6 +254,22 @@ import * as m from '../paraglide/messages';
       {/if}
     </div>
   {/if}
+
+  <div class="abas" role="tablist" aria-label={m.ctx_painel_titulo()}>
+    <button type="button" id="aba-ctx-contexto" class="aba" class:sel={ctxPanel.aba === 'contexto'}
+            role="tab" aria-selected={ctxPanel.aba === 'contexto'} aria-controls="painel-ctx-contexto"
+            onclick={() => (ctxPanel.aba = 'contexto')}>
+      {m.ctx_aba_contexto()}
+    </button>
+    <button type="button" id="aba-ctx-arquivos" class="aba" class:sel={ctxPanel.aba === 'arquivos'}
+            role="tab" aria-selected={ctxPanel.aba === 'arquivos'} aria-controls="painel-ctx-arquivos"
+            onclick={() => (ctxPanel.aba = 'arquivos')}>
+      {m.arq_aba()}
+    </button>
+  </div>
+
+  {#if ctxPanel.aba === 'contexto'}
+  <div id="painel-ctx-contexto" role="tabpanel" aria-labelledby="aba-ctx-contexto" class="ctx-tab">
 
   <!-- A secao "Estado" saiu: repetia o chip do header a 60px de distancia, mesma palavra e mesma
        cor. O detalhe e o chip do loop subiram pro header, que ja era o lugar do estado. -->
@@ -576,47 +579,49 @@ import * as m from '../paraglide/messages';
 
   /* Faixa de acoes (ex-botoes da NavBar): icones sozinhos pediam memorizacao. Em 264px o par
      icone+rotulo cabe em duas colunas sem virar grade de cards. */
+  /* Barra de acoes: uma linha so, um bloco por acao (icone em cima, rotulo curto embaixo), dentro
+     de uma unica superficie — le como toolbar do painel, nao como quatro cards. Quantas couberem
+     (o Atividade so existe as vezes): auto-fit divide a linha por igual. */
   .ctx-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-2);
-    padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--border-subtle);
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 2px;
+    margin: 0 var(--space-4) var(--space-3);
+    padding: 2px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-inset);
   }
-  /* Numero IMPAR de acoes (o botao Atividade so existe as vezes): o ultimo ficava pendurado numa
-     coluna com um buraco do lado. Ele passa a ocupar a linha inteira, entao a faixa fecha em bloco
-     em vez de terminar num degrau. */
-  .ctx-action:last-child:nth-child(odd) { grid-column: 1 / -1; }
 
   .ctx-action {
     position: relative;
     min-width: 0;
-    min-height: 44px;
-    display: inline-flex;
+    min-height: 50px;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
-    gap: var(--space-2);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-inset);
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 2px 5px;
+    border: 0;
+    border-radius: calc(var(--radius-md) - 3px);
+    background: transparent;
     color: var(--text-secondary);
-    font-size: var(--text-xs);
+    font-size: 10.5px;
     font-weight: 600;
-    transition: background 180ms var(--ease-out), border-color 180ms var(--ease-out), color 180ms var(--ease-out);
+    letter-spacing: 0.01em;
+    transition: background 160ms var(--ease-out), color 160ms var(--ease-out);
   }
-  .ctx-action:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-default);
-    color: var(--text-primary);
-  }
+  .ctx-action:hover { background: var(--surface-raised); color: var(--text-primary); }
   .ctx-action:active { background: var(--bg-hover); }
-  .ctx-action svg { flex-shrink: 0; }
+  .ctx-action:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .ctx-action svg { flex-shrink: 0; width: 18px; height: 18px; }
   .ctx-action span:not(.activity-badge) {
-    min-width: 0;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1;
   }
 
   .terminal-btn { color: var(--text-secondary); }

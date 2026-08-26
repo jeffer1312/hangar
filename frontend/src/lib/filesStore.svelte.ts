@@ -19,6 +19,9 @@ export class FilesStore {
   abertos = new SvelteSet<string>();
   // Arquivo selecionado na arvore (caminho absoluto).
   selecionado = $state<string | null>(null);
+  // Aberto de FORA do cwd (citado na conversa, servido pelo /file): so leitura, e nao vai pro
+  // localStorage — no reload o readFile do cwd daria 404 num caminho que nunca foi da arvore.
+  externo = $state(false);
   // Conteudo do arquivo selecionado (nulo antes da primeira abertura).
   conteudo = $state<FileContent | null>(null);
   // Diff do arquivo selecionado no escopo atual (nulo quando o diff falha — fora de repo git).
@@ -104,7 +107,7 @@ export class FilesStore {
   private _persistir() {
     if (!this.chaveLS) return;
     try {
-      localStorage.setItem(this.chaveLS, JSON.stringify({ abertos: [...this.abertos], selecionado: this.selecionado }));
+      localStorage.setItem(this.chaveLS, JSON.stringify({ abertos: [...this.abertos], selecionado: this.externo ? null : this.selecionado }));
     } catch {
       // idem: persistir e conveniencia, nunca erro
     }
@@ -165,8 +168,46 @@ export class FilesStore {
   }
 
   // Abre um arquivo: pinta conteudo + diff (no escopo atual) quando a resposta voltar.
-  async abrir(path: string) {
+  // Arquivo de fora do cwd, pelo endpoint /file (so serve o que esta no transcript): texto no
+  // MESMO visor da arvore, sem diff e sem editar (digest nulo). Midia continua no navegador.
+  // Devolve se ESTA abertura deu certo (abertura mais nova por cima conta como "nao falhou").
+  async abrirExterno(cru: string, url: string): Promise<boolean> {
+    this.selecionado = cru;
+    this.externo = true;
+    this.erro = null;
+    this.loading = true;
+    const g = ++this.gArquivo;
+    const ge = ++this.gErro;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 30_000);
+    try {
+      const r = await fetch(url, { signal: ctl.signal });
+      if (g !== this.gArquivo) return true;
+      if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status });
+      const text = await r.text();
+      if (g !== this.gArquivo) return true;
+      this.conteudo = { path: cru, text, size: text.length, truncated: false, digest: null };
+      this.diff = null;
+      return true;
+    } catch (e) {
+      if (g !== this.gArquivo) return true;
+      this.conteudo = null;
+      this.diff = null;
+      this.selecionado = null;
+      this.externo = false;
+      if (ge === this.gErro) {
+        this.erro = (e as { status?: number }).status === 404 ? m.erro_arq_inexistente() : cleanErr(e);
+      }
+      return false;
+    } finally {
+      clearTimeout(timer);
+      if (g === this.gArquivo) this.loading = false;
+    }
+  }
+
+  async abrir(path: string): Promise<boolean> {
     this.selecionado = path;
+    this.externo = false;
     this._persistir();
     this.erro = null;
     this.loading = true;
@@ -185,7 +226,7 @@ export class FilesStore {
       readFile(this.sessao, path),
       pathDiff(this.sessao, path, this.escopo),
     ]);
-    if (g !== this.gArquivo) return; // uma abertura mais nova ja tomou o lugar
+    if (g !== this.gArquivo) return true; // uma abertura mais nova ja tomou o lugar — nao e falha DESTA
     this.loading = false;
     if (c.status === 'rejected') {
       // Falha ao abrir nao pode deixar o conteudo do arquivo anterior na tela sob o nome novo.
@@ -230,12 +271,13 @@ export class FilesStore {
       } else if (ge === this.gErro) {
         this.erro = cleanErr(c.reason);
       }
-      return;
+      return false;
     }
     this.conteudo = c.value;
     // Diff que falha NAO derruba a leitura: fora de repositorio git o path_diff responde 409 e
     // a arvore tem que continuar lendo arquivo. `diff = null` e o estado de "sem alteracao".
     this.diff = d.status === 'fulfilled' ? d.value : null;
+    return true;
   }
 
   // Expande/colapsa uma pasta; ao expandir, lista o conteudo dela (uma vez so).
@@ -279,7 +321,9 @@ export class FilesStore {
   async trocarEscopo(escopo: 'branch' | 'nao_commitado') {
     if (escopo === this.escopo) return;
     this.escopo = escopo;
-    if (this.selecionado) await this.abrir(this.selecionado);
+    // Externo nao tem diff (nem esta no cwd): reabrir pelo readFile daria 404 num arquivo que
+    // acabou de ser mostrado.
+    if (this.selecionado && !this.externo) await this.abrir(this.selecionado);
   }
 
   // Invalida o cache de uma subarvore (a pasta e todos os descendentes): incrementa a
