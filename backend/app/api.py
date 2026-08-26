@@ -2809,6 +2809,13 @@ async def get_atualizacao(procurar: bool = False):
 async def post_atualizacao_iniciar():
     """Lança a atualização e devolve na hora — ela roda FORA deste processo, que vai reiniciar."""
     pre = await asyncio.to_thread(atualizar.checar)
+    # Recusa ANTES de lançar o motor: a atualização alinha o disco com `origin/main` e arrastaria a
+    # branch de trabalho junto (medido em 25/08/2026 numa máquina com `mobile-expo` no checkout).
+    if pre.get("branch_de_trabalho"):
+        raise HTTPException(409, detail=erro(
+            "erro_atualizacao_branch",
+            f"este checkout esta na branch {pre.get('branch')}, nao na main",
+            branch=pre.get("branch")))
     if not pre.get("pode"):
         faltando = pre.get("faltando") or []
         raise HTTPException(409, detail=erro(

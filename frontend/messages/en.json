@@ -1957,6 +1957,8 @@
   "atualizar_reiniciando": "Restarting…",
   "atualizar_reinicio_demorou": "The server did not come back within 90 seconds. Check the service log before trying again.",
   "atualizar_reinicio_falhou": "The last restart failed:",
+  "atualizar_branch_bloqueia": "This checkout is on branch {branch}. Updating aligns the disk with main and would drag that branch along — switch to main first.",
+  "erro_atualizacao_branch": "The update only runs on main. This checkout is on another branch.",
   "erro_reinicio_indisponivel": "This machine does not restart the server on its own — here the installer is what stops and starts it.",
   "atualizar_procurar": "Check again",
   "atualizar_disponivel_titulo": "New version available",

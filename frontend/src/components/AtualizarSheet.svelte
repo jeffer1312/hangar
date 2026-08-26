@@ -268,6 +268,8 @@
    * recusa (409). Sem o botão, a única saída era descobrir o comando do serviço por conta.
    */
   const podeReiniciar = $derived(versoesDivergem && dados?.pre_voo?.topologia === 'systemd');
+  /** Checkout numa branch que não é a main: o backend recusa atualizar, e a tela não oferece. */
+  const branchDeTrabalho = $derived(!!dados?.pre_voo?.branch_de_trabalho);
   let reiniciando = $state(false);
 
   const _TETO_VOLTAR_MS = 90_000;
@@ -417,12 +419,20 @@
       {#if trabalhando > 0}
         <p class="aviso">{aviso_sessoes}</p>
       {/if}
+      {#if branchDeTrabalho}
+        <!-- A atualização alinha o disco com origin/main, e numa branch de trabalho isso arrasta a
+             branch junto. Sem o botão aqui, porque a única saída é trocar de branch — e escolher
+             isso por quem está trabalhando não é papel do botão de atualizar. -->
+        <p class="aviso">{m.atualizar_branch_bloqueia({ branch: dados?.pre_voo?.branch ?? '?' })}</p>
+      {/if}
       {#if erroDeRede}<p class="erro-linha">{erroDeRede}</p>{/if}
       <div class="acoes">
         <button class="bt secundario" onclick={onClose}>{m.atualizar_agora_nao()}</button>
-        <button class="bt primario" onclick={atualizar} disabled={enviando}>
-          {m.atualizar_botao()}
-        </button>
+        {#if !branchDeTrabalho}
+          <button class="bt primario" onclick={atualizar} disabled={enviando}>
+            {m.atualizar_botao()}
+          </button>
+        {/if}
       </div>
 
     {:else}

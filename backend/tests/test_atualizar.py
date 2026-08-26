@@ -185,6 +185,31 @@ def test_dependencia_faltando_nao_toca_no_repo(repo, monkeypatch):
     assert final["ok"] is False and "npm" in final["erro"]
 
 
+def test_branch_de_trabalho_recusa_sem_tocar_no_repo(repo, monkeypatch):
+    """Medido em 25/08/2026: com o checkout numa branch de trabalho, o `reset --hard origin/main`
+    levou A BRANCH junto — ela passou a apontar pra um commit da main e o disco ficou misturado.
+
+    Recusa antes de qualquer coisa, inclusive antes do resguardo: aqui nada aconteceu ainda, e a
+    saída é uma frase — não uma branch de resgate pra alguém desfazer depois.
+    """
+    _git(repo, "checkout", "-b", "mobile-expo")
+    tocou = []
+    monkeypatch.setattr(atualizar, "_puxar", lambda pre: tocou.append("puxar"))
+    monkeypatch.setattr(atualizar, "resguardar", lambda pre: tocou.append("resguardar"))
+
+    final = atualizar.executar()
+    assert tocou == []
+    assert final["ok"] is False and "mobile-expo" in final["erro"]
+    assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "mobile-expo"
+
+
+def test_main_e_master_seguem_atualizando(repo):
+    """A recusa é sobre branch de TRABALHO. Quem clona com `master` não pode ficar sem atualizar."""
+    assert atualizar.checar()["branch_de_trabalho"] is False
+    _git(repo, "checkout", "-b", "master")
+    assert atualizar.checar()["branch_de_trabalho"] is False
+
+
 def test_backend_que_nao_sobe_volta_pro_commit_anterior(repo, monkeypatch):
     antes = _git(repo, "rev-parse", "HEAD").stdout.strip()
 

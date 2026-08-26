@@ -662,6 +662,8 @@ export interface AtualizacaoPreVoo {
   behind?: number;
   divergiu?: boolean;
   topologia?: 'systemd' | 'windows' | 'manual';
+  /** Checkout fora de main/master: atualizar arrastaria a branch de trabalho, então o backend recusa. */
+  branch_de_trabalho?: boolean;
 }
 
 export interface Atualizacao {

@@ -163,6 +163,22 @@ describe('versão nova', () => {
     expect(txt).toContain(m.atualizar_botao());
   });
 
+  it('numa branch de trabalho não oferece o botão, e diz qual é a branch', async () => {
+    // Medido em 25/08/2026: atualizar com o checkout na `mobile-expo` levou a branch junto no
+    // `reset --hard origin/main`. O backend passou a recusar; a tela não pode nem oferecer.
+    vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+      base({ atualizacao_disponivel: true, mudancas: [{ sha: 'a1', titulo: 'algo novo' }],
+             pre_voo: { pode: true, faltando: [], branch: 'mobile-expo',
+                        branch_de_trabalho: true } }),
+    );
+    montar();
+    await tick();
+    await tick();
+    const txt = document.body.textContent ?? '';
+    expect(txt).toContain(m.atualizar_branch_bloqueia({ branch: 'mobile-expo' }));
+    expect(txt).not.toContain(m.atualizar_botao());
+  });
+
   it('corta em 5 e resume o resto', async () => {
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
       base({ atualizacao_disponivel: true, mudancas: dez }),

@@ -101,6 +101,20 @@ def test_dependencia_faltando_da_409_nomeando_o_que_falta():
     assert not ini.called
 
 
+def test_branch_de_trabalho_da_409_e_nao_lanca_a_atualizacao():
+    """A atualização alinha o disco com origin/main; numa branch de trabalho ela arrastaria a
+    branch. Recusa ANTES de lançar o motor, nomeando a branch pra tela poder dizer qual é."""
+    c = _client()
+    with patch("app.api.atualizar.checar",
+               return_value={"pode": True, "branch_de_trabalho": True, "branch": "mobile-expo"}), \
+         patch("app.api.atualizar.iniciar") as ini:
+        r = c.post("/api/atualizacao/iniciar", headers=_AUTH)
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_atualizacao_branch"
+    assert r.json()["detail"]["params"]["branch"] == "mobile-expo"
+    assert not ini.called
+
+
 def test_reiniciar_lanca_e_devolve_na_hora():
     c = _client()
     with patch("app.api.atualizar.reiniciar_agora", return_value={"ok": True, "pid": 7}) as rei:

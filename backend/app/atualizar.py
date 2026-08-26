@@ -390,6 +390,13 @@ def checar() -> dict:
         "pode": not faltando,
         "faltando": faltando,
         "branch": branch,
+        # A atualização alinha o checkout com `origin/main` — inclusive por `reset --hard`, quando o
+        # fast-forward é recusado. Numa branch de trabalho isso ARRASTA a branch: medido em
+        # 25/08/2026 na máquina do desktop, a `mobile-expo` local passou a apontar pra um commit da
+        # main e o disco ficou misturado (arquivos da main em alguns caminhos, sobras da outra
+        # branch noutros). Nada se perdeu — o `resguardar` fez o trabalho dele —, mas atualizar o
+        # app não pode decidir sobre a branch de ninguém, então aqui ele recusa.
+        "branch_de_trabalho": branch not in ("main", "master"),
         "sujo": len(sujo_rastreado),
         "ahead": ahead,
         "behind": behind,
@@ -583,6 +590,13 @@ def _executar(porta: int) -> dict:
     pre = checar()
     de = pre.get("commit", "")
     _escrever(commit_de=de)
+
+    # A recusa da branch vem ANTES de tudo, e principalmente antes do `resguardar`: aqui nada
+    # aconteceu ainda, e a saída é uma frase, não um resgate pra alguém desfazer depois.
+    if pre.get("branch_de_trabalho"):
+        return _falhou(
+            f"este checkout esta na branch '{pre.get('branch')}', e a atualizacao alinha o disco "
+            "com origin/main — troque para a main antes de atualizar", porta=porta)
 
     if not pre.get("pode"):
         falta = ", ".join(pre.get("faltando") or []) or pre.get("erro", "desconhecido")
