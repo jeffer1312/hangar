@@ -7,6 +7,8 @@
   import { caminhoDeCodigoNoComando } from '../lib/codeFromBash';
   import { pseudoCaminhoPorConteudo } from '../lib/detectarLinguagem';
   import { rolagemSoAoClicar } from '../lib/rolagemSoAoClicar';
+  import { lerComandoHangar } from '../lib/hangarCmd';
+  import HangarCommandCard from './HangarCommandCard.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import EditDiff from './EditDiff.svelte';
   import ReadView from './ReadView.svelte';
@@ -40,6 +42,30 @@
   );
 
   const phase = $derived(toolPhase(result));
+
+  // Comando do hangar (hangar-send e cia): vira cartão próprio — o que aconteceu, não a linha de
+  // comando. Só depois que o resultado chega: com o comando ainda rodando não há o que ler, e o
+  // card de Bash de sempre já mostra "executando".
+  const comandoBash = $derived(
+    event.tool_name === 'Bash'
+      ? String((event.tool_input as Record<string, unknown> | null)?.['command'] ?? '')
+      : '',
+  );
+  const hangarAcao = $derived(
+    result ? lerComandoHangar(comandoBash, String(result.result ?? ''), phase === 'error') : null,
+  );
+  const duracao = $derived(
+    result?.ts && event.ts ? Math.max(0, (result.ts - event.ts) * 1000) : null,
+  );
+  const hora = $derived(
+    event.ts ? new Date(event.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : null,
+  );
+  // Servidor da rota atual — sem ele o botão "abrir sessão" não teria pra onde ir (ex.: card
+  // renderizado fora de uma rota de chat), e aí ele nem aparece.
+  const servidorAtual = $derived(location.hash.match(/^#\/(?:chat|board|canvas)\/([^/]+)\//)?.[1] ?? null);
+  function abrirSessao(nome: string) {
+    if (servidorAtual) location.hash = `#/chat/${servidorAtual}/${encodeURIComponent(nome)}`;
+  }
   // Erro mostra o TEXTO do erro (o diff esconderia a mensagem que importa).
   const showDiff = $derived(!!editEdits && phase !== 'error');
   // Read: resultado de codigo com highlight (escolha do usuario 2026-08-04). Imagem lida NAO passa
@@ -102,7 +128,16 @@
   {/if}
 {/snippet}
 
-{#if toolLook.look === 'chips'}
+{#if hangarAcao}
+  <HangarCommandCard
+    acao={hangarAcao}
+    comando={comandoBash}
+    saida={String(result?.result ?? '')}
+    {duracao}
+    {hora}
+    onAbrirSessao={servidorAtual ? abrirSessao : undefined}
+  />
+{:else if toolLook.look === 'chips'}
   <!-- Pele 'chips' (portada do beautiful-ui): UMA linha — glifo + nome + o argumento num chip +
        o desfecho em texto apagado. O glifo vira chevron no hover (a linha fica limpa em repouso).
        O desfecho NAO saiu: e ele que diz "Pronto (38 linhas)" e a mensagem de erro. -->

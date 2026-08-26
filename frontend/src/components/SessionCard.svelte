@@ -288,11 +288,16 @@ import * as m from '../paraglide/messages';
            muda, entao vem primeiro e nunca some; o cwd fecha a linha e trunca primeiro. O tempo
            relativo ("51 min atrás") vem por último, colado à direita — informação de contexto, não
            de identidade. -->
-      {#if serverBadge || session.branch || showCwd || agoLabel}
+      {#if serverBadge || session.branch || session.worktree || showCwd || agoLabel}
         <span class="meta-line">
           {#if serverBadge}
             <span class="srv" style="color: {serverBadge.color};">{serverBadge.label}</span>
             {#if session.branch || showCwd}<span class="meta-sep">·</span>{/if}
+          {/if}
+          <!-- ⧉ = worktree ligada. IRMÃO da branch, não filho: worktree com HEAD destacado não tem
+               branch nenhuma e ainda assim precisa se distinguir do checkout principal. -->
+          {#if session.worktree}
+            <span class="wt" title={m.sessao_worktree()}>worktree</span>
           {/if}
           {#if session.branch}
             <span class="branch" title={m.sessao_branch_git_atual()}>⎇ {session.branch}</span>
@@ -682,6 +687,18 @@ import * as m from '../paraglide/messages';
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Marcador de worktree: chip com a palavra inteira, nunca trunca (quem cede a largura é o cwd).
+     Era um glifo ⧉ e não dava pra ver — dizer o nome custa 8 caracteres. */
+  .wt {
+    flex-shrink: 0;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
   }
   /* "+128 −24" do working tree: mono como a branch ao lado, nas cores semânticas de sempre
      (verde/vermelho do diff, não accent — é dado de código, não identidade). Não trunca: são 2

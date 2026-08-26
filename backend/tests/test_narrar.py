@@ -859,6 +859,66 @@ _BRIEFING_COMPLETO = """**Objetivo**
 - Como que eu posso integrar a skill que eu já tenho de orquestração com a skill de portar tela?"""
 
 
+# O segundo caso real (26/08/2026), e o que recalibrou os limites: o usuario ditou 2:25 sobre
+# unificar logs, clicou "Briefing" e o texto voltou CRU com aviso, duas vezes seguidas — pra ele o
+# botao estava quebrado. Os dois textos abaixo sao a medicao real (mesmo audio, mesmo provedor):
+# o briefing esta INTEIRO (nao falta nenhum assunto), e ainda assim tinha cobertura 0,577, dentro
+# do intervalo do defeito de 24/08. A razao esta no proprio texto: ele SOLETRA caminho ("pss barra
+# logs barra prom web"), e cada "barra" dita vira uma barra escrita.
+_BRIEFING2_CRU = (
+    "Tá, o que a gente precisa aí? Eu preciso de dar uma melhorada nos logs aí. Por que que eu tô "
+    "falando isso? Tem que ver, né, analisar como que tá feito. Hoje você vai rodar vários "
+    "sub-agents aí pra gente ter uma noção maior, mas é porque tá aí meio que espalhado os logs "
+    "aí, os logs da aplicação, no caso. Tem log que tá ficando na pasta... Deixa eu achar aqui a "
+    "pasta, peraí. Tá, no caso aqui, tem logs que ficam na pasta pss barra logs, pss módulos, "
+    "não, pss barra módulos, barra pmedicweb, barra log, e também tem uns logs que estão ficando "
+    "na pasta do usuário, barra pm2, que seriam os logs do pm2. queria ver uma forma de pegar "
+    "todos esses logs a na teoria j era para estar assim mas por algum motivo n est mas pegar "
+    "todos esses logs que s do Prom Web e colocar tudo em pss barra logs que no caso pss barra "
+    "logs barra prom web eu queria todos os logs nesse caminho nesse endere porque assim ficaria "
+    "mais f de encontrar E uma outra coisa que depois a gente conseguir fazer isso que eu queria "
+    "ver era se poss fazer uma p uma HTML simples para ler esses logs de forma melhor, né, ali "
+    "onde eu possa, que ele não dependa do projeto Next rodando, por isso que eu falo um HTML ou "
+    "o que for melhor, mas imagino que é um HTML puro, com JavaScript nele ali, onde eu posso "
+    "clicar, abrir ele e eu vejo os logs, todos os logs, não só do PSS, porque dentro dessa pasta "
+    "PSS logs, vai ter vários, então seria uma boa se a gente conseguisse fazer um sistema, uma "
+    "até a linha local ali que não depende de rodar node, linha do tipo para ler esses logs, né? "
+    "E aí se você não tiver aí agora a estrutura desses logs, depois eu te passo para a tela, mas "
+    "primeiro vamos fazer a verificação de como unificar esses logs aí. E aí"
+)
+
+_BRIEFING2_BOM = """**Objetivo**
+- Melhorar os logs da aplicação.
+- Unificar todos os logs do Prom Web em um único caminho: `pss/logs/promweb`.
+- Depois de unificar, criar um HTML simples (com JavaScript) para ler esses logs de forma melhor, sem depender do projeto Next rodando, nem de rodar Node — algo local, que possa abrir e visualizar todos os logs.
+
+**Situação hoje**
+- Os logs estão espalhados:
+- Na pasta `pss/logs` e também em `pss/modulos/pmedicweb/log`.
+- Na pasta do usuário, `/pm2`, que seriam os logs do PM2.
+- Na teoria, já deveria estar assim, mas por algum motivo não está.
+- Preciso analisar como está feito hoje, verificar a estrutura desses logs.
+
+**Contexto**
+- Hoje você vai rodar vários sub-agents para ter uma noção maior.
+- Dentro da pasta `pss/logs`, vai ter vários logs, não só do PSS.
+
+**Em aberto**
+- Se você não tiver a estrutura desses logs agora, depois eu te passo para a tela.
+- Primeiro vamos fazer a verificação de como unificar esses logs."""
+
+
+def test_briefing_que_soletra_caminho_passa(monkeypatch):
+    """O bug de 26/08/2026 virado teste. Este briefing nao perdeu assunto nenhum e mesmo assim
+    tinha 0,577 de cobertura — abaixo do piso de 0,65 que valia entao. Se ele voltar a ser
+    recusado, o piso subiu demais de novo e o botao "Briefing" volta a parecer quebrado."""
+    monkeypatch.setattr(narrar, "chamar_chat", lambda *a, **k: _BRIEFING2_BOM)
+    monkeypatch.setattr(narrar, "estilo_ditado", lambda: "briefing")
+    texto, erro = narrar.limpar_ditado(_BRIEFING2_CRU)
+    assert erro is None, erro
+    assert texto.startswith("**Objetivo**")
+
+
 def test_briefing_que_resumiu_e_recusado(monkeypatch):
     """O bug de 24/08/2026, virado teste. Com encolhe_min=0.3 e cobertura_min=0.45 esta saida
     passava ILESA (0,38x do tamanho, 51% do conteudo) e o usuario recebia o resumo achando que era
@@ -884,14 +944,21 @@ def test_briefing_completo_passa(monkeypatch):
 def test_as_duas_populacoes_do_briefing_continuam_separadas():
     """Os numeros que justificam os limites, presos num teste pra nao virarem folclore de
     comentario. Medido em 24/08/2026: defeito 0,51-0,57 de cobertura e 0,38-0,41 de tamanho; bom
-    0,72-0,90 e 0,69-0,94. Os limites moram no MEIO desse vao, e e o vao que tem que existir."""
+    0,72-0,90 e 0,69-0,94.
+
+    Quem separa e o TAMANHO, e so ele: em 26/08/2026 o segundo ditado real (ver
+    test_briefing_que_soletra_caminho_passa) deu 0,577 de cobertura num briefing INTEGRO — dentro
+    do intervalo do defeito. O piso de cobertura sobrou como rede grossa e nao e mais divisor."""
     travas = narrar._TRAVAS_POR_ESTILO["briefing"]
     ruim = (narrar._cobertura(_BRIEFING_CRU, _BRIEFING_RESUMIDO),
             len(_BRIEFING_RESUMIDO) / len(_BRIEFING_CRU))
     bom = (narrar._cobertura(_BRIEFING_CRU, _BRIEFING_COMPLETO),
            len(_BRIEFING_COMPLETO) / len(_BRIEFING_CRU))
-    assert ruim[0] < travas.cobertura_min < bom[0], f"cobertura ruim={ruim[0]:.2f} bom={bom[0]:.2f}"
     assert ruim[1] < travas.encolhe_min < bom[1], f"tamanho ruim={ruim[1]:.2f} bom={bom[1]:.2f}"
+    # O piso do OUTRO caso real tem que caber no mesmo vao — 0,561 e o menor briefing bom medido.
+    assert travas.encolhe_min < len(_BRIEFING2_BOM) / len(_BRIEFING2_CRU)
+    assert ruim[0] > travas.cobertura_min, "cobertura virou rede grossa: nao pode recusar o defeito sozinha"
+    assert bom[0] > travas.cobertura_min
 
 
 def test_fecho_do_briefing_tem_completude_e_par_entrada_saida():

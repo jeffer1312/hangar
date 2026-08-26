@@ -996,6 +996,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       title={s.state === 'awaiting_input' ? s.question : s.label}
                     >{sub}</span>
                   {/if}
+                  <!-- ⧉ = worktree ligada. Fora do bloco da branch de propósito: worktree com HEAD
+                       destacado (ou em main) não tem chip de branch e ainda assim precisa se
+                       distinguir do checkout principal. -->
+                  {#if s.worktree}
+                    <span class="wt" title={m.sessao_worktree()}>worktree</span>
+                  {/if}
                   {#if showCwd && s.cwd}
                     {@const cp = cwdParts(s.cwd)}
                     <span class="cwd" title={showBranch(s.branch) ? `${s.cwd} · branch ${s.branch}` : s.cwd}>
@@ -1768,6 +1774,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .branch-inline { flex-shrink: 0; margin-left: var(--space-1); }
+  /* Marcador de worktree: chip com a palavra inteira, nunca trunca (quem cede largura é o cwd).
+     Era um glifo ⧉ de 10px e não dava pra ver — dizer o nome custa 8 caracteres. */
+  .wt {
+    flex-shrink: 0;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
   /* "+128 −24" do working tree (paridade com o SessionCard): mono, cores semânticas de diff. */
   .diff-stats {
     flex-shrink: 0;

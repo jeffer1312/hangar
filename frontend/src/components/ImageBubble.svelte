@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
-  import { zoomable } from '../lib/zoomable';
+  import { abrirVisor } from '../lib/visor';
 
   interface Props {
     caption: string;
@@ -8,53 +8,36 @@
   }
   let { caption, srcs }: Props = $props();
 
-  // Imagem aberta no lightbox (null = fechado). Clique na miniatura abre o original em tela cheia.
-  let lightbox = $state<string | null>(null);
-  // Gesto de zoom em curso: segura o "fechar no toque" enquanto o dedo esta na imagem.
-  let gesto = $state(false);
+  // Abre no visor compartilhado (lib/visor.ts) com TODAS as imagens desta bolha: quem manda 4 fotos
+  // de uma vez passa entre elas com as setas em vez de fechar e abrir uma a uma.
+  // Os botoes das miniaturas: o visor le deles o tamanho natural da imagem (sem isso ele abre vazio)
+  // e a origem da animacao.
+  const botoes: (HTMLElement | undefined)[] = [];
 
-  // Move o no pro <body> pra escapar do transform + overflow do .chat-screen — senao o overlay
-  // position:fixed fica relativo ao container transformado e some atras do composer/topbar.
-  function portal(node: HTMLElement) {
-    document.body.appendChild(node);
-    return { destroy() { node.remove(); } };
+  function abrir(i: number) {
+    void abrirVisor(
+      srcs.map((src, j) => ({
+        url: src,
+        nome: (src.split('/').pop() ?? src).split('?')[0],
+        tipo: 'image' as const,
+        element: botoes[j],
+      })),
+      i,
+    );
   }
 </script>
 
 <div class="image-bubble">
   <!-- Anexos primeiro (miniaturas), legenda embaixo — disposicao estilo Claude. -->
   <div class="thumb-row" class:thumb-row--multi={srcs.length > 1}>
-    {#each srcs as src}
-      <button class="thumb-btn" onclick={() => (lightbox = src)} aria-label={m.anexos_ver_original()}>
+    {#each srcs as src, i}
+      <button class="thumb-btn" bind:this={botoes[i]} onclick={() => abrir(i)} aria-label={m.anexos_ver_original()}>
         <img class="thumb" {src} alt={m.anexos_imagem_enviada()} loading="lazy" />
       </button>
     {/each}
   </div>
   {#if caption}<p class="image-caption">{caption}</p>{/if}
 </div>
-
-<!-- Escape fecha: o overlay do ImageBubble e um <button> solto (o FileAttachment herda isso do
-     ModalDialog). Sem isso, quem usa teclado nao tem saida — e num gesto travado, ninguem tem. -->
-<svelte:window onkeydown={(e) => { if (lightbox && e.key === 'Escape') lightbox = null; }} />
-
-{#if lightbox}
-  <!-- Overlay tela cheia com o original; toque em qualquer lugar fecha. Portal pro body. -->
-  <button
-    use:portal
-    class="lightbox"
-    onclick={() => { if (!gesto) lightbox = null; }}
-    aria-label={m.anexos_fechar_imagem()}
-  >
-    <!-- Pinch, duplo-toque e arrastar. `gesto` segura o fechar: sem isso, terminar um arrasto
-         fechava a imagem no clique que o browser dispara logo atrás. -->
-    <img
-      class="lightbox-img"
-      src={lightbox}
-      alt="imagem original"
-      use:zoomable={{ onGesture: (a) => (gesto = a) }}
-    />
-  </button>
-{/if}
 
 <style>
   .image-bubble {
@@ -110,24 +93,4 @@
     text-align: left;
   }
 
-  .lightbox {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-4);
-    background: rgba(0, 0, 0, 0.92);
-    border: none;
-    /* respeita as safe-areas do iOS */
-    padding-top: calc(var(--space-4) + env(safe-area-inset-top));
-    padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
-  }
-  .lightbox-img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    border-radius: var(--radius-md);
-  }
 </style>

@@ -77,6 +77,9 @@ class SessionInfo(BaseModel):
     # False = chute newest-by-mtime (claude manual sem --session-id) -> UI marca "sem id" e desliga chat.
     tracked: bool = True
     branch: Optional[str] = None   # branch git atual do cwd (lida de .git/HEAD) — mostra na lista
+    # True quando o cwd e uma worktree ligada (`.git` arquivo apontando pro repo principal) — a mesma
+    # branch em worktrees diferentes tem arquivos diferentes, entao a lista marca qual e qual.
+    worktree: bool = False
     # Estado de git do cwd, decorado em list_with_state (git_summary, cacheado). dirty = arquivos
     # não-commitados; ahead = commits não-pushados (None sem upstream real); behind idem. Non-repo
     # -> tudo None (sem badge no painel).

@@ -5,6 +5,8 @@
   import { computeEditDiff, extractEdits, extractFilePath } from '../lib/editdiff';
   import { toolLook } from '../lib/toolLook.svelte';
   import ToolCard from './ToolCard.svelte';
+  import HangarTrail, { type PassoHangar } from './HangarTrail.svelte';
+  import { lerComandoHangar } from '../lib/hangarCmd';
 
   interface Props {
     tools: ChatEvent[];
@@ -23,6 +25,33 @@
   let expanded = $state(false);
 
   const resultOf = (t: ChatEvent) => toolResults.get(t.tool_use_id ?? '') ?? null;
+
+  // Comandos do hangar deste grupo, na ordem. Só entram os que já têm resultado: sem ele não há o
+  // que ler, e um passo "?" na trilha seria pior que a ausência dele.
+  const trilha = $derived.by<PassoHangar[]>(() => {
+    const passos: PassoHangar[] = [];
+    for (const t of tools) {
+      if (t.tool_name !== 'Bash') continue;
+      const r = resultOf(t);
+      if (!r) continue;
+      const comando = String((t.tool_input as Record<string, unknown> | null)?.['command'] ?? '');
+      const acao = lerComandoHangar(comando, String(r.result ?? ''), toolPhase(r) === 'error');
+      if (!acao) continue;
+      passos.push({
+        acao,
+        hora: t.ts ? new Date(t.ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : null,
+      });
+    }
+    return passos;
+  });
+  // Do início do primeiro comando ao fim do último — inclui o que rodou ENTRE eles, e é isso mesmo
+  // que a trilha mede: quanto tempo a sequência levou.
+  const duracaoTrilha = $derived.by(() => {
+    const comandos = tools.filter((t) => t.tool_name === 'Bash' && resultOf(t));
+    const primeiro = comandos[0]?.ts;
+    const ultimo = comandos.length ? resultOf(comandos[comandos.length - 1])?.ts : null;
+    return primeiro && ultimo ? Math.max(0, (ultimo - primeiro) * 1000) : null;
+  });
 
   const phases = $derived(tools.map((t) => toolPhase(resultOf(t))));
   const label = $derived(toolGroupLabel(tools.map((t) => t.tool_name)));
@@ -73,6 +102,12 @@
 {#if tools.length === 1}
   <ToolCard event={tools[0]} result={resultOf(tools[0])} {sessionName} {animate} />
 {:else}
+<!-- Rajada de comandos do hangar: a trilha resume a sequência ANTES do grupo, e o grupo continua
+     ali com os cartões um a um. Ela só aparece com 2+ comandos lidos — com um só o cartão já conta
+     a história inteira. -->
+{#if trilha.length > 1}
+  <HangarTrail passos={trilha} total={duracaoTrilha} />
+{/if}
 <div class="tg" class:noanim={!animate}>
   <div
     class="tg-head"

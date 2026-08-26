@@ -906,3 +906,65 @@ html:is([data-bg='image'], [data-bg='desktop']) .code-block pre { background: no
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-dim);
 }
+
+/* O visor abre POR CIMA de tudo — inclusive da folha de Anexos, que é de onde ele costuma ser
+   aberto. O padrão da lib é 999, abaixo do ModalDialog (1100); sem isto a folha ficava metade
+   visível ao lado da foto. */
+/* `body >` pra ganhar da folha do CSS da lib, que é importada depois desta (mesma especificidade
+   perderia por ordem). */
+body > .bp-wrap { z-index: 1200; }
+
+/* ── Faixa do visor de mídia ───────────────────────────────────────────────
+   Mora aqui, e não num .svelte, porque é DOM criado à mão dentro do container da bigger-picture
+   (lib/visor.ts): estilo com escopo de componente não alcançaria. A lib desenha o resto — contador,
+   fechar, legenda, setas. */
+.visor-faixa {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* Esquerda: o contador da lib (.bp-count, 100px + 16 de margem) mora ali. Direita: o ✕. */
+  padding: 10px 56px 10px 132px;
+  color: #fff;
+  background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
+  pointer-events: none;           /* o fundo continua fechando ao toque; só os botões pegam clique */
+}
+.visor-nome {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.visor-meta {
+  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.62);
+  white-space: nowrap;
+}
+.visor-acoes {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+  pointer-events: auto;
+}
+.visor-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  cursor: pointer;
+}
+.visor-btn:hover { background: rgba(255, 255, 255, 0.2); }
+.visor-baixar { font-size: var(--text-base); }

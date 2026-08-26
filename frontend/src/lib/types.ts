@@ -40,6 +40,8 @@ export interface SessionInfo {
   // marca "sem id" e bloqueia o chat (evita mostrar/trocar a conversa errada).
   tracked?: boolean;
   branch?: string | null;   // branch git atual do cwd (mostrada na lista de sessões)
+  /** cwd é uma worktree ligada (`.git` arquivo) — marcador ⧉ ao lado da branch nas duas listas. */
+  worktree?: boolean;
   // Linhas adicionadas/removidas no working tree vs HEAD (git diff --numstat, staged+unstaged;
   // untracked não conta). null = cwd sem repo ou repo sem commit nenhum -> sem badge.
   git_added?: number | null;

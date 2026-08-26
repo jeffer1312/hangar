@@ -2,7 +2,7 @@
   import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
   import { fileUrl } from '../lib/api';
-  import { zoomable } from '../lib/zoomable';
+  import { abrirVisor } from '../lib/visor';
   import type { FileRef } from '../lib/format';
 
   interface Props {
@@ -11,10 +11,9 @@
   }
   let { sessionName, refs }: Props = $props();
 
-  // Item aberto em tela cheia (img/video/html/pdf). null = fechado.
+  // Documento aberto em tela cheia (html/pdf). Imagem e video vao pro visor compartilhado
+  // (lib/visor.ts) — iframe com sandbox nao e midia e continua aqui, no ModalDialog.
   let open = $state<FileRef | null>(null);
-  let imageClose = $state<HTMLButtonElement | null>(null);
-  let videoClose = $state<HTMLButtonElement | null>(null);
   // Paths que falharam ao carregar -> some o anexo.
   let failed = $state<Set<string>>(new Set());
 
@@ -31,6 +30,26 @@
   // Falha NAO some mais (sumir calado escondia o que quebrou) nem fica quadrado preto: vira um chip
   // "nao carregou" com o nome -> visivel + debugavel. So filtramos no render (failed.has).
 
+  // Abre no visor com TODAS as midias desta mensagem (menos as que falharam): a mensagem costuma
+  // trazer varias, e antes cada uma exigia fechar e abrir de novo.
+  // path -> botao da miniatura: e dele que o visor tira o tamanho natural da midia (sem isso ele
+  // abre vazio) e a origem da animacao.
+  const botoes: Record<string, HTMLElement | undefined> = {};
+
+  function abrir(r: FileRef) {
+    const midias = refs.filter(
+      (x) => !failed.has(x.path) && (x.kind === 'image' || x.kind === 'video'),
+    );
+    void abrirVisor(
+      midias.map((x) => ({
+        url: url(x),
+        nome: x.name,
+        tipo: x.kind as 'image' | 'video',
+        element: botoes[x.path],
+      })),
+      Math.max(0, midias.findIndex((x) => x.path === r.path)),
+    );
+  }
 </script>
 
 {#if refs.length}
@@ -39,11 +58,11 @@
       {#if failed.has(r.path)}
         <span class="att-broken" title={r.path}>⚠ {m.anexos_nao_carregou({ nome: r.name })}</span>
       {:else if r.kind === 'image'}
-        <button class="thumb-btn" onclick={() => (open = r)} aria-label={m.anexos_ver({ n: r.name })}>
+        <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_ver({ n: r.name })}>
           <img class="thumb" src={url(r)} alt={r.name} loading="lazy" onerror={() => fail(r)} />
         </button>
       {:else if r.kind === 'video'}
-        <button class="thumb-btn" onclick={() => (open = r)} aria-label={m.anexos_tocar({ nome: r.name })}>
+        <button class="thumb-btn" bind:this={botoes[r.path]} onclick={() => abrir(r)} aria-label={m.anexos_tocar({ nome: r.name })}>
           <!-- svelte-ignore a11y_media_has_caption -->
           <!-- #t=0.1: media fragment -> faz o browser (incl. iOS) buscar e mostrar o 1o frame no thumb -->
           <video class="thumb" src={url(r) + '#t=0.1'} preload="metadata" muted playsinline onerror={() => fail(r)}></video>
@@ -69,22 +88,8 @@
     open={true}
     ariaLabel={m.anexos_visualizar({ nome: cur.name })}
     onClose={() => (open = null)}
-    initialFocus={cur.kind === 'video' ? videoClose : null}
     className="attachment-dialog"
   >
-    {#if cur.kind === 'image'}
-      <div class="media-modal">
-        <button bind:this={imageClose} class="media-close" type="button" onclick={() => (open = null)} aria-label={m.anexos_fechar_visualizacao()}>✕</button>
-        <!-- Mesmo gesto do ImageBubble: pinch / duplo-toque / arrastar. -->
-        <img class="full-media" src={url(cur)} alt={cur.name} use:zoomable />
-      </div>
-    {:else if cur.kind === 'video'}
-      <div class="media-modal">
-        <button bind:this={videoClose} class="media-close" type="button" onclick={() => (open = null)} aria-label={m.anexos_fechar_visualizacao()}>✕</button>
-        <!-- svelte-ignore a11y_media_has_caption -->
-        <video class="full-media" src={url(cur)} controls autoplay playsinline></video>
-      </div>
-    {:else}
       <div class="doc-modal">
         <div class="doc-bar">
           <span class="doc-name">{cur.name}</span>
@@ -95,7 +100,6 @@
         <iframe class="doc-frame" src={url(cur)} title={cur.name}
           sandbox={cur.kind === 'html' ? 'allow-scripts allow-popups' : undefined}></iframe>
       </div>
-    {/if}
   </ModalDialog>
 {/if}
 
@@ -147,18 +151,6 @@
     width: 100%; max-width: 1100px; height: min(100%, 900px); max-height: 100%;
     overflow: hidden; background: transparent; border: 0; border-radius: 0; box-shadow: none;
   }
-  .media-modal {
-    position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
-  }
-  .media-close {
-    position: absolute; z-index: 1; top: var(--space-2); right: var(--space-2);
-    width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;
-    border: 1px solid rgba(255,255,255,0.25); border-radius: 999px; background: rgba(0,0,0,0.65);
-    color: #fff; font-size: var(--text-base); cursor: pointer;
-  }
-  .media-close:active, .media-close:focus-visible { background: rgba(255,255,255,0.18); }
-  .full-media { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-md); }
-
   .doc-modal {
     width: 100%; height: 100%; display: flex; flex-direction: column;
     background: var(--surface-inset); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden;

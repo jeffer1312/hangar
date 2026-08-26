@@ -47,6 +47,7 @@
     isTimeoutError,
     getPlan,
     getConfig,
+    uploadUrl,
   } from '../lib/api';
   import { formataErro } from '../lib/errosApi';
   import { appendTail, hasSeam, prependOlder } from '../lib/history';
@@ -54,7 +55,7 @@
   import { parseStatusLine } from '../lib/statusline';
   import { listServers, getActiveId } from '../lib/auth';
   import { createActivityFolder } from '../lib/activity';
-  import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail } from '../lib/types';
+  import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '../lib/format';
   import * as diag from '../lib/diag';
@@ -452,7 +453,21 @@
   }
 
   // ── Atalhos de teclado (so desktop) ────────────────────────────────────────
-  let composerRef = $state<{ focus: () => void } | undefined>();
+  let composerRef = $state<{ focus: () => void; ditarArquivo: (f: File) => void } | undefined>();
+
+  // Anexo de audio de volta pro ditado: busca o arquivo que ja esta no servidor e entrega ao
+  // Composer, que transcreve de novo e abre a barra de versoes. O download acontece AQUI porque a
+  // sheet nao conhece o Composer, e o Composer so sabe lidar com File.
+  async function usarAnexoNoDitado(f: UploadFile) {
+    try {
+      const res = await fetch(uploadUrl(sessionName, f.filename));
+      if (!res.ok) throw new Error(`${res.status}`);
+      const blob = await res.blob();
+      composerRef?.ditarArquivo(new File([blob], f.filename, { type: blob.type }));
+    } catch (e) {
+      error = `${m.anexos_erro_listar()} ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
 
   // Lista pra navegar sessao com Ctrl/Cmd+setas (desktop) e pra pilula "N aguardando" (mobile,
   // feature #4). Carregada no mount nos dois; no mobile reconsulta a cada 5s pra o contador da
@@ -2002,7 +2017,8 @@
              onActivity={(hasActivity || !!planName) ? () => (activityOpen = true) : undefined}
              onAttachments={() => (anexosOpen = true)}
              {activityRunning} {activityBadge} />
-  <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)} />
+  <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)}
+                    onUsarNoDitado={usarAnexoNoDitado} />
 
   <CodexLimitsSheet open={limitsOpen} {sessionName} onClose={() => (limitsOpen = false)} />
 

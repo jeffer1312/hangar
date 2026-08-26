@@ -897,3 +897,13 @@ def test_path_diff_da_subpasta_pega_o_arquivo_certo(tmp_path):
     (sub / "a.txt").write_text("da subpasta\nmexido\n")
     r = git_ops.path_diff(str(sub), "a.txt", "nao_commitado")
     assert r["original"] == "da subpasta\n", r["original"]
+
+
+def test_head_info_worktree(tmp_path):
+    """Worktree ligada: `.git` e ARQUIVO -> a branch vem do gitdir apontado, e worktree=True."""
+    d = _repo(tmp_path)
+    wt = str(tmp_path / "fora" / "wt")
+    git_ops._run(d, "worktree", "add", "-q", wt, "feature")
+    assert git_ops.head_info(wt) == ("feature", True)
+    assert git_ops.head_info(d) == ("main", False)
+    assert git_ops.head_info(str(tmp_path / "nao-repo")) == (None, False)

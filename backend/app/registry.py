@@ -14,7 +14,7 @@ from app import agentpane
 from app.config import settings
 from app import runtime_config
 from app.names import sanitize_session_name
-from app.git_ops import git_summary, git_diffstat, branch_of
+from app.git_ops import git_summary, git_diffstat, head_info
 from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
@@ -915,11 +915,6 @@ class SessionRegistry:
         return infos
 
     @staticmethod
-    def _branch_of(cwd: Optional[str]) -> Optional[str]:
-        """Delega pro helper publico git_ops.branch_of (mantido pra nao quebrar chamadores)."""
-        return branch_of(cwd)
-
-    @staticmethod
     def _agent_pane(panes: list[dict], children: dict[int, list[int]]) -> dict:
         """Escolhe, entre os panes de UMA sessao, o que roda o agente (Task 5.5).
 
@@ -1017,8 +1012,9 @@ class SessionRegistry:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
+            br, wt = head_info(p["cwd"])
             info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
-                               branch=self._branch_of(p["cwd"]),
+                               branch=br, worktree=wt,
                                then_target=link.get("target") if link else None,
                                pair_peers=pair.get("peers") if pair else None,
                                pair_gid=pair.get("gid") if pair else None,
@@ -1056,10 +1052,11 @@ class SessionRegistry:
         # Sessoes Codex: a TUI vive no tmux, mas a identidade vem dos sidecars duraveis (sobrevivem
         # a restart; o historico esta no rollout). O client vivo e reaberto sob demanda.
         for meta in codex_sessions.list_all():
+            br, wt = head_info(meta.get("cwd"))
             out.append(SessionInfo(
                 name=meta["name"], cwd=meta.get("cwd"), jsonl=meta.get("rollout_path"),
                 provider="codex", tracked=True,
-                branch=self._branch_of(meta.get("cwd")),
+                branch=br, worktree=wt,
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),

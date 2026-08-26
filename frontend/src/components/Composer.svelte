@@ -44,7 +44,7 @@
   import ConfirmSheet from './ConfirmSheet.svelte';
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado, type EstiloDitado } from '../lib/ditadoEstilo.svelte';
-  import { getCommands, setModelEffort, uploadFile, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
+  import { getCommands, setModelEffort, uploadFile, uploadUrl, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
   import type { State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
@@ -175,6 +175,14 @@
   // Exposto pro pai (atalho de teclado desktop "/" foca o campo).
   export function focus() { textareaEl?.focus(); }
 
+  // Exposto pro pai: um audio que JA esta nos anexos da sessao volta pro ditado (transcreve de novo
+  // e abre a barra de versoes). `autoEnvio: false` porque aqui nao houve gravacao — o motivo do fim
+  // guardado seria o da ultima vez que a pessoa falou, e mandar sozinho por causa dele seria enviar
+  // um texto que ela nem pediu.
+  export function ditarArquivo(file: File) {
+    void transcribeIntoComposer(file, { ditado: true, autoEnvio: false });
+  }
+
   // ── Anexos: lista de arquivos + preview local + estado de upload ────────────
   // isImage -> preview; resto -> chip de arquivo. Audio NAO vira anexo: e transcrito e cai no textarea.
   // Restaura do cache em memoria da sessao atual (mesma ideia do draft de texto em Chat.svelte).
@@ -212,19 +220,57 @@
   // de novo, mesmo com o audio ja gravado e o texto cru ja na mao.
   //
   // - `url`: objectURL do proprio File que foi gravado (o backend tambem salva em
-  //   .hangar-uploads, mas o blob ja esta na aba -> player sem round-trip).
+  //   .hangar-uploads, mas o blob ja esta na aba -> player sem round-trip). Numa barra RESTAURADA
+  //   o blob nao existe mais e a url e a do upload no servidor (ver restaurarDitado).
+  // - `arquivo`: nome do audio em .hangar-uploads. E o que deixa a barra sobreviver a sair da
+  //   conversa e voltar: o objectURL morre com a aba, o arquivo do servidor nao.
   // - `before`: o que havia no campo antes deste ditado, pra toda troca remontar a MESMA
   //   concatenacao trocando so a parte ditada.
   // - `cache`: estilo -> texto ja obtido. Reclicar num estilo por onde ja passou e instantaneo e de
   //   graca; sem isso, comparar duas versoes custaria uma chamada de LLM por ida e volta.
   type DitadoAtivo = {
     url: string;
+    arquivo?: string;
     before: string;
     raw: string;
     atual: VersaoDitado;
     cache: Partial<Record<VersaoDitado, string>>;
   };
-  let ditado = $state<DitadoAtivo | null>(null);
+  // Persistida por sessao no localStorage, pelo MESMO motivo do rascunho do campo (Chat.svelte):
+  // trocar de sessao remonta o Composer e o iOS mata o PWA em background — e a barra sumia junto,
+  // levando o audio e as versoes ja pagas. Guarda so texto + nome do arquivo; o audio fica onde ja
+  // estava (.hangar-uploads no servidor), entao a chave e pequena e o player continua tocando.
+  // svelte-ignore state_referenced_locally
+  const ditadoKey = `cp-ditado:${sessionName}`;
+  function restaurarDitado(): DitadoAtivo | null {
+    try {
+      const cru = localStorage.getItem(ditadoKey);
+      if (!cru) return null;
+      const d = JSON.parse(cru) as Partial<DitadoAtivo>;
+      // `arquivo` e `raw` sao o minimo pra barra fazer o que promete (tocar e trocar de versao):
+      // sem um deles a barra restaurada seria um player quebrado ou botoes que nao respondem.
+      if (!d?.arquivo || typeof d.raw !== 'string') return null;
+      return {
+        url: uploadUrl(sessionName, d.arquivo),
+        arquivo: d.arquivo,
+        before: typeof d.before === 'string' ? d.before : '',
+        raw: d.raw,
+        atual: ehVersao(d.atual) ? d.atual : 'cru',
+        cache: d.cache ?? {},
+      };
+    } catch {
+      return null;
+    }
+  }
+  let ditado = $state<DitadoAtivo | null>(restaurarDitado());
+  $effect(() => {
+    if (ditado?.arquivo) {
+      const { arquivo, before, raw, atual, cache } = ditado;
+      localStorage.setItem(ditadoKey, JSON.stringify({ arquivo, before, raw, atual, cache }));
+    } else {
+      localStorage.removeItem(ditadoKey);
+    }
+  });
   let relimpando = $state<VersaoDitado | null>(null);   // versao com troca em voo (spinner no botao)
   let mediaRecorder: MediaRecorder | undefined;
   let recChunks: Blob[] = [];
@@ -676,9 +722,23 @@
   // ── Textarea: auto-grow ate 120px ──────────────────────────────────────────
   function autoGrow() {
     if (!textareaEl) return;
+    // Teto proporcional a tela: 120px fixos sao ~6 linhas, e um briefing tem 20 — no desktop
+    // sobrava tela vazia enquanto o texto rolava dentro de uma fresta. `visualViewport` porque com
+    // o teclado aberto o innerHeight do iOS nao encolhe, e 40% de uma tela que o teclado cobriu
+    // esconderia o proprio campo.
+    const teto = Math.max(120, Math.round((window.visualViewport?.height ?? window.innerHeight) * 0.4));
     textareaEl.style.height = 'auto';
-    textareaEl.style.height = Math.min(textareaEl.scrollHeight, 120) + 'px';
+    textareaEl.style.height = Math.min(textareaEl.scrollHeight, teto) + 'px';
   }
+
+  // A altura acompanha o VALOR, nao so a digitacao: texto que entra por codigo (troca de versao do
+  // ditado, rascunho restaurado no mount, interrupt devolvendo a msg pendente) tambem tem que
+  // caber. Antes cada caminho tinha que lembrar de chamar autoGrow, e o briefing caia num campo de
+  // uma linha ate a pessoa digitar um espaco.
+  $effect(() => {
+    inputText;
+    autoGrow();
+  });
 
   function handleInput() {
     sendError = '';
@@ -741,7 +801,7 @@
   // So o File — o Blob vive na memoria da aba e nao paga nada; sai da tela no proximo sucesso.
   let audioFalhou = $state<{ file: File; ditado: boolean; avisoTeto: boolean } | null>(null);
 
-  async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean }) {
+  async function transcribeIntoComposer(file: File, opts?: { ditado?: boolean; avisoTeto?: boolean; autoEnvio?: boolean }) {
     // Uma por vez: transcribing e setado SINCRONO antes de qualquer await, entao um segundo audio
     // (ex: multi-selecao no picker) cai aqui e avisa em vez de correr concorrente e pisar no estado
     // compartilhado (transcribing/recError/inputText) — que sairia fora de ordem.
@@ -750,7 +810,7 @@
     recError = '';
     audioFalhou = null;
     try {
-      const { text, raw, aviso, estilo_aplicado } = await transcribeFile(sessionName, file, {
+      const { path, text, raw, aviso, estilo_aplicado } = await transcribeFile(sessionName, file, {
         limpar: !!opts?.ditado,
         // O estilo vai JUNTO, e nao e lido da config no servidor: e este rotulo que a pessoa leu na
         // pill antes de falar. Ver queryTranscribe em lib/api.ts.
@@ -778,7 +838,7 @@
         // `cru` cai pro proprio `t` quando o backend nao mandou raw: aconteceu quando a limpeza
         // desistiu (aviso) ou o texto era curto demais pra limpar, e nos dois casos o que esta no
         // campo JA e o cru — que e o que o botao "Cru" tem que devolver.
-        abrirDitado({ file, before, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
+        abrirDitado({ file, path, before, cru: raw?.trim() || t, texto: t, aplicado: estilo_aplicado });
       } else {
         fecharDitado();
       }
@@ -788,7 +848,7 @@
       else if (opts?.avisoTeto) {
         recError = m.composer_silencio();
       }
-      if (opts?.ditado) {
+      if (opts?.ditado && opts.autoEnvio !== false) {
         if (podeEnviarSozinho({ motivo: motivoDoFim, texto: t, aviso, rascunhoAntes: before.length > 0 })) {
           iniciarContagem();
         } else {
@@ -832,17 +892,20 @@
   // Fecha a barra do ditado e devolve o objectURL. Sem o revoke o blob do audio fica preso na
   // memoria da aba ate ela ser recarregada — e um ditado longo tem alguns MB.
   function fecharDitado() {
-    if (ditado) URL.revokeObjectURL(ditado.url);
+    // Barra restaurada aponta pro arquivo do servidor, nao pra um blob: revogar ali e no-op, mas
+    // o `if` diz qual das duas urls e nossa pra devolver.
+    if (ditado?.url.startsWith('blob:')) URL.revokeObjectURL(ditado.url);
     ditado = null;
     relimpando = null;
   }
 
   // Abre a barra pro ditado que acabou de cair no campo. Um por vez: o anterior ja saiu do campo.
-  function abrirDitado(d: { file: File; before: string; cru: string; texto: string; aplicado?: string }) {
+  function abrirDitado(d: { file: File; path?: string; before: string; cru: string; texto: string; aplicado?: string }) {
     fecharDitado();
     const atual: VersaoDitado = ehVersao(d.aplicado) ? d.aplicado : 'cru';
     ditado = {
       url: URL.createObjectURL(d.file),
+      arquivo: d.path?.split('/').pop(),
       before: d.before,
       raw: d.cru,
       atual,
@@ -1526,6 +1589,11 @@
             >{relimpando === v.valor ? m.composer_ditado_trocando() : v.rotulo}</button>
           {/each}
         </div>
+        <!-- Fechar a barra. Virou obrigatorio quando ela passou a sobreviver a trocar de sessao e a
+             recarregar o app: antes ela morria sozinha, agora fica ate o envio — e quem desistiu do
+             ditado nao tinha como tirar o player da frente. Nao mexe no texto que ja esta no campo. -->
+        <button type="button" class="ditado-fechar" onclick={fecharDitado}
+                aria-label={m.composer_ditado_fechar()}>✕</button>
       </div>
     {/if}
     {#if recError}
@@ -1991,7 +2059,9 @@
   .composer-textarea {
     width: 100%;
     min-height: 24px;
-    max-height: 120px;
+    /* Teto REAL vem do autoGrow (proporcional a viewport); aqui fica so a rede pra quando o script
+       ainda nao rodou. 120px sao ~6 linhas — um briefing tem 20 e ficava preso. */
+    max-height: 40vh;
     background: transparent;
     border: none;
     color: var(--text-primary);
@@ -2461,6 +2531,17 @@
   }
 
   .ditado-versao:disabled { opacity: 0.55; }
+
+  /* ✕ no fim da barra: some pra direita (margin-left auto) pra nao disputar espaco com as versoes. */
+  .ditado-fechar {
+    margin-left: auto;
+    padding: 2px var(--space-2);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: 1;
+  }
+  .ditado-fechar:hover { color: var(--text-primary); }
 
   /* Botao de acao discreta no rec-hint/erro (tentar transcrever de novo): texto sem fundo proprio
      (superficie e a do composer, ver regra de transparencia do CLAUDE.md). */
