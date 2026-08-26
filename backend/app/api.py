@@ -771,12 +771,16 @@ def _confirm_and_drain(name: str) -> None:
         # Timer a cada `grace` contra um arquivo que nao abre e tempestade sem fim; o proximo fim
         # de turno (`_on_hook_transition`) ou a proxima mensagem chamam isto de novo, e ate la a
         # entrada fica visivel como bolha "na fila". Falha VISIVEL, nunca mensagem duplicada.
+        # As DUAS leituras do transcript ficam juntas e falham juntas. `_transcript_start_ts` abre
+        # o mesmo arquivo uma segunda vez, e o 0.0 dele desliga a poda por idade — sem ela, entrada
+        # de sessao ANTERIOR nao e mais dispensada e vai parar no caminho que REDIGITA. Ou seja: o
+        # mesmo defeito, pela porta do lado. Aqui "nao sei" nunca decide nada.
         committed = committed_user_lines(info.jsonl, info.provider)
-        if committed is None:
+        inicio_ts = _transcript_start_ts(info.jsonl)
+        if committed is None or inicio_ts is None:
             _log.warning("confirmacao adiada name=%s: transcript ilegivel agora (nada foi "
                          "reenfileirado nem dado por perdido)", name)
             return
-        inicio_ts = _transcript_start_ts(info.jsonl)
         if m and m[0] == "working":
             # Turno vivo: REDIGITAR e DESISTIR no meio do turno sao perigosos (o texto pode ainda
             # estar na fila interna da TUI — desistiu viraria aviso falso de "nao chegou" sobre

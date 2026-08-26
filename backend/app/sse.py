@@ -411,7 +411,9 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
 
     broker = _broker_de(provider)
     # Inicio da sessao atual: poda entradas de fila pre-/clear no live SSE (mesma regra do history).
-    start_ts = _transcript_start_ts(jsonl)
+    # `or 0.0`: aqui start_ts so PODA bolha de sessao anterior. Transcript ilegivel -> nao corta
+    # nada, que e o fallback seguro deste lado (o perigoso e no reconcile, ver _transcript_start_ts).
+    start_ts = _transcript_start_ts(jsonl) or 0.0
     queue: asyncio.Queue = asyncio.Queue()
     # Slot coalescido do preview: NUNCA entra na FIFO compartilhada (firehose atrasaria o assistant_msg
     # autoritativo — head-of-line). Mantemos so o ULTIMO texto + um unico marcador pendente na fila;

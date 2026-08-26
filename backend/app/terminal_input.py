@@ -610,7 +610,9 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     # novo); (b) nascimento do tmux atual — sem ele, um resume (`pi -c`) reusa transcript VELHO e
     # entradas enfileiradas pra vida anterior da sessao (mesmo nome de pasta) eram entregues na
     # sessao nova. Regra do dono: sessao morreu devendo, a divida nao passa pra proxima.
-    start_ts = max(_transcript_start_ts(jsonl), tmux.session_created(name))
+    # `or 0.0`: transcript ilegivel nao pode virar TypeError no max(). E aqui a perda e pequena —
+    # o corte cai pro nascimento do tmux, que e a outra metade da regra e continua valendo.
+    start_ts = max(_transcript_start_ts(jsonl) or 0.0, tmux.session_created(name))
     # Orfas de sessao anterior: nunca mais casam nem drenam — remove (senao o cheap-check acima
     # fica quente pra sempre e o lixo acumula ate o cap). A poda some com a bubble do chat, entao
     # ela nao pode ser muda: loga quantas cairam e o corte usado.

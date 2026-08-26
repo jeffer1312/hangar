@@ -153,19 +153,28 @@ def _ts_of_line(line: str) -> float:
     return _ts_of_obj(obj)
 
 
-def _transcript_start_ts(jsonl: str) -> float:
+def _transcript_start_ts(jsonl: str) -> float | None:
     # ts (epoch) da 1a linha COM timestamp do transcript = inicio da sessao atual. Toda entrada da
     # fila mais antiga que isto pertence a uma sessao anterior (ex: pre-/clear, que cria transcript
     # novo com novo session-id) e nao deve reaparecer como bubble. Le so ate achar o 1o ts (early
     # return) pra nao varrer transcript gigante. 0.0 se nao houver ts -> sem poda (fallback seguro).
+    #
+    # None = NAO DEU PRA LER, e e diferente de 0.0 pelo mesmo motivo que separa `None` de set()
+    # em committed_user_lines: 0.0 desliga a poda, e sem poda uma entrada de sessao ANTERIOR deixa
+    # de ser dispensada por idade e cai no caminho normal do reconcile — se o texto dela nao casar
+    # com o transcript de AGORA (e nao vai, e de outra sessao), ela e re-enfileirada e REDIGITADA.
+    # Ou seja: o mesmo defeito que a funcao irma acabou de perder, entrando pela porta do lado.
+    # Quem so PODA (sse, drain, merged_history) aceita 0.0 no lugar de None e escreve isso no
+    # proprio call site — ali "nao sei" pode virar "nao corta" sem estrago.
     try:
         with open(jsonl, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 ts = _ts_of_line(line)
                 if ts > 0:
                     return ts
-    except OSError:
-        pass
+    except OSError as e:
+        _log.warning("nao deu pra ler o inicio do transcript %s: %s", jsonl, e)
+        return None
     return 0.0
 
 
@@ -696,7 +705,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
         # Tail: o inicio da sessao esta FORA da janela -> _transcript_start_ts le do comeco do
         # arquivo ate o 1o ts (early return; sem cap de linhas — header longo sem timestamp
         # inflaria o start_ts e podaria fila valida).
-        start_ts = _transcript_start_ts(jsonl) if offset else 0.0
+        start_ts = (_transcript_start_ts(jsonl) or 0.0) if offset else 0.0
         try:
             fh = open(jsonl, encoding="utf-8", errors="replace")
         except OSError:

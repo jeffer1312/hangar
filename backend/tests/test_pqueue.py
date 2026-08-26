@@ -671,6 +671,31 @@ def test_committed_user_lines_none_quando_nao_da_pra_ler(tmp_path):
     assert pqueue.committed_user_lines(str(j)) == {"oi"}
 
 
+def test_transcript_start_ts_none_quando_nao_da_pra_ler(tmp_path):
+    # Irma da de cima, e o motivo de ela existir e o MESMO: 0.0 aqui significa "sem corte por
+    # idade", e sem esse corte uma entrada de sessao ANTERIOR deixa de ser dispensada e cai no
+    # caminho que redigita. "Nao consegui ler" nao pode se passar por "nao ha timestamp".
+    assert pqueue._transcript_start_ts(str(tmp_path)) is None
+    vazio = tmp_path / "sem-ts.jsonl"
+    vazio.write_text("{}\n", encoding="utf-8")
+    assert pqueue._transcript_start_ts(str(vazio)) == 0.0   # legivel e sem ts continua 0.0
+
+
+def test_confirm_nao_decide_com_inicio_de_transcript_ilegivel(tmp_path, monkeypatch, caplog):
+    # Mesmo cenario do requeue legitimo, mas com a SEGUNDA leitura do transcript falhando. Sem o
+    # guard, min_ts=0.0 desliga a poda por idade e o reconcile decide com meia informacao.
+    import logging
+    import time as _t
+    import app.api as api
+    monkeypatch.setattr(api, "_transcript_start_ts", lambda *a, **k: None)
+    with caplog.at_level(logging.WARNING, logger="hangar"):
+        chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()))
+    assert chamou == []
+    assert row["delivered"] is True and not row.get("attempts")
+    assert "desistiu" not in row and "confirmed" not in row
+    assert "confirmacao adiada" in caplog.text
+
+
 def test_confirm_nao_decide_com_transcript_ilegivel(tmp_path, monkeypatch, caplog):
     # MESMO cenario do teste de cima (estado provadamente ocioso + texto ausente), que redigita de
     # proposito — o que muda e so o oraculo nao ter conseguido ler. Aqui nao se toca na fila: a
