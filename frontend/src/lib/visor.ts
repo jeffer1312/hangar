@@ -33,6 +33,17 @@ export type AcaoVisor = {
 };
 
 let instancia: ReturnType<typeof BiggerPicture> | null = null;
+// Listener de Escape da abertura VIVA. É de módulo, e não da chamada, porque `abrirVisor` é
+// assíncrona (mede as mídias antes de abrir): dois toques rápidos em miniaturas diferentes chegam
+// a `bp.open` duas vezes, e só o `onClosed` da segunda rodaria — o `escapa` da primeira ficava
+// pendurado na window pra sempre, fechando visor alheio.
+let escapaVivo: ((e: KeyboardEvent) => void) | null = null;
+
+function trocarEscapa(novo: ((e: KeyboardEvent) => void) | null) {
+  if (escapaVivo) window.removeEventListener('keydown', escapaVivo, true);
+  escapaVivo = novo;
+  if (novo) window.addEventListener('keydown', novo, true);
+}
 
 function obterInstancia() {
   if (!instancia) {
@@ -64,17 +75,23 @@ function medirCarregando(url: string): Promise<{ width: number; height: number }
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-    // Erro ou midia sem dimensao (audio): um retangulo razoavel e melhor que zero.
+    // Erro ou midia sem dimensao (video/audio, que nao carregam como <img>): um retangulo razoavel
+    // e melhor que zero — mas quem NAO carregar de verdade aparece dito na faixa, pelo onError da
+    // lib; sem isso um anexo expirado abria como retangulo cinza e ninguem sabia por que.
     img.onerror = () => resolve({ width: 1600, height: 1200 });
     img.src = url;
   });
 }
 
-function paraItem(midia: MidiaVisor, tamanho: { width: number; height: number }) {
+function paraItem(midia: MidiaVisor, tamanho: { width: number; height: number }, idx: number) {
   const base = {
     thumb: midia.thumb,
     alt: midia.nome,
     element: midia.element,
+    // `idx` (e nao o nome) e o que liga o item de volta pra nossa lista no onUpdate: duas fotos com
+    // o MESMO nome de arquivo na mesma mensagem existem, e por nome a faixa ficava presa na
+    // primeira ao navegar.
+    idx,
     nome: midia.nome,
     meta: midia.meta,
     ...tamanho,
@@ -91,6 +108,16 @@ function paraItem(midia: MidiaVisor, tamanho: { width: number; height: number })
  * navegava.
  */
 export async function abrirVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoVisor) {
+  try {
+    await montarVisor(midias, inicio, acao);
+  } catch (e) {
+    // Os três chamadores disparam com `void` (é um onclick). Sem isto, uma falha aqui vira rejeição
+    // não tratada e o toque na miniatura simplesmente não faz nada, sem rastro nenhum.
+    console.error('visor: falhou ao abrir', e);
+  }
+}
+
+async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoVisor) {
   if (!midias.length) return;
   const tamanhos = await Promise.all(
     midias.map(async (x) => medir(x.element) ?? (await medirCarregando(x.url))),
@@ -118,42 +145,63 @@ export async function abrirVisor(midias: MidiaVisor[], inicio: number, acao?: Ac
   };
 
   // A lib nao diz o indice no onUpdate, so o item — e o item e o objeto que devolvemos em paraItem,
-  // entao o vinculo de volta e pelo nome do arquivo (unico dentro de uma sessao).
-  const indiceDe = (item: { nome?: string }) => midias.findIndex((x) => x.nome === item?.nome);
+  // que carrega o `idx` de propria lavra pra este caminho de volta.
+  const indiceDe = (item: { idx?: number }) => (typeof item?.idx === 'number' ? item.idx : -1);
 
   bp.open({
-    items: midias.map((x, i) => paraItem(x, tamanhos[i])),
+    items: midias.map((x, i) => paraItem(x, tamanhos[i], i)),
     position: inicio,
     onOpen(container) {
       // Esc fecha o VISOR, nao a folha atras dele. Precisa ser na CAPTURA: o BottomSheet tambem
       // escuta Escape na window e chama stopImmediatePropagation, e como ele monta antes, o Esc
       // fechava a folha e a foto ficava por cima — o mesmo bug que o AttachmentsSheet ja tinha
       // resolvido assim antes de o visor virar compartilhado.
-      window.addEventListener('keydown', escapa, true);
+      trocarEscapa(escapa);
+      // Nós criados um a um, sem innerHTML: o rótulo da ação vem de fora (i18n hoje, quem sabe o
+      // nome de um arquivo amanhã) e montar HTML por string é o caminho curto pra injetar marcação
+      // sem querer.
       faixa = document.createElement('div');
       faixa.className = 'visor-faixa';
-      faixa.innerHTML =
-        '<span class="visor-nome"></span><span class="visor-meta"></span>' +
-        '<span class="visor-acoes">' +
-        `<a class="visor-btn visor-baixar" title="${m.visor_baixar()}" download>⤓</a>` +
-        (acao ? `<button class="visor-btn visor-acao">${acao.rotulo}</button>` : '') +
-        '</span>';
-      container.appendChild(faixa);
+      const nome = document.createElement('span');
+      nome.className = 'visor-nome';
+      const meta = document.createElement('span');
+      meta.className = 'visor-meta';
+      const acoes = document.createElement('span');
+      acoes.className = 'visor-acoes';
+      const baixar = document.createElement('a');
+      baixar.className = 'visor-btn visor-baixar';
+      baixar.title = m.visor_baixar();
+      baixar.textContent = '⤓';
+      acoes.append(baixar);
       if (acao) {
-        faixa.querySelector('.visor-acao')?.addEventListener('click', () => {
+        const botao = document.createElement('button');
+        botao.className = 'visor-btn visor-acao';
+        botao.textContent = acao.rotulo;
+        botao.addEventListener('click', () => {
           const escolhida = midias[atual];
           bp.close();
           if (escolhida) acao.acao(escolhida);
         });
+        acoes.append(botao);
       }
+      faixa.append(nome, meta, acoes);
+      container.appendChild(faixa);
       pintar(inicio);
     },
     onUpdate(_container, item) {
-      const i = indiceDe(item as { nome?: string });
+      const i = indiceDe(item as { idx?: number });
       if (i >= 0) pintar(i);
     },
+    onError() {
+      // A midia nao carregou (anexo expirado, servidor fora). Sem isto o visor abre um retangulo
+      // vazio e o erro nao existe em lugar nenhum.
+      const meta = faixa?.querySelector('.visor-meta');
+      if (meta) meta.textContent = m.visor_nao_carregou();
+    },
     onClosed() {
-      window.removeEventListener('keydown', escapa, true);
+      // Só solta se ainda for o NOSSO: uma abertura mais nova já trocou o listener, e removê-lo
+      // aqui deixaria o visor vivo sem Escape.
+      if (escapaVivo === escapa) trocarEscapa(null);
       faixa = null;
     },
   });

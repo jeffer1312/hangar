@@ -53,6 +53,14 @@ describe('lerComandoHangar', () => {
     expect(a).toMatchObject({ verbo: 'parear', alvo: 'sessao-b', texto: 'unificar os logs' });
   });
 
+  it('alvo entre aspas não vira o texto do recado', () => {
+    // O nome com espaço é o único trecho entre aspas — pegá-lo como mensagem faria o cartão dizer
+    // que o recado era o próprio nome da sessão.
+    const a = lerComandoHangar('hangar-send --pair "sessao com espaco"', 'pareado: x <-> sessao com espaco', false);
+    expect(a).toMatchObject({ verbo: 'parear', alvo: 'sessao com espaco' });
+    expect(a?.texto).toBeUndefined();
+  });
+
   it('--group registra quem recebeu', () => {
     const a = lerComandoHangar('hangar-send --group "task 3 fechada"', 'aviso enviado ao grupo: a, b, c', false);
     expect(a?.peers).toEqual(['a', 'b', 'c']);

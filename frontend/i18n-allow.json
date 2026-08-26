@@ -1,6 +1,8 @@
 [
   {
     "_justificativas": {
+      "visor: falhou ao abrir": "visor.ts — mensagem de console.error (os tres chamadores disparam com `void`, entao sem isto a falha vira rejeicao nao tratada), nao texto de tela",
+      "ditado: nao deu pra restaurar a barra guardada": "Composer.svelte — mensagem de console.warn (chave de localStorage corrompida), nao texto de tela: quem le e quem abre o devtools pra diagnosticar",
       "árbitro": "OrquestracaoSheet.svelte PAPEIS_CANONICOS — nomes de papel da skill orchestrating-idea-to-push, gravados como DADO na tabela do regras-<gid>.md (o árbitro lê o nome cru); traduzir mudaria o contrato. Vale para 'revisão final' e 'par de research'",
       "Workflow": "activity.ts:171 — case de protocolo (tipo de evento do transcript do agente), nao e texto exibido; o rotulo do badge usa m.atividade_workflow()",
       "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
@@ -114,6 +116,8 @@
   "/** Rascunho sujo: usuário editou um campo e ainda não salvou/carregou. */",
   "/** Só pros testes: o store é singleton com cache, então sem zerar um caso herda o `carregado` do",
   "/** Valor exato, com centavos — tabela, tooltip, qualquer lugar que some ou compare. */",
+  "ditado: nao deu pra restaurar a barra guardada",
+  "visor: falhou ao abrir",
   ": ancestral com transform/filter/backdrop-filter cria containing block",
   ": nao ha como resolver isso olhando so onde a selecao",
   "Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador",

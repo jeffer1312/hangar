@@ -59,13 +59,19 @@
 
   let cruAberto = $state(false);
   let copiado = $state(false);
+  let falhouCopia = $state(false);
   async function copiar() {
     try {
       await navigator.clipboard.writeText(comando);
       copiado = true;
       setTimeout(() => (copiado = false), 1500);
     } catch {
-      // Sem permissão de área de transferência: o comando segue visível no bloco da saída crua.
+      // Sem permissão de área de transferência (http em rede local, por exemplo). A falha APARECE
+      // no botão e abre a saída crua, que é onde o comando está escrito — dizer nada deixaria a
+      // pessoa colando um texto velho sem saber.
+      falhouCopia = true;
+      cruAberto = true;
+      setTimeout(() => (falhouCopia = false), 2500);
     }
   }
 </script>
@@ -121,8 +127,8 @@
           {m.hangar_cmd_abrir({ nome: acao.alvo })}
         </button>
       {/if}
-      <button class="hc-btn mudo" onclick={copiar}>
-        {copiado ? m.hangar_cmd_copiado() : m.hangar_cmd_copiar()}
+      <button class="hc-btn mudo" class:falhou={falhouCopia} onclick={copiar}>
+        {falhouCopia ? m.hangar_cmd_copia_falhou() : copiado ? m.hangar_cmd_copiado() : m.hangar_cmd_copiar()}
       </button>
     </div>
 
@@ -218,6 +224,7 @@
   }
   .hc-btn.primaria { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
   .hc-btn.mudo { background: transparent; color: var(--text-muted); padding-left: 0; }
+  .hc-btn.falhou { color: var(--error); }
   .hc-cru { border-top: 1px dashed var(--border-subtle); padding-top: var(--space-2); }
   .hc-cru summary { font-size: 11.5px; color: var(--text-muted); cursor: pointer; list-style: none; }
   .hc-cru summary::before { content: '▸ '; }

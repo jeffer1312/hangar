@@ -44,11 +44,21 @@ function primeiroNome(args: string): string | null {
   return m ? (m[1] ?? m[2] ?? m[3] ?? null) : null;
 }
 
-function entreAspas(args: string): string | null {
-  const m = args.match(/"([^"]*)"|'([^']*)'/g);
+/**
+ * Última string entre aspas DEPOIS do alvo. O corte importa: em `--pair "sessao com espaco"` sem
+ * tarefa, o único trecho entre aspas é o próprio nome da sessão, e pegá-lo como texto faria o
+ * cartão mostrar o nome do par como se fosse o contrato dele.
+ */
+function entreAspas(args: string, depoisDe?: string | null): string | null {
+  let resto = args;
+  if (depoisDe) {
+    const pos = args.indexOf(depoisDe);
+    if (pos < 0) return null;
+    resto = args.slice(pos + depoisDe.length);
+  }
+  const m = resto.match(/"([^"]*)"|'([^']*)'/g);
   if (!m?.length) return null;
-  const ultimo = m[m.length - 1];
-  return ultimo.slice(1, -1);
+  return m[m.length - 1].slice(1, -1);
 }
 
 /**
@@ -83,10 +93,11 @@ export function lerComandoHangar(comando: string, saida: string, falhou: boolean
   }
 
   if (/(^|\s)--pair(\s|$)/.test(args)) {
+    const alvoPar = args.match(/--pair\s+(?:"([^"]+)"|'([^']+)'|(\S+))/)?.slice(1).find(Boolean);
     return {
       verbo: 'parear',
-      alvo: args.match(/--pair\s+(?:"([^"]+)"|'([^']+)'|(\S+))/)?.slice(1).find(Boolean),
-      texto: entreAspas(args) ?? undefined,
+      alvo: alvoPar,
+      texto: entreAspas(args, alvoPar) ?? undefined,
       erro,
     };
   }
@@ -119,7 +130,7 @@ export function lerComandoHangar(comando: string, saida: string, falhou: boolean
   return {
     verbo: 'recado',
     alvo,
-    texto: entreAspas(args) ?? undefined,
+    texto: entreAspas(args, alvo) ?? undefined,
     enfileirado: /^na fila ->/m.test(out),
     erro,
   };

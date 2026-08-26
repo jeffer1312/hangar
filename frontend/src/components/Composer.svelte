@@ -258,7 +258,10 @@
         atual: ehVersao(d.atual) ? d.atual : 'cru',
         cache: d.cache ?? {},
       };
-    } catch {
+    } catch (e) {
+      // Chave corrompida (versao antiga do formato, escrita interrompida): a barra some, e o LOG
+      // e o unico jeito de saber por que — sem ele o ditado guardado sumia sem rastro.
+      console.warn('ditado: nao deu pra restaurar a barra guardada', e);
       return null;
     }
   }
