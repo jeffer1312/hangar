@@ -1158,6 +1158,12 @@
         // preview). Sair de `working` é o outro dono — sem isto a última frase em voo ficaria
         // congelada na tela depois do fim.
         if (stateEvent?.state !== 'working' && previewText) previewText = '';
+        // Pergunta respondida em OUTRO aparelho (ou direto no terminal): o pane sai do
+        // `awaiting_input` e ninguem mais fechava o stepper AQUI — ele ficava na tela pedindo
+        // resposta de algo ja respondido. Pergunta de Pi/Kimi tem dono proprio (o $effect do
+        // `pendingPiQuestion`, que fecha pelo tool_result) e o estado do pane dela nao segue essa
+        // regra -> so o caso do Claude, que abre pelo evento SSE.
+        if (askOpen && !askPiId && stateEvent?.state !== 'awaiting_input') askOpen = false;
       } catch (err) {
         // Mesmo motivo do handler de `preview` logo abaixo: engolir aqui congela a prévia na tela
         // (este handler virou o OUTRO dono dela) e ainda deixa o `stateEvent` preso no valor
