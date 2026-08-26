@@ -18,7 +18,16 @@ export function rolagemSoAoClicar(node: HTMLElement) {
   const ligar = () => node.classList.remove(TRAVADA);
   const desligar = () => node.classList.add(TRAVADA);
 
-  node.addEventListener('click', ligar);
+  // O clique que LIGA a rolagem não pode subir: o card de ferramenta inteiro (ToolCard) tem um
+  // onclick que colapsa, então clicar no diff pra poder rolar fechava o card no mesmo gesto — e a
+  // rolagem que acabou de ser ligada morria junto. Só em ponteiro fino, o mesmo recorte do CSS:
+  // no toque a rolagem já é nativa e o toque no resultado segue fechando o card como antes.
+  const aoClicar = (e: MouseEvent) => {
+    if (matchMedia('(pointer: fine)').matches) e.stopPropagation();
+    ligar();
+  };
+
+  node.addEventListener('click', aoClicar);
   // `mouseleave` e não `mouseout`: mouseout dispara ao passar entre filhos do próprio bloco e
   // desligaria a rolagem no meio do uso.
   node.addEventListener('mouseleave', desligar);
@@ -28,7 +37,7 @@ export function rolagemSoAoClicar(node: HTMLElement) {
 
   return {
     destroy() {
-      node.removeEventListener('click', ligar);
+      node.removeEventListener('click', aoClicar);
       node.removeEventListener('mouseleave', desligar);
       node.removeEventListener('focusin', ligar);
       node.removeEventListener('focusout', desligar);
