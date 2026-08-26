@@ -665,6 +665,13 @@ button:active:not(:disabled) {
   to   { opacity: 1; transform: scale(1); }
 }
 
+/* Esqueleto de carregamento (barra que "brilha" da esquerda pra direita). Quem usa pinta o
+   gradiente com background-size: 200% e esta animação. */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
 /* Entra subindo alguns pixels — cápsulas de tarefa e linhas de rastro entram escalonadas com isto. */
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(6px); }
@@ -836,4 +843,66 @@ html:is([data-bg='image'], [data-bg='desktop']) .code-block pre { background: no
      algum embed) responde `false` pras DUAS, e com `fine` a trava simplesmente nunca ligava la.
      O requisito e "nao atrapalhar tela de toque" — entao a excecao e o toque, nao a regra. */
   .rolagem-travada { overflow: hidden !important; }
+}
+
+/* ── Formulário de sessão (CreateSessionSheet, OrquestracaoSheet) ─────────
+   Provider em tiles com a marca (ProviderGlyph) — mesma seleção por borda dos chips de
+   servidor, mas retangular: o ícone precisa de canto, não de pílula. Campo de texto sobre
+   `--surface-inset`, que acompanha o slider de transparência. */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: var(--space-2);
+}
+.provider-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 44px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: var(--surface-raised, var(--bg-surface));
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: border-color 160ms ease-out, color 160ms ease-out, background 160ms ease-out;
+}
+.provider-tile.on {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text-primary);
+}
+.provider-tile:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.field-label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.field-input {
+  height: 44px;
+  background: var(--surface-inset, var(--bg-surface));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 16px;
+  padding: 0 var(--space-3);
+  outline: none;
+  transition: border-color 180ms var(--ease-out);
+}
+.field-input::placeholder { color: var(--text-muted); }
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
 }

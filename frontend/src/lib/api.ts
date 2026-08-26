@@ -451,6 +451,27 @@ export interface ModelOption {
   images?: boolean;
 }
 
+// Orquestração: política de contas da máquina e papéis do grupo (tipos em lib/orquestracao.ts).
+export async function getOrqPolitica(): Promise<import('./orquestracao').OrqPolitica> {
+  return apiFetch('/api/orquestracao/politica');
+}
+export async function putOrqConta(
+  conta: string,
+  body: { provider: string; apelido?: string; modelos?: string[]; trocar?: boolean; ligada?: boolean; mtime: number },
+): Promise<{ ok: boolean; mtime: number }> {
+  return apiFetch(`/api/orquestracao/politica/${encodeURIComponent(conta)}`, { method: 'PUT', body: JSON.stringify(body) });
+}
+export async function getOrqGrupo(name: string): Promise<import('./orquestracao').OrqGrupo> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq`);
+}
+// Vários papéis numa escrita só e um recado só pro árbitro.
+export async function postOrqPapeis(
+  name: string,
+  body: { papeis: { papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string }[]; mtime: number },
+): Promise<import('./orquestracao').RespostaPapel> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/papeis`, { method: 'POST', body: JSON.stringify(body) });
+}
+
 // Lista de modelos da tela de nova sessão, onde ainda não existe sessão viva. O front manda
 // CAMINHO de config dir (nunca rótulo de conta): é o que faz a chave do cache do backend casar com
 // a da sessão viva — sem isto a lista quente de uma conta nunca seria aproveitada na abertura.

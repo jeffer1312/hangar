@@ -68,9 +68,46 @@ export class FilesStore {
   private cortePorPasta = new SvelteMap<string, boolean>();
 
   private readonly sessao: string;
+  // Chave de persistencia (serverId::sessao): pastas abertas + arquivo selecionado sobrevivem
+  // ao recarregar a pagina. Vazia = nao persiste (testes/instancia solta).
+  private readonly chaveLS: string;
 
-  constructor(sessao: string) {
+  constructor(sessao: string, chave = '') {
     this.sessao = sessao;
+    this.chaveLS = chave ? `cp_files_${chave}` : '';
+    this._restaurar();
+  }
+
+  // A raiz ja respondeu? Enquanto nao, o painel mostra o esqueleto (nao "nada mudou").
+  get raizCarregada(): boolean {
+    return this.porPasta.has('');
+  }
+
+  recolherTudo() {
+    this.abertos.clear();
+    this._persistir();
+  }
+
+  private _restaurar() {
+    if (!this.chaveLS) return;
+    try {
+      const raw = localStorage.getItem(this.chaveLS);
+      if (!raw) return;
+      const d = JSON.parse(raw) as { abertos?: unknown; selecionado?: unknown };
+      if (Array.isArray(d.abertos)) for (const p of d.abertos) if (typeof p === 'string') this.abertos.add(p);
+      if (typeof d.selecionado === 'string') this.selecionado = d.selecionado;
+    } catch {
+      // storage bloqueado ou JSON velho: comeca vazio, como sempre comecou
+    }
+  }
+
+  private _persistir() {
+    if (!this.chaveLS) return;
+    try {
+      localStorage.setItem(this.chaveLS, JSON.stringify({ abertos: [...this.abertos], selecionado: this.selecionado }));
+    } catch {
+      // idem: persistir e conveniencia, nunca erro
+    }
   }
 
   // A arvore achatada: a raiz e, logo depois de cada pasta aberta, os filhos dela.
@@ -130,6 +167,7 @@ export class FilesStore {
   // Abre um arquivo: pinta conteudo + diff (no escopo atual) quando a resposta voltar.
   async abrir(path: string) {
     this.selecionado = path;
+    this._persistir();
     this.erro = null;
     this.loading = true;
     const g = ++this.gArquivo;
@@ -158,6 +196,7 @@ export class FilesStore {
       // ao vivo com um binario: o erro sumia no recarregar e a tela afirmava que o png nao tem
       // diff). Sem selecao, o painel mostra o aviso de erro e a arvore continua navegavel.
       this.selecionado = null;
+      this._persistir();
       // Linha fantasma (Task 11): arquivo apagado entre listar e abrir. Alem do erro certo,
       // RE-LISTA — sem a recarga, a linha continua clicavel para sempre apontando pra nada
       // (o 404 do readFile e o sinal; o status vem na propriedade, como no _listar). O erro
@@ -203,9 +242,11 @@ export class FilesStore {
   async alternarPasta(path: string) {
     if (this.abertos.has(path)) {
       this.abertos.delete(path); // colapsar nao re-lista nem volta pra raiz
+      this._persistir();
       return;
     }
     this.abertos.add(path);
+    this._persistir();
     if (!this.porPasta.has(path)) await this._listar(path, ++this.gErro);
   }
 
@@ -297,6 +338,7 @@ export class FilesStore {
               this.porPasta.delete(p);
             }
           }
+          this._persistir();
         }
         return;
       }
@@ -321,7 +363,7 @@ export const filesStores = {
   retain(chave: string, sessao: string): FilesStore {
     let s = stores.get(chave);
     if (!s) {
-      s = new FilesStore(sessao);
+      s = new FilesStore(sessao, chave);
       stores.set(chave, s);
     }
     refs.set(chave, (refs.get(chave) ?? 0) + 1);

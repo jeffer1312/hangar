@@ -6,8 +6,9 @@
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
-           modelOptions, getArchivePorCwd, resumeArchivedConversation, getArchiveHistory,
+           getArchivePorCwd, resumeArchivedConversation, getArchiveHistory,
            type ModelOption, type Motor, type ArchiveEntry } from '../lib/api';
+  import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
   import { basename, providerName, relativeTime } from '../lib/format';
   import { renderMarkdown } from '../lib/markdown';
   import type { ChatEvent } from '../lib/types';
@@ -108,13 +109,6 @@
   // mais LENTA venceria — o usuário escolheria um modelo que não existe no que acabou de selecionar.
   let modSeq = 0;
 
-  // Catálogo do Pi traz ids que se REPETEM entre providers (medido: k3 existe na kimi-coding E na
-  // kimi-jefferson; gpt-5.6-luna na openai-codex E na opencode-go). O valor da opção tem que ser
-  // provider/id: sem o provider, a chave do each do Select colide e o each_key_duplicate derruba a
-  // lista inteira — e o `pi --model k3` cru seria ambíguo e recusado pelo CLI (o model-resolver do
-  // Pi rejeita bare id que casa em mais de um provider). Nos outros formatos (motor, cache do
-  // Claude, aliases reduzidos) não há provider e o id já é único — o valor é o id puro, como hoje.
-  const valorModelo = (m: ModelOption) => (m.provider ? `${m.provider}/${m.id}` : m.id);
 
   let erroProviders = $state('');
   let provSeq = 0;
@@ -143,19 +137,14 @@
   async function carregarModelos() {
     const seq = ++modSeq;
     modelos = []; erroModelos = ''; listaReduzida = false; modelo = ''; esforco = '';
-    // Só os três providers com escolha de modelo. `provider !== 'codex'` NÃO serve como guarda:
-    // a tela tem quatro botões e foi assim que o Kimi ficou de fora na primeira versão.
-    if (provider !== 'claude' && provider !== 'pi' && provider !== 'kimi') return;
+    if (!temEscolhaDeModelo(provider)) return;
     try {
-      const r = await modelOptions(provider, engine, selectedConfig);
+      const r = await carregarModelosDaConta({ provider, engine, configDir: selectedConfig }, chaveMemoria());
       if (seq !== modSeq) return;
       modelos = r.models;
       listaReduzida = r.reduced;
-      const lembrado = localStorage.getItem(chaveMemoria());
-      // Casar contra a lista: modelo tirado do provedor ou motor removido não pode virar flag às
-      // cegas — a sessão subiria e falharia no primeiro turno.
-      if (lembrado && modelos.some((mod) => valorModelo(mod) === lembrado)) modelo = lembrado;
-      esforco = localStorage.getItem(chaveMemoria() + ':effort') ?? '';
+      if (r.lembrado) modelo = r.lembrado;
+      esforco = r.esforcoLembrado;
     } catch (e) {
       if (seq !== modSeq) return;
       erroModelos = e instanceof Error ? e.message : m.criar_modelos_erro();
@@ -993,37 +982,8 @@
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   }
 
-  /* Provider em tiles com a marca (ProviderGlyph) — mesma seleção por borda dos chips de
-     servidor, mas retangular: o ícone precisa de canto, não de pílula. */
-  .provider-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-    gap: var(--space-2);
-  }
-  .provider-tile {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--space-2);
-    height: 44px;
-    padding: 0 var(--space-2);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border-default);
-    background: var(--surface-raised, var(--bg-surface));
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    font-weight: 500;
-    transition: border-color 160ms ease-out, color 160ms ease-out, background 160ms ease-out;
-  }
-  .provider-tile.on {
-    border-color: var(--accent);
-    background: var(--accent-dim);
-    color: var(--text-primary);
-  }
-  .provider-tile:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
+  /* .provider-grid / .provider-tile / .field / .field-label / .field-input: globais em app.css
+     (compartilhados com a tela de orquestração). */
 
   /* ── Escape hatch: digitar caminho ─────────────────────────────────────── */
   .advanced {
@@ -1164,19 +1124,6 @@
   }
 
   /* ── Campos / botoes ───────────────────────────────────────────────────── */
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    margin-bottom: var(--space-4);
-  }
-
-  .field-label {
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
-    font-weight: 500;
-  }
-
   .retomar-check {
     display: flex;
     align-items: center;
@@ -1233,18 +1180,6 @@
   .trio > .field { margin-bottom: var(--space-4); }
   .trio:empty { display: none; }
 
-  .field-input {
-    height: 44px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-family: var(--font-ui);
-    font-size: 16px;
-    padding: 0 var(--space-3);
-    outline: none;
-    transition: border-color 180ms var(--ease-out);
-  }
   /* O combo de config é o <button> dentro do Select.svelte: CSS escopado não o alcança (o atributo
      de escopo só cai nos elementos deste template), então a regra acima nunca casava e ele saía com
      o visual padrão do componente — mono e 40px, quebrando o alinhamento com os campos irmãos. */
@@ -1254,14 +1189,6 @@
     border-radius: var(--radius-md);
     font-family: var(--font-ui);
   }
-  .field-input::placeholder {
-    color: var(--text-muted);
-  }
-  .field-input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent-dim);
-  }
-
   /* Linha do seletor de conta + botão de cadastrar. O combo estica (flex: 1) e o botão fica
      fixo à direita; o aviso do /login vai embaixo. */
   .conta-row { display: flex; gap: 8px; align-items: center; }

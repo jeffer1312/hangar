@@ -14,6 +14,7 @@
   import ServidorSeletor from './ServidorSeletor.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
+  import OrquestracaoContas from '../OrquestracaoContas.svelte';
   import * as m from '../../paraglide/messages';
   import { listServers, onServersChanged, type Server } from '../../lib/auth';
 
@@ -96,6 +97,7 @@
     anexos: m.config_modal_anexos(),
     avancado: m.config_modal_avancado(),
     motores: m.config_modal_motores(),
+    orquestracao: m.config_modal_orquestracao(),
   };
 
   // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
@@ -125,6 +127,8 @@
       descricao: m.config_modal_desc_avancado(), servidor: true },
     { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: '🔌',
       descricao: m.config_modal_desc_motores(), servidor: true },
+    { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: '🎛',
+      descricao: m.config_modal_desc_orquestracao(), servidor: true },
   ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
   const SECOES = ['app', 'servidor'] as const;
 
@@ -338,6 +342,8 @@
     <DictationSettings />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
+  {:else if telaAtual === 'orquestracao'}
+    <OrquestracaoContas desktop={isDesktop} />
   {:else if telaAtual === 'diario'}
     <DiarioSettings />
   {:else if telaAtual === 'sobre'}

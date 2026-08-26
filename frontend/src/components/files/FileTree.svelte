@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as m from '../../paraglide/messages';
   import type { TreeEntry } from '../../lib/types';
+  import FileIcon from './FileIcon.svelte';
 
   interface Props {
     entries: TreeEntry[];
@@ -49,13 +50,23 @@
       ativa = alvo?.dataset.path ?? null;
       alvo?.focus();
     } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      // Como no VS Code: → abre a pasta fechada ou desce pro primeiro filho da aberta; ← fecha
+      // a pasta aberta ou sobe pro pai (de arquivo ou de pasta fechada).
       const ent = entries.find((en) => en.path === atual);
-      if (ent?.is_dir) {
-        const aberta = abertos.has(ent.path);
-        if ((e.key === 'ArrowRight' && !aberta) || (e.key === 'ArrowLeft' && aberta)) {
-          e.preventDefault();
-          onToggle(ent.path);
-        }
+      if (!ent) return;
+      e.preventDefault();
+      const foca = (p: string | null) => {
+        const alvo = linhas.find((l) => l.dataset.path === p);
+        if (alvo) { ativa = p; alvo.focus(); }
+      };
+      const aberta = ent.is_dir && abertos.has(ent.path);
+      if (e.key === 'ArrowRight') {
+        if (ent.is_dir && !aberta) onToggle(ent.path);
+        else if (aberta) foca(linhas[i + 1]?.dataset.path ?? null);
+      } else if (aberta) {
+        onToggle(ent.path);
+      } else if (ent.path.includes('/')) {
+        foca(ent.path.slice(0, ent.path.lastIndexOf('/')));
       }
     } else if (e.key === 'Enter') {
       const ent = entries.find((en) => en.path === atual);
@@ -85,11 +96,7 @@
     >
       <span class="chev" aria-hidden="true">{ent.is_dir ? (abertos.has(ent.path) ? '▾' : '▸') : ''}</span>
       <span class="ico" aria-hidden="true">
-        {#if ent.is_dir}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-        {:else}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
-        {/if}
+        <FileIcon nome={ent.name} isDir={ent.is_dir} aberta={ent.is_dir && abertos.has(ent.path)} />
       </span>
       <span class="nome">{ent.name}</span>
       {#if ent.add || ent.del}
@@ -141,8 +148,7 @@
     font-size: 9px;
     text-align: center;
   }
-  .no .ico { width: 14px; flex: none; color: var(--text-muted); display: grid; place-items: center; }
-  .no .ico svg { width: 13px; height: 13px; }
+  .no .ico { width: 16px; flex: none; display: grid; place-items: center; }
   .no.pasta > .nome { color: var(--text-primary); }
   .no .nome {
     flex: 1;

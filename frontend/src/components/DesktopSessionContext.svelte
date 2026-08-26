@@ -7,7 +7,7 @@ import * as m from '../paraglide/messages';
   import PlanRing from './PlanRing.svelte';
   import FilesPanel from './files/FilesPanel.svelte';
   import StateChip from './StateChip.svelte';
-  import type { State, SessionInfo, PlanDetail } from '../lib/types';
+  import type { State, SessionInfo, PlanDetail, ChatEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ctxWindow, providerName } from '../lib/format';
   import { planBadge } from '../lib/plan';
@@ -63,6 +63,8 @@ import * as m from '../paraglide/messages';
     // Grupo pareado -> PairSheet (conversa do par, contrato compartilhado, split). A secao dizia
     // "2 sessoes pareadas" e parava ali; a tela do par ja existia, so nao tinha porta aqui.
     onOpenPair?: () => void;
+    // Grupo -> modal Orquestração (quem roda cada papel, contas liberadas).
+    onOpenOrq?: () => void;
     // Repositorio -> modal de git do cwd. Mesmo caso: dado sem porta.
     onOpenGit?: () => void;
     // Abre a sessao do MEMBRO num modal (PairChatModal). So com UM par: com 2+ nao da pra escolher
@@ -70,10 +72,15 @@ import * as m from '../paraglide/messages';
     // `undefined` quando o Chat esta `nested` (dentro de um modal) — a guarda que evita modal
     // dentro de modal, e com ela SSE empilhado.
     onOpenPeerChat?: (peer: string) => void;
+    // Pra visão "Citados" da aba Arquivos (vêm do Chat).
+    events?: ChatEvent[] | null;
+    histGap?: string;
+    cwd?: string | null;
   }
 
   let {
     state, stateDetail = null, status = null, pairPeers = null,
+    events = null, histGap = '', cwd = null,
     serverLabel = '', provider = 'claude', sessionName = '', serverId = '',
     onOpenTerminal = undefined, terminalAlert = false,
     onOpenRun = undefined, runRunning = false,
@@ -82,7 +89,7 @@ import * as m from '../paraglide/messages';
     onExpandUsage = undefined, limited = false, limitReset = null,
     working = false,
     loopLabel = null, loopColor = undefined, onLoopTap = undefined,
-    onProviderTap = undefined, onOpenPair = undefined, onOpenGit = undefined,
+    onProviderTap = undefined, onOpenPair = undefined, onOpenOrq = undefined, onOpenGit = undefined,
     onOpenPeerChat = undefined,
     session = null, planDetail = null, planLoading = false, planError = false,
     toggleExterno = false,
@@ -354,6 +361,20 @@ import * as m from '../paraglide/messages';
     {/if}
   </section>
 
+  {#if onOpenOrq}
+  <!-- Sempre visível, com ou sem grupo: sem grupo o modal edita o time padrão. -->
+  <section class="sec-break">
+    <span class="section-label">{m.ctx_orquestracao()}</span>
+    <button type="button" class="sec-open" onclick={onOpenOrq} aria-label={m.ctx_orquestracao()}>
+      <span class="sec-open-body">
+        <strong>{m.ctx_orquestracao_titulo()}</strong>
+        <p>{m.ctx_orquestracao_desc()}</p>
+      </span>
+      <span class="sec-open-arrow" aria-hidden="true">›</span>
+    </button>
+  </section>
+  {/if}
+
   {#if status?.repo}
   <section class="sec-break">
     <span class="section-label">{m.ctx_repositorio()}</span>
@@ -388,7 +409,7 @@ import * as m from '../paraglide/messages';
   </div>
   {:else}
   <div id="painel-ctx-arquivos" role="tabpanel" aria-labelledby="aba-ctx-arquivos" class="ctx-tab">
-    <FilesPanel sessionName={sessionName} {serverId} desktop={true} />
+    <FilesPanel sessionName={sessionName} {serverId} desktop={true} {events} {histGap} {cwd} />
   </div>
   {/if}
   {/if}

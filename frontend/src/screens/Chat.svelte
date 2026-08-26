@@ -19,6 +19,7 @@
   import CodexLimitsSheet from '../components/CodexLimitsSheet.svelte';
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
+  import OrquestracaoSheet from '../components/OrquestracaoSheet.svelte';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
   // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
@@ -410,6 +411,7 @@
   let forwardText = $state<string | null>(null);
   // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
   let pairOpen = $state(false);
+  let orqOpen = $state(false);
   // Membro do grupo aberto no modal (null = fechado). É string, não lista, de propósito: um modal
   // por vez mantém o teto em 2 SSE (este chat + o do par) e o navegador corta em ~6 por host.
   let peerChat = $state<string | null>(null);
@@ -1740,6 +1742,7 @@
       provider={sessionProvider}
       serverId={getActiveId() ?? ''}
       {sessionName}
+      {events} {histGap} cwd={planSession?.cwd ?? null}
       onOpenTerminal={abrirTerminalReal}
       terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
@@ -1757,6 +1760,7 @@
       onLoopTap={() => (loopSheetOpen = true)}
       onProviderTap={isCodex ? () => (limitsOpen = true) : undefined}
       onOpenPair={() => (pairOpen = true)}
+      onOpenOrq={() => (orqOpen = true)}
       onOpenPeerChat={nested ? undefined : (peer) => (peerChat = peer)}
       onOpenGit={() => (gitOpen = true)}
       session={planSession}
@@ -1929,6 +1933,7 @@
         {pairPeers}
         {pairedState}
         onOpenPair={() => (pairOpen = true)}
+        onOpenOrq={() => (orqOpen = true)}
         {sendToPair}
         onToggleSendToPair={() => (sendToPair = !sendToPair)}
       />
@@ -1960,6 +1965,13 @@
     onClose={() => (forwardText = null)}
   />
 
+  <OrquestracaoSheet
+    open={orqOpen}
+    {sessionName}
+    sessoes={allSessions}
+    onClose={() => (orqOpen = false)}
+  />
+
   <PairSheet
     open={pairOpen}
     {sessionName}
@@ -1981,7 +1993,8 @@
 
   <UsageSheet open={usageOpen} {status} onClose={() => (usageOpen = false)} />
 
-  <Git open={gitOpen} {sessionName} {desktop} {filesInContext} onClose={() => (gitOpen = false)} />
+  <Git open={gitOpen} {sessionName} {desktop} {filesInContext} onClose={() => (gitOpen = false)}
+       {events} {histGap} cwd={planSession?.cwd ?? null} />
 
   <RunSheet open={runOpen} {sessionName} onClose={() => (runOpen = false)} onRunningChange={(r) => (runRunning = r)} />
   <MoreSheet open={moreOpen} onClose={() => (moreOpen = false)}

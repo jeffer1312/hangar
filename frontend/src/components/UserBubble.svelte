@@ -6,7 +6,7 @@ import * as m from '../paraglide/messages';
     ts?: number | null;
     animate?: boolean;   // false = bubble de HISTORICO remontada (paginacao/janela): sem fade
     from?: string | null;          // recado de OUTRA sessao (hangar-send): nome da sessao remetente
-    scope?: 'peer' | 'group' | null; // 'group' = aviso pro grupo todo ([grupo: X]) -> chip distinto
+    scope?: 'peer' | 'group' | 'panel' | null; // 'group' = aviso pro grupo ([grupo: X]); 'panel' = recado automático do app ([painel: X])
     onForward?: (() => void) | null; // abre o picker "encaminhar pra sessao" (botao ↗)
     onOpenPeer?: (() => void) | null; // tap no chip "de: X" -> abre o chat da sessao remetente
   }
@@ -28,10 +28,11 @@ import * as m from '../paraglide/messages';
     class="bubble"
     class:peer={!!from}
     class:group={scope === 'group'}
+    class:panel={scope === 'panel'}
   >
     {#if from}
-      {@const label = scope === 'group' ? m.board_peer_grupo({ n: from }) : m.board_peer_de({ n: from })}
-      {#if onOpenPeer}
+      {@const label = scope === 'group' ? m.board_peer_grupo({ n: from }) : scope === 'panel' ? m.board_peer_painel({ n: from }) : m.board_peer_de({ n: from })}
+      {#if onOpenPeer && scope !== 'panel'}
         <button class="peer-chip peer-chip--link" onclick={onOpenPeer}
                 aria-label={m.user_abrir_chat_de({ n: from })} title={m.user_abrir_chat_de({ n: from })}>{label} ›</button>
       {:else}
@@ -90,6 +91,12 @@ import * as m from '../paraglide/messages';
     border-color: var(--warning, #ff9f0a);
   }
   .bubble.group .peer-chip { color: var(--warning, #ff9f0a); }
+  /* Recado AUTOMÁTICO do app ([painel: X]): neutro, pra ler como configuração e não como pessoa. */
+  .bubble.panel {
+    background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+    border-color: var(--text-muted);
+  }
+  .bubble.panel .peer-chip { color: var(--text-muted); }
 
   .peer-chip {
     display: block;

@@ -476,7 +476,7 @@ import * as m from '../paraglide/messages';
                  (chip 📟/📣 + tinta accent), versão compacta — sem isto o card mostrava o
                  prefixo cru como se fosse msg tua. -->
             <div class="bc-user bc-peer" class:bc-peer-group={peer.scope === 'group'}>
-              <span class="bc-peer-chip">{peer.scope === 'group' ? m.board_peer_grupo({ n: peer.from }) : m.board_peer_de({ n: peer.from })}</span>
+              <span class="bc-peer-chip">{peer.scope === 'group' ? m.board_peer_grupo({ n: peer.from }) : peer.scope === 'panel' ? m.board_peer_painel({ n: peer.from }) : m.board_peer_de({ n: peer.from })}</span>
               <!-- Em <p> próprio (padrão do UserBubble): {peer.text} solto como irmão do span
                    herdava o whitespace do template como espaço inicial (pre-wrap o exibe). -->
               <p class="bc-peer-text">{peer.text}</p>

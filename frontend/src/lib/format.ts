@@ -251,13 +251,17 @@ export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[]
 }
 
 // Recado de OUTRA sessão Claude (hangar-send): "[de: <sessao>] texto" (1:1) ou "[grupo: <sessao>] texto"
-// (aviso pro grupo). Devolve remetente + texto sem o prefixo + scope; null = msg normal do usuário.
-// Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do Chat compara o cru).
-const _PEER_RE = /^\[(de|grupo):\s*([^\]]+)\]\s*/;
-export function parsePeerMessage(text: string): { from: string; text: string; scope: 'peer' | 'group' } | null {
+// (aviso pro grupo) ou "[painel: <tela>] texto" (recado AUTOMÁTICO do app — ex.: o modal de
+// orquestração avisando o árbitro). Devolve remetente + texto sem o prefixo + scope; null = msg
+// normal do usuário. Só APRESENTAÇÃO: o texto guardado em events/pending fica intacto (dedup do
+// Chat compara o cru).
+const _PEER_RE = /^\[(de|grupo|painel):\s*([^\]]+)\]\s*/;
+export type PeerScope = 'peer' | 'group' | 'panel';
+const _SCOPES: Record<string, PeerScope> = { de: 'peer', grupo: 'group', painel: 'panel' };
+export function parsePeerMessage(text: string): { from: string; text: string; scope: PeerScope } | null {
   const m = _PEER_RE.exec(text);
   if (!m) return null;
-  return { from: m[2].trim(), text: text.slice(m[0].length), scope: m[1] === 'grupo' ? 'group' : 'peer' };
+  return { from: m[2].trim(), text: text.slice(m[0].length), scope: _SCOPES[m[1]] };
 }
 
 // Anexos de arquivo por CAMINHO citado na conversa (sua ou minha msg). v1 = só "preview-worthy"

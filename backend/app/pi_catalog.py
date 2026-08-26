@@ -11,12 +11,31 @@ níveis AQUELE modelo aceita, que variam por modelo e não aparecem aqui.
 Cache porque é subprocess Node: pagar isso a cada abertura de tela é caro pra uma lista que muda de
 mês em mês.
 """
+import logging
 import shutil
 import subprocess
+import threading
 import time
 
+_log = logging.getLogger(__name__)
 _TTL = 600.0
 _cache: tuple[float, list[dict]] | None = None
+# Cache VENCIDO serve na hora e renova por trás (uma renovação por vez): o `pi --list-models` leva
+# ~7s (medido 26/08/2026) e a tela de orquestração pagava isso na primeira abertura de cada 10 min.
+_renovando = threading.Lock()
+
+
+def _renovar_em_fundo() -> None:
+    if not _renovando.acquire(blocking=False):
+        return
+    def _run():
+        try:
+            listar(fresco=True)
+        except Exception as e:  # noqa: BLE001 — falha em fundo só loga; o cache velho segue servindo
+            _log.warning("pi --list-models em fundo falhou: %s", e)
+        finally:
+            _renovando.release()
+    threading.Thread(target=_run, name="pi-catalog-refresh", daemon=True).start()
 
 
 class PiAusente(RuntimeError):
@@ -58,7 +77,9 @@ def parse(saida: str) -> list[dict]:
 
 def listar(fresco: bool = False) -> list[dict]:
     global _cache
-    if _cache and not fresco and time.monotonic() - _cache[0] < _TTL:
+    if _cache and not fresco:
+        if time.monotonic() - _cache[0] >= _TTL:
+            _renovar_em_fundo()
         return _cache[1]
     # `encoding` explicito pelo mesmo motivo dos outros: `text=True` sozinho decodifica pelo
     # locale, cp1252 no Windows, e a tabela do `pi` traz rotulo de modelo que nao e so ASCII.

@@ -180,6 +180,16 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_sessao_sem_grupo: () => m.erro_sessao_sem_grupo(),
   erro_sessao_nao_pareada: () => m.erro_sessao_nao_pareada(),
 
+  // Orquestração (política de contas + papéis do grupo)
+  erro_orq_conta_desconhecida: () => m.erro_orq_conta_desconhecida(),
+  erro_orq_modelo_desconhecido: (p) => m.erro_orq_modelo_desconhecido({ modelos: fmtParam(p.modelos) }),
+  erro_orq_celula_invalida: () => m.erro_orq_celula_invalida(),
+  erro_orq_arquivo_mudou: () => m.erro_orq_arquivo_mudou(),
+  erro_orq_conta_nao_liberada: () => m.erro_orq_conta_nao_liberada(),
+  erro_orq_modelo_nao_liberado: () => m.erro_orq_modelo_nao_liberado(),
+  erro_orq_conta_travada: () => m.erro_orq_conta_travada(),
+  erro_orq_esforco_invalido: () => m.erro_orq_esforco_invalido(),
+
   // Estado errado: terminal aberto, sessao trabalhando, loop ativo
   erro_terminal_aberto: () => m.erro_terminal_aberto(),
   erro_terminal_invalido: (p) => m.erro_terminal_invalido({ nome: String(p.nome) }),

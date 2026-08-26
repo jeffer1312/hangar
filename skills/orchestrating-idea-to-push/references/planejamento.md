@@ -309,20 +309,40 @@ Regras fixas:
 - Um escritor por árvore vale mesmo com vários escritores no elenco: o portão serializa as
   Tasks, então eles nunca escrevem ao mesmo tempo.
 
-O plano registra a tabela com **cinco** colunas — papel, sessão, agente/motor, **qual conta
-gasta**, e **como a sessão é aberta** (o comando literal). Motor de provedor consome a conta
-dele: o usuário aprova isso aqui.
-
-A coluna "como abrir" existe porque *"a revisão final é numa sessão do <agente> X"* é uma
-frase que envelhece mal: meses depois, na hora de abrir, vira decisão improvisada entre
-conta padrão, motor, gateway e subagente — e as quatro dão resultados diferentes. Escreva o
-comando no dia em que o usuário definir o papel:
+O time vai pro `regras-<gid>.md` como **tabela de cabeçalho fixo**, na seção `## Quem é quem`
+— seis colunas, uma linha por papel, **valor cru em cada célula** (sem negrito, sem parêntese,
+sem prosa; `-` = vazio). **Ponto de partida:** se existir `<pair_dir>/regras-padrao.md` (o "time
+padrão", que o usuário configura no modal Orquestração do hangar antes de qualquer grupo), copie a
+tabela de lá e só ajuste os nomes de sessão — ela é a escolha dele, não a tua:
 
 ```markdown
-| Papel | Sessão | Agente/motor | Conta | Como abrir |
-|---|---|---|---|---|
-| revisão final | <trab>-final | <agente>, conta padrão | assinatura | `hangar-send --new <trab>-final <cwd>` (SEM --engine) |
+## Quem é quem
+
+| papel | sessão | provider | conta | modelo | esforço |
+|---|---|---|---|---|---|
+| árbitro | <trab>-arbitro | claude | padrao | opus[1m] | high |
+| executor | <trab>-t* | claude | 200-01 | opus[1m] | medium |
+| revisor | <trab>-review | pi | clinepass | cline-pass/glm-5.2 | high |
+| revisão final | <trab>-final | claude | claude-200-3 | opus[1m] | high |
 ```
+
+- `provider`: `claude` | `codex` | `pi` | `kimi`.
+- `conta`: no Claude, o nome do config dir (`padrao` para `~/.claude`, `200-01` para
+  `~/.claude-200-01`); no Kimi, o provider do `~/.kimi-code/config.toml` (`apikey`); no Pi, o
+  provider do catálogo dele (`clinepass`); no Codex, `openai-codex`.
+- `sessão` terminando em `*` = papel com uma sessão por Task (`<trab>-t*`).
+
+**O cabeçalho é exato e a tabela é lida por máquina**: o modal Orquestração do hangar mostra
+essa tabela ao usuário, com o que cada sessão viva mede ao lado, e grava aqui o que ele trocar.
+Célula com prosa ("Opus 5, esforço `medium`, contas X e Y (decisão de 25/08)") não é lida — o
+papel some da tela. Tudo que é explicação — por que aquela conta, o que fazer quando a cota
+acaba, o gatilho da revisão final — vai em prosa **fora** da tabela.
+
+**Como abrir vai em prosa, logo abaixo da tabela**, um comando literal por papel. Existe porque
+*"a revisão final é numa sessão do <agente> X"* é uma frase que envelhece mal: meses depois, na
+hora de abrir, vira decisão improvisada entre conta padrão, motor, gateway e subagente — e as
+quatro dão resultados diferentes. Escreva o comando no dia em que o usuário definir o papel:
+`hangar-send --new <trab>-final <cwd> --conta claude-200-3 --model 'opus[1m]' --effort high`.
 
 **A revisão final entra na tabela como item próprio, com o gatilho junto:** *"dispara quando
 todas as Tasks de código estiverem aprovadas"*. Nunca "depois da Task N" — Task manual
@@ -552,9 +572,11 @@ separação o arquivo que todo mundo lê cresce a cada Task aprovada, e num trab
 chegou a 54 KB — 14k tokens cobrados de cada sessão nova para contar como Tasks encerradas foram
 reprovadas.
 
-O esqueleto do **registro** está abaixo. O de **regras** é a mesma coisa sem o histórico: os
-intocáveis literais, os gates (comando exato, sem depender do cwd), as réguas de julgamento que a
-execução for fixando, a barra por Task, o que a revisão precisa cobrir, teto e contas.
+O esqueleto do **registro** está abaixo. O de **regras** é a mesma coisa sem o histórico: a
+tabela `## Quem é quem` (formato fixo da fase 2, acima — é nas regras que ela mora, não no
+registro), os intocáveis literais, os gates (comando exato, sem depender do cwd), as réguas de
+julgamento que a execução for fixando, a barra por Task, o que a revisão precisa cobrir, teto e
+contas.
 
 ### O contrato nasce de esqueleto, não de memória
 
@@ -569,14 +591,9 @@ invisível pra quem lê depois:
 > Plano: <caminho>. Branch: <branch>. HEAD de partida: <hash>.
 
 ## Quem é quem
-| Papel | Sessão | Agente/motor | Conta | Como abrir |
-|---|---|---|---|---|
-| árbitro | <esta sessão> | ... | ... | (já aberta) |
-| executor | ... | ... | ... | `<comando literal>` |
-| revisor | ... | ... | ... | `<comando literal>` |
-| revisão final | ... | ... | ... | `<comando literal>` — dispara quando TODAS as Tasks de código estiverem aprovadas |
-
-Aviso de grupo contradizendo esta tabela: vale a tabela.
+Nas regras (`regras-<gid>.md`, tabela fixa `| papel | sessão | provider | conta | modelo | esforço |`).
+Aqui só o que é histórico: quem assumiu de quem, quando, por quê.
+Aviso de grupo contradizendo aquela tabela: vale a tabela.
 
 ## O que o plano possui (aponte, não copie)
 Ordem das Tasks, Steps, verificação por Task, intocáveis, barras da fase 1: <plano, seção>.

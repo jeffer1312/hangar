@@ -197,7 +197,10 @@ def test_status_sig_reduz_sem_relogio_e_custo():
     assert sse._status_sig(a)[0].startswith("Opus")
     assert sse._status_sig(a)[1] == 4                        # 40k/200k = 20% -> balde 4
     assert sse._status_sig(a)[2] == "46" and sse._status_sig(a)[3] == "57"
+    # So o esforco mudou -> sig DIFERENTE (a lista precisa re-emitir pro painel de orquestracao).
+    assert sse._status_sig(a) != sse._status_sig(a.replace("(high✦)", "(medium✦)"))
+    assert sse._status_sig(a)[4] == "high✦"
     c = a.replace("⚡5h:46%", "⚡5h:47%")
     assert sse._status_sig(a) != sse._status_sig(c)          # % mudou -> sig muda
     assert sse._status_sig(None) is None
-    assert sse._status_sig("sem emojis") == (None, None, None, None)
+    assert sse._status_sig("sem emojis") == (None, None, None, None, None)

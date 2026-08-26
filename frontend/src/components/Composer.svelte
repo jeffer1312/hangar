@@ -68,6 +68,8 @@
     pairPeers?: string[] | null;
     pairedState?: string | null;  // estado vivo do par ÚNICO (working/idle/...) -> bolinha no chip
     onOpenPair?: () => void;
+    // Chip ao lado do 🤝: modal Orquestração (só com grupo — sem grupo a porta é Configurações).
+    onOpenOrq?: () => void;
     // Toggle "mandar pro grupo" (só aparece pareada): ligado = prompt vai pra esta sessão E pros membros.
     sendToPair?: boolean;
     onToggleSendToPair?: () => void;
@@ -81,7 +83,7 @@
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
-    onOpenPreview, pairPeers = null, pairedState = null, onOpenPair,
+    onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
     sendToPair = false, onToggleSendToPair,
     inputText = $bindable(''),
     provider = 'claude',
@@ -1381,6 +1383,11 @@
               {/if}
             {/if}
           </button>
+          {#if onOpenOrq}
+            <button class="repo-chip" title={m.orqcfg_titulo()} onclick={onOpenOrq} aria-label={m.orqcfg_titulo()}>
+              <span class="repo-glyph" aria-hidden="true">🎛</span>
+            </button>
+          {/if}
           {#if pairPeers?.length && onToggleSendToPair}
             <!-- "Mandar pro grupo": prompt vai pra esta sessão E pros membros (broadcast). Aceso = ativo. -->
             <button class="repo-chip both-chip" class:both-chip--on={sendToPair}

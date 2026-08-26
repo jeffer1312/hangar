@@ -177,6 +177,9 @@ async def _cached_list():
 # Relogio (⏱) e custo ficam DE FORA — mudam a cada captura e re-emitiriam a lista inteira a toa.
 # Espelha o parse do front (frontend/src/lib/statusline.ts), so o subset que o sig precisa.
 _ST_MODEL = re.compile(r"🤖\s*([^(│]+)")
+# O esforco mora no parentese DEPOIS do modelo (`(high✦)`); sem ele no sig, trocar so o esforco
+# nao re-emitia a lista e o painel ficava com o valor velho.
+_ST_EFFORT = re.compile(r"🤖[^(│]*\(([^)│]*)\)")
 _ST_5H = re.compile(r"⚡[^│]*?(\d+)\s*%")
 _ST_7D = re.compile(r"📅[^│]*?(\d+)\s*%")
 _ST_PAIR = re.compile(r"([\d.,]+)\s*([kKmM])?\s*/\s*([\d.,]+)\s*([kKmM])?")
@@ -211,6 +214,7 @@ def _status_sig(s):
         ctx,
         m.group(1) if (m := _ST_5H.search(s)) else None,
         m.group(1) if (m := _ST_7D.search(s)) else None,
+        m.group(1).strip() if (m := _ST_EFFORT.search(s)) else None,
     )
 
 

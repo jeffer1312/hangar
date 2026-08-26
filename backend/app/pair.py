@@ -160,19 +160,22 @@ def join_with_snapshot(a: str, b: str, task: str = "") -> tuple[list[str], dict[
 def _merge_contract(loser_gid: str, survivor_gid: str) -> None:
     """Anexa o contrato do grupo absorvido ao do sobrevivente (best-effort; merge de grupos não
     pode falhar por causa de arquivo de contrato)."""
-    try:
-        loser = _pair_dir() / f"grupo-{loser_gid}.md"
-        content = loser.read_text(encoding="utf-8").strip()
-        if not content:
-            return
-        survivor = _pair_dir() / f"grupo-{survivor_gid}.md"
-        old = survivor.read_text(encoding="utf-8") if survivor.exists() else ""
-        survivor.write_text(
-            old + f"\n\n## Contrato herdado do grupo {loser_gid} (merge)\n\n" + content + "\n",
-            encoding="utf-8")
-        loser.unlink(missing_ok=True)
-    except OSError:
-        pass
+    # `regras-` (o que o time lê) segue o `grupo-` (o registro do árbitro): sem isto o merge
+    # deixava o regras-<loser> órfão, o mesmo furo que o leave() já fechava só pro grupo-.
+    for prefixo in ("grupo", "regras"):
+        try:
+            loser = _pair_dir() / f"{prefixo}-{loser_gid}.md"
+            content = loser.read_text(encoding="utf-8").strip()
+            if not content:
+                continue
+            survivor = _pair_dir() / f"{prefixo}-{survivor_gid}.md"
+            old = survivor.read_text(encoding="utf-8") if survivor.exists() else ""
+            survivor.write_text(
+                old + f"\n\n## Contrato herdado do grupo {loser_gid} (merge)\n\n" + content + "\n",
+                encoding="utf-8")
+            loser.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def join(a: str, b: str, task: str = "") -> list[str]:
@@ -210,10 +213,11 @@ def leave(name: str) -> list[str]:
         # Fora do try: apagar contrato é faxina, best-effort — falha aqui não pode desfazer um
         # unpair que já deu certo (restore ressuscitaria o par).
         if len(peers) == 1 and link.get("gid"):
-            try:
-                (_pair_dir() / f"grupo-{link['gid']}.md").unlink(missing_ok=True)
-            except OSError:
-                pass
+            for prefixo in ("grupo", "regras"):
+                try:
+                    (_pair_dir() / f"{prefixo}-{link['gid']}.md").unlink(missing_ok=True)
+                except OSError:
+                    pass
         return peers
 
 

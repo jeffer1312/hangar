@@ -33,7 +33,7 @@ from app import model_args
 from app import filesearch, filetree, git_ops
 from app.filesearch import SearchError
 from app.filetree import FileError
-from app import orq
+from app import orq, orq_md, orq_papeis, orq_politica
 from app import pi_catalog
 from app import cli_probe
 from app import pi_models
@@ -2475,6 +2475,197 @@ async def group_message(name: str, body: GroupMsgBody):
                                 f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in failed),
                             avisos=failed)
             if failed else None}
+
+
+# ----------------------------------------------------------------- orquestração (política + papéis)
+
+def _catalogo_claude_cache(dir_conta: Path) -> tuple[list[dict], bool]:
+    """Leitor do cache do picker pro inventário — o MESMO cache de /api/model-options."""
+    cacheado = _models_cache_get(_chave_config(dir_conta))
+    if cacheado is not None:
+        return list(cacheado.get("models") or []), False
+    return orq_politica._modelos_claude_reduzidos(dir_conta)
+
+
+def _inventario() -> list[orq_politica.ContaInventario]:
+    return orq_politica.inventario(_catalogo_claude_cache)
+
+
+class PoliticaContaBody(_StrictBody):
+    provider: str
+    apelido: str = ""
+    modelos: list[str] = ["*"]
+    trocar: bool = True
+    ligada: bool = True
+    mtime: float
+
+
+@app.get("/api/orquestracao/politica", dependencies=[Depends(require_auth)])
+async def orq_politica_get():
+    texto, mtime = orq_md.ler_arquivo(orq_politica.caminho())
+    inv = await asyncio.to_thread(_inventario)
+    return {"arquivo": str(orq_politica.caminho()), "mtime": mtime,
+            "politica": [asdict(c) for c in orq_politica.ler(texto)],
+            "inventario": [asdict(i) for i in inv]}
+
+
+@app.put("/api/orquestracao/politica/{conta}", dependencies=[Depends(require_auth)])
+async def orq_politica_put(conta: str, body: PoliticaContaBody):
+    inv = await asyncio.to_thread(_inventario)
+    item = next((i for i in inv if i.provider == body.provider
+                 and orq_md.normalizar(i.conta) == orq_md.normalizar(conta)), None)
+    if item is None:
+        raise HTTPException(400, detail=erro("erro_orq_conta_desconhecida",
+                                             f"conta {conta!r} ({body.provider}) não existe nesta máquina"))
+    modelos = tuple(m.strip() for m in body.modelos if m.strip()) or ("*",)
+    if "*" not in modelos and not item.reduced and item.modelos:
+        conhecidos = {m["id"] for m in item.modelos}
+        ruim = [m for m in modelos if m not in conhecidos]
+        if ruim:
+            raise HTTPException(400, detail=erro("erro_orq_modelo_desconhecido",
+                                                 f"modelo(s) fora do catálogo da conta: {', '.join(ruim)}",
+                                                 modelos=ruim))
+    try:
+        for v in (conta, body.apelido, *modelos):
+            orq_md.validar_celula(v)
+        if body.ligada:
+            c = orq_politica.ContaPolitica(item.conta, body.provider, body.apelido, modelos, body.trocar)
+            mtime = await asyncio.to_thread(orq_politica.gravar_conta, c, body.mtime)
+        else:
+            mtime = await asyncio.to_thread(orq_politica.desligar, item.conta, body.mtime)
+    except ValueError as e:
+        raise HTTPException(400, detail=erro("erro_orq_celula_invalida", str(e)))
+    except orq_md.Conflito:
+        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
+                                             "o arquivo mudou desde a leitura — recarregue"))
+    return {"ok": True, "mtime": mtime}
+
+
+class PapelBody(_StrictBody):
+    papel: str
+    sessao: str = ""
+    provider: str
+    conta: str
+    modelo: str = ""
+    esforco: str = ""
+    mtime: float
+
+
+def _gid_de(name: str) -> str:
+    link = PairLink(name).get()
+    if link and link.get("gid"):
+        return link["gid"]
+    # Sem grupo, a tela edita o TIME PADRÃO (regras-padrao.md): é dali que o árbitro parte ao
+    # montar o próximo grupo — configurar antes de começar foi pedido do usuário (26/08/2026).
+    return orq_papeis.gid_por_sessao(name) or orq_papeis.GID_PADRAO
+
+
+def _papeis_de(gid: str) -> tuple[str, float, list[orq_papeis.Papel]]:
+    texto, mtime = orq_md.ler_arquivo(orq_papeis.regras_path(gid))
+    return texto, mtime, orq_papeis.ler(texto)
+
+
+@app.get("/api/sessions/{name}/orq", dependencies=[Depends(require_auth)])
+async def orq_get(name: str):
+    gid = await asyncio.to_thread(_gid_de, name)
+    _texto, mtime, papeis = await asyncio.to_thread(_papeis_de, gid)
+    # A lista fresca do registry (sem git nem pane): `casar_viva` só precisa de nome + last_activity.
+    infos = await asyncio.to_thread(registry.list)
+    arbitro = next((p for p in papeis if p.e_arbitro()), None)
+    return {
+        "gid": gid, "arquivo": str(orq_papeis.regras_path(gid)), "mtime": mtime,
+        "arbitro": orq_papeis.casar_viva(arbitro, infos) if arbitro else None,
+        "papeis": [{**asdict(p), "viva": orq_papeis.casar_viva(p, infos),
+                    "id_cota": orq_politica.id_cota(p.provider, p.conta)} for p in papeis],
+    }
+
+
+def _recado_arbitro(novos: list[orq_papeis.Papel], gid: str) -> str:
+    # Prefixo `[painel: orquestração]` = mesma família do `[de: <sessão>]` do hangar-send: o front
+    # desenha o chip "configuração · orquestração" e a sessão sabe que é recado automático.
+    linhas = "; ".join("`" + p.papel + "` agora é provider `" + p.provider + "`, conta `" + p.conta
+                       + "`, modelo `" + (p.modelo or "-") + "`, esforço `" + (p.esforco or "-") + "`"
+                       for p in novos)
+    return ("[painel: orquestração] A configuração de modelos do grupo mudou no painel: " + linhas
+            + ". Releia `" + str(orq_papeis.regras_path(gid))
+            + "`. Aplicação, papel a papel: sessão desse papel PARADA (idle) → feche-a e abra outra já na "
+            "configuração nova (o Claude não troca conta/modelo com a sessão aberta); sessão "
+            "TRABALHANDO → deixe terminar a tarefa atual e a próxima sessão desse papel nasce na nova. "
+            "A linha já está gravada: não reescreva a tabela. "
+            "Se o papel for o seu (árbitro): termine a tarefa em curso, escreva no seu registro "
+            "(o diário do grupo, seja grupo-<gid>.md ou o registro.md do diretório durável) a seção "
+            "'Passagem para o árbitro seguinte' (até 25 linhas: Task e portão, sessões vivas por "
+            "papel, HEAD e git status, pendências, decisões recentes, caminhos do plano/regras/"
+            "registro), abra o sucessor na configuração nova com kick-off apontando pra essa seção, "
+            "troque a linha `árbitro` da tabela pro nome dele, avise executor e revisor vivos quem é "
+            "o árbitro agora, e pare de despachar — rito 'Sucessão do árbitro' da skill.")
+
+
+class PapelItem(_StrictBody):
+    papel: str
+    sessao: str = ""
+    provider: str
+    conta: str
+    modelo: str = ""
+    esforco: str = ""
+
+
+class PapeisBody(_StrictBody):
+    papeis: list[PapelItem]
+    mtime: float
+
+
+async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float) -> dict:
+    """Grava TODAS as linhas numa escrita só e manda UM recado ao árbitro listando as mudanças —
+    o usuário edita vários papéis e salva no fim (medido em 26/08/2026: salvar um por vez
+    descartava o resto sem aviso)."""
+    if not itens:
+        raise HTTPException(400, detail=erro("erro_orq_celula_invalida", "nenhum papel"))
+    gid = await asyncio.to_thread(_gid_de, name)
+    texto, _mtime, papeis = await asyncio.to_thread(_papeis_de, gid)
+    novos: list[orq_papeis.Papel] = []
+    try:
+        for it in itens:
+            atual = next((p for p in papeis if orq_md.normalizar(p.papel) == orq_md.normalizar(it.papel)), None)
+            novo = orq_papeis.Papel(it.papel.strip(), (it.sessao or (atual.sessao if atual else "")).strip(),
+                                    it.provider.strip().lower(), it.conta.strip(),
+                                    it.modelo.strip(), it.esforco.strip())
+            motivo = await asyncio.to_thread(orq_politica.permitido, novo.provider, novo.conta, novo.modelo, novo.esforco)
+            if motivo:
+                raise HTTPException(400, detail=erro(motivo, "a política de contas não permite esta escolha: " + novo.papel))
+            # ponytail: validar_celula roda dentro de escrever_papel — texto do cliente nunca chega
+            # ao arquivo nem ao recado sem passar por ali.
+            texto = orq_papeis.escrever_papel(texto, novo)
+            novos.append(novo)
+        mtime = await asyncio.to_thread(orq_md.gravar, orq_papeis.regras_path(gid), texto, mtime_lido)
+    except ValueError as e:
+        raise HTTPException(400, detail=erro("erro_orq_celula_invalida", str(e)))
+    except orq_md.Conflito:
+        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
+                                             "o contrato mudou desde a leitura — recarregue"))
+    arb = next((p for p in orq_papeis.ler(texto) if p.e_arbitro()), None)
+    infos = await asyncio.to_thread(registry.list)
+    # Time padrão não tem árbitro vivo pra avisar: uma sessão que por acaso case o nome não é dele.
+    arbitro = orq_papeis.casar_viva(arb, infos) if arb and gid != orq_papeis.GID_PADRAO else None
+    aviso, err = "sem_arbitro", None
+    if arbitro:
+        res = await _send_thread(_send_one, arbitro, _recado_arbitro(novos, gid))
+        if res["ok"]:
+            aviso = "enviado" if res.get("delivered") else "enfileirado"
+        else:
+            aviso, err = "falhou", res["error"]
+    return {"papeis": [asdict(p) for p in novos], "papel": asdict(novos[0]), "mtime": mtime,
+            "arbitro": arbitro, "aviso": aviso, "erro": err}
+
+
+@app.post("/api/sessions/{name}/orq/papel", dependencies=[Depends(require_auth)])
+async def orq_papel_set(name: str, body: PapelBody):
+    return await _aplicar_papeis(name, [PapelItem(**body.model_dump(exclude={"mtime"}))], body.mtime)
+
+
+@app.post("/api/sessions/{name}/orq/papeis", dependencies=[Depends(require_auth)])
+async def orq_papeis_set(name: str, body: PapeisBody):
+    return await _aplicar_papeis(name, body.papeis, body.mtime)
 
 
 @app.get("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])

@@ -129,7 +129,7 @@ Você **não** escolhe:
 
 | Não escolha | Onde está a resposta |
 |---|---|
-| Motor, modelo, conta de qualquer sessão do time | tabela "Quem é quem", no contrato — **e Task fora do plano não tem linha lá: pergunte** (abaixo) |
+| Motor, modelo, conta de qualquer sessão do time | tabela `## Quem é quem` das **regras** (`| papel | sessão | provider | conta | modelo | esforço |`) — **e Task fora do plano não tem linha lá: pergunte** (abaixo) |
 | Nome da sessão que você vai abrir | mesma tabela — o padrão do nome faz parte da definição |
 | Quem executa, quem revisa, quem só lê | mesma tabela |
 | Se uma Task pode começar | progresso do contrato + plano |
@@ -725,6 +725,36 @@ Medido em 16/08/2026: o árbitro foi trocado às 00:0x e a tabela estimado×real
 anterior. O bloco mais caro do trabalho, o total e a contagem de rodadas visuais ficaram **em
 branco** — a fase 5 teve de reconstruir tudo por `git log --format='%ad'`.
 
+## Sucessão do árbitro — passar o bastão sem perder o trabalho
+
+Vale quando VOCÊ sai: janela acima de metade, ou o usuário trocou a linha `árbitro` na tabela
+das regras (o recado "A configuração de modelos do grupo mudou no painel" chega com o papel
+`árbitro`). Nos dois casos o rito é o mesmo, e o registro (`grupo-<gid>.md`) já é a tua memória —
+a sucessão é fechá-lo bem e abrir quem vai lê-lo.
+
+1. **Termine a tarefa em curso** (o portão aberto fecha ou reprova; não deixe correção no meio).
+   Não despache Task nova.
+2. **Atualize o registro** com a foto do instante, em até 25 linhas numa seção
+   `## Passagem para o árbitro seguinte (<data hora>)`: Task atual e estado do portão; sessões
+   vivas por papel (nome, conta, modelo, esforço, contexto medido) e quais estão aposentadas;
+   HEAD e `git status` da branch; o que está no disco sem commit; pendências e o que falta do
+   plano; decisões do usuário das últimas horas que ainda não viraram regra; armadilhas já pagas.
+   Caminhos absolutos de: plano, `regras-<gid>.md`, `eventos.jsonl`, diretório durável.
+3. **Abra o sucessor** pela receita de sempre (criar pela API na configuração **nova** da linha
+   `árbitro`, provar modelo/esforço, kick-off em arquivo): a skill com papel árbitro, o caminho
+   do registro (ele lê a seção de passagem PRIMEIRO), das regras e do plano, e a ordem "assuma:
+   você é o árbitro a partir de agora".
+4. **Troque a linha `árbitro` da tabela** das regras pro nome da sessão nova (se o usuário já
+   trocou pelo painel, só o nome da sessão) e registre `sessao_trocada` no `eventos.jsonl`
+   (de, para, motivo).
+5. **Avise o time** (executor e revisor vivos, 1:1): "árbitro agora é `<nome>`; reportes vão pra
+   ele". Sem isso o revisor manda o veredito pra uma sessão morta.
+6. **Encerre-se**: uma linha no registro ("saí em <ctx>, sucessor `<nome>` assumiu") e pare de
+   mandar trabalho. Não mate a própria sessão — o usuário fecha quando quiser.
+
+Medido num trabalho real (25/08/2026): três árbitros na mesma execução; a passagem que funcionou foi a
+curta e apontando arquivos, a que falhou foi "leia o transcript do anterior".
+
 ## Autorização vinda de fora
 
 Ordem do usuário direto a uma sessão não-árbitra, contradizendo o que você mandou, precisa
@@ -792,9 +822,29 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 modelo dentro delas é de graça), quais estão travadas num modelo só e quais **cobram por token** —
 essas últimas são proibidas, porque a conta errada vira fatura do usuário, não erro de execução.
 
-Leia antes de abrir a primeira sessão e **copie pro contrato só o que este trabalho vai usar**, com
-papel, conta, modelo e nível. Não repasse o arquivo inteiro: sessão escolhe pelo que está no
-contrato.
+**Leia pela tabela, não pela prosa.** A seção `## O que pode` traz a tabela fixa
+`| conta | provider | apelido | modelos | trocar? |` — é ela que o modal Orquestração do hangar
+grava quando o usuário liga/desliga uma conta pela tela. **Conta que não está na tabela é
+proibida**, mesmo que um parágrafo mais abaixo pareça permitir: prosa envelhece, a tabela é o que
+o usuário mexeu por último. `modelos` = ids liberados naquela conta (`*` = qualquer);
+`trocar?` = `não` significa travada no único modelo da lista.
+
+Leia antes de abrir a primeira sessão e **copie pro contrato só o que este trabalho vai usar** —
+na tabela `## Quem é quem` das regras, uma linha por papel (formato em `planejamento.md`, fase 2).
+Não repasse o arquivo inteiro: sessão escolhe pelo que está no contrato.
+
+**Recado que começa com "A configuração de modelos do grupo mudou no painel"** vem do modal, não
+de uma sessão: o usuário trocou provider/conta/modelo/esforço de um papel pela tela, e a linha já
+está gravada no `regras-<gid>.md`. Regra, sem exceção: **releia o arquivo** e aplique assim
+(decisão do usuário, 26/08/2026):
+- sessão daquele papel **parada** (idle) → feche-a e abra outra já na configuração nova (o Claude
+  não troca conta nem modelo com a sessão aberta; trocar É fechar e abrir);
+- sessão **trabalhando** → deixe terminar a tarefa em curso; a próxima sessão daquele papel nasce
+  na configuração nova. Não mate trabalho em andamento — o contexto que ela construiu vale mais
+  que o modelo dela;
+- o papel é o **seu** (árbitro) → termine a tarefa em curso e passe o bastão a um árbitro novo,
+  aberto na configuração nova, pelo rito de "Sucessão do árbitro" (acima).
+Responda o recado só se ele pedir.
 
 O arquivo não existe, ou está velho? **Monte o inventário e pergunte** — a receita de levantamento
 está dentro dele (motores do `engines.json`, providers do catálogo do agente, config dirs de conta).
