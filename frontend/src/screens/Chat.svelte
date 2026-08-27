@@ -1872,6 +1872,7 @@
       onAskClose={closeAsk}
       onForward={(t) => (forwardText = t)}
       onOpenSession={onNavigateToChat}
+      onOpenOrq={() => (orqOpen = true)}
     />
   {/if}
 

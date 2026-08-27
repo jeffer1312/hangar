@@ -264,6 +264,18 @@ export function parsePeerMessage(text: string): { from: string; text: string; sc
   return { from: m[2].trim(), text: text.slice(m[0].length), scope: _SCOPES[m[1]] };
 }
 
+// Canal do recado: uma sessão que manda aviso de máquina abre o texto com "[vigia] ...", "[ALERTA]
+// ..." e afins — convenção de quem escreve a skill, não formato do servidor. Vira etiqueta ao lado
+// do remetente e sai do corpo, pra a primeira linha do recado ser a frase e não o rótulo. Só uma
+// palavra (letras/dígitos/-/_, até 16): "[de: x]" já saiu antes, e "[isso é um aparte]" no meio de
+// uma frase não vira etiqueta porque não abre o texto.
+const _CANAL_RE = /^\[([\p{L}\d_-]{1,16})\]\s*/u;
+export function parseCanal(text: string): { canal: string; text: string } | null {
+  const m = _CANAL_RE.exec(text);
+  if (!m) return null;
+  return { canal: m[1], text: text.slice(m[0].length) };
+}
+
 // Anexos de arquivo por CAMINHO citado na conversa (sua ou minha msg). v1 = só "preview-worthy"
 // (mídia + html + pdf); texto/código fora de proposito pra nao virar ruido (caminho de codigo
 // aparece toda hora na prosa). O backend so serve o que esta no transcript (consentido).

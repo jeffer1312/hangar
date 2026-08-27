@@ -16,6 +16,8 @@
   import ImageBubble from './ImageBubble.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import { parseImageMessage, parseFilePaths, parsePeerMessage } from '../lib/format';
+  import { lerRecadoOrq } from '../lib/orqRecado';
+  import OrqPainelCard from './OrqPainelCard.svelte';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
   import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim } from '../lib/window';
 
@@ -46,12 +48,14 @@
     onForward?: (text: string) => void;
     // Tap no chip "de: X" de recado peer -> abre o chat da sessao remetente. Ausente = chip estatico.
     onOpenSession?: (name: string) => void;
+    // Botao do cartao de orquestracao -> abre o modal de papeis. Ausente (Archive) = cartao sem acao.
+    onOpenOrq?: () => void;
   }
 
   let {
     events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onCancel,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds,
-    onForward, onOpenSession
+    onForward, onOpenSession, onOpenOrq
   }: Props = $props();
 
   let listEl: HTMLElement | undefined = $state();
@@ -317,6 +321,7 @@
         {@const imgFotos = img && img.filenames.length ? img : null}
         {@const peer = ev.text ? parsePeerMessage(ev.text) : null}
         {@const shownText = peer ? peer.text : ev.text ?? ''}
+        {@const orq = peer?.scope === 'panel' ? lerRecadoOrq(peer.text) : null}
         {#if ev.image_count}
           <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). Quando a
                msg veio do APP (tem "📎 imagem: <path>"), a legenda entra LIMPA e as fotos enviadas
@@ -346,6 +351,10 @@
           </div>
         {:else if imgFotos}
           <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
+        {:else if orq}
+          <!-- Recado do modal de orquestração: cartão em vez de doze linhas de prosa. O texto cru
+               continua no bloco fechado do cartão — o parse é leitura, não substituição. -->
+          <OrqPainelCard recado={orq} cru={shownText} ts={ev.ts} onAbrirPainel={onOpenOrq ?? null} />
         {:else}
           <UserBubble text={shownText} ts={ev.ts} animate={!histIds.has(ev.id)} from={peer?.from} scope={peer?.scope}
                       onForward={onForward ? () => onForward(shownText) : null}
