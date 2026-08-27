@@ -309,11 +309,24 @@ _COMPOSER_ALTURA = 15
 
 
 def _sem_espaco(s: str) -> str:
-    # Tambem as BORDAS VERTICAIS da caixa: o composer do Kimi e uma caixa (╭─╮ │ │ ╰─╯), entao cada
-    # linha do wrap chega ladeada por `│`. So tirar espaco deixava `…naotinhasido││reinstalado`, a
-    # cauda procurada nunca casava e TODO envio que quebrava linha virava "envio incompleto" com o
-    # texto parado no composer (medido 27/08/2026 na sessao pm-nova). Sai dos DOIS lados da
-    # comparacao, entao texto do usuario com `│` continua casando consigo mesmo.
+    return re.sub(r"\s+", "", s)
+
+
+def _sem_borda(s: str) -> str:
+    """`_sem_espaco` + as BORDAS VERTICAIS da caixa do composer.
+
+    O composer do Kimi e uma caixa (╭─╮ │ │ ╰─╯), entao cada linha do wrap chega ladeada por `│`. So
+    tirar espaco deixava `…naotinhasido││reinstalado`, a cauda procurada nunca casava e TODO envio
+    que quebrava linha virava "envio incompleto" com o texto parado no composer (medido 27/08/2026
+    na sessao pm-nova). Sai dos DOIS lados da comparacao, entao texto do usuario com `│` continua
+    casando consigo mesmo.
+
+    Separada de `_sem_espaco` de proposito, e nao um remendo nela: quem le rascunho
+    (`_composer_ocupado_pi`) pergunta "sobrou ALGUMA COISA na caixa?", e ali apagar `│` faria uma
+    tabela colada pelo usuario virar caixa vazia — o app digitaria por cima do rascunho dele, que e
+    exatamente o que aquele guarda existe pra impedir. Aqui a pergunta e outra: "este trecho MEU
+    esta ai?", e a borda so atrapalha.
+    """
     return re.sub(r"[\s│┃║]+", "", s)
 
 
@@ -391,8 +404,8 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
     # usuario estiver digitando ao vivo no composer, e o preco de um falso positivo e o remetente
     # reenviar em cima do residuo (ou pior, o Enter submeter rascunho alheio). Sem NENHUM trecho longo
     # o bastante, degrada pro comportamento de hoje.
-    cauda_curta = len(_sem_espaco(cauda)) < _RESIDUO_MIN
-    inicio_curto = len(_sem_espaco(inicio)) < _RESIDUO_MIN
+    cauda_curta = len(_sem_borda(cauda)) < _RESIDUO_MIN
+    inicio_curto = len(_sem_borda(inicio)) < _RESIDUO_MIN
     if cauda_curta and inicio_curto:
         return None      # nem cauda nem comeco provam algo — nao e "nao esta"
     # Regiao do composer = entre as DUAS ULTIMAS reguas (ver _composer_regiao; as travas contra
@@ -413,10 +426,10 @@ def _composer_residuo(pane: str, texto: str, nome_sessao: str = "",
     # Compara SEM espaco em branco: o wrap de exibicao quebra a linha no meio da cauda/comeco (recado
     # longo de um paragrafo so passa de 200 colunas e quebra), e ai um `trecho in composer` cru falhava
     # justamente na classe de mensagem que motivou o conserto.
-    composer_sem_espaco = _sem_espaco(composer)
-    if not cauda_curta and _sem_espaco(cauda) in composer_sem_espaco:
+    composer_sem_borda = _sem_borda(composer)
+    if not cauda_curta and _sem_borda(cauda) in composer_sem_borda:
         return True
-    if not inicio_curto and _sem_espaco(inicio) in composer_sem_espaco:
+    if not inicio_curto and _sem_borda(inicio) in composer_sem_borda:
         return True
     return False
 
