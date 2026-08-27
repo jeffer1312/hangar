@@ -21,6 +21,8 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   import NovaCredencialSheet from './NovaCredencialSheet.svelte';
   import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import { serverIdentidade, type Server } from '../../lib/auth';
+  import { createQuery } from '@tanstack/svelte-query';
+  import { clienteQuery, credenciais } from '../../lib/queries';
   import * as m from '../../paraglide/messages';
 
   // Contrato do apiTarget (o mesmo de ServidoresSettings): null = servidor ATIVO (API global com
@@ -32,9 +34,13 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   }
   let { apiTarget }: Props = $props();
 
-  let contas = $state<Credencial[]>([]);
-  let carregando = $state(true);
-  let erro = $state('');
+  // A lista vem do cache compartilhado: reabrir Contas entrega o que já estava lá e revalida por
+  // baixo, em vez de esvaziar a tela e esperar a leitura das cotas (medida em ~2,5s com o cache do
+  // backend frio).
+  const qContas = createQuery(() => credenciais(apiTarget), () => clienteQuery);
+  const contas = $derived(qContas.data ?? []);
+  const carregando = $derived(qContas.isPending);
+  const erro = $derived(qContas.error ? ((qContas.error as Error).message || String(qContas.error)) : '');
 
   // Criar: um botão só ("+ Nova conta") e a escolha do TIPO acontece depois do clique — pedido
   // do usuário: "eu seleciono qual vou criar na hora". Dois botões lado a lado obrigavam a
@@ -69,28 +75,21 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   // de 30 s faz o texto envelhecer sozinho. O intervalo morre no onDestroy junto com o poll
   // do login — nada fica rodando depois que a aba desmonta.
   let atualizando = $state(false);
-  let atualizadoEm = $state<number | null>(null);
+  // Quando o dado da chave atual foi lido — vem da própria query, não de um state à parte: assim o
+  // "atualizado há X" pertence ao alvo, e trocar de máquina já mostra o carimbo daquela, sem reset
+  // manual. 0 = ainda não há dado.
+  const atualizadoEm = $derived(qContas.dataUpdatedAt || null);
   let agora = $state(Date.now());
   const relogio = setInterval(() => { agora = Date.now(); }, 30_000);
   const idadeAtualizacao = $derived(
     atualizadoEm == null ? '' : formatarIntervalo(Math.max(0, (agora - atualizadoEm) / 1000)),
   );
 
-  async function carregar(meu: number) {
-    carregando = true;
-    erro = '';
-    try {
-      const lista = await listarCredenciais(apiTarget);
-      if (meu !== geracao) return;
-      contas = lista;
-      atualizadoEm = Date.now();
-      agora = atualizadoEm;
-    } catch (e) {
-      if (meu !== geracao) return;
-      erro = e instanceof Error && e.message ? e.message : String(e);
-    } finally {
-      if (meu === geracao) carregando = false;
-    }
+  // Assinatura preservada: as mutações (apelido, cookie, criar, apagar, login) seguem chamando
+  // `carregar(geracao)`. O guard de geração saiu porque a chave da query já isola o alvo — uma
+  // resposta do servidor anterior não tem onde escrever na tela do novo.
+  function carregar(_meu?: number) {
+    void qContas.refetch();
   }
 
   // Ao contrário de carregar(), NÃO liga `carregando`: a lista fica na tela durante a busca
@@ -103,15 +102,17 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     // invalida qualquer carga em voo (ex.: o carregar de um rename) pra um snapshot velho não
     // sobrescrever a resposta do botão (achado da revisão).
     const meu = ++geracao;
+    const alvo = apiTarget;
     atualizando = true;
     aviso = '';
     avisoErro = false;
     try {
-      const lista = await listarCredenciais(apiTarget, true);
+      const lista = await listarCredenciais(alvo, true);
       if (meu !== geracao) return;
-      contas = lista;
-      atualizadoEm = Date.now();
-      agora = atualizadoEm;
+      // Escreve no cache em vez de num state: a leitura forçada é a mais nova que existe, e quem
+      // reabrir a aba depois tem de ver ELA, não a de antes do botão.
+      clienteQuery.setQueryData(credenciais(alvo).queryKey, lista);
+      agora = Date.now();
     } catch (e) {
       if (meu !== geracao) return;
       aviso = e instanceof Error && e.message ? e.message : String(e);
@@ -132,6 +133,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
   // na aba — comparar o objeto matava um login em voo com o servidor sendo o MESMO (R1 do parecer;
   // mesmo contrato do SettingsModal.svelte:23-26).
   let identidadeAnterior: string | null = null;
+  let primeiraIdentidade = true;
 
   $effect(() => {
     const identidade = serverIdentidade(apiTarget);
@@ -155,7 +157,7 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     pararPoll();
     loginDe = null; loginCodigo = ''; loginPasso = { etapa: 'idle' };
     loginErro = ''; loginEnviando = false; loginIniciando = false; loginParado = false;
-    erro = ''; aviso = ''; avisoErro = false;
+    aviso = ''; avisoErro = false;
     confirmando = null; menuDe = null;
     renomeando = null; apelidoTexto = ''; salvandoApelido = false;
     cookieDe = null; cookieWs = ''; cookieValor = ''; salvandoCookie = false;
@@ -163,9 +165,15 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
     criando = false; apagando = false;
     // Refresh em voo pertence ao alvo que saiu: o finally de atualizar() só limpa o flag se a
     // geração for a mesma, então sem este reset o botão ficava desabilitado PRA SEMPRE no alvo
-    // novo (achado da revisão). O carimbo "atualizado há" também zera — ele era da outra máquina.
-    atualizando = false; atualizadoEm = null;
-    void carregar(meu);
+    // novo (achado da revisão). O carimbo "atualizado há" não precisa mais de reset: ele sai da
+    // query, que é por alvo.
+    atualizando = false;
+    // Na MONTAGEM não força nada: quem decide buscar é o cache (staleTime), senão reabrir a aba
+    // pagava um GET mesmo com o dado fresco na mão — o spinner some, o pedido não. O refetch fica
+    // pro que este efeito também cobre: mesmo servidor com TOKEN novo (credencial consertada),
+    // que cai na mesma chave e portanto não seria rebuscado sozinho.
+    if (!primeiraIdentidade) carregar(meu);
+    primeiraIdentidade = false;
   });
 
   // O backend relê a cota a cada 5 min, então "velha" aqui é o mesmo corte da faixa do rodapé

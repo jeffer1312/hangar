@@ -20,6 +20,7 @@
   import ForwardSheet from '../components/ForwardSheet.svelte';
   import PairSheet from '../components/PairSheet.svelte';
   import OrquestracaoSheet from '../components/OrquestracaoSheet.svelte';
+  import { prefetchOrq } from '../lib/queries';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
   // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
@@ -413,6 +414,10 @@
   // Pareamento ("trabalhando juntas"): sheet + par atual derivado da lista já carregada.
   let pairOpen = $state(false);
   let orqOpen = $state(false);
+  // Aquece o painel de Orquestração ao ENTRAR na sessão: o GET da política lê o disco e já foi
+  // medido em ~3s frio, então buscá-lo no toque do botão é o que fazia o painel abrir em spinner.
+  // Mesmo padrão do prefetch de modelos no Composer.
+  $effect(() => { prefetchOrq(sessionName); });
   // Membro do grupo aberto no modal (null = fechado). É string, não lista, de propósito: um modal
   // por vez mantém o teto em 2 SSE (este chat + o do par) e o navegador corta em ~6 por host.
   let peerChat = $state<string | null>(null);

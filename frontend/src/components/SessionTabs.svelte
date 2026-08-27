@@ -10,6 +10,7 @@ import * as m from '../paraglide/messages';
   import { planBadge } from '../lib/plan';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { sidebarBridge } from '../lib/sidebarBridge';
+  import { prefetchContas } from '../lib/queries';
   import { ctxPanel, alternarCtxPanel } from '../lib/ctxPanel.svelte';
   import { navMode } from '../lib/navMode.svelte';
   import { getActiveId, serverColor } from '../lib/auth';
@@ -214,7 +215,7 @@ import * as m from '../paraglide/messages';
        enfeite, é a única coisa na tela que diz EM QUAL SERVIDOR você está, na mesma cor que agrupa
        as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da
        informação sem ninguém notar. -->
-  <button class="tab-action tab-config" onclick={onOpenConfig}
+  <button class="tab-action tab-config" onclick={onOpenConfig} onmouseenter={() => prefetchContas(null)}
     aria-label={m.tabs_config_servidor({ n: servidorAtivo?.label ?? m.tabs_servidor() })}
     title={m.tabs_config_servidor({ n: servidorAtivo?.label ?? m.tabs_servidor() })}>
     ⚙

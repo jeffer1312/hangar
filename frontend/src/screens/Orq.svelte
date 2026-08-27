@@ -2,7 +2,8 @@
   import { untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import { listServers, onServersChanged, type Server } from '../lib/auth';
-  import { getOrqForServer, getOrqDetalheForServer } from '../lib/api';
+  import { getOrqForServer } from '../lib/api';
+  import { clienteQuery, orqDetalhe } from '../lib/queries';
   import type { OrqExecucao, OrqFicha } from '../lib/types';
   import { duracaoLegivel } from '../lib/orq';
   import Spinner from '../components/Spinner.svelte';
@@ -100,7 +101,7 @@
     let vivo = true;
     (async () => {
       try {
-        const completo = await getOrqDetalheForServer(alvo.servidor, alvo.exec.id);
+        const completo = await clienteQuery.fetchQuery(orqDetalhe(alvo.servidor, alvo.exec.id, false));
         if (vivo) vivaComEventos = { exec: completo, servidor: alvo.servidor };
       } catch (e) {
         // Sem o detalhe a faixa simplesmente não aparece — a lista abaixo continua inteira. Mas
@@ -125,7 +126,8 @@
     erroDetalhe = '';
     tasksAbertas = new Set();
     try {
-      const d = await getOrqDetalheForServer(linha.servidor, linha.exec.id);
+      // Execução terminada não muda mais: reabrir a mesma linha serve do cache, sem novo GET.
+      const d = await clienteQuery.fetchQuery(orqDetalhe(linha.servidor, linha.exec.id, !!linha.exec.fim));
       // Guarda de identidade, mesma razão do `geracao` em `carregar`: tocar em A e depois em B
       // antes de A responder desenhava a linha do tempo de A sob o cabeçalho de B — execução
       // errada na tela, sem nenhum sinal de que estava errada.

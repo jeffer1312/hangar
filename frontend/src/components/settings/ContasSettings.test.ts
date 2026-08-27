@@ -17,6 +17,7 @@ import { mensagemDeErro } from '../../lib/errosApi';
 import * as credLib from '../../lib/credenciais';
 import type { Credencial } from '../../lib/credenciais';
 import type { Server } from '../../lib/auth';
+import { clienteQuery } from '../../lib/queries';
 
 vi.mock('../../lib/credenciais', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../lib/credenciais')>();
@@ -87,7 +88,10 @@ function montar(contas: Credencial[], alvo: Server | null = ALVO) {
   return { el, comp: comp as never };
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+// O cache das queries é um singleton de módulo e sobrevive à desmontagem — de propósito, é o que
+// faz reabrir a tela ser instantâneo. Num teste isso vaza: sem limpar, o caso seguinte monta e
+// recebe a lista do ANTERIOR em vez de chamar o mock dele.
+beforeEach(() => { vi.clearAllMocks(); clienteQuery.clear(); });
 
 describe('ContasSettings — a lista', () => {
   it('mostra conta com em uso e e-mail (a frase do plano ficou de fora por decisão do árbitro — Task de ajuste serial quando o Lote A mergear)', async () => {

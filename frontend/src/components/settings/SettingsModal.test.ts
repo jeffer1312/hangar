@@ -9,6 +9,7 @@ import * as auth from '../../lib/auth';
 import * as m from '../../paraglide/messages';
 import type { Server } from '../../lib/auth';
 import type { TelaConfig } from '../../lib/configRoute';
+import { clienteQuery } from '../../lib/queries';
 
 vi.mock('../../lib/api', () => ({
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
@@ -57,7 +58,10 @@ const apiMock = vi.mocked(api);
 const authMock = vi.mocked(auth);
 const SRV = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'x' };
 
-beforeEach(() => { vi.clearAllMocks(); });   // contagens de chamada não vazam entre testes
+// Limpa também o cache das queries: ele é um singleton de módulo que sobrevive à desmontagem (é o
+// que faz reabrir uma aba ser instantâneo), então sem isto o caso seguinte monta e é servido pelo
+// dado do anterior em vez de chamar o próprio mock.
+beforeEach(() => { vi.clearAllMocks(); clienteQuery.clear(); });   // contagens de chamada não vazam entre testes
 
 // Os stubs de matchMedia são globais (desktop/mobile por teste); sem restaurar, o último stub
 // vazaria pra qualquer describe futuro adicionado depois (achado da revisão).

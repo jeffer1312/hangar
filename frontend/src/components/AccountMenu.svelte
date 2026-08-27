@@ -3,6 +3,7 @@
   import { pushSupported } from '../lib/push';
   import { getActiveId } from '../lib/auth';
   import { abrirConfig } from '../lib/configNav';
+  import { prefetchContas } from '../lib/queries';
   import ServerManager from './ServerManager.svelte';
   import PushQuiet from './PushQuiet.svelte';
   import type { Server } from '../lib/auth';
@@ -118,6 +119,7 @@
     <!-- Os três itens próprios seguem a MESMA regra dos componentes extraídos (round 7): menuitem
          só no POPOVER (que tem role="menu"); o drawer embedded é div comum — papel inválido lá. -->
     <button class="am-item" role={embedded ? undefined : 'menuitem'}
+            onmouseenter={() => prefetchContas(null)}
             onclick={() => {
               const alvo = embedded ? (activeServer?.id ?? null) : getActiveId();
               onClose?.();

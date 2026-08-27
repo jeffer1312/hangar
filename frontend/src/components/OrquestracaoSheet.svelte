@@ -10,7 +10,9 @@
   import OrquestracaoContas from './OrquestracaoContas.svelte';
   import { providerName } from '../lib/format';
   import { untrack } from 'svelte';
-  import { getOrqGrupo, getOrqPolitica, postOrqPapeis } from '../lib/api';
+  import { createQuery } from '@tanstack/svelte-query';
+  import { postOrqPapeis } from '../lib/api';
+  import { clienteQuery, orqGrupo, orqPolitica } from '../lib/queries';
   import { quotaFeed } from '../lib/quotaFeed.svelte';
   import {
     casarViva, contasLiberadas, estadoDoPapel, modelosLiberados, politicaDe,
@@ -44,9 +46,17 @@
   });
 
   let aba = $state<Aba>('papeis');
-  let grupo = $state<OrqGrupo | null>(null);
-  let politica = $state<OrqPolitica | null>(null);
-  let carregando = $state(false);
+  // As duas leituras vêm do cache compartilhado (lib/queries.ts): reabrir o painel entrega o dado
+  // que já estava lá e revalida por baixo, em vez de esvaziar a tela e buscar do zero. `enabled`
+  // porque o componente fica montado no Chat mesmo fechado — sem ele, buscaria sem ninguém olhando.
+  const qPolitica = createQuery(() => ({ ...orqPolitica(), enabled: open }), () => clienteQuery);
+  const qGrupo = createQuery(() => ({ ...orqGrupo(sessionName), enabled: open }), () => clienteQuery);
+  const grupo = $derived(qGrupo.data ?? null);
+  const politica = $derived(qPolitica.data ?? null);
+  const carregando = $derived(qPolitica.isPending || qGrupo.isPending);
+  const erroCarga = $derived(
+    (qPolitica.error ?? qGrupo.error) ? ((qPolitica.error ?? qGrupo.error) as Error).message : '',
+  );
   let erro = $state('');
   let conflito = $state(false);
   let salvando = $state(false);
@@ -97,23 +107,15 @@
     aba = abaInicial;
     sel = null; aviso = ''; erro = ''; conflito = false;
     quotaFeed.retain();
-    void carregar();
     return () => quotaFeed.release();
   });
 
-  async function carregar() {
-    carregando = true; erro = ''; conflito = false;
-    try {
-      const [p, g] = await Promise.all([
-        getOrqPolitica(),
-        getOrqGrupo(sessionName),
-      ]);
-      politica = p; grupo = g;
-    } catch (e) {
-      erro = (e as Error).message;
-    } finally {
-      carregando = false;
-    }
+  // Recarregar do zero (botão do conflito de mtime): ignora o staleTime de propósito — o arquivo
+  // mudou no disco, o cache está errado por definição.
+  function carregar() {
+    erro = ''; conflito = false;
+    void qPolitica.refetch();
+    void qGrupo.refetch();
   }
 
   // Edições pendentes por papel (chave = nome do papel no contrato, ou 'novo'). Trocar de card
@@ -173,7 +175,10 @@
         if (i >= 0) lista[i] = { ...lista[i], ...novo }; else lista.push(novo);
         ultimo = i >= 0 ? i : lista.length - 1;
       }
-      grupo = { ...grupo, mtime: r.mtime, papeis: lista, arbitro: r.arbitro };
+      // Escreve no cache, não num state local: o painel reabre com o que foi salvo, sem esperar
+      // uma releitura do disco que já sabemos como terminaria.
+      clienteQuery.setQueryData(orqGrupo(sessionName).queryKey,
+        { ...grupo, mtime: r.mtime, papeis: lista, arbitro: r.arbitro });
       rascunhos = {};
       sel = typeof ultimo === 'number' ? ultimo : sel;
       const arb = r.arbitro ?? '';
@@ -241,6 +246,12 @@
     <button type="button" class="os-item os-item--novo" class:sel={sel === 'novo'} onclick={() => escolher('novo')}>
       <span class="os-item-body"><span class="os-nome">+ {m.orqcfg_novo_papel()}{#if rascunhos.novo} <span class="os-chip os-chip--edit">{m.orqcfg_editado()}</span>{/if}</span></span>
     </button>
+  {:else if erroCarga}
+    <!-- Falha na leitura: sem este ramo o painel ficava VAZIO — nem esqueleto (carregando já é
+         falso) nem lista (grupo é null) —, e a mensagem só existia dentro do formulário de um
+         papel, que ninguém consegue escolher justamente porque a lista não veio. -->
+    <p class="os-erro" role="alert">{erroCarga}</p>
+    <button type="button" class="os-link" onclick={carregar}>{m.orqcfg_recarregar()}</button>
   {/if}
 {/snippet}
 
@@ -335,7 +346,7 @@
     <div class="os-acao">
       {#if conflito}
         <p class="os-erro" role="alert">{m.orqcfg_arquivo_mudou()} <button type="button" class="os-link" onclick={carregar}>{m.orqcfg_recarregar()}</button></p>
-      {:else if erro}<p class="os-erro" role="alert">{erro}</p>
+      {:else if erro || erroCarga}<p class="os-erro" role="alert">{erro || erroCarga}</p>
       {:else if aviso}<p class="os-ok" class:os-ok--ruim={avisoRuim} role="status">{aviso}</p>{/if}
       <button type="button" class="os-primary" onclick={salvar} disabled={salvando || conflito || nRascunhos === 0}>
         {salvando ? m.orqcfg_salvando() : nRascunhos > 1 ? m.orqcfg_salvar_n({ n: nRascunhos }) : m.orqcfg_salvar_avisar()}
@@ -351,7 +362,7 @@
       <h2 class="sheet-title">{m.orqcfg_titulo()}</h2>
       {@render abas()}
       <div class="os-corpo">
-        <OrquestracaoContas desktop={isDesktop} {papeis} onSalvo={(p) => (politica = p)} />
+        <OrquestracaoContas desktop={isDesktop} {papeis} onSalvo={(p) => clienteQuery.setQueryData(orqPolitica().queryKey, p)} />
       </div>
     </div>
   {:else if isDesktop}
