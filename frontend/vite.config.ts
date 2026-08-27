@@ -168,12 +168,17 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       strategies: 'injectManifest',
+      // srcDir + filename bastam: o plugin resolve `<root>/src/sw.ts` e `<root>/dist/sw.js`
+      // ABSOLUTOS a partir daí (options.ts, resolveSwPaths). Não repita esses dois caminhos em
+      // `injectManifest` — eles sobrescrevem os do plugin, e ali um caminho RELATIVO é resolvido
+      // contra o diretório de onde o build foi chamado, não contra a raiz do front. É o `swDest`
+      // que o workbox usa como ORIGEM da leitura (vite-plugin-pwa/dist/vite-build.js: `swSrc:
+      // options.injectManifest.swDest`), então com o caminho errado ele lê outro arquivo — ou um
+      // resto de build antigo, já sem o marcador — e o build morre com "Unable to find a place to
+      // inject the manifest ... swSrc and swDest are configured to the same file" (27/08/2026,
+      // numa máquina com o mesmo commit e as mesmas versões em que aqui buildava limpo).
       srcDir: 'src',
       filename: 'sw.ts',
-      injectManifest: {
-        swSrc: 'src/sw.ts',
-        swDest: 'dist/sw.js',
-      },
       manifest: {
         name: 'Hangar',
         short_name: 'Hangar',
