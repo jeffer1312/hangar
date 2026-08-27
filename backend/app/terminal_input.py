@@ -309,7 +309,12 @@ _COMPOSER_ALTURA = 15
 
 
 def _sem_espaco(s: str) -> str:
-    return re.sub(r"\s+", "", s)
+    # Tambem as BORDAS VERTICAIS da caixa: o composer do Kimi e uma caixa (╭─╮ │ │ ╰─╯), entao cada
+    # linha do wrap chega ladeada por `│`. So tirar espaco deixava `…naotinhasido││reinstalado`, a
+    # cauda procurada nunca casava e TODO envio que quebrava linha virava "envio incompleto" com o
+    # texto parado no composer (medido 27/08/2026 na sessao pm-nova). Sai dos DOIS lados da
+    # comparacao, entao texto do usuario com `│` continua casando consigo mesmo.
+    return re.sub(r"[\s│┃║]+", "", s)
 
 
 # Numeros dos placeholders de paste numa regiao do pane. A IDENTIDADE importa: aceitar qualquer

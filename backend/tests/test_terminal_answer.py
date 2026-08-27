@@ -401,6 +401,21 @@ def test_composer_residuo_ignora_digitacao_do_usuario():
                                 "linha um\nlinha final do recado") is False
 
 
+def test_composer_residuo_atravessa_a_borda_da_caixa_do_kimi():
+    # O composer do Kimi e uma caixa: cada linha do wrap chega entre `│`. Tirar so o espaco deixava
+    # `…naotinhasido││reinstalado` e a cauda nunca casava — o Enter nao era enviado e o envio virava
+    # 400 "envio incompleto" com o texto parado no terminal (sessao pm-nova, 27/08/2026).
+    texto = "abre outra, eu precisei fechar, era o wrapper que nao tinha sido reinstalado"
+    caixa = ("  eco da conversa aqui\n"
+             "╭" + "─" * 41 + "╮\n"
+             "│ > abre outra, eu precisei fechar,       │\n"
+             "│   era o wrapper que nao tinha sido      │\n"
+             "│   reinstalado                           │\n"
+             "╰" + "─" * 41 + "╯\n"
+             "  🤖 K3 │ 📁 pm-nova\n")
+    assert ti._composer_residuo(caixa, texto) is True
+
+
 def test_composer_residuo_pane_ilegivel_devolve_none_nao_false():
     # None e nao False: "nao sei ler" tem de cair pra lados OPOSTOS nos dois chamadores. Como False,
     # o _entrou_no_composer lia "nao chegou" e nunca mandava Enter.
