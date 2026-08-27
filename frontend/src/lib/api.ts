@@ -437,6 +437,49 @@ export function createSession(
   });
 }
 
+// ── Passagem de bastão ──────────────────────────────────────────────────────
+// O dossiê de continuidade que o backend monta lendo o transcript/git/plano da sessão. Volta como
+// `text/markdown` cru, e não JSON — por isso NÃO passa pelo apiFetch, que sempre faz `res.json()`.
+// Só leitura: o GET não cria nem grava nada, então serve de AMOSTRA (a origem segue trabalhando).
+export async function getBastao(name: string): Promise<string> {
+  const res = await fetch(`${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/bastao`, {
+    headers: authHeaders(),
+  });
+  await ensureOk(res);
+  return res.text();
+}
+
+// Resposta INTEIRA da rota, não só o que a tela lê hoje (`name`, pra navegar). Declarar meia
+// resposta é o convite pro próximo `as any` quando alguém precisar do `dossie` — e os quatro
+// campos são o contrato do endpoint, não campos inventados por precaução.
+export interface BastaoResult {
+  name: string;      // nome da sessão criada (já sanitizado pelo backend)
+  dossie: string;    // caminho do .md gravado no disco DAQUELA máquina
+  texto: string;     // o dossiê que foi realmente gravado (o da prévia era outro, mais velho)
+  kickoff: string;   // as linhas que entraram na fila durável da sessão nova
+}
+
+// Cria a sessão sucessora COM o dossiê: o backend monta → grava → cria → enfileira o kick-off.
+// Não é o POST /api/sessions normal; mandar aquele deixaria a sessão nova sem dossiê nenhum.
+export function passarBastao(
+  name: string,
+  body: {
+    name: string;
+    cwd?: string | null;
+    config_dir?: string | null;
+    provider?: Provider;
+    engine?: string | null;
+    model?: string | null;
+    effort?: string | null;
+    permission_mode?: string | null;
+  },
+): Promise<BastaoResult> {
+  return apiFetch<BastaoResult>(`/api/sessions/${encodeURIComponent(name)}/bastao`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
 // Modelo oferecido na tela de ABERTURA (GET /api/model-options). O backend devolve QUATRO formatos
 // do campo `models` conforme o ramo (pi, motor, cache do Claude, aliases reduzidos) — os campos são
 // todos opcionais porque nenhum formato tem todos; quem renderiza usa `m.name ?? m.id` e só mostra

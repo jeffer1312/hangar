@@ -6,7 +6,7 @@
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import IconFolder from './icons/IconFolder.svelte';
   import { getSessions, listClaudeConfigs, getEngines, getProviders, criarConta, apagarConta,
-           getArchivePorCwd, resumeArchivedConversation, getArchiveHistory,
+           getArchivePorCwd, resumeArchivedConversation, getArchiveHistory, getBastao, passarBastao,
            type ModelOption, type Motor, type ArchiveEntry } from '../lib/api';
   import { carregarModelos as carregarModelosDaConta, temEscolhaDeModelo, valorModelo } from '../lib/modelosPorConta';
   import { basename, providerName, relativeTime } from '../lib/format';
@@ -26,8 +26,13 @@
                engine?: string | null, model?: string | null, effort?: string | null,
                permissionMode?: string | null) => Promise<void>;
     onOpenSession: (name: string) => void;
+    /** Passagem de bastão: a MESMA folha, aberta pra criar a sessão que CONTINUA `bastao.name`.
+     *  Não-nulo = modo bastão — servidor travado no da origem, cwd/nome pré-preenchidos, e o
+     *  botão chama `POST /api/sessions/{origem}/bastao` (que grava o dossiê e enfileira o
+     *  kick-off) em vez do create normal. */
+    bastao?: { name: string; cwd: string; serverId: string } | null;
   }
-  let { open, servers, onClose, onCreate, onOpenSession }: Props = $props();
+  let { open, servers, onClose, onCreate, onOpenSession, bastao = null }: Props = $props();
 
   // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi ou
   // Kimi (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor fora do
@@ -61,13 +66,35 @@
   let loading = $state(false);
   let error = $state('');
 
+  // A MESMA regra do backend (`app/names.py:sanitize_session_name`): NFKD, descarta o acento,
+  // troca o resto por `-` e apara as pontas. O NFKD vem ANTES do filtro pelo motivo escrito lá —
+  // sem ele a letra acentuada vira `-` e o aparo do fim a come junto ("Área" -> "rea").
+  // Sanitizar aqui não é cosmético: é o nome que a checagem de colisão compara. Comparar o cru
+  // (`api.v2b`) contra uma lista de nomes já sanitizados deixa passar uma colisão com o
+  // `api-v2b` que existe — e o erro só apareceria lá no create.
+  function sanitizar(nome: string): string {
+    return nome.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+  }
+
   // Nome unico p/ tmux: sanitiza (igual ao backend) e, se ja existir, sufixa -2/-3...
   function uniqueName(base: string, taken: Set<string>): string {
-    const clean = base.replace(/[^A-Za-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'sessao';
+    const clean = sanitizar(base) || 'sessao';
     if (!taken.has(clean)) return clean;
     let i = 2;
     while (taken.has(`${clean}-${i}`)) i++;
     return `${clean}-${i}`;
+  }
+
+  // Nome do sucessor: pm18368-t24 -> pm18368-t24b, e a proxima letra livre se aquela ja existir.
+  // Sufixo de LETRA e nao `-2` de proposito: `-2` e o desempate de nome do fluxo normal (duas
+  // sessoes na mesma pasta), e ler `foo-2` como "quem continua foo" seria adivinhacao.
+  function nomeSucessor(origem: string, taken: Set<string>): string {
+    const base = sanitizar(origem);
+    if (!base) return uniqueName('sessao', taken);
+    for (const c of 'bcdefghijklmnopqrstuvwxyz') {
+      if (!taken.has(base + c)) return base + c;
+    }
+    return uniqueName(`${base}b`, taken);
   }
 
   // Config dirs do Claude (ex: ~/.claude, ~/.claude-work). Picker so aparece quando ha mais de um.
@@ -366,6 +393,57 @@
   // (lib/pastaNativa.svelte), que "Pastas mapeadas" tambem usa: era daqui que ele saiu.
   const nativo = criarSeletorNativo();
 
+  // ── Modo bastão ────────────────────────────────────────────────────────────
+  // Título/servidor/ação mudam; o resto do formulário (provider, conta, motor, modelo, esforço,
+  // permissão) é o mesmo — é a mesma criação, com um dossiê junto.
+  const titulo = $derived(bastao ? m.bastao_titulo() : m.sessao_nova());
+  // Derivados da ORIGEM, nunca de `targetServer`: o rótulo é o que a frase "o dossiê está no disco
+  // de X" afirma, e `targetServer` é só o que está selecionado. Se a origem sumisse da lista, a
+  // seleção cairia noutra máquina e a frase nomearia, com toda a confiança, a máquina errada.
+  const servidorDaOrigem = $derived(bastao ? servers.find((s) => s.id === bastao.serverId) ?? null : null);
+  const rotuloServidor = $derived(servidorDaOrigem?.label ?? '');
+  // Servidor da origem fora da lista (removido, ou a folha aberta com um id que não existe mais):
+  // NÃO dá pra passar o bastão — o dossiê é arquivo no disco dele. A folha diz isso e o botão
+  // trava; deixar seguir criaria uma sessão sem dossiê nenhum, calada.
+  const bastaoSemServidor = $derived(bastao !== null && servidorDaOrigem === null);
+
+  // Prévia do dossiê: recolhida, e só busca quando alguém abre (o GET monta o texto lendo git +
+  // transcript, não é de graça). É AMOSTRA: entre esta leitura e o POST a origem continua
+  // trabalhando, então quem vale é o texto que o POST devolve.
+  let previaBastaoAberta = $state(false);
+  let previaBastaoTexto = $state('');
+  // Sinal de "já busquei", separado do texto: um dossiê VAZIO é resposta, e usar o texto como
+  // cache faria cada abrir/fechar disparar o GET de novo justo no caso em que ele não traz nada.
+  let previaBastaoCarregada = $state(false);
+  let previaBastaoCarregando = $state(false);
+  let previaBastaoErro = $state(false);
+  let bastaoSeq = 0;
+  function alternarPreviaBastao() {
+    previaBastaoAberta = !previaBastaoAberta;
+    const b = bastao;
+    if (!previaBastaoAberta || !b || previaBastaoCarregada || previaBastaoCarregando) return;
+    const seq = ++bastaoSeq;
+    previaBastaoCarregando = true;
+    previaBastaoErro = false;
+    getBastao(b.name)
+      .then((t) => { if (seq === bastaoSeq) { previaBastaoTexto = t; previaBastaoCarregada = true; } })
+      .catch((e) => {
+        // Falha aqui NÃO pode virar caixa vazia: "não consegui ler" e "o dossiê está vazio" são
+        // coisas diferentes, e a segunda faria a pessoa desistir da passagem por engano.
+        console.error('baton dossier preview failed', e);
+        if (seq === bastaoSeq) previaBastaoErro = true;
+      })
+      .finally(() => { if (seq === bastaoSeq) previaBastaoCarregando = false; });
+  }
+
+  // Pré-preenche a folha com a origem: mesma pasta (o trabalho continua na mesma árvore) e nome
+  // derivado. Quem nomeia é o `handlePick` — ele já sabe do modo bastão e já tem a lista de nomes
+  // ocupados. Sem cwd conhecido a folha cai no passo da pasta, e o nome sai quando ela for escolhida.
+  function prefillBastao(b: { name: string; cwd: string }) {
+    if (b.cwd) void handlePick(b.cwd);
+    else name = nomeSucessor(b.name, takenNames);
+  }
+
   // Zera tudo a cada abertura. Fixa o servidor-alvo (ativo atual ou o 1º) e o seleciona, pra o
   // scanner do passo 1 já varrer o backend certo.
   // IMPORTANTE: o reset depende SO de `open`. O corpo le `servers`/getActiveId DENTRO de untrack
@@ -407,13 +485,31 @@
       avisoConta = '';
       contaCriadaPath = null;
       contaErro = false;
+      // Prévia do bastão da abertura anterior não vale pra esta: o `bastaoSeq++` invalida a leitura
+      // em voo, senão ela aterrissaria mostrando o dossiê de OUTRA sessão.
+      bastaoSeq++;
+      previaBastaoAberta = false;
+      previaBastaoTexto = '';
+      previaBastaoCarregada = false;
+      previaBastaoCarregando = false;
+      previaBastaoErro = false;
       const cur = getActiveId();
-      const target = servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '';
+      // Só é modo bastão se o servidor da origem AINDA existe. Sumiu, a folha abre mostrando a
+      // recusa (`bastaoSemServidor`) e o alvo cai no de sempre — mas o botão fica travado, então
+      // ninguém cria uma sessão sem dossiê achando que passou o bastão.
+      const b = bastao && servers.some((s) => s.id === bastao.serverId) ? bastao : null;
+      // Modo bastão: o servidor é o da ORIGEM, não o ativo. O dossiê é um arquivo no disco daquela
+      // máquina — criar no servidor B daria uma sessão apontando pra um caminho que não existe lá.
+      const target = b && servers.some((s) => s.id === b.serverId)
+        ? b.serverId
+        : (servers.find((s) => s.id === cur) ? cur! : servers[0]?.id ?? '');
       if (target) pickTarget(target);      // pickTarget ja carrega configs, motores e providers do alvo
       else {
         loadConfigs();
         carregarProviders();
       }
+      // Depois do pickTarget: `getSessions()` mira o servidor ATIVO, e é o da origem que interessa.
+      if (b) prefillBastao(b);
     });
   });
 
@@ -427,11 +523,13 @@
       const sessions = await getSessions();
       takenNames = new Set(sessions.map((s) => s.name));
       hasSameFolder = sessions.some((s) => s.cwd === p);
-      name = uniqueName(basename(p), takenNames);
+      // Modo bastão: o nome vem da ORIGEM, não da pasta. Derivar do basename aqui apagava o nome do
+      // sucessor toda vez que a pasta era (re)escolhida — inclusive no pré-preenchimento.
+      name = bastao ? nomeSucessor(bastao.name, takenNames) : uniqueName(basename(p), takenNames);
     } catch {
       takenNames = new Set();
       hasSameFolder = false;
-      name = basename(p);
+      name = bastao ? nomeSucessor(bastao.name, takenNames) : basename(p);
     } finally {
       checking = false;
     }
@@ -465,7 +563,10 @@
     // A escolha e da pasta/conta ANTERIOR; carrega-la adiante retomaria outra conversa.
     conversaEscolhida = '';
     querRetomar = false;
-    if (!cwd || prov === 'codex') {
+    // Modo bastão fica de fora: `--resume` reabre um transcript ANTIGO, e passar o bastão é o
+    // oposto — sessão nova que recebe o dossiê. Oferecer as duas coisas na mesma tela seria
+    // perguntar duas coisas ao mesmo tempo.
+    if (!cwd || prov === 'codex' || bastao) {
       retomaveis = [];
       return;
     }
@@ -554,6 +655,9 @@
 
   async function create() {
     if (!picked || !name.trim()) return;
+    // Guarda de verdade, não só o `disabled` do botão: o precedente aqui é a sonda de provider
+    // (C5), cujo teste dispara um clique sintético justamente pra provar que o atributo não basta.
+    if (bastaoSemServidor) return;
     if (providersCarregando) return;
     if (providers[provider] && !providers[provider].disponivel) return;
     loading = true;
@@ -569,6 +673,23 @@
       else localStorage.removeItem(chaveMemoria());
       if (esforco) localStorage.setItem(chaveMemoria() + ':effort', esforco);
       else localStorage.removeItem(chaveMemoria() + ':effort');
+      if (bastao) {
+        // Rota PRÓPRIA, não o POST /api/sessions: é ela que monta o dossiê, grava no disco e
+        // enfileira o kick-off. Criar pela rota normal daria uma sessão sem nada disso.
+        const r = await passarBastao(bastao.name, {
+          name: name.trim(),
+          cwd: picked,
+          config_dir: provider === 'claude' ? selectedConfig : null,
+          provider,
+          engine: provider === 'claude' ? (engine || null) : null,
+          model: modelo || null,
+          effort: esforco || null,
+          permission_mode: provider === 'claude' ? (permissao || null) : null,
+        });
+        onClose();
+        onOpenSession(r.name);
+        return;
+      }
       await onCreate(name.trim(), picked, provider === 'claude' ? selectedConfig : null, provider,
                      provider === 'claude' ? (engine || null) : null, modelo || null, esforco || null,
                      provider === 'claude' ? (permissao || null) : null);
@@ -584,7 +705,18 @@
 
 <!-- Snippets FORA do BottomSheet: declarados como filhos diretos de um componente eles viram
      PROPS dele (regra do Svelte 5) — aqui são só blocos reusados pelos dois layouts. -->
-{#snippet chipsServidor()}
+{#snippet cabecalhoBastao()}
+    {#if bastaoSemServidor}
+      <!-- No CABEÇALHO, e não junto do botão: sem pasta escolhida o formulário (e o botão) nem
+           existe, e a folha ficaria idêntica a um "criar sessão" comum, sem dizer que o bastão
+           não pode ser passado daqui. -->
+      <p class="error-msg" role="alert">{m.bastao_servidor_sumiu()}</p>
+    {:else if bastao}
+      <p class="bastao-origem">{m.bastao_origem({ n: bastao.name })}</p>
+    {/if}
+  {/snippet}
+
+  {#snippet chipsServidor()}
     {#if servers.length > 1}
       <div class="server-select">
         <span class="server-select-label">{m.lista_agrupar_servidor()}</span>
@@ -596,13 +728,20 @@
               class:on={targetServer === s.id}
               style="--chip: {serverColor(s.id)};"
               onclick={() => pickTarget(s.id)}
-              disabled={contaOcupada}
+              disabled={contaOcupada || (bastao !== null && s.id !== bastao.serverId)}
             >
               <span class="chip-dot" style="background: {serverColor(s.id)};" aria-hidden="true"></span>
               {s.label}
             </button>
           {/each}
         </div>
+        {#if bastao && !bastaoSemServidor}
+          <!-- Travado, e a tela DIZ por quê: o dossiê é arquivo local, então cross-server não é
+               uma opção que a v1 recusa por preguiça — não há transporte pra ele. O rótulo vem do
+               servidor da ORIGEM; com ele fora da lista a frase não é impressa (a recusa aparece
+               junto do botão), porque nomear a máquina errada é pior que não nomear nenhuma. -->
+          <p class="hint hint-travado">{m.bastao_servidor_travado({ s: rotuloServidor })}</p>
+        {/if}
       </div>
     {/if}
   {/snippet}
@@ -878,6 +1017,33 @@
       {/if}
       </div>
 
+      {#if bastao}
+        {@const bt = bastao}
+        <!-- Prévia RECOLHIDA e rotulada como amostra. Aberta por padrão ela empurraria o formulário
+             pra fora da tela, e o texto que ela mostra não é o que vai ser mandado: entre a leitura
+             e o POST a origem continua trabalhando. -->
+        <div class="advanced bastao-previa">
+          <button class="advanced-toggle sozinho" onclick={alternarPreviaBastao}
+            aria-expanded={previaBastaoAberta}>
+            <span>{m.bastao_previa()}</span>
+            <span class="chevron" class:chevron--open={previaBastaoAberta} aria-hidden="true">›</span>
+          </button>
+          {#if previaBastaoAberta}
+            <p class="hint">{m.bastao_previa_aviso({ n: bt.name })}</p>
+            <div class="previa">
+              {#if previaBastaoCarregando}
+                <p class="previa-vazia">{m.comum_carregando()}</p>
+              {:else if previaBastaoErro}
+                <p class="previa-erro" role="alert">{m.bastao_previa_erro()}</p>
+              {:else}
+                <!-- Markdown RENDERIZADO: o dossiê é .md, e `##` cru numa caixa de leitura é bug. -->
+                <div class="previa-doc">{@html renderMarkdown(previaBastaoTexto)}</div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       <div class="form-acao">
         {#if error}
           <p class="error-msg" role="alert">{error}</p>
@@ -891,8 +1057,8 @@
             {retomando ? m.criar_criando() : m.criar_retomar_acao()}
           </button>
         {:else}
-          <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || (providers[provider] && !providers[provider].disponivel)}>
-            {loading ? m.criar_criando() : m.sessao_nova()}
+          <button class="primary-btn" onclick={create} disabled={loading || !name.trim() || providersCarregando || bastaoSemServidor || (providers[provider] && !providers[provider].disponivel)}>
+            {loading ? m.criar_criando() : (bastao ? m.bastao_acao() : m.sessao_nova())}
           </button>
         {/if}
         {#if !isDesktop}
@@ -903,13 +1069,14 @@
     {/if}
 {/snippet}
 
-<BottomSheet {open} {onClose} ariaLabel={m.sessao_nova()} wide={isDesktop} centered={isDesktop} split={isDesktop}>
+<BottomSheet {open} {onClose} ariaLabel={titulo} wide={isDesktop} centered={isDesktop} split={isDesktop}>
   {#if isDesktop}
     <!-- Dois painéis (referência: fluxo "New Project" da Vercel): escolher a pasta à esquerda,
          configurar a sessão à direita. Escolher já preenche o formulário — sem troca de passo. -->
     <div class="cs-split">
       <aside class="cs-pane cs-esq">
-        <h2 class="sheet-title">{m.sessao_nova()}</h2>
+        <h2 class="sheet-title">{titulo}</h2>
+        {@render cabecalhoBastao()}
         {@render chipsServidor()}
         {@render escolha()}
       </aside>
@@ -926,7 +1093,8 @@
       </section>
     </div>
   {:else}
-    <h2 class="sheet-title">{m.sessao_nova()}</h2>
+    <h2 class="sheet-title">{titulo}</h2>
+    {@render cabecalhoBastao()}
     {@render chipsServidor()}
     {#if !picked}
       {@render escolha()}
@@ -977,6 +1145,12 @@
   .server-chip.on {
     border-color: var(--chip);
     color: var(--text-primary);
+  }
+  /* Sem isto o chip travado (modo bastão) fica IDÊNTICO ao clicável e só não responde ao toque —
+     a trava funcionava sem se anunciar. Mesmos valores do .conta-add:disabled deste arquivo. */
+  .server-chip:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
   .chip-dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -1170,6 +1344,29 @@
 
   .previa-vazia { color: var(--text-muted); margin: 0; }
   .previa-erro { color: var(--danger); margin: 0; }
+
+  /* ── Passagem de bastão ────────────────────────────────────────────────── */
+  .bastao-origem {
+    margin: 0 0 var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+  }
+  /* O aviso do servidor travado cola no bloco de chips (a .hint tem margem de baixo pro caso solto). */
+  .hint-travado { margin: var(--space-2) 0 0; }
+  .bastao-previa { margin-bottom: var(--space-4); }
+  /* O dossiê é markdown de verdade (títulos, listas, blocos de código): a caixa segue a mesma
+     .previa das conversas, mas o conteúdo aqui é UM documento, não uma sequência de falas. */
+  .previa-doc { color: var(--text-secondary); overflow-wrap: anywhere; }
+  .previa-doc :global(h1),
+  .previa-doc :global(h2),
+  .previa-doc :global(h3) {
+    margin: var(--space-3) 0 var(--space-1);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+  .previa-doc :global(*:first-child) { margin-top: 0; }
+  .previa-doc :global(p), .previa-doc :global(ul), .previa-doc :global(ol) { margin: 0 0 var(--space-2); }
+  .previa-doc :global(pre) { overflow-x: auto; }
 
   .trio {
     display: grid;

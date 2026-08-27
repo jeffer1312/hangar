@@ -15,10 +15,11 @@
     onDelete: () => void;
     onGit: () => void;
     onLoop: () => void;
+    onBastao: () => void;
     onPickBranch: (branch: string, dirty: boolean) => void;
     onFlash: (msg: string) => void;
   }
-  let { x, y, name, serverId, cwd, thenTarget, chainCandidates, onClose, onRename, onDelete, onGit, onLoop, onPickBranch, onFlash }: Props = $props();
+  let { x, y, name, serverId, cwd, thenTarget, chainCandidates, onClose, onRename, onDelete, onGit, onLoop, onBastao, onPickBranch, onFlash }: Props = $props();
 
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -260,6 +261,16 @@
         {/if}
       </DropdownMenu.SubContent>
     </DropdownMenu.Sub>
+
+    <DropdownMenu.Separator class="ctx-sep" />
+    <!-- Passagem de bastão: abre a folha de criar sessão pré-preenchida pra CONTINUAR esta. Aqui,
+         e não no swipe do celular, porque no celular a lista não tem menu por sessão — lá a
+         entrada é o "⋯" do chat aberto (MoreSheet). -->
+    <DropdownMenu.Item onSelect={onBastao}>
+      {#snippet child({ props })}
+        <button {...props}>{m.bastao_menu()}<span class="ctx-more">›</span></button>
+      {/snippet}
+    </DropdownMenu.Item>
 
     <DropdownMenu.Separator class="ctx-sep" />
     <DropdownMenu.Item onSelect={onDelete}>

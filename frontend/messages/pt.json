@@ -2134,5 +2134,19 @@
   "erro_orq_conta_nao_liberada": "a política não libera essa conta",
   "erro_orq_modelo_nao_liberado": "a política não libera esse modelo nessa conta",
   "erro_orq_conta_travada": "essa conta é travada num modelo só",
-  "erro_orq_esforco_invalido": "esforço inválido pra esse provider"
+  "erro_orq_esforco_invalido": "esforço inválido pra esse provider",
+  "bastao_menu": "Continuar em outra conta",
+  "bastao_sub": "Sessão nova com o dossiê do que foi feito aqui",
+  "bastao_titulo": "Continuar esta sessão",
+  "bastao_origem": "Continua o trabalho de {n}",
+  "bastao_servidor_travado": "O dossiê é um arquivo no disco de {s} — a sessão nova nasce nesse mesmo servidor.",
+  "bastao_previa": "Ver o dossiê (amostra)",
+  "bastao_previa_aviso": "É uma amostra: {n} continua trabalhando, e o dossiê que a sessão nova vai receber é montado na hora de criar — pode não ser exatamente este.",
+  "bastao_previa_erro": "Não consegui ler o dossiê agora.",
+  "bastao_acao": "Passar o bastão",
+  "bastao_servidor_sumiu": "O servidor da sessão de origem não está mais na lista — não dá pra passar o bastão daqui.",
+  "erro_bastao_para_si_mesma": "a sessão não passa o bastão pra si mesma",
+  "erro_bastao_sem_cwd": "a sessão de origem não tem diretório conhecido; escolha o cwd da sessão nova",
+  "erro_bastao_gravar": "não consegui gravar o dossiê: {motivo}",
+  "erro_bastao_fila": "a sessão {nome} nasceu, mas o kick-off não entrou na fila dela — mande você mesmo o pedido apontando pra {dossie}"
 }

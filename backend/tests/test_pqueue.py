@@ -1063,6 +1063,58 @@ def test_reconcile_prefixo_nao_rouba_linha_do_mais_especifico(tmp_path):
     assert got["Y"]["confirmed"] is True and "desistiu" not in got["Y"]  # chegou, sem marca
 
 
+def test_kickoff_de_bastao_nao_e_carimbado_como_sessao_anterior():
+    # A outra rede de segurança que comia o kick-off: `ts < min_ts` marcava `confirmed` ("sessão
+    # anterior: fora do escopo"), e confirmada nunca mais é reentregue nem aparece no histórico.
+    # Com `pre_transcript` a entrada segue o caminho NORMAL — não achou no transcript, re-enfileira
+    # pro drain (ou seja, a marca isenta do corte por idade, não do reconcile).
+    q = PromptQueue("s")
+    q.append("kick-off do bastão", delivered=True, ts=100.0, pre_transcript=True)
+    q.reconcile_delivered(committed=set(), min_ts=500.0, now=200.0)
+    r = PromptQueue("s").load()[0]
+    assert "confirmed" not in r
+    assert r["delivered"] is False and r["attempts"] == 1
+
+
+def test_kickoff_de_bastao_aparece_no_historico_do_transcript_novo(tmp_path):
+    # merged_history poda entrada anterior ao início da sessão (fantasma de pré-/clear). O kick-off
+    # é anterior de propósito — sem a isenção a bolha dele nunca apareceria no chat da sessão nova.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "primeira linha"}}) + "\n",
+                 encoding="utf-8")
+    inicio = pqueue._transcript_start_ts(str(j))
+    q = PromptQueue("s")
+    q.append("velha de outra vida", delivered=False, ts=inicio - 3600)
+    # 30s antes do transcript nascer = o intervalo REAL entre enfileirar o kick-off e a sessão
+    # gravar a 1a linha.
+    q.append("kick-off do bastão", delivered=False, ts=inicio - 30, pre_transcript=True)
+    textos = [e.text for e in pqueue.merged_history("s", str(j))]
+    assert "kick-off do bastão" in textos
+    assert "velha de outra vida" not in textos
+
+
+def test_prune_before_nao_apaga_o_kickoff_de_bastao():
+    q = PromptQueue("s")
+    q.append("velha", delivered=False, ts=1000.0)
+    q.append("kick-off", delivered=False, ts=1000.0 + 30, pre_transcript=True)
+    assert q.prune_before(1000.0 + 60) == 1
+    assert [e["text"] for e in PromptQueue("s").load()] == ["kick-off"]
+
+
+def test_kickoff_de_bastao_expira_e_nao_ressuscita_numa_vida_posterior():
+    # A isenção do bastão tem PRAZO. Sem ele, um kick-off nunca entregue (sessão morta antes de a
+    # TUI aceitar texto) sobreviveria a todo corte futuro e seria digitado na PRÓXIMA sessão de
+    # mesmo nome — a dívida da vida anterior que o corte por idade existe pra matar. E o
+    # cheap-check do drain ficaria quente naquele arquivo pra sempre.
+    q = PromptQueue("s")
+    velho = 1000.0
+    q.append("kick-off de uma vida anterior", delivered=False, ts=velho, pre_transcript=True)
+    assert q.prune_before(velho + pqueue._JANELA_BASTAO + 1) == 1
+    assert PromptQueue("s").load() == []
+
+
 def test_confirm_delivered_carimba_so_as_entregues_nao_confirmadas():
     # O steer do Kimi baixa a fila INTERNA da TUI — que é exatamente o conjunto delivered e ainda
     # não confirmado. Confirmada já, não-entregue e desistida não podem mudar.

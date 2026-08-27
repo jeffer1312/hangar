@@ -330,6 +330,30 @@ def test_drain_poda_entradas_de_vida_anterior_da_sessao(tmp_queue, tmp_path, mon
     assert PromptQueue("cc").load() == []  # PODADA de verdade (nao marcada entregue, nao pendente)
 
 
+def test_drain_entrega_kickoff_carimbado_antes_do_transcript(tmp_queue, tmp_path, monkeypatch):
+    # PASSAGEM DE BASTAO: o kick-off e enfileirado ANTES de a sessao existir — antes da 1a linha do
+    # .jsonl e antes do nascimento do tmux. E o unico caso em que a entrada e legitimamente mais
+    # VELHA que o transcript, e sem a marca `pre_transcript` as duas redes de seguranca da fila a
+    # comem CALADAS: o prune_before daqui a apaga como "vida anterior" e o claim nem a ve. Efeito
+    # medido em codigo: dossie gravado, sessao nascida, sucessor sem receber nada e nenhum erro.
+    from datetime import datetime, timezone
+    PromptQueue("cc").append("continue o trabalho da sessao anterior", delivered=False,
+                             pre_transcript=True)
+    # Transcript e tmux nascem DEPOIS do append — o intervalo real da passagem de bastao (segundos).
+    depois = time.time() + 30
+    j = tmp_path / "t.jsonl"
+    j.write_text('{"timestamp":"%s"}\n' % datetime.fromtimestamp(depois, timezone.utc).isoformat(),
+                 encoding="utf-8")
+    monkeypatch.setattr(terminal_input.tmux, "session_created", lambda name: depois)
+    sent = []
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: sent.append(text) or "sent")
+    assert terminal_input.drain("cc", str(j)) == 1
+    assert sent == ["continue o trabalho da sessao anterior"]
+    assert PromptQueue("cc").load()[0]["delivered"] is True
+
+
 def test_drain_entrega_entrada_mais_nova_que_o_tmux(tmp_queue, tmp_path, monkeypatch):
     # A direcao arriscada do max(): entrada enfileirada DEPOIS do nascimento do tmux atual e
     # mensagem viva — o corte novo nao pode come-la.

@@ -24,6 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 from app import atomico, atualizacoes, atualizar, diag, migracao_sidecars, tmux
 from app.auth import require_auth, require_loopback
+from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
+from app.bastao import montar as bastao_montar
 from app.commands import list_commands
 from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
@@ -1762,6 +1764,127 @@ async def history(name: str, limit: int | None = None):
     if limit is not None and limit > 0:
         return evs[-limit:]
     return evs
+
+
+@app.get("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth)])
+async def bastao(name: str):
+    """Dossiê de continuidade da sessão, em markdown. SÓ leitura — não cria nada e não grava nada.
+
+    to_thread não é detalhe: `montar` roda `git status`/`git diff` (subprocess) e parseia a cauda de
+    um transcript que pode ter MB. Trabalho desses dentro da corrotina trava o loop e leva junto o
+    SSE de TODAS as sessões — é o incidente de 2026-07-23, quando um `git status` no tick da lista
+    derrubou a conexão inteira.
+    """
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
+    texto = await asyncio.to_thread(bastao_montar, info.jsonl, info.cwd, info.provider, name)
+    return Response(content=texto, media_type="text/markdown; charset=utf-8")
+
+
+class BastaoBody(_StrictBody):
+    """Sessão NOVA que vai continuar o trabalho de `{name}`.
+
+    Corpo próprio, e não `CreateBody`: aquele é `extra="forbid"` e tem `cwd` obrigatório — aqui o
+    padrão é o cwd da ORIGEM (a passagem continua o mesmo trabalho, na mesma árvore). Os campos
+    que sobrepõem o `CreateBody` são repassados pra ele tal e qual, então a validação de
+    provider/conta/motor/modelo/esforço/permissão continua num lugar só (`model_args` + o handler
+    de criação).
+    """
+    name: str = Field(min_length=1)          # nome da sessão nova (o destino)
+    cwd: str | None = None                   # None = o cwd da origem
+    config_dir: str | None = None
+    provider: str = "claude"
+    engine: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    permission_mode: str | None = None
+
+
+def _bastao_preparar(info: SessionInfo, origem: str, destino: str) -> tuple[str, Path, str]:
+    """Monta o dossiê, GRAVA e devolve (texto, caminho, kick-off). Tudo sync, numa thread só.
+
+    Gravar antes de criar a sessão é o que fecha o caso "sessão nova viva apontando pra um arquivo
+    que não existe": se o disco recusar, a exceção sobe daqui e nada foi criado ainda.
+    """
+    texto = bastao_montar(info.jsonl, info.cwd, info.provider, origem)
+    alvo = bastao_mod.gravar(destino, texto)
+    conta, modelo = bastao_mod.origem_resumida(info.jsonl)
+    return texto, alvo, bastao_mod.kickoff(origem, alvo, conta, modelo)
+
+
+@app.post("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth)])
+async def bastao_passar(name: str, body: BastaoBody):
+    """Passa o bastão de `{name}` pra uma sessão nova: dossiê no disco + sessão criada + kick-off
+    na fila durável dela.
+
+    A ordem é a feature: **monta → grava → cria → enfileira**. Invertida, um erro de disco deixaria
+    uma sessão viva com um kick-off mandando ler um arquivo inexistente.
+
+    A entrega NÃO passa pelo caminho do `/input` (que digita PRIMEIRO e só depois grava na fila):
+    numa sessão criada há milissegundos a TUI ainda está subindo e as teclas se perdem. Entra como
+    `append(delivered=False)` — durável — e o drain entrega quando ela aceitar texto.
+
+    `to_thread` no preparo pelo mesmo motivo do GET: `montar` roda `git status` (subprocess) e
+    parseia a cauda do transcript; no loop isso derruba o SSE de todas as sessões (2026-07-23).
+    """
+    info = await _cached_info(name)
+    if not info or not info.jsonl:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
+    # UM nome só, sanitizado pelo MESMO lugar que a criação usa (`registry.create` chama isto), e
+    # daqui pra frente é ele quem nomeia o arquivo e a sessão. Sanitizar duas vezes por dois
+    # caminhos diferentes era o bug: `api.v2` gravava `api.v2.md` mas nascia como `api-v2`, e aí o
+    # `prune` não achava chave viva pro dossiê e APAGAVA o sidecar de uma sessão viva. De quebra,
+    # a guarda do "bastão pra si mesma" passa a pegar `"cc "` contra `"cc"`.
+    destino = sanitize_session_name(body.name)
+    if not destino:
+        raise HTTPException(400, detail=erro("erro_nome_invalido", "nome invalido"))
+    if destino == name:
+        raise HTTPException(400, detail=erro("erro_bastao_para_si_mesma",
+                                             "a sessão não passa o bastão pra si mesma"))
+    cwd = body.cwd or info.cwd
+    if not cwd:
+        # A origem sem cwd conhecido é o caso do transcript resolvido sem pane utilizável: sem
+        # diretório não há onde criar a sessão nova, e chutar um seria pior que recusar.
+        raise HTTPException(400, detail=erro("erro_bastao_sem_cwd",
+                                             "a sessão de origem não tem diretório conhecido; "
+                                             "escolha o cwd da sessão nova"))
+    try:
+        texto, alvo, kick = await asyncio.to_thread(_bastao_preparar, info, name, destino)
+    except OSError as e:
+        # Falha APARECE, e a sessão não nasce órfã: nada foi criado até aqui.
+        _log.warning("bastao: não deu pra gravar o dossiê de %s -> %s: %s", name, destino, e)
+        # `motivo` como PARAM, e não só embutido no `msg`: sem ele o front não tem como traduzir a
+        # frase sem jogar fora o erro do sistema de arquivos, que é a única parte acionável dela.
+        raise HTTPException(500, detail=erro("erro_bastao_gravar",
+                                             f"não consegui gravar o dossiê: {e}",
+                                             motivo=str(e))) from None
+    # Reusa o handler de criação inteiro (validação de provider/conta/motor/model_args, ciclo da
+    # conta, Codex): duplicar aquilo aqui seria uma segunda porta de criação pra manter em dia.
+    # HTTPException dele sobe tal e qual — o dossiê já gravado vira sidecar órfão, que o `prune`
+    # recolhe pelo nome (ver bastao_mod.caminho).
+    novo = await create_session(CreateBody(
+        name=destino, cwd=cwd, config_dir=body.config_dir, provider=body.provider,
+        engine=body.engine, model=body.model, effort=body.effort,
+        permission_mode=body.permission_mode))
+    try:
+        await asyncio.to_thread(lambda: PromptQueue(novo.name).append(
+            kick, delivered=False, pre_transcript=True))
+    except OSError as e:
+        # A sessão JÁ existe: o erro tem de dizer isso, senão o 500 nomeia a coisa errada e quem
+        # lê acha que nada aconteceu — e vai criar outra. Aqui o conserto é humano (mandar o
+        # kick-off na mão), então o caminho do dossiê vai junto.
+        _log.error("bastao: sessão %s criada, mas o kick-off não entrou na fila: %s", novo.name, e)
+        raise HTTPException(500, detail=erro(
+            "erro_bastao_fila", f"a sessão {novo.name} nasceu, mas o kick-off não entrou na fila "
+            f"dela ({e}) — mande você mesmo o pedido apontando pra {alvo}",
+            nome=novo.name, dossie=str(alvo))) from None
+    # Drena numa thread: `send_prompt` espera a TUI ficar interativa (`_wait_input_ready`), o que
+    # pode levar segundos numa sessão recém-criada — segurar o request nisso não ajuda ninguém.
+    # Vale só pro Claude na prática (Pi/Kimi nascem com `jsonl=None` e a thread sai calada); não há
+    # perda, a fila é durável e o drain do próximo idle/SSE entrega.
+    threading.Thread(target=_drain_session, args=(novo.name,), daemon=True).start()
+    return {"name": novo.name, "dossie": str(alvo), "texto": texto, "kickoff": kick}
 
 
 @app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])

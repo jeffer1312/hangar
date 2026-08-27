@@ -77,6 +77,18 @@ def test_morta_velha_some(tmp_path):
     assert not (base / ".hangar-state" / "morto-stem.json").exists()
 
 
+def test_dossie_de_bastao_e_podado_pelo_nome_da_sessao(tmp_path):
+    """`.hangar-bastao/<destino>.md`: keyed pelo NOME, como a fila. Sidecar fora do catalogo
+    `_NOME_KEYED` nunca seria podado — o defeito medido em 18/08/2026."""
+    base = tmp_path / "cfg"
+    _escreve(base, ".hangar-bastao", "sucessora-viva", _AGORA, 30, ".md")
+    _escreve(base, ".hangar-bastao", "sucessora-morta", _AGORA, 30, ".md")
+    apagados = prune._podar([base], {"aaa"}, {"sucessora-viva"}, {"1"}, _AGORA)
+    assert apagados[".hangar-bastao"] == 1
+    assert (base / ".hangar-bastao" / "sucessora-viva.md").exists()
+    assert not (base / ".hangar-bastao" / "sucessora-morta.md").exists()
+
+
 def test_morta_recente_nao_some(tmp_path):
     """Sidecar de sessao morta RECENTE nao some: a poda preserva a materia-prima de
     diagnostico — decisao da Task, registrada no reporte (leitura ja recusa velho)."""

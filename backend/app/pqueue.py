@@ -112,6 +112,38 @@ def _casam(linhas: set[str], disponiveis: set[str],
     return consumidas
 
 
+# Folga que a marca `pre_transcript` compra sobre o corte por idade. 15 min cobre com sobra o
+# intervalo real entre enfileirar o kick-off e a sessão nova gravar a 1a linha do transcript
+# (segundos), e é o que impede a isenção de virar ETERNA: a chave fica no disco pra sempre (o
+# prune_before é justamente quem não a apaga), então uma isenção sem prazo faria um kick-off nunca
+# entregue — sessão morta antes de a TUI aceitar texto — ressuscitar numa VIDA POSTERIOR da sessão
+# de mesmo nome, que é a dívida da sessão anterior que o corte existe pra matar. Passada a folga
+# ela é lixo como qualquer outra entrada velha: some no prune_before e o cheap-check do drain esfria.
+_JANELA_BASTAO = 15 * 60.0
+
+
+def _da_sessao_atual(entry: dict, min_ts: float) -> bool:
+    """A entrada pertence à sessão de AGORA (ou está dentro da folga do bastão)?
+
+    O corte normal é `ts >= min_ts`: entrada carimbada antes do início do transcript é de uma vida
+    anterior (pré-`/clear`, ou o `pi -c` que reusa transcript velho) e não pode ser entregue nem
+    reaparecer como bolha.
+
+    `pre_transcript` é a exceção, e ela existe pra UM caso: a passagem de bastão enfileira o
+    kick-off ANTES de a sessão nova existir — logo, antes da primeira linha do `.jsonl` e antes do
+    nascimento do tmux. Sem esta marca as duas redes de segurança da fila comem a entrada em
+    silêncio (o `prune_before` do drain a APAGA como vida anterior; o `reconcile_delivered` a
+    carimba `confirmed` como "sessão anterior"), e o resultado é o pior possível: dossiê gravado,
+    sessão nascida, sucessor sem receber nada e nenhum erro em lugar nenhum.
+
+    A marca isenta só do corte por IDADE, e só por `_JANELA_BASTAO` — a entrada segue passando pelo
+    reconcile normal, então kick-off engolido pela TUI ainda é reentregue e ainda desiste no teto
+    de tentativas.
+    """
+    folga = _JANELA_BASTAO if entry.get("pre_transcript") else 0.0
+    return float(entry.get("ts") or 0.0) >= min_ts - folga
+
+
 def _entry_event(entry: dict) -> ChatEvent:
     # user_msg sintetico com id prefixado ("queued-") pro front distinguir de evento real do
     # transcript. ts fica None de proposito: o ts so serve pra ORDENAR no historico, nao pra
@@ -343,7 +375,8 @@ class PromptQueue:
         tmp.write_text("".join(dumps_safe(r) + "\n" for r in rows), encoding="utf-8")
         atomico.substituir(tmp, self.path)
 
-    def append(self, text: str, delivered: bool = False, ts: float | None = None) -> dict:
+    def append(self, text: str, delivered: bool = False, ts: float | None = None,
+               pre_transcript: bool = False) -> dict:
         # delivered=False por padrao = enfileirada mas NAO digitada na TUI (o /input passa True quando
         # o send_prompt realmente digitou). So entradas False sao drenadas -> sem isto um upgrade
         # re-enviaria toda entrada legada (= double-send em massa).
@@ -355,8 +388,13 @@ class PromptQueue:
         # scrub AQUI tambem (nao so no _write_atomic): a entrada devolvida ao caller tem que ser a
         # MESMA que foi pro disco, senao o reconcile/dedup compararia o texto cru contra o transcript
         # (que ja recebeu o U+FFFD) e nunca casaria.
+        # pre_transcript: entrada carimbada ANTES de a sessão existir (passagem de bastão) — isenta
+        # do corte por idade em toda a fila. Ver _da_sessao_atual; só grava a chave quando é True
+        # pra não engordar toda entrada normal com um campo que nunca será lido.
         entry = {"id": uuid.uuid4().hex, "text": scrub_surrogates(text),
                  "ts": time.time() if ts is None else ts, "delivered": delivered}
+        if pre_transcript:
+            entry["pre_transcript"] = True
         # ponytail: lock global serializa o read-modify-write; 2 POSTs /input concorrentes (handlers
         # sync no threadpool) senao liam as mesmas rows e um sobrescrevia o outro (entrada perdida).
         # upgrade: lock per-path se o throughput de uma sessao virar gargalo.
@@ -377,7 +415,7 @@ class PromptQueue:
             rows = self.load()
             claimed = []
             for r in rows:
-                if r.get("delivered") is False and float(r.get("ts") or 0.0) >= min_ts:
+                if r.get("delivered") is False and _da_sessao_atual(r, min_ts):
                     r["delivered"] = True
                     claimed.append(dict(r))
                     if limit is not None and len(claimed) >= limit:
@@ -454,7 +492,7 @@ class PromptQueue:
             return 0
         with _append_lock:
             rows = self.load()
-            kept = [r for r in rows if float(r.get("ts") or 0.0) >= min_ts]
+            kept = [r for r in rows if _da_sessao_atual(r, min_ts)]
             if len(kept) != len(rows):
                 self._write_atomic(kept)
             return len(rows) - len(kept)
@@ -512,7 +550,7 @@ class PromptQueue:
                     # `ts < min_ts` NAO resgata: entrada de uma sessao ANTERIOR (pre-/clear) seria
                     # comparada contra o transcript de AGORA, e um texto curto e repetido ("Sim",
                     # "1") casaria por coincidencia — dando por entregue o que nunca chegou.
-                    if ts < min_ts:
+                    if not _da_sessao_atual(r, min_ts):
                         continue
                     linhas_r = _linhas_da_entrada(r)
                     casou = _casam(linhas_r, disponiveis, reservadas, dono)
@@ -522,7 +560,7 @@ class PromptQueue:
                         r.pop("desistiu", None)
                         changed = True
                     continue
-                if ts < min_ts:
+                if not _da_sessao_atual(r, min_ts):
                     r["confirmed"] = True   # sessao anterior: fora do escopo (e silencia o check)
                     changed = True
                     continue
@@ -613,7 +651,7 @@ class PromptQueue:
                 if eid in seen and seen[eid] == desistiu:
                     continue
                 seen[eid] = desistiu
-                if min_ts and float(entry.get("ts") or 0.0) < min_ts:
+                if min_ts and not _da_sessao_atual(entry, min_ts):
                     continue
                 evs.append(_entry_event(entry))
             return evs
@@ -785,7 +823,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
             continue
         # Poda: entrada anterior ao inicio da sessao atual e de uma sessao antiga (ex: pre-/clear, que
         # cria transcript novo). Sem isto, nunca casaria com o transcript novo e viraria fantasma.
-        if start_ts and ts < start_ts:
+        if start_ts and not _da_sessao_atual(entry, start_ts):
             continue
         items.append((ts, 10**9, _entry_event(entry)))
 

@@ -2134,5 +2134,19 @@
   "erro_orq_conta_nao_liberada": "the policy does not allow that account",
   "erro_orq_modelo_nao_liberado": "the policy does not allow that model on that account",
   "erro_orq_conta_travada": "that account is locked to a single model",
-  "erro_orq_esforco_invalido": "invalid effort for that provider"
+  "erro_orq_esforco_invalido": "invalid effort for that provider",
+  "bastao_menu": "Continue in another account",
+  "bastao_sub": "New session with a dossier of the work done here",
+  "bastao_titulo": "Continue this session",
+  "bastao_origem": "Continues the work of {n}",
+  "bastao_servidor_travado": "The dossier is a file on {s}'s disk — the new session is created on that same server.",
+  "bastao_previa": "See the dossier (sample)",
+  "bastao_previa_aviso": "This is a sample: {n} keeps working, and the dossier the new session receives is built at creation time — it may not be exactly this one.",
+  "bastao_previa_erro": "Couldn't read the dossier right now.",
+  "bastao_acao": "Hand off",
+  "bastao_servidor_sumiu": "The origin session's server is no longer in the list — the baton can't be handed off from here.",
+  "erro_bastao_para_si_mesma": "a session can't hand the baton to itself",
+  "erro_bastao_sem_cwd": "the origin session has no known directory; pick the new session's cwd",
+  "erro_bastao_gravar": "couldn't write the dossier: {motivo}",
+  "erro_bastao_fila": "session {nome} was created, but the kick-off never made it into its queue — send the request yourself, pointing at {dossie}"
 }

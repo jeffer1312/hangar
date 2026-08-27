@@ -82,7 +82,11 @@ vi.mock('../lib/plan', () => ({ planBadge: () => null }));
 vi.mock('../lib/sidebarPrefs.svelte', () => ({ sidebarPrefs: { height: 'content' } }));
 vi.mock('../lib/configNav', () => ({ abrirConfig: vi.fn() }));
 
-vi.mock('./CreateSessionSheet.svelte', stubDe);
+// Dublê que PUBLICA as props, não o stub cego: é o que deixa afirmar em que modo a folha abriu
+// (normal x bastão). Renderiza uma única div, como o stub — os casos que contam markup não mudam.
+vi.mock('./CreateSessionSheet.svelte', async () => ({
+  default: (await import('./CreateSessionSheet.spy.svelte')).default,
+}));
 // SessionContextMenu NÃO é stubado: o teste clica no botão Renomear REAL do menu (mesmo caminho
 // que as abas usam — bridge -> openMenu -> Rename). Stub de raw snippet não repassava o clique
 // pro listener do setup no happy-dom (o nó é substituído no flush do Svelte).
@@ -110,6 +114,7 @@ import { sidebarBridge } from '../lib/sidebarBridge';
 import { navMode } from '../lib/navMode.svelte';
 import { ctxPanel } from '../lib/ctxPanel.svelte';
 import * as api from '../lib/api';
+import * as m from '../paraglide/messages';
 import type { AggSession } from '../lib/types';
 
 beforeEach(() => {
@@ -713,6 +718,67 @@ describe('Sidebar — filesInContext (Task 14/15): o Git do menu e a sessão hos
     await tick();
     await abrirGitDaSessao();
     expect(temArquivos()).toBe(true);
+    unmount(t.comp);
+  });
+});
+
+describe('Sidebar — passagem de bastão: em que MODO a folha de criar abre', () => {
+  // O defeito que isto trava: `bastaoAlvo` sobrevive à sessão em que foi escrito. Sem o
+  // `abrirCriar()` zerando, o "+ Nova" clicado depois de uma passagem abriria a folha ainda em
+  // modo bastão — criando, com o dossiê de outra sessão, algo que a pessoa pediu do zero.
+  function comUmaSessao() {
+    storeState.servers.length = 0;
+    storeState.servers.push({ id: 'srv-a', label: 'Servidor A', baseUrl: 'http://a', token: 'x' });
+    storeState.byServer.length = 0;
+    storeState.byServer.push({
+      server: { id: 'srv-a', label: 'Servidor A' },
+      sessions: [{ name: 'sess-1', serverId: 'srv-a', state: 'idle', cwd: '/tmp/proj' }],
+      error: null, loaded: true,
+    });
+  }
+  const modo = () => document.querySelector('[data-testid="create-sheet"]')?.getAttribute('data-bastao');
+
+  async function abrirMenuEPassarBastao() {
+    sidebarBridge.openSessionMenu(
+      new MouseEvent('contextmenu', { clientX: 5, clientY: 5 }),
+      { name: 'sess-1', serverId: 'srv-a', cwd: '/tmp/proj' } as unknown as AggSession,
+      'srv-a',
+    );
+    await tick();
+    const item = [...document.querySelectorAll<HTMLButtonElement>('.ctx-menu button')]
+      // `includes` e não igualdade: o item carrega o chevron "›" (abre outra superfície), igual
+      // aos de Git e Loop — o texto do botão é rótulo + chevron.
+      .find((b) => b.textContent?.includes(m.bastao_menu()));
+    expect(item, 'item "continuar em outra conta" no menu "⋯"').not.toBeUndefined();
+    item!.click();
+    await tick();
+  }
+
+  it('o item do menu abre em modo bastão; o "+ Nova" seguinte volta ao normal', async () => {
+    comUmaSessao();
+    const t = montar();
+    await tick();
+    expect(modo()).toBe('');                       // nasce em modo normal
+
+    await abrirMenuEPassarBastao();
+    expect(modo()).toBe('sess-1');                 // a folha recebeu a origem
+
+    // "+ Nova" do rodapé: o MESMO caminho que a pessoa usa depois de passar o bastão.
+    document.querySelector<HTMLButtonElement>('.cta-new')!.click();
+    await tick();
+    expect(modo()).toBe('');
+    unmount(t.comp);
+  });
+
+  it('o "+ Nova" da barra de abas (bridge) também zera o modo', async () => {
+    comUmaSessao();
+    const t = montar();
+    await tick();
+    await abrirMenuEPassarBastao();
+    expect(modo()).toBe('sess-1');
+    sidebarBridge.openCreate();                    // caminho das abas, com a sidebar recolhida
+    await tick();
+    expect(modo()).toBe('');
     unmount(t.comp);
   });
 });

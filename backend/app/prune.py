@@ -47,9 +47,11 @@ _INTERVALO = 24 * 3600.0
 # catalogo de modelos do Pi (subdir de .hangar-pi).
 _STEM_KEYED = (".hangar-status", ".hangar-state", ".hangar-preview",
                ".hangar-askq", ".hangar-pi/models")
-# Keyed pelo NOME da sessao (sanitizado): a fila sobrevive ao /clear de proposito (o
-# session-id muda no /clear), entao o nome e a chave certa dela.
-_NOME_KEYED = ".hangar-queue"
+# Keyed pelo NOME da sessao (sanitizado), com o glob de cada um: a fila sobrevive ao /clear de
+# proposito (o session-id muda no /clear), entao o nome e a chave certa dela; o dossie de passagem
+# de bastao (`.hangar-bastao/<destino>.md`) e nomeado so pelo DESTINO pelo mesmo motivo — sidecar
+# fora deste catalogo nunca e podado (o defeito medido em 18/08/2026).
+_NOME_KEYED = ((".hangar-queue", "*.jsonl"), (".hangar-bastao", "*.md"))
 # Keyed pelo pane_id (bilhete pane->sessao do Pi e do Kimi). O tmux REUSA %pane_id, entao o
 # bilhete nunca decide quem e a sessao (isso e o frescor de pi_session_file) — a poda so tira
 # bilhete de pane que NAO existe mais; pane vivo nunca tem bilhete podado.
@@ -168,7 +170,8 @@ def _podar(bases: list[Path], chaves_stem: set[str], chaves_nome: set[str],
     if not chaves_stem:
         _log.warning("prune: sem chave de sessao viva — %s ficam", ", ".join(_STEM_KEYED))
     if not chaves_nome:
-        _log.warning("prune: sem nome de sessao viva — %s fica", _NOME_KEYED)
+        _log.warning("prune: sem nome de sessao viva — %s ficam",
+                     ", ".join(sub for sub, _ in _NOME_KEYED))
     if not chaves_pane:
         _log.warning("prune: sem pane vivo (tmux fora?) — %s ficam", ", ".join(_PANE_KEYED))
     apagados: dict[str, int] = {}
@@ -188,8 +191,9 @@ def _podar(bases: list[Path], chaves_stem: set[str], chaves_nome: set[str],
             for sub in _STEM_KEYED:
                 apagados[sub] = apagados.get(sub, 0) + _podar_dir(base / sub, chaves_stem, agora)
         if chaves_nome:
-            apagados[_NOME_KEYED] = (apagados.get(_NOME_KEYED, 0)
-                                     + _podar_dir(base / _NOME_KEYED, chaves_nome, agora, "*.jsonl"))
+            for sub, glob in _NOME_KEYED:
+                apagados[sub] = (apagados.get(sub, 0)
+                                 + _podar_dir(base / sub, chaves_nome, agora, glob))
         if chaves_pane:
             for sub in _PANE_KEYED:
                 apagados[sub] = (apagados.get(sub, 0)

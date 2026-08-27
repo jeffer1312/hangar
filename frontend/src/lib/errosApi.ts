@@ -279,6 +279,14 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_pi_recusou_troca: (p) => m.erro_pi_recusou_troca({ provider: String(p.provider), id: String(p.id), thinking: String(p.thinking) }),
   erro_reinicio_indisponivel: () => m.erro_reinicio_indisponivel(),
   erro_atualizacao_branch: () => m.erro_atualizacao_branch(),
+
+  // Passagem de bastao (POST /api/sessions/{name}/bastao). O `erro_bastao_fila` e o que mais
+  // importa traduzir: e o unico em que a sessao JA nasceu e o conserto e humano — a frase tem
+  // que carregar o nome dela e o caminho do dossie, senao quem le acha que nada aconteceu.
+  erro_bastao_para_si_mesma: () => m.erro_bastao_para_si_mesma(),
+  erro_bastao_sem_cwd: () => m.erro_bastao_sem_cwd(),
+  erro_bastao_gravar: (p) => m.erro_bastao_gravar({ motivo: String(p.motivo ?? '') }),
+  erro_bastao_fila: (p) => m.erro_bastao_fila({ nome: String(p.nome), dossie: String(p.dossie) }),
 };
 
 export function mensagemDeErro(code: string, params: Parametros = {}): string | undefined {

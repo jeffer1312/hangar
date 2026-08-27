@@ -12,12 +12,15 @@
     runRunning?: boolean;
     onActivity?: () => void;      // ausente = sessao sem atividade pra mostrar
     onAttachments: () => void;
+    /** Passagem de bastão. Mora AQUI porque no celular a lista de sessões não tem menu por sessão
+     *  (as ações dela são swipe no SessionCard) — o "⋯" do chat aberto é a única entrada. */
+    onBastao: () => void;
     activityRunning?: boolean;
     activityBadge?: number;
   }
   let {
     open, onClose, onRun, runRunning = false,
-    onActivity, activityRunning = false, activityBadge = 0, onAttachments,
+    onActivity, activityRunning = false, activityBadge = 0, onAttachments, onBastao,
   }: Props = $props();
 
   function pick(fn: () => void) {
@@ -71,6 +74,19 @@
       <span class="txt">
         <span class="label">{m.ctx_anexos()}</span>
         <span class="sub">{m.more_fotos_videos_arquivos()}</span>
+      </span>
+      <span class="chev" aria-hidden="true">›</span>
+    </button>
+
+    <button class="item" onclick={() => pick(onBastao)}>
+      <span class="ico" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12h10" /><polyline points="10 8 14 12 10 16" /><path d="M19 4v16" />
+        </svg>
+      </span>
+      <span class="txt">
+        <span class="label">{m.bastao_menu()}</span>
+        <span class="sub">{m.bastao_sub()}</span>
       </span>
       <span class="chev" aria-hidden="true">›</span>
     </button>

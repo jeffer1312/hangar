@@ -179,6 +179,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   const showProviderTags = $derived(new Set(sessionsStore.rows.map((s) => providerName(s.provider))).size > 1);
   let activeId = $state(getActiveId());
   let showCreate = $state(false);
+  // Passagem de bastão: mesma folha de criar, aberta pra CONTINUAR a sessão apontada. Fica ao lado
+  // do `showCreate` e é sempre zerado por `abrirCriar()` — a folha só lê o alvo na transição de
+  // abertura, então limpar no fechamento faria a tela piscar em modo normal enquanto ela sai.
+  let bastaoAlvo = $state<{ name: string; cwd: string; serverId: string } | null>(null);
+  function abrirCriar() { bastaoAlvo = null; showCreate = true; }
   // Fallback de foco dos diálogos: a engrenagem é o controle que SEMPRE sobra acessível.
   let acctBtnEl = $state<HTMLElement | null>(null);
   let searchOpen = $state(false);     // Buscar conversas (switcher em modo so-busca)
@@ -209,7 +214,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     // Bridge pro SessionTabs (Task 6): as abas vivem FORA da <aside> recolhida, mas os workflows
     // continuam aqui — criar sessao, menu de contexto e kebab sao delegados por ela.
     const unregisterBridge = sidebarBridge.register({
-      openCreate: () => (showCreate = true),
+      openCreate: abrirCriar,
       openSessionMenu: (event, session, serverId) => openMenu(event, session, serverId),
       openKebab,
     });
@@ -290,9 +295,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                               permissionMode?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
     await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode);
-    activeId = getActiveId(); // I2: sync local state after sheet's selectServer
-    onSelect(name);
+    abrirSessaoDoSheet(name);
     // SSE stream emitirá a sessão nova automaticamente
+  }
+  // TODA saída do CreateSessionSheet passa por aqui — o create normal, o "continuar conversa" e a
+  // passagem de bastão. O sheet já trocou o servidor ativo (selectServer no pickTarget), e este
+  // `activeId` é a cópia LOCAL que a Sidebar usa pro ponto do servidor e pra marcar a linha
+  // `.active`. Sem ressincronizar, passar bastão de uma sessão de OUTRO servidor deixava o badge
+  // no servidor antigo e a linha da sessão nova sem destaque (o "I2" original, por outra porta —
+  // o ramo do bastão não passa pelo handleCreate).
+  function abrirSessaoDoSheet(name: string) {
+    activeId = getActiveId();
+    onSelect(name);
   }
   // Excluir sessao pede confirmacao (com o nome) — clique unico no × era facil de errar. O delete real
   // so acontece no doDelete.
@@ -509,6 +523,15 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     loopSheet = { name };
     closeMenu();
   }
+  // Passar o bastão: abre a folha de criar já sabendo quem é a origem. Ao contrário do Git/Loop, o
+  // servidor NÃO é apontado aqui — quem faz isso é a própria folha (o `pickTarget` da abertura), e
+  // travado no da origem: o dossiê é arquivo no disco daquela máquina.
+  function menuBastao() {
+    if (!menu) return;
+    bastaoAlvo = { name: menu.name, cwd: menu.cwd, serverId: menu.serverId };
+    showCreate = true;
+    closeMenu();
+  }
   function closeLoopSheet() {
     loopSheet = null;
     if (loopSheetPrevServer) { selectServer(loopSheetPrevServer); loopSheetPrevServer = null; }
@@ -706,7 +729,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         detail: m.sessao_criar_nova(),
         keywords: [m.lista_nova_curto(), m.sessao_criar_nova(), m.sessao_singular()],
         group: m.sessao_grupo(),
-        run: () => (showCreate = true),
+        run: abrirCriar,
       },
       {
         id: 'search',
@@ -1155,7 +1178,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
          a barra é permanente, então os comandos do app moram nela, num lugar só. O ponto do
          servidor ativo foi junto com a engrenagem (SessionTabs). Aqui fica só o que é do
          trilho: criar sessão e recolher/expandir. -->
-    <button class="cta-new" onclick={() => (showCreate = true)} aria-label={m.sessao_nova()} title={m.sessao_nova()}>
+    <button class="cta-new" onclick={abrirCriar} aria-label={m.sessao_nova()} title={m.sessao_nova()}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
       {#if expanded}<span>{m.lista_nova_curto()}</span>{/if}
     </button>
@@ -1192,7 +1215,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      overflow:hidden (e backdrop-filter no modo liquid, que vira containing block) e clipa o popover. -->
 {#if hp}<HoverPreview text={hp.text} x={hp.x} y={hp.y} />{/if}
 
-<CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={onSelect} />
+<CreateSessionSheet open={showCreate} {servers} onClose={() => (showCreate = false)} onCreate={handleCreate} onOpenSession={abrirSessaoDoSheet} bastao={bastaoAlvo} />
 
 <!-- "Buscar conversas" (nav): switcher em modo só-busca (busca de conteúdo cross-servidor, feature #10). -->
 <SessionSwitcherSheet
@@ -1201,7 +1224,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   sessions={[]}
   currentName=""
   onPick={(name) => { searchOpen = false; onSelect(name); }}
-  onNew={() => { searchOpen = false; showCreate = true; }}
+  onNew={() => { searchOpen = false; abrirCriar(); }}
   onClose={() => (searchOpen = false)}
 />
 
@@ -1249,7 +1272,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   <SessionContextMenu x={m.x} y={m.y} name={m.name} serverId={m.serverId} cwd={m.cwd} thenTarget={m.thenTarget}
     chainCandidates={chainCandidates(m.serverId, m.name)}
     onClose={closeMenu}
-    onRename={menuRename} onDelete={menuDelete} onGit={menuGit} onLoop={menuLoop}
+    onRename={menuRename} onDelete={menuDelete} onGit={menuGit} onLoop={menuLoop} onBastao={menuBastao}
     onPickBranch={(branch, dirty) => {
       if (dirty) confirmBranch = { name: m.name, serverId: m.serverId, branch };
       else doCheckout(m.name, m.serverId, branch);

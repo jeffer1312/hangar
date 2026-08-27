@@ -1,0 +1,603 @@
+"""Dossiê de continuidade — o que uma sessão nova precisa saber pra continuar o trabalho de outra.
+
+Montado por CÓDIGO, lendo o disco: transcript, git, plano, sidecars de par/grupo. Sem modelo de
+linguagem, por três motivos que a spec registra (docs/superpowers/specs/2026-08-27-passagem-de-bastao.md):
+funciona com a conta da origem esgotada (ela não escreve resumo nenhum), é reprodutível (mesmo
+transcript → mesmo dossiê, o que torna o corte calibrável) e é EXTRATIVO — cita literal, então não
+inventa uma decisão que não houve.
+
+`montar()` recebe o alvo JÁ RESOLVIDO (jsonl, cwd, provider, nome). É isso que faz a feature servir
+o caso que a motivou: sessão VIVA resolve pelo `registry`, sessão MORTA pelo `archive`
+(`archive_jsonl`/`archive_cwd`) — `registry.resolve_tracked` depende de pane vivo e não serve.
+
+Duas escolhas de fonte não são detalhe:
+- os eventos vêm de `pqueue.merged_history`, não de `transcript.parse_obj`: aquele é o parser do
+  CLAUDE, e passar bastão de um Codex/Pi/Kimi é metade do pedido — `merged_history` escolhe o
+  parser por provider e ainda junta a fila durável;
+- o transcript é lido UMA vez, e as seções de "arquivos e comandos", "decisões" e "estado agora"
+  saem da MESMA lista. Ler três vezes um arquivo que tem dezenas de MB custaria três varreduras
+  por clique de botão.
+
+Falha de UMA seção não derruba o dossiê: ela sai com uma linha dizendo que não deu pra ler, e o
+motivo vai pro log. Um dossiê que some inteiro porque o `git status` travou é pior que um dossiê
+com um buraco anotado.
+"""
+from __future__ import annotations
+
+import logging
+import re
+import unicodedata
+from pathlib import Path
+
+from app import atomico
+
+_log = logging.getLogger("hangar.bastao")
+
+# Onde o dossiê é gravado. Nome do arquivo = só o DESTINO (`<destino>.md`), nunca
+# `origem__destino`: é o que faz o sidecar cair no `_NOME_KEYED` do `prune.py` e ser podado junto
+# com a sessão que o lê. Irmão de `.hangar-queue`/`.hangar-pair`, mesmo lugar.
+_SUBDIR = ".hangar-bastao"
+
+# Teto de linhas do dossiê inteiro (a spec pede ~200): ele é lido por um AGENTE, e o ponto da
+# feature é justamente não lotar o contexto do sucessor. Cada seção tem o seu orçamento; o teto
+# global é a rede pra soma de seções generosas.
+_TETO_LINHAS = 200
+_COL = 220              # teto de caracteres por linha (uma saída de ferramenta cabe numa linha só)
+
+# Janela do tail-read do transcript. ponytail: a cauda, não o arquivo inteiro — "onde parou" e "por
+# que decidiu assim" são recentes por definição, e um transcript de 19MB parseado inteiro a cada
+# clique é o custo que a feature não precisa pagar. Sobe se a calibração (Step 4) mostrar decisão
+# importante caindo fora da janela.
+_EVENTOS = 600
+
+_MAX_DECISOES = 12      # pares proposta→resposta que sobrevivem ao corte
+_MAX_ARQUIVOS = 12
+_MAX_COMANDOS = 8
+_MAX_FALHAS = 5
+_MAX_CAUDA = 6
+
+_ORCAMENTO = {          # linhas por seção (o cabeçalho não conta)
+    "De onde veio": 8,
+    "Onde está o trabalho": 16,
+    "O plano": 16,
+    "Arquivos e comandos": 32,
+    "Grupo e par": 14,
+    "Decisões": 40,
+    "Estado agora": 24,
+}
+
+_SEM_SECAO = "_(não deu pra ler esta seção — o motivo está no log do backend)_"
+_VAZIO = "_(nada aqui)_"
+
+
+# ---------------------------------------------------------------------------
+# texto
+# ---------------------------------------------------------------------------
+
+def _uma_linha(txt: str | None, n: int = _COL) -> str:
+    """Texto de várias linhas virando UMA, cortado em `n`. O dossiê é lido como lista: um bullet que
+    carrega 40 linhas de saída de ferramenta esconde os outros bullets."""
+    s = " ".join((txt or "").split())
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+_FIM_FRASE = re.compile(r"(?<=[.!?:])\s+")
+
+
+def _ultimas_frases(txt: str, n: int = 220) -> str:
+    """A última frase INTEIRA da fala do agente, não os últimos N caracteres dela.
+
+    Cortar por caractere começava a citação no meio de uma palavra ("senhada como bolha cinza…") —
+    medido no primeiro dossiê real. A proposta é o fecho da mensagem: junta frases do fim pra trás
+    enquanto couber."""
+    frases = [f.strip() for f in _FIM_FRASE.split(" ".join((txt or "").split())) if f.strip()]
+    if not frases:
+        return ""
+    escolhidas: list[str] = []
+    tam = 0
+    for f in reversed(frases):
+        if escolhidas and tam + len(f) > n:
+            break
+        escolhidas.insert(0, f)
+        tam += len(f) + 1
+    return _uma_linha(" ".join(escolhidas), n)
+
+
+def _sem_acento(txt: str) -> str:
+    s = unicodedata.normalize("NFKD", txt.lower())
+    return "".join(c for c in s if not unicodedata.combining(c))
+
+
+def _secao(titulo: str, linhas: list[str]) -> list[str]:
+    teto = _ORCAMENTO.get(titulo, 20)
+    linhas = [ln for ln in linhas if ln]
+    if not linhas:
+        linhas = [_VAZIO]
+    if len(linhas) > teto:
+        sobra = len(linhas) - teto
+        linhas = linhas[:teto] + [f"_(+{sobra} linha(s) cortada(s) pelo orçamento da seção)_"]
+    return [f"## {titulo}", ""] + linhas + [""]
+
+
+def _tentar(titulo: str, fn) -> list[str]:
+    """Roda o construtor de uma seção; qualquer falha vira UMA linha visível + warning no log."""
+    try:
+        return _secao(titulo, fn())
+    except Exception:
+        _log.warning("bastao: seção %r falhou", titulo, exc_info=True)
+        return _secao(titulo, [_SEM_SECAO])
+
+
+# ---------------------------------------------------------------------------
+# seções de leitura direta
+# ---------------------------------------------------------------------------
+
+def _conta_do_transcript(jsonl: str) -> str:
+    """Rótulo da conta dona do transcript, deduzido do caminho (`<config>/projects/<proj>/<id>.jsonl`).
+
+    Sem chamar `conta_estado.listar_contas()` de propósito: aquilo forka o CLI do `claude` por conta,
+    com timeout de 10s, pra devolver estado de LOGIN — que não é o que o sucessor precisa saber.
+    Fora do Claude o transcript nem mora na conta (Pi/Kimi/Codex), e aí a linha simplesmente não sai.
+    """
+    from app.config import list_config_dirs
+    try:
+        base = Path(jsonl).resolve().parent.parent.parent
+    except OSError:
+        return ""
+    for c in list_config_dirs():
+        try:
+            if Path(c.path).resolve() == base:
+                return c.label or c.path
+        except OSError:
+            continue
+    return ""
+
+
+def _de_onde_veio(jsonl: str, cwd: str | None, provider: str, nome: str) -> list[str]:
+    from app import statusline
+    from app.models import session_key
+
+    out = [f"- Sessão de origem: `{nome or '?'}` (harness `{provider}`)",
+           f"- Diretório de trabalho: `{cwd or '?'}`",
+           f"- Transcript lido: `{jsonl}`"]
+    conta = _conta_do_transcript(jsonl)
+    if conta:
+        out.append(f"- Conta: `{conta}`")
+    linha = statusline.read(session_key(jsonl))
+    if linha:
+        # A statusline traz modelo, esforço, janela de contexto e cota — é o único lugar onde o
+        # "modelo/esforço da origem" existe sem dirigir o terminal dela (ver model_picker).
+        out.append(f"- Statusline da origem: `{_uma_linha(linha)}`")
+    return out
+
+
+def _onde_esta_o_trabalho(cwd: str | None) -> list[str]:
+    from app import git_ops
+
+    if not cwd:
+        return ["_(sessão sem diretório conhecido)_"]
+    branch, worktree = git_ops.head_info(cwd)
+    if branch is None and not worktree:
+        return [f"_(sem repositório git em `{cwd}`)_"]
+    out = [f"- Branch: `{branch or 'HEAD destacado'}`" + (" (worktree ligada)" if worktree else "")]
+    resumo = git_ops.git_summary(cwd)
+    stat = git_ops.git_diffstat(cwd)
+    if resumo:
+        pedacos = [f"{resumo['dirty']} arquivo(s) não commitado(s)"]
+        if stat:
+            pedacos.append(f"+{stat['added']} -{stat['removed']} linhas vs HEAD")
+        if resumo.get("ahead") is not None:
+            pedacos.append(f"{resumo['ahead']} commit(s) à frente, {resumo['behind']} atrás")
+        out.append("- " + " · ".join(pedacos))
+    try:
+        mudados = git_ops.changed_files(cwd)
+    except git_ops.GitError as e:
+        # Não propaga: o resto da seção (branch, contagem) é útil sozinho. Mas APARECE.
+        _log.warning("bastao: git status falhou em %s: %s", cwd, e.detail)
+        out.append(f"- _(a lista de arquivos não veio: {_uma_linha(e.detail, 120)})_")
+        return out
+    if mudados:
+        out.append("- Não commitado agora:")
+        out += [f"  - `{m['code']}` `{m['path']}`" for m in mudados[:_MAX_ARQUIVOS]]
+        if len(mudados) > _MAX_ARQUIVOS:
+            out.append(f"  - _(+{len(mudados) - _MAX_ARQUIVOS} arquivo(s))_")
+    return out
+
+
+def _o_plano(cwd: str | None) -> list[str]:
+    from app import planprog
+
+    prog = planprog.plan_progress(cwd)
+    # Plano NÃO COMEÇADO não acende a barra do app (planprog descarta zero-marcado de propósito), e
+    # no primeiro dossiê real isso apontou o sucessor pro plano da SEMANA PASSADA — 14/16, "Task em
+    # curso: modal" — enquanto o trabalho vivo era um plano escrito naquela manhã. Pro app é acerto;
+    # aqui seria mandar continuar a coisa errada. Então o mais recente é citado quando difere.
+    lista = planprog.list_plans(cwd) or {}
+    recente = next((p for p in lista.get("plans", []) if not p["complete"]), None)
+    aviso: list[str] = []
+    if recente and (prog is None or recente["stem"] not in (prog.path or "")):
+        aviso = [f"- Plano mais RECENTE no repo: `{recente['name']}` "
+                 f"({recente['done']}/{recente['total']} steps)"
+                 + (" — ainda não começado" if recente["done"] == 0 else "")]
+    if prog is None:
+        return aviso or ["_(nenhum plano ativo neste repositório)_"]
+    out = aviso + [f"- Plano que a barra do app mostra: `{prog.name}` (`{prog.path}`)",
+                   f"- Progresso: {prog.done}/{prog.total} steps · Task {prog.task_idx}/{prog.task_total}"]
+    atual = next((t for t in prog.tasks if t.done < t.total), None)
+    if atual is None:
+        out.append("- Todas as Tasks marcadas como concluídas.")
+        return out
+    out.append(f"- Task em curso: **{atual.title}** ({atual.done}/{atual.total})")
+    pendentes = [s for s in atual.steps if not s.done]
+    if pendentes:
+        out.append("- Steps pendentes desta Task:")
+        out += [f"  - {s.title}" + (" _(verificação manual)_" if s.manual else "")
+                for s in pendentes]
+    out.append("- Marque `- [ ]` → `- [x]` no arquivo do plano ao fechar cada Step: é daí que sai a "
+               "barra de progresso do app.")
+    return out
+
+
+_CHAVES_ARQUIVO = ("file_path", "filePath", "path", "notebook_path", "filename")
+_CHAVES_COMANDO = ("command", "cmd", "script")
+
+
+def _alvo_da_ferramenta(entrada: dict | None) -> tuple[str, str]:
+    """(tipo, valor) do que a ferramenta mexeu: ('arquivo', path) / ('comando', cmd) / ('', '')."""
+    if not isinstance(entrada, dict):
+        return "", ""
+    for k in _CHAVES_ARQUIVO:
+        v = entrada.get(k)
+        if isinstance(v, str) and v.strip():
+            return "arquivo", v.strip()
+    for k in _CHAVES_COMANDO:
+        v = entrada.get(k)
+        if isinstance(v, str) and v.strip():
+            return "comando", v.strip()
+    return "", ""
+
+
+_ESCRITA = {"edit", "write", "notebookedit", "multiedit", "apply_patch", "str_replace_editor",
+            "create_file", "update_file"}
+
+
+# Comando de LEITURA não é trabalho: o dossiê perdia as oito linhas de "últimos comandos" com
+# `sed -n`/`grep`/`pwd` do próprio agente vasculhando arquivo. O que o sucessor precisa saber é o
+# que RODOU de verdade — teste, build, git, instalação.
+_CMD_LEITURA = {"cat", "sed", "grep", "rg", "head", "tail", "wc", "ls", "find", "pwd", "echo",
+                "which", "stat", "file", "cut", "awk", "sort", "uniq", "tree", "du", "realpath"}
+
+
+def _e_leitura(cmd: str) -> bool:
+    primeiro = (cmd.strip().split() or [""])[0].split("/")[-1]
+    return primeiro in _CMD_LEITURA
+
+
+def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
+    """Arquivos escritos, comandos rodados e as ferramentas que FALHARAM, na ordem do transcript."""
+    escritos: list[str] = []
+    lidos: list[str] = []
+    comandos: list[str] = []
+    nome_por_id: dict[str, str] = {}
+    falhas: list[str] = []
+    for ev in eventos:
+        if ev.kind == "tool_use":
+            nome = (ev.tool_name or "").strip()
+            if ev.tool_use_id:
+                nome_por_id[ev.tool_use_id] = nome or "?"
+            tipo, valor = _alvo_da_ferramenta(ev.tool_input)
+            if tipo == "arquivo":
+                alvo = escritos if _sem_acento(nome).replace("_", "") in _ESCRITA else lidos
+                if valor not in alvo:
+                    alvo.append(valor)
+            elif tipo == "comando" and not _e_leitura(valor):
+                comandos.append(_uma_linha(valor, 140))
+        elif ev.kind == "tool_result" and ev.is_error:
+            quem = nome_por_id.get(ev.tool_use_id or "", "ferramenta")
+            falhas.append(f"  - `{quem}`: {_uma_linha(ev.result, 160)}")
+
+    # Arquivo fora do projeto é rastro de investigação (print em /tmp, log de outro repo), não o
+    # trabalho: no primeiro dossiê real, doze linhas de "lidos" eram PNG de /tmp. Escritos ficam
+    # inteiros — se a origem escreveu fora do cwd, isso é justamente o que o sucessor tem que saber.
+    if cwd:
+        dentro = [p for p in lidos if p.startswith(cwd)]
+        lidos = dentro or lidos
+
+    out: list[str] = []
+    if escritos:
+        out.append("- Arquivos ESCRITOS pela origem (o trabalho já está no disco):")
+        out += [f"  - `{p}`" for p in escritos[-_MAX_ARQUIVOS:]]
+    if lidos:
+        out.append("- Arquivos lidos/buscados (só os do projeto):")
+        out += [f"  - `{p}`" for p in lidos[-_MAX_ARQUIVOS:]]
+    if comandos:
+        out.append("- Últimos comandos:")
+        out += [f"  - `{c}`" for c in comandos[-_MAX_COMANDOS:]]
+    if falhas:
+        # As falhas ficam por ÚLTIMO e nomeadas: é o que o sucessor não pode redescobrir sozinho —
+        # um teste que quebrou, uma permissão negada, um comando que não existe naquela máquina.
+        out.append("- Ferramentas que FALHARAM (as mais recentes):")
+        out += falhas[-_MAX_FALHAS:]
+    return out
+
+
+def _grupo_e_par(nome: str) -> list[str]:
+    from app import orq_md, orq_papeis, pair
+
+    link = pair.PairLink(nome).get() if nome else None
+    gid = (link or {}).get("gid") or (orq_papeis.gid_por_sessao(nome) if nome else None)
+    if not link and not gid:
+        return ["_(sessão sem par e sem grupo)_"]
+    out: list[str] = []
+    if link:
+        out.append("- Pareada com: " + ", ".join(f"`{p}`" for p in link["peers"]))
+        if link.get("task"):
+            out.append(f"- Rótulo do grupo: `{_uma_linha(link['task'], 120)}`")
+    if nome:
+        contrato = pair.contract_path_for(nome)
+        if contrato:
+            out.append(f"- Contrato do grupo (leia antes de agir): `{contrato}`")
+    if gid:
+        regras = orq_papeis.regras_path(gid)
+        texto, _mtime = orq_md.ler_arquivo(regras)
+        if texto:
+            out.append(f"- Tabela de papéis: `{regras}`")
+            out += [f"  - **{p.papel}** → `{p.sessao}` ({p.provider or '?'} · {p.conta or '?'} · "
+                    f"{p.modelo or '?'})" for p in orq_papeis.ler(texto)]
+    # O bastão NÃO reata nada disso (par, grupo, then e loop são sidecars por NOME): quem continua
+    # tem de trocar a linha da tabela e avisar o par à mão. Dizer isso aqui é o que evita o par
+    # seguir mandando recado pra uma sessão que parou.
+    out.append("- **A passagem de bastão não move estes vínculos.** Quem continua precisa trocar a "
+               "linha da tabela de papéis para o próprio nome e avisar o par.")
+    return out
+
+
+def _estado_agora(eventos: list) -> list[str]:
+    fala = [ev for ev in eventos if ev.kind in ("user_msg", "assistant_msg") and ev.text]
+    if not fala:
+        return []
+    out = ["Últimas falas da conversa, na ordem (citação literal, cortada):", ""]
+    for ev in fala[-_MAX_CAUDA:]:
+        quem = "você" if ev.kind == "user_msg" else "agente"
+        out.append(f"- **{quem}:** {_uma_linha(ev.text, 300)}")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Decisões (o único filtro do dossiê)
+# ---------------------------------------------------------------------------
+# Sem TF-IDF/TextRank/MMR: aquele ferramental foi feito pra corpus de MUITOS documentos, e
+# centralidade num corpus que é UMA conversa premia o que se repete — em chat, o que se repete é
+# "ok", "pode seguir". A decisão rara e definitiva é justamente o que a centralidade rebaixaria.
+# Ver o pass adversarial de 27/08 na spec.
+
+# Concordância curta: a mensagem do usuário sozinha ("pode") não é decisão nenhuma. Sem acento
+# porque a comparação roda em texto normalizado.
+_CONCORDA = {
+    "ok", "okay", "oks", "blz", "beleza", "sim", "isso", "isso ai", "ai", "pode", "podes", "vai",
+    "manda", "bora", "segue", "seguir", "siga", "prossegue", "continua", "faz", "fecha",
+    "fechado", "certo", "mesmo", "tranquilo", "ver", "adiante",
+    "exato", "exatamente", "perfeito", "boa", "otimo", "legal", "top", "show", "valeu", "obrigado",
+    "aprovado", "aprova", "aprovo", "ta", "tah", "eh", "e", "yes", "y", "s", "sla", "vamos", "la",
+    "por", "favor", "pra", "frente", "adiante", "de", "acordo", "concordo", "aceito", "otima",
+}
+_LIM_CONCORDA = 34      # acima disso não é "ok" — é instrução
+
+# Negação: é onde a decisão vira RESTRIÇÃO ("não usa X", "em vez de Y"), o que o sucessor mais
+# precisa e o que ele mais refaz errado quando não sabe.
+_NEGACOES = ("nao ", "nao,", "nao.", "nao!", "nao?", " nao", "nunca", "jamais", "em vez de",
+             "no lugar de", "esquece", "cancela", "sem usar", "nem ", "tira ", "remove ", "para de")
+
+# Menção de arquivo/símbolo: `algo.py`, `app/bastao.py`, `montar()`, ou um termo entre crases.
+_TERMO_RE = re.compile(r"`([^`\n]{2,60})`|\b([\w./\\-]+\.[A-Za-z]{1,6})\b")
+
+
+def _e_concordancia(txt: str) -> bool:
+    n = _sem_acento(txt).strip()
+    if not n or len(n) > _LIM_CONCORDA:
+        return False
+    palavras = re.findall(r"[a-z0-9]+", n)
+    return bool(palavras) and all(p in _CONCORDA for p in palavras)
+
+
+def _tem_negacao(txt: str) -> bool:
+    n = " " + _sem_acento(txt) + " "
+    return any(m in n for m in _NEGACOES)
+
+
+def _termos(txt: str) -> set[str]:
+    return {(a or b).strip() for a, b in _TERMO_RE.findall(txt)}
+
+
+def _pares(eventos: list) -> list[tuple[int, str, str]]:
+    """(índice, proposta do agente, resposta do usuário) por ADJACÊNCIA — a última fala do agente
+    imediatamente antes de cada mensagem do usuário. Sem heurística de quem-responde-o-quê: a
+    unidade de decisão é o par, e "pode fazer" isolado não é decisão nenhuma."""
+    out: list[tuple[int, str, str]] = []
+    proposta = ""
+    for ev in eventos:
+        if ev.kind == "assistant_msg" and ev.text:
+            proposta = ev.text
+        elif ev.kind == "user_msg" and ev.text:
+            out.append((len(out), proposta, ev.text))
+            proposta = ""       # a mesma proposta não vale pra duas respostas seguidas
+    return out
+
+
+def _decisoes(eventos: list) -> list[str]:
+    from app.pqueue import linha_mais_parecida
+
+    pares = _pares(eventos)
+    if not pares:
+        return []
+
+    vistos: set[str] = set()
+    pontuados: list[tuple[int, int, str, str]] = []      # (peso, índice, proposta, resposta)
+    for i, prop, resp in pares:
+        novos = _termos(resp) - vistos
+        vistos |= _termos(resp) | _termos(prop)
+        # Fora o par cujo lado do usuário é só concordância curta E cujo lado do agente não propõe
+        # nada (sem pergunta): ali não há decisão pra citar, só ritmo de conversa.
+        if _e_concordancia(resp) and "?" not in prop:
+            continue
+        peso = (2 if _tem_negacao(resp) else 0) + (1 if novos else 0)
+        pontuados.append((peso, i, prop, resp))
+
+    # Sobem os de mais peso; empate resolve por recência. O corte é aqui: os últimos N que
+    # sobreviveram, e não "os N últimos do arquivo".
+    pontuados.sort(key=lambda t: (t[0], t[1]), reverse=True)
+
+    escolhidos: list[tuple[int, str, str]] = []
+    textos: set[str] = set()
+    for _peso, i, prop, resp in pontuados:
+        chave = _uma_linha(resp, 300)
+        # Dedup por semelhança de texto (o papel que o MMR faria) com o precedente que já existe em
+        # stdlib neste repo. "roda o pytest" pedido cinco vezes ocupa UMA linha do dossiê.
+        if linha_mais_parecida(chave, textos):
+            continue
+        textos.add(chave)
+        escolhidos.append((i, prop, resp))
+        if len(escolhidos) >= _MAX_DECISOES:
+            break
+
+    escolhidos.sort(key=lambda t: t[0])       # de volta pra ordem da conversa
+    out = ["Pares proposta→resposta, na ordem em que aconteceram. Citação literal do transcript:", ""]
+    for _i, prop, resp in escolhidos:
+        out.append(f"- **você:** {_uma_linha(resp, 260)}")
+        if prop:
+            out.append(f"  - _antes disso, o agente:_ {_ultimas_frases(prop)}")
+    return out
+
+
+# ---------------------------------------------------------------------------
+
+def _eventos(nome: str, jsonl: str, provider: str) -> list:
+    from app.pqueue import merged_history
+    try:
+        return merged_history(nome, jsonl, provider, _EVENTOS)
+    except Exception:
+        # merged_history já engole o OSError do transcript ausente; chegar aqui é outra coisa.
+        # Sem isto, um transcript malformado apagaria as TRÊS seções que saem dele de uma vez, e o
+        # dossiê sairia parecendo uma sessão que nunca fez nada.
+        _log.warning("bastao: não deu pra ler o transcript %s (provider=%s)", jsonl, provider,
+                     exc_info=True)
+        return []
+
+
+def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = "") -> str:
+    """Dossiê em markdown de UMA sessão, pronto pra outra ler com um `Read`.
+
+    O alvo chega resolvido: sessão viva vem do `registry` (`SessionInfo.jsonl`/`cwd`/`provider`),
+    sessão morta vem do `archive` (`archive_jsonl` + `archive_cwd`). Nunca levanta — seção que
+    falha vira uma linha dizendo isso."""
+    eventos = _eventos(nome, jsonl, provider)
+    linhas: list[str] = [
+        f"# Passagem de bastão — sessão `{nome or '?'}`",
+        "",
+        "Montado pelo backend do Hangar a partir do transcript, do git e do plano no disco. Não é "
+        "resumo de modelo: tudo aqui é leitura direta ou citação literal. O que estiver marcado "
+        "como cortado existe no transcript da origem, não sumiu.",
+        "",
+    ]
+    linhas += _tentar("De onde veio", lambda: _de_onde_veio(jsonl, cwd, provider, nome))
+    linhas += _tentar("Onde está o trabalho", lambda: _onde_esta_o_trabalho(cwd))
+    linhas += _tentar("O plano", lambda: _o_plano(cwd))
+    linhas += _tentar("Arquivos e comandos", lambda: _arquivos_e_comandos(eventos, cwd))
+    linhas += _tentar("Grupo e par", lambda: _grupo_e_par(nome))
+    linhas += _tentar("Decisões", lambda: _decisoes(eventos))
+    linhas += _tentar("Estado agora", lambda: _estado_agora(eventos))
+    if len(linhas) > _TETO_LINHAS:
+        linhas = linhas[:_TETO_LINHAS] + [
+            "", f"_(dossiê cortado no teto de {_TETO_LINHAS} linhas)_"]
+    return "\n".join(linhas).rstrip() + "\n"
+
+
+# ---------------------------------------------------------------------------
+# entrega: onde o dossiê é gravado e o que a sessão nova recebe na fila
+# ---------------------------------------------------------------------------
+
+def caminho(destino: str) -> Path:
+    """`<config>/.hangar-bastao/<destino>.md`, com o diretório já criado.
+
+    `_sanitize` é o MESMO da fila (`pqueue`): o `prune` compara o `stem` do arquivo com
+    `_sanitize(nome_da_sessao)`, então qualquer outra normalização aqui deixaria o sidecar órfão
+    pra sempre — que é o defeito medido em 18/08/2026 (sidecar fora do catálogo nunca é podado).
+    """
+    from app.config import settings
+    from app.pqueue import _sanitize
+
+    d = Path(settings.projects_dir).parent / _SUBDIR
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{_sanitize(destino)}.md"
+
+
+def gravar(destino: str, texto: str) -> Path:
+    """Grava o dossiê da sessão `destino` e devolve o caminho. Falha SOBE (não engole OSError).
+
+    Quem chama grava ANTES de criar a sessão, e é por isso que o erro tem de subir: uma sessão
+    nova viva com um kick-off apontando pra arquivo que não existe é pior que pedido nenhum — o
+    sucessor abre, dá `Read`, não acha nada e não tem como saber o que era pra continuar.
+    """
+    alvo = caminho(destino)
+    tmp = alvo.with_suffix(".md.tmp")
+    tmp.write_text(texto, encoding="utf-8")
+    atomico.substituir(tmp, alvo)
+    return alvo
+
+
+# Modelo + esforço da statusline (`🤖 Opus 5 (high✦)`). Mesma leitura que o `sse._status_sig` já
+# faz pro dedup da lista — aqui é uma linha de texto, não vale importar o privado de lá.
+_MODELO_RE = re.compile(r"🤖\s*([^│]+?)\s*(?:·|│|$)")
+
+
+def origem_resumida(jsonl: str) -> tuple[str, str]:
+    """(conta, modelo) da origem, pro kick-off. `""` em cada campo que não dá pra saber.
+
+    Nenhum dos dois é obrigatório: sessão de Pi/Kimi não mora numa conta do Claude, e sessão sem
+    a statusline instrumentada não publica modelo nenhum. O kick-off omite a parte que faltar em
+    vez de inventar — o dossiê traz a linha inteira de qualquer jeito.
+    """
+    from app import statusline
+    from app.models import session_key
+
+    modelo = ""
+    linha = statusline.read(session_key(jsonl))
+    if linha:
+        m = _MODELO_RE.search(linha)
+        if m:
+            modelo = _uma_linha(m.group(1), 60)
+    return _conta_do_transcript(jsonl), modelo
+
+
+# Prefixo do recado, mesma família do `[de: <sessão>]` do hangar-send e do
+# `[painel: orquestração]` do `_recado_arbitro`: quem lê sabe na primeira palavra que isto é
+# recado do app, não uma mensagem digitada pelo usuário.
+_KICKOFF_PREFIXO = "[hangar: passagem de bastão]"
+
+
+def kickoff(origem: str, dossie: str | Path, conta: str = "", modelo: str = "") -> str:
+    """As seis linhas que a sessão NOVA recebe pela fila durável.
+
+    Curto de propósito: o conteúdo é o arquivo, e o recado só diz de quem ela continua, onde ler e
+    as três coisas que o dossiê sozinho não resolve — que a origem continua viva (um escritor por
+    árvore, e as duas compartilham o mesmo diretório), que par/grupo NÃO são movidos pela passagem,
+    e de onde ela veio. Ver a spec: mandar transcript no prompt lota o contexto do sucessor antes
+    de ele começar.
+    """
+    de = " · ".join(x for x in (f"conta `{conta}`" if conta else "",
+                                f"modelo `{modelo}`" if modelo else "") if x)
+    return "\n".join([
+        f"{_KICKOFF_PREFIXO} Você continua o trabalho da sessão `{origem or '?'}` — não é tarefa "
+        "nova, é a mesma, no ponto em que ela parou.",
+        f"Comece lendo, com um `Read`, o dossiê em `{dossie}`: onde o trabalho está, o que já está "
+        "no disco e por que as decisões foram tomadas.",
+        "Leia o plano e o contrato citados no dossiê ANTES de mexer em qualquer arquivo — o dossiê "
+        "diz onde parou, o plano diz o que vem em seguida.",
+        f"A sessão `{origem or '?'}` continua VIVA, mas parou de escrever: daqui pra frente quem "
+        "escreve no diretório é você (um escritor por árvore — as duas compartilham o mesmo cwd).",
+        "Se o dossiê mostrar par ou grupo, a passagem NÃO move esses vínculos: troque a linha da "
+        "tabela de papéis para o SEU nome e avise o par (`hangar-send`) que o endereço agora é você.",
+        (f"Ela vinha de {de} — você pode estar em outra." if de
+         else "A conta e o modelo de onde ela vinha estão na primeira seção do dossiê — você pode "
+              "estar em outros."),
+    ])

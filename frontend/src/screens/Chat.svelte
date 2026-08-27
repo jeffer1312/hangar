@@ -442,6 +442,15 @@
 
   function startNew() {
     switcherOpen = false;
+    bastaoAlvo = null;
+    createOpen = true;
+  }
+
+  // Passagem de bastão pelo "⋯" do celular (a lista mobile não tem menu por sessão). Mesma folha de
+  // criar, aberta pra CONTINUAR esta conversa; o cwd sai da linha da sessão na lista agregada.
+  let bastaoAlvo = $state<{ name: string; cwd: string; serverId: string } | null>(null);
+  function passarBastaoDaqui() {
+    bastaoAlvo = { name: sessionName, cwd: planSession?.cwd ?? '', serverId: getActiveId() ?? '' };
     createOpen = true;
   }
 
@@ -1972,6 +1981,7 @@
     onClose={() => (createOpen = false)}
     onCreate={handleCreate}
     onOpenSession={onNavigateToChat}
+    bastao={bastaoAlvo}
   />
 
   <ForwardSheet
@@ -2017,6 +2027,7 @@
              onRun={() => (runOpen = true)} {runRunning}
              onActivity={(hasActivity || !!planName) ? () => (activityOpen = true) : undefined}
              onAttachments={() => (anexosOpen = true)}
+             onBastao={passarBastaoDaqui}
              {activityRunning} {activityBadge} />
   <AttachmentsSheet open={anexosOpen} {sessionName} onClose={() => (anexosOpen = false)}
                     onUsarNoDitado={usarAnexoNoDitado} />

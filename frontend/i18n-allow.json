@@ -1,6 +1,8 @@
 [
   {
     "_justificativas": {
+      "não reescreva a tabela": "orqRecado.ts MARCAS — trecho do recado que o BACKEND gera (api._recado_arbitro), casado por `includes` pra o cartão só existir enquanto resumir o texto certo. É dado do servidor, não texto de tela; traduzir faria o cartão nunca casar. Vale para 'Sucessão do árbitro' (MARCA_SUCESSAO), 'PARADA (idle)' e 'TRABALHANDO' — as duas últimas não caem na heurística por serem maiúsculas.",
+      "Sucessão do árbitro": "orqRecado.ts MARCA_SUCESSAO — ver a justificativa de 'não reescreva a tabela': marcador casado contra o texto do backend, não interface.",
       "visor: falhou ao abrir": "visor.ts — mensagem de console.error (os tres chamadores disparam com `void`, entao sem isto a falha vira rejeicao nao tratada), nao texto de tela",
       "ditado: nao deu pra restaurar a barra guardada": "Composer.svelte — mensagem de console.warn (chave de localStorage corrompida), nao texto de tela: quem le e quem abre o devtools pra diagnosticar",
       "árbitro": "OrquestracaoSheet.svelte PAPEIS_CANONICOS — nomes de papel da skill orchestrating-idea-to-push, gravados como DADO na tabela do regras-<gid>.md (o árbitro lê o nome cru); traduzir mudaria o contrato. Vale para 'revisão final' e 'par de research'",
@@ -29,6 +31,8 @@
       "sse.abrir": "screens/Chat.svelte — VERBO de evento do diario de uso (mesmo alfabeto de 'tela.ver', 'opcao.tocar'), chave de dado num arquivo JSONL. Nunca exibido."
     }
   },
+  "não reescreva a tabela",
+  "Sucessão do árbitro",
   "de primeira",
   "orq: falhou o detalhe da execução viva",
   "'Adapte só a FORMA: troque caminho de arquivo pelo nome do arquivo falado, separe identificador',",
