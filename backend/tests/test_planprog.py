@@ -455,6 +455,57 @@ def test_arquivar_nunca_sobrescreve_o_que_ja_esta_em_feitos(tmp_path):
     assert (feitos / "2026-07-01-pendente.md").read_text(encoding="utf-8") == "o de la"
 
 
+def test_arquivar_e_tudo_ou_nada_quando_so_o_html_colide(tmp_path):
+    # O caso que o teste de colisao anterior nao pegava: um `.html` orfao ja em feitos/ (sobra de
+    # um arquivamento antigo) era notado DEPOIS de o `.md` ja ter saido — o plano sumia da pasta
+    # ativa enquanto a tela dizia "nao deu pra arquivar".
+    root = _tres_planos(tmp_path)
+    Path(root, "2026-07-01-pendente.html").write_text("novo", encoding="utf-8")
+    feitos = Path(root, planprog.FEITOS_REL)
+    feitos.mkdir()
+    (feitos / "2026-07-01-pendente.html").write_text("o de la", encoding="utf-8")
+
+    with pytest.raises(planprog.PlanWriteError):
+        planprog.arquivar(root, "2026-07-01-pendente")
+
+    # Nada se mexeu: o .md continua onde estava e o .html de la continua intacto.
+    assert Path(root, "2026-07-01-pendente.md").is_file()
+    assert Path(root, "2026-07-01-pendente.html").read_text(encoding="utf-8") == "novo"
+    assert (feitos / "2026-07-01-pendente.html").read_text(encoding="utf-8") == "o de la"
+    assert plan_progress(str(tmp_path)).name == "pendente"
+
+
+def test_marcacoes_concorrentes_nao_se_desfazem(tmp_path):
+    # Celular e desktop abertos na MESMA sessao: as duas chamadas liam o mesmo texto antes de
+    # qualquer uma gravar, e a segunda regravava o arquivo inteiro por cima — a marcacao da
+    # primeira sumia sem erro nenhum. O sleep dentro da escrita forca a sobreposicao.
+    import threading
+    p = _write(tmp_path, "2026-07-29-plano-de-teste.md", PLAN_A)
+    pendentes = [s.idx for t in plan_progress(str(tmp_path)).tasks for s in t.steps if not s.done]
+    assert len(pendentes) >= 2
+
+    real = planprog.atomico.substituir
+
+    def devagar(origem, destino):
+        time.sleep(0.05)
+        real(origem, destino)
+
+    planprog.atomico.substituir = devagar
+    try:
+        ts = [threading.Thread(target=planprog.marcar_step, args=(str(p), i, True))
+              for i in pendentes[:2]]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+    finally:
+        planprog.atomico.substituir = real
+
+    planprog._reset_caches()
+    marcados = {s.idx for t in plan_progress(str(tmp_path)).tasks for s in t.steps if s.done}
+    assert set(pendentes[:2]) <= marcados
+
+
 @pytest.mark.parametrize("veneno", ["../fora", "a/b", "..", ""])
 def test_escrita_recusa_stem_com_separador(tmp_path, veneno):
     root = _tres_planos(tmp_path)

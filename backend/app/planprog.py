@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -180,6 +181,15 @@ def caminho_do_plano(root: str, stem: str) -> str:
     return os.path.join(root, stem + ".md")
 
 
+# Serializa o ciclo ler-alterar-gravar do `marcar_step`. Duas marcacoes quase simultaneas — o app
+# roda no celular E no desktop ao mesmo tempo, na mesma sessao — liam o MESMO `raw` antes de
+# qualquer uma gravar, e a segunda regravava o arquivo inteiro por cima, desfazendo a primeira em
+# silencio (a checagem de `raw[pos]` so olha o byte do proprio idx, entao ela nao pega isso).
+# ponytail: um lock global pro backend inteiro. A secao critica e ler um .md e trocar um caractere;
+# se um dia isto virar gargalo, o passo seguinte e um lock por caminho.
+_lock_escrita = threading.Lock()
+
+
 def marcar_step(path: str, idx: int, done: bool) -> None:
     """Marca (ou desmarca) o step de indice `idx` — 0-based, na ordem do documento — do plano.
 
@@ -189,36 +199,40 @@ def marcar_step(path: str, idx: int, done: bool) -> None:
     Escreve UM caractere: o resto do arquivo sai byte a byte igual. Nada de reserializar markdown —
     o plano e do usuario e esta versionado, um reformat viraria diff que ninguem pediu.
     """
-    try:
-        raw = Path(path).read_bytes().decode("utf-8")
-    except OSError as e:
-        raise PlanWriteError(str(e))
-    except UnicodeDecodeError:
-        # Os outros caminhos leem com errors="replace" porque so exibem. Aqui a leitura volta pro
-        # disco: gravar o U+FFFD apagaria o byte original do arquivo do usuario.
-        raise PlanWriteError("o plano nao esta em UTF-8")
+    with _lock_escrita:
+        try:
+            raw = Path(path).read_bytes().decode("utf-8")
+        except OSError as e:
+            raise PlanWriteError(str(e))
+        except UnicodeDecodeError:
+            # Os outros caminhos leem com errors="replace" porque so exibem. Aqui a leitura volta
+            # pro disco: gravar o U+FFFD apagaria o byte original do arquivo do usuario.
+            raise PlanWriteError("o plano nao esta em UTF-8")
 
-    # Mesma neutralizacao de bloco cercado do parse, PRESERVANDO offsets — e o que deixa casar no
-    # texto limpo e escrever no original. Sem ela, um step de exemplo dentro de ``` entraria na
-    # contagem e o indice apontaria pro checkbox errado.
-    limpo = _FENCE_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), raw)
-    ms = list(_STEP_RE.finditer(limpo))
-    if idx < 0 or idx >= len(ms):
-        raise PlanWriteError(f"step {idx} nao existe (o plano tem {len(ms)})")
-    pos = ms[idx].start(1)
-    if raw[pos] not in " xX":
-        # So acontece se o arquivo mudou entre a leitura que gerou a tela e este clique. Recusa
-        # explicita: escrever no offset errado corromperia o texto do plano.
-        raise PlanWriteError("o plano mudou no disco — recarregue antes de marcar")
+        # Mesma neutralizacao de bloco cercado do parse, PRESERVANDO offsets — e o que deixa casar
+        # no texto limpo e escrever no original. Sem ela, um step de exemplo dentro de ``` entraria
+        # na contagem e o indice apontaria pro checkbox errado.
+        limpo = _FENCE_RE.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), raw)
+        ms = list(_STEP_RE.finditer(limpo))
+        if idx < 0 or idx >= len(ms):
+            raise PlanWriteError(f"step {idx} nao existe (o plano tem {len(ms)})")
+        pos = ms[idx].start(1)
+        if raw[pos] not in " xX":
+            # So acontece se o arquivo mudou entre a leitura que gerou a tela e este clique. Recusa
+            # explicita: escrever no offset errado corromperia o texto do plano.
+            raise PlanWriteError("o plano mudou no disco — recarregue antes de marcar")
 
-    novo = raw[:pos] + ("x" if done else " ") + raw[pos + 1:]
-    tmp = f"{path}.{os.getpid()}.tmp"    # pid no nome: mesmo motivo do sidecar da statusline
-    try:
-        Path(tmp).write_text(novo, encoding="utf-8")
-        atomico.substituir(tmp, path)
-    except OSError as e:
-        Path(tmp).unlink(missing_ok=True)
-        raise PlanWriteError(str(e))
+        novo = raw[:pos] + ("x" if done else " ") + raw[pos + 1:]
+        # pid no nome separa PROCESSOS; duas marcacoes do mesmo backend cairiam no mesmo temporario
+        # (medido: a segunda achava o arquivo ja renomeado e levantava FileNotFoundError). Quem
+        # separa as duas e o `_lock_escrita` acima — o pid e a rede pro caso de outro processo.
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            Path(tmp).write_text(novo, encoding="utf-8")
+            atomico.substituir(tmp, path)
+        except OSError as e:
+            Path(tmp).unlink(missing_ok=True)
+            raise PlanWriteError(str(e))
     # _file_cache e chaveado por mtime_ns, entao a proxima leitura ja reparseia sozinha.
 
 
@@ -241,18 +255,36 @@ def arquivar(root: str, stem: str) -> list[str]:
     movidos: list[str] = []
     try:
         os.makedirs(destino, exist_ok=True)
-        for ext in (".md", ".html"):
-            origem = os.path.join(root, stem + ext)
-            if not os.path.isfile(origem):
-                continue
-            alvo = os.path.join(destino, stem + ext)
-            if os.path.exists(alvo):
+        a_mover = [stem + ext for ext in (".md", ".html")
+                   if os.path.isfile(os.path.join(root, stem + ext))]
+        # TUDO ou NADA: a colisao dos DOIS destinos e conferida ANTES de mover qualquer um. Dentro
+        # do laco, um `.html` orfao ja em `feitos/` (sobra de um arquivamento anterior) so era
+        # notado depois do `.md` ja ter saido — o plano sumia da pasta ativa e a tela ainda dizia
+        # "nao deu pra arquivar", que e o contrario do que tinha acontecido.
+        for nome in a_mover:
+            if os.path.exists(os.path.join(destino, nome)):
                 # NUNCA sobrescreve: o de la e um plano encerrado de verdade, com o mesmo nome.
-                raise PlanWriteError(f"ja existe {stem + ext} em {FEITOS_REL}/")
-            atomico.substituir(origem, alvo)
-            movidos.append(stem + ext)
+                raise PlanWriteError(f"ja existe {nome} em {FEITOS_REL}/")
+        for nome in a_mover:
+            try:
+                atomico.substituir(os.path.join(root, nome), os.path.join(destino, nome))
+            except OSError as e:
+                # Sobrou o caso improvavel (disco cheio, permissao) DEPOIS do primeiro ter movido.
+                # A mensagem diz o que ja saiu: sem isso a pessoa le "nao deu pra arquivar", tenta
+                # de novo e recebe "plano nao encontrado", sem nunca saber que metade se mexeu.
+                if movidos:
+                    raise PlanWriteError(f"moveu {', '.join(movidos)} e falhou em {nome}: {e}")
+                raise PlanWriteError(str(e))
+            movidos.append(nome)
     except OSError as e:
         raise PlanWriteError(str(e))
+    finally:
+        # Fora do try de sucesso: num arquivamento parcial o `.md` JA saiu, e um cache apontando
+        # pro caminho velho faria a proxima leitura descrever um estado que nao existe mais.
+        _file_cache.pop(origem_md, None)
+        _file_cache.pop(origem_md + "\x00pin", None)
+        _discovery_cache.pop(root, None)
+        _sticky.pop(root, None)
 
     if pin_era_este:
         try:
@@ -261,10 +293,6 @@ def arquivar(root: str, stem: str) -> list[str]:
             # O pin morto agora e inofensivo (read_pin o descarta), entao nao vale falhar o
             # arquivamento que ja aconteceu — mas nao some calado.
             _log.warning("plano arquivado, mas nao deu pra soltar o pin root=%s", root, exc_info=True)
-    _file_cache.pop(origem_md, None)
-    _file_cache.pop(origem_md + "\x00pin", None)
-    _discovery_cache.pop(root, None)
-    _sticky.pop(root, None)
     return movidos
 
 

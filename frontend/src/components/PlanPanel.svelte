@@ -87,19 +87,26 @@
   async function alternarStep(s: { idx: number; done: boolean }) {
     if (!detail || escrevendo !== null) return;
     const alvo = !s.done;
+    // O plano que estava na tela quando o clique saiu. No desktop o painel NÃO remonta ao trocar
+    // de sessão, e `detail` é uma prop reativa: sem prender a referência aqui, a resposta atrasada
+    // de A voltava e escrevia no plano de B — o `idx` é 0-based por documento, então casa por
+    // acidente e a contagem de B ficava errada calada (ou estourava, se B ainda não tem plano).
+    const meu = detail;
+    const nome = session.name;
     escrevendo = s.idx;
     acaoErr = '';
     try {
-      const r = await setPlanStep(session.name, detail.stem, s.idx, alvo);
+      const r = await setPlanStep(nome, meu.stem, s.idx, alvo);
+      if (detail !== meu) return;   // trocou de sessão/plano com o POST em voo: não mexe no alheio
       // Aplica na hora em vez de esperar o poll de 5s da lista (é ele que muda `plan_done` e
       // refaz o detalhe no Chat.svelte). `detail` vem de um `$state` do Chat, então a mutação
       // reflete na barra e nas contagens; o poll seguinte confirma com o que está no disco.
       s.done = alvo;
-      const t = detail.tasks.find((t) => t.steps.some((x) => x.idx === s.idx));
+      const t = meu.tasks.find((t) => t.steps.some((x) => x.idx === s.idx));
       if (t) t.done += alvo ? 1 : -1;
-      if (r.done !== null) detail.done = r.done;
-      detail.complete = r.complete;
-    } catch (e) { acaoErr = erro(e); }
+      if (r.done !== null) meu.done = r.done;
+      meu.complete = r.complete;
+    } catch (e) { if (detail === meu) acaoErr = erro(e); }
     finally { escrevendo = null; }
   }
 
@@ -108,23 +115,38 @@
   // diálogo pra isso seria desproporcional. O estado se desarma sozinho ao trocar de plano.
   let confirmando = $state(false);
   let arquivando = $state(false);
-  $effect(() => { void detail?.stem; confirmando = false; });
+  // Trocou o plano da tela: desarma a confirmação e solta os steps. Sem soltar o `escrevendo`, um
+  // POST ainda em voo da sessão anterior deixava TODOS os passos da nova desabilitados.
+  $effect(() => { void detail?.stem; confirmando = false; escrevendo = null; });
 
   async function arquivar() {
     if (!detail) return;
     if (!confirmando) { confirmando = true; return; }
+    const nome = session.name;
+    const stem = detail.stem;
     arquivando = true;
     acaoErr = '';
     try {
-      await archivePlan(session.name, detail.stem);
+      await archivePlan(nome, stem);
       confirmando = false;
-      // Recarrega o seletor: o plano arquivado tem de sumir da lista na hora. A barra e as Tasks
-      // seguem o poll da lista, que reelege sozinho quando o arquivo some.
-      const r = await getPlans(session.name);
+    } catch (e) {
+      acaoErr = erro(e);
+      return;
+    } finally { arquivando = false; }
+
+    // Recarregar a lista é um try SEPARADO, e com a mesma guarda de `vez` do resto do arquivo. O
+    // plano JÁ foi movido aqui: uma falha de rede nesta linha caindo no `catch` de cima diria
+    // "não deu pra arquivar" sobre um arquivamento que deu certo — o contrário do que aconteceu.
+    const minha = ++vez;
+    try {
+      const r = await getPlans(nome);
+      if (minha !== vez) return;   // resposta atrasada: já tem requisição mais nova no ar
       plans = r.plans;
       pinned = r.pinned;
-    } catch (e) { acaoErr = erro(e); }
-    finally { arquivando = false; }
+    } catch (e) {
+      // No slot de erro do SELETOR, não no da ação: o que ficou desatualizado é a lista.
+      if (minha === vez) pickerErr = erro(e);
+    }
   }
 </script>
 
