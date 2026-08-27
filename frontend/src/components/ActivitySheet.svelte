@@ -481,7 +481,15 @@
                 <div class="ag-meta"><span>{m.atividade_sub_ilegivel()}</span></div>
               {:else}
                 <div class="ag-meta">
-                  <span class="rodando">◐ {m.atividade_rodando()}</span>
+                  <!-- `finished` vem do próprio transcript do filho (Kimi e Pi sabem dizer). Antes
+                       isto era um "◐ Rodando" fixo no HTML, então um subagente que terminou há
+                       horas abria dizendo que ainda estava trabalhando — e a linha da lista, uma
+                       tela acima, já mostrava "concluído" pelo mesmo dado. -->
+                  {#if subDetail.finished}
+                    <span class="ok">✓ {m.atividade_sub_concluido()}</span>
+                  {:else}
+                    <span class="rodando">◐ {m.atividade_rodando()}</span>
+                  {/if}
                   <span>{m.atividade_chamadas({ n: subDetail.toolCalls })}</span>
                   {#if subDetail.agentType}<span>{subDetail.agentType}</span>{/if}
                   {#if subDetail.recent.length}
