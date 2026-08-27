@@ -122,12 +122,16 @@ def _casam(linhas: set[str], disponiveis: set[str],
 _JANELA_BASTAO = 15 * 60.0
 
 
-def _da_sessao_atual(entry: dict, min_ts: float) -> bool:
+def _da_sessao_atual(entry: dict, min_ts: float, ts: float | None = None) -> bool:
     """A entrada pertence à sessão de AGORA (ou está dentro da folga do bastão)?
 
     O corte normal é `ts >= min_ts`: entrada carimbada antes do início do transcript é de uma vida
     anterior (pré-`/clear`, ou o `pi -c` que reusa transcript velho) e não pode ser entregue nem
     reaparecer como bolha.
+
+    `ts` explícito: o `merged_history` já resolve o relógio da entrada com carry-forward (entrada
+    sem `ts` herda o da linha anterior) e passa esse valor pra cá, senão a MESMA entrada teria duas
+    idades dentro da mesma função — ordenada pelo relógio herdado e cortada por 0.0.
 
     `pre_transcript` é a exceção, e ela existe pra UM caso: a passagem de bastão enfileira o
     kick-off ANTES de a sessão nova existir — logo, antes da primeira linha do `.jsonl` e antes do
@@ -141,7 +145,8 @@ def _da_sessao_atual(entry: dict, min_ts: float) -> bool:
     de tentativas.
     """
     folga = _JANELA_BASTAO if entry.get("pre_transcript") else 0.0
-    return float(entry.get("ts") or 0.0) >= min_ts - folga
+    quando = float(entry.get("ts") or 0.0) if ts is None else ts
+    return quando >= min_ts - folga
 
 
 def _entry_event(entry: dict) -> ChatEvent:
@@ -823,7 +828,10 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
             continue
         # Poda: entrada anterior ao inicio da sessao atual e de uma sessao antiga (ex: pre-/clear, que
         # cria transcript novo). Sem isto, nunca casaria com o transcript novo e viraria fantasma.
-        if start_ts and not _da_sessao_atual(entry, start_ts):
+        # `ts` (com carry-forward) e não o campo cru: entrada legada/editada à mão, sem `ts`, é
+        # ordenada aqui pelo relógio da linha anterior — cortá-la por 0.0 a fazia sumir do
+        # histórico em silêncio, que é o oposto do que a fila durável existe pra garantir.
+        if start_ts and not _da_sessao_atual(entry, start_ts, ts):
             continue
         items.append((ts, 10**9, _entry_event(entry)))
 

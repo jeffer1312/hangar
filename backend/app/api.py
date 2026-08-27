@@ -1552,8 +1552,16 @@ def rename_session(name: str, body: RenameBody):
         oq, nq = PromptQueue(name).path, PromptQueue(new).path
         if oq.exists():
             atomico.substituir(oq, nq)
-    except OSError:
-        pass
+        # O dossiê da passagem de bastão é keyed por nome do MESMO jeito que a fila: sem migrar
+        # junto, a sucessora renomeada fica com um kick-off apontando pro caminho antigo e o
+        # `prune` apaga o arquivo em 7 dias por não achar sessão viva com aquele nome.
+        od, nd = bastao_mod.caminho(name), bastao_mod.caminho(new)
+        if od.exists():
+            atomico.substituir(od, nd)
+    except OSError as e:
+        # Não derruba o rename (que já aconteceu no tmux), mas APARECE: sidecar que não migrou é
+        # fila perdida ou dossiê órfão, e nenhum dos dois pode sumir calado.
+        _log.warning("rename %s -> %s: sidecar nao migrou: %s", name, new, e)
     return {"ok": True, "name": new}
 
 
@@ -1801,6 +1809,13 @@ class BastaoBody(_StrictBody):
     permission_mode: str | None = None
 
 
+def _nome_ocupado(nome: str) -> bool:
+    """Já existe sessão com esse nome? Mesmas duas fontes que `registry.create` consulta antes de
+    levantar `ValueError` — tmux (Claude/Pi/Kimi) e o sidecar do Codex."""
+    from app.adapters.codex import sessions as codex_sessions
+    return tmux.has_session(nome) or codex_sessions.exists(nome)
+
+
 def _bastao_preparar(info: SessionInfo, origem: str, destino: str) -> tuple[str, Path, str]:
     """Monta o dossiê, GRAVA e devolve (texto, caminho, kick-off). Tudo sync, numa thread só.
 
@@ -1842,6 +1857,17 @@ async def bastao_passar(name: str, body: BastaoBody):
     if destino == name:
         raise HTTPException(400, detail=erro("erro_bastao_para_si_mesma",
                                              "a sessão não passa o bastão pra si mesma"))
+    # Nome JÁ OCUPADO recusa aqui, ANTES de gravar. O `create_session` lá embaixo também recusa
+    # (registry.create: `ja existe uma sessao com esse nome` -> 409), só que tarde demais: o dossiê
+    # é `<destino>.md`, keyed por nome, então digitar o nome de uma sessão viva que já recebeu um
+    # bastão SOBRESCREVIA o dossiê dela — e o kick-off dela aponta pra aquele caminho. Mesma dupla
+    # de fontes do registry (tmux + sidecar do Codex), pra recusar o mesmo conjunto de nomes.
+    # Sobra uma janela estreita: se ALGUÉM MAIS criar esse nome entre esta checagem e o create, o
+    # dossiê já terá sido gravado por cima. O 409 do `create_session` impede duas sessões com o
+    # mesmo nome — ele NÃO desfaz essa escrita. Fechar de vez exigiria criar a sessão antes de
+    # gravar, que é a ordem que a feature proíbe (sessão viva apontando pra arquivo inexistente).
+    if await asyncio.to_thread(_nome_ocupado, destino):
+        raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
     cwd = body.cwd or info.cwd
     if not cwd:
         # A origem sem cwd conhecido é o caso do transcript resolvido sem pane utilizável: sem

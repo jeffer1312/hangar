@@ -1095,6 +1095,22 @@ def test_kickoff_de_bastao_aparece_no_historico_do_transcript_novo(tmp_path):
     assert "velha de outra vida" not in textos
 
 
+def test_entrada_sem_ts_herda_o_relogio_anterior_e_nao_some_do_historico(tmp_path):
+    # Carry-forward, como o docstring de merged_history promete: `append` sempre carimba `ts`,
+    # então isto é sidecar legado (ou editado à mão). Cortar por 0.0 dava DUAS idades à mesma
+    # entrada dentro da mesma função — ordenada pelo relógio herdado e descartada pelo zero — e ela
+    # sumia do histórico calada, que é o oposto do que a fila durável existe pra garantir.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "user", "uuid": "u0", "timestamp": "2026-01-01T00:00:00Z",
+                             "message": {"role": "user", "content": "primeira linha"}}) + "\n",
+                 encoding="utf-8")
+    q = PromptQueue("s")
+    q.append("sem relogio", delivered=False, ts=0.0)
+    assert q.load()[0]["ts"] == 0.0             # o zero é o que o `or` do append deixa passar
+    assert "sem relogio" in [e.text for e in pqueue.merged_history("s", str(j))]
+
+
 def test_prune_before_nao_apaga_o_kickoff_de_bastao():
     q = PromptQueue("s")
     q.append("velha", delivered=False, ts=1000.0)

@@ -25,13 +25,17 @@ com um buraco anotado.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
 import unicodedata
 from pathlib import Path
 
 from app import atomico
 
 _log = logging.getLogger("hangar.bastao")
+
+_grava_lock = threading.Lock()      # ver `gravar()`
 
 # Onde o dossiê é gravado. Nome do arquivo = só o DESTINO (`<destino>.md`), nunca
 # `origem__destino`: é o que faz o sidecar cair no `_NOME_KEYED` do `prune.py` e ser podado junto
@@ -153,6 +157,31 @@ def _conta_do_transcript(jsonl: str) -> str:
     return ""
 
 
+# Modelo e esforço da statusline (`🤖 Opus5·1M (high✦) │ …`). Mesma leitura que o `sse._status_sig`
+# faz pro dedup da lista (`_ST_MODEL`/`_ST_EFFORT`): o modelo vai até o parêntese ou a barra, e o
+# esforço mora DENTRO do parêntese. O `·` é separador INTERNO do modelo (`Opus5·1M`), não fim de
+# campo — tratá-lo como fim devolvia só `Opus5` e comia justo o que importa numa passagem.
+_MODELO_RE = re.compile(r"🤖\s*([^(│]+)")
+_ESFORCO_RE = re.compile(r"🤖[^(│]*\(([^)│]*)\)")
+
+
+def _modelo_e_esforco(linha: str | None) -> str:
+    """`Opus5·1M (high✦)` da statusline, ou `""`. Só isto sai da linha inteira: custo em dólar,
+    percentual das duas janelas de cota, relógio e diretório não ajudam ninguém a continuar o
+    trabalho — e o dossiê é lido por uma sessão que pode estar noutro provedor, pra quem a cota da
+    origem não quer dizer nada."""
+    if not linha:
+        return ""
+    m = _MODELO_RE.search(linha)
+    if not m:
+        return ""
+    modelo = _uma_linha(m.group(1), 60).strip()
+    esforco = _ESFORCO_RE.search(linha)
+    if esforco and esforco.group(1).strip():
+        modelo = f"{modelo} ({_uma_linha(esforco.group(1), 20).strip()})"
+    return modelo
+
+
 def _de_onde_veio(jsonl: str, cwd: str | None, provider: str, nome: str) -> list[str]:
     from app import statusline
     from app.models import session_key
@@ -163,11 +192,11 @@ def _de_onde_veio(jsonl: str, cwd: str | None, provider: str, nome: str) -> list
     conta = _conta_do_transcript(jsonl)
     if conta:
         out.append(f"- Conta: `{conta}`")
-    linha = statusline.read(session_key(jsonl))
-    if linha:
-        # A statusline traz modelo, esforço, janela de contexto e cota — é o único lugar onde o
-        # "modelo/esforço da origem" existe sem dirigir o terminal dela (ver model_picker).
-        out.append(f"- Statusline da origem: `{_uma_linha(linha)}`")
+    # A statusline é o único lugar onde o "modelo/esforço da origem" existe sem dirigir o terminal
+    # dela (ver model_picker) — mas só esses dois campos entram; o resto da linha é ruído aqui.
+    modelo = _modelo_e_esforco(statusline.read(session_key(jsonl)))
+    if modelo:
+        out.append(f"- Modelo e esforço da origem: `{modelo}`")
     return out
 
 
@@ -273,6 +302,26 @@ def _e_leitura(cmd: str) -> bool:
     return primeiro in _CMD_LEITURA
 
 
+def _sem_repetidas(linhas: list[str]) -> list[str]:
+    """Tira as repetições da lista, mantendo a ÚLTIMA de cada família e a ordem do transcript.
+
+    Mesmo dedup por semelhança das `Decisões` (`linha_mais_parecida`, já em stdlib neste repo):
+    num dossiê real 4 das 5 vagas de falha foram ocupadas pela MESMA linha de hook repetida, e as
+    outras falhas — as que o sucessor não tem como redescobrir — caíram fora do orçamento.
+    """
+    from app.pqueue import linha_mais_parecida
+
+    vistas: set[str] = set()
+    unicas: list[str] = []
+    for ln in reversed(linhas):
+        if linha_mais_parecida(ln, vistas):
+            continue
+        vistas.add(ln)
+        unicas.append(ln)
+    unicas.reverse()
+    return unicas
+
+
 def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
     """Arquivos escritos, comandos rodados e as ferramentas que FALHARAM, na ordem do transcript."""
     escritos: list[str] = []
@@ -317,7 +366,7 @@ def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
         # As falhas ficam por ÚLTIMO e nomeadas: é o que o sucessor não pode redescobrir sozinho —
         # um teste que quebrou, uma permissão negada, um comando que não existe naquela máquina.
         out.append("- Ferramentas que FALHARAM (as mais recentes):")
-        out += falhas[-_MAX_FALHAS:]
+        out += _sem_repetidas(falhas)[-_MAX_FALHAS:]
     return out
 
 
@@ -537,17 +586,19 @@ def gravar(destino: str, texto: str) -> Path:
     Quem chama grava ANTES de criar a sessão, e é por isso que o erro tem de subir: uma sessão
     nova viva com um kick-off apontando pra arquivo que não existe é pior que pedido nenhum — o
     sucessor abre, dá `Read`, não acha nada e não tem como saber o que era pra continuar.
+
+    O tmp leva o PID e a escrita corre sob lock pelo mesmo motivo do `hangar_panel_common` e do
+    `pqueue._write_atomic`: dois POSTs pro mesmo destino, de processos ou de threads diferentes,
+    escreviam no MESMO tmp e o `substituir` promovia bytes entrelaçados.
     """
     alvo = caminho(destino)
-    tmp = alvo.with_suffix(".md.tmp")
-    tmp.write_text(texto, encoding="utf-8")
-    atomico.substituir(tmp, alvo)
+    tmp = alvo.with_suffix(f".md.{os.getpid()}.tmp")
+    # ponytail: lock de módulo (o dossiê é escrito por clique de botão, não em volume);
+    # per-destino se algum dia isso virar gargalo.
+    with _grava_lock:
+        tmp.write_text(texto, encoding="utf-8")
+        atomico.substituir(tmp, alvo)
     return alvo
-
-
-# Modelo + esforço da statusline (`🤖 Opus 5 (high✦)`). Mesma leitura que o `sse._status_sig` já
-# faz pro dedup da lista — aqui é uma linha de texto, não vale importar o privado de lá.
-_MODELO_RE = re.compile(r"🤖\s*([^│]+?)\s*(?:·|│|$)")
 
 
 def origem_resumida(jsonl: str) -> tuple[str, str]:
@@ -560,13 +611,7 @@ def origem_resumida(jsonl: str) -> tuple[str, str]:
     from app import statusline
     from app.models import session_key
 
-    modelo = ""
-    linha = statusline.read(session_key(jsonl))
-    if linha:
-        m = _MODELO_RE.search(linha)
-        if m:
-            modelo = _uma_linha(m.group(1), 60)
-    return _conta_do_transcript(jsonl), modelo
+    return _conta_do_transcript(jsonl), _modelo_e_esforco(statusline.read(session_key(jsonl)))
 
 
 # Prefixo do recado, mesma família do `[de: <sessão>]` do hangar-send e do

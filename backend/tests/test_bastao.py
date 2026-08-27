@@ -233,6 +233,52 @@ def test_origem_resumida_tira_o_modelo_da_statusline(monkeypatch):
     assert modelo == "Opus 5 (high✦)"
 
 
+# Statusline REAL, com `·` dentro do nome do modelo. O regex antigo (`[^│]+?` até `·`) devolvia só
+# `Opus5` — comia o `1M` e o esforço, que é justamente o que importa numa passagem de bastão.
+# Statusline com a FORMA da real (o `·` dentro do modelo é o que quebrava o regex antigo), com os
+# valores trocados por exemplo: repositório público.
+STATUS_REAL = ("🤖 Opus5·1M (high✦) │ 📁 app-web [ABC-1234*] │ 📟 sessao-exemplo │ "
+               "⎈ k8s-dev │ 💬 268k/138 270k/1M │ 💵 $12.97 │ ⚡5h:49% ↺2h24m │ "
+               "📅7d:44% ↺ter 19h·5d3h │ 🕐 15:55 ⏱ 1h8m")
+
+
+def test_modelo_com_ponto_medio_no_nome_nao_e_cortado(monkeypatch):
+    from app import statusline
+    monkeypatch.setattr(statusline, "read", lambda stem: STATUS_REAL)
+    assert bastao.origem_resumida("/cfg/projects/p/abc.jsonl")[1] == "Opus5·1M (high✦)"
+
+
+def test_dossie_leva_modelo_e_esforco_e_nao_a_statusline_inteira(monkeypatch):
+    # Custo em dólar, percentual das duas janelas de cota e relógio não ajudam ninguém a continuar
+    # o trabalho — e o dossiê é lido por uma sessão que pode estar noutro provedor.
+    from app import statusline
+    monkeypatch.setattr(statusline, "read", lambda stem: STATUS_REAL)
+    md = bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "s")
+    bloco = md.split("## De onde veio", 1)[1].split("## ", 1)[0]
+    assert "`Opus5·1M (high✦)`" in bloco
+    for ruido in ("$12.97", "⚡5h", "📅7d", "🕐", "k8s-dev"):
+        assert ruido not in bloco
+
+
+def test_falha_repetida_nao_ocupa_todas_as_vagas(tmp_path):
+    # Num dossiê real 4 das 5 vagas de falha foram ocupadas pela MESMA linha de hook: as outras
+    # falhas — as que o sucessor não redescobre sozinho — caíram fora do orçamento.
+    linhas = []
+    for i in range(6):
+        linhas.append({"type": "assistant", "uuid": f"a{i}", "message": {"role": "assistant",
+                       "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash",
+                                    "input": {"command": f"uv run pytest -q # {i}"}}]}})
+        erro = "1 failed em test_unico.py" if i == 5 else "hook bloqueou: rode os reviewers antes"
+        linhas.append({"type": "user", "uuid": f"u{i}", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": f"t{i}", "content": erro, "is_error": True}]}})
+    jsonl = tmp_path / "s.jsonl"
+    jsonl.write_text("".join(json.dumps(o) + "\n" for o in linhas), encoding="utf-8")
+    bloco = bastao.montar(str(jsonl), None, "claude", "s").split(
+        "## Arquivos e comandos", 1)[1].split("## ", 1)[0]
+    assert bloco.count("hook bloqueou") == 1
+    assert "1 failed em test_unico.py" in bloco
+
+
 def test_origem_sem_statusline_devolve_modelo_vazio(monkeypatch):
     from app import statusline
     monkeypatch.setattr(statusline, "read", lambda stem: None)
@@ -293,6 +339,8 @@ def bastao_post(api_client_bastao, monkeypatch, tmp_path):
 
     monkeypatch.setattr(api_mod, "create_session", fake_create)
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
+    # Sem nome ocupado por padrão (e sem consultar o tmux da máquina que roda os testes).
+    monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
 
     def post(**corpo):
         with patch("app.api.registry.list", return_value=[origem]):
@@ -375,6 +423,39 @@ def test_post_diz_que_a_sessao_nasceu_quando_a_fila_falha(bastao_post, monkeypat
     assert r.status_code == 500
     assert criadas and criadas[0].name == "cc2"
     assert "cc2" in r.text and "nasceu" in r.text      # nomeia o que de fato aconteceu
+
+
+def test_post_recusa_nome_ja_em_uso_sem_tocar_no_dossie_dela(bastao_post, monkeypatch):
+    """O achado mais grave: o dossiê é `<destino>.md`, keyed por NOME. Digitar o nome de uma sessão
+    viva que já recebeu um bastão sobrescrevia o dossiê DELA antes de o 409 do `create_session`
+    aparecer — e o kick-off dela aponta pra aquele caminho. A recusa tem de vir antes da gravação."""
+    import app.api as api_mod
+
+    ja = bastao.gravar("cc2", "# dossiê da sessão viva\n")
+    monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: nome == "cc2")
+    post, criadas = bastao_post
+    r = post(name="cc2")
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_nome_em_uso"
+    assert criadas == []
+    assert ja.read_text(encoding="utf-8") == "# dossiê da sessão viva\n"
+
+
+def test_rename_leva_o_dossie_junto(api_client_bastao, monkeypatch):
+    """Renomear a sucessora deixava o dossiê órfão: o kick-off dela aponta pro caminho antigo e o
+    `prune` apaga o arquivo em 7 dias. Mesmo argumento que fez a fila ser migrada no rename."""
+    from unittest.mock import patch
+    import app.api as api_mod
+
+    velho = bastao.gravar("cc", "# dossiê\n")
+    with patch("app.tmux.has_session", side_effect=lambda n: n == "cc"), \
+         patch("app.tmux.rename_session", return_value=True), \
+         patch.object(api_mod.registry, "rename", lambda a, b: None):
+        r = api_client_bastao.post("/api/sessions/cc/rename", json={"new": "cx"},
+                                   headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200, r.text
+    assert not velho.exists()
+    assert bastao.caminho("cx").read_text(encoding="utf-8") == "# dossiê\n"
 
 
 def test_post_404_sem_transcript(api_client_bastao):
