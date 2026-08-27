@@ -268,8 +268,10 @@ export function parsePeerMessage(text: string): { from: string; text: string; sc
 // ..." e afins — convenção de quem escreve a skill, não formato do servidor. Vira etiqueta ao lado
 // do remetente e sai do corpo, pra a primeira linha do recado ser a frase e não o rótulo. Só uma
 // palavra (letras/dígitos/-/_, até 16): "[de: x]" já saiu antes, e "[isso é um aparte]" no meio de
-// uma frase não vira etiqueta porque não abre o texto.
-const _CANAL_RE = /^\[([\p{L}\d_-]{1,16})\]\s*/u;
+// uma frase não vira etiqueta porque não abre o texto. E `]` seguido de `(` é LINK markdown
+// (`[log](https://…)`): virava etiqueta "log" com a URL crua sobrando no corpo, o rótulo do link
+// perdido.
+const _CANAL_RE = /^\[([\p{L}\d_-]{1,16})\](?!\()\s*/u;
 export function parseCanal(text: string): { canal: string; text: string } | null {
   const m = _CANAL_RE.exec(text);
   if (!m) return null;

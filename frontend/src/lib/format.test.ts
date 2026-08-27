@@ -10,7 +10,7 @@ import {
   untrackedReason,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
   rotuloEstado,
-  splitTodoBlock, parseImageMessage,
+  splitTodoBlock, parseImageMessage, parseCanal,
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from '../paraglide/runtime';
@@ -868,5 +868,20 @@ describe('formatacao segue o idioma', () => {
       overwriteGetLocale(() => 'en');
       expect(rotuloEstado(st)).not.toBe('');
     }
+  });
+});
+
+describe('parseCanal', () => {
+  it('tira o rótulo do começo e devolve o corpo sem ele', () => {
+    expect(parseCanal('[vigia] ARMADA sobre: x')).toEqual({ canal: 'vigia', text: 'ARMADA sobre: x' });
+  });
+
+  it('link markdown no começo NÃO é canal (o rótulo do link se perderia)', () => {
+    expect(parseCanal('[log](https://ex.com/a) caiu de novo')).toBeNull();
+  });
+
+  it('colchete no meio da frase e rótulo longo demais não viram etiqueta', () => {
+    expect(parseCanal('olha isso [um aparte] aqui')).toBeNull();
+    expect(parseCanal('[rotulo-comprido-demais-pra-etiqueta] x')).toBeNull();
   });
 });

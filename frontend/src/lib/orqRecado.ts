@@ -29,12 +29,21 @@ export type RecadoOrq = {
 const CABECA = /configuração de modelos do grupo mudou no painel:\s*(.+?)\.\s*Releia\s*`([^`]+)`/s;
 const PAPEL = /^`([^`]+)`\s*agora é provider\s*`([^`]+)`,\s*conta\s*`([^`]+)`,\s*modelo\s*`([^`]+)`,\s*esforço\s*`([^`]+)`$/;
 
+// O cartão não CITA a cauda do recado: ele a reescreve em frases curtas e traduzidas. Isso só é
+// honesto enquanto as duas dizem a mesma coisa — e quem mexe no `_recado_arbitro` não tem como
+// saber que existe um cartão do outro lado. Então o parser exige os marcadores do que o cartão
+// resume: mudou a instrução, isto para de casar e a mensagem volta a aparecer inteira, no texto do
+// servidor. Perder o cartão é o preço certo; mostrar instrução velha como oficial, não.
+const MARCAS = ['PARADA (idle)', 'TRABALHANDO', 'não reescreva a tabela'];
+const MARCA_SUCESSAO = 'Sucessão do árbitro';
+
 const vazio = (v: string) => (v === '-' ? '' : v);
 
 /** @param texto corpo do recado JÁ sem o prefixo `[painel: orquestração]` (parsePeerMessage o tira). */
 export function lerRecadoOrq(texto: string): RecadoOrq | null {
   const casou = texto.match(CABECA);
   if (!casou) return null;
+  if (!MARCAS.every((marca) => texto.includes(marca))) return null;
   const papeis: PapelMudado[] = [];
   for (const parte of casou[1].split(';')) {
     const p = parte.trim().match(PAPEL);
@@ -44,9 +53,8 @@ export function lerRecadoOrq(texto: string): RecadoOrq | null {
     papeis.push({ papel: p[1], provider: p[2], conta: p[3], modelo: vazio(p[4]), esforco: vazio(p[5]) });
   }
   if (!papeis.length) return null;
-  return {
-    papeis,
-    regras: casou[2],
-    sucessao: papeis.some((p) => /^[áa]rbitro$/i.test(p.papel.trim())),
-  };
+  const sucessao = papeis.some((p) => /^[áa]rbitro$/i.test(p.papel.trim()));
+  // O bloco do rito só é desenhado na sucessão — então só ali o marcador dele é exigido.
+  if (sucessao && !texto.includes(MARCA_SUCESSAO)) return null;
+  return { papeis, regras: casou[2], sucessao };
 }

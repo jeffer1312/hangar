@@ -43,9 +43,32 @@ describe('lerRecadoOrq', () => {
     expect(r?.sucessao).toBe(true);
   });
 
+  it('nome de papel com `;` ou crase embutida não fabrica linha: falha segura, sem cartão', () => {
+    // `orq_md.validar_celula` (backend) barra só `|`, controle e quebra de linha, então um papel
+    // pode chegar com os delimitadores que este parser usa. Tem que devolver null, nunca um papel
+    // inventado a partir do próprio nome.
+    const r = lerRecadoOrq(recado(
+      '`a`, conta `y`, modelo `z`, esforço `w`; `b` agora é provider `claude`, conta `c`, modelo `opus`, esforço `high`',
+    ));
+    expect(r).toBeNull();
+  });
+
   it('formato desconhecido volta null — a bolha de texto continua valendo', () => {
     expect(lerRecadoOrq('A configuração de modelos do grupo mudou no painel: sei lá. Releia `/x.md`.')).toBeNull();
     expect(lerRecadoOrq('recado qualquer de outra sessão')).toBeNull();
+  });
+
+  it('cauda de instruções mudada no backend derruba o cartão: o texto volta inteiro na bolha', () => {
+    const semMarca = recado('`executor` agora é provider `claude`, conta `c`, modelo `opus`, esforço `medium`')
+      .replace('não reescreva a tabela', 'não mexa na tabela');
+    expect(lerRecadoOrq(semMarca)).toBeNull();
+  });
+
+  it('rito de sucessão renomeado derruba o cartão só quando o papel mudado é o árbitro', () => {
+    const trocado = (linha: string) =>
+      recado(linha).replace("rito 'Sucessão do árbitro' da skill", 'rito de passagem da skill');
+    expect(lerRecadoOrq(trocado('`árbitro` agora é provider `claude`, conta `c`, modelo `opus`, esforço `high`'))).toBeNull();
+    expect(lerRecadoOrq(trocado('`executor` agora é provider `claude`, conta `c`, modelo `opus`, esforço `high`'))).not.toBeNull();
   });
 
   it('meia lista não vira cartão: uma linha ilegível derruba o cartão inteiro', () => {
