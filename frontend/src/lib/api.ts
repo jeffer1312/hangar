@@ -978,6 +978,22 @@ export function setPlanPin(name: string, stem: string | null): Promise<{ pinned:
   });
 }
 
+// Marca/desmarca um step no .md do plano. Quem marca no fluxo normal é o agente — isto é pro caso
+// dele esquecer, que é justamente o que deixa o plano preso em 14/16 pra sempre.
+export function setPlanStep(name: string, stem: string, idx: number, done: boolean):
+    Promise<{ done: number | null; total: number | null; complete: boolean }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/plan-step`, {
+    method: 'POST', body: JSON.stringify({ stem, idx, done }),
+  });
+}
+
+// Encerra o plano: move o .md (e o .html irmão) pra docs/superpowers/plans/feitos/.
+export function archivePlan(name: string, stem: string): Promise<{ moved: string[] }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/plan-archive`, {
+    method: 'POST', body: JSON.stringify({ stem }),
+  });
+}
+
 // ── Motores de modelo ───────────────────────────────────────────────────────
 export interface Motor {
   label?: string;

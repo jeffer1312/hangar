@@ -5,7 +5,7 @@
   import Select from './Select.svelte';
   import * as m from '../paraglide/messages';
   import { renderMarkdown } from '../lib/markdown';
-  import { getPlans, setPlanPin, type PlanListItem } from '../lib/api';
+  import { getPlans, setPlanPin, setPlanStep, archivePlan, type PlanListItem } from '../lib/api';
   import { planBadge } from '../lib/plan';
   import type { PlanDetail, SessionInfo } from '../lib/types';
 
@@ -76,6 +76,56 @@
       if (minha === vez) pinned = r.pinned;
     } catch (e) { if (minha === vez) pickerErr = erro(e); }
   }
+
+  // Marcar step na mão. O `- [x]` é do agente; quando ele esquece, o plano fica preso na etapa
+  // errada pra sempre — e era o motivo nº 1 de o painel não dizer onde o trabalho está.
+  // `escrevendo` guarda o idx em voo: sem ele um duplo-clique manda dois POST e o segundo desfaz
+  // o primeiro. Erro fica na tela (o clique sumir sem explicação é o defeito que isto evita).
+  let escrevendo = $state<number | null>(null);
+  let acaoErr = $state('');
+
+  async function alternarStep(s: { idx: number; done: boolean }) {
+    if (!detail || escrevendo !== null) return;
+    const alvo = !s.done;
+    escrevendo = s.idx;
+    acaoErr = '';
+    try {
+      const r = await setPlanStep(session.name, detail.stem, s.idx, alvo);
+      // Aplica na hora em vez de esperar o poll de 5s da lista (é ele que muda `plan_done` e
+      // refaz o detalhe no Chat.svelte). `detail` vem de um `$state` do Chat, então a mutação
+      // reflete na barra e nas contagens; o poll seguinte confirma com o que está no disco.
+      s.done = alvo;
+      const t = detail.tasks.find((t) => t.steps.some((x) => x.idx === s.idx));
+      if (t) t.done += alvo ? 1 : -1;
+      if (r.done !== null) detail.done = r.done;
+      detail.complete = r.complete;
+    } catch (e) { acaoErr = erro(e); }
+    finally { escrevendo = null; }
+  }
+
+  // Arquivar = mover o .md (e o .html irmão) pra `feitos/`. Confirmação em dois toques em vez de
+  // modal: é mexer em arquivo do repo do usuário, mas é reversível (git + a pasta feitos/), e um
+  // diálogo pra isso seria desproporcional. O estado se desarma sozinho ao trocar de plano.
+  let confirmando = $state(false);
+  let arquivando = $state(false);
+  $effect(() => { void detail?.stem; confirmando = false; });
+
+  async function arquivar() {
+    if (!detail) return;
+    if (!confirmando) { confirmando = true; return; }
+    arquivando = true;
+    acaoErr = '';
+    try {
+      await archivePlan(session.name, detail.stem);
+      confirmando = false;
+      // Recarrega o seletor: o plano arquivado tem de sumir da lista na hora. A barra e as Tasks
+      // seguem o poll da lista, que reelege sozinho quando o arquivo some.
+      const r = await getPlans(session.name);
+      plans = r.plans;
+      pinned = r.pinned;
+    } catch (e) { acaoErr = erro(e); }
+    finally { arquivando = false; }
+  }
 </script>
 
 <div class="plan">
@@ -145,8 +195,14 @@
             <ul>
               {#each t.steps as s}
                 <li class:done={s.done}>
-                  <span class="mark">{s.done ? '✓' : '○'}</span>
-                  <span class="ttl">{s.title}</span>
+                  <!-- Clicável: o step é o único lugar do app que escreve no .md do plano. -->
+                  <button class="step-btn" disabled={escrevendo !== null}
+                    onclick={() => alternarStep(s)}
+                    aria-pressed={s.done}
+                    title={s.done ? m.plano_desmarcar_step() : m.plano_marcar_step()}>
+                    <span class="mark">{s.done ? '✓' : '○'}</span>
+                    <span class="ttl">{s.title}</span>
+                  </button>
                   {#if s.manual}<span class="manual" title={m.plano_conferencia_humana()}>🙋</span>{/if}
                 </li>
               {/each}
@@ -158,6 +214,21 @@
   {:else if error}
     <p class="muted">{m.plano_falha_leitura()}</p>
   {/if}
+
+  <!-- Encerrar o plano. Fora do gate das Tasks: fechar a lista não pode esconder a única saída de
+       um plano terminado — é exatamente o "plano finalizado que fica parado ali". -->
+  {#if detail}
+    <div class="fim">
+      {#if detail.complete}<span class="ok">{m.plano_completo()}</span>{/if}
+      <button class="arq" class:confirma={confirmando} disabled={arquivando} onclick={arquivar}>
+        {confirmando ? m.plano_arquivar_confirmar() : m.plano_arquivar()}
+      </button>
+      {#if confirmando}
+        <button class="arq" onclick={() => (confirmando = false)}>{m.plano_arquivar_cancelar()}</button>
+      {/if}
+    </div>
+  {/if}
+  {#if acaoErr}<p class="muted err">{acaoErr}</p>{/if}
 
   <!-- Fora do gate das Tasks: fechar a lista nao pode desarmar o `›` do cabecalho, que e outro
        controle. Markdown NUNCA aparece cru (regra do CLAUDE.md). -->
@@ -254,6 +325,49 @@
   .steps li.done .mark { color: var(--success); text-decoration: none; }
   .steps .ttl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .manual { flex-shrink: 0; }
+
+  /* Sem superfície própria (regra da transparência): o material é do painel. O realce de hover é
+     tinta por cima da linha, então aí `--bg-hover` cru é o certo. */
+  /* `min-height/width: 0` desfaz o alvo de toque global de 44px (app.css): numa lista de 16 steps
+     ele triplicaria a altura do painel. A área clicável continua grande porque o botão ocupa a
+     LINHA inteira — o que se perde é altura, não largura. */
+  .step-btn {
+    display: flex;
+    flex: 1;
+    align-items: baseline;
+    gap: var(--space-1);
+    min-width: 0;
+    min-height: 0;
+    margin: -2px -4px;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .step-btn:disabled { cursor: progress; opacity: 0.6; }
+  @media (hover: hover) { .step-btn:hover:not(:disabled) { background: var(--bg-hover); } }
+
+  .fim { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+  .ok { color: var(--success); font-size: var(--text-xs); font-weight: 600; }
+  .arq {
+    min-height: 0;
+    min-width: 0;
+    padding: 2px var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+  .arq.confirma { border-color: var(--error); color: var(--error); }
+  .arq:disabled { cursor: progress; opacity: 0.6; }
+  @media (hover: hover) { .arq:hover:not(:disabled) { border-color: var(--border-default); color: var(--text-secondary); } }
 
   .md {
     margin-top: var(--space-2);

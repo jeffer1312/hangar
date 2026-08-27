@@ -217,6 +217,8 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_nome_plano_invalido: (p) => m.erro_nome_plano_invalido({ nome: String(p.nome) }),
   erro_plano_nao_encontrado: (p) => m.erro_plano_nao_encontrado({ nome: String(p.nome) }),
   erro_gravar_pin: (p) => m.erro_gravar_pin({ erro: String(p.erro) }),
+  erro_marcar_step: (p) => m.erro_marcar_step({ erro: String(p.erro) }),
+  erro_arquivar_plano: (p) => m.erro_arquivar_plano({ erro: String(p.erro) }),
   erro_editor_falhou: (p) => m.erro_editor_falhou({ binario: String(p.binario), erro: String(p.erro) }),
   erro_arquivo_nao_citado: () => m.erro_arquivo_nao_citado(),
   erro_caminho_fora_cwd: () => m.erro_caminho_fora_cwd(),

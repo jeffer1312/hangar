@@ -43,7 +43,9 @@ from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
                         ProjectStatus, session_key)
-from app.planprog import plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir, PlanPinError, PIN_NONE
+from app.planprog import (plan_progress, list_plans, write_pin, is_safe_stem, _plans_dir,
+                          PlanPinError, PIN_NONE, marcar_step, arquivar, caminho_do_plano,
+                          PlanWriteError)
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
                         linha_mais_parecida)
 from app.prune import prune_loop as _prune_loop
@@ -3549,11 +3551,14 @@ async def session_plan(name: str):
         _log.warning("falha lendo markdown do plano path=%s", p.path, exc_info=True)
         markdown = ""
     return {
-        "name": p.name, "path": p.path,
+        # `stem` (nome do arquivo) alem do `name` (ja sem o prefixo de data): e a chave que o
+        # cliente devolve pra marcar step e arquivar, e sao os dois caminhos que o `name`, com a
+        # data cortada, nao consegue reabrir.
+        "name": p.name, "path": p.path, "stem": Path(p.path).stem,
         "task": p.task_idx, "task_total": p.task_total,
         "done": p.done, "total": p.total, "complete": p.complete,
         "tasks": [{"title": t.title, "done": t.done, "total": t.total,
-                   "steps": [{"title": s.title, "done": s.done, "manual": s.manual}
+                   "steps": [{"title": s.title, "done": s.done, "manual": s.manual, "idx": s.idx}
                              for s in t.steps]}
                   for t in p.tasks],
         "markdown": markdown,
@@ -3622,6 +3627,54 @@ async def session_plan_pin(name: str, body: PlanPinBody):
     except PlanPinError as e:
         raise HTTPException(500, detail=erro("erro_gravar_pin", f"nao deu pra gravar o pin: {e}", erro=str(e)))
     return {"pinned": body.stem}
+
+
+async def _plans_root(name: str) -> tuple[str, str]:
+    """(cwd, raiz de planos). Devolve os DOIS porque `_session_cwd` chama `registry.list()`, que
+    forka tmux e varre /proc — pedir o cwd de novo depois dobraria esse scan por clique."""
+    cwd = await asyncio.to_thread(_session_cwd, name)
+    root = await asyncio.to_thread(_plans_dir, cwd)
+    if root is None:
+        raise HTTPException(404, detail=erro("erro_sem_pasta_planos", "repo sem pasta de planos"))
+    return cwd, root
+
+
+class PlanStepBody(_StrictBody):
+    stem: str
+    idx: int      # 0-based, na ordem do documento — vem do proprio /plan
+    done: bool
+
+
+@app.post("/api/sessions/{name}/plan-step", dependencies=[Depends(require_auth)])
+async def session_plan_step(name: str, body: PlanStepBody):
+    """Marca/desmarca UM step no .md do plano. Quem marca no fluxo normal e o agente; isto existe
+    pro caso dele esquecer — sem marcacao o plano nunca fecha e trava o painel na etapa errada."""
+    cwd, root = await _plans_root(name)
+    try:
+        path = caminho_do_plano(root, body.stem)
+        await asyncio.to_thread(marcar_step, path, body.idx, body.done)
+    except PlanWriteError as e:
+        # 409 e nao 500: os modos de falha reais aqui sao "o arquivo mudou/nao serve", nao bug do
+        # servidor — e a UI PRECISA mostrar o texto (o clique some sem explicacao, senao).
+        raise HTTPException(409, detail=erro("erro_marcar_step", f"nao deu pra marcar o step: {e}", erro=str(e)))
+    p = await asyncio.to_thread(plan_progress, cwd)
+    return {"done": p.done if p else None, "total": p.total if p else None,
+            "complete": bool(p and p.complete)}
+
+
+class PlanArchiveBody(_StrictBody):
+    stem: str
+
+
+@app.post("/api/sessions/{name}/plan-archive", dependencies=[Depends(require_auth)])
+async def session_plan_archive(name: str, body: PlanArchiveBody):
+    """Encerra o plano: move o .md (e o .html irmao) pra docs/superpowers/plans/feitos/."""
+    _, root = await _plans_root(name)
+    try:
+        movidos = await asyncio.to_thread(arquivar, root, body.stem)
+    except PlanWriteError as e:
+        raise HTTPException(409, detail=erro("erro_arquivar_plano", f"nao deu pra arquivar: {e}", erro=str(e)))
+    return {"moved": movidos}
 
 
 @app.get("/api/sessions/{name}/branches", dependencies=[Depends(require_auth)])
