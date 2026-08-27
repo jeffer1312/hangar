@@ -232,6 +232,10 @@ fi
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
 if command -v pi >/dev/null 2>&1; then
   mkdir -p "$PI_EXT_DIR"
+  # Link do nome ANTIGO (pre-rename): o alvo nao existe mais, entao ele fica pendurado e o Pi sobe
+  # sem a extensao — sessao "sem id", sem estado e sem previa, sem erro nenhum na tela. So symlink
+  # e removido; arquivo de verdade com esse nome e do usuario.
+  [ -L "$PI_EXT_DIR/cp-state.ts" ] && rm -f "$PI_EXT_DIR/cp-state.ts" && echo "  removido link antigo cp-state.ts"
   ln -sfn "$SCRIPT_DIR/pi/hangar-state.ts" "$PI_EXT_DIR/hangar-state.ts"
   echo "  linked hangar-state.ts into $PI_EXT_DIR"
   # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
