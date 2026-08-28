@@ -15,9 +15,15 @@ você escreve na fase 2 e que **todo kick-off repete**.
   17/08/2026).
 - `mattpocock` → você usa `/grill-me` (ou `/grill-with-docs`) → `/to-spec` → `/to-tickets`; o
   executor usa `/implement`. **Só com pedido explícito do usuário, e só depois de conferir que o
-  `/implement` está instalado** — a execução de 16–17/08 rodou sem ele e o árbitro teve de
-  improvisar. Qualquer que seja o método, o **portão de saída da fase 1** (seção no fim desta
-  página) vale igual: artefato que o método não gera, você gera à mão.
+  `/implement` está instalado na conta que vai executar** — a execução de 16–17/08 rodou sem ele e o
+  árbitro teve de improvisar; conferido em 28/08/2026, hoje ele está nas cinco contas desta máquina.
+  O kick-off do executor **começa** com a linha `/implement` (as duas skills trazem
+  `disable-model-invocation: true`, então a sessão não as auto-invoca — mas o kick-off chega como
+  digitação no pane). Qualquer que seja o método, o **portão de saída da fase 1** (seção no fim
+  desta página) vale igual: artefato que o método não gera, você gera à mão — e os itens 2, 3 e 4
+  são auditoria sua, com comando, não coisa que você espera vir escrita. O `to-tickets` entrega
+  arestas de bloqueio (ordem), não estimativa nem disjunção; isso não o desqualifica, só diz qual
+  parte do portão sobra pra você.
 
 - `nenhum` → **o plano já existe e não é de método nenhum**: o usuário escreveu à mão, veio de outro
   ticket, ou não existe plano escrito. É caso legítimo e frequente — ver a seção seguinte.

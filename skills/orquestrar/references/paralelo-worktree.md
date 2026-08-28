@@ -10,20 +10,46 @@ vez depois do join (`executor.md`, "Seus braços"). Isso entrega quase todo o ga
 com **zero** risco de merge, porque nunca existe uma segunda base. Worktree só se paga
 quando a Task é grande o bastante pra justificar uma **sessão inteira** por ela.
 
-## Gatilho — as três condições valem juntas
+## Gatilho — as quatro condições valem juntas
 
-O planejador declara isso na fase 1, com o usuário. O árbitro não deduz depois.
+**Quem responde as quatro é a AUDITORIA do planejador, não o plano.** Nenhum método é obrigado a
+entregar isto escrito, e vários não entregam — o planejador levanta ele mesmo, com o comando do item
+3 do portão de saída (`planejamento.md`): arquivos por Task tirados **do texto dos Steps** ×
+`git merge-tree`, saída colada. Esperar que o plano declare independência é o defeito, não a
+prudência: a declaração de 15/08/2026 estava escrita, e era falsa. A auditoria é a fase 1, com o
+usuário; o árbitro não deduz depois.
+
+**Repo novo não dispensa a auditoria — muda onde ela olha.** Em código que já existe, o `grep` acha
+o singleton retido. Em projeto do zero, o estado compartilhado ainda não está no disco: ele vai ser
+**criado pelas Tasks do próprio lote** (o store da conversa, a conexão de socket, o cliente HTTP com
+renovação de sessão). Então a condição 3 se audita no **desenho** — quem cria o quê e quem consome —,
+não no repo. Nada aqui é freio a projeto novo: as quatro condições passam mais fácil num greenfield,
+e é para elas serem respondidas rápido que existe o comando.
 
 1. **Arquivos disjuntos.** Nenhum arquivo aparece em duas Tasks do lote. Não é "quase" nem
    "só o `types.ts`" — um arquivo compartilhado já é a serialização voltando pela porta dos
    fundos, com merge no meio.
+   **Confira no texto dos STEPS, não no cabeçalho da Task.** Foi ali que a colisão de
+   15/08/2026 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py` e o Step 8 dela mandava
+   editá-lo — a declaração "nenhum arquivo em comum" estava escrita e era falsa.
 2. **Nenhum símbolo atravessa.** Nada que a Task A cria é consumido pela Task B do mesmo
    lote. Se B espera uma função que A ainda está escrevendo, B trabalha contra o vazio.
-3. **Verificação isolada.** O comando de verificação de cada Task roda sozinho, na worktree
+3. **Nenhum ESTADO compartilhado.** Store, singleton de módulo, registry, cache, tabela: duas
+   Tasks que montam hosts do mesmo estado não são independentes por mais disjuntos que os
+   arquivos sejam, e a colisão **não aparece no merge** — aparece em rodadas de revisão, que é
+   onde ela custa mais caro. Medido em 16/08/2026: um store singleton retido por três componentes
+   nascidos em três Tasks tratadas como independentes; **8 das 11 rodadas** das duas últimas foram
+   um host escrevendo no estado que o outro limpa, lê ou apaga.
+4. **Verificação isolada.** O comando de verificação de cada Task roda sozinho, na worktree
    dela, sem depender do que as outras fizeram.
 
 Falhou uma → aquela Task sai do lote e volta pra fila serial. Lote de duas ou três; acima
 disso a integração vira o gargalo e você perdeu o ganho de qualquer jeito.
+
+**Passar nas quatro é o gatilho, não o fim da conta.** O que decide é o gatilho **mais** o custo de
+montagem deste repo (a seção "O custo real", abaixo): ambiente por worktree, portas, navegador
+único, hooks compartilhados. Lote que passa nas quatro e é barato de montar é o caminho certo — a
+página existe para ser usada, não para ser evitada.
 
 ## O que NÃO muda
 
@@ -147,7 +173,8 @@ rastro: `ls -la ~/.local/bin | grep <worktree>`.
 
 | Desculpa | Realidade |
 |---|---|
-| "O plano é grande, então paraleliza" | Tamanho não é independência. As três condições, ou serial. |
+| "O plano é grande, então paraleliza" | Tamanho não é independência. As quatro condições, ou serial. |
+| "Os arquivos são disjuntos, então são independentes" | Estado compartilhado não é arquivo. Condição 3, 8 de 11 rodadas. |
 | "Só o `types.ts` que as duas tocam" | Um arquivo compartilhado é merge no meio. Sai do lote. |
 | "Resolvo esse conflitinho e sigo" | Você é read-only. Conflito é Task nova, serial. |
 | "As duas passaram, mergeio as duas e verifico no fim" | Verificação depois de cada merge. Senão você não sabe qual quebrou. |

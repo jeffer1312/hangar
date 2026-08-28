@@ -41,9 +41,11 @@ sessão acaba confirmando que é revisora enquanto está no meio de um commit.
 
 Duas páginas que não são papel:
 
-- `references/paralelo-worktree.md` — a **exceção** de rodar Tasks em paralelo com uma worktree
-  cada. O padrão é serial; leia só se o plano declarou um lote paralelo (planejador) ou se você
-  vai integrá-lo (árbitro).
+- `references/paralelo-worktree.md` — rodar Tasks em paralelo, uma worktree cada. **O padrão
+  continua serial**, mas quem decide é a fase 1: o planejador lê esta página **ao decompor**, testa
+  o gatilho e escreve no plano o que decidiu — serial ou lote, com o motivo. Ler só depois de já
+  ter declarado o lote é circular, porque o gatilho que decide está lá dentro. O árbitro lê quando
+  vai integrar um.
 - `references/replanejar.md` — **reescrever o plano e o contrato no MEIO da execução**, quando o
   usuário mandar ou o plano deixar de ser confiável (premissa caída, método sem metade executora,
   estimativa estourando pela mesma causa). Não é troca de método escondida: é a fase 1 rodando de
@@ -93,13 +95,32 @@ Método: superpowers    # planejador: brainstorming → writing-plans · executo
 Método: mattpocock     # planejador: /grill-me → /to-spec → /to-tickets · executor: /implement
 ```
 
-**`superpowers` é o padrão e a recomendação — decisão do usuário, 17/08/2026, depois de medir a
-única execução em `mattpocock`.** Outro método só com pedido explícito dele, e com a **metade
-executora instalada e testada antes de aceitar**: a execução de 16–17/08 rodou `mattpocock` com o
-`/implement` ausente (o árbitro improvisou "os Steps são o método"), e o `/to-tickets` não gerou
-estimativa a priori nem prova de não-colisão — dois artefatos que o portão de saída da fase 1
-(`planejamento.md`) cobra de **qualquer** método. É um caso do princípio geral — skill invocada
-roda inteira (ver "Travas que valem para todos os papéis").
+**`superpowers` é o padrão — decisão do usuário, 17/08/2026.** Outro método entra com pedido
+explícito dele, e a **única** coisa a conferir antes de aceitar é esta:
+
+**A metade executora existe na CONTA que vai executar.** Skill e plugin são por diretório de
+configuração, e a conta do executor pode não enxergar o que a tua enxerga — confira o caminho, não a
+lembrança. É o caso geral de "skill invocada roda inteira" (ver "Travas que valem para todos os
+papéis"). *Prova:* a execução de 16–17/08/2026 rodou `mattpocock` com o `/implement` ausente da
+máquina, e o árbitro improvisou "os Steps são o método". **Isto venceu para o `mattpocock`:**
+conferido em 28/08/2026, `implement` e `to-tickets` estão instalados nas cinco contas de agente
+desta máquina, por symlink para `~/Projetos/mattpocock-skills/skills/engineering/`.
+
+**Artefato que o método não gera NÃO é motivo pra recusar o método — é trabalho do planejador, e
+ele já tem o procedimento.** O portão de saída da fase 1 é agnóstico de método por construção, e
+dois dos seus itens são justamente auditoria feita pelo planejador, com comando: arquivos por Task
+levantados **do texto dos Steps** × `git merge-tree` (item 3) e a procura por estado compartilhado
+(item 4). Ele não espera que o plano venha com isso escrito — ele levanta. *Medido no `to-tickets`
+(SKILL.md lido em 28/08/2026):* ele entrega arestas de bloqueio ("Blocked by"), que são ordem e não
+disjunção, não tem campo de estimativa em nenhum dos dois templates, e manda explicitamente *"avoid
+specific file paths"*. Nada disso o reprova: é exatamente a lacuna que a auditoria do planejador
+existe pra fechar, e ela fecharia igual num plano escrito à mão pelo usuário.
+
+**`disable-model-invocation: true` não é obstáculo.** As duas skills do `mattpocock` o trazem, então
+a sessão não as auto-invoca — mas o kick-off chega no pane como **digitação**, igual ao que o
+usuário manda do celular. Kick-off de executor nesse método **começa** com a linha `/implement` e o
+resto do texto vira argumento dela. Só não vale escrever `/implement` no meio do kick-off: ali é
+texto, não comando.
 
 Nenhum papel escolhe método, e **nenhum troca de método no meio**. Plano nascido num método e
 executado noutro é o defeito que esta seção existe para impedir: os dois escrevem o trabalho em formatos
