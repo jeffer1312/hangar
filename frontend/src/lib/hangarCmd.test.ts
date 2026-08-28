@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { lerComandoHangar } from './hangarCmd';
+import { lerComandoHangar, lerFerramentaClaude } from './hangarCmd';
 
 describe('lerComandoHangar', () => {
   it('sessão criada: tira nome, cwd, provider e marca worktree', () => {
@@ -78,5 +78,53 @@ describe('lerComandoHangar', () => {
 
   it('o nome antigo cp-send continua sendo reconhecido', () => {
     expect(lerComandoHangar('cp-send --list', '', false)?.verbo).toBe('listar');
+  });
+});
+
+// Saídas COPIADAS de uma chamada real (28/08/2026, claude 2.1.224) — o shape do `ListAgents` tem
+// separador `·` e sufixo `started Xh ago`, que uma amostra inventada erraria.
+const LISTA = [
+  'This session is hangar-78 [543645] — the name other sessions use to message it (it is not listed below).',
+  '',
+  'Peer sessions (2):',
+  '  hangar-b2 [5f1ae0]  ·  interactive  ·  idle  ·  tmux hangar-2:@1921.%2050  ·  started 19h ago',
+  '  app-web-0f [a47c75]  ·  interactive  ·  busy  ·  tmux tarefa-28:@2807.%2996  ·  started 7m ago',
+].join('\n');
+
+describe('lerFerramentaClaude', () => {
+  it('SendMessage entregue: alvo, texto e a marca da via', () => {
+    const a = lerFerramentaClaude(
+      'SendMessage',
+      { to: 'hangar-b2', message: 'não era orquestração' },
+      '{"success":true,"message":"\\"não era orquestração\\" → hangar-b2 (another Claude session on this machine)","msg_id":"535b"}',
+      false,
+    );
+    expect(a).toMatchObject({ verbo: 'recado', via: 'claude', alvo: 'hangar-b2', entregue: true });
+    expect(a?.erro).toBeUndefined();
+  });
+
+  it('resultado sem `success` não vira "entregue" por otimismo', () => {
+    const a = lerFerramentaClaude('SendMessage', { to: 'x', message: 'oi' }, 'ok', false);
+    expect(a?.entregue).toBe(false);
+    expect(a?.erro).toBeUndefined();
+  });
+
+  it('`success: false` é erro mesmo sem o tool_result vir marcado', () => {
+    const a = lerFerramentaClaude('SendMessage', { to: 'x' }, '{"success":false,"error":"no such agent"}', false);
+    expect(a?.erro).toContain('no such agent');
+  });
+
+  it('ListAgents: uma linha por sessão, busy vira working, e o nome desta sessão sai à parte', () => {
+    const a = lerFerramentaClaude('ListAgents', {}, LISTA, false);
+    expect(a?.eu).toBe('hangar-78');
+    expect(a?.sessoes).toEqual([
+      { nome: 'hangar-b2', estado: 'idle', cwd: 'hangar-2:@1921.%2050', extra: '19h ago' },
+      { nome: 'app-web-0f', estado: 'working', cwd: 'tarefa-28:@2807.%2996', extra: '7m ago' },
+    ]);
+  });
+
+  it('outra ferramenta qualquer não vira cartão', () => {
+    expect(lerFerramentaClaude('Bash', { command: 'ls' }, 'a  b', false)).toBeNull();
+    expect(lerFerramentaClaude(null, null, '', false)).toBeNull();
   });
 });

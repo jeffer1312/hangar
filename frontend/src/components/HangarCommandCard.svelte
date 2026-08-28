@@ -1,6 +1,8 @@
 <script lang="ts">
   import * as m from '../paraglide/messages';
   import type { AcaoHangar } from '../lib/hangarCmd';
+  import HangarMark from './icons/HangarMark.svelte';
+  import { MARCA_CLAUDE } from '../lib/marcaClaude';
 
   // Cartão de um comando do hangar rodado pelo agente. O que ele acrescenta ao card de Bash: diz o
   // que ACONTECEU (em vez da linha de comando), quando e quanto levou, e oferece a ação seguinte
@@ -78,10 +80,22 @@
 
 <div class="hc" class:erro={!!acao.erro}>
   <div class="hc-cab">
-    <svg class="hc-arco" width="18" height="13" viewBox="0 0 20 14" fill="none" aria-hidden="true">
-      <path d="M2 13a8 8 0 0116 0" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
-      <path d="M6.5 13a3.5 3.5 0 017 0" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" opacity=".55" />
-    </svg>
+    {#if acao.via === 'claude'}
+      <!-- Ferramenta nativa do Claude Code: a marca dele entra como SELO sobre o arco do hangar —
+           o cartão é do app, a via é do Claude. -->
+      <span class="hc-selo">
+        <span class="hc-arco3"><HangarMark size={21} /></span>
+        <svg class="hc-marca" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"
+             style="color: {MARCA_CLAUDE.cor}">
+          <path d={MARCA_CLAUDE.d} />
+        </svg>
+      </span>
+    {:else}
+      <svg class="hc-arco" width="18" height="13" viewBox="0 0 20 14" fill="none" aria-hidden="true">
+        <path d="M2 13a8 8 0 0116 0" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
+        <path d="M6.5 13a3.5 3.5 0 017 0" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" opacity=".55" />
+      </svg>
+    {/if}
     <span class="hc-titulo">{titulo}</span>
     {#if tempo}<span class="hc-tempo">{tempo}</span>{/if}
   </div>
@@ -104,15 +118,23 @@
             <span class="hc-bola" data-estado={s.estado} aria-hidden="true"></span>
             <button class="hc-nome" onclick={() => onAbrirSessao?.(s.nome)} disabled={!onAbrirSessao}>{s.nome}</button>
             <span class="hc-estado">{(estadoRotulo[s.estado] ?? (() => s.estado))()}</span>
-            <span class="hc-cam">{s.cwd}</span>
+            <span class="hc-cam">{s.extra ?? s.cwd}</span>
           </li>
         {/each}
       </ul>
+      {#if acao.eu}<p class="hc-eu">{m.hangar_cmd_esta_sessao({ nome: acao.eu })}</p>{/if}
     {:else if acao.texto}
       <p class="hc-msg">{acao.texto}</p>
       {#if acao.verbo === 'recado'}
         <div class="hc-chips">
-          <span class="hc-chip">{acao.enfileirado ? m.hangar_cmd_na_fila() : m.hangar_cmd_entregue()}</span>
+          <!-- Via nativa: a ferramenta confirma a entrega por socket, e não há fila do hangar. Sem
+               a confirmação (`success` ausente) o cartão não afirma "entregue" — o chip some. -->
+          {#if acao.via === 'claude'}
+            {#if acao.entregue}<span class="hc-chip destaque">{m.hangar_cmd_entregue()}</span>{/if}
+            <span class="hc-chip">{m.hangar_cmd_via_claude()}</span>
+          {:else}
+            <span class="hc-chip">{acao.enfileirado ? m.hangar_cmd_na_fila() : m.hangar_cmd_entregue()}</span>
+          {/if}
         </div>
       {:else if acao.peers?.length}
         <div class="hc-chips">
@@ -127,16 +149,19 @@
           {m.hangar_cmd_abrir({ nome: acao.alvo })}
         </button>
       {/if}
-      <button class="hc-btn mudo" class:falhou={falhouCopia} onclick={copiar}>
-        {falhouCopia ? m.hangar_cmd_copia_falhou() : copiado ? m.hangar_cmd_copiado() : m.hangar_cmd_copiar()}
-      </button>
+      <!-- Via nativa não tem linha de comando pra copiar (a ferramenta é chamada por parâmetro). -->
+      {#if comando}
+        <button class="hc-btn mudo" class:falhou={falhouCopia} onclick={copiar}>
+          {falhouCopia ? m.hangar_cmd_copia_falhou() : copiado ? m.hangar_cmd_copiado() : m.hangar_cmd_copiar()}
+        </button>
+      {/if}
     </div>
 
     {#if saida.trim()}
       <details class="hc-cru" bind:open={cruAberto}>
         <summary>{m.hangar_cmd_saida_original({ n: saida.trim().split('\n').length })}</summary>
-        <pre>$ {comando}
-{saida.trim()}</pre>
+        {#if comando}<pre>$ {comando}
+{saida.trim()}</pre>{:else}<pre>{saida.trim()}</pre>{/if}
       </details>
     {/if}
   </div>
@@ -164,6 +189,24 @@
   }
   .hc-arco { flex-shrink: 0; color: var(--accent); }
   .hc.erro .hc-arco { color: var(--error); }
+  /* Selo: o arco cede o canto de baixo à direita (translate+scale) pra a marca do Claude caber
+     inteira ali. Sem o anel (box-shadow na cor do cartão) a estrela encosta no arco e, a 13px,
+     as duas viram uma mancha só. */
+  .hc-selo { position: relative; display: block; flex-shrink: 0; width: 21px; height: 21px; color: var(--accent); }
+  .hc.erro .hc-selo { color: var(--error); }
+  .hc-arco3 { position: absolute; inset: 0; display: block; transform: translate(-1px, -1.5px) scale(0.92); }
+  .hc-arco3 :global(svg) { width: 100%; height: 100%; }
+  .hc-marca {
+    position: absolute;
+    right: -3px;
+    bottom: -2px;
+    width: 13px;
+    height: 13px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-full);
+    padding: 1.5px;
+    box-shadow: 0 0 0 1.5px var(--surface-raised);
+  }
   .hc-titulo {
     font-size: var(--text-sm);
     font-weight: 600;
@@ -211,6 +254,7 @@
   .hc-nome { padding: 0; background: none; border: none; color: var(--text-primary); font-weight: 600; font-size: var(--text-sm); cursor: pointer; white-space: nowrap; flex-shrink: 0; }
   .hc-nome:disabled { cursor: default; }
   .hc-estado { font-size: 11px; color: var(--text-muted); }
+  .hc-eu { margin: 0; font-size: 11px; color: var(--text-muted); }
   .hc-cam { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hc-acoes { display: flex; flex-wrap: wrap; gap: var(--space-2); }
   .hc-btn {

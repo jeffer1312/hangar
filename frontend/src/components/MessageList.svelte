@@ -18,6 +18,8 @@
   import { parseImageMessage, parseFilePaths, parsePeerMessage } from '../lib/format';
   import { lerRecadoOrq } from '../lib/orqRecado';
   import OrqPainelCard from './OrqPainelCard.svelte';
+  import BastaoCard from './BastaoCard.svelte';
+  import { lerRecadoBastao } from '../lib/bastaoRecado';
   import { transcriptImageUrl, uploadUrl } from '../lib/api';
   import { windowStartFor, nextWindowEnd, precisaPreencher, mostrarIrPraoFim } from '../lib/window';
 
@@ -322,6 +324,10 @@
         {@const peer = ev.text ? parsePeerMessage(ev.text) : null}
         {@const shownText = peer ? peer.text : ev.text ?? ''}
         {@const orq = peer?.scope === 'panel' ? lerRecadoOrq(peer.text) : null}
+        <!-- O kick-off da passagem NÃO passa pelo parsePeerMessage: o prefixo dele é
+             `[hangar: passagem de bastão]`, e ler "passagem de bastão" como nome de remetente
+             desenharia um chip "de: passagem de bastão" que não é sessão nenhuma. -->
+        {@const bastao = ev.text ? lerRecadoBastao(ev.text) : null}
         {#if ev.image_count}
           <!-- Imagem(ns) colada(s) no TERMINAL: thumbnail buscado lazy do .jsonl (base64). Quando a
                msg veio do APP (tem "📎 imagem: <path>"), a legenda entra LIMPA e as fotos enviadas
@@ -340,6 +346,11 @@
           <div class="queued-row" class:dim={working && !ev.desistiu}>
             {#if imgFotos}
               <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
+            {:else if bastao}
+              <!-- O kick-off da passagem chega SEMPRE por aqui: quem o entrega é a fila durável, e
+                   não o terminal. Sem este ramo o cartão só existiria no caso que nunca acontece. -->
+              <BastaoCard recado={bastao} cru={ev.text ?? ''} ts={ev.ts} {sessionName}
+                          onAbrirOrigem={onOpenSession ? () => onOpenSession(bastao.origem) : null} />
             {:else}
               <UserBubble text={shownText} ts={ev.ts} from={peer?.from} scope={peer?.scope}
                           onForward={onForward ? () => onForward(shownText) : null}
@@ -351,6 +362,11 @@
           </div>
         {:else if imgFotos}
           <ImageBubble caption={imgFotos.caption} srcs={imgFotos.filenames.map((f) => uploadUrl(sessionName, f))} />
+        {:else if bastao}
+          <!-- Passagem de bastão: cartão com os dois passos e os dois avisos do kick-off. O recado
+               inteiro continua no bloco fechado do cartão. -->
+          <BastaoCard recado={bastao} cru={ev.text ?? ''} ts={ev.ts} {sessionName}
+                      onAbrirOrigem={onOpenSession ? () => onOpenSession(bastao.origem) : null} />
         {:else if orq}
           <!-- Recado do modal de orquestração: cartão em vez de doze linhas de prosa. O texto cru
                continua no bloco fechado do cartão — o parse é leitura, não substituição. -->

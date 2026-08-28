@@ -9,10 +9,18 @@
 
 export type VerboHangar = 'criar' | 'listar' | 'recado' | 'parear' | 'desparear' | 'grupo';
 
-export type SessaoListada = { nome: string; estado: string; cwd: string };
+export type SessaoListada = {
+  nome: string;
+  estado: string;
+  cwd: string;
+  /** Linha da direita quando o `cwd` não é o que interessa (idade da sessão, no ListAgents). */
+  extra?: string;
+};
 
 export type AcaoHangar = {
   verbo: VerboHangar;
+  /** Por onde o recado foi: o comando do hangar (padrão) ou a ferramenta nativa do Claude Code. */
+  via?: 'hangar' | 'claude';
   /** Sessão criada / destinatária do recado / par. */
   alvo?: string;
   /** Texto do recado ou da tarefa do pareamento. */
@@ -28,6 +36,10 @@ export type AcaoHangar = {
   peers?: string[];
   /** Recado que ficou na fila em vez de ser digitado na hora. */
   enfileirado?: boolean;
+  /** `SendMessage`: a ferramenta confirmou a entrega (`success: true`). */
+  entregue?: boolean;
+  /** `ListAgents`: o nome DESTA sessão, que a ferramenta diz e não lista junto das outras. */
+  eu?: string;
   /** Falhou: a mensagem crua do backend (o componente traduz o que conhece). */
   erro?: string;
 };
@@ -133,5 +145,76 @@ export function lerComandoHangar(comando: string, saida: string, falhou: boolean
     texto: entreAspas(args, alvo) ?? undefined,
     enfileirado: /^na fila ->/m.test(out),
     erro,
+  };
+}
+
+// ── A OUTRA via: `SendMessage` / `ListAgents`, ferramentas NATIVAS do Claude Code ────────────
+// Mesma coisa que o `hangar-send` faz por comando, só que por socket e só entre sessões Claude
+// desta máquina. Vira o MESMO cartão (recado e lista já existem lá); o que muda é o `via`, que o
+// cartão usa pra marcar o ícone — e o fato de o dado já vir estruturado, sem parse de linha de
+// comando.
+
+/** Uma sessão do `ListAgents`: `  nome [ref]  ·  interactive  ·  idle  ·  tmux X:@1.%2  ·  started 19h ago` */
+const AGENTE = /^\s+(\S+)\s+\[[^\]]+\]\s+·\s+\S+\s+·\s+(\S+)\s+·\s+tmux\s+(\S+)\s+·\s+started\s+(.+?)\s*$/;
+/** A 1ª linha, que diz o nome desta sessão — ela não entra na lista das outras. */
+const EU = /^This session is (\S+)/m;
+
+/**
+ * @param toolName nome da ferramenta do evento (`SendMessage`, `ListAgents`, …)
+ * @param entrada `tool_input` cru do evento
+ * @param saida texto do `tool_result` (vazio enquanto roda)
+ * @param falhou o `tool_result` veio marcado como erro
+ */
+export function lerFerramentaClaude(
+  toolName: string | null | undefined,
+  entrada: unknown,
+  saida: string,
+  falhou: boolean,
+): AcaoHangar | null {
+  const out = saida.trim();
+  const campos = (entrada ?? {}) as Record<string, unknown>;
+
+  if (toolName === 'ListAgents') {
+    const sessoes = out
+      .split('\n')
+      .map((l) => l.match(AGENTE))
+      .filter(Boolean)
+      // `busy` é o `working` do resto do app: o rótulo do cartão é um só, e traduzir aqui evita um
+      // segundo vocabulário de estado circulando na UI.
+      .map((m) => ({
+        nome: m![1],
+        estado: m![2] === 'busy' ? 'working' : m![2],
+        cwd: m![3],
+        extra: m![4],
+      }));
+    return {
+      verbo: 'listar',
+      via: 'claude',
+      sessoes: sessoes.length ? sessoes : undefined,
+      eu: out.match(EU)?.[1],
+      erro: falhou ? out || 'falhou' : undefined,
+    };
+  }
+
+  if (toolName !== 'SendMessage') return null;
+  const alvo = typeof campos['to'] === 'string' ? campos['to'] : undefined;
+  const texto = typeof campos['message'] === 'string' ? campos['message'] : undefined;
+  // A ferramenta responde JSON (`{"success":…}`). Resultado que não é JSON — ou que é JSON de outra
+  // forma — não vira "entregue" por otimismo: sem `success: true` explícito o cartão não afirma
+  // nada, e o texto cru continua no bloco fechado.
+  let sucesso: boolean | null = null;
+  try {
+    const j = out ? JSON.parse(out) : null;
+    if (j && typeof j === 'object' && 'success' in j) sucesso = j.success === true;
+  } catch {
+    sucesso = null;
+  }
+  return {
+    verbo: 'recado',
+    via: 'claude',
+    alvo,
+    texto,
+    erro: falhou || sucesso === false ? out || 'falhou' : undefined,
+    entregue: sucesso === true,
   };
 }

@@ -285,6 +285,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   // que carregar o nome dela e o caminho do dossie, senao quem le acha que nada aconteceu.
   erro_bastao_para_si_mesma: () => m.erro_bastao_para_si_mesma(),
   erro_bastao_sem_cwd: () => m.erro_bastao_sem_cwd(),
+  erro_bastao_sem_dossie: () => m.erro_bastao_sem_dossie(),
   erro_bastao_gravar: (p) => m.erro_bastao_gravar({ motivo: String(p.motivo ?? '') }),
   erro_bastao_fila: (p) => m.erro_bastao_fila({ nome: String(p.nome), dossie: String(p.dossie) }),
 };

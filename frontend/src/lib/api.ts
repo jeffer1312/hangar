@@ -454,6 +454,17 @@ export async function getBastao(name: string): Promise<string> {
   return res.text();
 }
 
+// O dossiê que ESTA sessão recebeu, lido do disco — não um novo montado agora (é o que separa esta
+// rota do `getBastao` acima). Mesma resposta em markdown cru, mesmo motivo pra não passar pelo
+// apiFetch.
+export async function getBastaoDossie(name: string): Promise<string> {
+  const res = await fetch(`${getBaseUrl()}/api/sessions/${encodeURIComponent(name)}/bastao/dossie`, {
+    headers: authHeaders(),
+  });
+  await ensureOk(res);
+  return res.text();
+}
+
 // Resposta INTEIRA da rota, não só o que a tela lê hoje (`name`, pra navegar). Declarar meia
 // resposta é o convite pro próximo `as any` quando alguém precisar do `dossie` — e os quatro
 // campos são o contrato do endpoint, não campos inventados por precaução.

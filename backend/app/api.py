@@ -1790,6 +1790,22 @@ async def bastao(name: str):
     return Response(content=texto, media_type="text/markdown; charset=utf-8")
 
 
+@app.get("/api/sessions/{name}/bastao/dossie", dependencies=[Depends(require_auth)])
+async def bastao_dossie(name: str):
+    """O dossiê que ESTA sessão RECEBEU, lido do disco — não um novo.
+
+    Irmão do GET acima e diferente dele de propósito: aquele MONTA o dossiê da sessão pedida agora,
+    e serve pra prévia de quem vai passar o bastão. Este devolve o arquivo gravado na hora da
+    passagem, que é o que a sucessora leu. Mostrar um dossiê remontado no lugar dele seria exibir
+    um texto que ninguém leu como se fosse a instrução recebida.
+    """
+    alvo = bastao_mod.caminho(name)
+    if not alvo.exists():
+        raise HTTPException(404, detail=erro("erro_bastao_sem_dossie", "no handover dossier for this session"))
+    texto = await asyncio.to_thread(alvo.read_text, encoding="utf-8")
+    return Response(content=texto, media_type="text/markdown; charset=utf-8")
+
+
 class BastaoBody(_StrictBody):
     """Sessão NOVA que vai continuar o trabalho de `{name}`.
 

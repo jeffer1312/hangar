@@ -7,7 +7,7 @@
   import { caminhoDeCodigoNoComando } from '../lib/codeFromBash';
   import { pseudoCaminhoPorConteudo } from '../lib/detectarLinguagem';
   import { rolagemSoAoClicar } from '../lib/rolagemSoAoClicar';
-  import { lerComandoHangar } from '../lib/hangarCmd';
+  import { lerComandoHangar, lerFerramentaClaude } from '../lib/hangarCmd';
   import HangarCommandCard from './HangarCommandCard.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import EditDiff from './EditDiff.svelte';
@@ -51,8 +51,14 @@
       ? String((event.tool_input as Record<string, unknown> | null)?.['command'] ?? '')
       : '',
   );
+  // `SendMessage`/`ListAgents` são a MESMA conversa entre sessões, por outra via (socket do Claude
+  // Code em vez do comando do hangar) — logo, o mesmo cartão. O `via` do resultado é o que muda o
+  // ícone lá dentro.
   const hangarAcao = $derived(
-    result ? lerComandoHangar(comandoBash, String(result.result ?? ''), phase === 'error') : null,
+    result
+      ? lerComandoHangar(comandoBash, String(result.result ?? ''), phase === 'error') ??
+        lerFerramentaClaude(event.tool_name, event.tool_input, String(result.result ?? ''), phase === 'error')
+      : null,
   );
   const duracao = $derived(
     result?.ts && event.ts ? Math.max(0, (result.ts - event.ts) * 1000) : null,
