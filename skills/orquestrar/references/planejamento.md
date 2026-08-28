@@ -158,9 +158,11 @@ execução confirmar.
 Além do que o `writing-plans` já pede, o plano carrega:
 
 - **Ordem das Tasks** e quais não paralelizam, com o motivo. O padrão é **serial**: uma Task
-  por vez, portão fechando cada uma. Trabalho grande com Tasks de verdade independentes pode
-  virar lote paralelo com uma worktree cada — a exceção, o gatilho e o custo estão em
-  `paralelo-worktree.md`, e a decisão é **aqui**, com o usuário, nunca do árbitro depois.
+  por vez, portão fechando cada uma. Trabalho grande com Tasks de verdade independentes vira
+  lote paralelo com uma worktree cada — o gatilho e o custo estão em `paralelo-worktree.md`, e
+  a decisão é **aqui**, com o usuário, nunca do árbitro depois. **Você audita, não espera o
+  plano declarar**: as quatro condições do gatilho se respondem com os itens 3 e 4 do portão de
+  saída, que são trabalho seu qualquer que seja o método.
 - **Estimativa a priori, escrita ANTES do kick-off**: uma linha por Task — **relógio e rodadas**
   esperados. Não é adivinhação: é a régua que deixa o árbitro ver "estourou" enquanto acontece.
   Medido nas duas direções: a execução de 15/08 escreveu antes e a régua pegou uma Task estourando
