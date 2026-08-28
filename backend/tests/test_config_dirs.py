@@ -38,6 +38,26 @@ def test_env_override_with_labels(tmp_path, monkeypatch):
     assert [(c.label, c.path) for c in out] == [("trabalho", str(a.resolve())), ("clean", str(b.resolve()))]
 
 
+def test_projects_mtime_nao_revarre_dentro_do_ttl(tmp_path, monkeypatch):
+    """A varredura recursiva custa ~55ms com 9.370 arquivos e roda em caminho quente (cotas por
+    requisicao, statusline e previa por leitura de sidecar). Dentro do TTL ela nao pode acontecer."""
+    cfg._mtime_cache.clear()
+    d = _make_dir(tmp_path, ".claude-work", ts=100)
+    relogio = [1000.0]
+    monkeypatch.setattr(cfg.time, "monotonic", lambda: relogio[0])
+
+    primeiro = cfg._projects_mtime(d)
+    assert primeiro == 100
+
+    novo = d / "projects" / "ws" / "b.jsonl"
+    novo.write_text("", encoding="utf-8")
+    os.utime(novo, (900, 900))
+    assert cfg._projects_mtime(d) == 100, "dentro do TTL tem que devolver o valor guardado"
+
+    relogio[0] += cfg._MTIME_TTL + 1
+    assert cfg._projects_mtime(d) == 900, "passado o TTL, revarre e ve o arquivo novo"
+
+
 def test_active_flag_matches_backend_config_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("CP_CLAUDE_CONFIG_DIRS", raising=False)
     monkeypatch.setattr(cfg.Path, "home", classmethod(lambda cls: tmp_path))

@@ -488,7 +488,7 @@ def abrir_shell(name: str):
     # async): mesmo padrao das rotas POST vizinhas (select/answer acima), que resolvem a sessao via
     # `registry.list()` direto e deixam o FastAPI rodar o handler bloqueante no threadpool.
     from app import tmux
-    info = next((s for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
     if info is None:
         raise HTTPException(status_code=404, detail=erro("erro_sessao_inexistente", "sessao nao existe"))
     alvo = f"term-{name}"
@@ -627,17 +627,25 @@ _LIST_TTL = 1.0
 _list_snap: dict = {"t": 0.0, "infos": None}
 
 
-async def _cached_info(name: str) -> SessionInfo | None:
+def _cached_info_sync(name: str) -> SessionInfo | None:
+    """Gemeo SINCRONO do _cached_info, pro handler `def` (que o FastAPI ja roda na threadpool e
+    portanto pode chamar registry.list() direto). Mesmo dicionario dos dois lados: um hit vindo de
+    qualquer caminho serve o outro. Duas threads podem recarregar ao mesmo tempo — inofensivo, a
+    recarga e idempotente e a ultima vence."""
     now = time.monotonic()
     if _list_snap["infos"] is None or now - _list_snap["t"] >= _LIST_TTL:
-        _list_snap["infos"] = await asyncio.to_thread(registry.list)
+        _list_snap["infos"] = registry.list()
         _list_snap["t"] = time.monotonic()
     info = next((s for s in _list_snap["infos"] if s.name == name), None)
     if info is None:
-        _list_snap["infos"] = await asyncio.to_thread(registry.list)
+        _list_snap["infos"] = registry.list()
         _list_snap["t"] = time.monotonic()
         info = next((s for s in _list_snap["infos"] if s.name == name), None)
     return info
+
+
+async def _cached_info(name: str) -> SessionInfo | None:
+    return await asyncio.to_thread(_cached_info_sync, name)
 
 
 def _notify_async(session_id: str, send_fn) -> None:
@@ -740,7 +748,7 @@ _RECHECA_KIMI = 5.0
 def _drain_session(name: str) -> None:
     """Entrega enfileiradas pendentes desta sessao (best-effort, roda fora do request)."""
     try:
-        info = next((s for s in registry.list() if s.name == name), None)
+        info = _cached_info_sync(name)
         if info and info.jsonl:
             drain(name, info.jsonl, info.provider)
     except Exception:
@@ -755,7 +763,7 @@ def _confirm_and_drain(name: str) -> None:
         q = PromptQueue(name)
         if not any(r.get("delivered") is True and not r.get("confirmed") for r in q.load()):
             return  # nada a confirmar: nao paga registry nem o scan do transcript
-        info = next((s for s in registry.list() if s.name == name), None)
+        info = _cached_info_sync(name)
         if not info or not info.jsonl:
             return
         # MID-TURN o prompt entregue ainda pode nao ter virado entrada no transcript (vive na fila
@@ -3190,7 +3198,7 @@ def select(name: str, body: SelectBody):
     # Kimi: os botoes de aprovacao (plano/comando/arquivo) sao desenhados a partir do WIRE, entao a
     # escolha volta pelo wire tambem — tecla numerica + `interaction.resolved` como prova. O drive
     # generico abaixo NAO atende este provider em hipotese nenhuma (ver _select_aprovacao_kimi).
-    info = next((s for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
     if getattr(info, "provider", "claude") == "kimi":
         return _select_aprovacao_kimi(name, info, body.option)
     try:
@@ -3755,7 +3763,7 @@ async def relimpar_ditado(body: RelimparBody):
 
 @app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])
 def serve_upload(name: str, filename: str):
-    info = next((s for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
     if info is None or not info.cwd:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     try:
@@ -3770,7 +3778,7 @@ def list_session_uploads(name: str):
     # Galeria de anexos: a retencao vive no servidor, entao o prazo sai daqui pronto (o front so
     # desenha). Le do runtime_config, nao do env cru — senao a galeria mostraria um prazo e o
     # prune usaria outro.
-    info = next((s for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
     if info is None or not info.cwd:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     return {"files": list_uploads(info.cwd, runtime_config.get("upload_retention_days"))}
@@ -3807,7 +3815,7 @@ class GitCommitBody(_StrictBody):
 
 def _session_cwd(name: str) -> str:
     # cwd da sessao tmux (mesmo lookup do upload). 404 se a sessao/cwd nao existe.
-    info = next((s for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
     if info is None or not info.cwd:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     return info.cwd
@@ -4357,7 +4365,8 @@ def open_editor(name: str):
 @app.get("/api/sessions/{name}/transcript-image/{uuid}/{idx}", dependencies=[Depends(require_auth)])
 def transcript_image(name: str, uuid: str, idx: int):
     # Serve uma imagem colada no TERMINAL (base64 no .jsonl) sob demanda. Decodifica por uuid+idx.
-    jsonl = next((s.jsonl for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
+    jsonl = info.jsonl if info else None
     if not jsonl:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.transcript import get_transcript_image
@@ -4561,15 +4570,23 @@ def ask_history(body: AskHistoryBody):
     return {"answer": answer, "hits": hits}
 
 
+# Anexo citado na conversa: 60s sem perguntar + ETag pro resto. A miniatura de 96px do
+# FileAttachment carrega o arquivo ORIGINAL, entao sem cache toda repintura da lista rebaixava o
+# PNG inteiro. Starlette 1.3.1 poe o ETag no FileResponse mas NAO responde 304 — o 304 abaixo e
+# nosso. ponytail: arquivo reescrito no MESMO caminho so aparece depois dos 60s; e o preco de nao
+# perguntar. Documento (html/pdf) que o agente regenera e o caso que mais sente isso.
+_CACHE_ARQUIVO = "max-age=60"
+
+
 @app.get("/api/sessions/{name}/file", dependencies=[Depends(require_auth)])
-def serve_file(name: str, path: str):
+def serve_file(name: str, path: str, request: Request):
     # Serve QUALQUER arquivo referenciado na conversa (video/html/codigo/pdf/...). TRAVA de seguranca:
     # so serve se o `path` aparece no transcript desta sessao (citado por voce ou pelo Claude =
     # consentido) E existe E e arquivo regular -> bloqueia leitura arbitraria de disco / path-traversal.
     # FileResponse trata Range -> <video> faz seek/streaming.
     # Path RELATIVO (ex "./mock.png", "sub/x.png") resolve contra o CWD DA SESSAO (onde o Claude criou
     # o arquivo), nao o cwd do processo backend; guard extra: o resolvido nao pode ESCAPAR do cwd.
-    info = next((s for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
     if info is None or not info.jsonl:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     from app.transcript import path_in_transcript
@@ -4588,7 +4605,14 @@ def serve_file(name: str, path: str):
     if not os.path.isfile(real):
         raise HTTPException(404, detail=erro("erro_arquivo_nao_encontrado", "file not found"))
     media = mimetypes.guess_type(real)[0] or "application/octet-stream"
-    return FileResponse(real, media_type=media)
+    st = os.stat(real)
+    etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    cabecalhos = {"etag": etag, "cache-control": _CACHE_ARQUIVO}
+    # Depois da trava do transcript, nunca antes: 304 e resposta sobre um arquivo, e quem nao pode
+    # ver o arquivo tambem nao pode saber que ele mudou.
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=cabecalhos)
+    return FileResponse(real, media_type=media, headers=cabecalhos)
 
 
 class AnswerItem(_StrictBody):
@@ -4665,7 +4689,7 @@ def answer(name: str, body: AnswerBody):
     _recusa_se_painel_aberto(name)
     from app import terminal_input
     answers = [a.model_dump() for a in body.answers]
-    info = next((s for s in registry.list() if s.name == name), None)
+    info = _cached_info_sync(name)
     jsonl = info.jsonl if info else None
     fallback = False
 

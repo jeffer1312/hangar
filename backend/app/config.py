@@ -1,6 +1,7 @@
 import logging
 import os
 import socket
+import time
 from pathlib import Path
 from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,12 +39,28 @@ def _is_config_dir(p: Path) -> bool:
     return (p / ".credentials.json").is_file() and (p / "projects").is_dir()
 
 
+# Chave = caminho do config dir; cresce so com a quantidade de ~/.claude*, entao nao precisa poda.
+_MTIME_TTL = 60.0
+_mtime_cache: dict[str, tuple[float, float]] = {}
+
+
 def _projects_mtime(p: Path) -> float:
-    # Varre recursivamente pra pegar o arquivo mais recente (nao so o dir imediato)
+    # Varre recursivamente pra pegar o arquivo mais recente (nao so o dir imediato). CARO: medido em
+    # 28/08/2026 nesta maquina, 9.370 arquivos e ~55ms por chamada — e `list_config_dirs` esta em
+    # caminho quente (cotas._fontes por requisicao, statusline e previa por leitura de sidecar),
+    # onde apareceu como ~10% do CPU do backend num perfil de py-spy. O valor so ORDENA a lista de
+    # contas por recencia, entao um minuto de atraso na ordem nao se ve; a varredura por chamada, sim.
+    agora = time.monotonic()
+    chave = str(p)
+    hit = _mtime_cache.get(chave)
+    if hit is not None and agora - hit[0] < _MTIME_TTL:
+        return hit[1]
     try:
-        return max((f.stat().st_mtime for f in (p / "projects").rglob("*") if f.is_file()), default=0.0)
+        valor = max((f.stat().st_mtime for f in (p / "projects").rglob("*") if f.is_file()), default=0.0)
     except OSError:
-        return 0.0
+        valor = 0.0
+    _mtime_cache[chave] = (agora, valor)
+    return valor
 
 
 def list_config_dirs() -> list[ConfigDirInfo]:
