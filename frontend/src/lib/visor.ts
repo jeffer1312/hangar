@@ -1,5 +1,7 @@
-import BiggerPicture from 'bigger-picture/vanilla';
-import 'bigger-picture/css';
+// Import de TIPO so: o modulo (22KB no mapa do bundle, mais o CSS) so viaja quando alguem abre uma
+// midia de fato — ver `obterInstancia`. Estatico, ele ia pro chunk de entrada por causa do
+// `FileAttachment`, que esta no caminho critico do chat.
+import type BiggerPictureCtor from 'bigger-picture/vanilla';
 import * as m from '../paraglide/messages';
 
 // Visor de midia do app inteiro: chat, anexo de arquivo e folha de Anexos abrem POR AQUI.
@@ -32,7 +34,7 @@ export type AcaoVisor = {
   acao: (midia: MidiaVisor) => void;
 };
 
-let instancia: ReturnType<typeof BiggerPicture> | null = null;
+let instancia: ReturnType<typeof BiggerPictureCtor> | null = null;
 // Listener de Escape da abertura VIVA. É de módulo, e não da chamada, porque `abrirVisor` é
 // assíncrona (mede as mídias antes de abrir): dois toques rápidos em miniaturas diferentes chegam
 // a `bp.open` duas vezes, e só o `onClosed` da segunda rodaria — o `escapa` da primeira ficava
@@ -88,8 +90,12 @@ export function ligarArrastoPraBaixo(wrap: HTMLElement, fechar: () => void): () 
   };
 }
 
-function obterInstancia() {
+async function obterInstancia() {
   if (!instancia) {
+    // Carrega a lib e o CSS dela AQUI, no primeiro toque numa midia. O `abrirVisor` ja e assincrono
+    // (mede as midias antes de abrir), entao esperar o pedaco nao muda nada pra quem chama.
+    const { default: BiggerPicture } = await import('bigger-picture/vanilla');
+    await import('bigger-picture/css');
     // O alvo tem que ser o proprio <body>: a lib mede o container por `target.offsetWidth` e, so
     // pro body, usa `window.innerHeight` como altura. Num <div> criado a mao a altura e ZERO, e o
     // fator de escala vira 0 — o visor abre com a midia em `width: 0px; height: 0px`, sem erro
@@ -165,7 +171,7 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
   const tamanhos = await Promise.all(
     midias.map(async (x) => medir(x.element) ?? (await medirCarregando(x.url))),
   );
-  const bp = obterInstancia();
+  const bp = await obterInstancia();
   let faixa: HTMLElement | null = null;
   let atual = inicio;
   let soltarArrasto: (() => void) | null = null;

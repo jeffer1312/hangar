@@ -5,7 +5,7 @@
   // Estreito (celular) -> unificado de uma coluna, o mesmo dado em outra ordem.
   import * as m from '../paraglide/messages';
   import { computeEditDiff, type EditDiff, type SplitRow } from '../lib/editdiff';
-  import { highlightCodeLines, type DiffToken } from '../lib/highlight';
+  import { highlightCodeLines, type DiffToken } from '../lib/highlightLazy';
   import { toolLook } from '../lib/toolLook.svelte';
   import { rolagemSoAoClicar } from '../lib/rolagemSoAoClicar';
 

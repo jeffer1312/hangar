@@ -8,7 +8,7 @@
   import { abrirComTexto } from '../lib/ttsSelection.svelte';
   import FileAttachment from './FileAttachment.svelte';
   import IconSpeaker from './icons/IconSpeaker.svelte';
-  import { highlightCodeBlocks } from '../lib/highlight';
+  import { highlightCodeBlocks } from '../lib/highlightLazy';
   import { enhanceTables } from '../lib/tableChartMount';
   import { tableChartPref } from '../lib/tableChartPref.svelte';
   import { Typewriter } from '../lib/typewriter.svelte';

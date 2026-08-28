@@ -4,7 +4,7 @@
   // como esta (sem numeros). Numerado so e assumido se QUASE TODA linha casa "^\d+\t" — um tab
   // solto em dado (saida de grep, TSV) nao pode virar gutter falso. Recolhido/expandido quem
   // controla e o ToolCard; aqui e so a pintura.
-  import { highlightCodeLines, type DiffToken } from '../lib/highlight';
+  import { highlightCodeLines, type DiffToken } from '../lib/highlightLazy';
 
   interface Props {
     path: string;
