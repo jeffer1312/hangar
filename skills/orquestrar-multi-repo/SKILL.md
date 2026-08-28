@@ -4,7 +4,7 @@ description: |
   Orquestra uma tarefa que atravessa VARIOS repos usando sessoes Claude pareadas do hangar - esta sessao vira a LIDER, cria/pareia uma sessao visivel por repo (hangar-send --new/--pair), escreve o contrato compartilhado do grupo, distribui o escopo, monitora os reportes e consolida o painel final pro usuario. Use quando o usuario pedir "orquestra", "coordena", "distribui essa tarefa/ticket entre os repos", "abre uma sessao pra cada repo", ou quando um ticket multi-repo precisar de trabalho paralelo em mais de um repo. NAO use para: tarefa de um repo so (sessao normal), exploracao read-only multi-repo (subagent Explore resolve), ou mandar um recado avulso (hangar-send direto).
 ---
 
-# orquestrar — sessão líder de um grupo de trabalho multi-repo
+# orquestrar-multi-repo — sessão líder de um grupo espalhado por vários repos
 
 Esta sessão vira a **líder**: decompõe a tarefa, cria uma sessão pareada **visível**
 por repo (nunca subagent pra editar outro repo — o usuário quer ver os terminais
