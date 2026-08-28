@@ -1,7 +1,7 @@
 ---
 name: orquestrar
 description: |
-  Use quando o usuario pedir para tocar um trabalho grande com revisao independente e pouca interacao dele depois do planejamento - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - ou quando um plano grande/arriscado vai virar MR ou push. Use TAMBEM quando um kick-off mandar voce invocar esta skill e disser seu papel, e quando ja existe um trabalho desses em andamento e voce precisa saber o que fazer agora. Serve a trabalho de um repositorio ou de varios - o que a define e o plano com Tasks, o portao entre elas e o revisor independente, nao a quantidade de checkouts. NAO use para - tarefa pequena sem plano escrito (sessao normal), distribuir uma tarefa entre repos sem plano nem portao (skill orquestrar-multi-repo), revisao avulsa de um diff (subagent de review direto).
+  Use quando o usuario pedir para tocar um trabalho grande com revisao independente e pouca interacao dele depois do planejamento - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - ou quando um plano grande/arriscado vai virar MR ou push. Use TAMBEM quando um kick-off mandar voce invocar esta skill e disser seu papel, e quando ja existe um trabalho desses em andamento e voce precisa saber o que fazer agora. Serve a trabalho de um repositorio ou de varios - o que a define e o plano com Tasks, o portao entre elas e o revisor independente, nao a quantidade de checkouts; para varios repos ela combina as interfaces antes e abre uma sessao por repo. NAO use para - tarefa pequena sem plano escrito (sessao normal), revisao avulsa de um diff (subagent de review direto).
 ---
 
 # Tubo: research → plano → execução autônoma com portão
@@ -60,9 +60,21 @@ papel nasce lá — quem diz o repo de cada uma é o contrato, na linha do cabe�
 <outro> a partir da T13)`). O que continua valendo é o **um escritor por árvore**: dois executores
 no mesmo checkout ao mesmo tempo, não; em checkouts diferentes, sim.
 
-A `orquestrar-multi-repo` é outra coisa e serve a outro caso: distribuir UMA tarefa entre repos, uma
-sessão por repo, sem plano com Tasks, sem portão e sem revisor independente. Se o trabalho tem plano
-e portão, é esta skill aqui, tendo ele um repositório ou cinco.
+Quando o trabalho atravessa repositórios, três coisas mudam de peso:
+
+**As interfaces se combinam ANTES de abrir as sessões.** O que atravessa a fronteira — rota,
+payload, evento, tipo — vira linha do contrato, numa seção `## Interfaces combinadas`, antes de
+qualquer um escrever código. Sem isso dois repos entregam pontas que não encaixam, e o defeito só
+aparece na integração, quando as duas Tasks já passaram pelo portão.
+
+**Subagente lê, sessão escreve.** Subagente serve pra explorar o outro repo, rastrear um fluxo,
+achar o caller. Editar fora do cwd da sessão exige uma sessão de verdade naquele repo — não porque
+o subagente não conseguiria, mas porque trabalho que ninguém vê no terminal não dá pra acompanhar
+nem interromper.
+
+**Sessão em outra máquina (`servidor::sessao`) não entra em grupo.** Pareamento cross-server não
+existe; ela recebe recado 1:1 e o que ficar combinado tem de ser registrado no contrato local, à
+mão, senão some.
 
 ## O MÉTODO não é escolha sua — vem do contrato
 

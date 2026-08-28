@@ -334,6 +334,21 @@ tabela de lá e só ajuste os nomes de sessão — ela é a escolha dele, não a
   `~/.claude-200-01`); no Kimi, o provider do `~/.kimi-code/config.toml` (`apikey`); no Pi, o
   provider do catálogo dele (`clinepass`); no Codex, `openai-codex`.
 - `sessão` terminando em `*` = papel com uma sessão por Task (`<trab>-t*`).
+- Um papel pode ocupar **mais de uma linha**, revezando entre contas: acrescente a coluna `vez`
+  (`| papel | vez | sessão | …`) e numere 1, 2, 3. A Task N cabe à linha `(N-1) % total`. Regra
+  completa em `arbitro.md`, "Papel com rodízio". Sem rodízio, a coluna não existe.
+
+**Trabalho em mais de um repositório**: acrescente ao contrato, ANTES de abrir as sessões, uma
+seção com o que atravessa a fronteira. É o que impede dois repos de entregarem pontas que não
+encaixam, com o defeito só aparecendo na integração, quando as duas Tasks já passaram pelo portão.
+
+```markdown
+## Interfaces combinadas
+- <rota, payload, evento ou tipo acordado entre os repos>
+```
+
+O cabeçalho do contrato já diz os repos (`Repo: <um> (+ <outro> a partir da T13)`), e cada linha da
+tabela de papéis nasce no repo da sua Task.
 
 **O cabeçalho é exato e a tabela é lida por máquina**: o modal Orquestração do hangar mostra
 essa tabela ao usuário, com o que cada sessão viva mede ao lado, e grava aqui o que ele trocar.
