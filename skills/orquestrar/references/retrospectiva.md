@@ -42,8 +42,8 @@ git log --format='%h %ad %s' --date=format:'%d/%m %H:%M' <base>..<ponta>
 git log --oneline <base>..<ponta>
 
 # 4. o que a PRÓPRIA SKILL ganhou durante a execução — é a evidência mais forte que existe
-git -C <repo-da-skill> log --oneline --since="<data-de-início>" -- skills/orchestrating-idea-to-push
-git -C <repo-da-skill> diff <commit-antes-do-trabalho>..HEAD -- skills/orchestrating-idea-to-push
+git -C <repo-da-skill> log --oneline --since="<data-de-início>" -- skills/orquestrar
+git -C <repo-da-skill> diff <commit-antes-do-trabalho>..HEAD -- skills/orquestrar
 
 # 5. o eventos.jsonl — rodadas, vereditos e tempos por task JÁ contados pelo árbitro
 cat ~/.claude/orq-retros/<data>-<gid>/eventos.jsonl

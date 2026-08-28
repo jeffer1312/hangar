@@ -2900,7 +2900,7 @@ async def orq_comecar(name: str, body: ComecarBody):
     regras = str(orq_papeis.regras_path(gid))
     texto = (
         "[painel: orquestração] Comece a orquestração deste grupo. Você é o ÁRBITRO.\n"
-        f"Invoque a skill `orchestrating-idea-to-push` e leia `references/arbitro.md` — só a página do seu papel.\n"
+        f"Invoque a skill `orquestrar` e leia `references/arbitro.md` — só a página do seu papel.\n"
         f"Contrato do grupo: `{regras}` (tabela `## Quem é quem` = quem roda cada papel; "
         "papel com coluna `vez` reveza entre contas, e a Task N cabe à linha (N-1) % total).\n"
         f"Plano: `{plano.path}` — {plano.done} de {plano.total} steps, Task {plano.task_idx} de {plano.task_total}.\n"

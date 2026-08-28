@@ -7,12 +7,12 @@ existiam antes destas skills:
 | O quê | Onde | Quem mais lê |
 |---|---|---|
 | Spec / research | `docs/superpowers/specs/<AAAA-MM-DD>-<slug>.md` | o plano cita o arquivo |
-| Plano com os tickets | `docs/superpowers/plans/<AAAA-MM-DD>-<slug>.md` | `backend/app/planprog.py`, `skills/orchestrating-idea-to-push` |
+| Plano com os tickets | `docs/superpowers/plans/<AAAA-MM-DD>-<slug>.md` | `backend/app/planprog.py`, `skills/orquestrar` |
 | Plano concluído | `docs/superpowers/plans/feitos/` | arquivo morto |
 
 **Por que não `.scratch/` nem GitHub Issues:** o próprio app lê esse diretório. `planprog.py`
 varre `docs/superpowers/plans/` e alimenta a barra de progresso do plano (chip 📋 no celular,
-barra segmentada no card). E `skills/orchestrating-idea-to-push` recorta a Task da vez desse mesmo
+barra segmentada no card). E `skills/orquestrar` recorta a Task da vez desse mesmo
 arquivo para entregar ao executor. Ticket publicado em outro lugar sai do campo de visão das duas
 coisas.
 
@@ -53,4 +53,4 @@ medido em 14/08/2026: plano inteiro ~30k tokens, Task recortada ~2,9k.
 ## Operações de wayfinding
 
 Não usadas neste repo. `/wayfinder` foi avaliado e descartado para este trabalho: a execução
-multi-sessão já tem dono, a skill `orchestrating-idea-to-push`.
+multi-sessão já tem dono, a skill `orquestrar`.

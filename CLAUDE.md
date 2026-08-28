@@ -105,7 +105,7 @@ do protocolo que as sessões leem vive no heredoc de `scripts/install-hangar-sen
 Skills do repo em `skills/` (symlinkadas em `~/.claude/skills/` pelo installer):
 `orquestrar` — esta sessão vira líder de um grupo multi-repo (cria/pareia sessões via
 hangar-send, escreve o contrato do grupo, distribui escopo, monitora e consolida).
-`orchestrating-idea-to-push` — conduz UM trabalho da ideia ao push: research, spec/plano com
+`orquestrar` — conduz UM trabalho da ideia ao push: research, spec/plano com
 o usuário, e daí em diante autônomo — um executor, um revisor independente de outra família
 por commit, portão entre as Tasks, e uma sessão fresca revisando a branch no fim. O revisor
 entrega **correção fechada** (causa reproduzida, arquivo/símbolo, inventário de callers,
@@ -965,7 +965,7 @@ and [`docs/tmux.conf.example`](docs/tmux.conf.example).
 
 Markdown versionado, não GitHub Issues: spec em `docs/superpowers/specs/`, tickets como Tasks de um
 plano em `docs/superpowers/plans/` — que é de onde `backend/app/planprog.py` lê a barra de progresso
-e de onde `skills/orchestrating-idea-to-push` recorta a Task do executor. O formato de `### Task N:`
+e de onde `skills/orquestrar` recorta a Task do executor. O formato de `### Task N:`
 e `- [ ] **Step N: …**` é casado por regex e não é livre. Ver
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 

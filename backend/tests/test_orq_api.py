@@ -124,7 +124,7 @@ def test_comecar_recusa_sem_plano_e_manda_kickoff_com_ele(cli, tmp_path, monkeyp
     assert len(cli.enviados) == antes + 1
     alvo, texto = cli.enviados[-1]
     assert alvo == "exec", "o kick-off tem de ir pra PRÓPRIA sessão, não pro árbitro da tabela"
-    assert "ÁRBITRO" in texto and "orchestrating-idea-to-push" in texto
+    assert "ÁRBITRO" in texto and "orquestrar" in texto
     assert "/tmp/p1.md" in texto and "regras-g1.md" in texto
 
 

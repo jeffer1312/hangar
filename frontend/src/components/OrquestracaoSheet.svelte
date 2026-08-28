@@ -75,7 +75,7 @@
 
   const papeis = $derived(grupo?.papeis ?? []);
   const grupos = $derived(agruparPorPapel(papeis));
-  // Papéis da skill orchestrating-idea-to-push; um que já está no contrato não se repete.
+  // Papéis da skill orquestrar; um que já está no contrato não se repete.
   const PAPEIS_CANONICOS = ['árbitro', 'executor', 'revisor', 'revisão final', 'par de research'];
   const papeisDisponiveis = $derived(PAPEIS_CANONICOS.filter((n) => !papeis.some((p) => p.papel.toLowerCase() === n)));
   let papelOutro = $state(false);

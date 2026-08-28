@@ -1,6 +1,6 @@
 """Leitura e agregação dos eventos de orquestração (eventos.jsonl por execução).
 
-Contrato do arquivo: skills/orchestrating-idea-to-push/references/arbitro.md. Robustez no
+Contrato do arquivo: skills/orquestrar/references/arbitro.md. Robustez no
 molde do planprog: o arquivo é escrito por agente — linha inválida, campo com tipo errado ou
 tipo desconhecido são ignorados (com log quando o diretório inteiro fica sem linha válida),
 nunca derrubam a listagem.
