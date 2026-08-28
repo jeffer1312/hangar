@@ -111,7 +111,11 @@
         {#if acao.worktree}<span class="hc-chip wt">worktree</span>{/if}
       </div>
       {#if acao.cwd}<div class="hc-cwd">{acao.cwd}</div>{/if}
-    {:else if acao.verbo === 'listar' && acao.sessoes}
+    <!-- `listar` sem lista ainda tem o que mostrar: numa máquina sem pares vivos, o `ListAgents`
+         devolve zero sessões e MESMO ASSIM diz qual é esta. Pendurar o galho em `acao.sessoes`
+         escondia esse dado justo no caso em que ele é a única informação do cartão. -->
+    {:else if acao.verbo === 'listar'}
+      {#if acao.sessoes}
       <ul class="hc-lista">
         {#each acao.sessoes as s (s.nome)}
           <li class="hc-sessao">
@@ -122,6 +126,7 @@
           </li>
         {/each}
       </ul>
+      {/if}
       {#if acao.eu}<p class="hc-eu">{m.hangar_cmd_esta_sessao({ nome: acao.eu })}</p>{/if}
     {:else if acao.texto}
       <p class="hc-msg">{acao.texto}</p>
@@ -130,7 +135,15 @@
           <!-- Via nativa: a ferramenta confirma a entrega por socket, e não há fila do hangar. Sem
                a confirmação (`success` ausente) o cartão não afirma "entregue" — o chip some. -->
           {#if acao.via === 'claude'}
-            {#if acao.entregue}<span class="hc-chip destaque">{m.hangar_cmd_entregue()}</span>{/if}
+            <!-- Três desfechos, não dois: entregue, falhou, e "não deu pra confirmar" (a saída não
+                 trouxe `success` e o resultado não veio marcado como erro). Sem o terceiro chip, o
+                 indeterminado desenhava idêntico ao confirmado e o motivo ficava escondido no bloco
+                 fechado, sem ninguém ser avisado de que havia o que conferir. -->
+            {#if acao.entregue}
+              <span class="hc-chip destaque">{m.hangar_cmd_entregue()}</span>
+            {:else if !acao.erro}
+              <span class="hc-chip alerta">{m.hangar_cmd_sem_confirmacao()}</span>
+            {/if}
             <span class="hc-chip">{m.hangar_cmd_via_claude()}</span>
           {:else}
             <span class="hc-chip">{acao.enfileirado ? m.hangar_cmd_na_fila() : m.hangar_cmd_entregue()}</span>
@@ -233,6 +246,7 @@
     color: var(--text-secondary);
   }
   .hc-chip.destaque { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+  .hc-chip.alerta { color: var(--warning); font-weight: 600; }
   .hc-chip.wt { background: var(--accent-dim); color: var(--accent); font-weight: 700; font-size: 9.5px; letter-spacing: 0.03em; }
   .hc-cwd { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-muted); word-break: break-all; }
   .hc-msg {

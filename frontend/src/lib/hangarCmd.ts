@@ -181,10 +181,13 @@ export function lerFerramentaClaude(
       .filter(Boolean)
       // `busy` é o `working` do resto do app: o rótulo do cartão é um só, e traduzir aqui evita um
       // segundo vocabulário de estado circulando na UI.
+      // `cwd` vazio de propósito: o que a ferramenta dá aqui é o alvo tmux (`hangar-2:@1921.%2050`),
+      // que não é diretório nenhum — pôr o alvo naquele campo faria a coluna da direita mostrar um
+      // endereço de pane com cara de caminho no dia em que `extra` faltasse.
       .map((m) => ({
         nome: m![1],
         estado: m![2] === 'busy' ? 'working' : m![2],
-        cwd: m![3],
+        cwd: '',
         extra: m![4],
       }));
     return {
@@ -202,10 +205,13 @@ export function lerFerramentaClaude(
   // A ferramenta responde JSON (`{"success":…}`). Resultado que não é JSON — ou que é JSON de outra
   // forma — não vira "entregue" por otimismo: sem `success: true` explícito o cartão não afirma
   // nada, e o texto cru continua no bloco fechado.
+  // Três estados, não dois: `true`, `false` e "não deu pra saber". `success` presente mas fora do
+  // booleano (`"true"`, `1`, schema mudado) tem de cair no terceiro — lido como `false` ele pintava
+  // cartão de ERRO em cima de um recado que chegou.
   let sucesso: boolean | null = null;
   try {
     const j = out ? JSON.parse(out) : null;
-    if (j && typeof j === 'object' && 'success' in j) sucesso = j.success === true;
+    if (j && typeof j === 'object' && typeof j.success === 'boolean') sucesso = j.success;
   } catch {
     sucesso = null;
   }

@@ -693,6 +693,7 @@
   "bastao_card_abrir_dossie": "Open the dossier",
   "bastao_card_recado_original": "raw message ({n} lines)",
   "hangar_cmd_via_claude": "Claude session · this machine",
+  "hangar_cmd_sem_confirmacao": "not confirmed — check the output",
   "hangar_cmd_esta_sessao": "This session is {nome} — it is not in the list.",
   "hangar_cmd_na_fila": "queued · delivered when it goes idle",
   "hangar_cmd_abrir": "Open {nome}",

@@ -693,6 +693,7 @@
   "bastao_card_abrir_dossie": "Abrir o dossiê",
   "bastao_card_recado_original": "recado original ({n} linhas)",
   "hangar_cmd_via_claude": "sessão Claude · esta máquina",
+  "hangar_cmd_sem_confirmacao": "sem confirmação — veja a saída",
   "hangar_cmd_esta_sessao": "Esta sessão é {nome} — não aparece na lista.",
   "hangar_cmd_na_fila": "na fila · entrega quando ela parar",
   "hangar_cmd_abrir": "Abrir {nome}",

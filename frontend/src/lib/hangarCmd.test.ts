@@ -114,12 +114,20 @@ describe('lerFerramentaClaude', () => {
     expect(a?.erro).toContain('no such agent');
   });
 
+  it('`success` fora do booleano não vira erro — cartão vermelho sobre recado entregue é pior', () => {
+    for (const bruto of ['{"success":"true","message":"ok"}', '{"success":1}']) {
+      const a = lerFerramentaClaude('SendMessage', { to: 'x' }, bruto, false);
+      expect(a?.erro).toBeUndefined();
+      expect(a?.entregue).toBe(false);
+    }
+  });
+
   it('ListAgents: uma linha por sessão, busy vira working, e o nome desta sessão sai à parte', () => {
     const a = lerFerramentaClaude('ListAgents', {}, LISTA, false);
     expect(a?.eu).toBe('hangar-78');
     expect(a?.sessoes).toEqual([
-      { nome: 'hangar-b2', estado: 'idle', cwd: 'hangar-2:@1921.%2050', extra: '19h ago' },
-      { nome: 'app-web-0f', estado: 'working', cwd: 'tarefa-28:@2807.%2996', extra: '7m ago' },
+      { nome: 'hangar-b2', estado: 'idle', cwd: '', extra: '19h ago' },
+      { nome: 'app-web-0f', estado: 'working', cwd: '', extra: '7m ago' },
     ]);
   });
 
