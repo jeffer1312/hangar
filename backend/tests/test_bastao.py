@@ -514,5 +514,5 @@ def api_client_bastao(monkeypatch, models_cache_em_tmp):
     settings.auth_token = "secret"
     monkeypatch.setattr(api_mod, "_session_exists", lambda name: True)
     # O snapshot da lista tem TTL — sem zerar, um teste anterior pode servir a sessão errada.
-    api_mod._list_snap["infos"] = None
+    api_mod._list_snap["snap"] = None
     return TestClient(api_mod.app)

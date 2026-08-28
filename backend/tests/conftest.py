@@ -128,11 +128,9 @@ def _reset_list_snapshot():
     # manager) -> sem este reset, o snapshot preenchido num teste vazaria pro seguinte dentro do
     # TTL de 1s (fakes de um teste respondendo no outro).
     from app import api
-    api._list_snap["infos"] = None
-    api._list_snap["t"] = 0.0
+    api._list_snap["snap"] = None
     yield
-    api._list_snap["infos"] = None
-    api._list_snap["t"] = 0.0
+    api._list_snap["snap"] = None
 
 
 # Recortes REAIS do material_colors.scss, medidos em 05/08/2026 trocando o papel de parede: um azul

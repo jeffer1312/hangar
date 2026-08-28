@@ -58,7 +58,12 @@ def _projects_mtime(p: Path) -> float:
     try:
         valor = max((f.stat().st_mtime for f in (p / "projects").rglob("*") if f.is_file()), default=0.0)
     except OSError:
-        valor = 0.0
+        # Falha NAO entra no cache. Cachear o 0.0 congelaria por 60s um engasgo de 200ms de disco
+        # (rede lenta, arquivo sendo reescrito), e como o valor so serve pra ORDENAR, a conta que a
+        # pessoa acabou de usar afundaria pro fim da lista sem nenhuma pista do porque. Sem gravar,
+        # a proxima chamada tenta de novo — que era o comportamento antes do cache.
+        logging.getLogger("hangar.config").warning("_projects_mtime falhou em %s", p, exc_info=True)
+        return 0.0
     _mtime_cache[chave] = (agora, valor)
     return valor
 

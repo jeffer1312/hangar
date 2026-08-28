@@ -624,7 +624,18 @@ def abrir_terminal_nativo(name: str):
 # separados porque as instancias de SessionRegistry sao separadas). Miss por nome (sessao criada ha
 # <1s) -> fallback pro list() fresco, entao o TTL nunca causa 404 falso.
 _LIST_TTL = 1.0
-_list_snap: dict = {"t": 0.0, "infos": None}
+# UMA chave, guardando o par (quando, lista). Guardar `t` e `infos` em chaves separadas deixava as
+# duas escritas se entrelacarem entre threads — e desde que o `_cached_info` async passou a entrar
+# por aqui via to_thread, sao threads de verdade, nao mais so o laco de eventos. O pior caso era
+# pequeno (a lista de uma thread carimbada com o relogio da outra, dezenas de ms a mais de atraso),
+# mas o par num STORE_SUBSCR so custa o mesmo e nao deixa a pergunta em aberto.
+_list_snap: dict = {"snap": None}
+
+
+def _guardar_snap() -> list[SessionInfo]:
+    infos = registry.list()
+    _list_snap["snap"] = (time.monotonic(), infos)
+    return infos
 
 
 def _cached_info_sync(name: str) -> SessionInfo | None:
@@ -632,15 +643,12 @@ def _cached_info_sync(name: str) -> SessionInfo | None:
     portanto pode chamar registry.list() direto). Mesmo dicionario dos dois lados: um hit vindo de
     qualquer caminho serve o outro. Duas threads podem recarregar ao mesmo tempo — inofensivo, a
     recarga e idempotente e a ultima vence."""
-    now = time.monotonic()
-    if _list_snap["infos"] is None or now - _list_snap["t"] >= _LIST_TTL:
-        _list_snap["infos"] = registry.list()
-        _list_snap["t"] = time.monotonic()
-    info = next((s for s in _list_snap["infos"] if s.name == name), None)
+    snap = _list_snap["snap"]
+    infos = (snap[1] if snap is not None and time.monotonic() - snap[0] < _LIST_TTL
+             else _guardar_snap())
+    info = next((s for s in infos if s.name == name), None)
     if info is None:
-        _list_snap["infos"] = registry.list()
-        _list_snap["t"] = time.monotonic()
-        info = next((s for s in _list_snap["infos"] if s.name == name), None)
+        info = next((s for s in _guardar_snap() if s.name == name), None)
     return info
 
 
