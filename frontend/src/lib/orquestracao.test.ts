@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compararModelo, compararEsforco, compararConta, estadoDoPapel, casarViva, familiaDe, type Papel } from './orquestracao';
+import { compararModelo, compararEsforco, compararConta, estadoDoPapel, casarViva, familiaDe, agruparPorPapel, contaDaTask, type Papel } from './orquestracao';
 import type { SessionInfo } from './types';
 
 const papel = (p: Partial<Papel> = {}): Papel => ({
@@ -69,6 +69,31 @@ describe('estadoDoPapel', () => {
     expect(e.esforco).toBe('divergente');
     expect(e.esforcoMedido).toBe('high');
     expect(e.divergente).toBe(true);
+  });
+});
+
+describe('agruparPorPapel e contaDaTask', () => {
+  const linhas: Papel[] = [
+    papel({ papel: 'executor' }),
+    papel({ papel: 'revisor', vez: '1', conta: 'a' }),
+    papel({ papel: 'revisor', vez: '2', conta: 'b' }),
+    papel({ papel: 'revisor', vez: '3', conta: 'c' }),
+  ];
+
+  it('junta as linhas do mesmo papel e deduz o modo do conteúdo', () => {
+    const g = agruparPorPapel(linhas);
+    expect(g.map((x) => [x.papel, x.modo, x.linhas.length]))
+      .toEqual([['executor', 'unica', 1], ['revisor', 'reveza', 3]]);
+  });
+
+  // 3 contas e 6 Tasks = 2 voltas, em ordem. É o erro de um a mais fácil de cometer aqui.
+  it('a Task N cabe à conta (N-1) % total', () => {
+    const rev = agruparPorPapel(linhas)[1].linhas;
+    expect([1, 2, 3, 4, 5, 6].map((t) => contaDaTask(rev, t)!.conta)).toEqual(['a', 'b', 'c', 'a', 'b', 'c']);
+  });
+
+  it('papel sem linha nenhuma não estoura', () => {
+    expect(contaDaTask([], 3)).toBeNull();
   });
 });
 

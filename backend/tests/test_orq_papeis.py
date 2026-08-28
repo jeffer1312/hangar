@@ -38,6 +38,37 @@ def test_ler_e_escrever_papel():
         op.escrever_papel(REGRAS, op.Papel("x|y", "s", "claude", "c", "m", "e"))
 
 
+def test_rodizio_varias_linhas_no_mesmo_papel():
+    """Um papel com `vez` ocupa uma linha por conta, e gravar a segunda NÃO sobrescreve a primeira
+    (a chave da linha passa a ser papel+vez). O contrato é promovido pro formato de 7 colunas na
+    primeira gravação com vez, e os papéis que já existiam sobrevivem à promoção."""
+    t = op.escrever_papel(REGRAS, op.Papel("revisor", "pm1-rev*", "claude", "200-01", "opus", "high", "1"))
+    t = op.escrever_papel(t, op.Papel("revisor", "pm1-rev*", "pi", "codex", "luna", "max", "2"))
+    t = op.escrever_papel(t, op.Papel("revisor", "pm1-rev*", "kimi", "apikey", "k3", "", "3"))
+    revisores = [p for p in op.ler(t) if p.papel == "revisor"]
+    assert [p.vez for p in revisores] == ["1", "2", "3"]
+    assert [p.conta for p in revisores] == ["200-01", "codex", "apikey"]
+    # Promoveu o formato sem perder quem já estava lá, nem o resto do arquivo.
+    assert [p.papel for p in op.ler(t)][:3] == ["árbitro", "executor", "revisão final"]
+    assert "## Gates" in t and op.tem_coluna_vez(t)
+    # A promoção é NO LUGAR: um título só, e a tabela continua ANTES das seções escritas à mão.
+    # A primeira versão apagava a tabela e deixava `trocar_linha` recriá-la, o que deixava o título
+    # órfão e punha a tabela no fim do arquivo, depois do `## Gates`.
+    assert t.count("## Quem é quem") == 1, "a promoção duplicou o título da seção"
+    assert t.index("## Quem é quem") < t.index("## Gates"), "a tabela saiu do lugar"
+    # Regravar a vez 2 troca no lugar, não duplica.
+    t2 = op.escrever_papel(t, op.Papel("revisor", "pm1-rev*", "pi", "codex", "luna", "low", "2"))
+    revisores2 = [p for p in op.ler(t2) if p.papel == "revisor"]
+    assert len(revisores2) == 3 and revisores2[1].esforco == "low"
+
+
+def test_contrato_sem_rodizio_nao_ganha_a_coluna():
+    """Quem nunca usou rodízio não pode ter o arquivo mexido: são contratos de trabalhos em curso."""
+    t = op.escrever_papel(REGRAS, op.Papel("executor", "pm1-t*", "kimi", "apikey", "apikey/k3", "high"))
+    assert not op.tem_coluna_vez(t)
+    assert "| vez |" not in t
+
+
 def test_regras_path():
     assert op.regras_path("ab12").name == "regras-ab12.md"
     assert op.regras_path("ab12").parent == pair._pair_dir()

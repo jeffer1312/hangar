@@ -15,8 +15,40 @@ export interface Papel {
   conta: string;
   modelo: string;
   esforco: string;
+  // '' = o papel roda sempre na mesma conta. '1','2','3'… = rodízio, e a Task N cabe à conta de
+  // índice (N-1) % total — regra determinística, sem estado guardado. 'par' = todas ao mesmo tempo.
+  vez?: string;
   viva: string | null;     // nome da sessão viva casada pelo backend, ou null
   id_cota?: string | null; // chave do /api/cotas da conta do papel
+}
+
+// Dois modos, e não três: "rodar Tasks em paralelo" é outra coisa e já existe na skill (Tasks
+// independentes, uma worktree cada, cada uma com seu executor e seu revisor). Aquilo se declara no
+// PLANO — ver references/paralelo-worktree.md —, não na configuração de um papel.
+export type ModoPapel = 'unica' | 'reveza';
+
+/** Agrupa as linhas de um mesmo papel: o contrato tem uma linha por conta quando há rodízio. */
+export function agruparPorPapel(papeis: Papel[]): { papel: string; linhas: Papel[]; modo: ModoPapel }[] {
+  const ordem: string[] = [];
+  const mapa = new Map<string, Papel[]>();
+  for (const p of papeis) {
+    const k = p.papel.trim().toLowerCase();
+    if (!mapa.has(k)) { mapa.set(k, []); ordem.push(k); }
+    mapa.get(k)!.push(p);
+  }
+  return ordem.map((k) => {
+    const linhas = mapa.get(k)!;
+    // O modo sai do CONTEÚDO, não de um campo à parte: uma linha é conta única, várias é rodízio.
+    // Assim não há como o modo discordar das linhas.
+    const modo: ModoPapel = linhas.length < 2 ? 'unica' : 'reveza';
+    return { papel: linhas[0].papel, linhas, modo };
+  });
+}
+
+/** De quem é a vez na Task N (1-based). Round-robin puro: sem estado, derivável a qualquer momento. */
+export function contaDaTask(linhas: Papel[], task: number): Papel | null {
+  if (!linhas.length) return null;
+  return linhas[((task - 1) % linhas.length + linhas.length) % linhas.length];
 }
 
 export interface RespostaPapel {
@@ -24,7 +56,9 @@ export interface RespostaPapel {
   papeis: Omit<Papel, 'viva' | 'id_cota'>[];
   mtime: number;
   arbitro: string | null;
-  aviso: 'enviado' | 'enfileirado' | 'sem_arbitro' | 'falhou';
+  // `nao_avisado` = gravou com `avisar: false` (o "salvar e continuar"); não é falha, é o árbitro
+  // deliberadamente não acordado ainda.
+  aviso: 'enviado' | 'enfileirado' | 'sem_arbitro' | 'falhou' | 'nao_avisado';
   erro: string | null;
 }
 

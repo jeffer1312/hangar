@@ -13,9 +13,18 @@ from . import orq_md, pair
 
 _log = logging.getLogger(__name__)
 
+# Dois formatos da tabela, e a leitura aceita os dois. O de 6 colunas é o original (uma linha por
+# papel); o de 7 acrescenta `vez`, que é o que deixa um papel ocupar VÁRIAS linhas — o rodízio de
+# contas. A coluna só aparece no arquivo quando algum papel de fato reveza: contrato sem rodízio
+# continua byte a byte como estava, o que importa porque estes arquivos são de trabalhos em curso.
 CABECALHO = ("papel", "sessão", "provider", "conta", "modelo", "esforço")
+CABECALHO_VEZ = ("papel", "vez", "sessão", "provider", "conta", "modelo", "esforço")
 SECAO = "Quem é quem"
 ARBITRO = "arbitro"
+# `vez` só assume "1", "2", "3"…: a Task N cabe à conta de índice (N-1) % total, então a ordem é a
+# própria ordem das linhas e não há estado a guardar. Não existe valor para "rodar em paralelo" —
+# Tasks em paralelo são outra coisa (uma worktree por Task, cada uma com seu executor e seu
+# revisor) e se declaram no PLANO, não aqui: skills/.../references/paralelo-worktree.md.
 
 
 @dataclass(frozen=True)
@@ -26,6 +35,7 @@ class Papel:
     conta: str
     modelo: str
     esforco: str
+    vez: str = ""
 
     def e_arbitro(self) -> bool:
         return orq_md.normalizar(self.papel) == ARBITRO
@@ -38,17 +48,56 @@ def regras_path(gid: str) -> Path:
     return pair._pair_dir() / f"regras-{gid}.md"
 
 
+def tem_coluna_vez(texto: str) -> bool:
+    """O arquivo já está no formato de 7 colunas? Decide entre reescrever no lugar e promover."""
+    return bool(orq_md.ler_tabela(texto, CABECALHO_VEZ))
+
+
 def ler(texto: str) -> list[Papel]:
-    return [Papel(r["papel"], r["sessão"], r["provider"].lower(), r["conta"], r["modelo"], r["esforço"])
-            for r in orq_md.ler_tabela(texto, CABECALHO) if r.get("papel")]
+    """Lê a tabela nos dois formatos. Tenta o de 7 colunas primeiro: se o arquivo já tem `vez`, o
+    cabeçalho de 6 não casa (a comparação é exata) e a leitura devolveria vazio — que na tela é
+    'este grupo não tem papel nenhum', o pior erro possível aqui."""
+    for cab in (CABECALHO_VEZ, CABECALHO):
+        linhas = orq_md.ler_tabela(texto, cab)
+        if linhas:
+            return [Papel(r["papel"], r["sessão"], r["provider"].lower(), r["conta"],
+                          r["modelo"], r["esforço"], r.get("vez", ""))
+                    for r in linhas if r.get("papel")]
+    return []
+
+
+def promover(texto: str) -> str:
+    """Acrescenta a coluna `vez` à tabela, no lugar, com `-` em quem já estava. Só é chamada quando
+    um papel passa a revezar: um contrato que nunca usou rodízio nunca é tocado.
+
+    A conversão é NO LUGAR de propósito — nada além da tabela muda de posição, e as outras seções
+    do contrato (`## Gates`, `## Réguas`, escritas à mão) ficam onde estavam."""
+    if tem_coluna_vez(texto):
+        return texto
+    return orq_md.inserir_coluna(texto, CABECALHO, "vez", 1)
+
+
+def _valores(p: Papel, com_vez: bool) -> dict[str, str]:
+    v = {"papel": p.papel, "sessão": p.sessao, "provider": p.provider,
+         "conta": p.conta, "modelo": p.modelo, "esforço": p.esforco}
+    if com_vez:
+        v["vez"] = p.vez
+    return v
+
+
+def _escrever_vez(texto: str, p: Papel) -> str:
+    # Chave composta (papel, vez): sem ela, gravar a 2ª conta de um papel sobrescreveria a 1ª.
+    return orq_md.trocar_linha(texto, CABECALHO_VEZ, (p.papel, p.vez or "-"),
+                               _valores(p, True), SECAO)
 
 
 def escrever_papel(texto: str, p: Papel) -> str:
-    for v in (p.papel, p.sessao, p.provider, p.conta, p.modelo, p.esforco):
+    for v in (p.papel, p.sessao, p.provider, p.conta, p.modelo, p.esforco, p.vez):
         orq_md.validar_celula(v)
-    return orq_md.trocar_linha(texto, CABECALHO, p.papel, {
-        "papel": p.papel, "sessão": p.sessao, "provider": p.provider,
-        "conta": p.conta, "modelo": p.modelo, "esforço": p.esforco}, SECAO)
+    # Papel sem `vez` num arquivo que ainda não tem a coluna: nada muda de formato.
+    if not p.vez and not tem_coluna_vez(texto):
+        return orq_md.trocar_linha(texto, CABECALHO, p.papel, _valores(p, False), SECAO)
+    return _escrever_vez(promover(texto), p)
 
 
 def _casa_nome(padrao: str, nome: str) -> bool:

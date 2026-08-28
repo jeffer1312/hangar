@@ -129,7 +129,7 @@ Você **não** escolhe:
 
 | Não escolha | Onde está a resposta |
 |---|---|
-| Motor, modelo, conta de qualquer sessão do time | tabela `## Quem é quem` das **regras** (`| papel | sessão | provider | conta | modelo | esforço |`) — **e Task fora do plano não tem linha lá: pergunte** (abaixo) |
+| Motor, modelo, conta de qualquer sessão do time | tabela `## Quem é quem` das **regras** (`| papel | sessão | provider | conta | modelo | esforço |`, ou de 7 colunas com `vez` quando o papel reveza entre contas por Task — ver "Abrir uma sessão", abaixo) — **e Task fora do plano não tem linha lá: pergunte** (abaixo) |
 | Nome da sessão que você vai abrir | mesma tabela — o padrão do nome faz parte da definição |
 | Quem executa, quem revisa, quem só lê | mesma tabela |
 | Se uma Task pode começar | progresso do contrato + plano |
@@ -230,6 +230,10 @@ quem assume julga do zero, e o hash só fecha com o veredito de um revisor nomea
 Chegaram dois vereditos pro mesmo hash → o portão **não** fechou; trate como DEVOLVIDO e mande um
 julgamento novo. Medido em 17/08/2026: um APROVA e um REPROVA sobre o mesmo commit, o merge saiu
 com o APROVA, e o defeito que o REPROVA nomeava entrou na `main`.
+
+Isso vale igual quando o papel reveza entre contas: o rodízio troca **quem** revisa de uma Task pra
+outra, nunca põe dois revisores no mesmo commit. Dois vereditos pro mesmo hash continua sendo
+defeito, sempre.
 
 Nenhuma Task começa antes da anterior ser aprovada — **no fluxo serial, que é o padrão**.
 
@@ -830,8 +834,9 @@ o usuário mexeu por último. `modelos` = ids liberados naquela conta (`*` = qua
 `trocar?` = `não` significa travada no único modelo da lista.
 
 Leia antes de abrir a primeira sessão e **copie pro contrato só o que este trabalho vai usar** —
-na tabela `## Quem é quem` das regras, uma linha por papel (formato em `planejamento.md`, fase 2).
-Não repasse o arquivo inteiro: sessão escolhe pelo que está no contrato.
+na tabela `## Quem é quem` das regras: uma linha por papel, ou mais de uma quando ele reveza entre
+contas (coluna `vez` — formato em `planejamento.md`, fase 2, e a regra do rodízio em "Abrir uma
+sessão", abaixo). Não repasse o arquivo inteiro: sessão escolhe pelo que está no contrato.
 
 **Recado que começa com "A configuração de modelos do grupo mudou no painel"** vem do modal, não
 de uma sessão: o usuário trocou provider/conta/modelo/esforço de um papel pela tela, e a linha já
@@ -898,6 +903,39 @@ vale tanto quanto a lista do que usar — evita que a próxima sessão gaste tur
 te pedir — é braço dele pra rodar app, clicar tela e capturar print, e o que chega em você continua
 sendo só o parecer. Não crie, não gerencie e não cobre relatório dela. **O modelo dela não é escolha
 dele**: sai do contrato, como o de todo mundo — mas quem cria e confere é ele, não você.
+
+### Papel com rodízio: qual linha da tabela vale para esta Task
+
+A tabela `## Quem é quem` pode ter uma sétima coluna, `vez` — ela só aparece quando algum papel do
+time de fato reveza entre contas; um contrato sem rodízio continua com as seis colunas de sempre e
+nada aqui muda. Papel com `vez` vazia ou `-` é o caso comum: uma conta só, sempre a mesma, decida
+como sempre decidiu.
+
+Papel com `vez` numérica **reveza**: mais de uma linha para o mesmo papel, cada uma numa conta.
+**A Task N cabe à linha de índice `(N-1) % total`**, contando só as linhas daquele papel, na ordem
+em que aparecem na tabela — normalmente numeradas 1, 2, 3… nessa mesma ordem. Ninguém "decide" de
+quem é a vez: é aritmética sobre o número da Task, e por isso duas sessões que fazem a conta
+separadas chegam ao mesmo resultado, sem precisar combinar nada. Exemplo, 3 contas de revisor e 6
+Tasks:
+
+| Task (N) | (N-1) % 3 | linha da tabela |
+|---|---|---|
+| 1 | 0 | 1ª |
+| 2 | 1 | 2ª |
+| 3 | 2 | 3ª |
+| 4 | 0 | 1ª |
+| 5 | 1 | 2ª |
+| 6 | 2 | 3ª |
+
+Cada conta roda 2 das 6 Tasks. **A Task 4 volta pra 1ª linha, não continua de onde a Task 3
+parou** — é o erro mais fácil de cometer aqui, junto do desvio de 1: é `(N-1)`, não `N` — a Task 1
+usa a **1ª** linha (índice 0), não a segunda.
+
+O rodízio **não** é paralelismo: numa Task existe **uma** sessão daquele papel, na conta da vez.
+Rodar Tasks ao mesmo tempo é outra coisa, com outro mecanismo — Tasks de verdade independentes,
+uma worktree cada, cada uma com o seu executor e o seu revisor —, declarada no PLANO e não na
+tabela de papéis. Está em `paralelo-worktree.md`. Um papel que reveza continua servindo às Tasks
+uma de cada vez, e a regra "Um hash, UM revisor" vale inteira.
 
 Vale para toda sessão que você cria. Os cinco passos são **uma unidade**: o turno não fecha
 no meio deles.

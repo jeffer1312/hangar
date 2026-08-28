@@ -2786,17 +2786,25 @@ class PapelItem(_StrictBody):
     conta: str
     modelo: str = ""
     esforco: str = ""
+    # Vazio = o papel roda numa conta só (formato original). "1", "2", "3"… = rodízio, e a Task N
+    # cabe à conta de índice (N-1) % total. "par" = todas ao mesmo tempo.
+    vez: str = ""
 
 
 class PapeisBody(_StrictBody):
     papeis: list[PapelItem]
     mtime: float
+    # Falso = grava e NÃO acorda o árbitro. É o "salvar e continuar montando o time": quem monta
+    # o grupo mexe em vários papéis em sessões separadas da tela, e um recado por rodada de edição
+    # faz o árbitro parar o que está fazendo pra ler meia configuração. O aviso vai no fim, uma vez.
+    avisar: bool = True
 
 
-async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float) -> dict:
+async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float,
+                          avisar: bool = True) -> dict:
     """Grava TODAS as linhas numa escrita só e manda UM recado ao árbitro listando as mudanças —
     o usuário edita vários papéis e salva no fim (medido em 26/08/2026: salvar um por vez
-    descartava o resto sem aviso)."""
+    descartava o resto sem aviso). `avisar=False` grava sem acordar o árbitro."""
     if not itens:
         raise HTTPException(400, detail=erro("erro_orq_celula_invalida", "nenhum papel"))
     gid = await asyncio.to_thread(_gid_de, name)
@@ -2804,10 +2812,20 @@ async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float) 
     novos: list[orq_papeis.Papel] = []
     try:
         for it in itens:
-            atual = next((p for p in papeis if orq_md.normalizar(p.papel) == orq_md.normalizar(it.papel)), None)
+            # Herda a sessão da linha de MESMO papel e MESMA vez: num papel que reveza, cada conta
+            # tem a sua, e casar só pelo papel copiaria a sessão da primeira pras demais.
+            #
+            # Consequência a saber ao escrever um chamador novo: converter um papel de conta única
+            # (`vez` vazia) em rodízio (`vez` = "1") não casa linha nenhuma, então a sessão NÃO é
+            # herdada — quem faz essa conversão tem de mandar `sessao` explícito, como o painel faz
+            # em `adicionarConta`. Omitir ali perderia a sessão viva do papel, calado.
+            vez = it.vez.strip()
+            atual = next((p for p in papeis
+                          if orq_md.normalizar(p.papel) == orq_md.normalizar(it.papel)
+                          and orq_md.normalizar(p.vez) == orq_md.normalizar(vez)), None)
             novo = orq_papeis.Papel(it.papel.strip(), (it.sessao or (atual.sessao if atual else "")).strip(),
                                     it.provider.strip().lower(), it.conta.strip(),
-                                    it.modelo.strip(), it.esforco.strip())
+                                    it.modelo.strip(), it.esforco.strip(), vez)
             motivo = await asyncio.to_thread(orq_politica.permitido, novo.provider, novo.conta, novo.modelo, novo.esforco)
             if motivo:
                 raise HTTPException(400, detail=erro(motivo, "a política de contas não permite esta escolha: " + novo.papel))
@@ -2821,6 +2839,11 @@ async def _aplicar_papeis(name: str, itens: list[PapelItem], mtime_lido: float) 
     except orq_md.Conflito:
         raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
                                              "o contrato mudou desde a leitura — recarregue"))
+    # Gravado. Sem aviso, para aqui: o arquivo é a verdade do grupo, e o árbitro relê o contrato
+    # quando for usar — o recado é conveniência, não o canal de entrega da configuração.
+    if not avisar:
+        return {"papeis": [asdict(p) for p in novos], "papel": asdict(novos[0]), "mtime": mtime,
+                "arbitro": None, "aviso": "nao_avisado", "erro": None}
     arb = next((p for p in orq_papeis.ler(texto) if p.e_arbitro()), None)
     infos = await asyncio.to_thread(registry.list)
     # Time padrão não tem árbitro vivo pra avisar: uma sessão que por acaso case o nome não é dele.
@@ -2843,7 +2866,83 @@ async def orq_papel_set(name: str, body: PapelBody):
 
 @app.post("/api/sessions/{name}/orq/papeis", dependencies=[Depends(require_auth)])
 async def orq_papeis_set(name: str, body: PapeisBody):
-    return await _aplicar_papeis(name, body.papeis, body.mtime)
+    return await _aplicar_papeis(name, body.papeis, body.mtime, body.avisar)
+
+
+class ComecarBody(_StrictBody):
+    mtime: float = 0.0
+
+
+@app.post("/api/sessions/{name}/orq/comecar", dependencies=[Depends(require_auth)])
+async def orq_comecar(name: str, body: ComecarBody):
+    """Põe ESTA sessão pra tocar a orquestração como árbitra. Quem planejou vira árbitro (é o que a
+    skill manda: a sessão da fase 1 assume a fase 2), então o alvo é a própria sessão, não uma nova
+    — uma sessão nova começaria relendo tudo que esta já sabe.
+
+    Recusa sem plano: o árbitro despacha Tasks e as Tasks vêm do plano. Um botão que acorda alguém
+    sem ter o que despachar é pior que botão nenhum."""
+    info = next((s for s in await asyncio.to_thread(registry.list) if s.name == name), None)
+    if info is None:
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
+    gid = await asyncio.to_thread(_gid_de, name)
+    if gid == orq_papeis.GID_PADRAO:
+        raise HTTPException(409, detail=erro("erro_orq_sem_grupo",
+                                             "esta sessão não está num grupo — pareie as sessões antes"))
+    _texto, _mt, papeis = await asyncio.to_thread(_papeis_de, gid)
+    if not papeis:
+        raise HTTPException(409, detail=erro("erro_orq_sem_papeis",
+                                             "defina os papéis do grupo antes de começar"))
+    plano = await asyncio.to_thread(plan_progress, info.cwd)
+    if plano is None:
+        raise HTTPException(409, detail=erro("erro_orq_sem_plano",
+                                             "não há plano nesta pasta — a orquestração despacha as "
+                                             "Tasks do plano, então escreva o plano primeiro"))
+    regras = str(orq_papeis.regras_path(gid))
+    texto = (
+        "[painel: orquestração] Comece a orquestração deste grupo. Você é o ÁRBITRO.\n"
+        f"Invoque a skill `orchestrating-idea-to-push` e leia `references/arbitro.md` — só a página do seu papel.\n"
+        f"Contrato do grupo: `{regras}` (tabela `## Quem é quem` = quem roda cada papel; "
+        "papel com coluna `vez` reveza entre contas, e a Task N cabe à linha (N-1) % total).\n"
+        f"Plano: `{plano.path}` — {plano.done} de {plano.total} steps, Task {plano.task_idx} de {plano.task_total}.\n"
+        "Comece pelo portão: confira o que já passou, e só então despache a próxima Task."
+    )
+    res = await _send_thread(_send_one, name, texto)
+    if not res["ok"]:
+        raise HTTPException(409, detail=erro("erro_orq_comecar_falhou",
+                                             f"não deu pra avisar a sessão: {_erro_texto(res['error'])}",
+                                             erro=res["error"]))
+    return {"ok": True, "entregue": bool(res.get("delivered")), "plano": plano.name}
+
+
+class RemoverPapelBody(_StrictBody):
+    papel: str
+    vez: str = ""
+    mtime: float
+
+
+@app.delete("/api/sessions/{name}/orq/papel", dependencies=[Depends(require_auth)])
+async def orq_papel_del(name: str, body: RemoverPapelBody):
+    """Tira UMA linha da tabela: um papel inteiro (sem `vez`) ou uma conta do rodízio dele. NÃO
+    avisa o árbitro — quem mexe na fila normalmente mexe em várias linhas seguidas, e o aviso sai
+    uma vez no fim, pelo botão. A sessão viva daquele papel não é tocada: o contrato diz quem
+    DEVE rodar, não mata quem está rodando."""
+    gid = await asyncio.to_thread(_gid_de, name)
+    texto, _mtime, papeis = await asyncio.to_thread(_papeis_de, gid)
+    alvo = next((p for p in papeis
+                 if orq_md.normalizar(p.papel) == orq_md.normalizar(body.papel)
+                 and orq_md.normalizar(p.vez) == orq_md.normalizar(body.vez)), None)
+    if alvo is None:
+        raise HTTPException(404, detail=erro("erro_orq_papel_inexistente",
+                                             f"não há linha para {body.papel!r} nesta configuração"))
+    cab = orq_papeis.CABECALHO_VEZ if orq_papeis.tem_coluna_vez(texto) else orq_papeis.CABECALHO
+    chave = (alvo.papel, alvo.vez or "-") if cab is orq_papeis.CABECALHO_VEZ else alvo.papel
+    texto = orq_md.remover_linha(texto, cab, chave)
+    try:
+        mtime = await asyncio.to_thread(orq_md.gravar, orq_papeis.regras_path(gid), texto, body.mtime)
+    except orq_md.Conflito:
+        raise HTTPException(409, detail=erro("erro_orq_arquivo_mudou",
+                                             "o contrato mudou desde a leitura — recarregue"))
+    return {"papeis": [asdict(p) for p in orq_papeis.ler(texto)], "mtime": mtime}
 
 
 @app.get("/api/sessions/{name}/pair/contract", dependencies=[Depends(require_auth)])

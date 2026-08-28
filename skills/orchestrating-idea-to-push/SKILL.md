@@ -247,8 +247,9 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
   usar. Arquivo ausente ou desatualizado: **levante o inventário e pergunte ao usuário** (a receita
   de levantamento está dentro do próprio arquivo), escreva a resposta lá com a data, e siga. O
   contrato traz a tabela conta↔modelo por papel (`## Quem é quem` do `regras-<gid>.md`,
-  cabeçalho fixo `| papel | sessão | provider | conta | modelo | esforço |` — lida e gravada pelo
-  modal Orquestração do app, então célula com prosa não é lida); ela é fechada. Modelo fora dela não se usa **nem pra teste**, nem porque "é mais barato",
+  cabeçalho fixo `| papel | sessão | provider | conta | modelo | esforço |` — ou de 7 colunas com
+  `vez`, quando o papel reveza entre contas por Task (`references/arbitro.md`, "Abrir uma sessão")
+  — lida e gravada pelo modal Orquestração do app, então célula com prosa não é lida); ela é fechada. Modelo fora dela não se usa **nem pra teste**, nem porque "é mais barato",
   nem porque apareceu no catálogo. Cada conta tem cota e preço próprios, e provedor errado **cobra
   dinheiro do usuário** — um `openrouter/*` escolhido por conta própria é fatura, não experimento.
   - **Sessão nova nasce no padrão do harness, que não é o modelo da tabela.** Quem cria: troca,

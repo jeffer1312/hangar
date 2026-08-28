@@ -103,10 +103,14 @@ def _render(cabecalho: tuple[str, ...], valores: dict[str, str]) -> str:
     return "| " + " | ".join(validar_celula(valores.get(c, "")) or "-" for c in cabecalho) + " |"
 
 
-def trocar_linha(texto: str, cabecalho: tuple[str, ...], chave: str, valores: dict[str, str],
-                 titulo_se_ausente: str) -> str:
-    """Troca no lugar a linha cuja primeira coluna casa `chave` (normalizada); ausente, entra no
-    fim da tabela; tabela ausente, nasce sob `## <titulo_se_ausente>` no fim do arquivo."""
+def trocar_linha(texto: str, cabecalho: tuple[str, ...], chave: str | tuple[str, ...],
+                 valores: dict[str, str], titulo_se_ausente: str) -> str:
+    """Troca no lugar a linha cujas PRIMEIRAS colunas casam `chave` (normalizada); ausente, entra no
+    fim da tabela; tabela ausente, nasce sob `## <titulo_se_ausente>` no fim do arquivo.
+
+    `chave` como tupla casa as N primeiras colunas em vez de só a primeira — é o que permite um
+    mesmo papel ocupar várias linhas (o rodízio de contas), sem que gravar a segunda sobrescreva
+    a primeira."""
     nova = _render(cabecalho, valores)
     linhas = texto.splitlines()
     pos = _achar_tabela(texto, cabecalho)
@@ -117,11 +121,12 @@ def trocar_linha(texto: str, cabecalho: tuple[str, ...], chave: str, valores: di
         base = texto.rstrip("\n")
         return (base + "\n\n" if base else "") + "\n".join(bloco) + "\n"
     ini, fim = pos
-    alvo = normalizar(chave)
+    alvo = [normalizar(c) for c in ((chave,) if isinstance(chave, str) else chave)]
     for i in range(ini + 1, fim):
         if _e_separador(linhas[i]):
             continue
-        if normalizar(_celulas(linhas[i])[0]) == alvo:
+        cels = [normalizar(c) for c in _celulas(linhas[i])]
+        if len(cels) >= len(alvo) and cels[:len(alvo)] == alvo:
             linhas[i] = nova
             break
     else:
@@ -129,16 +134,48 @@ def trocar_linha(texto: str, cabecalho: tuple[str, ...], chave: str, valores: di
     return "\n".join(linhas) + ("\n" if texto.endswith("\n") or not texto else "")
 
 
-def remover_linha(texto: str, cabecalho: tuple[str, ...], chave: str) -> str:
+def remover_linha(texto: str, cabecalho: tuple[str, ...], chave: str | tuple[str, ...]) -> str:
+    """Tira UMA linha. `chave` como tupla casa as N primeiras colunas — mesmo motivo do
+    `trocar_linha`: num papel que reveza, remover pelo nome sozinho apagaria a linha errada."""
     pos = _achar_tabela(texto, cabecalho)
     if pos is None:
         return texto
     linhas = texto.splitlines()
-    alvo = normalizar(chave)
+    alvo = [normalizar(c) for c in ((chave,) if isinstance(chave, str) else chave)]
     for i in range(pos[0] + 1, pos[1]):
-        if not _e_separador(linhas[i]) and normalizar(_celulas(linhas[i])[0]) == alvo:
+        if _e_separador(linhas[i]):
+            continue
+        cels = [normalizar(c) for c in _celulas(linhas[i])]
+        if len(cels) >= len(alvo) and cels[:len(alvo)] == alvo:
             del linhas[i]
             break
+    return "\n".join(linhas) + ("\n" if texto.endswith("\n") else "")
+
+
+def inserir_coluna(texto: str, cabecalho: tuple[str, ...], nome: str, em: int, valor: str = "-") -> str:
+    """Acrescenta uma coluna à tabela, NO LUGAR: reescreve o cabeçalho, o separador e cada linha
+    onde já estavam.
+
+    Foi tentado antes apagar a tabela e deixar `trocar_linha` recriá-la: o título `## Quem é quem`
+    ficava órfão (só as linhas com `|` saíam) e a tabela nova nascia no FIM do arquivo, depois de
+    seções que a pessoa escreveu à mão — arquivo com o título duplicado e a tabela fora de lugar.
+    Converter no lugar não mexe em mais nada do documento."""
+    pos = _achar_tabela(texto, cabecalho)
+    if pos is None:
+        return texto
+    linhas = texto.splitlines()
+    novo_cab = list(cabecalho[:em]) + [nome] + list(cabecalho[em:])
+    for i in range(pos[0], pos[1]):
+        ln = linhas[i]
+        if i == pos[0]:
+            linhas[i] = "| " + " | ".join(novo_cab) + " |"
+        elif _e_separador(ln):
+            linhas[i] = "|" + "---|" * len(novo_cab)
+        else:
+            cels = [limpar(c) for c in _celulas(ln)]
+            cels += [""] * (len(cabecalho) - len(cels))
+            cels = cels[:em] + [valor] + cels[em:]
+            linhas[i] = "| " + " | ".join(c or "-" for c in cels) + " |"
     return "\n".join(linhas) + ("\n" if texto.endswith("\n") else "")
 
 

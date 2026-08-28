@@ -311,7 +311,10 @@ Regras fixas:
 
 O time vai pro `regras-<gid>.md` como **tabela de cabeçalho fixo**, na seção `## Quem é quem`
 — seis colunas, uma linha por papel, **valor cru em cada célula** (sem negrito, sem parêntese,
-sem prosa; `-` = vazio). **Ponto de partida:** se existir `<pair_dir>/regras-padrao.md` (o "time
+sem prosa; `-` = vazio). Existe uma sétima coluna opcional, `vez`, para quando o time reveza
+entre contas dentro do mesmo papel (uma linha por conta, a vez decidida pelo número da Task) — só
+entra na tabela quando algum papel de fato reveza; formato e regra em `arbitro.md`, "Abrir uma
+sessão". **Ponto de partida:** se existir `<pair_dir>/regras-padrao.md` (o "time
 padrão", que o usuário configura no modal Orquestração do hangar antes de qualquer grupo), copie a
 tabela de lá e só ajuste os nomes de sessão — ela é a escolha dele, não a tua:
 

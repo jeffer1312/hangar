@@ -515,9 +515,29 @@ export async function getOrqGrupo(name: string): Promise<import('./orquestracao'
 // Vários papéis numa escrita só e um recado só pro árbitro.
 export async function postOrqPapeis(
   name: string,
-  body: { papeis: { papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string }[]; mtime: number },
+  // `avisar: false` grava sem acordar o árbitro — é o "salvar e continuar montando o time".
+  body: { papeis: { papel: string; sessao?: string; provider: string; conta: string; modelo?: string; esforco?: string }[]; mtime: number; avisar?: boolean },
 ): Promise<import('./orquestracao').RespostaPapel> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/papeis`, { method: 'POST', body: JSON.stringify(body) });
+}
+
+/**
+ * Põe a PRÓPRIA sessão pra tocar a orquestração como árbitra (quem planejou vira árbitro — é o que
+ * a skill manda). 409 com motivo legível quando falta grupo, papéis ou plano.
+ */
+export async function comecarOrq(name: string): Promise<{ ok: boolean; entregue: boolean; plano: string }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/comecar`, { method: 'POST', body: JSON.stringify({}) });
+}
+
+/**
+ * Tira UMA linha da tabela de papéis: o papel inteiro (sem `vez`) ou uma conta do rodízio dele.
+ * Não avisa o árbitro — quem mexe na fila mexe em várias linhas seguidas, e o aviso sai no fim.
+ */
+export async function removerPapel(
+  name: string,
+  body: { papel: string; vez: string; mtime: number },
+): Promise<{ papeis: import('./orquestracao').Papel[]; mtime: number }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/orq/papel`, { method: 'DELETE', body: JSON.stringify(body) });
 }
 
 // Lista de modelos da tela de nova sessão, onde ainda não existe sessão viva. O front manda
