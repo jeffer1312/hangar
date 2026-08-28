@@ -16,8 +16,13 @@
     hora?: string | null;
     /** Abre outra sessão no app (o chat sabe fazer isso; aqui só sai o nome). */
     onAbrirSessao?: (nome: string) => void;
+    /** Esse alvo TEM tela pra abrir? O alvo de um recado é um endereço (`servidor::sessao`, nome de
+     *  subagente…), e nem todo endereço é uma sessão do app — ver lib/alvoSessao. Sem isto o cartão
+     *  desenhava "Abrir srv1633222::thread-admin", que era clique morto. Default: pode. */
+    podeAbrir?: (nome: string) => boolean;
   }
-  let { acao, comando, saida, duracao = null, hora = null, onAbrirSessao }: Props = $props();
+  let { acao, comando, saida, duracao = null, hora = null, onAbrirSessao,
+        podeAbrir = () => true }: Props = $props();
 
   const titulo = $derived.by(() => {
     if (acao.erro) {
@@ -120,7 +125,10 @@
         {#each acao.sessoes as s (s.nome)}
           <li class="hc-sessao">
             <span class="hc-bola" data-estado={s.estado} aria-hidden="true"></span>
-            <button class="hc-nome" onclick={() => onAbrirSessao?.(s.nome)} disabled={!onAbrirSessao}>{s.nome}</button>
+            <!-- A lista do `--list` traz sessão de outra máquina também (`servidor::nome`), e
+                 aquela não tem tela aqui: nome sem botão em vez de botão que não faz nada. -->
+            <button class="hc-nome" onclick={() => onAbrirSessao?.(s.nome)}
+                    disabled={!onAbrirSessao || !podeAbrir(s.nome)}>{s.nome}</button>
             <span class="hc-estado">{(estadoRotulo[s.estado] ?? (() => s.estado))()}</span>
             <span class="hc-cam">{s.extra ?? s.cwd}</span>
           </li>
@@ -157,7 +165,7 @@
     {/if}
 
     <div class="hc-acoes">
-      {#if acao.alvo && onAbrirSessao && !acao.erro && acao.verbo !== 'listar'}
+      {#if acao.alvo && onAbrirSessao && !acao.erro && acao.verbo !== 'listar' && podeAbrir(acao.alvo)}
         <button class="hc-btn primaria" onclick={() => onAbrirSessao(acao.alvo!)}>
           {m.hangar_cmd_abrir({ nome: acao.alvo })}
         </button>

@@ -13,14 +13,18 @@
   import EditDiff from './EditDiff.svelte';
   import ReadView from './ReadView.svelte';
   import ToolGlyph from './ToolGlyph.svelte';
+  import { rotaDoAlvo } from '../lib/alvoSessao';
+  import { sessionsStore } from '../lib/sessionsStore.svelte';
 
   interface Props {
     event: ChatEvent;
     result?: ChatEvent | null;
     sessionName: string;
     animate?: boolean;   // false = card de HISTORICO remontado (paginacao/janela): sem fade
+    /** true = desenha SÓ o detalhe (diff/saída/imagem); quem chama já mostrou a chamada. */
+    soDetalhe?: boolean;
   }
-  let { event, result = null, sessionName, animate = true }: Props = $props();
+  let { event, result = null, sessionName, animate = true, soDetalhe = false }: Props = $props();
 
   // Edit/MultiEdit/Write: o tool_input ja traz o texto antigo e o novo (no Write, o antigo e vazio
   // e sai tudo como adicao) -> da pra mostrar o DIFF (estilo Pi, lado a lado) no lugar do resultado
@@ -69,8 +73,19 @@
   // Servidor da rota atual — sem ele o botão "abrir sessão" não teria pra onde ir (ex.: card
   // renderizado fora de uma rota de chat), e aí ele nem aparece.
   const servidorAtual = $derived(location.hash.match(/^#\/(?:chat|board|canvas)\/([^/]+)\//)?.[1] ?? null);
+  // O alvo do recado é um ENDEREÇO (`servidor::sessao`, nome de subagente, ...), não um nome de
+  // sessão do app. `rotaDoAlvo` só devolve rota quando existe mesmo aquela sessão — ver lib/alvoSessao.
+  // Sem retain() no store de propósito: quem o mantém vivo é a Sidebar/SessionList da tela, e um
+  // cartão de mensagem não pode abrir stream (o navegador corta em ~6 por host).
+  function rotaDe(nome: string) {
+    return rotaDoAlvo(nome, sessionsStore.byServer, servidorAtual);
+  }
+  function podeAbrir(nome: string): boolean {
+    return rotaDe(nome) !== null;
+  }
   function abrirSessao(nome: string) {
-    if (servidorAtual) location.hash = `#/chat/${servidorAtual}/${encodeURIComponent(nome)}`;
+    const r = rotaDe(nome);
+    if (r) location.hash = `#/chat/${r.serverId}/${encodeURIComponent(r.nome)}`;
   }
   // Erro mostra o TEXTO do erro (o diff esconderia a mensagem que importa).
   const showDiff = $derived(!!editEdits && phase !== 'error');
@@ -142,7 +157,17 @@
     {duracao}
     {hora}
     onAbrirSessao={servidorAtual ? abrirSessao : undefined}
+    {podeAbrir}
   />
+{:else if soDetalhe}
+  <!-- Só o DETALHE (diff, saída, imagem), sem a linha de identificação: quem chama já desenhou a
+       chamada com as próprias palavras — é o caso da pele 'fluxo', onde a linha é "Editei
+       ToolGroup.svelte +0 −4" e repetir "Edit /caminho/inteiro" logo abaixo dela seria a mesma
+       informação duas vezes, uma delas pior. -->
+  <div class="tc-detail tc-detail--solto">
+    {#if phase !== 'error'}<div class="tc-desfecho">{outcome}</div>{/if}
+    {@render detalhe()}
+  </div>
 {:else if toolLook.look === 'chips'}
   <!-- Pele 'chips' (portada do beautiful-ui): UMA linha — glifo + nome + o argumento num chip +
        o desfecho em texto apagado. O glifo vira chevron no hover (a linha fica limpa em repouso).
@@ -357,6 +382,9 @@
   }
   .tc-clip { min-height: 0; overflow: hidden; }
   .tc-detail { padding-top: var(--space-1); margin-left: 8px; }
+  /* Solto (soDetalhe): quem chama já deu a margem à esquerda, e o fade entra porque aqui não há a
+     animação de altura do wrapper que o cartão inteiro tem. */
+  .tc-detail--solto { margin-left: 0; animation: fade-up 260ms var(--ease-out) both; }
 
   /* ─── pele clássica ─────────────────────────────────────────────────────── */
   .tool-row {

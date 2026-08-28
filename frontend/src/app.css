@@ -914,6 +914,15 @@ html:is([data-bg='image'], [data-bg='desktop']) .code-block pre { background: no
    perderia por ordem). */
 body > .bp-wrap { z-index: 1200; }
 
+/* O ✕ da lib nasce em `top: 0`, e no iPhone os ~54px de cima são a barra de status: o botão ficava
+   ATRÁS do relógio e da bateria, sem como tocar — a foto abria e não fechava (relatado 28/08/2026,
+   com print). A lib não expõe opção pra isso; o `env()` desce o botão e o contador junto.
+   `body >` pela mesma razão do z-index acima: o CSS dela é importado depois deste. */
+body > .bp-wrap .bp-x { top: env(safe-area-inset-top); }
+/* O contador não tem `top` (é `position: absolute` com `margin: 16px`), então quem o desce é a
+   margem — pôr `top` aqui o tiraria do canto em vez de empurrá-lo. */
+body > .bp-wrap .bp-count { margin-top: calc(16px + env(safe-area-inset-top)); }
+
 /* ── Faixa do visor de mídia ───────────────────────────────────────────────
    Mora aqui, e não num .svelte, porque é DOM criado à mão dentro do container da bigger-picture
    (lib/visor.ts): estilo com escopo de componente não alcançaria. A lib desenha o resto — contador,
@@ -927,8 +936,10 @@ body > .bp-wrap { z-index: 1200; }
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  /* Esquerda: o contador da lib (.bp-count, 100px + 16 de margem) mora ali. Direita: o ✕. */
-  padding: 10px 56px 10px 132px;
+  /* Esquerda: o contador da lib (.bp-count, 100px + 16 de margem) mora ali. Direita: o ✕.
+     O topo desce com a barra de status do aparelho — sem isso o nome do arquivo saía por cima do
+     relógio no iPhone, pelo mesmo motivo do ✕ (ver .bp-x acima). */
+  padding: calc(10px + env(safe-area-inset-top)) 56px 10px 132px;
   color: #fff;
   background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
   pointer-events: none;           /* o fundo continua fechando ao toque; só os botões pegam clique */

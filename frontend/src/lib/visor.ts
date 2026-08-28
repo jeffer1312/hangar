@@ -45,6 +45,49 @@ function trocarEscapa(novo: ((e: KeyboardEvent) => void) | null) {
   if (novo) window.addEventListener('keydown', novo, true);
 }
 
+// Arrastar pra BAIXO fecha. A lib fecha no arrastar pra CIMA (`y < -90` no pointermove dela), e
+// ninguém tenta isso: o gesto que o WhatsApp, a Fotos do iPhone e a Galeria do Android ensinaram é
+// puxar pra baixo. Quem abria uma foto no celular ficava preso — o ✕ dela nasce em `top: 0`, atrás
+// da barra de status (ver app.css).
+//
+// Só ESCUTA, nunca chama preventDefault: o pointermove da lib segue fazendo o dele (arrastar entre
+// mídias, inércia, zoom) e nós apenas somamos uma saída. Zoom fora de propósito — com a imagem
+// ampliada, arrastar pra baixo é PANORAMICAR, e fechar ali seria roubar o gesto (a lib marca isso
+// com a classe `bp-zoomed` no próprio wrap).
+const _ARRASTO_FECHA = 90;   // mesmo limiar da lib pro gesto pra cima, pra os dois pesarem igual
+
+// De MÓDULO, e não da chamada, pela MESMA razão do `escapaVivo` acima: `abrirVisor` é assíncrona,
+// dois toques rápidos chegam a `bp.open` duas vezes e só o `onClosed` da segunda roda. Com a
+// variável local, o `onOpen` de uma chamada registrava os listeners e o `onClosed` da OUTRA
+// tentava soltá-los — os primeiros ficavam pendurados no wrap reusado, e aí cada toque a mais
+// deixava o arrasto mais sensível (dois listeners = fecha na metade do caminho).
+let soltarArrastoVivo: (() => void) | null = null;
+
+function trocarArrasto(novo: (() => void) | null) {
+  soltarArrastoVivo?.();
+  soltarArrastoVivo = novo;
+}
+
+export function ligarArrastoPraBaixo(wrap: HTMLElement, fechar: () => void): () => void {
+  let y0: number | null = null;
+  const desce = (e: PointerEvent) => {
+    if (y0 === null || wrap.classList.contains('bp-zoomed')) return;
+    if (e.clientY - y0 > _ARRASTO_FECHA) { y0 = null; fechar(); }
+  };
+  const comeca = (e: PointerEvent) => { y0 = wrap.classList.contains('bp-zoomed') ? null : e.clientY; };
+  const acaba = () => { y0 = null; };
+  wrap.addEventListener('pointerdown', comeca);
+  wrap.addEventListener('pointermove', desce);
+  wrap.addEventListener('pointerup', acaba);
+  wrap.addEventListener('pointercancel', acaba);
+  return () => {
+    wrap.removeEventListener('pointerdown', comeca);
+    wrap.removeEventListener('pointermove', desce);
+    wrap.removeEventListener('pointerup', acaba);
+    wrap.removeEventListener('pointercancel', acaba);
+  };
+}
+
 function obterInstancia() {
   if (!instancia) {
     // O alvo tem que ser o proprio <body>: a lib mede o container por `target.offsetWidth` e, so
@@ -125,6 +168,7 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
   const bp = obterInstancia();
   let faixa: HTMLElement | null = null;
   let atual = inicio;
+  let soltarArrasto: (() => void) | null = null;
 
   const escapa = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
@@ -186,6 +230,11 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
       }
       faixa.append(nome, meta, acoes);
       container.appendChild(faixa);
+      // O wrap é quem recebe o gesto (o container pode ser um filho dele) e é onde a lib põe a
+      // classe `bp-zoomed`, que o arrasto precisa consultar.
+      const wrap = (container.closest?.('.bp-wrap') as HTMLElement | null) ?? container;
+      soltarArrasto = ligarArrastoPraBaixo(wrap, () => bp.close());
+      trocarArrasto(soltarArrasto);
       pintar(inicio);
     },
     onUpdate(_container, item) {
@@ -202,6 +251,10 @@ async function montarVisor(midias: MidiaVisor[], inicio: number, acao?: AcaoViso
       // Só solta se ainda for o NOSSO: uma abertura mais nova já trocou o listener, e removê-lo
       // aqui deixaria o visor vivo sem Escape.
       if (escapaVivo === escapa) trocarEscapa(null);
+      // Só solta se ainda for o NOSSO, igual ao Escape logo acima: uma abertura mais nova já
+      // trocou os listeners, e soltá-los aqui deixaria o visor vivo sem o gesto.
+      if (soltarArrastoVivo === soltarArrasto) trocarArrasto(null);
+      soltarArrasto = null;
       faixa = null;
     },
   });
