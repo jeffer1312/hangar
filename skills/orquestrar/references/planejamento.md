@@ -19,11 +19,58 @@ você escreve na fase 2 e que **todo kick-off repete**.
   improvisar. Qualquer que seja o método, o **portão de saída da fase 1** (seção no fim desta
   página) vale igual: artefato que o método não gera, você gera à mão.
 
-O plano e a execução têm de sair do **mesmo** método: os formatos de Task/ticket diferem, e quem lê
-depois — executor, árbitro, e a barra de progresso do app — lê o formato errado sem erro nenhum.
-Se o método escolhido produzir um plano que **não** atende os requisitos de formato desta skill
-(Steps em `- [ ]`, `Files:` por Task, arquivo em `docs/superpowers/plans/`), isso é conversa com o
-usuário **antes** de lançar o time, não depois.
+- `nenhum` → **o plano já existe e não é de método nenhum**: o usuário escreveu à mão, veio de outro
+  ticket, ou não existe plano escrito. É caso legítimo e frequente — ver a seção seguinte.
+
+O plano e a execução, quando saem de um método, saem do **mesmo**: os formatos de Task/ticket
+diferem, e quem lê depois — executor, árbitro — lê o formato errado sem erro nenhum. Trocar de
+método no meio é `references/replanejar.md`, nunca emenda.
+
+## O plano é do usuário. Você escreve o PLANO DE ORQUESTRAÇÃO ao lado dele
+
+Esta skill não precisa que o plano tenha um formato. O que ela precisa é que **treze propriedades do
+trabalho** estejam decididas antes da Task 1 — é o portão de saída no fim desta página, e ele já se
+declara agnóstico de método. Nada ali pergunta quem escreveu o plano; tudo pergunta se as Tasks
+colidem, se cada uma tem prova, quem é dono de cada espera, o que é intocável.
+
+Então a regra é esta, e vale para os quatro casos (plano do `superpowers`, plano de outro método,
+plano escrito pelo usuário à mão, **nenhum plano**):
+
+**Você NÃO reescreve, converte nem copia o plano do usuário.** Ele continua sendo dele, no formato
+dele, no arquivo dele — e continua sendo a fonte. Cópia diverge do original no primeiro ajuste, e
+aí duas pessoas leem coisas diferentes achando que leem a mesma.
+
+**Você escreve um segundo arquivo, curto, que APONTA para o plano dele** e acrescenta só o que
+falta para o portão funcionar:
+
+```markdown
+# Plano de orquestração — <trabalho>
+Plano do usuário: <caminho absoluto>   (é ele que manda; isto aqui só orquestra)
+
+## Tasks
+| # | O que é | Onde está no plano dele | Arquivos | Verificação | Prova |
+|---|---|---|---|---|---|
+| 1 | subir o esquema | seção "Banco", 2º parágrafo | migrations/… | `uv run pytest tests/test_schema.py` | suíte verde + a tabela existe |
+| 2 | tela de listagem | passo 3 da skill portar-tela | frontend/src/screens/… | `npm run check` | print da tela + comparação com a barra |
+
+## O que o plano dele NÃO decide, e eu decidi aqui
+- Ordem: 1 antes de 2 (a tela lê a tabela).
+- Intocáveis: <paths>.
+- Barra da Task 2: <tela, largura>.
+```
+
+A coluna **"onde está no plano dele"** é o coração disto: ela pode apontar uma seção, um parágrafo,
+um número de linha, o passo de uma skill de domínio — o que existir. Quando o plano dele não diz
+nada sobre aquilo, a linha vai vazia e o item aparece na lista de baixo, que é o que você teve de
+decidir. Essa lista é o que você mostra a ele antes de lançar.
+
+**Sem plano nenhum, o plano de orquestração é o único documento** — e aí ele é o plano, escrito no
+método que o usuário escolher, ou à mão com você. O portão de saída vale igual.
+
+**A barra de progresso do app é a única coisa que depende de formato.** Ela lê `### Task N:` e
+`- [ ] **Step N: …**` (`backend/app/planprog.py`), e só. Plano do usuário sem esse formato não
+mostra barra no celular — é **limitação, não defeito**: o trabalho roda igual. Quem quiser a barra
+escreve os Steps assim **no plano de orquestração**, que é seu; o do usuário fica intocado.
 
 ## Fase 0 — Research (só se o plano não sai sem ele)
 
@@ -31,6 +78,23 @@ Sessão ou subagente **read-only**, com a pergunta fechada ("como o fluxo X func
 "o que quebra se mudar Y"). Saída é um arquivo em disco que o plano referencia — research
 que só existe no contexto de uma sessão morre no `/clear`. Dá pra escrever o plano sem
 isso? Pule.
+
+**"Não existe" é a resposta a UMA pergunta — escreva qual pergunta a busca fez.** Ausência não é
+fato do repositório; é resultado de uma consulta, e duas consultas sobre a mesma base devolvem
+respostas opostas. Antes de registrar "o campo não existe" / "não há nada sobre isso", escreva a
+frase que você procurou, e **refaça a busca por um segundo caminho** sempre que a ausência sustentar
+uma decisão.
+
+Medido em 26/08/2026: uma conclusão ficou dois dias de pé — "nenhuma das 104 colunas representa
+realizado" — e caiu quando o usuário mandou pesquisar de novo. A primeira medição procurou uma
+**data**; o produto usa **status**. Cinco buscas independentes acharam quatro conceitos de situação
+que a primeira não viu. Na mesma Task descobriu-se outra coisa: **a regra que faltava estava escrita
+na descrição do ticket o tempo todo**, e o grupo tratou o assunto como decisão de produto pendente
+com o usuário por dois dias. Então: **antes de declarar que algo depende de decisão dele, releia o
+que ele já escreveu.**
+
+Vale igual para consulta a banco e a serviço, onde falta de permissão e falta do objeto devolvem
+exatamente a mesma saída — zero linhas.
 
 ## Fase 1 — Spec e plano
 
@@ -91,12 +155,20 @@ Além do que o `writing-plans` já pede, o plano carrega:
   por vez, portão fechando cada uma. Trabalho grande com Tasks de verdade independentes pode
   virar lote paralelo com uma worktree cada — a exceção, o gatilho e o custo estão em
   `paralelo-worktree.md`, e a decisão é **aqui**, com o usuário, nunca do árbitro depois.
-- **Estimado × real, escrito ANTES do kick-off**: um arquivo próprio, uma linha por Task —
-  relógio, rodadas e custo esperados. Não é adivinhação: é a régua que deixa o árbitro ver
-  "estourou" enquanto acontece. Medido nas duas direções: a execução de 15/08 escreveu antes e a
-  régua pegou a Montagem estourando (3h–6h → 10h50, documentado na hora); a de 16–17/08 não
-  escreveu para as Tasks 1–5 e uma Task rodou **4h19 de captura com zero commits** sem nenhum
-  número gritando. Plano sem esse arquivo não passa no portão de saída.
+- **Estimativa a priori, escrita ANTES do kick-off**: uma linha por Task — **relógio e rodadas**
+  esperados. Não é adivinhação: é a régua que deixa o árbitro ver "estourou" enquanto acontece.
+  Medido nas duas direções: a execução de 15/08 escreveu antes e a régua pegou uma Task estourando
+  (3h–6h → 10h50, documentado na hora); a de 16–17/08 não escreveu para as Tasks 1–5 e uma Task
+  rodou **4h19 com zero commits** sem nenhum número gritando. Plano sem isso não passa no portão de
+  saída.
+
+  **Ela vive no plano, e o REAL vive só no `eventos.jsonl` — não existe segunda tabela.** O
+  estimado é escrito uma vez, aqui; o realizado o árbitro já grava evento a evento no
+  `eventos.jsonl`, e a fase 5 cruza os dois. Manter à mão uma tabela "estimado × real" que duplica
+  um dado que a máquina já tem é a obrigação repetida em dois lugares que se cumpre pela metade:
+  medido em 28/08/2026, a tabela manual **parou na Task 9** de um trabalho de 33 e ninguém notou por
+  24 Tasks, enquanto o rastro estruturado só passou a existir na Task 21 — **onze Tasks ficaram sem
+  nenhuma das duas fontes**, justamente o terço mais caro.
   **Time com mais de um executor autorizado: a estimativa traz o consumo POR MODELO, não só por
   Task** — em **cota e contexto** (as contas são assinatura; não há fatura por token pra analisar):
   contexto esperado por Task, sessões por Task e qual conta/janela cada modelo gasta — e a régua de
@@ -116,7 +188,9 @@ Além do que o `writing-plans` já pede, o plano carrega:
   comando literal — suíte verde de fakes não prova fluxo: medido em 17/08/2026, um módulo passou
   com 2.167+935 testes verdes e o fluxo inteiro morto (405 linhas de teste reproduziam a suposição
   errada do código; nenhum Step do plano tocava o tmux).
-- **Steps escritos como `- [ ] **Step N: …**`** — é o formato que o contador de progresso reconhece
+- **Steps escritos como `- [ ] **Step N: …**` — só se você quiser a barra de progresso no celular**,
+  e então no arquivo que **você** escreve (o plano de orquestração), nunca reformatando o do
+  usuário. É o formato que o contador de progresso reconhece
   (`_STEP_RE` em `backend/app/planprog.py`; `### Task N:` para os cabeçalhos). Numerar de outro
   jeito (`Passo A`, `Etapa 1`) faz a Task inteira contar **zero** e a barra que o usuário acompanha
   no celular ficar parada com o trabalho andando. Receita partilhada por várias Tasks: escreva-a
@@ -126,14 +200,28 @@ Além do que o `writing-plans` já pede, o plano carrega:
 - **Barra** das Tasks que mexem em pixel: contra o que o resultado vai ser comparado — ver abaixo.
 - **O que a revisão precisa cobrir** — ver abaixo. Isso entra **antes da Task 1**.
 - **Decisões em aberto**: o que ainda não foi decidido e quem decide. Lista vazia é a meta.
-- **Teto**: quanto de custo/cota o usuário aceita gastar sozinho, e o que faz parar — em número
-  **operacional**: o total, o esperado por Task (sai do estimado×real acima), a **cota restante de
-  cada provedor do time** (colada, com a hora da leitura) e o **fallback autorizado por escrito**
-  ("a cota de X acabar → executores migram pra Y, efeito conhecido: ..."). Medido em 17/08/2026: a
-  cota do provedor dos executores estourou às 23:35 com o usuário dormindo, os 4 morreram no mesmo
-  minuto, e a decisão de fallback custou 3 intervenções dele de madrugada — porque não estava
-  escrita.
+- **Cota e fallback** — e **não** um teto de dinheiro; ver a régua abaixo. O que entra é o que
+  **acaba**: a cota restante de cada conta do time (colada, com a hora da leitura) e o **fallback
+  autorizado por escrito** ("a cota de X acabar → executores migram pra Y, efeito conhecido: ...").
+  Medido em 17/08/2026: a cota do provedor dos executores estourou às 23:35 com o usuário dormindo,
+  os 4 morreram no mesmo minuto, e a decisão de fallback custou 3 intervenções dele de madrugada —
+  porque não estava escrita.
 - **O time**, com motor e conta de cada papel.
+
+**Não existe teto de dinheiro nesta skill.** Quem usa isto controla gasto de outra forma — pela
+assinatura que contratou, pelo painel do provedor, pela conta que escolhe abrir —, e a política de
+contas da máquina já **proíbe** conta que cobra por token. Um orçamento em reais aqui seria um
+número que ninguém consegue medir de dentro de uma sessão, e que pararia trabalho bom.
+
+O que existe, e é diferente, são **paredes**:
+
+- **Cota** — acaba, e quando acaba a sessão morre. Por isso ela é lida antes de largar, e por isso o
+  fallback é escrito.
+- **Contexto** — quando a sessão passa da metade da própria janela, ela troca ("Autonomia —
+  gatilhos", em `arbitro.md`). Isso é rotação de sessão, não orçamento.
+- **Relógio e rodadas** — Task passando de 2× o estimado sem fechar é espiral, e o árbitro pergunta.
+
+Nenhuma das três é um valor que o usuário "aceita gastar": as três são fatos que o árbitro lê.
 
 ### Antes de fechar a decomposição, procure o ESTADO compartilhado
 
@@ -187,23 +275,27 @@ Task visual entra com **a lista dos estados** que precisam de screenshot (as dua
 overlay, tela cheia, o que mais a Task afetar). É essa lista que o revisor cobra depois —
 estado que ninguém listou é estado que ninguém olha.
 
-#### A captura tem DONO e TETO — e acima de ~5 estados ela vira Task própria
+#### A captura é do EXECUTOR: quantos prints, e se vale abrir uma sessão só pra isso
 
-A lista acima é sobre cobertura; esta régua é sobre custo. Task cuja prova passa de **~5 estados ×
-variantes** (idiomas, larguras, hosts) não embute a captura no executor: a captura vira **Task
-própria ou papel próprio** — uma sessão capturadora barata, com a lista fechada de estados escrita
-no kick-off, contexto pequeno e descartável. O executor entrega código + gates + 1 print de
-sanidade; quem varre estados é a capturadora, e a estimativa da Task lista a captura como linha.
+A lista acima é sobre cobertura — quais estados a Task precisa provar. **Quantos prints tirar, e
+quem os tira, é decisão do executor na hora de executar** (decisão do usuário, 28/08/2026). O plano
+não impõe número: ele não sabe quantas telas a Task vai acabar tendo, e um teto escrito aqui limita
+trabalho legítimo.
 
-Medido nas duas direções: a execução de 13–14/08 fez a varredura como Task própria (71 prints, 2
-idiomas × 2 larguras) e fechou em horas; a de 16–17/08 embutiu "print de cada estado × 2 hosts × 2
-idiomas" dentro do executor e as duas Tasks mais caras ficaram **12h53 presas em captura, com 72%
-do custo do provedor e nenhum merge**.
+O que o plano faz é **contar ao executor o que já custou**, para que ele decida com dado e não com
+palpite. Medido nas duas direções: a execução de 13–14/08 tirou a varredura de dentro do executor e
+a fez em sessão própria (71 prints, 2 idiomas × 2 larguras) e fechou em horas; a de 16–17/08
+embutiu "print de cada estado × 2 hosts × 2 idiomas" dentro do executor e as duas Tasks mais caras
+ficaram **12h53 presas em captura, sem nenhum merge**. Quando a varredura é grande, a saída barata é
+uma sessão capturadora descartável, com a lista de estados no kick-off — o executor entrega código,
+verificações e o print de sanidade, e a capturadora varre o resto. **Quem escolhe isso é ele, e a
+escolha vai no reporte.**
 
 E a régua-mãe, que vale para qualquer portão desta skill: **exigência de prova nova (desfecho, mais
-estados, mais variantes) só entra com o teto e o dono na MESMA frase.** Foi exatamente o par
-"prova termina no desfecho" (régua certa, sem dono do palco) + "o teto só conta rodada de barra"
-(régua certa, que deixou a captura sem fronteira), somado no mesmo dia, que produziu as 12h53.
+estados, mais variantes) só entra com o DONO na mesma frase** — quem produz aquela prova, e onde.
+Foi exatamente o par "prova termina no desfecho" (régua certa, sem dono do palco) + "o teto só
+conta rodada de barra" (régua certa, que deixou a captura sem fronteira), somado no mesmo dia, que
+produziu as 12h53.
 
 ### Task visual entra também com uma BARRA
 
@@ -267,6 +359,23 @@ harness e conta são do usuário, sempre, e ler a política de contas da máquin
 preencher: aquele arquivo diz o que **pode** ser usado, nunca o que **vai** ser usado neste
 trabalho. Preencher a tabela sozinho é indistinguível, no registro, de uma decisão que ele tomou.
 
+**Mas a pergunta se faz UMA vez, e ela tem saída.** Quem tem uma conta só não tem o que escolher, e
+travar o trabalho numa pergunta sem resposta possível é o que já afastou um usuário de fora. Comece
+por esta, e siga com qualquer resposta:
+
+> "Quer escolher o time (conta e modelo por papel), ou seguimos no padrão?"
+
+- **Quer escolher** → a receita inteira desta seção: inventário levantado, duas ou três combinações
+  propostas, ele decide.
+- **Não quer, ou não respondeu** → **padrão, na conta que ele já está usando**: executor em Opus
+  esforço `medium`; revisor, árbitro, revisão final e retrospectiva em Opus esforço `high`. A tabela
+  nasce preenchida assim, com a palavra `padrão` e a data na linha, e o trabalho começa. Ele troca
+  quando quiser, pelo modal ou pedindo.
+
+**Isso não é uma sessão escolhendo conta.** A conta continua sendo a dele, a que já está aberta — o
+padrão preenche modelo e esforço dentro dela. Trocar de conta, ou entrar em conta que cobra por
+token, continua exigindo palavra dele: é a fatura dele, e nenhum padrão automático chega lá.
+
 Mesmo formato da barra (seção abaixo): chegue com o trabalho caracterizado e as combinações que a
 máquina realmente consegue abrir, e faça **uma pergunta**. Não pergunte "qual modelo?" — ele pode
 não saber o que a máquina oferece; e não liste "as contas permitidas" como se fossem opções.
@@ -299,7 +408,7 @@ Olhe as Tasks e responda:
 | O erro típico dela aparece em quê: teste, tela, carga, estado em disco? | o que o revisor precisa **conseguir fazer** (ver print, rodar harness, ler concorrência) |
 | Tem Task visual? O executor escolhido enxerga imagem? | se não enxerga, o protocolo de visão do `executor.md` (`see`) é obrigatório e entra no contrato — não é motivo pra descartar o motor |
 | Cada papel tem sessão própria, sem ninguém acumulando dois? | **não negociável** — ver as regras fixas abaixo |
-| Quanto custa e em qual conta? | os motores, e o teto |
+| Em qual conta, e a cota dela aguenta? | os motores, e o fallback |
 
 Regras fixas:
 
@@ -336,7 +445,15 @@ tabela de lá e só ajuste os nomes de sessão — ela é a escolha dele, não a
 | executor | <trab>-t* | claude | 200-01 | opus[1m] | medium |
 | revisor | <trab>-review | pi | clinepass | cline-pass/glm-5.2 | high |
 | revisão final | <trab>-final | claude | claude-200-3 | opus[1m] | high |
+| retrospectiva | <trab>-retro | claude | claude-200-3 | opus[1m] | high |
 ```
+
+**A tabela nasce com TODOS os papéis do tubo, inclusive os das fases 4 e 5.** Revisão da branch e
+retrospectiva chegam dias depois, quando quem lançou já não está na sessão — e sem a linha, o
+árbitro daquele momento escolhe sozinho conta, modelo e esforço de um papel que o usuário nunca viu.
+Medido em 28/08/2026: um contrato trouxe a linha da fase 4 e esqueceu a da fase 5; o árbitro decidiu
+por analogia e registrou como decisão própria. A linha custa dez segundos aqui e tira uma decisão da
+mão dele lá.
 
 - `provider`: `claude` | `codex` | `pi` | `kimi`.
 - `conta`: no Claude, o nome do config dir (`padrao` para `~/.claude`, `200-01` para
@@ -459,28 +576,37 @@ Quatro coisas que o plano erra **calado**, e as quatro custaram rodada ou bloque
 
 ## Portão de saída da fase 1 — checklist fechado, agnóstico de método
 
-A fase 1 só fecha com os doze abaixo conferidos, **um a um, por escrito no plano ou no contrato**.
+A fase 1 só fecha com os treze abaixo conferidos, **um a um, por escrito no plano ou no contrato**.
 Cada item já existe como regra em alguma seção; a lista existe porque regra espalhada em prosa é
 regra que um método novo não conhece — medido em 16–17/08/2026: o `/to-tickets` saiu sem os itens
 2 e 3, e o custo foi o lote derrubado 3 vezes e uma Task rodando 4h19 sem régua de estouro. Item
 que o método escolhido não gera, **você gera à mão**.
 
-1. `parse_plan` conta Tasks e Steps certos (comando e saída colados no plano).
-2. **Estimado × real a priori** escrito, uma linha por Task (relógio, rodadas, custo).
+1. **Toda Task tem um nome, um conjunto de arquivos e uma verificação** — no plano do usuário, ou no
+   plano de orquestração que você escreveu ao lado dele. Quiser a barra de progresso no celular:
+   rode o `parse_plan` no arquivo que tem o formato e cole a saída; barra é opcional, Task com dono
+   e prova não é.
+2. **Estimativa a priori** escrita, uma linha por Task: **relógio e rodadas esperados**. Custo em
+   dinheiro não entra — ver "Não existe teto de dinheiro nesta skill", acima.
 3. **Não-colisão do lote provada**: arquivos por Task levantados **do texto dos Steps** ×
    `git merge-tree` — saída colada.
 4. Estado compartilhado procurado; contrato de posse escrito onde houver — **com o número de
    cópias que ele cria e quem confere as N** (ou a Task de unificação no fim do lote).
 5. Barra (ou `nenhuma — decisão do usuário`) registrada por Task visual.
-6. Task de tela com >~5 estados × variantes: captura como Task/papel próprio, e ponto de rotação
-   de contexto previsto no Step ("Step N é marco de troca segura").
+6. Task de tela longa: ponto de rotação de contexto previsto no Step ("Step N é marco de troca
+   segura"). **Quantos prints tirar, e se a captura vira sessão separada, é decisão do executor na
+   hora** — decisão do usuário, 28/08/2026 (ver "A captura é do executor", acima).
 7. Task de orquestração: Step de fumaça contra a fonte real, comando literal.
 8. Pré-condição externa com dono declarado em cada Step que espera algo.
 9. Lote paralelo com prova visual: navegador exclusivo por executor ou prova como seção crítica
    (`paralelo-worktree.md`).
-10. Teto operacional: total + por Task + cota restante dos provedores + fallback autorizado.
-11. Método com a metade executora instalada e testada.
+10. Cota restante de cada conta do time, com a hora da leitura, e o fallback autorizado por escrito.
+11. Método com a metade executora instalada e testada — ou `nenhum`, com o plano de orquestração
+    escrito.
 12. Pass adversarial oferecido, baseline verde, todo código citado rodado.
+13. **Skill de domínio declarada** (nome ou `nenhuma`), e as duas conferências dela feitas: nenhuma
+    Task duplica passo que a skill já faz por dentro, e nenhum passo dela ficou sem dono
+    (`SKILL.md`, "A SKILL DE DOMÍNIO").
 
 E uma régua de prudência que não é item, é postura: **uma estreia por vez.** Método de plano novo,
 skill recém-editada e provedor novo não entram juntos na mesma execução — a de 16–17/08 estreou os
@@ -575,10 +701,15 @@ uma sessão parada perguntando.
 
 Motor inexistente devolve `400` e a sessão não nasce. Ver os motores: `claude-engine`.
 
-### Nascem TRÊS arquivos, e cada um tem um leitor
+### Nascem QUATRO arquivos, e cada um tem um leitor
 
-- **`regras-<gid>.md`** — o que executor e revisor leem. Só o que **ainda vale**. Duas páginas.
+- **`regras-<gid>.md`** — o **combinado deste trabalho**, que executor e revisor leem inteiro. Quem
+  é quem, intocáveis, gates, método, skill de domínio, branch, barras, contas. Escrito agora e
+  quase imutável depois. Duas páginas.
 - **`grupo-<gid>.md`** — o registro, que só o árbitro lê. Progresso, histórico, decisões com data.
+- **`licoes.md`** (no diretório durável) — as réguas que a execução for fixando, com data e prova.
+  **Cresce à vontade e nada sai dele.** Ninguém lê inteiro: o árbitro cola no kick-off as três ou
+  quatro que valem para aquela Task. Nasce vazio, com só o cabeçalho.
 - **`eventos.jsonl`** — uma linha JSON por acontecimento, escrita pelo árbitro no diretório
   durável abaixo. Ninguém do time lê; quem lê é máquina — as telas de orquestração do app e a
   retrospectiva. Contrato dos tipos e dos campos: `references/arbitro.md`.
@@ -594,16 +725,16 @@ Pareceres, recortes de Task, kick-offs e prints moram ali, **nunca em `/tmp`**, 
 A fase 5 lê exatamente os pareceres — a linha de desperdício de cada rodada é a matéria-prima dela.
 Decidir isso no meio do trabalho custa mover arquivo à mão, medido em 16/08/2026.
 
-A fronteira é o tipo do conteúdo: **já aconteceu → registro; ainda vale → regras.** Sem essa
-separação o arquivo que todo mundo lê cresce a cada Task aprovada, e num trabalho de 12 Tasks ele
-chegou a 54 KB — 14k tokens cobrados de cada sessão nova para contar como Tasks encerradas foram
-reprovadas.
+A fronteira é o tipo do conteúdo: **já aconteceu → registro; é o combinado → regras; é régua nova →
+lições.** Sem essa separação o arquivo que todo mundo lê cresce a cada Task aprovada, e num trabalho
+de 12 Tasks ele chegou a 54 KB — 14k tokens cobrados de cada sessão nova para contar como Tasks
+encerradas foram reprovadas. Detalhe em `SKILL.md`, "Três arquivos, cada um com um leitor".
 
 O esqueleto do **registro** está abaixo. O de **regras** é a mesma coisa sem o histórico: a
 tabela `## Quem é quem` (formato fixo da fase 2, acima — é nas regras que ela mora, não no
-registro), os intocáveis literais, os gates (comando exato, sem depender do cwd), as réguas de
-julgamento que a execução for fixando, a barra por Task, o que a revisão precisa cobrir, teto e
-contas.
+registro), os intocáveis literais, os gates (comando exato, sem depender do cwd), a barra por Task,
+o que a revisão precisa cobrir, cota e contas. **Régua nova NÃO entra aqui** — vai para o
+`licoes.md`, e do `licoes.md` para o kick-off.
 
 ### O contrato nasce de esqueleto, não de memória
 
@@ -615,7 +746,10 @@ invisível pra quem lê depois:
 
 ````markdown
 > Registro do árbitro. Regras do grupo (o que o time lê): <caminho do regras-<gid>.md>.
-> Plano: <caminho>. Branch: <branch>. HEAD de partida: <hash>.
+> Lições: <caminho do licoes.md>. Plano do usuário: <caminho>.
+> Plano de orquestração: <caminho | é este mesmo>.
+> Método: <superpowers | mattpocock | nenhum>. Skill de domínio: <nome | nenhuma>.
+> Branch: <branch>. HEAD de partida: <hash>.
 
 ## Quem é quem
 Nas regras (`regras-<gid>.md`, tabela fixa `| papel | sessão | provider | conta | modelo | esforço |`).
@@ -633,8 +767,8 @@ Baseline: <comando> → <resultado>, <data>.
 ## O que a revisão precisa cobrir
 <do plano da fase 1: fluxo completo, callers irmãos, concorrência, estado final, visual>
 
-## Teto
-<custo/cota que o usuário aceita, e o que faz parar>
+## Cota e fallback
+<cota restante de cada conta do time, com a hora da leitura; pra onde migrar quando acabar>
 
 ## Barras decididas DEPOIS da aprovação do plano
 Task N — Barra: <tela, estado, largura> | nenhuma — decisão do usuário, <data>

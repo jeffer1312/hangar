@@ -77,6 +77,14 @@ regra permanente dele proibia rodar os gates de type-check, lint e build naquele
 contrato do grupo mandava rodá-los; venceu a regra permanente, e a Task seguiu sem eles. Autoridade
 dele, dada antes — não uma dispensa criada na hora por quem estava tocando o trabalho.
 
+**E leia a proibição dele pelo COMANDO exato, não pela categoria.** A mesma medição tem uma segunda
+metade, e ela custou defeito: a regra do usuário proibia **um** verificador de tipos pesado, que
+trava a máquina dele; o contrato chegou dizendo "não rodem os gates", e a versão barata — que roda
+em 12 segundos e era justamente a que pegava o erro — foi proibida junto. O trabalho seguiu sem
+verificação de tipo nenhuma e os erros apareceram no fim, todos de uma vez. **Proibição sem o
+comando literal ao lado é proibição que você não sabe aplicar: pergunte ao árbitro qual comando
+exatamente está proibido, e o que continua liberado.**
+
 Medido duas vezes, com skills diferentes e a mesma causa: um método declarado no contrato rodou sem
 a metade executora, e o árbitro improvisou "os Steps são o método" (`SKILL.md`, "O MÉTODO não é
 escolha sua"); e uma skill de porte de tela, invocada dentro de uma Task, rodou só parte dos passos
@@ -95,6 +103,14 @@ entrega saiu com o nome da skill em cima e o conteúdo dela pela metade.
    não permissão pra pular.
 5. Commite **só os paths da Task**, por caminho explícito.
 6. **PARE.** Não comece a Task seguinte. Não emende "o Step aditivo que não encosta em nada".
+
+**Conserto de bloqueador entra com a TRAVA no mesmo commit.** Antes de declarar qualquer conserto
+feito, exista o teste que **cai sem ele**: desfaça a sua correção e veja o teste ficar vermelho. Sem
+esse par, "consertado" é relato, não fato — e é indetectável do lado de fora, porque apagar código
+que já estava morto não muda teste nenhum. Medido em 25/08/2026: um conserto entregue pela metade
+(a peça existia e nunca era acionada) **passou no portão**, o defeito seguiu inteiro, e o teste que
+faltava falhou de cara quando foi escrito. Vale também para achado que um revisor automático
+provocou e que você resolveu no mesmo commit: é conserto como qualquer outro.
 
 Reporte ao árbitro **neste formato, e só ele**:
 
@@ -142,6 +158,13 @@ Aplique os passos, rode a prova, reporte ao árbitro, pare. Três exceções:
 
 Antes de editar, faça a varredura: `git grep` do símbolo que a receita manda mexer, no repo
 todo. Quem mais usa com o mesmo defeito entra **nesta** correção.
+
+**Lista que veio pronta na receita é ponto de partida, nunca o conjunto.** Quando o parecer ou o
+kick-off diz "os arquivos afetados são A, B e C", quem escreveu mediu antes, com a informação que
+tinha — e o que ficou de fora fica de fora para sempre, porque você confere exatamente aquilo e
+reporta verde. Rode você o comando que descobre a lista e confira **todos** os que aparecerem;
+divergiu da lista recebida, isso vai no reporte. Medido em 28/08/2026: uma lista de dois módulos
+escondeu o mesmo defeito num terceiro, e ele sobreviveu à branch inteira.
 
 É o erro mais caro que existe neste ciclo. O padrão que se repete: o parecer diz "o `load`
 não tem geração" → você põe geração no `load`; a round seguinte diz "o `salvar` também não
@@ -390,6 +413,15 @@ Depois que todos voltarem: você lê o que cada um fez, roda a verificação **u
 commita. O reporte ao árbitro diz o que cada braço tocou — trabalho de subagente é seu, mas
 o árbitro precisa saber que veio de fan-out pra ler o diff com esse olho.
 
+**E antes do commit, despache os revisores de subagente da máquina em paralelo — todos de uma vez.**
+Isso não é velocidade, é outro tipo de olho: eles leem o código sem o seu contexto, e por isso veem
+o que você já explicou pra si mesmo. Medido em 28/08/2026, num trabalho que tinha passado por
+revisão independente a cada Task: quatro revisores rodados juntos antes do push acharam **12 erros
+de tipo** que o portão por Task tinha deixado passar. Quais existem nesta máquina está no contrato
+(`arbitro.md`, "Levante o ferramental"); passe a eles os **caminhos explícitos** dos arquivos da
+Task, porque revisor por linguagem monta o próprio diff com filtro de extensão e devolve "nada a
+apontar" sobre código que não leu.
+
 Braço que devolveu algo que você não entende ou que foge da lista de arquivos dele: **não
 commite**, desfaça a parte dele e refaça você. Diff que você não consegue explicar é diff que
 você não pode defender no portão.
@@ -535,8 +567,18 @@ reabra a sua URL. Levaram de novo → **reporte o conflito ao árbitro** em vez 
 passou 3 horas perguntando "minha tela voltou?" a uma página que não era dela — um comando de 1s
 teria virado um reporte às 13:45.
 
-**E a captura tem teto: 1h ou 60 comandos de navegação por Task.** Estourou → pare e reporte com o
-que já tem. Estado novo descoberto no meio vai pra lista do árbitro, não pro seu laço. (O teto de 2
+**Quantos prints tirar é decisão SUA, na hora** — decisão do usuário, 28/08/2026. Nem o plano nem o
+árbitro impõem número: quem sabe quantas telas esta Task acabou tendo é você, executando. O plano
+diz quais **estados** precisam ser provados; a contagem de arquivos é problema seu.
+
+**O que existe é um ponto de parada, não um limite: 1h ou 60 comandos de navegação por Task.**
+Bateu, **pare e reporte com o que já tem** — não porque você excedeu uma cota, mas porque captura
+que passa disso costuma ser sinal de outra coisa (palco quebrado, estado que não reproduz, lista de
+estados maior do que a Task). Medido em 16–17/08/2026: duas Tasks ficaram **12h53 presas em
+captura, sem nenhum merge**. Se, ao reportar, ficar claro que a varredura é grande mesmo, **proponha
+ao árbitro uma sessão capturadora separada** — barata, descartável, com a lista de estados no
+kick-off; você entrega código, verificações e o print de sanidade. Essa proposta é sua; a execução
+dela é dele. Estado novo descoberto no meio vai pra lista do árbitro, não pro seu laço. (O teto de 2
 rodadas lá embaixo é da comparação cega; este é do trabalho de capturar — os dois coexistem.)
 
 Um print por estado, em **caminho absoluto** e num diretório **durável** — o que o lançamento

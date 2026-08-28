@@ -335,6 +335,53 @@ usa um **vivo diferente**, nunca um mundo sem vivos: com o mundo vazio, "morto s
 dão a mesma saída, e a suíte assina embaixo do defeito. Medido em 18/08/2026: **6 chamadas** de
 teste passavam "não há ninguém vivo" como fixture, e era o caminho de perda de dado.
 
+**Nem um mundo que o servidor NUNCA produz.** É a forma oposta da anterior e sai mais cara: ali o
+teste não podia falhar; aqui ele **afirma** um estado impossível, e a suíte verde assina embaixo.
+Todo fixture que sustenta uma asserção se confere contra um dado real — um `curl` na rota, uma linha
+da tabela — antes de valer como prova. Medido em 25–26/08/2026: um fixture trazia preenchido um
+campo que o serviço entrega nulo em **0 de 129** registros reais, com um teste afirmando o rótulo
+que só aquele estado produz; apareceu em três arquivos de duas Tasks, e a segunda ocorrência
+reprovou uma rodada. **Fixture corrigido entra no MESMO commit da correção que ele trava** — senão a
+trava é ilusória.
+
+#### Antes de aceitar uma bateria de sabotagem, quatro conferências
+
+Esta seção já cresceu porque cada modo de falha dela custou uma rodada. As quatro abaixo são as que
+se esquecem na hora, então elas ficam juntas, em lista, e não em prosa:
+
+1. **O corte isola o caminho que a afirmação NOMEIA?** Pergunta que invalida: *existe outra
+   explicação para esses testes terem caído?* Corte que cai em código compartilhado — um mapeador
+   de erro, um `catch` comum, um helper — derruba todos os caminhos juntos e é compatível com
+   hipóteses opostas: ele prova que algo ali é exercitado, não a frase escrita ao lado. Medido em
+   28/08/2026: um corte num mapeador compartilhado entre gravar e excluir sustentava tanto "o teste
+   novo fecha um buraco" quanto "é cópia do irmão"; refeito desligando só o caminho afirmado,
+   caíram exatamente os 2 testes certos, com o resto como controle. **Afirmação verdadeira com
+   prova incompleta: complete a evidência, não reprove** — reprovar aí cobra do executor o desenho
+   da prova, não o trabalho.
+2. **Cada corte diz QUAL ARQUIVO DE TESTE acusou?** "Derrubou 7 testes" não separa *a trava nova
+   mordeu* de *um teste antigo já mordia e a trava nova leva o crédito*. Medido em 28/08/2026: duas
+   baterias da mesma Task, com denominadores de **165** e **69** casos, nenhuma registrando o
+   acusador; refeitas com o campo, **10 de 10** cortes que mordiam tinham como acusador uma das
+   travas novas — a suspeita era a certa de se ter, e só se soube porque o campo existia. **E o
+   denominador é único na bateria inteira**: cortes medidos contra suítes de tamanhos diferentes não
+   se comparam. Corte que derruba o processo (estouro de pilha) roda **com filtro no teste que se
+   afirma acusador** — sem filtro o log saiu com 9,6 MB e o acusador só aparecia lendo pilha; com
+   filtro, 9,3 KB e o próprio comando o nomeou.
+3. **Cada corte vem em PAR com um controle?** O corte responde "o defeito volta?"; o controle
+   responde "e a função continua viva?". Sem o segundo, um conserto que destrói a funcionalidade —
+   ou que "conserta" apagando a linha — passa como sucesso. Medido três vezes: um controle separou
+   "o guard funciona" de "o campo está morto"; outro, acrescentado fora da receita, derrubou as
+   quatro provas de uma vez e mostrou que remover a linha não passa; um terceiro manteve verde o
+   caminho que já funcionava. **Controle que fica VERDE sob o corte é o desenho certo, não uma
+   lacuna** — controle que morde virou uma segunda trava, e o arquivo perdeu a única medida de "não
+   recusa demais" que tinha.
+4. **Bloqueador sobre AUSÊNCIA foi medido por dois caminhos?** "Este ponto não tem teste", "esta
+   função não tem caller", "o campo não existe" são respostas a **uma** pergunta específica, e
+   perguntas diferentes sobre o mesmo repositório devolvem respostas opostas. Escreva no parecer
+   **qual pergunta a busca fez**, e refaça por um segundo caminho antes de virar bloqueador. Medido
+   em 26/08/2026: uma ausência registrada por dois dias caiu na primeira busca feita com outra
+   palavra.
+
 **A outra metade: receita que instala TRAVA exige prova invertida.** A mutação responde "o teste
 prova o cenário?"; a prova invertida responde "a trava trava?". Toda receita cujo objetivo é impedir
 regressão futura — tornar prop obrigatória, apertar um tipo, acrescentar um lint — só vale entregue

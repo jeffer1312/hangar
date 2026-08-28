@@ -7,25 +7,40 @@ Você é o único que escreve no contrato.
 
 > **Lançamento — nada abre antes destes cinco, todos já detalhados nesta página:** vigia armada e
 > provada pelo alarme sintético · baseline medida com o hash ao lado · itens de encerramento
-> (fase 4 + fase 5, com gatilhos) escritos no registro · estimado×real preenchido · política de
+> (fase 4 + fase 5, com gatilhos) escritos no registro · estimativa a priori escrita · política de
 > contas lida e copiada pro contrato. Medido em 20/08/2026: os itens de encerramento entraram ~7h
 > depois do lançamento — a ordem existia, mas mora na seção "Fase 4", que é a última coisa que
 > parece urgente na hora de lançar. Este índice não é régua nova: é o mapa das que já existem.
 
-## Você mantém TRÊS arquivos, e só um deles é lido pelo time
+## Você mantém QUATRO arquivos, e só um deles o time lê inteiro
 
 - **`~/.claude/orq-retros/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
   Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à
   vontade. **Só você lê.** Não mande esse caminho a ninguém.
 
-  > **O registro mora no diretório durável do trabalho, que nada gerencia** — não em
+  > **O registro e as lições moram no diretório durável do trabalho, que nada gerencia** — não em
   > `<config>/.hangar-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
   > Medido em 22/08/2026: um executor matou a última sessão viva do grupo e o diário inteiro de 10h
   > sumiu com ela; o árbitro teve de reconstruir de memória. **As regras continuam lá** — é o caminho
   > que o app mostra ao time.
-- **`regras-<gid>.md` — as regras.** O que **ainda vale**: intocáveis, gates, réguas de
-  julgamento, barra, o que a revisão precisa cobrir, teto e contas. É o que entra no kick-off,
-  e ele deve caber em duas páginas.
+- **`regras-<gid>.md` — as regras.** O **combinado deste trabalho**, escrito no lançamento e quase
+  imutável depois dele: quem é quem, intocáveis, gates, método, skill de domínio, branch, barras, o
+  que a revisão precisa cobrir, contas. É o único que o time lê **inteiro**, e ele cabe em duas
+  páginas porque quase nada é acrescentado depois.
+- **`~/.claude/orq-retros/<data>-<gid>/licoes.md` — as lições.** Toda régua que nascer no meio do
+  trabalho vai aqui, uma por bloco, com a **data** e a **prova medida** ao lado. **Cresce à vontade
+  e nada nunca é apagado daqui.** Ninguém lê este arquivo inteiro: você escolhe, a cada kick-off, as
+  três ou quatro que valem para aquela Task e **cola o texto delas** no kick-off.
+
+  > **Régua não se joga fora para caber.** O desenho antigo era um teto de 200 linhas no arquivo que
+  > o time lê, com compactação antes de cada kick-off — e ele produziu o defeito que este arquivo
+  > existe para impedir: medido em 28/08/2026, uma régua foi apagada **por ser rara** e o caso dela
+  > reapareceu **uma hora depois**. Régua rara é rara, não morta; o que morre é régua de um lote já
+  > fechado ou decisão que virou código, e essas continuam saindo — do **kick-off**, não do arquivo.
+
+  Como escolher o que colar, a cada despacho: **lição serve a esta Task?** O critério é o assunto
+  (tela, banco, canal, este arquivo específico), nunca a idade. Na dúvida, cola: quatro linhas a
+  mais num kick-off são baratas; a régua que não chegou custou uma rodada, três vezes em 48h.
 - **`~/.claude/orq-retros/<data>-<gid>/eventos.jsonl` — o esqueleto que máquina lê.** Uma
   linha JSON por acontecimento, escrita NO EVENTO, junto da linha de prosa do registro — não
   "depois". Tipos fechados: `execucao_inicio` (plano, branch, gid), `task_inicio` (task,
@@ -44,9 +59,13 @@ Você é o único que escreve no contrato.
   Valide quando quiser com `python3 <repo>/scripts/orq-valida-eventos.py <arquivo>` (sai 0
   se o contrato fecha).
 
-**A fronteira é o tipo do conteúdo, não o assunto: já aconteceu → registro; ainda vale →
-regras.** Decisão nova entra nas regras; o registro anota a data e aponta pra lá. É o que
-impede os dois de divergirem.
+**A fronteira é o tipo do conteúdo, não o assunto.** Três destinos, e a pergunta que separa cada um:
+
+| A frase é… | Vai para | Pergunta que decide |
+|---|---|---|
+| o que já aconteceu | **registro** | isto muda o que alguém faz amanhã? Não → é história |
+| o combinado deste trabalho | **regras** | isto foi decidido no lançamento e vale até o fim? |
+| uma régua que nasceu agora e vale daqui pra frente | **lições** | isto mudaria o que a próxima sessão faz? |
 
 Por que isso não é organização, é custo: em 14/08/2026 o registro chegou a 54 KB (~14k tokens),
 porque cada Task aprovada acrescentava um parágrafo e nada saía. Com o plano inteiro junto
@@ -54,32 +73,37 @@ porque cada Task aprovada acrescentava um parágrafo e nada saía. Com o plano i
 commit** — lendo, entre outras coisas, como uma Task tinha sido reprovada quatro vezes semanas
 antes. Ele precisava de duas páginas, e o modelo dele tem 272k de janela.
 
-Regra prática ao fechar uma Task: o que você escreve no registro é história; pergunte se
-alguma frase dali **muda o que a próxima sessão faz**. Se muda, ela pertence às regras, em
-forma de régua — não de relato.
+**E o registro se escreve NO EVENTO, não "depois" — a linha JSON PRIMEIRO, o parágrafo depois.**
+Parecer chegou, merge feito, sessão trocada → `eventos.jsonl` **e** registro, antes da próxima ação.
+A ordem não é estilo: os dois têm o mesmo gatilho e leitores diferentes — a prosa é sua, o JSON é o
+que as telas do app agregam e o que a fase 5 lê com número —, e escrever a prosa primeiro **dá a
+sensação de ter registrado**, então a linha curta é a que some. Medido em 28/08/2026, três
+ocorrências em dois dias e **nas duas direções**: 69 minutos com duas revisões de conjunto abertas e
+nenhuma linha JSON, e 82 minutos com o JSON escrito e a prosa parada. O próprio árbitro nomeou a
+causa: *"a prosa é o que eu quero escrever; o JSON é o que a máquina lê"*. Escreva a que some
+primeiro.
 
-**E o registro se escreve NO EVENTO, não "depois".** Parecer chegou, merge feito, sessão trocada →
-a linha de prosa entra no registro **E** a linha JSON entra no `eventos.jsonl`, **antes da
-próxima ação**. Não existe "atualizo no fim do dia": medido em
-17/08/2026, o registro de uma execução parou às 10:39 e as 6h45 seguintes — justamente as duas
-Tasks mais caras — ficaram sem diário; a retrospectiva virou arqueologia de git e mtime. A vigia
-cobra o mtime do arquivo (flag `--diario`), e a cobrança vale para os **dois** arquivos:
-registro parado ou `eventos.jsonl` parado durante trabalho é a mesma falha. Mas a vigia é rede,
-não desculpa.
+Não existe "atualizo no fim do dia": medido em 17/08/2026, o registro de uma execução parou às 10:39
+e as 6h45 seguintes — justamente as duas Tasks mais caras — ficaram sem diário; a retrospectiva
+virou arqueologia de git e mtime. A vigia cobra o mtime do arquivo (flag `--diario`), e a cobrança
+vale para os **dois**: registro parado ou `eventos.jsonl` parado durante trabalho é a mesma falha.
+Mas a vigia é rede, não desculpa.
 
-### Você é o único que reescreve as regras — e por isso tem teto
+### Você é o único que escreve lições — e elas vão no kick-off, não no arquivo que o time lê
 
 Cada parecer fecha com uma linha de **desperdício** (`revisor.md`, "Formato do parecer"): o que a
 rodada gastou sem virar nada, e a instrução que teria evitado. Esse `teria evitado` é a matéria-prima
-das regras — é ele que você transforma em régua, e é assim que o arquivo melhora sem ninguém
-reescrever o critério de aceite no meio do trabalho.
+das lições — é ele que você transforma em régua, e é assim que o trabalho melhora sem ninguém
+reescrever o critério de aceite no meio dele.
 
 Duas obrigações vêm junto, e sem elas isso vira o problema que veio resolver:
 
-- **Mede antes de cada kick-off.** `wc -l` no arquivo de regras; passou de **200 linhas**, compacta
-  antes de enviar. Régua de lote fechado, exceção de arquivo já mergeado e decisão que virou código
-  **saem** — viram uma linha no registro, com a data. Medido em 15/08/2026: sem essa trava o arquivo
-  foi a 316 linhas em um dia, e ele é lido inteiro por toda sessão nova.
+- **A régua nasce no `licoes.md`, com data e prova, e nada de lá é apagado.** O que você escolhe é
+  **quais** colar em cada kick-off — três ou quatro, as do assunto daquela Task. Não meça o tamanho
+  do arquivo e não compacte: o desenho anterior era um teto de 200 linhas no arquivo que o time lê,
+  e ele **mandava jogar régua fora para caber**. Medido em 28/08/2026: uma régua saiu por ser rara e
+  o caso dela voltou uma hora depois. Régua rara é a que ninguém lembra na hora — é justamente a que
+  precisa estar escrita.
 - **Duas rodadas seguidas cujo desperdício é "fechou só o caso que o parecer anterior nomeou"** não
   é caso de mais uma régua: é sinal de que o *desenho* está errado. Aí você não escreve régua —
   **pergunta ao usuário** se o caminho vale o custo, com o que já foi gasto na mão. Foi o que
@@ -100,9 +124,10 @@ deixar o portão cobrar cada caso novo — custou 9 rodadas e 3h58 numa Task est
 Isso é decisão sua e vai no registro com a data. **Não** afrouxa nada do que continua bloqueador
 cheio, e não se aplica antes da terceira rodada.
 
-**Régua nova que muda ONDE uma coisa mora vai no KICK-OFF, não só nas regras.** Sessão nova lê o
-kick-off inteiro e as regras por alto: régua enterrada na página 5 de um arquivo de 200 linhas não
-alcança quem nasceu depois dela. Medido em 16/08/2026 com a régua "parecer não mora em `/tmp`",
+**Toda lição que vale para a Task vai COLADA no kick-off — apontar o arquivo não basta.** É o mesmo
+princípio da separação dos três arquivos, visto do outro lado: sessão nova lê o kick-off inteiro e o
+resto por alto, então régua enterrada na página 5 de um arquivo qualquer não alcança quem nasceu
+depois dela. Medido em 16/08/2026 com a régua "parecer não mora em `/tmp`",
 decidida de manhã: **duas** das três sessões abertas depois dela salvaram prova em `/tmp` assim
 mesmo, e você teve de copiar os arquivos à mão. **Caso obrigatório dessa regra: os invalidadores de
 prova visual** (tamanho/viewport, idioma dos dois lados, borda da captura, print auto-suficiente —
@@ -120,7 +145,7 @@ trabalhar.
 
 ## Contrato fechado = você não decide mais nada que ele já decidiu
 
-Depois que o contrato existe, ele **manda**. Papel, nome de sessão, motor, modelo, conta, teto,
+Depois que o contrato existe, ele **manda**. Papel, nome de sessão, motor, modelo, conta,
 intocáveis, ordem das Tasks: o usuário já decidiu isso, e a decisão dele não reabre porque a
 situação mudou de cara. **Na dúvida, leia o contrato** — a resposta está lá, e ler custa uma
 chamada.
@@ -175,6 +200,38 @@ que estava toda em assinatura.
 Escolha que o usuário fizer no meio do caminho **vai pro contrato antes de você usá-la**. O que
 mora só na conversa some no `/clear` seguinte, e a sessão nova improvisa de novo.
 
+**Restrição do usuário se copia com o COMANDO EXATO e o custo medido — nunca com a sua paráfrase.**
+Ele proíbe coisas específicas por razões específicas, e a razão costuma ser um número. Ao levar a
+proibição dele para o contrato, escreva os três: o comando literal, o motivo, e o que **continua
+liberado**.
+
+```markdown
+Proibido: `npm run check` neste repo — trava a máquina do usuário (~4 min, 100% de CPU).
+Liberado: `npx tsc --noEmit -p tsconfig.json` (12s) — é o que pega erro de tipo aqui.
+```
+
+Alargar a proibição "por segurança" é o defeito, não o cuidado: medido em 24/08/2026, a regra dele
+proibia **um** verificador de tipos pesado; o árbitro escreveu "não rodem os gates" e proibiu junto
+a versão barata — que era exatamente a que pegava o defeito. O trabalho seguiu sem verificação de
+tipo nenhuma, e os erros apareceram no fim, todos de uma vez. **Na dúvida sobre a extensão de uma
+regra dele, pergunte a ele; não arredonde para o lado restritivo.**
+
+**Permissão para mexer em arquivo intocável entra no contrato ANTES do despacho, nunca por
+mensagem.** Vai acontecer: uma Task precisa encostar num path que está na lista, o usuário autoriza,
+e a autorização fica na conversa. A sessão que recebe o kick-off lê a lista literal de intocáveis e
+não sabe da exceção — ou pior, sabe por um recado e commita contra a lista, e aí não há como
+distinguir, no registro, exceção autorizada de violação.
+
+A exceção se escreve na linha do intocável, com escopo e data, antes de a Task ser liberada:
+
+```markdown
+Intocáveis: backend/app/api.py, frontend/src/lib/api.ts
+  - EXCEÇÃO: `api.py` liberado na Task 7, só a função `listar_sessoes` — usuário, 2026-08-26.
+```
+
+E o kick-off leva a lista **com a exceção dentro**, do mesmo jeito que leva os intocáveis: literal,
+não "os do contrato".
+
 **E quando o PLANO inteiro deixa de ser confiável** — premissa central caiu, método sem a metade
 executora, duas Tasks seguidas estourando a estimativa pela mesma causa, ou o usuário mandou —
 remendar Task a Task é jogar rodada fora: o caminho é `references/replanejar.md` (a fase 1 de
@@ -196,21 +253,47 @@ do trabalho.
 2. Kick-off/receita em arquivo; mensagem = caminho, via `"$(cat <<'EOF' … EOF)"` — nunca aspas duplas cruas.
 3. `entregue` lido? Agora confira engajamento: o ctx saiu do zero em 1 min? (medido: 24 min perdidos sem isso).
 4. Vigia reescrita com quem tem a bola AGORA (medido: 5 alarmes falsos numa execução, 10 na anterior).
-5. Registro: a linha do evento entra antes da próxima ação.
+5. Registro: a linha JSON entra antes do parágrafo, e os dois antes da próxima ação.
+6. Mandei conferir alguma coisa? Então mandei o **comando que descobre a lista**, não a lista.
 
-Essas cinco não são novidade — as quatro primeiras já estavam escritas nesta página, em prosa, e mesmo
+Essas seis não são novidade — as quatro primeiras já estavam escritas nesta página, em prosa, e mesmo
 assim foram furadas pelo árbitro numa execução de 24h. Régua em prosa não protege na hora do despacho;
 por isso viraram checklist, aqui em cima.
+
+**A sexta merece o parágrafo inteiro, porque parece ajuda e é a forma mais barata de esconder um
+defeito.** Quando você manda alguém conferir um conjunto — "confira nesses dois módulos", "os
+callers são estes três", "os arquivos afetados são A, B e C" —, a sua lista **fecha o assunto**:
+quem recebe confere exatamente aquilo e reporta verde, e o que ficou de fora fica de fora para
+sempre. Sua lista é uma medição sua, feita antes, que pode estar desatualizada ou incompleta — e
+quem lê não tem como saber disso.
+
+Mande o **comando**, e deixe a lista nascer na mão de quem vai conferir:
+
+```
+# não: "confira o cp_token em ServidoresSettings.svelte e App.svelte"
+# sim: "rode `git grep -n cp_token -- src/` e confira TODOS os que aparecerem"
+```
+
+Medido em 28/08/2026: uma lista de dois módulos escondeu o mesmo defeito num terceiro, e ele
+sobreviveu à branch inteira. Vale para receita, para kick-off e para pergunta dirigida.
+**Onde você não conseguir escrever um comando, escreva a pergunta** ("quem mais chama esta função?"),
+nunca a resposta.
 
 1. Você libera **uma** Task ao executor.
 2. Ele executa, marca os Steps, roda as verificações, commita só os paths da Task e para.
 3. Ele reporta hash, saída dos testes, `git status --short`, riscos.
 4. **Você confere o relato contra o repo** — `git log --oneline -1` (o hash é a ponta?),
    `git show --stat <hash>` (os arquivos batem com a Task?), nenhum intocável stageado — **e uma
-   linha de CUSTO**: o `ctx`/`$` da statusline da sessão executora (o sidecar já existe; é um
-   `cat`). Task acima de **2× o custo ou o relógio estimado** sem fechar é espiral com outro nome:
-   pare e pergunte, como na espiral de rodadas. Medido em 17/08/2026: "T8 = $6,75 e subindo, 0
-   commits" estava legível em tempo real, e quem viu foi o usuário, no painel do provedor.
+   linha de ANDAMENTO**: quanto tempo a Task já leva e quantas rodadas já teve, contra o que a
+   estimativa dizia. **Task acima de 2× o relógio ou 2× as rodadas estimadas sem fechar é espiral
+   com outro nome:** pare e pergunte, como na espiral de rodadas.
+
+   **Contexto NÃO entra nessa conta.** Contexto estourando é sinal de Task grande, não de espiral —
+   medido em 24–28/08/2026, um trabalho inteiro rodou com o contexto 2 a 3× acima do previsto e o
+   relógio **dentro** do estimado em quase toda Task; cobrar contexto aqui pararia trabalho que
+   estava indo bem. Onde o contexto manda é na rotação de sessão ("Autonomia — gatilhos"), que é
+   outra coisa: lá ele diz *quando trocar de sessão*, não *se o trabalho azedou*.
+
    Relato é relato; o repo é o fato. Divergiu → volta pro executor, não pro revisor.
    **A lista é fechada e é só metadado**: esses comandos, e mais nenhum. Rodar teste, abrir o
    diff linha a linha ou julgar o código é o passo 5 — do revisor.
@@ -224,6 +307,22 @@ por isso viraram checklist, aqui em cima.
 
 Você não é intermediário de correção. Entre o REPROVA e o relatório do executor, o trabalho anda sem
 você — e é assim que tem que ser.
+
+**Conserto de bloqueador entra com a TRAVA no mesmo commit. "Consertado" sem um teste que morde é
+relato, não fato** — e isso vale dos dois lados do portão: o executor não declara sem, e você não
+aceita a declaração sem.
+
+O motivo é mecânico: apagar código que já estava morto **não muda teste nenhum**. Então um conserto
+entregue pela metade atravessa tudo — a suíte fica verde, o revisor desfaz a correção e vê a suíte
+continuar verde, e a conclusão certa dele ("não há prova") é indistinguível de "o código já não
+fazia nada". Medido em 25/08/2026, duas vezes no mesmo dia: um conserto foi **aprovado no portão**
+com metade dele faltando (a peça existia e nunca era acionada), o defeito seguiu inteiro, e o teste
+que faltava **falhou de cara** quando alguém finalmente o escreveu; na mesma data, outra Task
+reprovou porque um conserto provocado por um revisor automático entrou no mesmo commit sem trava
+nenhuma, e desfazer qualquer uma das duas metades deixava tudo verde.
+
+Isso inclui o conserto que **um revisor automático provocou no meio da Task**: achado que entra no
+mesmo commit é conserto como qualquer outro e paga a mesma prova.
 
 **Um hash, UM revisor.** Rotação de revisor com parecer em voo **mata o parecer do aposentado**:
 quem assume julga do zero, e o hash só fecha com o veredito de um revisor nomeado no registro.
@@ -273,8 +372,15 @@ perceber. Seis vezes em 48 horas, medido em 17–18/08/2026:
 | "a compactação de 241k foi o cutucão da vigia" | foi a própria sessão, 34 min antes do cutucão chegar | uma régua construída sobre a causa errada |
 | "139 + 183 + 178 + 142 + 104 sidecars órfãos" | você contou **um** diretório de configuração; o código varre todos — é ~4× isso | um número parcial entregue ao usuário como total |
 
-As seis regras que saem disso, e as seis são baratas:
+As sete regras que saem disso, e as sete são baratas:
 
+0. **Hora vem de comando, nunca da cabeça.** Antes de escrever qualquer horário — no registro, no
+   `eventos.jsonl`, num reporte, numa passagem de bastão — rode `date -Iseconds` e use a saída.
+   Custa uma chamada. Medido em 24–28/08/2026, num trabalho de cinco dias: as horas do registro
+   eram lembrança, com desvio crescente de 0 a **+6h13** — em um caso o árbitro escreveu 19h quando
+   eram 14h38 —, e o único evento com hora exata foi aquele em que ele declarou ter copiado o
+   carimbo do git. Nenhuma leitura de relógio interno vale: de dentro da sessão, o tempo entre dois
+   turnos é invisível.
 1. **Baseline vai no kick-off com o hash ao lado**, medida na base que a branch tem como pai:
    `Baseline (<hash>): backend N · check N · front N + <vermelho conhecido nomeado>`. Herdar número
    de duas horas antes é mandar o executor provar a tua medida.
@@ -355,7 +461,7 @@ mais caro da mesa e enterra, no meio do relato, as poucas mensagens que ele prec
 **Escreva ao usuário em quatro situações, e só nelas:**
 
 1. **Uma linha quando um LOTE ou bloco inteiro fecha** — nunca por Task.
-2. **Quando o teto bate** e você precisa parar.
+2. **Quando a cota de uma conta do time acaba** e você precisa parar.
 3. **Quando precisar de uma decisão que só ele pode tomar** — com a decisão pronta: o que está em
    jogo, as opções, e o que você recomenda.
 4. **Quando algo quebrar de um jeito que você não resolve.**
@@ -426,10 +532,10 @@ E a linha entre decidir e acordar o usuário:
 | Verificação faltando no relato | **decide**: cobra de quem roda (executor) ou re-roda (revisor) — nunca roda você |
 | Muda escopo, arquitetura ou contrato público que o plano fechou | **acorda** |
 | Duas leituras do plano levam a trabalhos diferentes | **acorda** |
-| Teto de custo/cota chegando | **para no fim da Task** e acorda — nunca no meio |
+| Cota de uma conta do time perto de acabar | **para no fim da Task** e acorda — nunca no meio |
 | Ação irreversível fora do repo: push, MR, registrar domínio, subir asset, pagar | **sempre o usuário** |
 | Outra sessão escrevendo na árvore | resolve com ela; não resolveu, **acorda** |
-| Item da fase 1 faltando no plano (sem teto, sem intocáveis) | **decide** o default conservador, registra como decisão sua, conta depois |
+| Item da fase 1 faltando no plano (sem intocáveis, sem comando de verificação) | **decide** o default conservador, registra como decisão sua, conta depois |
 | Task mexe em pixel e o plano não trouxe **barra** | **acorda** — ver abaixo. É a exceção da linha acima: barra não tem default conservador |
 
 ### Perguntar tem NOTA — e abaixo de 8 o tubo não para
@@ -443,7 +549,7 @@ Três eixos; vale o **maior**:
 |---|---|---|---|
 | **Desfazer** | um commit desfaz | custa outra rodada | não desfaz: push, MR, dinheiro, apagar coisa do usuário |
 | **Autoria** | conserta o que ele já pediu | escolhe entre caminhos equivalentes | muda **o que o produto faz** — escopo, arquitetura, contrato público |
-| **Conta dele** | dentro da tabela | dentro da tabela, mas caro | **fora** da tabela |
+| **Conta dele** | dentro da tabela | dentro da tabela, com a cota apertada | **fora** da tabela |
 
 - **8+** → para e espera. São as que não voltam atrás.
 - **4–7** → **pergunta SEM parar**: declara a decisão, o padrão que vai seguir, e segue. O usuário
@@ -618,6 +724,25 @@ silêncio: sessão **travada** (diz `working` mas não produz evento há 10 min)
 > Enquanto o script não distinguir os dois papéis, o paliativo é **tirar o árbitro da lista sempre
 > que houver executor com a bola** e devolvê-lo quando ninguém tiver.
 
+**A vigia PERGUNTA; ela não manda parar.** É um laço de shell que lê dois números — quanto tempo
+sem evento, e se o último comando repetiu — e a partir disso ela **não sabe** se a sessão está
+travada ou trabalhando bem. Alarme escrito no imperativo faz o destinatário obedecer sem checar,
+porque a mensagem chega pela mesma porta das ordens de verdade. Medido em 24–28/08/2026: **três
+alarmes falsos num dia**, e um deles mandou o executor PARAR no meio de 44 minutos de trabalho
+legítimo.
+
+A prova de que a forma do texto decide está dentro do próprio script: o aviso de ociosidade é
+**condicional** ("se ela re-checa a mesma condição, …") e ninguém nunca parou por causa dele; o de
+loop era **imperativo** ("PARE de re-checar") e quase abortou uma Task boa. Toda mensagem que a
+vigia manda a uma sessão do time é uma **pergunta com a evidência junto**:
+
+> `[vigia] Você repete o mesmo comando há ~N min. Isso é espera por condição externa? Se for,
+> o teto já estourou — reporte ao árbitro o que espera. Se você está trabalhando, ignore.`
+
+A que vai para **você** (árbitro) pode ser afirmativa: você é quem decide, e é o único que pode
+distinguir sessão parada de propósito de sessão quebrada. Ordem de parar continua existindo — só
+que ela vem de você, depois de olhar, e não de um contador de minutos.
+
 **A prova de que ela funciona é o alarme sintético CHEGAR.** Ao armar, a vigia dispara sozinha um
 `[vigia] ARMADA ...` para você, **pelo mesmo caminho dos alarmes reais** — se esse prompt chegou na
 sua sessão, o canal está provado; se a unidade subiu e ele não chegou em 2 minutos, o canal está
@@ -715,9 +840,17 @@ numa Task que já ia em 2h36 sem commit — a substituta commitou em 20 min), ou
 reanima em dois cutucões**. Um mesmo modelo caiu 8 vezes numa execução e ainda assim entregou a melhor
 prova visual dela: contar quedas não decide nada.
 
-**A passagem pra substituta tem TETO: 25 linhas, em arquivo** — HEAD, `git status`, o que está no disco
-sem commit, o que falta, e as armadilhas já conhecidas. Medido no mesmo trabalho: uma passagem de 14 KB
-não foi lida pela sucessora; a de 25 linhas foi, e ela continuou de onde a anterior parou.
+**A passagem pra substituta vai em ARQUIVO e APONTA em vez de colar** — HEAD, `git status`, o que
+está no disco sem commit, o que falta, as armadilhas já conhecidas, e os caminhos do plano, do
+contrato e da Task recortada. Não existe número de linhas: o tamanho é o que a sucessora precisa
+para continuar sem reconstruir nada, e quem sabe isso é quem está saindo.
+
+O que a passagem **não** pode ser é uma cópia do contexto inteiro. Medido nas duas direções: uma
+passagem de 14 KB não foi lida pela sucessora e ela recomeçou do zero; e uma passagem curta demais
+fez o usuário ter de apontar, ele mesmo, decisões que já tinham sido tomadas e que a sessão nova
+não sabia (28/08/2026 — a passagem teve de ser reescrita inteira). **Aponte arquivo, não cole
+conteúdo; e o que foi DECIDIDO vai junto, porque decisão não mora em arquivo nenhum se você não a
+escreveu.**
 
 **Aposentar é um ATO, com mensagem — "parar de mandar trabalho" não aposenta ninguém.** Turno morto
 por provedor **volta a viver** e retoma de onde parou, e aí há dois escritores no mesmo palco. A
@@ -743,12 +876,15 @@ como rascunho não confiável, com os paths listados.
 ### Árbitro que cede o lugar entrega uma LISTA, não só o registro
 
 O que está aberto e **quem carrega cada coisa**. No mínimo: os itens de encerramento (revisão da
-branch, retrospectiva), a tabela estimado×real, as barras já decididas, e as sessões vivas com o
-`ctx` de cada uma.
+branch, retrospectiva), as barras já decididas, as sessões vivas com o `ctx` de cada uma, e a
+**última linha escrita no `eventos.jsonl`** — é por ela que o sucessor sabe até onde o rastro está
+em dia.
 
-Medido em 16/08/2026: o árbitro foi trocado às 00:0x e a tabela estimado×real parou no bloco
-anterior. O bloco mais caro do trabalho, o total e a contagem de rodadas visuais ficaram **em
-branco** — a fase 5 teve de reconstruir tudo por `git log --format='%ad'`.
+Medido em 16/08/2026: um árbitro foi trocado de madrugada e o registro do trabalho parou no bloco
+anterior; o bloco mais caro, o total e a contagem de rodadas visuais ficaram **em branco**, e a fase
+5 teve de reconstruir tudo por `git log --format='%ad'`. É o mesmo defeito de 28/08/2026 visto de
+outro ângulo: o que a máquina grava sozinha sobrevive à troca, o que depende de alguém lembrar de
+escrever, não. **Por isso o rastro estruturado é o que se entrega; ele não some com você.**
 
 ## Sucessão do árbitro — passar o bastão sem perder o trabalho
 
@@ -759,12 +895,20 @@ a sucessão é fechá-lo bem e abrir quem vai lê-lo.
 
 1. **Termine a tarefa em curso** (o portão aberto fecha ou reprova; não deixe correção no meio).
    Não despache Task nova.
-2. **Atualize o registro** com a foto do instante, em até 25 linhas numa seção
-   `## Passagem para o árbitro seguinte (<data hora>)`: Task atual e estado do portão; sessões
-   vivas por papel (nome, conta, modelo, esforço, contexto medido) e quais estão aposentadas;
-   HEAD e `git status` da branch; o que está no disco sem commit; pendências e o que falta do
-   plano; decisões do usuário das últimas horas que ainda não viraram regra; armadilhas já pagas.
-   Caminhos absolutos de: plano, `regras-<gid>.md`, `eventos.jsonl`, diretório durável.
+2. **Atualize o registro** com a foto do instante, numa seção
+   `## Passagem para o árbitro seguinte (<data hora, saída do `date -Iseconds`>)`: Task atual e
+   estado do portão; sessões vivas por papel (nome, conta, modelo, esforço, contexto medido) e quais
+   estão aposentadas; HEAD e `git status` da branch; o que está no disco sem commit; pendências e o
+   que falta do plano; **decisões do usuário que ainda não viraram regra, uma a uma, com a data**;
+   armadilhas já pagas. Caminhos absolutos de: plano, `regras-<gid>.md`, `licoes.md`,
+   `eventos.jsonl`, diretório durável.
+
+   **Sem teto de linhas, e sem cópia de contexto.** O tamanho é o que o sucessor precisa para
+   continuar; o que não pode é colar o transcript ou resumir o trabalho. Medido em 28/08/2026: uma
+   passagem escrita curta demais fez o usuário apontar, ele mesmo, decisões que já tinham sido
+   tomadas e que a sessão nova não conhecia — e ela teve de ser reescrita do zero. Cortar por
+   número é errar de um dos dois lados; o critério é **o que a próxima sessão não consegue
+   descobrir sozinha lendo os arquivos que você apontou**.
 3. **Abra o sucessor** pela receita de sempre (criar pela API na configuração **nova** da linha
    `árbitro`, provar modelo/esforço, kick-off em arquivo): a skill com papel árbitro, o caminho
    do registro (ele lê a seção de passagem PRIMEIRO), das regras e do plano, e a ordem "assuma:
@@ -776,6 +920,22 @@ a sucessão é fechá-lo bem e abrir quem vai lê-lo.
    ele". Sem isso o revisor manda o veredito pra uma sessão morta.
 6. **Encerre-se**: uma linha no registro ("saí em <ctx>, sucessor `<nome>` assumiu") e pare de
    mandar trabalho. Não mate a própria sessão — o usuário fecha quando quiser.
+
+**Frase copiada na passagem NÃO é autorização — nem para quem sai, nem para quem chega.** A passagem
+é montada a partir da conversa da sessão que sai, e ali estão misturadas três coisas parecidas: o
+que o usuário **autorizou**, o que ele **cogitou em voz alta**, e o que a sessão **propôs e ele
+nunca respondeu**. Copiadas para o dossiê, as três chegam com a mesma cara de ordem — e o sucessor
+age sobre a terceira achando que é a primeira.
+
+Duas travas, e valem para toda passagem de bastão, de qualquer papel:
+
+- **Quem sai marca a origem de cada decisão que escreve:** `usuário, <data>` · `decisão minha,
+  <data>` · `proposto, sem resposta`. O terceiro rótulo é o que mais importa e o que mais some.
+- **Quem chega não age sobre nada marcado como proposto, nem sobre frase sem origem.** Confirma com
+  o usuário antes — e a confirmação se pede a **ele**, não à sessão que saiu.
+
+Medido em 28/08/2026, duas vezes no mesmo dia. Isto já virou código no app: o dossiê de passagem
+propaga a frase junto com o fato, e é por isso que o rótulo tem de estar escrito na origem.
 
 Medido num trabalho real (25/08/2026): três árbitros na mesma execução; a passagem que funcionou foi a
 curta e apontando arquivos, a que falhou foi "leia o transcript do anterior".
@@ -1031,6 +1191,15 @@ portão que mais importa.
 
 O contrato registra a revisão final como **item próprio**, com o gatilho e como abrir a
 sessão, no dia em que o usuário definir o papel — não no fim, de memória.
+
+**E os dois papéis já estão na tabela `## Quem é quem` desde o lançamento, com conta, modelo e
+esforço — não só como item de encerramento.** Revisão da branch e retrospectiva chegam dias depois,
+quando quem lançou já não está na sessão; sem a linha, o árbitro do momento escolhe sozinho a
+configuração de um papel que o usuário nunca viu — que é exatamente o que esta skill tira das mãos
+dele em todo o resto. Medido em 28/08/2026: um contrato trouxe a linha da revisão final e esqueceu a
+da retrospectiva; o árbitro decidiu por analogia com o revisor e registrou como decisão própria. Foi
+barato e razoável, e mesmo assim é a classe errada de decisão. **Linha faltando na tabela = pare e
+pergunte**, como qualquer Task fora do plano.
 
 **E registra a fase 5 junto, na mesma hora.** São dois itens, não um:
 

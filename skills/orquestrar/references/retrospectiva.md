@@ -32,11 +32,8 @@ ls ~/.claude/orq-retros/<data>-<gid>/pareceres/*.md
 # 1c. os kick-offs — como cada sessão foi despachada (o que ela sabia ao começar)
 ls ~/.claude/orq-retros/<data>-<gid>/kickoffs/
 
-# 2. estimado × real, se o plano tiver esse arquivo
-cat docs/superpowers/plans/<data>-*-estimativa-vs-real.md
-
-# 2b. ele costuma estar PELA METADE (troca de árbitro leva o item embora) — reconstrua:
-git log --format='%h %ad %s' --date=format:'%d/%m %H:%M' <base>..<ponta>
+# 2. as LIÇÕES — toda régua que o árbitro precisou escrever no meio do trabalho
+cat ~/.claude/orq-retros/<data>-<gid>/licoes.md
 
 # 3. a branch: quantos commits por Task, quantas rodadas de correção
 git log --oneline <base>..<ponta>
@@ -53,31 +50,30 @@ A quinta é a que dá número sem recontar na mão: rodadas, vereditos e tempo p
 contados de lá, e a retro **confere a prosa contra ele** em vez de reconstruir de git e mtime.
 Execução antiga não tem o arquivo — aí valem as quatro de sempre, e isso se diz no relatório.
 
-A quarta é a que ninguém pensa em olhar, e é a que mais entrega: **toda régua que o árbitro precisou
-escrever no meio do trabalho é uma coisa que a skill não tinha.** Se ele teve que decidir, escrever e
-avisar as sessões, a decisão não estava aqui.
+A segunda e a quarta são as que ninguém pensa em olhar, e são as que mais entregam: **toda régua que
+o árbitro precisou escrever no meio do trabalho é uma coisa que a skill não tinha.** Se ele teve que
+decidir, escrever e avisar as sessões, a decisão não estava aqui. O `licoes.md` é essa lista já
+pronta, com data e prova ao lado de cada uma — é a entrada mais barata que você tem.
 
-## O que o relatório tem — seis seções, nesta ordem
+## O que o relatório tem — cinco seções, nesta ordem
 
-### 1. Onde o tempo foi
+**Não existe seção de análise de tempo, e é decisão do usuário (28/08/2026).** Bloco a bloco,
+estimado contra real, não muda o que a próxima execução faz: relógio de calendário é feito de espera
+por decisão dele, de banco fora do ar e de VPN caindo, e separar isso do trabalho custa mais do que
+rende. O que **realmente** custa execução são rodadas repetidas, e isso é a seção 1 abaixo. Task
+estourando o relógio já é tratada quando acontece, pelo árbitro, e não em retrospecto. Se algum
+número de tempo entrar aqui, ele vem de `date -Iseconds` ou do carimbo do git — nunca de memória:
+medido neste mesmo trabalho, as horas escritas de cabeça no registro tinham desvio de até **+6h13**.
 
-Bloco a bloco: estimado, real, diferença. Depois **uma** frase sobre o maior desvio: o que aconteceu,
-não quem errou. Se um bloco estourou 300%, a pergunta é o que a skill não previu.
-
-Os timestamps de commit são dado duro e dão o começo e o fim de cada Task — use-os quando o arquivo
-vier incompleto. E **separe relógio de trabalho**: espera do usuário testando o app é relógio, não
-desperdício, e contá-la infla o número que vai virar régua. Medido em 16/08/2026: "~7h, +37%" viraram
-~2h30 de trabalho depois de tirar 3h40 de espera.
-
-### 2. Desperdício agrupado
+### 1. Desperdício agrupado
 
 Junte as linhas de desperdício de **todos** os pareceres (`revisor.md`, "Formato do parecer") e
 procure repetição. Uma vez é azar. **Três vezes é buraco da skill**, e o texto da terceira já é
 quase a régua nova.
 
-### 3. Réguas que nasceram no meio
+### 2. Réguas que nasceram no meio
 
-Do `git diff` da skill e do arquivo de regras do grupo. Para cada uma:
+Do `licoes.md` do grupo e do `git diff` da skill. Para cada uma:
 
 | A régua | O que a fez nascer | Já está na skill? |
 |---|---|---|
@@ -85,9 +81,9 @@ Do `git diff` da skill e do arquivo de regras do grupo. Para cada uma:
 Régua que ficou só no arquivo do grupo **morre com o trabalho** — o grupo seguinte não a herda. É
 exatamente essa a lista que vira patch.
 
-### 4. O que o PLANO errou — e esta é a seção que mais paga
+### 3. O que o PLANO errou — e esta é a seção que mais paga
 
-As outras três olham como o trabalho foi conduzido. Esta olha o que foi **planejado**, e é onde está
+As outras duas olham como o trabalho foi conduzido. Esta olha o que foi **planejado**, e é onde está
 o ganho maior: defeito de plano custa rodadas de execução, e custa em todas as Tasks que dependiam
 dele.
 
@@ -107,7 +103,7 @@ realidade não bateu com o plano — e classifique:
 essa linha aparecer de novo, o patch não é mais uma régua de execução — é uma régua de
 `planejamento.md`.
 
-### 5. As fichas de modelo
+### 4. As fichas de modelo
 
 `references/modelos/<provider>-<id>.md`, uma por modelo do time. Para cada um que trabalhou:
 
@@ -120,10 +116,27 @@ essa linha aparecer de novo, o patch não é mais uma régua de execução — �
 Modelo sem ficha ganha a primeira. As regras do formato estão em `references/modelos/README.md`:
 só coisa medida, com data, e cada linha responde *o que eu escrevo diferente por causa disto*.
 
-### 6. Patch proposto
+### 5. A proposta de mudança na skill (o "patch")
 
-Arquivo, seção, e o texto pronto para colar. Com a evidência junto: *"medido em `<data>`: `<número>`"*.
-Sem número, não entra — a skill é feita de coisa medida, não de impressão.
+Cada proposta traz **quatro** campos, nesta ordem: **arquivo e seção** onde entra · **o texto pronto
+pra colar** · **a evidência** (*"medido em `<data>`: `<número>`"*) · **o que SAI da skill por causa
+dela**. Sem número, não entra — a skill é feita de coisa medida, não de impressão.
+
+**O quarto campo é o que impede a skill de só inchar, e é o que se esquece.** Ou a proposta nomeia a
+régua que morreu — deixou de valer, virou código, foi absorvida pela nova, era um número arbitrário
+que virou princípio — ou ela diz, numa linha, **por que nada saiu**. Sem uma das duas, ela não está
+pronta. Medido em 28/08/2026: um relatório com 18 propostas não trazia esse campo em nenhuma delas;
+ao levantá-lo depois, quatro apagavam coisa, três já estavam escritas na skill e não precisavam ser
+propostas, e cinco caíam todas na mesma seção de um arquivo, que dobraria de tamanho. Nada disso
+era visível sem o campo.
+
+Régua que sai não some sem rastro: ela vai pro relatório, com a data e o motivo. História mora no
+relatório; o que ainda vale mora na skill.
+
+E diga, no fim, **onde as propostas se concentram** — quantas caem em cada arquivo, e se alguma
+seção recebe três ou mais. Seção que recebe muitas de uma vez não deve ser engordada: ou as novas
+viram uma lista curta de conferência no fim dela, ou a seção vira arquivo próprio. Quem lê a skill
+lê o arquivo inteiro; seção de cem linhas não é lida, é folheada.
 
 **E a régua se enuncia como PRINCÍPIO; o caso medido entra como PROVA dele.** As duas exigências
 valem juntas, não uma no lugar da outra: sem número a régua não entra, e escrita como caso ela não
@@ -153,7 +166,7 @@ exatamente essa força. Ao varrer, agrupe por **condição**, nunca pelo nome da
 - **Régua para caso que aconteceu uma vez** e tinha causa externa (cota estourada, máquina cheia).
   Isso vira nota no relatório, não patch.
 - **Régua escrita como caso** — que nomeia a skill, a ferramenta, o arquivo ou a data no lugar da
-  condição. Não é motivo pra descartar o achado: é motivo pra reescrever (seção 6).
+  condição. Não é motivo pra descartar o achado: é motivo pra reescrever (seção 5).
 - **Reescrita de critério.** Você propõe como o trabalho é conduzido, nunca o que conta como pronto.
 
 ## Onde salvar, e quem aplica

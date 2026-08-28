@@ -275,9 +275,12 @@ for i in $(seq 1 1440); do
       fi
       RHASH[$k]=$h
       if [ "${RSEQ[$k]:-0}" -ge "$REP_LIMITE" ] && [ "${RAVISO[$k]:-0}" -eq 0 ]; then
-        msg="[vigia] ${SESSOES[$k]} parece em LOOP: diz working mas o ultimo comando e o MESMO ha ${RSEQ[$k]} leituras (~${RSEQ[$k]} min). Polling de espera nao e trabalho — olhe o pane: se ela re-checa a mesma condicao, mande-a PARAR e reportar o que espera (executor.md, teto de espera). Time: $resumo"
+        msg="[vigia] ${SESSOES[$k]} PODE estar em loop: diz working mas o ultimo comando e o MESMO ha ${RSEQ[$k]} leituras (~${RSEQ[$k]} min). Olhe o pane antes de decidir — polling de espera nao e trabalho, mas trabalho longo tambem repete comando. Quem manda parar e voce, depois de olhar. Time: $resumo"
         echo "$msg"
-        hangar-send --tmux "${SESSOES[$k]}" "[vigia] Voce repete o MESMO comando ha ~${RSEQ[$k]} min. Se e espera por condicao externa, o teto ja estourou: PARE de re-checar e reporte ao arbitro o que voce espera e o ultimo retorno (regra do executor.md)." >/dev/null 2>&1
+        # Pergunta, nunca ordem: a vigia le dois numeros e nao sabe se a sessao esta travada ou
+        # trabalhando. Medido 24-28/08/2026: 3 alarmes falsos num dia, um mandou PARAR no meio de
+        # 44 min de trabalho legitimo. Ordem de parar vem do arbitro, depois de olhar.
+        hangar-send --tmux "${SESSOES[$k]}" "[vigia] Voce repete o MESMO comando ha ~${RSEQ[$k]} min. Isso e espera por condicao externa? Se for, o teto ja estourou: reporte ao arbitro o que voce espera e o ultimo retorno (regra do executor.md). Se voce esta trabalhando, ignore este aviso." >/dev/null 2>&1
         hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
         RAVISO[$k]=1
       fi

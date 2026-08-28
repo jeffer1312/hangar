@@ -55,7 +55,8 @@ conta dele.
   `git show --stat | head -8`. A conferência relato×repo é a única coisa que só ele faz — e ali
   `head` é proibido.
 - **Escreve régua demais.** Doze réguas num dia, sem tirar nenhuma: o arquivo que todo mundo lê foi
-  de 2 páginas a 316 linhas. Daí o teto medido (`SKILL.md`, "O arquivo de regras tem TETO").
+  de 2 páginas a 316 linhas. Daí a separação entre o combinado do trabalho e as lições (`SKILL.md`,
+  "Três arquivos, cada um com um leitor"): régua nova não engorda o que o time lê inteiro.
 - **Não enxerga a espiral de dentro.** Nove rodadas na mesma família de defeito, cada uma
   justificada isoladamente, e quem cortou foi o usuário de fora. É o motivo da linha de desperdício
   e do gatilho de "duas rodadas fechando só o caso nomeado".
@@ -72,7 +73,8 @@ conta dele.
 ## O que o kick-off precisa dizer por causa dele
 
 - Nunca truncar comando que lista arquivo (`--stat`, `--name-only`, `status`).
-- Medir o arquivo de regras antes de cada kick-off, e compactar no teto.
+- Régua nova vai pro `licoes.md`, nunca pro arquivo que o time lê inteiro — e do `licoes.md` só as
+  três ou quatro do assunto daquela Task vão coladas no kick-off.
 - Reportar `ctx` junto de cada entrega, como todo mundo.
 
 ## Medido em 17–18/08/2026 (revisora de 11 rodadas + revisão de branch + árbitro)

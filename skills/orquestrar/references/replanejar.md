@@ -37,10 +37,11 @@ O replanejador lê, nesta ordem:
 1. **O que já está na base** — `git log` da branch: Tasks mergeadas são fatos, não opções.
 2. **O que está em voo** — commit sem merge, worktree com diff sem commit: cada um vira decisão
    explícita no plano novo (aproveitar, revisar, descartar), nunca limbo.
-3. **O contrato** (regras + registro) — as réguas que a execução fixou entram no plano novo como
-   ponto de partida, não como descoberta a repetir.
+3. **O contrato e as lições** (`regras-<gid>.md`, `licoes.md`, registro) — as réguas que a execução
+   fixou entram no plano novo como ponto de partida, não como descoberta a repetir.
 4. **Os pareceres** — a linha de desperdício de cada rodada é o mapa do que o plano velho errou.
-5. **O estimado × real** — onde havia; onde não havia, o custo medido por `git log`/transcripts.
+5. **O `eventos.jsonl`** — relógio e rodadas reais por Task, já contados; onde não houver, o que
+   `git log`/transcripts derem.
 6. O plano velho, por último — pra herdar o que ainda vale, não pra defender.
 
 ## O que o plano novo é
@@ -50,12 +51,14 @@ O replanejador lê, nesta ordem:
   os números velhos.
 - **Nasce no método do contrato** (padrão `superpowers`) — inteiro. Se o replanejamento é troca de
   método, o plano novo nasce 100% no método novo; formato misto é o defeito que a linha `Método:`
-  existe pra impedir.
-- **Arquivo novo** em `docs/superpowers/plans/`, com o nome do trabalho + `fase-final` (ou `v2`).
-  O plano velho ganha, no topo, um aviso apontando pro novo — nunca é apagado: os pareceres o citam.
-- **Passa o MESMO portão de saída da fase 1** (`planejamento.md`, checklist de 12 itens) —
-  replanejamento não é atalho: estimativa a priori, não-colisão, barra/captura, fumaça, teto com
-  cota, tudo de novo, agora com os números REAIS da fase anterior como base da estimativa.
+  existe pra impedir. Contrato com `Método: nenhum` → o que nasce de novo é o **plano de
+  orquestração** (`planejamento.md`), apontando pro plano do usuário como sempre.
+- **Arquivo novo**, com o nome do trabalho + `fase-final` (ou `v2`), ao lado do plano velho — que
+  ganha, no topo, um aviso apontando pro novo e **nunca é apagado**: os pareceres o citam.
+- **Passa o MESMO portão de saída da fase 1** (`planejamento.md`, checklist de 13 itens) —
+  replanejamento não é atalho: estimativa a priori, não-colisão, barra/captura, fumaça, cota e
+  fallback, skill de domínio, tudo de novo, agora com os números REAIS da fase anterior como base
+  da estimativa.
 - **O time volta a ser pergunta.** Como Task fora do plano (`arbitro.md`): o trabalho restante
   pode ser de outra natureza que o time original. Proponha com o histórico na mão; o usuário
   escolhe.
@@ -88,7 +91,7 @@ quem digita — `planejamento.md`), porque ela É plano.
 Medido em 19–20/08/2026: o plano dizia "o árbitro fecha a receita da T5 depois da T4"; o árbitro
 — sem o contexto do planejamento — fechou-a sem dizer QUANDO a chamada dispara, e dessa lacuna
 nasceu o bloqueador mais sério do trabalho (a sonda que digita rodando no mount de toda conversa
-aberta). A miniatura não exige o portão de 12 itens de novo: exige só o dono certo e o formato de
+aberta). A miniatura não exige o portão de 13 itens de novo: exige só o dono certo e o formato de
 Step.
 
 ## O que o replanejamento NÃO é

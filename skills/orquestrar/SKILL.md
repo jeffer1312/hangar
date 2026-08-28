@@ -1,7 +1,7 @@
 ---
 name: orquestrar
 description: |
-  Use quando o usuario pedir para tocar um trabalho grande com revisao independente e pouca interacao dele depois do planejamento - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - ou quando um plano grande/arriscado vai virar MR ou push. Use TAMBEM quando um kick-off mandar voce invocar esta skill e disser seu papel, e quando ja existe um trabalho desses em andamento e voce precisa saber o que fazer agora. Serve a trabalho de um repositorio ou de varios - o que a define e o plano com Tasks, o portao entre elas e o revisor independente, nao a quantidade de checkouts; para varios repos ela combina as interfaces antes e abre uma sessao por repo. NAO use para - tarefa pequena sem plano escrito (sessao normal), revisao avulsa de um diff (subagent de review direto).
+  Use quando o usuario pedir para tocar um trabalho grande com revisao independente e pouca interacao dele depois do planejamento - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - ou quando um plano grande/arriscado vai virar MR ou push. Use TAMBEM quando um kick-off mandar voce invocar esta skill e disser seu papel, e quando ja existe um trabalho desses em andamento e voce precisa saber o que fazer agora. Serve a trabalho de um repositorio ou de varios - o que a define e o trabalho quebrado em Tasks, o portao entre elas e o revisor independente, nao a quantidade de checkouts; para varios repos ela combina as interfaces antes e abre uma sessao por repo. Nao exige plano em formato nenhum - vale com plano do superpowers, plano de outro metodo, plano que o usuario escreveu a mao, ou nenhum plano (ela escreve um plano de orquestracao curto apontando pro material dele). NAO use para - tarefa pequena que uma sessao so resolve, revisao avulsa de um diff (subagent de review direto).
 ---
 
 # Tubo: research → plano → execução autônoma com portão
@@ -118,6 +118,44 @@ dele, como modelo e conta. Troca que ele aprovar não se faz por emenda: roda
 `references/replanejar.md`, e o plano do trabalho restante nasce **inteiro** no método novo — nunca
 metade em cada.
 
+## A SKILL DE DOMÍNIO, quando existe, é quem manda no trabalho
+
+Não confunda com o método, que é a seção acima. **Método** é quem planeja e quem executa
+(`superpowers`, `mattpocock`). **Skill de domínio** é a que descreve *o trabalho em si*, passo a
+passo, porque alguém já fez aquilo dezenas de vezes: portar uma tela, criar um módulo, montar uma
+migração. Ela não planeja nem executa nada — ela diz o que tem de acontecer, e em que ordem.
+
+**Quando existe uma, o plano não a repete: ele a instancia.** Cada Task cita o passo da skill que
+executa, na mesma ordem dela, e o executor relê a skill antes de começar. Isso não é invenção
+nossa: uma skill de domínio real deste repositório já traz, no meio dela, a descrição de como deve
+ser instanciada por um plano — ela foi escrita prevendo isto.
+
+O contrato ganha uma linha, escrita no lançamento, e ela é obrigatória mesmo quando a resposta é
+"nenhuma":
+
+```markdown
+Skill de domínio: portar-tela    # passos 1–9; em conflito com o plano, vale a skill
+Skill de domínio: nenhuma
+```
+
+**Duas conferências, antes da Task 1** (o portão de saída da fase 1 as cobra, em
+`references/planejamento.md`):
+
+1. **Alguma Task faz o que a skill já faz por dentro?** Se faz, essa Task **não existe** — o que
+   existe é a exigência da evidência daquele passo dentro da Task que o contém. Medido em
+   25/08/2026: o passo que gera o contrato de backend virou uma Task separada no fim de um plano de
+   19; duas telas passaram pelo portão sem ele, o backend não pôde começar em paralelo, e o portão
+   nunca cobrou o passo, porque "já existe uma Task para isso". Quem viu foi o usuário, na décima
+   Task.
+2. **Sobrou passo da skill sem dono?** Passo que nenhuma Task cita é passo que ninguém vai rodar.
+   E olhe também o que a skill **não** tem: uma skill de porte de tela pode terminar no último passo
+   sem nunca mandar testar a tela inteira — trabalho montado só com os passos dela nasce sem
+   verificação de conjunto, e isso é buraco do plano, não da skill.
+
+**A skill de domínio não se altera para caber neste trabalho.** Outras pessoas usam. O que se ajusta
+é o plano e o contrato; a skill se lê como está. Passo que não se aplica é decisão do usuário, nunca
+do árbitro — é o mesmo caso de "skill invocada roda inteira", nas travas abaixo.
+
 ## Kick-off — a mensagem aponta, não copia
 
 Sessão nova nasce com contexto zero, mas com o **mesmo `~/.claude`**: esta skill já está lá,
@@ -126,16 +164,24 @@ pelo nome. O kick-off é um endereço, não um manual.
 ```
 Invoque a skill orquestrar e leia a página do seu papel.
 Papel: <executor único | revisor | revisão da branch>.
-Método: <superpowers | mattpocock>.
+Método: <superpowers | mattpocock | nenhum — o plano é o do usuário>.
+Skill de domínio: <nome | nenhuma>.
 Repo/branch: <caminho> / <branch>.   HEAD esperado: <hash>.
 Regras do grupo: <caminho do regras-<gid>.md>.
 A Task da vez, recortada: <caminho do task-<N>.md>.
 Intocáveis: <paths, um a um — não "os do contrato">.
+Lições que valem nesta Task: <coladas aqui, 3 ou 4, não o caminho do arquivo>.
 Sua vez agora: <Task N | esperar o primeiro hash>.
 Ao terminar, reporte para <sessao-do-arbitro> e PARE.
 
-Leia SÓ esses dois arquivos além da skill. O plano inteiro e o registro do grupo NÃO são seus.
+Leia SÓ esses dois arquivos além da skill. O plano inteiro, o registro e o arquivo de lições
+NÃO são seus.
 ```
+
+As **lições vão coladas, não como caminho** — é a única coisa do kick-off que se copia em vez de
+apontar, e por um motivo: o arquivo inteiro não serve a esta Task, e quem sabe quais servem é o
+árbitro. Mandar o caminho faria a sessão ler tudo, que é exatamente o custo que a separação dos
+três arquivos existe para evitar.
 
 A última linha é uma **instrução**, não um comentário: sem ela a sessão vai atrás do plano
 completo e do registro por conta própria — foi exatamente o que aconteceu no trabalho de
@@ -148,60 +194,63 @@ O mesmo texto, reenviado, recoloca de pé uma sessão que deu `/clear`: ele não
 estado, carrega caminhos. Nenhuma linha dele diz "a Task 2 já passou" — isso é do contrato,
 onde continua verdadeiro amanhã.
 
-## Dois arquivos, não um: o registro e as regras
+## Três arquivos, cada um com um leitor: o registro, as regras e as lições
 
-**Só o árbitro escreve nos dois.** Uma sessão que registra a própria autorização legitima o
+**Só o árbitro escreve nos três.** Uma sessão que registra a própria autorização legitima o
 próprio desvio, e o árbitro só descobre relendo o arquivo.
 
 | Arquivo | Contém | Quem lê |
 |---|---|---|
 | `~/.claude/orq-retros/<data>-<gid>/registro.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
-| `regras-<gid>.md` — **as regras** | o que **ainda vale**: intocáveis, gates, réguas, barra, o que a revisão cobre, teto e contas | executor e revisor |
+| `regras-<gid>.md` — **as regras** | o combinado do trabalho, que quase não muda: quem é quem, intocáveis, gates, método, branch, barras, o que a revisão cobre, contas | executor e revisor, **inteiro** |
+| `~/.claude/orq-retros/<data>-<gid>/licoes.md` — **as lições** | as réguas que a execução vai fixando, uma por bloco, com a data e a prova | **ninguém lê inteiro** — o árbitro cola no kick-off só as que servem àquela Task |
 
-> **O registro mora no diretório durável do trabalho, que nada gerencia.** `<config>/.hangar-pair/`
-> é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo (medido 22/08/2026, quando um executor
-> matou a última sessão viva e o diário de 10h sumiu). As **regras** continuam lá — é o caminho que o
-> app mostra ao time.
+Existe um quarto, que nenhuma sessão lê: o `eventos.jsonl`, uma linha por acontecimento, que
+alimenta as telas do app e a retrospectiva. Ele é do árbitro e está descrito em
+`references/arbitro.md` — por isso aquela página fala em **quatro** arquivos e esta, em três.
 
-A fronteira é o **tipo** do conteúdo, não o assunto: **já aconteceu → registro; ainda vale →
-regras.** Uma decisão nova entra nas regras, e o registro só anota a data e aponta pra lá. Assim
-os dois não divergem, e o arquivo que todo mundo lê **para de crescer**.
+> **O registro e as lições moram no diretório durável do trabalho, que nada gerencia.**
+> `<config>/.hangar-pair/` é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo (medido
+> 22/08/2026, quando um executor matou a última sessão viva e o diário de 10h sumiu). As **regras**
+> continuam lá — é o caminho que o app mostra ao time.
 
-Por que separar, medido em 14/08/2026: o registro chegou a 54 KB (~14k tokens) porque toda Task
-aprovada acrescentava um parágrafo e nada saía. Somado ao plano inteiro (~30k), um revisor recém-
-aberto para a Task 10 gastou **110k de contexto antes de receber o primeiro commit** — lendo,
-entre outras coisas, como a Task 4 tinha sido reprovada quatro vezes três semanas antes. O que ele
-precisava sabia-se em duas páginas.
+A fronteira entre os três é o **tipo** do conteúdo, não o assunto:
 
-### O arquivo de regras tem TETO, e ele se mede
+- **já aconteceu → registro** (a Task 4 foi reprovada quatro vezes);
+- **é o combinado deste trabalho → regras** (o executor é a sessão X, `api.py` é intocável);
+- **é uma régua que nasceu no meio e vale daqui pra frente → lições** (o `adb logcat` pendura, use
+  o `-d`).
 
-"Duas páginas" não é limite: ninguém mede, e o arquivo cresce mesmo assim — cada régua nova entra e
-nada sai. Medido em 15/08/2026, num trabalho de 13 Tasks: o arquivo de regras chegou a **316 linhas
-/ 18 KB** e o registro a 22 KB, com o árbitro escrevendo uma régua a cada achado, o dia todo, sem
-nunca tirar nada.
+**As regras quase não mudam depois do lançamento; as lições crescem o trabalho inteiro.** É essa
+separação que resolve o problema real: régua nova é o produto normal de uma execução — toda rodada
+que reprova produz uma —, e enfiar todas elas no arquivo que toda sessão lê inteiro fazia esse
+arquivo dobrar de tamanho até alguém ter de jogar coisa fora.
 
-**Teto: 200 linhas.** Antes de mandar cada kick-off, o árbitro mede:
+**Lição não se joga fora, e não tem teto.** Ela é escrita uma vez, com data e prova, e fica. O que
+tem teto é **quanto disso vai num kick-off**: o árbitro escolhe as que valem para aquela Task e
+cola no texto. Uma lição de Task de tela não vai no kick-off de uma Task de backend, e não é por
+ela estar velha — é por ser de outro assunto.
 
-```bash
-wc -l <config>/.hangar-pair/regras-<gid>.md
-```
+Por que isto existe, medido em duas datas. Em 14/08/2026 o registro chegou a 54 KB (~14k tokens)
+porque toda Task aprovada acrescentava um parágrafo e nada saía; somado ao plano inteiro (~30k), um
+revisor recém-aberto para a Task 10 gastou **110k de contexto antes de receber o primeiro commit**.
+Em 15/08/2026, num trabalho de 13 Tasks, o arquivo que o time lê chegou a **316 linhas / 18 KB**
+porque o árbitro escrevia uma régua a cada achado, o dia todo. O remédio da época era um teto de
+200 linhas com compactação antes de cada kick-off — e ele **falhou de um jeito específico**: numa
+execução de 28/08/2026 uma régua foi apagada por ser rara e o caso dela reapareceu **uma hora
+depois**. Jogar régua boa fora para caber é o defeito, não a solução.
 
-Passou → **compacta antes de enviar**. Compactar não é resumir: é tirar o que **deixou de valer** —
-régua de um lote já fechado, exceção de um arquivo que já mergeou, decisão que virou código. O que
-saiu vira uma linha no registro (com a data), que é onde história mora.
-
-**O registro tem teto mais largo (500 linhas) e no teto ele ARQUIVA, não compacta** — mesma palavra,
-efeitos opostos. "Tirar o que deixou de valer" serve ao contrato; o registro é a matéria-prima da
-fase 5, e resumir ali destrói o que ela vai destilar. Bateu o teto: mova o bloco mais antigo
-**inteiro** para um arquivo irmão no mesmo diretório durável (`registro-tasks-1-N.md`) e deixe um
-ponteiro no lugar. Medido em 23/08/2026: 308 linhas arquivadas, nada perdido, e a retrospectiva leu
-os dois.
+**O registro tem teto (500 linhas) e no teto ele ARQUIVA** — move o bloco mais antigo **inteiro**
+para um arquivo irmão no mesmo diretório durável (`registro-tasks-1-N.md`) e deixa um ponteiro no
+lugar. Nunca resume: ele é a matéria-prima da fase 5, e resumir ali destrói o que ela vai destilar.
+Medido em 23/08/2026: 308 linhas arquivadas, nada perdido, e a retrospectiva leu os dois.
 
 Primeira linha do arquivo de regras, pra sessão amnésica se reancorar sozinha:
 
 ```markdown
 > Sessões deste grupo: invoquem a skill `orquestrar` e leiam a página do seu papel.
-> Branch: <branch> · Repo: <caminho> · Método: <superpowers | mattpocock>
+> Branch: <branch> · Repo: <caminho>
+> Método: <superpowers | mattpocock | nenhum> · Skill de domínio: <nome | nenhuma>
 ```
 
 A linha `Método:` é obrigatória (ver "O MÉTODO não é escolha sua", acima) e nunca muda no meio do
@@ -286,7 +335,23 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
 
   Aspas duplas cruas fazem o shell comer crase e `$`, e receita mutilada é pior que receita
   nenhuma. Heredoc solto (`hangar-send <sessao> <<'EOF'`) devolve erro de uso — a mensagem não sai.
-- **MODELO É DECISÃO DO USUÁRIO. Ninguém escolhe modelo.** A política de contas da máquina fica em
+- **Escolher o time é OFERTA, não obrigação — e a oferta se faz UMA vez.** Montar a tabela
+  conta↔modelo por papel trava quem tem uma conta só: não há o que escolher, e a pessoa fica parada
+  numa pergunta sem resposta possível (reclamação de um usuário de fora, 2026). O planejador
+  pergunta uma vez — *"quer escolher o time, ou seguimos no padrão?"* — e **qualquer resposta
+  destrava o trabalho**:
+  - **quer escolher** → a receita inteira de `references/planejamento.md` ("O time é saída do
+    planejamento"): inventário levantado, candidatas propostas, ele decide.
+  - **não quer, ou não respondeu** → **padrão, na conta que já está em uso**: executor em Opus
+    esforço `medium`; revisor, árbitro e revisão final em Opus esforço `high`. A tabela nasce
+    preenchida assim, com a data e a palavra `padrão` na linha, e o trabalho começa.
+
+  **Isto não é uma sessão escolhendo conta.** A conta continua sendo a que ele já está usando — o
+  padrão só preenche modelo e esforço dentro dela. Sair da conta em uso, ou entrar em conta que
+  **cobra por token**, continua proibido sem ele mandar: é a fatura dele, e nenhum padrão
+  automático pode chegar lá. Padrão escrito na tabela é decisão dele por omissão, e ele troca
+  quando quiser, pelo modal ou pedindo.
+- **MODELO É DECISÃO DO USUÁRIO. Ninguém escolhe modelo fora do padrão acima.** A política de contas da máquina fica em
   **`~/.claude/orquestracao-contas.md`** — quais contas existem, quais são assinatura (troca livre
   dentro da conta), quais são travadas num modelo e quais são proibidas por cobrarem por token. O
   árbitro **lê esse arquivo antes de montar time** e copia pro contrato só o que aquele trabalho vai
