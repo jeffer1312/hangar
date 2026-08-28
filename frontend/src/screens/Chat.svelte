@@ -21,6 +21,7 @@
   import PairSheet from '../components/PairSheet.svelte';
   import OrquestracaoSheet from '../components/OrquestracaoSheet.svelte';
   import { prefetchOrq } from '../lib/queries';
+  import { aoAquecer, segurarAquecimento, soltarAquecimento } from '../lib/aquecimento';
   // Ciclo de import de propósito (PairChatModal importa este Chat): é o mesmo Chat montado por
   // dentro. Só o render é recursivo — o modal só existe com `peerChat` preenchido, e ele nunca
   // abre outro modal (o PairSheet de lá abre o dele, mas o `peerChat` é por instância).
@@ -111,6 +112,20 @@
     publishWorkspaceActions = false, onWorkspaceActionsChange, nested = false,
     splitTab = false, onCloseSplit,
   }: Props = $props();
+
+  // Sessão abrindo: os aquecimentos de cache (aqui e no Composer) esperam a conversa pintar antes
+  // de tocar no backend. AQUI no corpo do script, e não num $effect: o corpo do pai roda antes de
+  // o Composer existir, e um $effect rodaria DEPOIS dos efeitos dele — tarde demais pra segurar.
+  // Solto no `finally` do loadHistory; ver lib/aquecimento pros números que motivaram isto.
+  // O nome fica preso numa const: é a MESMA chave que o `finally` do loadHistory precisa usar pra
+  // soltar. Um portão por sessão porque o app monta vários Chat ao mesmo tempo (split, chat do par).
+  // svelte-ignore state_referenced_locally
+  // Capturar o valor inicial é o certo AQUI, não um descuido: `sessionName` não muda dentro de uma
+  // instância — TODO `<Chat>` do app vive dentro de um `{#key}` pela sessão (App.svelte:483,
+  // DesktopShell.svelte:481/505, PairChatModal.svelte:23), justamente porque SSE e histórico ficam
+  // amarrados a ela. E o `finally` do loadHistory PRECISA soltar exatamente a mesma chave.
+  const sessaoDoPortao = sessionName;
+  segurarAquecimento(sessaoDoPortao);
 
   let events = $state<ChatEvent[]>([]);
 
@@ -307,7 +322,11 @@
   let gitOpen = $state(false);
   let runOpen = $state(false);
   let runRunning = $state(false);
-  onMount(() => { getRunners(sessionName).then((r) => (runRunning = !!r.running)).catch(() => {}); });
+  // Só acende o indicador do botão Rodar — nada na tela depende dele pra abrir. Espera a conversa.
+  onMount(() => {
+    void aoAquecer(sessionName).then(() =>
+      getRunners(sessionName).then((r) => (runRunning = !!r.running)).catch(() => {}));
+  });
   let previewOpen = $state(false);
   let activityOpen = $state(false);
   // Menu "⋯" do celular: Rodar/Atividade saíram da NavBar pra sobrar largura pro nome da sessão.
@@ -417,7 +436,12 @@
   // Aquece o painel de Orquestração ao ENTRAR na sessão: o GET da política lê o disco e já foi
   // medido em ~3s frio, então buscá-lo no toque do botão é o que fazia o painel abrir em spinner.
   // Mesmo padrão do prefetch de modelos no Composer.
-  $effect(() => { prefetchOrq(sessionName); });
+  // DEPOIS do histórico (ver lib/aquecimento): disparado junto, esse mesmo GET de 3s era o maior
+  // ladrão da abertura — a conversa esperava a política que ninguém tinha pedido ainda.
+  $effect(() => {
+    const sn = sessionName;
+    void aoAquecer(sn).then(() => prefetchOrq(sn));
+  });
   // Membro do grupo aberto no modal (null = fechado). É string, não lista, de propósito: um modal
   // por vez mantém o teto em 2 SSE (este chat + o do par) e o navegador corta em ~6 por host.
   let peerChat = $state<string | null>(null);
@@ -885,7 +909,10 @@
         if (vivo) subagentesNoDisco = lista.length;
       } catch { /* offline / sessão sem transcript -> mantém o que tinha */ }
     }
-    void contar();
+    // A 1ª contagem espera a conversa pintar (ver lib/aquecimento): ela só acende o ponto do botão
+    // de Atividade. Depois que o histórico chega a espera já está resolvida e o ciclo de 5s corre
+    // no ritmo de sempre.
+    void aoAquecer(sessionName).then(() => { if (vivo) void contar(); });
     const id = trabalhando ? setInterval(contar, 5000) : undefined;
     return () => { vivo = false; if (id !== undefined) clearInterval(id); };
   });
@@ -1026,6 +1053,10 @@
       error = msg;
     } finally {
       if (g === histGen) loading = false;
+      // Conversa na tela (ou desistimos dela): o trabalho especulativo pode correr. Vale também no
+      // ramo de ERRO — histórico que falhou não é motivo pra a pílula de modelo ficar sem catálogo.
+      // Sem o `if`: uma carga abortada é sempre sucedida por outra, que solta na vez dela.
+      if (g === histGen) soltarAquecimento(sessaoDoPortao);
     }
   }
 

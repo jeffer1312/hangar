@@ -22,7 +22,10 @@
   } from '../lib/cota';
 
   interface Props {
-    /** Troca de sessão/servidor no shell — o feed relê na máquina certa (ver QuotaStrip). */
+    /** ID do SERVIDOR ativo — o feed relê na máquina certa (ver QuotaStrip). Só o servidor, nunca
+     *  `<servidor>::<sessão>`: cota é da credencial da máquina, não da sessão aberta, e com o nome
+     *  da sessão dentro toda troca de aba jogava as contas fora (pílula em branco) e refazia o GET
+     *  — medido em 28/08/2026, 559ms disputando com o histórico em cada abertura de sessão. */
     serverKey: string;
     /** Conta da sessão ABERTA (id do /api/cotas). Quando existe e tem leitura, a pílula mostra o
      *  uso DELA (pedido do usuário); sem ela, cai no pior-geral (smart). */

@@ -462,6 +462,30 @@ def session_created(name: str) -> float:
         return 0.0
 
 
+def cwd_de(name: str) -> str | None:
+    """Diretorio de uma sessao de UM pane so, num fork so. None = "pergunte pro registry".
+
+    Existe pra quem quer SO o cwd de uma sessao nao pagar a varredura inteira (tmux de todas as
+    sessoes + /proc + git por sessao): medido em 28/08/2026, 0,005s contra 0,239s.
+
+    So responde com UM pane, e isso e o cuidado principal aqui: com 2+ panes quem escolhe o cwd no
+    registry e o `_agent_pane`, que procura o pane do AGENTE — e nao o pane ativo. "Ativo" no tmux
+    e por JANELA, nao por sessao, entao numa sessao com o agente numa janela e um shell na outra em
+    primeiro plano, "o ativo" e o SHELL: responder por ele daria o cwd errado com cara de certo (a
+    rota /commands listaria as skills do projeto errado). Nesse caso devolvemos None e o chamador
+    cai na varredura, que decide como sempre decidiu. Um pane e o caso esmagadoramente comum.
+
+    O `:` no alvo NAO e cosmetico: sem ele, um nome NUMERICO sem sessao correspondente e lido como
+    indice de JANELA e responde pelos panes da sessao ANEXADA, com rc=0 — a mesma pegadinha ja
+    documentada no `list_panes_of` (que usa exatamente este comando) e no `_pane_target`.
+    """
+    cp = _run(["tmux", "list-panes", "-s", "-t", f"={name}:", "-F", "#{pane_current_path}"])
+    if cp.returncode != 0:
+        return None
+    linhas = [l for l in cp.stdout.splitlines() if l.strip()]
+    return linhas[0] if len(linhas) == 1 else None
+
+
 def _config_dir_padrao() -> str:
     """O ~/.claude — que no Claude Code NAO e a mesma coisa que exportar CLAUDE_CONFIG_DIR=~/.claude.
 

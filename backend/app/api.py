@@ -5394,7 +5394,23 @@ def preview_stop():
 def commands(name: str):
     # cwd vem do registry/tmux; se a sessao nao for achada, ainda devolvemos os built-ins
     # + skills globais (lista util mesmo sem cwd casado).
-    cwd = next((s.cwd for s in registry.list() if s.name == name), None)
+    #
+    # `tmux.cwd_de` antes do `registry.list()`: esta rota so quer o cwd de UMA sessao, e a varredura
+    # completa cobra tmux de todas as sessoes + /proc + `git` por sessao pra devolver tudo o mais.
+    # Medido em 28/08/2026, ela era o companheiro mais caro da abertura de sessao — sozinha levava
+    # o `/history` de 0,29s pra 0,53s. A varredura fica como plano B pros dois casos em que ela sabe
+    # mais: a sessao Codex (vive num sidecar duravel, pode nao ter pane nenhum) e a sessao com 2+
+    # panes (ali quem escolhe o cwd e o `_agent_pane`, que acha o pane do AGENTE — ver `cwd_de`).
+    cwd = tmux.cwd_de(name)
+    if cwd is None:
+        cwd = next((s.cwd for s in registry.list() if s.name == name), None)
+    if cwd is None:
+        # Nem o tmux nem a varredura acharam a sessao. A lista SAI MESMO ASSIM (built-ins + skills
+        # globais), que e util e e o comportamento de sempre — mas nao pode sair calada: sem cwd
+        # faltam as skills e comandos DO PROJETO, e do lado de fora isso e indistinguivel de um
+        # projeto que nao tem nenhuma.
+        _log.warning("commands: sem cwd pra '%s' (tmux e registry nao acharam) — lista sem o que "
+                     "e do projeto", name)
     return list_commands(cwd)
 
 

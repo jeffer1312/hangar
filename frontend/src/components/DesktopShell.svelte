@@ -573,7 +573,7 @@ import * as m from '../paraglide/messages';
        recolhida e quem abre é o "Mostrar na barra" do popover (lib/quotaBarra). -->
   {#if quotaBarra.aberta}
     <QuotaStrip
-      serverKey={currentKey ?? ''}
+      serverKey={currentKey?.split('::')[0] || getActiveId() || ''}
       onIrParaContas={() => abrirConfig('contas', getActiveId())}
     />
   {/if}

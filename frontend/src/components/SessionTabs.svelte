@@ -211,7 +211,7 @@ import * as m from '../paraglide/messages';
   <button class="tab-action" onclick={(e) => sidebarBridge.openKebab(e)} aria-haspopup="menu" aria-label={m.tabs_mais_opcoes()} title={m.tabs_buscar_arquivo_custos()}>⋯</button>
   <!-- Pílula de cota (o medidor do super.engineering): entre o ⋯ e a engrenagem, no espaço morto
        da barra. Mostra a conta da sessão ativa (ou a pior, sem sessão); o clique abre o detalhe. -->
-  <QuotaPill serverKey={currentKey ?? ''} {contaAtiva} {onIrParaContas} />
+  <QuotaPill serverKey={servidorAtivo?.id ?? ''} {contaAtiva} {onIrParaContas} />
   <!-- O ponto colorido veio junto com a engrenagem quando ela saiu do rodapé do trilho: ele não é
        enfeite, é a única coisa na tela que diz EM QUAL SERVIDOR você está, na mesma cor que agrupa
        as sessões por servidor. Tirar a engrenagem de lá sem trazer o ponto perderia essa metade da

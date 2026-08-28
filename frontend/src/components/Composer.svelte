@@ -45,6 +45,7 @@
   import DitadoEstiloPopover from './DitadoEstiloPopover.svelte';
   import { ditadoEstilo, estilosDitado, type EstiloDitado } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, uploadUrl, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
+  import { aoAquecer } from '../lib/aquecimento';
   import type { State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
@@ -160,14 +161,20 @@
       commands = cached;
       return;
     }
-    getCommands(sn)
-      .then((c) => {
-        commandCache.set(sn, c);
-        commands = c;
-      })
-      .catch(() => {
-        // endpoint indisponivel -> segue com lista vazia, sem quebrar a UI
-      });
+    // Depois do historico (ver lib/aquecimento): a lista so importa quando a pessoa digita "/", e
+    // este GET varre o tmux inteiro — disputando com a conversa, era um dos maiores ladroes da
+    // abertura. O cache em memoria acima segue respondendo na hora numa sessao ja visitada.
+    void aoAquecer(sn).then(() => {
+      if (sn !== sessionName) return;   // trocou de sessao na espera: esta busca nao serve mais
+      getCommands(sn)
+        .then((c) => {
+          commandCache.set(sn, c);
+          if (sn === sessionName) commands = c;
+        })
+        .catch(() => {
+          // endpoint indisponivel -> segue com lista vazia, sem quebrar a UI
+        });
+    });
   });
 
   let textareaEl: HTMLTextAreaElement | undefined = $state();
@@ -559,12 +566,18 @@
   // Aquece o catálogo do seletor desta sessão ANTES do toque na pill (cache de 60s na api.ts):
   // o popover abre com a lista pronta em vez de "Carregando…". O catch é silencioso de propósito:
   // falha de verdade aparece no GET que o popover refaz ao abrir, com o erro na caixa.
+  // Espera a conversa pintar (ver lib/aquecimento): "antes do toque na pill" nao quer dizer "antes
+  // da conversa" — o toque vem sempre depois dela, e no Claude este GET chega a DIRIGIR o terminal.
   $effect(() => {
     const sn = sessionName;
-    if (isKimi) void getKimiModels(sn).catch(() => {});
-    else if (isPi) void getPiModels(sn).catch(() => {});
-    else if (isCodex) void getCodexModels(sn).catch(() => {});
-    else void getModelOptions(sn).catch(() => {});
+    const kimi = isKimi, pi = isPi, codex = isCodex;
+    void aoAquecer(sn).then(() => {
+      if (sn !== sessionName) return;
+      if (kimi) void getKimiModels(sn).catch(() => {});
+      else if (pi) void getPiModels(sn).catch(() => {});
+      else if (codex) void getCodexModels(sn).catch(() => {});
+      else void getModelOptions(sn).catch(() => {});
+    });
   });
   $effect(() => { if (permPopOpen) permError = null; });
   // Token de sequência: o poll de fundo e a sonda da pílula correm juntos, e sem isto a resposta
@@ -577,19 +590,25 @@
     const sn = sessionName;
     const seq = ++permSeq;
     // só lê o atual (zero teclas); ciclo só ao abrir a pílula (bloqueador 1)
-    getPermissionModes(sn, false)
-      .then((res) => {
-        if (seq !== permSeq || sn !== sessionName) return;
-        permCurrent = res.current;
-        // lista vazia do poll não apaga o ciclo que a sonda já trouxe
-        if (res.modes.length > 0 || permModes.length === 0) permModes = res.modes;
-        permSondavel = res.sondavel;
-      })
-      .catch(() => {
-        if (seq !== permSeq || sn !== sessionName) return;
-        permCurrent = null;
-        permModes = [];
-      });
+    // Atrás do histórico na PRIMEIRA rodada (ver lib/aquecimento); depois que ele pinta, a espera
+    // já está resolvida e os polls seguintes seguem no ritmo de sempre. O `permSeq` continua sendo
+    // tomado ANTES da espera: é ele que faz a rodada nova invalidar a que ficou esperando.
+    void aoAquecer(sn).then(() => {
+      if (seq !== permSeq) return;
+      getPermissionModes(sn, false)
+        .then((res) => {
+          if (seq !== permSeq || sn !== sessionName) return;
+          permCurrent = res.current;
+          // lista vazia do poll não apaga o ciclo que a sonda já trouxe
+          if (res.modes.length > 0 || permModes.length === 0) permModes = res.modes;
+          permSondavel = res.sondavel;
+        })
+        .catch(() => {
+          if (seq !== permSeq || sn !== sessionName) return;
+          permCurrent = null;
+          permModes = [];
+        });
+    });
   });
   async function abrirPermissao() {
     permPopOpen = true;
