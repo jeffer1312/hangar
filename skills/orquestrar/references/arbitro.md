@@ -235,12 +235,20 @@ Isso vale igual quando o papel reveza entre contas: o rodízio troca **quem** re
 outra, nunca põe dois revisores no mesmo commit. Dois vereditos pro mesmo hash continua sendo
 defeito, sempre.
 
-**E o revisor nunca é a sessão que executou.** Esta é a regra que sustenta o portão inteiro: quem
-escreveu o código já defende as escolhas que fez, e dar o crachá de revisor pra ela transforma o
-julgamento em carimbo. Vale mesmo com pressa, mesmo com a sessão do revisor fechada, mesmo quando o
-executor "só quer confirmar uma coisinha" — nesse caso abra a sessão do revisor, não reaproveite a
-dele. O que a regra exige é **sessão** separada: modelo, conta e provider podem ser os mesmos do
-executor sem nenhum problema, e no rodízio isso acontece naturalmente.
+**Um papel, uma sessão** — e é você quem abre as sessões, então é você quem pode violar isso.
+Nenhuma sessão acumula dois papéis do contrato ao mesmo tempo: o revisor não é a sessão que
+executou, o executor não vira revisor da própria Task, o revisor não faz a revisão final, e você
+(árbitro) não escreve código. O motivo é o mesmo em todos os pares: quem fez uma coisa já defende
+as escolhas que fez ao fazê-la, e o crachá seguinte transforma o julgamento em carimbo.
+
+**É sessão, não modelo.** Duas sessões com o mesmo modelo, a mesma conta e o mesmo provider cumprem
+a regra sem problema nenhum — no rodízio de contas isso acontece o tempo todo. O que não vale é uma
+sessão só usando dois crachás.
+
+Vale com pressa, com a sessão do papel já fechada, e quando alguém "só quer confirmar uma
+coisinha": abra a sessão daquele papel, não reaproveite a que está à mão. A única troca legítima é
+de fase (o planejador virou você) ou por sucessão, e nas duas a sessão que sai **para** de agir
+naquele papel.
 
 Nenhuma Task começa antes da anterior ser aprovada — **no fluxo serial, que é o padrão**.
 

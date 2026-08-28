@@ -298,16 +298,22 @@ Olhe as Tasks e responda:
 | Cada Task é volume mecânico, raciocínio sutil ou julgamento visual? | quem escreve — pode ser **um escritor por Task** |
 | O erro típico dela aparece em quê: teste, tela, carga, estado em disco? | o que o revisor precisa **conseguir fazer** (ver print, rodar harness, ler concorrência) |
 | Tem Task visual? O executor escolhido enxerga imagem? | se não enxerga, o protocolo de visão do `executor.md` (`see`) é obrigatório e entra no contrato — não é motivo pra descartar o motor |
-| Quem revisa é sessão diferente de quem escreveu? | **não negociável** — ver as regras fixas abaixo |
+| Cada papel tem sessão própria, sem ninguém acumulando dois? | **não negociável** — ver as regras fixas abaixo |
 | Quanto custa e em qual conta? | os motores, e o teto |
 
 Regras fixas:
 
-- **Quem planejou não executa.** Vira árbitro, read-only no código pro resto do trabalho.
-- **Revisor nunca é a mesma sessão que executou.** Quem escreveu o código não revisa o próprio
-  código: a sessão que executou já defende as escolhas que fez, e passar o crachá de revisor pra
-  ela transforma o portão em carimbo. O que a regra exige é sessão separada — modelo, conta e
-  provider podem ser os mesmos do executor, e às vezes é o que se quer.
+- **Um papel, uma sessão.** Cada linha da tabela de papéis é uma sessão própria, e nenhuma sessão
+  acumula dois papéis ao mesmo tempo. Vale entre todos: o árbitro não executa, o executor não
+  revisa, o revisor não faz a revisão final. O motivo é o mesmo em todos os pares — quem fez uma
+  coisa já defende as escolhas que fez ao fazê-la, e acumular o papel seguinte transforma o
+  julgamento em carimbo.
+  **É sessão, não modelo.** Duas sessões com o mesmo modelo, a mesma conta e o mesmo provider
+  cumprem a regra; uma sessão só usando dois crachás, não. No rodízio de contas isso acontece o
+  tempo todo, e está certo.
+  A única troca legítima é de **fase**: quem planejou vira árbitro quando o plano fecha, e aí é
+  read-only no código pro resto do trabalho. Sucessão de papel (passar o bastão) também é troca,
+  não acúmulo — a sessão que sai para de agir naquele papel.
 - **Revisão final** em sessão nova que não participou de nada.
 - Um escritor por árvore vale mesmo com vários escritores no elenco: o portão serializa as
   Tasks, então eles nunca escrevem ao mesmo tempo.
