@@ -1042,7 +1042,16 @@ class SessionRegistry:
                 from app import cotas
                 padrao = cotas.provider_padrao_kimi()
                 info.conta = f"kimi:{padrao}" if padrao else None
-            elif prov != "pi":
+            elif prov == "pi":
+                # Sessão Pi gasta a credencial do modelo escolhido NELA (o `current.provider` do
+                # sidecar do catálogo), que pode ser a mesma chave Kimi/motor que já é uma conta
+                # desta lista. Provider sem chave conhecida (OAuth do Codex, provedor só do Pi)
+                # segue None, e a pílula cai no pior-geral como antes.
+                from app import cotas, pi_models
+                cfg_pi = _config_dir_of(p["pid"]) if p.get("pid") else None
+                atual = pi_models.provider_atual(jsonl, cfg_pi) if jsonl else None
+                info.conta = cotas.conta_de_provider_pi(atual)
+            else:
                 cdir = (_config_dir_of(p["pid"]) if p.get("pid") else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
             out.append(info)

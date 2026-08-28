@@ -54,8 +54,9 @@ import * as m from '../paraglide/messages';
   const corDoServidor = $derived(servidorAtivo ? serverColor(servidorAtivo.id) : 'var(--text-muted)');
 
   // Conta da sessão ABERTA (id do /api/cotas), pra pílula de cota mostrar o uso DELA em vez do
-  // pior-geral — pedido do usuário. Sem sessão aberta (ou sessão kimi/pi sem motor): null, e a
-  // pílula cai no smart.
+  // pior-geral — pedido do usuário. Sem sessão aberta: null, e a pílula cai no smart. A sessão Pi
+  // passou a ter conta em 28/08/2026 (a credencial do modelo escolhido NELA, casada pela chave no
+  // backend); só fica sem quando o provedor dela não é nenhuma credencial conhecida.
   const contaAtiva = $derived(
     model.tabs.find((t) => tabKeyOf(t.session) === currentKey)?.session.conta ?? null,
   );

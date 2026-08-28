@@ -421,6 +421,74 @@ def provider_padrao_kimi() -> str | None:
     return prov
 
 
+# Provider do Pi -> conta desta lista, casado pela CHAVE e não pelo nome: o Pi chama de
+# "kimi-coding" a MESMA credencial que o Kimi Code chama de "apikey" (verificado: a chave é byte a
+# byte a mesma), e cota é da credencial, não do rótulo que cada CLI deu pra ela. Casar por nome
+# exigiria uma tabela de sinônimos que envelhece a cada provedor novo.
+# Provider sem chave conhecida aqui (OAuth do Codex, provedor que só o Pi tem) devolve None e a
+# pílula cai no pior-geral — o comportamento de antes, nunca um id que não casa com nada.
+_PI_AGENT = Path.home() / ".pi" / "agent"
+_mapa_pi_cache: tuple[tuple[float, ...], dict[str, str]] | None = None
+
+
+def _mtimes(*caminhos: Path) -> tuple[float, ...]:
+    out = []
+    for p in caminhos:
+        try:
+            out.append(p.stat().st_mtime)
+        except OSError:
+            out.append(0.0)
+    return tuple(out)
+
+
+def _chaves_do_pi() -> dict[str, str]:
+    """provider do Pi -> api key. Dois arquivos: `auth.json` (o que o `/login` do Pi grava) e os
+    provedores manuais de `models.json`, que trazem a chave no próprio bloco."""
+    out: dict[str, str] = {}
+    try:
+        auth = json.loads((_PI_AGENT / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        auth = {}
+    for nome, d in (auth if isinstance(auth, dict) else {}).items():
+        k = d.get("key") if isinstance(d, dict) else None
+        if isinstance(k, str) and k:
+            out[str(nome)] = k
+    try:
+        mods = json.loads((_PI_AGENT / "models.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        mods = {}
+    provs = mods.get("providers") if isinstance(mods, dict) else None
+    for nome, d in (provs if isinstance(provs, dict) else {}).items():
+        k = d.get("apiKey") if isinstance(d, dict) else None
+        if isinstance(k, str) and k:
+            out.setdefault(str(nome), k)
+    return out
+
+
+def _mapa_pi() -> dict[str, str]:
+    """provider do Pi -> id de conta. Cache pelos mtimes dos quatro arquivos porque isto roda por
+    sessão Pi a cada varredura da lista (mesma razão do cache do `provider_padrao_kimi`)."""
+    global _mapa_pi_cache
+    chave = _mtimes(_PI_AGENT / "auth.json", _PI_AGENT / "models.json",
+                    kimi_sessions.kimi_home() / "config.toml", engines.caminho())
+    if _mapa_pi_cache and _mapa_pi_cache[0] == chave:
+        return _mapa_pi_cache[1]
+    por_chave: dict[str, str] = {}
+    for nome, key, _base in _providers_kimi():
+        por_chave.setdefault(key, f"kimi:{nome}")
+    for nome, dados in engines.listar().items():
+        key = dados.get("api_key")
+        if isinstance(key, str) and key:
+            por_chave.setdefault(key, f"chave:{nome}")
+    mapa = {prov: por_chave[key] for prov, key in _chaves_do_pi().items() if key in por_chave}
+    _mapa_pi_cache = (chave, mapa)
+    return mapa
+
+
+def conta_de_provider_pi(provider: str | None) -> str | None:
+    return _mapa_pi().get(provider) if provider else None
+
+
 # ------------------------------------------------------------------------- fontes e cache
 
 _cache: dict[str, tuple[float, CotaConta]] = {}

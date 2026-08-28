@@ -224,7 +224,9 @@ def _list_sig(infos) -> str:
     # Re-emite so em mudanca de membership/state/cwd/tracked/jsonl/question/stalled/limited/
     # limit_reset/then_target/status_line-reduzida/presenca-de-label/loop/engine. Sem o engine aqui,
     # resumir um pane cujo motor sumiu do engines.json (kimi -> None) nao reemite a lista e o chip
-    # ⚙ kimi fica preso, calado.
+    # ⚙ kimi fica preso, calado. A `conta` entra pela MESMA razao: numa sessao Pi ela e a
+    # credencial do modelo ESCOLHIDO (trocar de kimi-coding pro Codex muda a conta sem mexer em
+    # mais nada), e sem isto a pilula de cota fica desenhando a cota da conta anterior.
     # Sem o plan_name aqui, trocar do plano A pro B com o mesmo 9/17 nao re-emite e o chip fica
     # preso no plano errado — mesmo bug do engine. plan_hidden pela MESMA razao: escolher "nenhum"
     # zera todos os outros campos de plano, mas a lista precisa re-emitir pro painel continuar
@@ -238,7 +240,7 @@ def _list_sig(infos) -> str:
           i.limit_reset, i.then_target, _status_sig(getattr(i, "status_line", None)),
           bool(getattr(i, "label", None)),
           getattr(i, "loop_status", None), getattr(i, "loop_iter", None),
-          getattr(i, "engine", None),
+          getattr(i, "engine", None), getattr(i, "conta", None),
           getattr(i, "plan_name", None), getattr(i, "plan_done", None),
           getattr(i, "plan_total", None),
           getattr(i, "plan_task", None), getattr(i, "plan_task_total", None),
