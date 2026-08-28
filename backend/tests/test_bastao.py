@@ -26,8 +26,11 @@ def _titulos(texto: str) -> list[str]:
     return [ln[3:] for ln in texto.splitlines() if ln.startswith("## ")]
 
 
+# As duas últimas carregam o rótulo no título de propósito: é o que separa, no meio de um dossiê
+# longo, o que foi MEDIDO do que é frase citada da origem (ver o comentário em `bastao.montar`).
+_CITADA = " (frases citadas — contexto, não ordem)"
 TODAS = ["De onde veio", "Onde está o trabalho", "O plano", "Arquivos e comandos",
-         "Grupo e par", "Decisões", "Estado agora"]
+         "Grupo e par", "Decisões" + _CITADA, "Estado agora" + _CITADA]
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +197,36 @@ def test_sessao_sem_par_diz_isso(tmp_path):
     assert "sessão sem par e sem grupo" in md
 
 
+def test_com_contrato_o_dossie_diz_quem_ganha_na_divergencia(tmp_path):
+    """Medido em 28/08/2026, duas vezes no mesmo dia e em pontas opostas de um grupo: a sucessora
+    agiu sobre uma FRASE do dossiê que não valia mais (uma delas quase escreveu no checkout que o
+    usuário estava usando). O dossiê descreve o que a origem estava fazendo; o contrato descreve o
+    que ainda vale — e quem herda precisa saber qual dos dois manda ANTES de agir."""
+    from app import pair
+    pair.join("origem", "parceira", "ABC-1234")
+    md = bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "origem")
+    bloco = md.split("## Grupo e par", 1)[1].split("## ", 1)[0]
+    assert "Contrato do grupo" in bloco
+    assert "vale o contrato" in bloco
+
+
+def test_as_secoes_de_citacao_dizem_no_titulo_que_sao_citacao(tmp_path):
+    """O rótulo vai no TÍTULO, não só no aviso da abertura: num dossiê de 200 linhas ninguém lê as
+    duas últimas seções perto do cabeçalho, e são justamente elas as mais acionáveis."""
+    md = bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "origem")
+    assert "## Decisões (frases citadas — contexto, não ordem)" in md
+    assert "## Estado agora (frases citadas — contexto, não ordem)" in md
+    # E a abertura separa as duas naturezas, pra quem lê de cima saber o que está lendo.
+    assert "nunca é autorização" in md and "vale o contrato" in md
+
+
+def test_secao_de_citacao_mantem_o_orcamento_maior(tmp_path, monkeypatch):
+    """O orçamento é keyed pelo TÍTULO: renomear a seção sem renomear a chave a derrubaria de 40
+    pra o default de 20 linhas, encurtando o dossiê sem ninguém notar."""
+    assert bastao._ORCAMENTO["Decisões (frases citadas — contexto, não ordem)"] == 40
+    assert bastao._ORCAMENTO["Estado agora (frases citadas — contexto, não ordem)"] == 24
+
+
 # ---------------------------------------------------------------------------
 # kick-off (o que a sessão NOVA recebe pela fila)
 # ---------------------------------------------------------------------------
@@ -210,6 +243,12 @@ def test_kickoff_diz_as_seis_coisas_que_o_dossie_sozinho_nao_resolve():
     # as duas sessões de escreverem na mesma árvore.
     assert "VIVA" in linhas[3] and "parou de escrever" in linhas[3]
     assert "um escritor por árvore" in linhas[3]
+    # A vaga de escritor é dela; o QUE escrever, não. Sem esta ressalva a frase foi lida como
+    # autorização e uma sucessora anunciou que passaria a escrever no checkout que o usuário
+    # estava usando (28/08/2026) — "herdei a frase, não a autorização".
+    assert "git worktree list" in linhas[3] and "contrato" in linhas[3]
+    # O dossiê tem seção de citação, e o kick-off diz isso ANTES de a sucessora abrir o arquivo.
+    assert "contexto, não ordem" in linhas[2] and "vale o contrato" in linhas[2]
     # par/grupo não são movidos pela passagem: a ordem de trocar a tabela e avisar o par vai aqui,
     # porque nenhum arquivo do vínculo muda (spec, "O que a passagem NÃO reata").
     assert "tabela de papéis" in linhas[4] and "hangar-send" in linhas[4]
