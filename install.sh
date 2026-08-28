@@ -365,6 +365,13 @@ else
   nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
 
+# Ponte de skills pro Pi e pro Kimi. Roda SEMPRE (inclusive no --update): quem cria sessão nesses
+# dois agentes é este app, e uma sessão nascida assim não enxerga as skills do Claude sem a ponte.
+# Sai 0 e não faz nada quando nenhum dos dois está instalado.
+./scripts/install-skills-bridge.sh >/dev/null 2>&1 \
+  && ok "ponte de skills (Pi/Kimi) atualizada" \
+  || nota "ponte de skills pulada — depois: ./scripts/install-skills-bridge.sh"
+
 # Sessões sobrevivendo a reboot: TPM + resurrect + continuum + um timer systemd que salva.
 # Fica DEPOIS dos serviços de propósito — é o único passo aqui que clona repositório de
 # terceiro (os plugins do tmux), então merece pergunta própria mesmo com --yes já dito.
