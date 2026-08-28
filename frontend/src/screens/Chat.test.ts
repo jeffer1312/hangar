@@ -109,7 +109,7 @@ vi.mock('../lib/statusline', () => ({ parseStatusLine: vi.fn(() => null) }));
 vi.mock('../lib/history', () => ({ appendTail: vi.fn(), hasSeam: vi.fn(), prependOlder: vi.fn() }));
 vi.mock('../lib/activity', () => ({
   createActivityFolder: vi.fn(() => ({
-    snapshot: () => ({ tasks: [], inProgress: 0, running: 0, agents: [], writeEvents: [] }),
+    snapshot: () => ({ tasks: [], inProgress: 0, running: 0, agents: [], shells: [], runningAgents: 0, runningShells: 0, writeEvents: [] }),
     push: () => {}, save: () => {}, attach: () => {}, reset: () => {},
   })),
 }));

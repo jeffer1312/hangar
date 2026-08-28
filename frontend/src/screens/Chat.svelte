@@ -886,7 +886,9 @@
   // INTEIRO a cada mensagem (O(n) por evento em sessão longa).
   const actFolder = createActivityFolder();
   let activity = $state(actFolder.snapshot());
-  const activityBadge = $derived(activity.inProgress + activity.runningAgents);
+  // O shell de fundo conta junto: pro app "o que está rodando aqui" é uma coisa só. O terminal já
+  // mostrava ("5 shells still running") e o app não mostrava nada.
+  const activityBadge = $derived(activity.inProgress + activity.runningAgents + activity.runningShells);
 
   // Subagentes que existem NO DISCO (`<session-dir>/subagents/agent-*.jsonl`), contados pelo
   // backend. Sem isto o painel só abria quando o transcript trazia a ferramenta `Agent` — e o uso
@@ -895,7 +897,8 @@
   // disco, e o botão de Atividade nunca aparecia — com os dados prontos numa rota que já existia.
   let subagentesNoDisco = $state(0);
   const hasActivity = $derived(
-    activity.tasks.length > 0 || activity.agents.length > 0 || subagentesNoDisco > 0,
+    activity.tasks.length > 0 || activity.agents.length > 0 || activity.runningShells > 0
+    || subagentesNoDisco > 0,
   );
 
   // Quando perguntar: enquanto TRABALHA (é quando nasce subagente) e uma vez ao parar, pra pegar o
@@ -2002,6 +2005,8 @@
         onOpenOrq={() => (orqOpen = true)}
         {sendToPair}
         onToggleSendToPair={() => (sendToPair = !sendToPair)}
+        shellsRodando={activity.runningShells}
+        onOpenActivity={() => (activityOpen = true)}
       />
     {/if}
   </div>

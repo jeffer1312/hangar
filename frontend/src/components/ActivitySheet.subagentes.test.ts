@@ -45,7 +45,7 @@ function sub(agentId: string, over: Partial<SubagentRun> = {}): SubagentRun {
 }
 
 // Atividade derivada do transcript: VAZIA — é o cenário exato do defeito.
-const SEM_ATIVIDADE = { tasks: [], agents: [], inProgress: 0, runningAgents: 0 };
+const SEM_ATIVIDADE = { tasks: [], agents: [], shells: [], inProgress: 0, runningAgents: 0, runningShells: 0 };
 
 function montar(atividade: unknown = SEM_ATIVIDADE) {
   const el = document.createElement('div');

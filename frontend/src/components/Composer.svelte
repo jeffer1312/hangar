@@ -81,11 +81,17 @@
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
     // o Codex nao tem nem um nem outro); "kimi" nao tem sheet de modelo neste MVP (pill so leitura).
     provider?: 'claude' | 'codex' | 'pi' | 'kimi';
+    // Shells de fundo rodando nesta sessão (lib/activity). 0 = chip nem aparece. O terminal já
+    // dizia "N shells still running" e o app não dizia nada; o chip é o atalho, o detalhe (qual
+    // comando, há quanto tempo) fica no painel de Atividade, que o toque abre.
+    shellsRodando?: number;
+    onOpenActivity?: () => void;
   }
   let {
     sessionName, sessionState, status, lastCache = null, onSend, onSteer, onCommand, onInterrupt, onOpenGit,
     onOpenPreview, pairPeers = null, pairedState = null, onOpenPair, onOpenOrq = undefined,
     sendToPair = false, onToggleSendToPair,
+    shellsRodando = 0, onOpenActivity,
     inputText = $bindable(''),
     provider = 'claude',
     filaCount = 0,
@@ -1497,6 +1503,19 @@
             <span class="fila-acao">{m.composer_fila_acao()}</span>
           </button>
         {/if}
+        {#if shellsRodando > 0 && onOpenActivity}
+          <!-- Shells de FUNDO: comando que continua rodando depois que a ferramenta respondeu. O
+               terminal mostra "N shells still running" no rodapé e o app não mostrava nada — dava
+               pra sair da sessão sem saber que um build ainda estava de pé. O toque abre a
+               Atividade, onde está qual comando é e há quanto tempo. -->
+          <button class="repo-chip shell-chip" onclick={onOpenActivity}
+                  title={m.composer_shells_titulo({ n: shellsRodando })}
+                  aria-label={m.composer_shells_titulo({ n: shellsRodando })}>
+            <span class="repo-glyph" aria-hidden="true">&gt;_</span>
+            <span class="repo-name">{m.composer_shells_contagem({ n: shellsRodando })}</span>
+            <span class="shell-dot" aria-hidden="true"></span>
+          </button>
+        {/if}
         {#if status?.repo}
           <button class="repo-chip" title={m.composer_git_chip()} onclick={onOpenGit}>
             <IconFolder size={13} />
@@ -2389,6 +2408,16 @@
   .fila-chip .repo-name { color: var(--accent); font-weight: 600; }
   .fila-chip .fila-acao { color: var(--accent); text-decoration: underline; }
   .fila-chip:active { background: var(--accent-dim); }
+
+  /* Shell de fundo: o mesmo chip dos outros, com o ponto do estado "em execução" — a MESMA cor que
+     `stateColors.working` (lib/format) usa na lista, que é o que a pessoa já lê como "rodando". */
+  .shell-chip .repo-name { font-weight: 600; }
+  .shell-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    background: var(--accent);
+    animation: shell-pulso 1.8s var(--ease-out, ease-out) infinite;
+  }
+  @keyframes shell-pulso { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
   /* ── Anexo de imagem ────────────────────────────────────────────────────── */
   .file-input { display: none; }
