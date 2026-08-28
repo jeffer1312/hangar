@@ -50,9 +50,17 @@ export type AcaoHangar = {
 // o ponto de não casar em qualquer posição.
 const CMD = /(?:^|[;&|]\s*)(?:\w+=\S+\s+|timeout\s+[\d.smh]+\s+|command\s+|nohup\s+)*(?:hangar-send|cp-send)\b(.*)$/;
 
-/** Primeiro argumento que não é flag — o nome da sessão nos verbos que têm alvo. */
+/** Primeiro argumento que não é flag — o nome da sessão nos verbos que têm alvo.
+ *
+ * A flag aqui NUNCA consome o token seguinte, e isso não é descuido: este caminho é só o do
+ * RECADO (`hangar-send [flags] <sessao> "msg"`) — `--new`, `--pair`, `--unpair` e `--group` saem
+ * antes, em ramos próprios —, e ali toda flag é booleana (`--tmux`).
+ * Deixando a flag comer um valor, `hangar-send --tmux teste-picker "..."` lia `teste-picker` como
+ * valor do `--tmux` e o alvo virava a MENSAGEM INTEIRA: o cartão desenhava
+ * "Abrir Chame AskUserQuestion uma vez com multiSelect true, 1 pergunta e 4 opcoes…" como se fosse
+ * nome de sessão (relatado com print, 28/08/2026). */
 function primeiroNome(args: string): string | null {
-  const m = args.match(/^\s*(?:--[\w-]+(?:\s+(?:"[^"]*"|'[^']*'|[^\s-][^\s]*))?\s*)*?(?:"([^"]+)"|'([^']+)'|([^\s"'-][^\s]*))/);
+  const m = args.match(/^\s*(?:--[\w-]+\s*)*?(?:"([^"]+)"|'([^']+)'|([^\s"'-][^\s]*))/);
   return m ? (m[1] ?? m[2] ?? m[3] ?? null) : null;
 }
 

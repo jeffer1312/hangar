@@ -394,6 +394,7 @@
   "sessao_sem_previa": "(sem prévia)",
   "board_vazio": "vazio",
   "comum_cancelar": "Cancelar",
+  "opcoes_enviar_marcadas": "Enviar {n} marcada(s)",
   "comum_confirmar": "Confirmar",
   "config_tema_claro": "Claro",
   "config_tema_escuro": "Escuro",

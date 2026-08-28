@@ -1244,6 +1244,14 @@ export async function selectOption(name: string, option: number): Promise<void> 
   });
 }
 
+/** Múltipla escolha: envia o que já está marcado. Marcar (selectOption) e enviar são ações
+ *  diferentes ali — ver terminal_input.submeter_multipla. */
+export async function submitSelected(name: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/select/submit`, {
+    method: 'POST',
+  });
+}
+
 // ── Git pela sessao (cwd da sessao tmux): listar/trocar branch + status/pull ──
 export interface BranchInfo {
   current: string | null;

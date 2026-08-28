@@ -37,6 +37,7 @@
     steerSession,
     broadcast,
     selectOption,
+    submitSelected,
     interrupt,
     openEventStream,
     getSessions,
@@ -1716,6 +1717,23 @@
     }
   }
 
+  // Múltipla escolha: enviar o que já foi marcado. Toque em opção só ALTERNA ali (ver
+  // terminal_input.submeter_multipla) — sem isto dava pra marcar e não dava pra enviar.
+  async function handleSubmitSelected() {
+    if (selBusy) return;
+    selBusy = true;
+    clearTimeout(avisoErrTimer);
+    avisoErr = '';
+    try {
+      await submitSelected(sessionName);
+    } catch (err) {
+      console.error('submitSelected error:', err);
+      mostrarAviso(err);
+    } finally {
+      selBusy = false;
+    }
+  }
+
   async function handleInterrupt() {
     // Ao interromper, o Claude Code MANTEM a msg enfileirada no input -> proximo envio concatenava.
     // Se ha pendente, devolve o texto pro composer (editavel) e remove a bubble; pede clear ao backend
@@ -1917,6 +1935,7 @@
       previewMd={previewMd}
       previewFull={previewFull}
       onSelectOption={handleSelect}
+      onSubmitSelected={handleSubmitSelected}
       onCancel={handleInterrupt}
       askOpen={isWide && askOpen}
       askPayload={askPayload}

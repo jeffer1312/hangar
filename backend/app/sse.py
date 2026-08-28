@@ -66,7 +66,32 @@ def preview_is_committed(preview: str, committed: str) -> bool:
 
 # Linhas que o proprio TUI acrescenta a QUALQUER AskUserQuestion. Nunca vem no payload do hook, entao
 # nao podem contar como "opcao a mais" na checagem de frescor abaixo.
-_TUI_EXTRAS = frozenset({"Type something.", "Chat about this"})
+# Linhas que o TUI acrescenta a TODA pergunta e que nunca estao no payload do hook. Guardadas SEM
+# pontuacao final e comparadas assim (ver `_sem_ponto`): o mesmo item aparece "Type something." na
+# escolha unica e "Type something" na multipla — medido 28/08/2026 —, e a versao sem ponto passava
+# batido, virava "opcao no pane fora do sidecar" e derrubava o stepper nativo de TODA multipla
+# escolha. Guardar as duas formas na lista resolveria hoje e quebraria no proximo ponto que sumir.
+_TUI_EXTRAS = frozenset({"Type something", "Chat about this"})
+
+# Caixinha que o TUI desenha antes do rotulo numa pergunta de MULTIPLA ESCOLHA: "[ ] Alfa",
+# "[x] Alfa". Ela e desenho, nao rotulo — o payload do hook traz so "Alfa".
+# Medido 28/08/2026: sem tirar isto, `first_opts <= pane_opts` NUNCA casava numa multiSelect (o
+# pane trazia `["[ ] Alfa", "[ ] Bravo", …]` contra `{"Alfa", "Bravo", …}` do sidecar) e o stepper
+# nativo simplesmente nao abria — toda multipla escolha caia no OptionButtons cru. As linhas
+# extras do TUI vinham com caixinha tambem (`[ ] Type something.`), entao nem o _TUI_EXTRAS as
+# removia. So a COMPARACAO tira a caixinha: a lista que vai pro OptionButtons continua com ela,
+# porque ali a caixinha e o unico jeito de ver o que ja esta marcado.
+_CAIXA_MULTI = re.compile(r"^\[.?\]\s*")
+
+
+def _sem_caixa(rotulo: str) -> str:
+    return _CAIXA_MULTI.sub("", rotulo)
+
+
+def _normaliza_extra(rotulo: str) -> str:
+    """Tira a caixinha e o ponto final, que e o que separa as linhas do TUI de uma opcao de verdade.
+    So serve pra COMPARAR com `_TUI_EXTRAS`: o rotulo que vai pra tela nao passa por aqui."""
+    return _sem_caixa(rotulo).rstrip(".")
 
 
 def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
@@ -106,11 +131,17 @@ def _ask_question_event(state_json: str, jsonl: str) -> dict | None:
     # preview a comparacao e por CONTAGEM IGUAL, entao mante-las ali reprovava 100% das perguntas com
     # preview — exatamente o caminho que existe pra nao perder o preview. Bug anterior a este trecho:
     # o teste do ramo de preview usava um pane fabricado sem as extras e nunca o exercitou.
-    pane_opts = set(obj.get("options") or []) - _TUI_EXTRAS
+    pane_opts = {_sem_caixa(o) for o in (obj.get("options") or [])
+                 if _normaliza_extra(o) not in _TUI_EXTRAS}
     if not first_opts or not pane_opts:
         return None
     if not has_preview:
         if not first_opts <= pane_opts:
+            # Este return era o UNICO dos tres sem log, e era justamente por onde a multipla
+            # escolha saia — a degradacao mais comum era tambem a mais calada. Mesmo motivo dos
+            # logs irmaos abaixo: sem isto o unico sintoma e "a tela ficou mais pobre".
+            _log.info("askq: rotulo do sidecar fora do menu, degrada p/ OptionButtons "
+                      "sidecar=%s pane=%s", sorted(first_opts), sorted(pane_opts))
             return None
         # Subset sozinho nao basta. Um sidecar STALE cujos rotulos por acaso APARECEM num menu maior
         # (ex: {Sim, Nao} contra um menu [Cancelar, Sim, Nao]) passava — e como answer_questions

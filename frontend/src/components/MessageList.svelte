@@ -33,6 +33,8 @@
     previewMd?: boolean;   // o texto da previa e markdown cru -> a bolha renderiza
     previewFull?: boolean; // a previa e incremental (so cresce no fim) -> bolha sem o teto de 10 linhas
     onSelectOption: (i: number) => void;
+    /** Múltipla escolha: envia o que já foi marcado. Ausente = sem botão de enviar. */
+    onSubmitSelected?: () => void;
     onCancel: () => void;
     // AskUserQuestion inline (desktop): quando askOpen, renderiza o card no fim da lista.
     askOpen?: boolean;
@@ -55,7 +57,7 @@
   }
 
   let {
-    events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onCancel,
+    events, stateEvent, pending, sessionName, dockH, preview = '', previewMd = false, previewFull = false, onSelectOption, onSubmitSelected, onCancel,
     askOpen = false, askPayload = null, askActive = false, onAnswer, onAskClose, imageUrl, swapIds,
     onForward, onOpenSession, onOpenOrq
   }: Props = $props();
@@ -412,6 +414,7 @@
         question={stateEvent.question}
         options={stateEvent.options ?? []}
         onSelect={onSelectOption}
+        onSubmit={onSubmitSelected}
         onCancel={onCancel}
       />
     {/if}

@@ -37,6 +37,23 @@ describe('lerComandoHangar', () => {
     expect(a?.enfileirado).toBe(false);
   });
 
+  it('flag ANTES do nome não vira alvo: o alvo é a sessão, nunca a mensagem', () => {
+    // Relatado com print: `hangar-send --tmux <sessao> "<msg longa>"` desenhava o botão
+    // "Abrir Chame AskUserQuestion uma vez com multiSelect true, 1 pergunta e 4 opcoes…" — a flag
+    // engolia o nome como se fosse valor dela, e a mensagem inteira virava o alvo.
+    const a = lerComandoHangar(
+      'hangar-send --tmux teste-picker "Chame AskUserQuestion uma vez com multiSelect true"',
+      'entregue -> teste-picker', false,
+    );
+    expect(a?.alvo).toBe('teste-picker');
+    expect(a?.texto).toBe('Chame AskUserQuestion uma vez com multiSelect true');
+  });
+
+  it('nome com aspas e flag junto continua sendo o nome', () => {
+    const a = lerComandoHangar('hangar-send --tmux "sessao com espaco" "oi"', 'entregue -> x', false);
+    expect(a?.alvo).toBe('sessao com espaco');
+  });
+
   it('--list vira lista de sessões', () => {
     const saida = [
       'sessao-b             working         /home/u/app-web',

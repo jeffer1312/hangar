@@ -3203,6 +3203,26 @@ def select(name: str, body: SelectBody):
     return {"ok": True}
 
 
+@app.post("/api/sessions/{name}/select/submit", dependencies=[Depends(require_auth)])
+def select_submit(name: str):
+    """Envia as opções JÁ MARCADAS de um picker de múltipla escolha.
+
+    Existe porque marcar e enviar são coisas diferentes ali: pelo celular dava pra marcar e não
+    dava pra enviar — a lista crua só oferecia Cancelar. Ver `terminal_input.submeter_multipla`
+    pro caminho na TUI (aba Submit) e pro porquê de o Enter sozinho não servir.
+    """
+    _recusa_se_painel_aberto(name)
+    if not _session_exists(name):
+        raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
+    try:
+        terminal.submeter_multipla(name)
+    except terminal_input.DriveError as e:
+        # Mesma política do /select: 409 com o motivo na tela, nunca 500 calado nem "ok" mentiroso.
+        diag.registrar("opcao.envio_falhou", "erro", sessao=name, detalhe=str(e))
+        raise HTTPException(409, detail=erro("erro_opcao_nao_convergiu", "não consegui enviar as opções marcadas — tente de novo", detalhe=str(e)))
+    return {"ok": True}
+
+
 @app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth)])
 async def interrupt(name: str, clear: bool = False):
     # Codex: interrompe a propria TUI pelo tmux, mantendo celular e terminal no mesmo controlador.

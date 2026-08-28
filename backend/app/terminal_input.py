@@ -754,6 +754,40 @@ def _cursor_row(screen: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# Linha de opcao do picker, marcada ou nao: "❯ 1. Alfa", "  2. Bravo", "  1. [✔] Alfa".
+_LINHA_OPCAO = re.compile(r"^\s*❯?\s*(\d+)\.\s", re.M)
+# Caixinha da MULTIPLA escolha. Medido na TUI (claude 2.1.246, 28/08/2026): numa multiSelect cada
+# linha vem "1. [ ] Alfa" / "1. [✔] Alfa". Numa escolha unica nao ha caixinha nenhuma.
+_CAIXA_OPCAO = re.compile(r"^\s*❯?\s*\d+\.\s*\[.?\]\s", re.M)
+
+
+def _e_multipla_escolha(screen: str) -> bool:
+    return bool(_CAIXA_OPCAO.search(screen))
+
+
+def _marca_da_opcao(screen: str, option: int) -> str | None:
+    """O que esta dentro do `[ ]` da opcao `option` — None se a linha nao esta na tela."""
+    m = re.search(rf"^\s*❯?\s*{option}\.\s*\[(.?)\]", screen, re.M)
+    return m.group(1) if m else None
+
+
+def _tem_lista_numerada(screen: str) -> bool:
+    return bool(_LINHA_OPCAO.search(screen))
+
+
+def _picker_do_claude(screen: str) -> bool:
+    """A tela mostra um picker VIVO do Claude Code, do tipo que aceita a tecla do numero?
+
+    Duas provas juntas, e as duas importam:
+      - o cursor `❯ N.` — assinatura do picker do Claude. O do Pi usa `> N.` ascii e e outra TUI,
+        onde o digito nao foi medido; sem esta parte ele entraria no caminho novo de carona.
+      - o rodape de navegacao — prova que o picker esta VIVO. So o `❯ N.` nao basta: ele fica no
+        scrollback depois de a pergunta ser respondida, e digitar um numero ali escreveria no
+        composer em vez de escolher (foi o que aconteceu num teste manual, em 28/08/2026).
+    """
+    return _cursor_row(screen) is not None and ("Esc to cancel" in screen or "to navigate" in screen)
+
+
 def _review_matches(screen: str, answers: list[dict]) -> bool:
     # Cada pergunta no review vira uma linha "→ <labels por ', '>". Compara por TOKEN exato (nao
     # substring) pra um label curto nao casar dentro de outra palavra.
@@ -788,6 +822,11 @@ def _validate(answers: list[dict]) -> None:
         elif kind == "option":
             if not a.get("indices"):
                 raise ValueError("indices required for option kind")
+            # Faixa: no caminho da tecla do numero um indice negativo virava a tecla "0" ou o
+            # argumento "-3", que o tmux le como flag. `range(negativo)` do caminho antigo so nao
+            # mandava nada; o novo digita.
+            if any(not isinstance(i, int) or i < 0 for i in a["indices"]):
+                raise ValueError("indices must be >= 0")
         else:
             raise ValueError(f"unknown answer kind: {kind!r}")
 
@@ -807,6 +846,23 @@ def answer_questions(name: str, answers: list[dict]) -> None:
 
     for a in answers:
         kind = a.get("kind")
+        # Caminho CURTO das duas ramificacoes de opcao: a TECLA DO NUMERO. Medido na TUI em
+        # 28/08/2026, com o picker vivo: na escolha unica o digito MARCA E SUBMETE (o TUI ja
+        # auto-avanca, igual ao Enter), e na multipla ele ALTERNA a opcao. Nao le cursor nenhum,
+        # entao nao tem como cair no "nav drift" que manda tudo pro fallback por texto.
+        # Ate 9 porque a partir dai a TUI precisaria de duas teclas e o primeiro digito ja
+        # escolheria outra opcao. Fora disso, segue a navegacao de sempre, logo abaixo.
+        # UMA captura serve aos dois caminhos: a decisao aqui e a 1a leitura do guard logo abaixo.
+        # Capturar duas vezes gastaria um poll a toa e, pior, faria o guard ler uma tela mais NOVA
+        # que a que ele acha que esta corrigindo.
+        tela0 = _capture(name) if kind == "option" else ""
+        if kind == "option" and all(i + 1 <= 9 for i in a["indices"]) and _picker_do_claude(tela0):
+            for idx in sorted(a["indices"]):
+                key(str(idx + 1))
+            if a.get("multi"):
+                key("Right")   # multipla: marcar nao envia; Right abre a aba de envio
+            continue
+
         if kind == "option" and not a.get("multi"):
             # single-select: desce ate o indice e Enter (TUI auto-avanca pro proximo tab)
             for _ in range(a["indices"][0]):
@@ -818,6 +874,9 @@ def answer_questions(name: str, answers: list[dict]) -> None:
             # logo esperado = indice+1. Linha ilegivel -> segue como hoje (guard so age se leu).
             # Nao convergiu -> DriveError SEM Escape (caller faz Escape + fallback por texto).
             expected = a["indices"][0] + 1
+            # Captura FRESCA: entre o `tela0` la de cima e este ponto passou o laco de Down. Reusar
+            # aquela leitura fazia o guard comparar a tela de ANTES da navegacao, achar um drift que
+            # nao existe e mandar a correcao em dobro (achado da revisao).
             row = _cursor_row(_capture(name))
             for _ in range(3):
                 if row is None or row == expected:
@@ -1553,7 +1612,48 @@ class TerminalInput:
             except Exception:
                 return ""  # pane ilegivel -> _cursor_row None -> caminho aberto, como antes
 
-        row = _cursor_row(tela())
+        antes = tela()
+
+        # Caminho CURTO: a tecla do numero. Medido na TUI em 28/08/2026, com o picker vivo:
+        #   - escolha unica  -> o digito MARCA E SUBMETE, numa tecla so (nem Enter precisa);
+        #   - multipla       -> o digito ALTERNA a opcao e o picker segue aberto (quem envia e o
+        #                       `submeter_multipla`, que anda ate a aba Submit).
+        # Ele nao le cursor nenhum, e por isso nao tem como cair nas duas falhas ja registradas no
+        # diario do app: "cursor parou na linha None" (o regex nao achou o ❯ na tela) e "parou na
+        # linha 5, esperava 7" (o ❯ que ele achou nao era o do picker vivo).
+        # So vale ate 9 porque a partir dai a TUI precisaria de duas teclas e o primeiro digito ja
+        # escolheria outra opcao — 10+ segue pelo caminho de sempre.
+        if 1 <= option <= 9 and _picker_do_claude(antes):
+            multipla = _e_multipla_escolha(antes)
+            send_keys(name, str(option))
+            time.sleep(_NAV_GAP)
+            depois = tela()
+            if not depois:
+                time.sleep(_NAV_GAP)
+                depois = tela()   # uma releitura antes de decidir; captura falha tambem devolve ""
+            if not depois:
+                # "" e o MESMO valor para "o picker fechou" e para "o capture-pane falhou" (tmux.py
+                # loga e devolve vazio). Tratar como sucesso era declarar envio sem prova nenhuma.
+                raise DriveError(f"tela ilegivel depois da tecla {option} — envio NAO confirmado")
+            # Numa multipla o picker CONTINUA aberto de proposito (marcar nao e enviar). Numa
+            # unica, o sumico da lista e a prova de que a tecla foi aceita e submeteu.
+            if multipla:
+                # A marca nao mudou = a tecla foi engolida. Nao levanta: quem manda na tela e o
+                # pane, e o app ja mostra a caixinha como ela esta — um erro aqui faria a pessoa
+                # tocar de novo e DESMARCAR o que ela tinha acabado de marcar.
+                m_antes, m_depois = _marca_da_opcao(antes, option), _marca_da_opcao(depois, option)
+                if m_antes is not None and m_antes == m_depois:
+                    _log.info("select: a opcao %d de '%s' nao mudou de marca apos o digito", option, name)
+                return
+            if not _picker_do_claude(depois):
+                return
+            # A tecla nao pegou (TUI que nao aceita digito, redraw no meio). Cai no caminho de
+            # sempre em vez de desistir — ele ainda pode convergir, e desistir aqui seria trocar
+            # um mecanismo que funciona por um que acabou de falhar.
+            _log.info("select: digito nao fechou o picker em '%s', caindo na navegacao", name)
+            antes = depois   # a tela ja foi relida ali; nao gasta outra captura
+
+        row = _cursor_row(antes)
         if row is None:
             for _ in range(option - 1):
                 send_keys(name, "Down")
@@ -1574,6 +1674,30 @@ class TerminalInput:
                 row = _cursor_row(tela())
             if row != option:
                 raise DriveError(f"cursor parou na linha {row}, esperava {option} — opcao NAO enviada")
+        send_keys(name, "Enter")
+
+    def submeter_multipla(self, name: str) -> None:
+        """Envia as opcoes ja MARCADAS de um picker de multipla escolha.
+
+        Numa multiSelect marcar e enviar sao coisas diferentes, e isso nao era atendido: pelo
+        celular dava pra marcar e nao dava pra enviar — so restava Cancelar (relatado com print,
+        28/08/2026). Na TUI o caminho e a barra de abas do topo (`←  ☒ Opcoes  ✔ Submit  →`): a
+        seta pra direita abre a aba Submit, que tem uma opcao so ("1. Submit answers"), e o Enter
+        confirma. Medido nessa ordem, com o picker vivo.
+
+        O Enter SOZINHO nao serve: na multipla ele ALTERNA a opcao sob o cursor (medido — desmarcou
+        a que estava marcada), entao mandar Enter aqui desmarcaria uma escolha antes de enviar.
+        """
+        antes = _capture(name)
+        if not _e_multipla_escolha(antes):
+            raise DriveError("nao ha picker de multipla escolha na tela — nada enviado")
+        send_keys(name, "Right")
+        time.sleep(_NAV_GAP)
+        # Prova de que o Right chegou: o texto da aba. "Tem lista numerada" NAO servia — a propria
+        # lista de opcoes e numerada, entao ela casava consigo mesma e o guard passava com o Right
+        # engolido, deixando o Enter ALTERNAR uma opcao em vez de enviar (achado da revisao).
+        if "Submit answers" not in _capture(name):
+            raise DriveError("a aba de envio nao apareceu — nada enviado")
         send_keys(name, "Enter")
 
     def interrupt(self, name: str, clear: bool = False) -> None:

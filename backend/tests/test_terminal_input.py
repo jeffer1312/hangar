@@ -1226,3 +1226,125 @@ def test_windows_composer_ilegivel_nao_cola(monkeypatch):
         assert TerminalInput().send_prompt("cc", "linha 1\nlinha 2") == "partial"
     assert not pvc.called and not pt.called
     assert call("cc", "Enter") not in sk.call_args_list
+
+
+# ── tecla do numero: o caminho curto do picker vivo do Claude ──────────────────────────────────
+# Medido na TUI (claude 2.1.246, 28/08/2026) com o picker aberto: na escolha unica o digito MARCA E
+# SUBMETE; na multipla ele ALTERNA e o picker segue aberto. Nao le cursor, entao nao cai nas duas
+# falhas ja registradas no diario do app ("cursor parou na linha None" e "parou na linha 5,
+# esperava 7"). O rodape faz parte da assinatura: sem ele, o `❯ N.` pode ser scrollback de uma
+# pergunta ja respondida, e digitar ali escreveria no composer.
+_RODAPE = "Enter to select · ↑/↓ to navigate · Esc to cancel"
+
+
+def _picker_vivo(cursor: int = 1, n: int = 5, caixa: bool = False) -> str:
+    marca = "[ ] " if caixa else ""
+    linhas = [f"{'❯' if i == cursor else ' '} {i}. {marca}opcao {i}" for i in range(1, n + 1)]
+    return "\n".join([*linhas, _RODAPE])
+
+
+def test_select_usa_o_digito_no_picker_vivo(sem_espera, monkeypatch):
+    telas = iter([_picker_vivo(1), "❯ \n⏵⏵ bypass permissions on"])  # 2a: picker fechou = submeteu
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 4)
+    assert sk.call_args_list == [call("cc", "4")]   # uma tecla, sem Down e sem Enter
+
+
+def test_select_multipla_marca_e_nao_envia(sem_espera, monkeypatch):
+    # Marcar nao e enviar: o picker CONTINUA aberto de proposito, e quem envia e o submeter_multipla.
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker_vivo(1, caixa=True))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "2")]
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_select_tela_ilegivel_depois_do_digito_nao_vira_sucesso(sem_espera, monkeypatch):
+    # "" e o mesmo valor para "o picker fechou" e para "o capture-pane falhou" — tratar como
+    # sucesso declarava envio sem prova. Duas leituras vazias seguidas -> DriveError (achado da
+    # revisao). O caminho da navegacao nao serve aqui: sem tela, o Enter iria as cegas.
+    telas = iter([_picker_vivo(1), "", ""])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "2")]   # a tecla saiu, mas nada de Enter as cegas
+
+
+def test_select_tela_volta_na_releitura(sem_espera, monkeypatch):
+    # Vazio TRANSITORIO: a releitura pega a tela boa e o envio segue confirmado, sem erro na cara.
+    telas = iter([_picker_vivo(1), "", "❯ \n⏵⏵ bypass permissions on"])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert sk.call_args_list == [call("cc", "2")]
+
+
+def test_select_digito_que_nao_pega_cai_na_navegacao(sem_espera, monkeypatch):
+    # A tecla nao fechou o picker (TUI que nao aceita digito, redraw no meio): desistir aqui seria
+    # trocar um mecanismo que funciona por um que acabou de falhar.
+    telas = iter([_picker_vivo(1), _picker_vivo(1), _picker_vivo(3)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 3)
+    assert sk.call_args_list[0] == call("cc", "3")          # tentou o digito
+    assert call("cc", "Enter") in sk.call_args_list          # e caiu na navegacao
+
+
+def test_select_sem_rodape_nao_arrisca_o_digito(sem_espera, monkeypatch):
+    # `❯ N.` sozinho pode ser scrollback de pergunta ja respondida — digitar ali vira texto no
+    # composer. Sem o rodape de navegacao, segue pelo caminho de sempre.
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker(2))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 2)
+    assert call("cc", "2") not in sk.call_args_list
+    assert call("cc", "Enter") in sk.call_args_list
+
+
+def test_select_opcao_10_nao_usa_digito(sem_espera, monkeypatch):
+    # A partir de 10 seriam duas teclas, e o primeiro digito ja escolheria OUTRA opcao.
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: _picker_vivo(10, n=12))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().select("cc", 10)
+    assert call("cc", "1") not in sk.call_args_list
+
+
+def test_submeter_multipla_anda_ate_a_aba_de_envio(sem_espera, monkeypatch):
+    # Right abre a aba Submit (uma opcao so) e o Enter confirma. O Enter SOZINHO nao serve: na
+    # multipla ele ALTERNA a opcao sob o cursor — medido, desmarcou a que estava marcada.
+    telas = iter([_picker_vivo(1, caixa=True), "❯ 1. Submit answers\n" + _RODAPE])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        TerminalInput().submeter_multipla("cc")
+    assert sk.call_args_list == [call("cc", "Right"), call("cc", "Enter")]
+
+
+def test_submeter_multipla_sem_picker_nao_manda_nada(sem_espera, monkeypatch):
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: "❯ \n⏵⏵ bypass permissions on")
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().submeter_multipla("cc")
+    assert sk.call_args_list == []
+
+
+def test_submeter_multipla_com_o_right_engolido_nao_manda_enter(sem_espera, monkeypatch):
+    # O Right foi engolido e a LISTA DE OPCOES continua na tela. Ela e numerada, entao "tem lista
+    # numerada" casava com ela mesma e o guard passava — e o Enter, em vez de enviar, DESMARCAVA a
+    # opcao sob o cursor. Achado da revisao; a prova agora e o texto da aba.
+    telas = iter([_picker_vivo(1, caixa=True), _picker_vivo(1, caixa=True)])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().submeter_multipla("cc")
+    assert call("cc", "Enter") not in sk.call_args_list
+
+
+def test_submeter_multipla_sem_aba_de_envio_nao_manda_enter(sem_espera, monkeypatch):
+    # O Right nao chegou: mandar Enter aqui ALTERNARIA uma opcao em vez de enviar.
+    telas = iter([_picker_vivo(1, caixa=True), "tela sem lista nenhuma"])
+    monkeypatch.setattr(terminal_input, "_capture", lambda _n: next(telas))
+    with patch.object(terminal_input, "send_keys") as sk:
+        with pytest.raises(terminal_input.DriveError):
+            TerminalInput().submeter_multipla("cc")
+    assert call("cc", "Enter") not in sk.call_args_list
