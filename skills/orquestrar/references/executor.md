@@ -38,14 +38,50 @@ dimensões de qualquer jeito.
 
 Duas conferências que valem por si:
 
-- **Serve ao que você vai fazer?** Skill de revisão de PR do GitHub não ajuda quem commita em branch
-  local; ferramenta que filtra `*.ts`/`*.tsx` não lê o teu `.svelte`.
+- **As três perguntas** do `SKILL.md` ("Ferramenta de fora — skill, subagente, comando"): existe com
+  esse nome, serve ao fluxo, serve aos arquivos desta Task. A do meio e a de baixo são as que mordem
+  aqui — skill de revisão de PR não ajuda quem commita em branch local, e ferramenta que filtra
+  `*.ts`/`*.tsx` não lê o teu `.svelte`.
 - **A ferramenta é sua, a responsabilidade também.** Saída de skill ou de subagente é insumo, não
   entrega: você lê, decide e assina. Diff que você não consegue explicar é diff que você não defende
   no portão.
 
 Achou uma que muda como a Task devia ser feita (um padrão da casa que o plano ignora, por exemplo)?
 **Fale com o árbitro antes**, não depois do commit.
+
+## Skill invocada dentro da Task roda INTEIRA
+
+Skill que a Task manda usar — ou que você escolheu porque casa com o trabalho — se roda do primeiro
+ao último passo. **Ela não é cardápio.** Passo que você não rodou é passo pulado, e passo pulado
+não vira item de "pendências" na entrega: vira **bloqueio para o árbitro, antes do commit**.
+
+Três formas de a skill rodar capada, e as três param a Task:
+
+- **Falta metade dela na máquina** — o comando que ela manda invocar não existe, a ferramenta não
+  está instalada. Não improvise um equivalente ("o que eu já ia fazer dá na mesma"): substituto
+  inventado carrega o nome da skill sem carregar o conteúdo dela, e quem lê o reporte depois
+  acredita no nome.
+- **Um passo não se aplica** ao que esta Task faz. Pode ser verdade — e mesmo assim não é você que
+  decide, nem o árbitro.
+- **Um passo falhou** e o resto seguiu. Skill não é lista de tentativas.
+
+Nos três: **pare antes do commit, reporte ao árbitro qual passo não rodou e por quê**, e espere.
+
+**Quem dispensa passo de skill é o usuário — o árbitro não tem essa alçada.** É o mesmo padrão de
+"Contrato omisso não vira licença" (`references/arbitro.md`): recebendo o bloqueio, ele leva a
+decisão ao usuário em vez de preencher a lacuna com o que parece razoável.
+
+A dispensa pode já ter sido dada **antes**, e aí o árbitro não decide nada — cumpre: dispensa
+escrita no plano, no contrato, ou uma **regra permanente do usuário**. Medido em 24/08/2026: uma
+regra permanente dele proibia rodar os gates de type-check, lint e build naquele repositório, e o
+contrato do grupo mandava rodá-los; venceu a regra permanente, e a Task seguiu sem eles. Autoridade
+dele, dada antes — não uma dispensa criada na hora por quem estava tocando o trabalho.
+
+Medido duas vezes, com skills diferentes e a mesma causa: um método declarado no contrato rodou sem
+a metade executora, e o árbitro improvisou "os Steps são o método" (`SKILL.md`, "O MÉTODO não é
+escolha sua"); e uma skill de porte de tela, invocada dentro de uma Task, rodou só parte dos passos
+— o que faltou chegou ao usuário como lista de pendências, não como bloqueio. Nos dois casos a
+entrega saiu com o nome da skill em cima e o conteúdo dela pela metade.
 
 ## O ciclo
 
@@ -459,10 +495,18 @@ colocou na tela:
 Clique que não faz nada visível é **defeito**, não "provavelmente funciona": vá atrás do
 motivo (console, rede, o handler) antes de reportar.
 
-### Palco de aparelho (emulador + Metro)
+### Palco em aparelho ou processo separado
 
-Tudo do palco web vale aqui, e cinco coisas são só daqui — as três primeiras custaram **três rodadas e
-meia** numa execução de 24h (21–22/08/2026):
+**A prova é o artefato que o ALVO carregou, não o que a tua máquina serve.** É a mesma família de
+"serviço de longa duração serve o código de quando subiu" e de "prova ao vivo mede o que está
+servido": sempre que o código atravessa um processo, uma porta ou um aparelho antes de virar o que
+você vai julgar, a pergunta é **qual build aquele lado está rodando** — e ela se responde lendo um
+marcador do teu commit no artefato que ele baixou, não confirmando do teu lado que o build saiu.
+Vale pra emulador, para o servidor que outra sessão subiu e para o binário instalado.
+
+O caso medido abaixo é um palco de aplicativo (emulador + servidor de bundle). Tudo do palco web
+vale aqui, e cinco coisas são só daqui — as três primeiras custaram **três rodadas e meia** numa
+execução de 24h (21–22/08/2026):
 
 - **Metro sobe de dentro de `mobile/`**, não da raiz da worktree: `expo start` com o cwd errado responde
   `UnableToResolveError` a todo pedido de bundle, e o aparelho segue mostrando o **cache anterior**, sem

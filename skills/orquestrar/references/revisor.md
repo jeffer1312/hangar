@@ -210,7 +210,8 @@ a pílula do composer; custou **dois commits** e ele mesmo retirou a régua na r
 de medir que zerar o recuo lateral levava o cartão de **376px para 534px** e a sobreposição sumia
 com 91px de folga. A caixa que provava isso já estava na medição dele da rodada anterior.
 
-**3. Receita que nomeia um CASO quando a regra é uma ORDEM.** "A linha que casa exato com outra
+**3. Receita que nomeia um CASO quando a regra é uma ORDEM** — é o caso particular da trava geral
+"Régua se escreve como PRINCÍPIO" (`SKILL.md`), aplicada à receita. "A linha que casa exato com outra
 entrada pertence a ela" nomeia o caso extremo; a regra é "a linha pertence a quem a reivindica de
 forma **mais específica**". Escrita como caso, ela deixa o resto do espaço sem regra — e o resto do
 espaço costuma ser exatamente o cenário da Task. **Antes de mandar, pergunte: "e quando nenhum dos
@@ -405,21 +406,12 @@ por dimensão (`typescript-reviewer`, `python-reviewer`, `silent-failure-hunter`
   você já ia achar é gastar sem cobrir.
 - **Contradição entre dois deles é sua pra resolver**, não pra repassar como "há divergência".
 - **O portão visual continua sendo com os seus olhos** — nenhum subagente de código olha print.
-- **Confira o que existe, não o que deveria existir.** Ferramenta muda de nome, vira comando em vez
-  de skill, ou não está instalada naquela conta (plugin é por config dir, e uma sessão em conta
-  secundária pode ver outra lista). Não achou o que o contrato nomeia? Diga ao árbitro **qual** você
-  procurou e o que existe no lugar, e siga com o que tem.
-- **Confira também se a ferramenta serve ao FLUXO.** Comando de revisão que monta o diff a partir de
-  mudanças **não commitadas** ou de PR do GitHub não serve a um portão que revisa **commit já feito**
-  em branch local: o diff chega vazio e o parecer sai bonito e oco. Aconteceu aqui com o
-  `/orch-review` do ecc.
-- **E se serve aos ARQUIVOS desta Task.** Revisor por linguagem costuma montar o próprio diff com um
-  filtro de extensão; se o filtro não pega os arquivos que a Task tocou, ele devolve "nada a apontar"
-  sobre código que **não leu**, e você embute uma ausência como se fosse evidência. Real: o
-  `typescript-reviewer` filtra `'*.ts' '*.tsx' '*.js' '*.jsx'` e **não enxerga `.svelte`** — era onde
-  moravam os dois bloqueadores de tela daquele trabalho. Conserto: passe os caminhos explicitamente
-  no pedido e mande ler o arquivo inteiro. **Silêncio de subagente só vale se você souber o que ele
-  leu.**
+- **As três perguntas antes de despachar qualquer uma** (`SKILL.md`, "Ferramenta de fora — skill,
+  subagente, comando"): existe com esse nome, serve ao fluxo, serve aos arquivos desta Task. As três
+  mordem justamente aqui, porque é você quem despacha o ferramental de revisão — e a terceira é a
+  pior, porque a ferramenta responde "nada a apontar" sobre código que não leu. Não achou o que o
+  contrato nomeia? Diga ao árbitro **qual** você procurou e o que existe no lugar, e siga com o que
+  tem. **Silêncio de subagente só vale se você souber o que ele leu.**
 
 ### Trabalho braçal você DELEGA — o julgamento continua seu
 

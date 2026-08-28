@@ -98,7 +98,8 @@ Método: mattpocock     # planejador: /grill-me → /to-spec → /to-tickets · 
 executora instalada e testada antes de aceitar**: a execução de 16–17/08 rodou `mattpocock` com o
 `/implement` ausente (o árbitro improvisou "os Steps são o método"), e o `/to-tickets` não gerou
 estimativa a priori nem prova de não-colisão — dois artefatos que o portão de saída da fase 1
-(`planejamento.md`) cobra de **qualquer** método.
+(`planejamento.md`) cobra de **qualquer** método. É um caso do princípio geral — skill invocada
+roda inteira (ver "Travas que valem para todos os papéis").
 
 Nenhum papel escolhe método, e **nenhum troca de método no meio**. Plano nascido num método e
 executado noutro é o defeito que esta seção existe para impedir: os dois escrevem o trabalho em formatos
@@ -232,6 +233,31 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
   ordem vigente do árbitro. Confirme com ele **antes** de commitar, não depois.
 - **Stage por caminho explícito.** Nunca `git add -A` nem `git add .`. Intocáveis nunca
   entram, em commit nenhum.
+- **Skill invocada dentro de uma Task roda INTEIRA.** Metade ausente na máquina, passo que não se
+  aplica, passo que falhou → **pare antes do commit**, e nunca improvise um equivalente nem entregue
+  o que faltou como "pendência". **Dispensar passo de skill é do usuário, não do árbitro** — ele só
+  cumpre dispensa já dada (no plano, no contrato, ou regra permanente dele) e leva o resto pra
+  decisão. Detalhe em `references/executor.md`.
+- **Régua se escreve como PRINCÍPIO; o caso medido entra como prova.** Regra que nomeia um caso —
+  uma skill, uma ferramenta, um arquivo, uma data — deixa o resto do espaço sem regra, e o resto do
+  espaço costuma ser exatamente o cenário da próxima vez. Vale para tudo que esta skill produz:
+  receita do revisor, régua nova do árbitro, patch da fase 5. Antes de escrever qualquer uma,
+  pergunte: **"e quando não for esse caso?"** Resposta não coberta → o que você escreveu é a
+  instância, não a regra: enuncie a condição e mova o caso pra prova. Isso **não** afrouxa a
+  exigência de medição — o princípio vem na frente **e** o caso medido vem junto, com data e número;
+  as duas coisas, sempre. Detalhe em `references/revisor.md` (receita) e
+  `references/retrospectiva.md` (patch).
+- **Ferramenta de fora — skill, subagente, comando — passa por TRÊS perguntas, e são sempre as
+  três:** (1) **existe com esse nome?** Pode ter virado comando em vez de skill, mudado de nome, ou
+  não estar instalada nesta conta (plugin é por diretório de configuração, e uma sessão em conta
+  secundária vê outra lista). (2) **Serve ao FLUXO?** Ferramenta que monta o diff a partir de
+  mudanças **não commitadas** ou de um PR não serve a um portão que revisa **commit já feito** em
+  branch local: o diff chega vazio e a saída sai bonita e oca. (3) **Serve aos ARQUIVOS desta
+  Task?** Revisor por linguagem costuma montar o próprio diff com filtro de extensão; filtro que
+  não pega os arquivos tocados devolve "nada a apontar" sobre código que ele **não leu**, e ausência
+  vira falsa evidência — o conserto é passar os caminhos explicitamente no pedido. Reprovou em
+  alguma: registre **por que não serve**, numa linha, e isso vale tanto quanto a lista do que usar.
+  E **silêncio de ferramenta só conta se você souber o que ela leu.**
 - **Sem `--amend`/rebase/squash** em commit já commitado. Correção é commit novo.
 - **Escreva primeiro, avise depois — sempre nessa ordem.** Parecer, reporte e receita nascem como
   **arquivo** no diretório durável do trabalho **antes** de qualquer envio, e a mensagem carrega o

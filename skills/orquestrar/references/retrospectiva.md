@@ -125,12 +125,35 @@ só coisa medida, com data, e cada linha responde *o que eu escrevo diferente po
 Arquivo, seção, e o texto pronto para colar. Com a evidência junto: *"medido em `<data>`: `<número>`"*.
 Sem número, não entra — a skill é feita de coisa medida, não de impressão.
 
+**E a régua se enuncia como PRINCÍPIO; o caso medido entra como PROVA dele.** As duas exigências
+valem juntas, não uma no lugar da outra: sem número a régua não entra, e escrita como caso ela não
+serve. É a trava geral do `SKILL.md` ("Régua se escreve como PRINCÍPIO"), e é aqui que ela mais
+pesa — a fase 5 é quem fabrica as réguas das próximas execuções, e você chega no fim de um trabalho
+com os casos daquele trabalho na mão.
+
+O teste, antes de propor qualquer régua: **onde deveria estar a CONDIÇÃO, você escreveu o nome de
+uma skill, de uma ferramenta, de um arquivo ou de uma data?** Então é a instância. Reescreva a
+condição e mova o nome pra linha da prova.
+
+| Escrito como caso (não entra assim) | Escrito como princípio (entra) |
+|---|---|
+| "a skill `<nome>` roda capada quando invocada dentro de uma Task" | "skill invocada dentro de uma Task roda inteira — passo pulado é bloqueio, não pendência" |
+| "o método `<nome>` foi usado sem a metade executora" | *(o mesmo princípio acima; o método é a segunda prova dele, não uma régua nova)* |
+| "o revisor por linguagem `<nome>` não lê `.svelte`" | "ferramenta com filtro de extensão devolve 'nada a apontar' sobre código que não leu — confira se ela serve aos ARQUIVOS desta Task" |
+
+**Duas provas do mesmo princípio não são duas réguas.** Se o registro trouxer dois incidentes que
+caem na mesma condição, eles viram **uma** entrada do patch, com as duas medições embaixo — é o sinal
+mais forte que existe de que você achou o princípio certo, e escrevê-los separados desperdiça
+exatamente essa força. Ao varrer, agrupe por **condição**, nunca pelo nome da coisa que quebrou.
+
 ## O que NÃO entra
 
 - **Elogio e resumo do que deu certo.** O que funcionou já está na skill; repetir gasta linha de
   quem vai ler.
 - **Régua para caso que aconteceu uma vez** e tinha causa externa (cota estourada, máquina cheia).
   Isso vira nota no relatório, não patch.
+- **Régua escrita como caso** — que nomeia a skill, a ferramenta, o arquivo ou a data no lugar da
+  condição. Não é motivo pra descartar o achado: é motivo pra reescrever (seção 6).
 - **Reescrita de critério.** Você propõe como o trabalho é conduzido, nunca o que conta como pronto.
 
 ## Onde salvar, e quem aplica

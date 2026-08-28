@@ -273,7 +273,7 @@ perceber. Seis vezes em 48 horas, medido em 17–18/08/2026:
 | "a compactação de 241k foi o cutucão da vigia" | foi a própria sessão, 34 min antes do cutucão chegar | uma régua construída sobre a causa errada |
 | "139 + 183 + 178 + 142 + 104 sidecars órfãos" | você contou **um** diretório de configuração; o código varre todos — é ~4× isso | um número parcial entregue ao usuário como total |
 
-As cinco regras que saem disso, e as cinco são baratas:
+As seis regras que saem disso, e as seis são baratas:
 
 1. **Baseline vai no kick-off com o hash ao lado**, medida na base que a branch tem como pai:
    `Baseline (<hash>): backend N · check N · front N + <vermelho conhecido nomeado>`. Herdar número
@@ -460,8 +460,14 @@ Parar **entre** Tasks é limpo; parar **durante** deixa a árvore num estado que
 entende depois. Ao acordar o usuário, entregue a decisão pronta: o que está em jogo, as
 opções, e o que você recomenda.
 
-**Bloqueador de LEGENDA não paga palco novo.** Achado de descrição (a legenda diz o que a imagem não
-mostra) se corrige na **descrição**, com duas condições: onde a imagem **repete outro quadro**, a
+**Achado sobre o RELATO se conserta no relato; só achado sobre o produto paga produção de prova
+nova.** Vale para legenda de print, para o reporte do executor, para a descrição de um comando e
+para o próprio parecer: quando o defeito é o que foi **dito** sobre a evidência, refazer a evidência
+é pagar a parte cara pra consertar a barata — e costuma **esconder** o defeito que a descrição
+passaria a nomear.
+
+O caso medido é o de legenda. **Bloqueador de legenda não paga palco novo:** achado de descrição (a
+legenda diz o que a imagem não mostra) se corrige na **descrição**, com duas condições: onde a imagem **repete outro quadro**, a
 legenda declara isso e aponta onde aquele estado está provado de verdade; onde a imagem **mostra um
 defeito**, a legenda diz que está quebrado e nomeia o defeito. Medido em 18/08/2026, cinco
 bloqueadores de legenda: 38 linhas reescritas, zero "idem", e a rodada seguinte mexeu em **+239
@@ -896,18 +902,11 @@ Olhe as três prateleiras: **subagentes** (revisores por linguagem e por dimens�
 segurança, acessibilidade, cobertura de teste), **skills** (auditoria de caminho de clique, revisão de
 segurança, prontidão pra produção, QA de navegador, padrões da casa) e **comandos** do marketplace.
 
-E confira **três coisas**, não uma:
-
-1. **Existe com esse nome?** O que você lembra pode ser comando e não skill, ou ter mudado de nome.
-   (Real: `/orch-review` do ecc existe como comando e workflow; não aparece na lista de skills de
-   quem revisa, e o árbitro anunciou como skill.)
-2. **Serve ao FLUXO?** (Real: o mesmo `/orch-review` monta o diff de mudanças **não commitadas** ou
-   de PR do GitHub — inútil num portão que revisa commit já feito em branch local.)
-3. **Serve aos ARQUIVOS?** Ferramenta boa com filtro errado devolve "nada a apontar" sobre código
-   que ela não leu, e ausência vira falsa evidência. (Real: o `typescript-reviewer` monta o diff com
-   `-- '*.ts' '*.tsx' '*.js' '*.jsx'` e **não enxerga `.svelte`** — justamente o arquivo onde moravam
-   os dois bloqueadores de tela daquele trabalho. A saída foi mandar os caminhos `.svelte`
-   explicitamente no pedido.)
+E passe cada uma pelas **três perguntas** do `SKILL.md` ("Ferramenta de fora — skill, subagente,
+comando"): existe com esse nome, serve ao fluxo, serve aos arquivos. As três já erraram aqui na
+mesma varredura — uma ferramenta anunciada como skill que era comando, a mesma montando o diff de
+mudanças não commitadas num portão que revisa commit feito, e um revisor por linguagem cujo filtro
+de extensão não enxergava o tipo de arquivo onde moravam os dois bloqueadores de tela do trabalho.
 
 Ferramenta que não passa nos três: registre no contrato **por que não serve**, com uma linha. Isso
 vale tanto quanto a lista do que usar — evita que a próxima sessão gaste turno tentando.
