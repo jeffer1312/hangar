@@ -593,7 +593,7 @@ Três coisas que fazem isso valer alguma coisa:
 - **Cego de verdade**: nome de arquivo neutro (`A`/`B`), e você **alterna** qual letra é o
   seu trabalho entre as rodadas. `novo.png` vs `referencia.png` não é cego — é uma dica.
 - **Subagente fresco, nunca o braço que desenhou.** Quem construiu já sabe por que cada
-  escolha foi feita, e defende ela. É o mesmo motivo do revisor ser de outra família.
+  escolha foi feita, e defende ela. É o mesmo motivo de o revisor nunca ser a sessão que executou.
 - **Escolha binária, não nota.** "Qual está melhor" tem resposta; "de 0 a 10, quanto está
   bom" devolve 7 sempre.
 

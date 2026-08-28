@@ -298,13 +298,16 @@ Olhe as Tasks e responda:
 | Cada Task é volume mecânico, raciocínio sutil ou julgamento visual? | quem escreve — pode ser **um escritor por Task** |
 | O erro típico dela aparece em quê: teste, tela, carga, estado em disco? | o que o revisor precisa **conseguir fazer** (ver print, rodar harness, ler concorrência) |
 | Tem Task visual? O executor escolhido enxerga imagem? | se não enxerga, o protocolo de visão do `executor.md` (`see`) é obrigatório e entra no contrato — não é motivo pra descartar o motor |
-| Quem revisa pensa diferente de quem escreveu? | família do revisor — **não negociável** |
+| Quem revisa é sessão diferente de quem escreveu? | **não negociável** — ver as regras fixas abaixo |
 | Quanto custa e em qual conta? | os motores, e o teto |
 
 Regras fixas:
 
 - **Quem planejou não executa.** Vira árbitro, read-only no código pro resto do trabalho.
-- **Revisor de família diferente do executor.**
+- **Revisor nunca é a mesma sessão que executou.** Quem escreveu o código não revisa o próprio
+  código: a sessão que executou já defende as escolhas que fez, e passar o crachá de revisor pra
+  ela transforma o portão em carimbo. O que a regra exige é sessão separada — modelo, conta e
+  provider podem ser os mesmos do executor, e às vezes é o que se quer.
 - **Revisão final** em sessão nova que não participou de nada.
 - Um escritor por árvore vale mesmo com vários escritores no elenco: o portão serializa as
   Tasks, então eles nunca escrevem ao mesmo tempo.

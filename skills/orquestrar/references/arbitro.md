@@ -235,6 +235,13 @@ Isso vale igual quando o papel reveza entre contas: o rodízio troca **quem** re
 outra, nunca põe dois revisores no mesmo commit. Dois vereditos pro mesmo hash continua sendo
 defeito, sempre.
 
+**E o revisor nunca é a sessão que executou.** Esta é a regra que sustenta o portão inteiro: quem
+escreveu o código já defende as escolhas que fez, e dar o crachá de revisor pra ela transforma o
+julgamento em carimbo. Vale mesmo com pressa, mesmo com a sessão do revisor fechada, mesmo quando o
+executor "só quer confirmar uma coisinha" — nesse caso abra a sessão do revisor, não reaproveite a
+dele. O que a regra exige é **sessão** separada: modelo, conta e provider podem ser os mesmos do
+executor sem nenhum problema, e no rodízio isso acontece naturalmente.
+
 Nenhuma Task começa antes da anterior ser aprovada — **no fluxo serial, que é o padrão**.
 
 **Lote paralelo, se o PLANO declarou um:** o ciclo acima roda igual, uma vez por Task, cada
