@@ -656,6 +656,7 @@
   "askq_erro_envio": "Erro ao enviar respostas",
   "askq_conversar": "Conversar",
   "askq_enviando": "Enviando…",
+  "askq_enviada_como_texto": "O seletor não respondeu — sua resposta foi enviada como texto. É isso que o \"interrompido\" acima significa.",
   "tool_toque_ver": "toque para ver",
   "tool_toque_ocultar": "toque para ocultar",
   "tool_clique_ver": "clique para ver",

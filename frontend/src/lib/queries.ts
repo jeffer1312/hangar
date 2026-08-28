@@ -7,10 +7,13 @@
 // `clienteQuery` junto — ver `OrquestracaoSheet.svelte`.
 import { QueryClient, queryOptions } from '@tanstack/svelte-query';
 import { getActiveId, type Server } from './auth';
-import { getOrqDetalheForServer, getOrqGrupo, getOrqPolitica } from './api';
+import {
+  fetchCostsForServer, getArchive, getOrqDetalheForServer, getOrqGrupo, getOrqPolitica,
+  type ArchiveFolder,
+} from './api';
 import { listarCredenciais } from './credenciais';
 import type { OrqGrupo, OrqPolitica } from './orquestracao';
-import type { OrqExecucao } from './types';
+import type { CostReport, OrqExecucao } from './types';
 
 export const clienteQuery = new QueryClient({
   defaultOptions: {
@@ -18,9 +21,13 @@ export const clienteQuery = new QueryClient({
       // `gcTime` é o que faz o stale-while-revalidate valer entre ABERTURAS: sem ele (padrão 5min)
       // o cache some junto com o último consumidor, e sair da tela e voltar paga o spinner de novo.
       gcTime: 30 * 60_000,
-      // O app já tem timeout próprio em cada fetch; repetir 3× (padrão) só empilha espera em cima
-      // de um servidor que não está respondendo.
-      retry: 1,
+      // Sem repetição automática. Cada fetch daqui já tem seu próprio teto de tempo, e o retry do
+      // TanStack é incondicional — repetiria um 401 ou 404 que nunca vai mudar, dobrando a espera
+      // antes de o erro aparecer. As telas têm caminho de erro próprio (aviso, "tentar de novo",
+      // fallback por texto): erro rápido e visível vale mais aqui do que uma segunda tentativa
+      // calada. Medido: com retry, o `.catch` que carrega os modelos no CreateSessionSheet
+      // demorava o bastante para a tela ficar sem lista.
+      retry: false,
     },
   },
 });
@@ -67,6 +74,24 @@ export const credenciais = (alvo: Server | null) => queryOptions({
   // também devolve constante, então nem o efeito de identidade da tela percebia a troca.
   queryKey: ['credenciais', alvo?.id ?? idAtivo()],
   queryFn: () => listarCredenciais(alvo),
+  staleTime: 60_000,
+});
+
+// Custo de UMA máquina num período. É a leitura mais cara do app — medida em 12,6s com o cache do
+// backend frio (0,28s quente). Cacheia por (máquina, período) e não o merge: o merge é código puro
+// e barato, e é a TROCA DE PERÍODO que o usuário faz o tempo todo — 7d → 30d → 7d pagava tudo de
+// novo na volta. 5 min porque o período corrente inclui HOJE, e o custo de hoje ainda sobe.
+export const custos = (s: Server, periodo: string) => queryOptions({
+  queryKey: ['custos', s.id, periodo],
+  queryFn: (): Promise<Partial<CostReport>> => fetchCostsForServer(s, periodo),
+  staleTime: 5 * 60_000,
+});
+
+// Pastas do Arquivo: lista de projetos com conversa arquivada. Muda quando alguém arquiva algo,
+// o que é raro perto da frequência com que a tela é aberta e fechada.
+export const arquivo = () => queryOptions({
+  queryKey: ['arquivo', idAtivo()],
+  queryFn: (): Promise<ArchiveFolder[]> => getArchive(),
   staleTime: 60_000,
 });
 

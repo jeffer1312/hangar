@@ -269,10 +269,15 @@ export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> 
 // Devolve `Partial<CostReport>` porque é isto que chega DO FIO: um servidor da malha em versão
 // antiga responde sem os campos novos, e prometer o objeto completo aqui é como o front
 // quebrava em runtime com o `check` verde.
+// O teto NÃO é os 4s dos outros fan-outs: medido em 27/08/2026, o próprio servidor local, saudável,
+// leva 12,6s neste endpoint com o cache do backend frio (0,28s quente) — ou seja, a PRIMEIRA carga
+// de custos estourava sempre, e a máquina aparecia na tela como "não respondeu". Servidor offline
+// não paga este tempo: conexão recusada volta em milissegundos. Quem espera são os lentos de
+// verdade, e é exatamente por eles que este número existe.
 export async function fetchCostsForServer(s: Server, period: string): Promise<Partial<CostReport>> {
   const res = await fetch(`${s.baseUrl}/api/costs?period=${encodeURIComponent(period)}`, {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${s.token}` },
-    signal: AbortSignal.timeout(4000),
+    signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<Partial<CostReport>>;
@@ -1392,8 +1397,12 @@ export function gitPush(name: string): Promise<{ ok: boolean; output: string }> 
 }
 
 // Envia respostas do stepper AskUserQuestion para o backend.
-export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}/answer`, {
+// `fallback` = o backend não conseguiu dirigir o seletor da TUI, mandou Escape e entregou a
+// resposta como TEXTO. É sucesso (a resposta chegou), mas o Escape aparece no transcript como
+// "user declined"/"Request interrupted" — em vermelho. Sem propagar este campo, quem respondeu vê
+// só o vermelho e conclui que perdeu a resposta; era o que acontecia até 27/08/2026.
+export function answerQuestions(name: string, answers: AnswerItem[]): Promise<{ ok: boolean; fallback?: boolean }> {
+  return apiFetch<{ ok: boolean; fallback?: boolean }>(`/api/sessions/${encodeURIComponent(name)}/answer`, {
     method: 'POST', body: JSON.stringify({ answers }),
   });
 }

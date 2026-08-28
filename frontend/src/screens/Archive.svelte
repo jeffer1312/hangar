@@ -5,9 +5,10 @@ import { intlLocale } from '../lib/locale';
   import Select from '../components/Select.svelte';
   import * as m from '../paraglide/messages';
   import {
-    getArchive, getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
+    getArchiveFolder, getArchiveHistory, archiveImageUrl, resumeArchivedConversation,
     getEngines, type ArchiveFolder, type ArchiveEntry, type Motor,
   } from '../lib/api';
+  import { arquivo, clienteQuery } from '../lib/queries';
   import type { ChatEvent } from '../lib/types';
   import { selectServer, listServers, getActiveId, serverColor } from '../lib/auth';
   import ProviderGlyph from '../components/icons/ProviderGlyph.svelte';
@@ -61,7 +62,7 @@ import { intlLocale } from '../lib/locale';
     loading = true;
     error = '';
     try {
-      folders = await getArchive();
+      folders = await clienteQuery.fetchQuery(arquivo());
     } catch (e) {
       error = e instanceof Error ? e.message : m.arquivo_carregar_erro();
     } finally {

@@ -656,6 +656,7 @@
   "askq_erro_envio": "Error sending answers",
   "askq_conversar": "Chat",
   "askq_enviando": "Sending…",
+  "askq_enviada_como_texto": "The picker didn't respond — your answer was sent as text. That's what the \"interrupted\" above means.",
   "tool_toque_ver": "tap to see",
   "tool_toque_ocultar": "tap to hide",
   "tool_clique_ver": "click to see",

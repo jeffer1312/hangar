@@ -1658,7 +1658,8 @@
 
   function mostrarAviso(err: unknown) {
     clearTimeout(avisoErrTimer);
-    avisoErr = err instanceof Error ? err.message : m.chat_nao_deu_enviar_resposta();
+    avisoErr = typeof err === 'string' ? err
+      : err instanceof Error ? err.message : m.chat_nao_deu_enviar_resposta();
     avisoErrTimer = setTimeout(() => (avisoErr = ''), 8000);
   }
 
@@ -1700,12 +1701,16 @@
   // 409 (mismatch de verificação, ou painel de terminal aberto) ou erro inesperado.
   async function handleAnswer(answers: AnswerItem[]) {
     try {
-      await answerQuestions(sessionName, answers);
+      const r = await answerQuestions(sessionName, answers);
       // Pergunta do Pi respondida com sucesso: o tool_result ainda demora ~1s pra aterrissar no
       // transcript — sem marcar a dispensa aqui, o sheet REABRIA nessa janela (pergunta ainda
       // pendente + askOpen false).
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
+      // Plano B do backend: a resposta FOI entregue, mas como texto, e o Escape que fechou o
+      // seletor vira "interrompido pelo usuário" em vermelho no transcript. Sem esta linha o
+      // vermelho ficava sem legenda e parecia que a resposta tinha se perdido.
+      if (r?.fallback) mostrarAviso(m.askq_enviada_como_texto());
     } catch (err) {
       if (askPiId) { askPiDismissed = askPiId; askPiId = null; }
       askOpen = false;
