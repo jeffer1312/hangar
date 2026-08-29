@@ -149,8 +149,17 @@ if [[ "$BACKEND_ONLY" == 1 || "$SERVE" == backend ]]; then
   # tenha sobrado de uma instalacao anterior COM frontend.
   systemctl --user disable --now "$FRONT" 2>/dev/null || true
   rm -f "$SD_DIR/$FRONT"
+  # CP_FRONT_PORT aponta o QR e o painel de alcance. Deixar um 5173 escrito por uma instalacao
+  # anterior faria os dois mandarem a pessoa pra uma porta que acabou de ser desligada; sem a
+  # linha, o backend usa a PROPRIA porta (config.porta_do_front).
+  sed -i -E '/^[[:space:]]*CP_FRONT_PORT=/d' "$REPO/backend/.env" 2>/dev/null || true
   if [[ "$BACKEND_ONLY" == 1 ]]; then log "Skipping $FRONT (--backend-only)"; else log "Skipping $FRONT (o backend serve a interface no 8765)"; fi
 else
+  # Preview mantido: a interface responde no 5173, e o QR precisa dizer isso. Gravado explicito
+  # porque o default do backend passou a ser "eu mesmo sirvo" — sem esta linha, quem ficou no
+  # preview veria o QR apontar pro 8765 e trocaria de ORIGEM (localStorage vazio: cp_servers com
+  # os tokens, tema, layout).
+  grep -qsE '^[[:space:]]*CP_FRONT_PORT=' "$REPO/backend/.env" || printf 'CP_FRONT_PORT=5173\n' >> "$REPO/backend/.env"
 # O bind do preview vem da MESMA variavel do backend (backend/.env). systemd nao le .env sozinho,
 # entao a unit precisa RECEBER a variavel — senao o vite cai no padrao 127.0.0.1 e, num servidor
 # atras de reverse proxy, o front fica inalcancavel com a unit `active` (medido na VPS: o traefik

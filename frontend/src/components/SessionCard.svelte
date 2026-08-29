@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { SessionInfo } from '../lib/types';
 import * as m from '../paraglide/messages';
-  import { rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '../lib/format';
+  import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '../lib/format';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
@@ -32,18 +32,12 @@ import * as m from '../paraglide/messages';
 
   const title = $derived(session.name);
 
-  // O que identifica a sessao e a ULTIMA pasta do cwd (nome do projeto). Ellipsis padrao corta o
-  // fim e some justo com ela; entao split em prefixo (truncavel) + basename (nunca encolhe).
-  const cwdParts = $derived.by(() => {
-    const p = (session.cwd ?? '').replace(/\/+$/, '');
-    const i = p.lastIndexOf('/');
-    return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
-  });
+  const cwdPartes = $derived(cwdParts(session.cwd));
 
   // Celular e estreito: o cwd so entra quando ACRESCENTA algo. Quando o basename ja e o nome da
   // sessao ("hangar" + "/home/jeff…/hangar"), a linha inteira e redundante e so
   // roubava largura do nome/branch.
-  const showCwd = $derived(!!session.cwd && cwdParts.base.toLowerCase() !== session.name.toLowerCase());
+  const showCwd = $derived(!!session.cwd && cwdPartes.base.toLowerCase() !== session.name.toLowerCase());
 
   // Chip de estado so quando o estado PEDE atencao. "pronto" repetido em toda linha e ruido: o
   // ponto colorido do lead ja diz que esta parada.
@@ -309,7 +303,7 @@ import * as m from '../paraglide/messages';
             <span class="diff-stats" aria-hidden="true">{#if session.git_added}<span class="diff-add">+{session.git_added}</span>{/if}{#if session.git_removed}<span class="diff-del">−{session.git_removed}</span>{/if}</span>
           {/if}
           {#if showCwd}
-            <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdParts.prefix}</span><span class="cwd-base">{cwdParts.base}</span></span>
+            <span class="cwd" title={session.cwd}><span class="cwd-prefix">{cwdPartes.prefix}</span><span class="cwd-base">{cwdPartes.base}</span></span>
           {/if}
           {#if agoLabel}
             {#if serverBadge || session.branch || showCwd}<span class="meta-sep" aria-hidden="true">·</span>{/if}

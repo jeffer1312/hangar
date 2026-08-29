@@ -17,7 +17,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import StateChip from './StateChip.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
   import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
-  import { rotuloEstado, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
+  import { cwdParts, rotuloEstado, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
@@ -44,13 +44,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     const label = (s.label ?? '').trim();
     if (!label) return null;
     return label.replace(/\s+\([^)]*\)\s*$/, '');
-  }
-
-  // cwd -> prefixo truncável + basename que nunca encolhe (mesma lógica do SessionCard).
-  function cwdParts(cwd: string | undefined) {
-    const p = (cwd ?? '').replace(/\/+$/, '');
-    const i = p.lastIndexOf('/');
-    return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
   }
 
   // Sidebar do DESKTOP (so monta >=820px). Reusa as MESMAS APIs/componentes do mobile, sem tocar

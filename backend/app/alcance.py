@@ -28,7 +28,7 @@ import qrcode.image.svg
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import require_auth
-from app.config import Settings, detect_lan_ip, pairing_url, resolve_bind_ip, settings
+from app.config import Settings, detect_lan_ip, pairing_url, porta_do_front, resolve_bind_ip, settings
 from app.mensagens import erro
 
 alcance_router = APIRouter(prefix="/api/alcance")
@@ -151,8 +151,8 @@ def levantar_estados(s: Settings) -> dict:
     loopback = bind in _LOOPBACK_ONLY
     enderecos: list[dict] = []
     if loopback:
-        enderecos.append({"tipo": "nesta_maquina", "url": f"http://{bind}:{s.front_port}"})
-    enderecos.append({"tipo": "rede_local", "url": f"http://{_detectar_lan()}:{s.front_port}"})
+        enderecos.append({"tipo": "nesta_maquina", "url": f"http://{bind}:{porta_do_front(s)}"})
+    enderecos.append({"tipo": "rede_local", "url": f"http://{_detectar_lan()}:{porta_do_front(s)}"})
     nome_ts = _nome_tailscale()
     if nome_ts:
         enderecos.append({"tipo": "tailscale", "url": f"https://{nome_ts}"})

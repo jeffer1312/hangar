@@ -319,14 +319,23 @@ porta_liberada() { # 0 = já tem regra pra esta porta
   return 1
 }
 if command -v ufw >/dev/null || command -v firewall-cmd >/dev/null; then
-  if [ "$FRONTEND" = 0 ]; then PORTAS=(8765); else PORTAS=(8765 5173); fi
-  if porta_liberada "${PORTAS[0]}" && { [ ${#PORTAS[@]} = 1 ] || porta_liberada 5173; }; then
-    ok "portas 8765 e 5173 já liberadas no firewall"
+  # A 5173 só entra quando ESTA máquina tem serviço de front (instalação antiga que ficou no
+  # `vite preview`). Sem ele quem serve a interface é o backend, na 8765, e abrir uma porta que
+  # ninguém escuta é furo aberto de graça. Mesma pergunta que o services-setup.sh faz depois.
+  PORTAS=(8765)
+  [ "$FRONTEND" = 1 ] && [ -f "$HOME/.config/systemd/user/hangar-frontend.service" ] && PORTAS+=(5173)
+  LISTA="${PORTAS[*]}"
+  FALTA=0
+  for p in "${PORTAS[@]}"; do porta_liberada "$p" || FALTA=1; done
+  if [ "$FALTA" = 0 ]; then
+    ok "porta(s) $LISTA já liberada(s) no firewall"
   else
     nota "Liberar precisa de senha de administrador. Por fora seria:"
-    nota "    sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173"
-    if ask "Liberar as portas 8765 e 5173 agora (vai pedir a senha)?"; then
-      sudo ./scripts/lan-setup.sh 8765 && sudo ./scripts/lan-setup.sh 5173 && ok "portas liberadas" || erro "liberar portas no firewall falhou"
+    for p in "${PORTAS[@]}"; do nota "    sudo ./scripts/lan-setup.sh $p"; done
+    if ask "Liberar a(s) porta(s) $LISTA agora (vai pedir a senha)?"; then
+      OK_FW=1
+      for p in "${PORTAS[@]}"; do sudo ./scripts/lan-setup.sh "$p" || OK_FW=0; done
+      [ "$OK_FW" = 1 ] && ok "portas liberadas" || erro "liberar portas no firewall falhou"
     fi
   fi
 else

@@ -186,10 +186,22 @@ export function initials(name: string): string {
 // ela é caractere VÁLIDO num nome de arquivo, e quebrar por ela ali cortaria o nome no meio. Sem
 // essa distinção, um cwd do Windows não tinha separador nenhum e voltava inteiro — a sessão nascia
 // chamada `C--Sistemas-DotNet-PssBackend`, que é o caminho todo depois do sanitizador do nome.
+const EH_WINDOWS = /^([A-Za-z]:[\\/]|\\\\)/;
+
 export function basename(path: string): string {
-  const sep = /^([A-Za-z]:[\\/]|\\\\)/.test(path) ? /[\\/]/ : '/';
-  const parts = path.split(sep).filter(Boolean);
+  const parts = path.split(EH_WINDOWS.test(path) ? /[\\/]/ : '/').filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
+}
+
+// cwd -> prefixo truncável + basename que nunca encolhe: o que identifica a sessão na lista é a
+// ÚLTIMA pasta, e a ellipsis padrão corta justamente o fim. Mora aqui, e não copiado no card e na
+// sidebar, porque a regra da contrabarra é a mesma do basename() — num cwd do Windows as duas
+// cópias liam `lastIndexOf('/')` como -1 e mostravam o caminho INTEIRO como nome da pasta.
+export function cwdParts(cwd: string | undefined): { prefix: string; base: string } {
+  const win = EH_WINDOWS.test(cwd ?? '');
+  const p = (cwd ?? '').replace(win ? /[\\/]+$/ : /\/+$/, '');
+  const i = win ? Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) : p.lastIndexOf('/');
+  return i < 0 ? { prefix: '', base: p } : { prefix: p.slice(0, i + 1), base: p.slice(i + 1) };
 }
 
 // Chave de agrupamento por PROJETO (toggle Servidor|Projeto da lista de sessões, feature #3): o cwd

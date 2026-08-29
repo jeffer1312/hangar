@@ -774,6 +774,27 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   before PATH) and cmd builtins skipped. Not-found → a `ProjectError` naming the command and warning
   about the orphan; found and failed → silence, with rc and the stderr tail in the log. The stderr
   never reaches the screen: it comes in the console's OEM codepage, not the locale's.
+- **Quem serve a interface é o BACKEND, e o `frontend/dist` chega pronto do CI.** Duas mudanças de
+  25-29/08/2026 que andam juntas, e as duas têm o mesmo antônimo: uma máquina de quem usa não
+  compila nem serve nada além do necessário.
+  - O backend monta o `frontend/dist` na raiz (`api.py`, `_UIStatic`), então o `vite preview` num
+    serviço à parte era um SEGUNDO servidor para o mesmo arquivo. Instalação nova não registra mais
+    esse serviço — no Linux o `services-setup.sh` já decidia assim; o `install.ps1` passou a seguir.
+    Quem **já** tem o serviço fica com ele: trocar a porta muda a ORIGEM, e origem nova é
+    `localStorage` vazio (`cp_servers` com os tokens, tema, layout do canvas). Ninguém perde
+    configuração por causa de um `git pull`. O que decide é a existência da unit/tarefa, nunca uma
+    pergunta nova.
+  - `CP_FRONT_PORT` deixou de ter `5173` cravado como default (`config.porta_do_front`): vazio = a
+    porta do próprio backend. Com o serviço do front fora, o QR e o painel de alcance apontavam para
+    uma porta onde ninguém escuta — foi o `Rede local … não respondeu` do painel. Quem mantém o
+    preview tem o `5173` **gravado** pelos instaladores, e é isso que preserva a origem dele.
+    O firewall também segue essa decisão: a 5173 só é liberada quando há serviço de front.
+  - O `ci.yml` publica `frontend-dist.tar.gz` + `frontend-dist.sha` na release fixa `dist-latest` a
+    cada push na main, e os instaladores baixam de lá **só** quando o `.sha` bate com o `HEAD` e o
+    `frontend/` não está editado. Não bateu (CI ainda compilando), sem rede, ou tar quebrado → build
+    local, como sempre foi. `tar.gz` e não zip porque o Windows 10+ traz `tar.exe` — um comando só
+    nos dois instaladores. O `npm ci` **continua** para quem mantém o preview, que precisa do
+    `node_modules`.
 - **Session creation's systemd-scope probe.** Creating a session wraps `tmux` in
   `systemd-run --user --scope` so the tmux server doesn't inherit the backend's cgroup, but the wrap
   is now gated on a probe: a systemd user manager that refuses transient scopes was making **every**

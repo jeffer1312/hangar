@@ -196,7 +196,7 @@ This is a LAN/VPN-only tool and should be treated like a remote shell:
 | `CP_AUTH_TOKEN` | `change-me` | Bearer token for API routes; use a strong value. |
 | `CP_LAN_BIND_IP` | `127.0.0.1` | Bind address. Use a trusted LAN/VPN address for phone access. |
 | `CP_PORT` | `8765` | Backend port. |
-| `CP_FRONT_PORT` | `5173` | Frontend URL/QR pairing port; configure the frontend server separately when changing its dev port. |
+| `CP_FRONT_PORT` | — | Where the PWA is served (used for the QR/pairing URL). Empty = this backend, which serves `frontend/dist` at the root. Set `5173` only if you keep a separate `vite preview` service. |
 | `CP_PUBLIC_URL` | — | LAN/VPN base URL used for pairing links, if needed. |
 | `CP_TERM_ORIGINS` | — | Extra `Origin`s accepted by the terminal WebSocket, comma-separated (e.g. `https://pocket.example.com`). Needed when the PWA is served from a host that is neither this backend, `CP_PUBLIC_URL`, nor a peer. |
 

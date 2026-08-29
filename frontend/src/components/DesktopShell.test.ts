@@ -56,6 +56,7 @@ vi.mock('../lib/format', () => ({
   fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,
   clusterByPair: (s: unknown[]) => s.map((x) => ({ session: x })),
   untrackedReason: () => '', providerName: () => 'claude', providerTag: () => null,
+  cwdParts: (c: string | undefined) => ({ prefix: '', base: c ?? '' }),
 }));
 vi.mock('../lib/badge', () => ({ updateBadge: vi.fn() }));
 vi.mock('../lib/loop', () => ({ loopBadge: () => null, LOOP_TONE_COLOR: {} }));

@@ -390,6 +390,15 @@ function Set-EnvKey {
     [System.IO.File]::WriteAllText($envFile, (($novo -join "`r`n") + "`r`n"),
                                    (New-Object System.Text.UTF8Encoding $false))
 }
+function Remove-EnvKey {
+    param([Parameter(Mandatory)][string]$Chave)
+    if (-not (Test-Path $envFile)) { return }
+    $linhas = @(Get-Content -Path $envFile -Encoding UTF8)   # UTF8 na leitura pelo motivo do Set-EnvKey
+    $novo = @($linhas | Where-Object { $_ -notmatch "^\s*$([regex]::Escape($Chave))=" })
+    if ($novo.Count -eq $linhas.Count) { return }            # nada a fazer: nao reescreve o arquivo a toa
+    [System.IO.File]::WriteAllText($envFile, (($novo -join "`r`n") + "`r`n"),
+                                   (New-Object System.Text.UTF8Encoding $false))
+}
 $temToken = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^CP_AUTH_TOKEN=' -Quiet)
 function Token-Aleatorio {
     # RNGCryptoServiceProvider, nao RandomNumberGenerator::Fill: o segundo e .NET Core e nao
@@ -456,6 +465,14 @@ Titulo '4/8 Frontend'
 $dist = "$raiz\frontend\dist\index.html"
 $modulos = "$raiz\frontend\node_modules"
 $marcaArq = "$raiz\frontend\dist\.cp-build-stamp"
+
+# MESMA regra do services-setup.sh do Linux: instalacao NOVA nao registra servico de frontend — o
+# backend ja serve o `frontend\dist` na raiz (api.py, `_UIStatic`), entao a tarefa era um SEGUNDO
+# servidor pro mesmo arquivo. Quem JA tem a tarefa registrada continua com ela: trocar a porta muda
+# a ORIGEM, e origem nova = localStorage vazio (cp_servers com os tokens, tema, layout do canvas).
+# Ninguem perde configuracao por causa de um `git pull`. Decidido AQUI, e nao no passo 7, porque o
+# firewall (passo 6) e o `npm ci` do passo 4 dependem da resposta.
+$temTarefaFront = [bool](Get-ScheduledTask -TaskName 'hangar-frontend' -ErrorAction SilentlyContinue)
 
 $marca = $null
 # Test-Path .git ANTES de chamar o git: sem repositorio, o `rev-parse` escreve "fatal: not a git
@@ -1196,14 +1213,18 @@ Nota 'claude como VOCE, entao um host exposto e execucao remota na sua maquina.'
 # Firewall: precisa de admin. Sem admin nao adianta tentar - a regra falha e o usuario fica
 # achando que liberou. Ja liberado -> nem pergunta: re-rodar o instalador depois de um git pull
 # deve pegar so o que falta, nao repetir pergunta do que ja esta de pe.
-$regras = @(8765, 5173) | ForEach-Object {
+# A 5173 so entra quando ha servico de front nesta maquina: sem ele, quem serve a interface e o
+# backend na 8765, e abrir porta que ninguem escuta e furo aberto de graca.
+$portasFw = if ($temTarefaFront) { @(8765, 5173) } else { @(8765) }
+$listaFw = $portasFw -join ' e '
+$regras = @($portasFw | ForEach-Object {
     Get-NetFirewallRule -DisplayName "hangar $_" -ErrorAction SilentlyContinue
-}
-if ($regras.Count -eq 2) {
-    Ok 'portas 8765 e 5173 ja liberadas no firewall'
-} elseif (Pergunte '  Liberar as portas 8765 e 5173 no firewall pra rede LOCAL?') {
+})
+if ($regras.Count -eq $portasFw.Count) {
+    Ok "porta(s) $listaFw ja liberada(s) no firewall"
+} elseif (Pergunte "  Liberar a(s) porta(s) $listaFw no firewall pra rede LOCAL?") {
     if (EhAdmin) {
-        foreach ($p in 8765, 5173) {
+        foreach ($p in $portasFw) {
             $nome = "hangar $p"
             Get-NetFirewallRule -DisplayName $nome -ErrorAction SilentlyContinue |
                 Remove-NetFirewallRule -ErrorAction SilentlyContinue
@@ -1215,8 +1236,9 @@ if ($regras.Count -eq 2) {
         Ok 'portas liberadas (perfil Private apenas)'
     } else {
         Falta 'sem privilegio de administrador - abra um PowerShell como admin e rode:'
-        Nota 'New-NetFirewallRule -DisplayName "hangar 8765" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private'
-        Nota 'New-NetFirewallRule -DisplayName "hangar 5173" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 5173 -Profile Private'
+        foreach ($p in $portasFw) {
+            Nota "New-NetFirewallRule -DisplayName `"hangar $p`" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $p -Profile Private"
+        }
     }
 }
 
@@ -1359,6 +1381,12 @@ $portaBack  = Porta-Do-Env 'CP_PORT' 8765
 # A fonte da verdade e o vite.config.ts; se ele mudar, muda aqui junto.
 $portaFront = 5173
 
+# CP_FRONT_PORT aponta o QR e o painel de alcance pra quem SERVE a interface. Com a tarefa do front
+# de pe e o 5173; sem ela, a linha tem de sair, senao os dois mandam a pessoa pra uma porta onde
+# ninguem escuta (sem a chave, o backend usa a propria porta — config.porta_do_front).
+if ($temTarefaFront) { Set-EnvKey -Chave 'CP_FRONT_PORT' -Valor "$portaFront" }
+else { Remove-EnvKey -Chave 'CP_FRONT_PORT' }
+
 $tarefas = @(
     # Padrao ANCORADO no caminho deste checkout. 'app\.main' cru casava com QUALQUER processo cuja
     # linha de comando contivesse app.main - e este repo tem worktrees em .claude/worktrees/ com
@@ -1369,16 +1397,15 @@ $tarefas = @(
     # o casamento e substring pura da linha de comando, e QUALQUER processo que so MENCIONE este
     # caminho vira alvo (um editor, um grep, o terminal de onde se chamou o instalador).
     @{ Nome = 'hangar-backend';  Exe = 'uv';  Args = 'run python -m app.main'; Dir = "$raiz\backend"
-       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' },
-    # `run preview`, NAO `run dev`: o passo 2 acabou de gerar o frontend\dist e subir o dev
-    # server aqui serviria desenvolvimento numa instalacao de producao - a mesma incoerencia que
-    # o services-setup.sh do Linux ja corrigiu. O bloco `preview` do vite.config.ts usa a MESMA
-    # porta 5173 com o mesmo proxy /api, entao a origem nao muda e ninguem perde localStorage
-    # (cp_servers, tema, layout). Pra mexer no layout com recarga ao vivo: pare a tarefa e rode
-    # `npm run dev` na mao.
-    @{ Nome = 'hangar-frontend'; Exe = 'npm'; Args = 'run preview';            Dir = "$raiz\frontend"
-       Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend"); ExeProc = 'node|npm|vite' }
+       Porta = $portaBack;  Padrao = [regex]::Escape("$raiz\backend"); ExeProc = 'uv|python' }
 )
+if ($temTarefaFront) {
+    # `run preview`, NAO `run dev`: o dist ja esta pronto e subir o dev server aqui serviria
+    # desenvolvimento numa instalacao de producao. Pra mexer no layout com recarga ao vivo: pare a
+    # tarefa e rode `npm run dev` na mao.
+    $tarefas += @{ Nome = 'hangar-frontend'; Exe = 'npm'; Args = 'run preview'; Dir = "$raiz\frontend"
+                   Porta = $portaFront; Padrao = [regex]::Escape("$raiz\frontend"); ExeProc = 'node|npm|vite' }
+}
 
 # Derruba a instancia VELHA antes de subir a nova.
 #
@@ -1640,9 +1667,14 @@ if ($registrou) {
         Start-ScheduledTask -TaskName $tarefa
     }
     Reergue __PORTA__ '(__APPMAIN__|__CAMINHO__)' '__EXE__' 'hangar-backend'
-    Reergue __PORTAFRONT__ '__CAMINHOFRONT__' '__EXEFRONT__' 'hangar-frontend'
+__LINHAFRONT__
 } *>&1 | Out-File -FilePath '__LOG__' -Append -Encoding utf8
 '@
+    # A linha do front so entra quando a tarefa existe: `Start-ScheduledTask` de tarefa inexistente
+    # levanta, e como a vigia roda a cada 5 min, isso encheria o log dela de erro pra sempre —
+    # justamente no arquivo que se olha quando algo NAO subiu.
+    $vigiaLinhaFront = if ($temTarefaFront) { "    Reergue __PORTAFRONT__ '__CAMINHOFRONT__' '__EXEFRONT__' 'hangar-frontend'" } else { '' }
+    $vigiaTemplate = $vigiaTemplate.Replace('__LINHAFRONT__', $vigiaLinhaFront)
     # Numa linha so, sem quebra: um `.Replace(...)` iniciando a linha seguinte arrisca ser lido
     # como dot-sourcing pelo parser (mesmo com crase antes), e nenhuma das duas formas de quebra
     # de linha do resto do arquivo (crase, ou deixar parentese/vírgula aberto) cobre encadeamento
@@ -2089,17 +2121,24 @@ Titulo 'Pronto'
 # afirmando algo que nao aconteceu.
 $linhaQr = ''
 if ($qrMostrado) { $linhaQr = "`n  O QR acima ja leva o token: ler com a camera do celular abre o app JA conectado." }
-Write-Host @"
-  Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build que este
-  instalador gerou, entao ali tem tela e API no mesmo endereco.
+# A frase do 5173 so vale pra quem MANTEVE a tarefa do front; numa instalacao nova ela nao existe
+# mais, e prometer um endereco que ninguem escuta e o mesmo defeito do QR apontando pra porta morta.
+$linha5173 = ''
+if ($temTarefaFront) {
+    $linha5173 = @"
+
   O http://localhost:5173 tambem sobe: e o 'vite preview' servindo o MESMO build (a tarefa
   agendada roda preview, nao dev - sem recarga ao vivo). Ele escuta SO em 127.0.0.1
   (vite.config.ts) - do celular se chega pelo Tailscale, nao pelo IP da LAN direto.
-  Pra mexer no layout com recarga ao vivo: pare a tarefa hangar-frontend e rode 'npm run dev'.
+"@
+}
+Write-Host @"
+  Abra a interface em http://127.0.0.1:$portaBack - o proprio backend serve o build, entao ali
+  tem tela e API no mesmo endereco.$linha5173
+  Pra mexer no layout com recarga ao vivo: 'npm run dev' na pasta frontend (porta 5173).
 
   Rodar na mao (se voce pulou o passo 7):
       cd backend  ; `$env:CP_LAN_BIND_IP='0.0.0.0' ; uv run python -m app.main
-      cd frontend ; npm run dev
 $linhaQr
   Guarde: quem tiver essa URL entra sem senha. Ela fica no historico do navegador desta
   maquina, e num navegador logado em conta o historico sincroniza pra nuvem do fornecedor.

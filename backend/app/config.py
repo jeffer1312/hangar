@@ -161,7 +161,14 @@ class Settings(BaseSettings):
     # resolve_scan_roots). Mantida como str pra aceitar o formato "a,b" direto do env.
     scan_roots: str = _DEFAULT_SCAN_ROOTS
     reload: bool = False     # CP_RELOAD=1: uvicorn auto-reload no dev (NUNCA em prod). Default off.
-    front_port: int = 5173   # where the PWA is served (vite dev / Caddy) — used for QR pairing
+    # CP_FRONT_PORT: onde o PWA é servido — entra no QR e no painel de alcance. VAZIO (0) = o
+    # próprio backend, que monta o `frontend/dist` na raiz (api.py, `_UIStatic`); é a topologia
+    # padrão desde que o serviço separado de front deixou de ser instalado. Só quem mantém o
+    # `vite preview` (instalação antiga, ou reverse proxy apontado pra lá) grava 5173 aqui — e os
+    # instaladores gravam por ele. Cravar 5173 como default fazia o QR apontar pra uma porta que
+    # ninguém escuta assim que o serviço do front saiu de cena.
+    front_port: int = 0
+
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
     # CP_TERM_ORIGINS: origens EXTRAS que o WebSocket do terminal aceita, separadas por virgula
     # (ex: "https://pocket.exemplo.com"). Existe porque o front pode ser servido de UMA maquina e
@@ -293,6 +300,11 @@ def resolve_bind_ip(s: "Settings") -> str:
     return detect_lan_ip() if s.lan_bind_ip == "auto" else s.lan_bind_ip
 
 
+def porta_do_front(s: "Settings") -> int:
+    """Onde a interface responde: o serviço separado, quando existe, senão o próprio backend."""
+    return s.front_port or s.port
+
+
 def pairing_url(s: "Settings") -> str:
     """The URL a phone should open (QR target): the PWA front + the auth token.
 
@@ -304,5 +316,5 @@ def pairing_url(s: "Settings") -> str:
         base = s.public_url.rstrip("/")
     else:
         host = detect_lan_ip() if s.lan_bind_ip in _LOOPBACK else s.lan_bind_ip
-        base = f"http://{host}:{s.front_port}"
+        base = f"http://{host}:{porta_do_front(s)}"
     return f"{base}/?token={s.auth_token}"
