@@ -656,6 +656,72 @@ function Pare-Servico {
     return $mortos
 }
 
+# O CI compila o front a cada push na main e publica na release `dist-latest`. Baixar de la evita o
+# passo mais lento e mais fragil da instalacao. Funcao no nivel do MODULO pelo motivo ja registrado
+# acima: o PowerShell nao tem hoisting.
+$distUrl = 'https://github.com/jeffer1312/hangar/releases/download/dist-latest'
+function Baixar-Dist {
+    # TUDO em variavel, e Out-Null no que nao interessa: em PowerShell qualquer saida solta dentro
+    # da funcao ENTRA no valor de retorno, e um `$true` no fim viraria um array que o `if` le como
+    # verdadeiro sempre — inclusive no caminho de falha.
+    if (-not (Tem 'tar')) { return $false }        # tar.exe existe no Windows 10+; sem ele, build local
+    if (-not $commit) { return $false }            # sem git nao da pra saber de que commit e o dist
+    if ($sujo) { return $false }                   # front editado a mao: a pessoa quer o codigo DELA na tela
+    $tmp = Join-Path "$raiz\frontend" (".dist-baixado." + [IO.Path]::GetRandomFileName())
+    try {
+        # TLS 1.2 explicito: o 5.1 ainda negocia TLS 1.0 por padrao em algumas maquinas e o GitHub
+        # recusa. E ProgressPreference='SilentlyContinue' porque a barra do Invoke-WebRequest no 5.1
+        # custa mais que o proprio download (medido em outras bases: chega a 10x).
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $progAnt = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        # O .sha primeiro, que sao 200 bytes: dist de OUTRO commit serve tela velha contra API nova,
+        # e esse defeito e mudo. Nao bateu (CI ainda compilando) -> build local, como sempre foi.
+        $shaRemoto = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 15 -Uri "$distUrl/frontend-dist.sha").Content
+        if ($shaRemoto.Trim() -ne $commit.Trim()) { return $false }
+        $tar = "$tmp.tar.gz"
+        Invoke-WebRequest -UseBasicParsing -TimeoutSec 180 -Uri "$distUrl/frontend-dist.tar.gz" -OutFile $tar | Out-Null
+        New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+        & tar -xzf $tar -C $tmp
+        if ($LASTEXITCODE -ne 0) { return $false }
+        if (-not (Test-Path (Join-Path $tmp 'index.html'))) { return $false }
+        # Extrai ao LADO e so entao troca: download interrompido no meio nao pode deixar a maquina
+        # sem front nenhum, ja que este caminho, ao voltar $true, faz o build local nem rodar.
+        if (Test-Path $dist) { Remove-Item -Recurse -Force (Split-Path -Parent $dist) -ErrorAction SilentlyContinue }
+        Move-Item $tmp "$raiz\frontend\dist"
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $progAnt) { $ProgressPreference = $progAnt }
+        Remove-Item -Recurse -Force $tmp, "$tmp.tar.gz" -ErrorAction SilentlyContinue
+    }
+}
+
+if ($precisa -and (Baixar-Dist)) {
+    Ok 'dist baixado do CI (nao precisou compilar aqui)'
+    # As DEPENDENCIAS continuam necessarias mesmo com o dist pronto: a tarefa hangar-frontend roda
+    # `npm run preview`, que e o vite servindo o dist — sem node_modules ela nao sobe. Pular o
+    # `npm ci` aqui deixaria a instalacao com front compilado e servico morto.
+    if (-not (Test-Path $modulos)) {
+        $eapAnt2 = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        Push-Location "$raiz\frontend"
+        try { npm ci @quieto; $rcDeps = $LASTEXITCODE } finally { Pop-Location; $ErrorActionPreference = $eapAnt2 }
+        if ($rcDeps -ne 0) {
+            Erro "npm ci falhou (exit $rcDeps) - o servico do frontend nao vai subir"
+            Nota 'rodar na mao:  cd frontend ; npm ci'
+            $script:pendencias += 'frontend'
+        } else {
+            Ok 'dependencias do frontend instaladas'
+        }
+    }
+    # Mesma marca do build local: ela e o que faz a proxima rodada pular o passo, e o dist e
+    # comprovadamente deste commit.
+    if ($marca) { Escrever-Texto $marcaArq $marca }
+    $precisa = $false
+}
+
 if ($precisa) {
     # Exit code de CADA etapa, e nao roda-e-assume: o comentario abaixo prometia que a marca so era
     # gravada depois do build dar certo, mas nada CONFERIA o resultado - `npm ci` e `npm run build`

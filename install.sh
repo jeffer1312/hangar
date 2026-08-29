@@ -193,6 +193,29 @@ fi
 nota "É esse token que você digita no celular na primeira conexão."
 
 # ── 4/8 Frontend ─────────────────────────────────────────────────────────────
+# O CI compila o front a cada push na main e publica o resultado na release `dist-latest`. Baixar
+# de lá evita o passo mais lento e mais frágil da instalação (o `npm ci` + build local).
+DIST_URL=https://github.com/jeffer1312/hangar/releases/download/dist-latest
+baixar_dist() { # 0 = frontend/dist agora tem o build DESTE commit
+  command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 || return 1
+  local sha_local sha_remoto tmp
+  sha_local=$(git rev-parse HEAD 2>/dev/null) || return 1
+  # Árvore suja no front = quem está editando quer o SEU código na tela, não o do CI.
+  [ -z "$(git status --porcelain -- frontend 2>/dev/null)" ] || return 1
+  # O .sha primeiro, que são 200 bytes: dist de OUTRO commit serve tela velha contra API nova, e
+  # esse defeito é mudo. Não bateu (CI ainda compilando, push agorinha) → cai no build local.
+  sha_remoto=$(curl -fsSL --max-time 15 "$DIST_URL/frontend-dist.sha" 2>/dev/null) || return 1
+  [ "$sha_remoto" = "$sha_local" ] || return 1
+  tmp=$(mktemp -d "frontend/.dist-baixado.XXXXXX") || return 1
+  # Extrai ao LADO do dist e só então troca: um download interrompido no meio não pode deixar a
+  # máquina sem front nenhum — o build local depois nem roda, porque este caminho já disse "ok".
+  if curl -fsSL --max-time 180 "$DIST_URL/frontend-dist.tar.gz" 2>/dev/null | tar -xzf - -C "$tmp" \
+     && [ -f "$tmp/index.html" ]; then
+    rm -rf frontend/dist && mv "$tmp" frontend/dist && return 0
+  fi
+  rm -rf "$tmp"
+  return 1
+}
 say "4/8 Frontend"
 if [ "$FRONTEND" = 0 ]; then
   ok "pulado (--no-frontend)"
@@ -209,6 +232,8 @@ DIST=frontend/dist/index.html
 if [ -f "$DIST" ] && [ -z "$(find frontend/src frontend/package-lock.json frontend/index.html \
                               frontend/vite.config.* -newer "$DIST" -print -quit 2>/dev/null)" ]; then
   ok "frontend já buildado e atualizado (nada mudou desde o último build)"
+elif baixar_dist; then
+  ok "dist baixado do CI (não precisou compilar aqui)"
 else
   # Sem --silent no --update (o modo que o BOTÃO Atualizar usa): a caixinha da tela mostra esta
   # saída ao vivo, e com --silent o npm não imprime nada — a tela fica idêntica a uma travada
