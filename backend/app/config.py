@@ -3,7 +3,7 @@ import os
 import socket
 import time
 from pathlib import Path
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app import contas
@@ -168,6 +168,15 @@ class Settings(BaseSettings):
     # instaladores gravam por ele. Cravar 5173 como default fazia o QR apontar pra uma porta que
     # ninguém escuta assim que o serviço do front saiu de cena.
     front_port: int = 0
+
+    @field_validator("front_port", mode="before")
+    @classmethod
+    def _front_port_vazio_e_ausencia(cls, v: object) -> object:
+        # `CP_FRONT_PORT=` (chave presente, valor vazio) é a forma natural de alguém "desligar" isso
+        # editando o .env à mão — e o pydantic levanta ValidationError num `int`, o que derruba o
+        # backend INTEIRO no import (`settings = Settings()` é module-level). Ausência e vazio têm de
+        # significar a mesma coisa: use a porta do backend.
+        return 0 if isinstance(v, str) and not v.strip() else v
 
     public_url: str = ""     # CP_PUBLIC_URL: overrides the auto-built pairing base URL
     # CP_TERM_ORIGINS: origens EXTRAS que o WebSocket do terminal aceita, separadas por virgula

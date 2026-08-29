@@ -52,6 +52,13 @@ def test_porta_do_front_cai_no_backend_quando_nao_ha_servico_de_front():
     assert porta_do_front(Settings(port=8765, front_port=5173)) == 5173
 
 
+def test_front_port_vazio_nao_derruba_o_backend():
+    # `CP_FRONT_PORT=` no .env levantava ValidationError, e como `settings = Settings()` roda no
+    # import do módulo, o backend inteiro não subia — sem tela e sem mensagem que explicasse.
+    assert porta_do_front(Settings(front_port="", port=8765)) == 8765  # type: ignore[arg-type]
+    assert porta_do_front(Settings(front_port="  ", port=8765)) == 8765  # type: ignore[arg-type]
+
+
 def test_pairing_url_usa_a_porta_do_backend_sem_front_port():
     s = Settings(lan_bind_ip="192.168.1.50", auth_token="tok", public_url="", port=8765)
     assert pairing_url(s) == "http://192.168.1.50:8765/?token=tok"
