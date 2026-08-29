@@ -706,7 +706,10 @@ if ($precisa) {
         npm ci @quieto
         $rcCi = $LASTEXITCODE
         if ($rcCi -eq 0) {
-            npm run build @quieto
+            # A flag vai ANTES do nome do script: no npm 11 `npm run build --silent` nao e mais
+            # consumida pelo npm, ela e repassada ao script e chega no `vite build`, que morre com
+            # CACError (medido na VM Windows, node 24.15 / npm 11).
+            npm run @quieto build
             $rcBuild = $LASTEXITCODE
         } else {
             $rcBuild = -1

@@ -214,7 +214,9 @@ else
   # saída ao vivo, e com --silent o npm não imprime nada — a tela fica idêntica a uma travada
   # durante o minuto do `npm ci`. No modo interativo o --silent fica, pra não poluir o terminal.
   QUIETO=--silent; [ "$UPDATE" = 1 ] && QUIETO=
-  (cd frontend && npm ci $QUIETO && npm run build $QUIETO)
+  # A flag vai ANTES do nome do script: no npm 11 `npm run build --silent` não é mais consumida
+  # pelo npm, ela é repassada ao script e chega no `vite build`, que morre com CACError.
+  (cd frontend && npm ci $QUIETO && npm run $QUIETO build)
   ok "buildado em frontend/dist/"
 fi
 fi
