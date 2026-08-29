@@ -771,6 +771,42 @@ def _marca_da_opcao(screen: str, option: int) -> str | None:
     return m.group(1) if m else None
 
 
+# Qualquer caractere de moldura (bloco "Box Drawing" do Unicode). A faixa inteira de proposito: o
+# painel de preview medido em 29/08/2026 usa `┌│└`, mas canto arredondado, linha dupla e traco
+# grosso sao o mesmo desenho com outros caracteres — listar so os tres vistos deixaria o corte
+# calado justo na variante que ninguem mediu.
+_MOLDURA = re.compile(r"[─-╿]")
+_LINHA_COM_NUMERO = re.compile(r"\s*❯?\s*(\d+)\.\s*(.*)")
+
+
+def _rotulos_de_opcao(screen: str) -> list[str]:
+    """Numero + rotulo de cada linha de opcao, sem o cursor e sem o painel de preview a direita.
+
+    Responde UMA pergunta: depois do digito, a tela ainda mostra a MESMA pergunta (o digito so
+    moveu o cursor) ou ja e outra? O corte na moldura e obrigatorio: no layout de preview o painel
+    da direita muda junto com o cursor, entao comparar a linha inteira diria "mudou" toda vez."""
+    fora = []
+    for linha in screen.splitlines():
+        m = _LINHA_COM_NUMERO.match(linha)
+        if m:
+            fora.append(f"{m.group(1)}. {_MOLDURA.split(m.group(2))[0].strip()}")
+    return fora
+
+
+def _tem_painel_de_preview(screen: str) -> bool:
+    """A pergunta na tela desenha o painel de preview ao lado das opcoes?
+
+    E a condicao MEDIDA (29/08/2026, claude 2.1.246) que decide se a tecla do numero envia ou so
+    move o cursor — e por isso e ela, e nao um palpite sobre "a pergunta continua na tela", que
+    libera o Enter extra. Errar pro lado de nao achar moldura devolve o comportamento de antes
+    (fallback por texto); errar pro outro lado mandaria um Enter na pergunta SEGUINTE."""
+    for linha in screen.splitlines():
+        m = _LINHA_COM_NUMERO.match(linha)
+        if m and _MOLDURA.search(m.group(2)):
+            return True
+    return False
+
+
 def _tem_lista_numerada(screen: str) -> bool:
     return bool(_LINHA_OPCAO.search(screen))
 
@@ -861,6 +897,30 @@ def answer_questions(name: str, answers: list[dict]) -> None:
                 key(str(idx + 1))
             if a.get("multi"):
                 key("Right")   # multipla: marcar nao envia; Right abre a aba de envio
+                continue
+            # Na escolha unica o digito NEM SEMPRE submete — medido em 29/08/2026 (claude 2.1.246),
+            # e depende do desenho da pergunta: SEM preview ele marca e envia numa tecla so; COM
+            # preview (opcoes a esquerda, painel a direita) ele so MOVE o cursor e o picker fica
+            # aberto. Sem este Enter, toda pergunta com preview caia no fallback por texto.
+            # Quem libera o Enter e a MOLDURA do preview na tela de antes — a condicao medida —, e
+            # nao um "a pergunta continua ai?" deduzido depois. Deduzir nao serve: sem preview o
+            # digito ja submeteu e o TUI abriu a proxima aba com o cursor de volta na linha 1; se as
+            # duas perguntas tiverem os mesmos rotulos (Sim/Nao e afins), a tela nova e indistinguivel
+            # da velha e o Enter responderia a pergunta SEGUINTE com a opcao errada, calado (achado
+            # das duas revisoes de 29/08/2026).
+            if not _tem_painel_de_preview(tela0):
+                continue
+            # DUAS leituras, com espera entre elas: uma so nao distingue "o picker esta parado
+            # esperando o Enter" de "o redesenho ainda nao chegou". Com a maquina carregada (varias
+            # sessoes no mesmo tmux) o quadro velho continua na tela bem depois do _SETTLE.
+            def parado_na_mesma() -> bool:
+                tela = _capture(name)
+                return (_picker_do_claude(tela) and _cursor_row(tela) == a["indices"][0] + 1
+                        and _rotulos_de_opcao(tela) == _rotulos_de_opcao(tela0))
+            if parado_na_mesma():
+                time.sleep(_OPEN_SETTLE)
+                if parado_na_mesma():
+                    key("Enter")
             continue
 
         if kind == "option" and not a.get("multi"):
@@ -915,7 +975,27 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     #  - UNICA pergunta -> NAO ha review; o Enter da selecao ja submeteu. Sucesso, sem Escape (mandar
     #    Escape aqui interrompia o Claude que ja recebeu a resposta -> bug do "aceitou mas deu ruim").
     #  - Picker ainda aberto sem review (algo travou) -> Escape e erro, nunca submete as cegas.
+    # Picker ainda na tela nao e veredito na PRIMEIRA leitura: com o tmux carregado o redesenho
+    # atrasa, e a tela de Review (ou o fim do picker) chega depois do _SETTLE. Uma leitura so
+    # mandava pro fallback por texto uma resposta que a TUI tinha aceitado — foi o que aconteceu na
+    # noite de 28/08/2026, com o diario registrando `mux.indisponivel` e "envio incompleto" nos
+    # mesmos minutos. Reler custa dois capture-pane no caminho que ja ia falhar.
     screen = _capture(name)
+    for _ in range(3):
+        if screen.strip():
+            if "Submit answers" in screen:
+                if _review_matches(screen, answers):
+                    break      # review pronto e conferido
+            elif "Esc to cancel" not in screen:
+                break          # picker fechou: a selecao ja submeteu
+        time.sleep(_OPEN_SETTLE)
+        screen = _capture(name)
+    if not screen.strip():
+        # Tela vazia e o MESMO valor para "pane em branco" e para "o capture-pane falhou" (tmux.py
+        # loga e devolve ""). Ler isso como "o picker sumiu, entao submeteu" era declarar entrega
+        # sem prova nenhuma — justo quando o multiplexador esta engasgado, que e quando isto
+        # acontece. Mesma decisao que o driver do Pi ja toma no lugar equivalente.
+        raise DriveError("tela ilegivel no passo final — nao da pra confirmar a submissao")
     if "Submit answers" in screen:
         if not _review_matches(screen, answers):
             raise DriveError("review mismatch — nao submetido")

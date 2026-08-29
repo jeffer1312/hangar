@@ -180,6 +180,84 @@ def test_single_question_no_review_submits_without_escape():
     assert "Escape" not in keys                 # SEM Escape espurio (era o interrupt do bug)
 
 
+# Pane REAL do picker com preview (claude 2.1.246, 29/08/2026): as opcoes ficam a esquerda e o
+# painel do preview a direita, e ele muda conforme o cursor. Medido: ali o digito NAO submete — so
+# move o cursor.
+def _preview_pane(cursor: int) -> str:
+    linhas = []
+    for n, rot in ((1, "Alfa"), (2, "Bravo"), (3, "Charlie")):
+        marca = "❯" if n == cursor else " "
+        caixa = {1: "┌────────────┐", 2: f"│ {rot:10} │", 3: "└────────────┘"}.get(n, "")
+        linhas.append(f"{marca} {n}. {rot:20} {caixa}")
+    return ("Escolha uma opção:\n" + "\n".join(linhas)
+            + "\n\nEnter to select · ↑/↓ to navigate · n to add notes · Esc to cancel")
+
+
+def test_pergunta_com_preview_o_digito_so_move_o_cursor_e_o_enter_fecha():
+    # Era o bug relatado em 29/08/2026: com preview o picker ficava aberto depois do digito, o passo
+    # final via "Esc to cancel" e TODA resposta caia no fallback por texto ("o seletor falhou").
+    keys = []
+    # Duas leituras iguais antes do Enter: o quadro velho de uma TUI lenta nao pode decidir.
+    caps = iter([_preview_pane(1), _preview_pane(2), _preview_pane(2), "❯ \n⏵⏵ bypass permissions on"])
+    with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "_capture", lambda name: next(caps)):
+        ti.answer_questions("s", [{"kind": "option", "indices": [1], "multi": False, "labels": ["Bravo"]}])
+    assert keys == ["2", "Enter"]
+    assert "Escape" not in keys
+
+
+def test_duas_perguntas_com_os_mesmos_rotulos_nao_ganham_enter_fantasma():
+    # Achado das duas revisoes (29/08/2026): sem preview o digito ja submete e o TUI abre a aba
+    # seguinte com o cursor de volta na linha 1. Com "Sim/Nao" nas duas perguntas, a tela nova e
+    # indistinguivel da velha — um Enter ali submetia a pergunta 2 com a opcao 1, calado, e a
+    # resposta que o usuario escolheu pra ela nunca era digitada. Quem barra e a moldura do
+    # preview: sem ela, nenhum Enter extra sai.
+    keys = []
+    q1 = "Continuar mesmo assim?\n❯ 1. Sim\n  2. Não\nEsc to cancel"
+    q2 = "Atualizar também os docs?\n❯ 1. Sim\n  2. Não\nEsc to cancel"
+    review = "Review your answers\n ● Q1\n   → Sim\n ● Q2\n   → Não\n❯ 1. Submit answers\nEsc to cancel"
+    caps = iter([q1, q2, review, review])
+    with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "_capture", lambda name: next(caps)):
+        ti.answer_questions("s", [
+            {"kind": "option", "indices": [0], "multi": False, "labels": ["Sim"]},
+            {"kind": "option", "indices": [1], "multi": False, "labels": ["Não"]},
+        ])
+    assert keys == ["1", "2", "Enter"]   # um digito por pergunta + o Enter do review
+
+
+def test_tela_ilegivel_no_passo_final_nao_vira_sucesso():
+    # capture-pane que falha devolve "" (tmux.py loga e degrada). Ler isso como "o picker sumiu,
+    # logo submeteu" declarava entrega sem prova — e o vazio aparece justamente quando o
+    # multiplexador esta engasgado, que foi o cenario do incidente.
+    import pytest
+    keys = []
+    caps = iter(["Q\n❯ 2. A-ONE\n  3. A-TWO\nEsc to cancel", "", "", "", ""])
+    with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "_capture", lambda name: next(caps)):
+        with pytest.raises(ti.DriveError):
+            ti.answer_questions("s", [{"kind": "option", "indices": [1], "multi": False, "labels": ["A-ONE"]}])
+    assert "Escape" not in keys   # o Escape e do caller, junto com o fallback por texto
+
+
+def test_digito_que_ja_submeteu_nao_ganha_enter_extra():
+    # Sem preview o digito marca E envia. Um Enter a mais aqui responderia a pergunta SEGUINTE (ou
+    # viraria linha vazia no composer) — por isso o Enter exige a mesma pergunta ainda na tela.
+    keys = []
+    caps = iter([
+        "Q1\n❯ 1. A-ZERO\n  2. A-ONE\nEsc to cancel",   # tela0
+        "Q2\n❯ 1. B-ZERO\n  2. B-ONE\nEsc to cancel",   # digito submeteu e avancou de aba
+        "❯ \n⏵⏵ bypass permissions on",
+    ])
+    with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
+         patch.object(ti, "_capture", lambda name: next(caps)):
+        ti.answer_questions("s", [{"kind": "option", "indices": [0], "multi": False, "labels": ["A-ZERO"]}])
+    assert keys == ["1"]   # cursor na linha 1 nas DUAS telas: quem separa e o rotulo
+
+
 def test_single_question_nav_drift_self_corrects_then_submits():
     # PLANO B (a navegacao), que continua existindo pra todo picker que nao e o do Claude vivo — o
     # do Pi, por exemplo, cujo cursor e `>` ascii e onde a tecla do numero nao foi medida. Sem o
@@ -221,11 +299,12 @@ def test_multi_question_review_submits():
     # Multiplas perguntas: ai SIM existe a tela "Submit answers". Guard por pergunta (linha do cursor) +
     # review final que bate os labels -> Enter submete. Sequencia de capturas: guard Q1, guard Q2, review.
     keys = []
-    caps = iter([
-        "First q\n❯ 2. A-ONE\n  3. A-TWO\nEsc to cancel",   # Q1: tecla "2" (indice 1 + 1)
-        "Second q\n❯ 1. B-ZERO\n  2. B-ONE\nEsc to cancel",  # Q2: tecla "1" (indice 0 + 1)
-        "Review your answers\n ● First q\n   → A-ONE\n ● Second q\n   → B-ZERO\n❯ 1. Submit answers\n  2. Cancel\n",
-    ])
+    q1 = "First q\n❯ 2. A-ONE\n  3. A-TWO\nEsc to cancel"
+    q2 = "Second q\n❯ 1. B-ZERO\n  2. B-ONE\nEsc to cancel"
+    review = "Review your answers\n ● First q\n   → A-ONE\n ● Second q\n   → B-ZERO\n❯ 1. Submit answers\n  2. Cancel\nEsc to cancel"
+    # Duas capturas por pergunta: a de antes (decide o caminho) e a de depois do digito (o TUI ja
+    # trocou de aba -> outros rotulos -> nenhum Enter extra). A ultima e o review.
+    caps = iter([q1, q2, q2, review, review])
     with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
          patch.object(ti, "_capture", lambda name: next(caps)):
         ti.answer_questions("s", [
@@ -235,6 +314,21 @@ def test_multi_question_review_submits():
     # Uma tecla por pergunta (o TUI auto-avanca pra aba seguinte) + o Enter do review.
     assert keys == ["2", "1", "Enter"]
     assert "Escape" not in keys
+
+
+def test_tui_lenta_o_review_atrasado_ainda_submete():
+    # Na noite de 28/08/2026 o diario registrou `mux.indisponivel` e "envio incompleto" nos mesmos
+    # minutos em que duas respostas cairam no fallback por texto: com o tmux carregado o redesenho
+    # chega depois do settle. Uma leitura so mandava pro fallback o que a TUI tinha aceitado.
+    keys = []
+    q1 = "First q\n❯ 2. A-ONE\n  3. A-TWO\nEsc to cancel"
+    review = "Review your answers\n ● First q\n   → A-ONE\n❯ 1. Submit answers\n  2. Cancel\nEsc to cancel"
+    caps = iter([q1, q1, review])  # tela0, passo final atrasado (picker ainda na tela), enfim o review
+    with patch.object(ti, "send_keys", lambda name, k, **kw: keys.append(k)), \
+         patch.object(ti.time, "sleep", lambda *_: None), \
+         patch.object(ti, "_capture", lambda name: next(caps)):
+        ti.answer_questions("s", [{"kind": "option", "indices": [1], "multi": False, "labels": ["A-ONE"]}])
+    assert keys == ["2", "Enter"]   # digito + Enter do review; antes virava DriveError e fallback
 
 
 def test_multi_select_macro_and_mismatch_raises_drive_error():

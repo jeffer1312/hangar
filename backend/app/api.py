@@ -4787,6 +4787,10 @@ def answer(name: str, body: AnswerBody):
     except terminal_input.DriveError as e:
         text = _askq_fallback_text(answers, jsonl)
         _log.warning("ASKQ fallback name=%s reason=%s text=%r", name, e, text[:120])
+        # Diario: o log do servico vive o que a maquina deixar viver (o journal do dia seguinte ja
+        # nao tinha as duas quedas de 28/08/2026), e sem o MOTIVO nao da pra separar "picker preso"
+        # de "nav drift" quando o relato chega dias depois.
+        diag.registrar("pergunta.fallback_texto", "erro", sessao=name, detalhe=str(e))
         terminal.interrupt(name)  # Escape unico: fecha o picker (sem clear — input vazio)
         if text:
             _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
