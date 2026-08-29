@@ -95,7 +95,10 @@ export function ligarArrastoPraBaixo(wrap: HTMLElement, fechar: () => void): () 
   };
 }
 
-function obterInstancia() {
+// Exportada pro TESTE, e so por isso: a corrida que ela fecha nao da pra provar por fora, atraves do
+// `abrirVisor` — la a medicao das midias gasta ticks demais e as duas chamadas nunca chegam juntas
+// ao ponto que importa (medido em 28/08/2026; um teste escrito assim passava ate com o bug).
+export function obterInstancia() {
   if (!instanciaPromise) {
     instanciaPromise = (async () => {
       // Carrega a lib e o CSS dela AQUI, no primeiro toque numa midia. O `abrirVisor` ja e
