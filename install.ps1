@@ -702,7 +702,13 @@ if ($precisa) {
         # `npm ci` a tela ficava sem barra andando e sem log novo — identica a uma travada, que foi
         # exatamente a leitura de quem estava olhando (25/08/2026). No modo interativo o --silent
         # continua, que e onde ele foi posto pra nao poluir o terminal de quem instala.
-        $quieto = if ($Update) { @() } else { @('--silent') }
+        # Atribuicao DIRETA, nunca `$x = if (...) { @('--silent') }`: o valor sai do bloco pelo
+        # pipeline, que desembrulha o array de um elemento, e $quieto virava a STRING '--silent'.
+        # Splat de string enumera CARACTERE (`-` `-` `s` `i` `l` `e` `n` `t`) — medido na VM
+        # Windows: o npm recebia `-` como nome de script (`Missing script: "-"`), o `npm ci` saia
+        # ruidoso, e antes disso as sobras caiam no `vite build` (`Unused args: 'l','e','n','t'`).
+        $quieto = @()
+        if (-not $Update) { $quieto = @('--silent') }
         npm ci @quieto
         $rcCi = $LASTEXITCODE
         if ($rcCi -eq 0) {
@@ -768,7 +774,9 @@ if (Test-Path "$shellDir\package.json") {
         $ErrorActionPreference = 'Continue'
         Push-Location $shellDir
         try {
-            $quietoShell = if ($Update) { @() } else { @('--silent') }
+            # Mesmo motivo do $quieto acima: o `if` desembrulha o array e o splat vira caractere.
+            $quietoShell = @()
+            if (-not $Update) { $quietoShell = @('--silent') }
             npm ci @quietoShell
             $rcShell = $LASTEXITCODE
         } finally {
