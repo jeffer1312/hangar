@@ -1443,10 +1443,43 @@ if ($registrou) {
             if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
             Start-Sleep -Seconds 1
         }
+        # Passados os 40s, "nao subiu" e "esta demorando" nao sao a mesma coisa, e o instalador
+        # tratava as duas como falha: na PRIMEIRA subida o backend aplica os passos de atualizacao
+        # e sincroniza o uv ANTES de abrir a porta, e ai o teto estoura com tudo indo bem (medido
+        # em 29/08/2026: a mensagem saiu com o uvicorn subindo logo depois, `Uvicorn running on
+        # http://0.0.0.0:8765` no log). Como isso vira pendencia, o instalador terminava em erro
+        # por causa de alguns segundos de atraso — o mesmo estrago que ja tinha levado o teto de
+        # 15s pra 40s.
+        # Quem diz se ainda esta subindo e o LOG, nunca o estado da tarefa: as tres tarefas ficam
+        # em `Ready` mesmo com o servidor vivo (o .vbs nao espera), entao ali nao ha resposta.
+        # Enquanto o arquivo crescer, espera; parou de crescer por $ociosoMax segundos, desiste
+        # — um backend morto nao paga o teto inteiro.
+        if (-not $subiu) {
+            $logBack = Join-Path $env:LOCALAPPDATA 'hangar\hangar-backend.log'
+            $ociosoMax = 30
+            $extraMax = 180
+            $tamAnt = if (Test-Path $logBack) { (Get-Item $logBack).Length } else { -1 }
+            $ocioso = 0
+            $avisou = $false
+            foreach ($i in 1..$extraMax) {
+                if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+                $tam = if (Test-Path $logBack) { (Get-Item $logBack).Length } else { -1 }
+                if ($tam -gt $tamAnt) {
+                    if (-not $avisou) { Nota 'o backend ainda esta subindo (primeira subida faz uv sync e passos de atualizacao)'; $avisou = $true }
+                    $tamAnt = $tam
+                    $ocioso = 0
+                } else {
+                    $ocioso++
+                    if ($ocioso -ge $ociosoMax) { break }
+                }
+                Start-Sleep -Seconds 1
+            }
+            $esperou = 40 + $i
+        }
         if ($subiu) {
             Ok "backend respondendo em 127.0.0.1:$portaBack"
         } else {
-            Falta 'o backend NAO subiu em 40s - o app nao vai conectar'
+            Falta "o backend NAO subiu em ${esperou}s (o log parou de crescer) - o app nao vai conectar"
             Nota "veja o porque:  Get-Content `"$env:LOCALAPPDATA\hangar\hangar-backend.log`" -Tail 30"
         }
     } else {
