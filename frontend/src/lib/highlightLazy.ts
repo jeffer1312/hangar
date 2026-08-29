@@ -28,5 +28,13 @@ export async function highlightCodeLines(lines: string[], path: string): Promise
 // Aqui so respondemos "existe bloco?"; qual deles ainda falta colorir continua sendo la dentro.
 export async function highlightCodeBlocks(root: HTMLElement): Promise<void> {
   if (!root.querySelector('pre code[class^="language-"]')) return;
-  return (await import('./highlight')).highlightCodeBlocks(root);
+  // Os dois chamadores disparam com `void` (e um efeito de render): uma rejeicao aqui viraria
+  // "Uncaught (in promise)" cru e o bloco ficaria sem cor sem nenhuma explicacao. Falha de INFRA
+  // avisa — mesma disciplina do `getCore()` dentro do `highlight.ts`. Deploy que trocou o hash e
+  // o caso comum, e quem cuida dele e o `vite:preloadError` do main.ts, que recarrega a pagina.
+  try {
+    return await (await import('./highlight')).highlightCodeBlocks(root);
+  } catch (err) {
+    console.warn('[hl] pedaco do realce nao carregou', err);
+  }
 }

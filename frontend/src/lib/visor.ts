@@ -34,7 +34,12 @@ export type AcaoVisor = {
   acao: (midia: MidiaVisor) => void;
 };
 
-let instancia: ReturnType<typeof BiggerPictureCtor> | null = null;
+// Guarda a PROMESSA, nao a instancia: `obterInstancia` tem um `await` (o import do pedaco) entre
+// "ja existe?" e a atribuicao, entao dois toques rapidos em miniaturas diferentes — o mesmo cenario
+// que o `escapaVivo` abaixo ja documenta — leriam os dois `null` e montariam DOIS visores no body,
+// com o segundo roubando o Esc e o arrasto do primeiro. Memoizar a promessa faz o segundo toque
+// esperar o mesmo carregamento em vez de comecar outro.
+let instanciaPromise: Promise<ReturnType<typeof BiggerPictureCtor>> | null = null;
 // Listener de Escape da abertura VIVA. É de módulo, e não da chamada, porque `abrirVisor` é
 // assíncrona (mede as mídias antes de abrir): dois toques rápidos em miniaturas diferentes chegam
 // a `bp.open` duas vezes, e só o `onClosed` da segunda rodaria — o `escapa` da primeira ficava
@@ -90,19 +95,25 @@ export function ligarArrastoPraBaixo(wrap: HTMLElement, fechar: () => void): () 
   };
 }
 
-async function obterInstancia() {
-  if (!instancia) {
-    // Carrega a lib e o CSS dela AQUI, no primeiro toque numa midia. O `abrirVisor` ja e assincrono
-    // (mede as midias antes de abrir), entao esperar o pedaco nao muda nada pra quem chama.
-    const { default: BiggerPicture } = await import('bigger-picture/vanilla');
-    await import('bigger-picture/css');
-    // O alvo tem que ser o proprio <body>: a lib mede o container por `target.offsetWidth` e, so
-    // pro body, usa `window.innerHeight` como altura. Num <div> criado a mao a altura e ZERO, e o
-    // fator de escala vira 0 — o visor abre com a midia em `width: 0px; height: 0px`, sem erro
-    // nenhum na tela (medido em 26/08/2026, foi assim que este arquivo nasceu errado).
-    instancia = BiggerPicture({ target: document.body });
+function obterInstancia() {
+  if (!instanciaPromise) {
+    instanciaPromise = (async () => {
+      // Carrega a lib e o CSS dela AQUI, no primeiro toque numa midia. O `abrirVisor` ja e
+      // assincrono (mede as midias antes de abrir), entao esperar o pedaco nao muda quem chama.
+      const { default: BiggerPicture } = await import('bigger-picture/vanilla');
+      await import('bigger-picture/css');
+      // O alvo tem que ser o proprio <body>: a lib mede o container por `target.offsetWidth` e, so
+      // pro body, usa `window.innerHeight` como altura. Num <div> criado a mao a altura e ZERO, e o
+      // fator de escala vira 0 — o visor abre com a midia em `width: 0px; height: 0px`, sem erro
+      // nenhum na tela (medido em 26/08/2026, foi assim que este arquivo nasceu errado).
+      return BiggerPicture({ target: document.body });
+    })();
+    // Falha do pedaco (rede caiu, ou deploy trocou o hash com a aba aberta) NAO fica memoizada:
+    // sem isto, o primeiro toque que falha condena todos os proximos ao mesmo erro, sem nova
+    // tentativa. O `catch` aqui so limpa o memo — a rejeicao segue pra quem chamou.
+    instanciaPromise.catch(() => { instanciaPromise = null; });
   }
-  return instancia;
+  return instanciaPromise;
 }
 
 /**

@@ -31,7 +31,9 @@
       "Chrome": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
       "Safari": "lib/diag.ts — NOME DE SISTEMA/NAVEGADOR gravado no diario de uso, nao texto de interface: e dado de plataforma que quem analisa o arquivo le, e traduzi-lo tornaria o arquivo de quem reporta ilegivel pra quem abre com outro idioma. Nao aparece em tela nenhuma.",
       "tela.ver": "lib/diag.ts — VERBO de evento do diario de uso (o mesmo alfabeto de 'opcao.tocar', 'api.falhou'), chave de dado num arquivo JSONL. Nunca exibido.",
-      "sse.abrir": "screens/Chat.svelte — VERBO de evento do diario de uso (mesmo alfabeto de 'tela.ver', 'opcao.tocar'), chave de dado num arquivo JSONL. Nunca exibido."
+      "sse.abrir": "screens/Chat.svelte — VERBO de evento do diario de uso (mesmo alfabeto de 'tela.ver', 'opcao.tocar'), chave de dado num arquivo JSONL. Nunca exibido.",
+      "[hl] pedaco do realce nao carregou": "highlightLazy.ts — mensagem de console.warn de quando o pedaco do Shiki nao baixa (rede caiu, ou deploy trocou o hash). Nao e texto de tela: o usuario ve o codigo sem cor, e quem le isto e quem abre o devtools. Mesmo caso de 'visor: falhou ao abrir'.",
+      "[hl] realce do diff falhou": "EditDiff.svelte — mensagem de console.warn irma da de cima, no diff. Nao e texto de tela pelo mesmo motivo."
     }
   },
   "não reescreva a tabela",
@@ -236,5 +238,7 @@
   "sse.abrir",
   "árbitro",
   "revisão final",
-  "par de research"
+  "par de research",
+  "[hl] pedaco do realce nao carregou",
+  "[hl] realce do diff falhou"
 ]

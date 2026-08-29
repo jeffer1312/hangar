@@ -7,6 +7,17 @@ import { applyBg, applyAppearance } from './lib/background';
 import { ensureCookie } from './lib/auth';
 import { localeAtual } from './lib/locale';
 
+// Pedaco que nao existe mais no servidor -> recarrega. A aba aberta ANTES de um deploy guarda um
+// index.html que aponta pra hashes trocados; quando ela enfim pede um pedaco sob demanda (o realce
+// de sintaxe, o visor de midia, o terminal), a resposta e 404 e a promise do import rejeita. Sem
+// isto o toque simplesmente nao faz nada, e o unico rastro e um erro no console que ninguem abre.
+// Enquanto o app era UM arquivo so, este caso nao existia: ou tudo carregava, ou nada carregava.
+// O `skipWaiting`/`cleanupOutdatedCaches` do service worker nao cobre isto — ele serve a proxima
+// carga, nao a aba que ja esta na tela.
+window.addEventListener('vite:preloadError', () => {
+  location.reload();
+});
+
 // Resolve o tema (escolha do usuario ou prefers-color-scheme) ANTES de montar -> sem flash do default.
 applyTheme();
 // Fundo escolhido (chapado por padrao): antes de montar, pelo mesmo motivo do tema.
