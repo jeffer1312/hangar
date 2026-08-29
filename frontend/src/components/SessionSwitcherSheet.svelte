@@ -3,7 +3,7 @@
 import * as m from '../paraglide/messages';
   import ThemeToggle from './ThemeToggle.svelte';
   import BackgroundToggle from './BackgroundToggle.svelte';
-  import { relativeTime, rotuloEstado, stateColors } from '../lib/format';
+  import { basename, relativeTime, rotuloEstado, stateColors } from '../lib/format';
   import { listServers, selectServer, serverColor, getActiveId } from '../lib/auth';
   import { searchTranscriptsForServer, askHistoryForServer, type SearchHit } from '../lib/api';
   import type { SessionInfo, State } from '../lib/types';
@@ -130,7 +130,7 @@ import * as m from '../paraglide/messages';
 
   // Nome curto da pasta pra exibir no meta do hit (ultimo segmento do cwd real; fallback = projeto).
   function folderShort(h: Hit): string {
-    if (h.cwd) return h.cwd.split('/').filter(Boolean).pop() ?? h.cwd;
+    if (h.cwd) return basename(h.cwd);
     return h.project;
   }
 

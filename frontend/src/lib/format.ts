@@ -182,8 +182,13 @@ export function initials(name: string): string {
 }
 
 // Último segmento não vazio de um caminho absoluto (basename do projeto).
+// A contrabarra só separa quando o caminho é do Windows (`C:\...` ou `\\servidor\...`): no Linux
+// ela é caractere VÁLIDO num nome de arquivo, e quebrar por ela ali cortaria o nome no meio. Sem
+// essa distinção, um cwd do Windows não tinha separador nenhum e voltava inteiro — a sessão nascia
+// chamada `C--Sistemas-DotNet-PssBackend`, que é o caminho todo depois do sanitizador do nome.
 export function basename(path: string): string {
-  const parts = path.split('/').filter(Boolean);
+  const sep = /^([A-Za-z]:[\\/]|\\\\)/.test(path) ? /[\\/]/ : '/';
+  const parts = path.split(sep).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : path;
 }
 

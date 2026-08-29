@@ -12,7 +12,7 @@ import { intlLocale } from '../lib/locale';
   import type { ChatEvent } from '../lib/types';
   import { selectServer, listServers, getActiveId, serverColor } from '../lib/auth';
   import ProviderGlyph from '../components/icons/ProviderGlyph.svelte';
-  import { providerName } from '../lib/format';
+  import { basename, providerName } from '../lib/format';
 
   interface Props {
     onBack: () => void;
@@ -147,7 +147,7 @@ import { intlLocale } from '../lib/locale';
 
   // Nome curto da pasta (ultimo segmento do cwd real; fallback: nome sanitizado do projeto).
   function folderName(f: ArchiveFolder): string {
-    if (f.cwd) return f.cwd.split('/').filter(Boolean).pop() ?? f.cwd;
+    if (f.cwd) return basename(f.cwd);
     return f.project;
   }
 

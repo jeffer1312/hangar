@@ -10,7 +10,7 @@ import {
   untrackedReason,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
   rotuloEstado,
-  splitTodoBlock, parseImageMessage, parseCanal,
+  splitTodoBlock, parseImageMessage, parseCanal, basename,
 } from './format';
 import type { ChatEvent, State } from './types';
 import { overwriteGetLocale } from '../paraglide/runtime';
@@ -273,6 +273,23 @@ describe('effectiveGroupBy', () => {
     expect(effectiveGroupBy('project', 1)).toBe('project');
     expect(effectiveGroupBy('none', 1)).toBe('none');
     expect(effectiveGroupBy('none', 3)).toBe('none');
+  });
+});
+
+describe('basename', () => {
+  it('pega o último segmento de um caminho unix', () => {
+    expect(basename('/home/user/repo')).toBe('repo');
+    expect(basename('/home/user/repo/')).toBe('repo');
+  });
+  it('pega o último segmento de um caminho do WINDOWS', () => {
+    // Sem isto o cwd voltava INTEIRO — a sessão criada pelo app nascia chamada
+    // `C--Sistemas-DotNet-PssBackend` (o caminho todo, depois do sanitizador do nome).
+    expect(basename('C:\\Sistemas\\DotNet\\PssBackend')).toBe('PssBackend');
+    expect(basename('C:\\Sistemas\\DotNet\\PssBackend\\')).toBe('PssBackend');
+    expect(basename('\\\\servidor\\share\\projeto')).toBe('projeto');
+  });
+  it('não quebra por contrabarra num caminho unix — lá ela é nome de arquivo válido', () => {
+    expect(basename('/home/user/pasta\\estranha')).toBe('pasta\\estranha');
   });
 });
 
