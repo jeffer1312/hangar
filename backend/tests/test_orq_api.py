@@ -21,6 +21,11 @@ def cli(monkeypatch, tmp_path):
         orq_politica.ContaInventario("apikey", "kimi", "Kimi", "kimi:apikey", ({"id": "apikey/k3"},)),
     ]
     monkeypatch.setattr(api_mod, "_inventario", lambda: inv)
+    # E TAMBÉM no módulo: quem escreve a seção "O que NÃO pode" é `orq_politica._secao_nao_pode`,
+    # que chama o `inventario()` dele — não o da API. Sem este segundo patch o arquivo gravado
+    # lista as contas REAIS da máquina de quem roda o teste, e o caso passa ou falha conforme quem
+    # tem qual conta instalada (verde aqui, vermelho no CI).
+    monkeypatch.setattr(orq_politica, "inventario", lambda *a, **k: inv)
     monkeypatch.setattr(api_mod, "PairLink", lambda name: SimpleNamespace(
         get=lambda: {"peers": ["arb"], "gid": "g1"} if name in ("exec", "arb") else None))
     # `cwd` no stub porque o /orq/comecar procura o plano da PASTA da sessão.

@@ -21,8 +21,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.14"
-      # alguns testes tocam o binario do tmux (mockado na maioria, mas presente por garantia)
-      - run: sudo apt-get update && sudo apt-get install -y tmux
+      # alguns testes tocam o binario do tmux (mockado na maioria, mas presente por garantia).
+      # ripgrep NAO e opcional: a busca entre sessoes (app/search.py) chama `rg` de verdade, e sem
+      # ele os testes de busca voltavam ZERO acerto — falha que so aparecia aqui, porque a maquina
+      # de quem desenvolve tem o rg como requisito do instalador.
+      - run: sudo apt-get update && sudo apt-get install -y tmux ripgrep
       - run: uv sync
       - run: uv run pytest -q
 

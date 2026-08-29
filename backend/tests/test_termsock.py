@@ -245,8 +245,10 @@ def test_desmonte_repoe_o_tamanho_da_janela(sessao):
     assert _tam(sessao).startswith("200x50")
     with c.websocket_connect(f"/api/sessions/{sessao}/term?token=secret&cols=80&rows=24") as ws:
         assert len(ws.receive_bytes()) > 0
-        time.sleep(1.0)
-        assert _tam(sessao).startswith("80x24")
+        # `_tam_bate` e nao `startswith("80x24")`: onde a barra de status esta LIGADA (o default do
+        # tmux, e o que o runner do CI usa — esta maquina a desliga no ~/.tmux.conf) a janela fica
+        # 80x23, e o teste acusava um resize que funcionou. O helper ja existe justamente pra isso.
+        _esperar(lambda: _tam_bate(sessao, 80, 24))
         ws.close()
         # Fechar e conferir AINDA DENTRO do `with`: o `__exit__` do WebSocketTestSession do
         # Starlette so ENFILEIRA o disconnect (nao espera o handler processar) e cancela a
@@ -258,7 +260,9 @@ def test_desmonte_repoe_o_tamanho_da_janela(sessao):
         # As DUAS metades: tamanho reposto E window-size de volta em latest. Sem a segunda, um
         # attach nativo posterior abriria recortado e ninguem saberia por que (medicao no spec,
         # linha 5).
-        _esperar(lambda: _tam(sessao) == "200x50 latest")
+        # Mesma tolerancia de uma linha do `_tam_bate`, pelo mesmo motivo (barra de status), sem
+        # abrir mao do `latest`: e a metade do caso que prova o `window-size` de volta.
+        _esperar(lambda: _tam_bate(sessao, 200, 50) and _tam(sessao).endswith(" latest"))
         assert termsock.clientes_ativos() == set()
         assert _clientes(sessao) == ""
 
