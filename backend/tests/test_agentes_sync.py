@@ -254,7 +254,7 @@ def test_codex_guarda_env_key_e_nao_a_chave(tmp_path):
     assert "HANGAR_CRED_API_KEY" in motivo  # o relatório diz qual variável precisa existir
     d = tomllib.loads(texto)
     assert d["model_providers"]["cred"] == {"name": "cred", "base_url": "https://x.dev/v1",
-                                            "env_key": "HANGAR_CRED_API_KEY", "wire_api": "chat"}
+                                            "env_key": "HANGAR_CRED_API_KEY", "wire_api": "responses"}
     assert d["projects"]["/tmp"]["trust_level"] == "trusted"
 
 

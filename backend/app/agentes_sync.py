@@ -443,10 +443,19 @@ def gravar_codex(
         var = nome_da_variavel(nome)
         ini, fim = _sentinelas(nome)
         # Sem tabela de modelos: no Codex o modelo é escolhido na hora (`model` + `model_provider`),
-        # não cadastrado. `wire_api = "chat"` casa com o dialeto que o probe usa (/v1/models OpenAI).
+        # não cadastrado.
+        #
+        # `wire_api = "responses"` e não `"chat"`: o CLI 0.146.1 RECUSA o valor antigo e o erro não
+        # fica contido no provedor — ele acontece ao CARREGAR a config, então derruba todo comando
+        # do `codex` na máquina (`login status`, `features list`, a sessão). Medido em 29/08/2026:
+        # "`wire_api = \"chat\"` is no longer supported" em config.toml:97, com o bloco escrito por
+        # esta função. Um valor que este código escreve não pode ter o poder de brickar o CLI de
+        # quem só cadastrou uma credencial. Ressalva honesta: se o provedor só falar
+        # /chat/completions, ele deixa de servir ao Codex nesta versão — mas aí a falha é na
+        # chamada daquele provedor, não na abertura do agente inteiro.
         bloco = "\n".join([ini, f"[model_providers.{_ts(nome)}]", f"name = {_ts(nome)}",
                            f"base_url = {_ts(base_openai(base_url))}", f"env_key = {_ts(var)}",
-                           'wire_api = "chat"', fim, ""])
+                           'wire_api = "responses"', fim, ""])
         ok, motivo = _gravar_bloco_toml(d / "config.toml", nome, bloco,
                                         {"model_providers": [nome]})
         return (True, f"{motivo} (exporte {var})") if ok else (ok, motivo)
