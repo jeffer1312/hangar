@@ -74,9 +74,10 @@ decidir. Essa lista é o que você mostra a ele antes de lançar.
 método que o usuário escolher, ou à mão com você. O portão de saída vale igual.
 
 **A barra de progresso do app é a única coisa que depende de formato.** Ela lê `### Task N:` e
-`- [ ] **Step N: …**` (`backend/app/planprog.py`), e só. Plano do usuário sem esse formato não
+`- [ ] **Step N: …**` (`backend/app/planprog.py`), e só — a palavra `Step` ali é literal, casada por
+regex, e é o único lugar desta skill onde ela ainda vale. Plano do usuário sem esse formato não
 mostra barra no celular — é **limitação, não defeito**: o trabalho roda igual. Quem quiser a barra
-escreve os Steps assim **no plano de orquestração**, que é seu; o do usuário fica intocado.
+escreve os passos nesse formato **no plano de orquestração**, que é seu; o do usuário fica intocado.
 
 ## Fase 0 — Research (só se o plano não sai sem ele)
 
@@ -122,7 +123,7 @@ O que a ficha muda no plano, com exemplo medido em 15/08/2026:
 | qualquer capacidade em estado de **HIPÓTESE** | a hipótese vira **teste de estreia** no primeiro kick-off (um turno: um `Read` num print + uma pergunta), nunca protocolo obrigatório — e a ficha é corrigida com o resultado |
 | executor **decide por argumento quando o critério não é numérico** | toda régua visual vira **número**: "linha de 24px, medida com `getBoundingClientRect` contra a aba irmã", nunca "densidade parecida com a do app" |
 | revisor tem **janela curta** (272k) | Task de tela não cabe duas na mesma sessão — e, medido, custa **um revisor por rodada**: o plano já prevê a rotação em vez de descobrir no meio |
-| executor **aplica receita literal muito bem** | vale investir no detalhe do Step; o mesmo plano num modelo que improvisa pediria menos passo a passo e mais critério |
+| executor **aplica receita literal muito bem** | vale investir no detalhe do passo; o mesmo plano num modelo que improvisa pediria menos passo a passo e mais critério |
 
 Sem isso o plano é escrito para um executor genérico que não existe, e cada característica real do
 modelo vira uma rodada de correção. A linha da hipótese existe porque o contrário foi medido em
@@ -133,7 +134,7 @@ tela vivos — a regra "nada não testado vira régua até uma execução confir
 mandava o contrário. (A primeira linha da tabela dizia só "não enxerga imagem", sem o MEDIDO, e
 ensinava exatamente esse erro.)
 
-**Step ou receita que cria estado de tela alimentado por request declara os TRÊS desfechos —
+**passo ou receita que cria estado de tela alimentado por request declara os TRÊS desfechos —
 sucesso, falha, pendente — e o QUANDO de cada chamada (mount × interação).** Medido em
 19–20/08/2026, três autores diferentes cometeram a mesma omissão e cada uma custou rodada: o
 plano declarou a falha e calou o pendente (fail-open valendo para request em voo); a receita do
@@ -184,25 +185,26 @@ Além do que o `writing-plans` já pede, o plano carrega:
   fechava rodadas em ~340–550k de contexto por sessão e o outro consumia a janela ~10× mais rápido
   na mesma conta — os dois autorizados, e a linha única da estimativa não descrevia nenhum. As
   fichas de `references/modelos/` são a fonte do número por modelo.
-- **Pré-condição externa com DONO**: todo Step cuja prova depende de coisa que o executor não
+- **Pré-condição externa com DONO**: todo passo cuja prova depende de coisa que o executor não
   controla no turno (servidor de pé, sessão tmux, conta de teste, elemento na tela) declara quem a
-  cria — e o dono é **o próprio executor**, como Step anterior explícito ("suba o backend na porta
+  cria — e o dono é **o próprio executor**, como passo anterior explícito ("suba o backend na porta
   X, confirme com curl, DEPOIS capture"). Espera sem dono declarado vira polling infinito: medido
   em 17/08/2026, uma executora checou 1.179× se uma sessão de prova existia — que só ela mesma
   podia criar.
 - **Intocáveis**: paths com mudança paralela na árvore, listados um a um.
 - **Verificação por Task**: o comando exato e o que conta como passou. Task de **orquestração**
-  (tmux, CLI, processo, conta, rede) leva um Step de **teste de fumaça contra a fonte real**, com o
+  (tmux, CLI, processo, conta, rede) leva um passo de **teste de fumaça contra a fonte real**, com o
   comando literal — suíte verde de fakes não prova fluxo: medido em 17/08/2026, um módulo passou
   com 2.167+935 testes verdes e o fluxo inteiro morto (405 linhas de teste reproduziam a suposição
-  errada do código; nenhum Step do plano tocava o tmux).
-- **Steps escritos como `- [ ] **Step N: …**` — só se você quiser a barra de progresso no celular**,
+  errada do código; nenhum passo do plano tocava o tmux).
+- **passos escritos como `- [ ] **Step N: …**` (a palavra em inglês é literal aqui) — só se você
+  quiser a barra de progresso no celular**,
   e então no arquivo que **você** escreve (o plano de orquestração), nunca reformatando o do
   usuário. É o formato que o contador de progresso reconhece
   (`_STEP_RE` em `backend/app/planprog.py`; `### Task N:` para os cabeçalhos). Numerar de outro
   jeito (`Passo A`, `Etapa 1`) faz a Task inteira contar **zero** e a barra que o usuário acompanha
   no celular ficar parada com o trabalho andando. Receita partilhada por várias Tasks: escreva-a
-  como texto explicativo e **repita os Steps dentro de cada Task** — o executor lê uma Task por vez
+  como texto explicativo e **repita os passos dentro de cada Task** — o executor lê uma Task por vez
   e não pode depender de ter lido a anterior. Confira antes de aprovar:
   `uv run python -c "from app.planprog import parse_plan; p=parse_plan('<caminho>', require_started=False); print(p.total, [t.total for t in p.tasks])"`
 - **Barra** das Tasks que mexem em pixel: contra o que o resultado vai ser comparado — ver abaixo.
@@ -530,8 +532,8 @@ nunca executou.
 | fixture com `__import__("app.main").app` | esse atributo não existe no projeto |
 | `raise HTTPException(..., erro(e.code, e.msg, msg=e.msg))` | `TypeError` — o parâmetro já é nomeado |
 | `pytest tests/test_git_ops.py -k path_diff` | **zero** testes selecionados: nenhum teste que o próprio plano escreveu tem `path_diff` no nome |
-| "Expected: 6 PASS" | eram 8, e no Step seguinte 9 contra 11 reais |
-| "Lote A: nenhum arquivo em comum" | `git_ops.py` estava na Task 3 por desenho **e** na Task 1 por um Step — conflito de merge |
+| "Expected: 6 PASS" | eram 8, e no passo seguinte 9 contra 11 reais |
+| "Lote A: nenhum arquivo em comum" | `git_ops.py` estava na Task 3 por desenho **e** na Task 1 por um passo — conflito de merge |
 | barra com coluna de número de linha | o componente que o próprio plano manda reusar não numera |
 
 Nenhum deles é erro de raciocínio: são coisas que **um comando teria respondido em segundos**.
@@ -547,7 +549,7 @@ Antes de fechar o plano:
 - **Contagem de teste: conte, não estime.** "Expected: N PASS" errado faz o executor achar que
   quebrou algo e ir procurar defeito onde não há.
 - **Disjunção de lote se confere no texto dos STEPS, não no bloco "Files".** Foi exatamente ali que a
-  colisão de 15/08 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py`; o Step 8 dela mandava
+  colisão de 15/08 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py`; o passo 8 dela mandava
   editá-lo.
 - **A barra tem que ser possível com o código que o plano manda reusar.** Mock desenhando o que o
   componente existente não faz é divergência garantida — decida no plano, não na Task.
@@ -590,31 +592,50 @@ regra que um método novo não conhece — medido em 16–17/08/2026: o `/to-tic
 2 e 3, e o custo foi o lote derrubado 3 vezes e uma Task rodando 4h19 sem régua de estouro. Item
 que o método escolhido não gera, **você gera à mão**.
 
-1. **Toda Task tem um nome, um conjunto de arquivos e uma verificação** — no plano do usuário, ou no
-   plano de orquestração que você escreveu ao lado dele. Quiser a barra de progresso no celular:
-   rode o `parse_plan` no arquivo que tem o formato e cole a saída; barra é opcional, Task com dono
-   e prova não é.
-2. **Estimativa a priori** escrita, uma linha por Task: **relógio e rodadas esperados**. Custo em
-   dinheiro não entra — ver "Não existe teto de dinheiro nesta skill", acima.
-3. **Não-colisão do lote provada**: arquivos por Task levantados **do texto dos Steps** ×
-   `git merge-tree` — saída colada.
-4. Estado compartilhado procurado; contrato de posse escrito onde houver — **com o número de
-   cópias que ele cria e quem confere as N** (ou a Task de unificação no fim do lote).
-5. Barra (ou `nenhuma — decisão do usuário`) registrada por Task visual.
-6. Task de tela longa: ponto de rotação de contexto previsto no Step ("Step N é marco de troca
-   segura"). **Quantos prints tirar, e se a captura vira sessão separada, é decisão do executor na
-   hora** — decisão do usuário, 28/08/2026 (ver "A captura é do executor", acima).
-7. Task de orquestração: Step de fumaça contra a fonte real, comando literal.
-8. Pré-condição externa com dono declarado em cada Step que espera algo.
-9. Lote paralelo com prova visual: navegador exclusivo por executor ou prova como seção crítica
-   (`paralelo-worktree.md`).
-10. Cota restante de cada conta do time, com a hora da leitura, e o fallback autorizado por escrito.
-11. Método com a metade executora instalada e testada — ou `nenhum`, com o plano de orquestração
-    escrito.
-12. Pass adversarial oferecido, baseline verde, todo código citado rodado.
-13. **Skill de domínio declarada** (nome ou `nenhuma`), e as duas conferências dela feitas: nenhuma
-    Task duplica passo que a skill já faz por dentro, e nenhum passo dela ficou sem dono
-    (`SKILL.md`, "A SKILL DE DOMÍNIO").
+**Cada item diz o que ele é**, porque isso muda o seu trabalho quando o usuário chega com o trabalho
+já decidido (uma spec e tickets prontos, por exemplo):
+
+- **AUDITA** — o material dele já traz a resposta, ou o repo traz; você confere e cola a prova. Não
+  escreva documento novo para isto.
+- **PRODUZ** — nenhum método entrega isto de graça; você escreve, no plano de orquestração, que é
+  seu. O do usuário fica intocado.
+
+O item 1 é misto: **audita** quando o material já traz arquivos e verificação por Task, **produz**
+quando não traz — que é o caso declarado do `to-tickets`, cujo template manda evitar caminhos de
+arquivo.
+
+1. **AUDITA/PRODUZ — Toda Task tem um nome, um conjunto de arquivos e uma verificação** — no plano
+   do usuário, ou no plano de orquestração que você escreveu ao lado dele. Quiser a barra de
+   progresso no celular: rode o `parse_plan` no arquivo que tem o formato e cole a saída; barra é
+   opcional, Task com dono e prova não é.
+2. **PRODUZ — Estimativa a priori** escrita, uma linha por Task: **relógio e rodadas esperados**.
+   Custo em dinheiro não entra — ver "Não existe teto de dinheiro nesta skill", acima.
+3. **AUDITA — Não-colisão provada**: arquivos por Task × `git merge-tree`, saída colada.
+   **Este item é o que DECIDE se existe lote paralelo, então ele vem antes da decisão, não depois.**
+   Dispensado só quando você já declarou serial de antemão no plano — cobrá-lo apenas depois de o
+   lote estar declarado é declarar sem auditar, a circularidade que o `SKILL.md` nomeia ao mandar
+   ler a página do paralelo **ao decompor**.
+   **De onde saem os arquivos:** do texto dos passos, quando o material os declara; **do repo**, por
+   subagente, quando não declara. Método que não traz caminho de arquivo não reprova por isso — o
+   levantamento é seu, e o comando é o mesmo.
+4. **AUDITA** — Estado compartilhado procurado; contrato de posse escrito onde houver — **com o
+   número de cópias que ele cria e quem confere as N** (ou a Task de unificação no fim do lote).
+5. **PRODUZ** — Barra (ou `nenhuma — decisão do usuário`) registrada por Task visual.
+6. **PRODUZ** — Task de tela longa: ponto de rotação de contexto previsto no passo ("passo N é marco
+   de troca segura"). **Quantos prints tirar, e se a captura vira sessão separada, é decisão do
+   executor na hora** — decisão do usuário, 28/08/2026 (ver "A captura é do executor", acima).
+7. **PRODUZ** — Task de orquestração: passo de fumaça contra a fonte real, comando literal.
+8. **PRODUZ** — Pré-condição externa com dono declarado em cada passo que espera algo.
+9. **PRODUZ** — Lote paralelo com prova visual: navegador exclusivo por executor ou prova como seção
+   crítica (`paralelo-worktree.md`).
+10. **AUDITA** — Cota restante de cada conta do time, com a hora da leitura, e o fallback autorizado
+    por escrito.
+11. **AUDITA** — Método com a metade executora instalada e testada — ou `nenhum`, com o plano de
+    orquestração escrito.
+12. **AUDITA** — Pass adversarial oferecido, baseline verde, todo código citado rodado.
+13. **AUDITA** — **Skill de domínio declarada** (nome ou `nenhuma`), e as duas conferências dela
+    feitas: nenhuma Task duplica passo que a skill já faz por dentro, e nenhum passo dela ficou sem
+    dono (`SKILL.md`, "A SKILL DE DOMÍNIO").
 
 E uma régua de prudência que não é item, é postura: **uma estreia por vez.** Método de plano novo,
 skill recém-editada e provedor novo não entram juntos na mesma execução — a de 16–17/08 estreou os
@@ -765,7 +786,7 @@ Aqui só o que é histórico: quem assumiu de quem, quando, por quê.
 Aviso de grupo contradizendo aquela tabela: vale a tabela.
 
 ## O que o plano possui (aponte, não copie)
-Ordem das Tasks, Steps, verificação por Task, intocáveis, barras da fase 1: <plano, seção>.
+Ordem das Tasks, passos, verificação por Task, intocáveis, barras da fase 1: <plano, seção>.
 Baseline: <comando> → <resultado>, <data>.
 
 ## Ferramental de revisão (por tipo de Task)

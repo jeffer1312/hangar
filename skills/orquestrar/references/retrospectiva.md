@@ -94,8 +94,8 @@ realidade não bateu com o plano — e classifique:
 |---|---|---|
 | **Código que ninguém rodou** | executor relata `TypeError`, atributo inexistente, import faltando | fixture com `__import__("app.main").app`; `erro(code, msg, msg=msg)` levantando `TypeError` |
 | **Comando que não faz o que diz** | executor relata "não selecionou nada" / exit 5 | `pytest -k path_diff` com zero testes de nome correspondente |
-| **Contagem inventada** | "esperado 6 PASS", vieram 8 | dois Steps seguidos com o número errado |
-| **Lote declarado disjunto que não era** | conflito de merge | `git_ops.py` na Task 3 por desenho e na Task 1 por um Step |
+| **Contagem inventada** | "esperado 6 PASS", vieram 8 | dois passos seguidos com o número errado |
+| **Lote declarado disjunto que não era** | conflito de merge | `git_ops.py` na Task 3 por desenho e na Task 1 por um passo |
 | **Defeito que o plano carregou adiante** | achado numa Task tardia com origem numa antiga | `motivo` em português desde a Task 3, visto na 11, virou Task extra |
 | **Barra pedindo o que o código reusado não faz** | divergência mock × componente existente | coluna de número de linha que o `DiffView` não tem |
 

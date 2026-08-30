@@ -49,7 +49,7 @@ mesmo (tela montada), o kick-off diz qual comando usar.
 **Aplica receita literal muito bem.** Reproduz a causa antes de editar quando mandado, mede depois,
 e relata desvio da receita em vez de improvisar em silêncio — inclusive desvios que o revisor não
 tinha visto (mediu que uma flag do `git` era global e não de subcomando, e disse). Vale investir no
-detalhe do Step: com passo a passo bom, a taxa de acerto é alta.
+detalhe do passo: com passo a passo bom, a taxa de acerto é alta.
 
 Achou sozinho um erro de tipo do plano que ninguém tinha visto (o `changed` do git devolve
 `R`/`C`/`U`/`T` além de `M`/`A`/`D`/`?`) *(visto uma vez)*.
@@ -75,7 +75,7 @@ Números da fase final: 686 chamadas, 617.926 de saída, 129,8M de cacheRead, ca
   (24% — longe do portão de 50%). Nenhuma rotação necessária em 8 sessões. O que segurou o número
   foi o recorte (3,7–5,2 KB por Task) e a captura ser Task de outra sessão.
 - **Chama `request_compaction` sozinho, em "marco lógico"** — 3× nesta execução (241k e 187k de
-  contexto jogados fora), uma delas **no meio da Task**, com o Step 4 inacabado, enquanto esperava
+  contexto jogados fora), uma delas **no meio da Task**, com o passo 4 inacabado, enquanto esperava
   resposta do árbitro. Proibido por escrito num kick-off → **zero** nas três sessões seguintes.
 - **Reproduz o defeito antes de editar, e reproduz a sonda do revisor antes de consertar.** Segunda
   e terceira execuções concordando: isto passa de *(visto uma vez)* para **padrão**. Na rodada 2 de

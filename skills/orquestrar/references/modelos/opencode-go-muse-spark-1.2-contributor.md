@@ -15,12 +15,12 @@ fabricante e de reviews públicos, não de rodada nossa — a primeira execuçã
 - **Teto de 60 requisições/minuto** no tier contributor (o tier normal tem 3.000) — executor
   único serial não deve sentir; fan-out de subagentes pode esbarrar.
 - Posição em ranking público de coding: mediano (#22/135, ~62.8/100 numa agregação de 08/2026).
-  Não é um modelo de topo: **plano conservador** — receita literal, régua numérica, Step curto.
+  Não é um modelo de topo: **plano conservador** — receita literal, régua numérica, passo curto.
 
 ## Hipóteses de trabalho (até a primeira medição)
 
 - **Tratar como executor que aplica receita literal** (mesma postura da ficha do
-  deepseek-v4-flash): investir no detalhe do Step; critério visual vira número.
+  deepseek-v4-flash): investir no detalhe do passo; critério visual vira número.
 - ~~**Assumir que NÃO enxerga imagem** até prova em contrário → protocolo de visão do
   `executor.md` (`see <caminho>`) obrigatório nas Tasks de tela.~~
   **DERRUBADA em 19/08/2026 pelo usuário: o muse-spark TEM visão própria.** Ele lê o print com
@@ -104,7 +104,7 @@ fabricante e de reviews públicos, não de rodada nossa — a primeira execuçã
   cópia; `toString()` procurando string sem render, 2 versões seguidas) — todas derrubadas por
   mutação do revisor, nenhuma pela régua escrita no contrato. Também dele: telas de teste como
   prova, barra sintética, print de código não commitado, prova de escrita no README do checkout.
-  Kick-off dele cobra: mutação antes de marcar Step, prova pela rota real, arquivo de prova fora do
+  Kick-off dele cobra: mutação antes de marcar passo, prova pela rota real, arquivo de prova fora do
   repo.
 - **Contexto ~340–550k por Task de tela; rotação no gatilho de 50% por volta de 1h40–2h** — 4
   trocas, todas no gatilho, nenhuma custou rodada.

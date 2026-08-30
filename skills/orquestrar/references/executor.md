@@ -94,8 +94,8 @@ entrega saiu com o nome da skill em cima e o conteúdo dela pela metade.
 
 ## O ciclo
 
-1. Execute os Steps da Task liberada, e só dela.
-2. Marque `- [ ]` → `- [x]` **ao terminar cada Step**, não ao terminar a Task. É o que
+1. Execute os passos da Task liberada, e só dela.
+2. Marque `- [ ]` → `- [x]` **ao terminar cada passo**, não ao terminar a Task. É o que
    sobrevive se você perder o contexto.
 3. Rode a verificação que o plano manda pra essa Task.
 4. **Seu diff encostou em pixel?** (`.svelte`/`.tsx`/`.vue`, CSS, template, qualquer coisa
@@ -124,7 +124,7 @@ entrega saiu com o nome da skill em cima e o conteúdo dela pela metade.
 8. **APROVA** → aí sim: commite **só os paths da Task**, por caminho explícito, e reporte o hash do
    commit ao árbitro. **REPROVA** → a receita chega direto em você; aplique, volte ao passo 3 e
    congele uma rodada nova.
-9. **PARE.** Não comece a Task seguinte. Não emende "o Step aditivo que não encosta em nada".
+9. **PARE.** Não comece a Task seguinte. Não emende "o passo aditivo que não encosta em nada".
 
 > **Regra de leitura para o resto desta página:** onde estiver escrito *"antes de commitar"* ou
 > *"antes do commit"*, entenda **antes de mandar a rodada ao revisor** (passo 6). O commit passou a
@@ -240,7 +240,7 @@ aparecer, elemento renderizar, arquivo de outra sessão — não se espera re-ch
 - **Resposta IDÊNTICA 3 vezes seguidas = re-checar é inútil por construção.** O mundo não vai
   mudar porque você perguntou de novo. Mude a verificação, ou pare e reporte.
 - **O palco da sua prova é SEU.** Servidor, conta de teste, sessão de prova: quem cria é você, como
-  Step explícito, antes de qualquer checagem. Checar se existe uma coisa que só você criaria é
+  passo explícito, antes de qualquer checagem. Checar se existe uma coisa que só você criaria é
   esperar por ninguém.
 
 Medido em 17/08/2026, nas duas Tasks mais caras de uma execução real: uma rodou **1.231 vezes o
@@ -253,7 +253,7 @@ progresso: sucesso repetido é tão parado quanto erro repetido.
 
 ## O plano errou uma premissa no meio da Task: decidir sozinho ou parar?
 
-Acontece: você chega num Step e a realidade contradiz algo que o plano afirma — a biblioteca se
+Acontece: você chega num passo e a realidade contradiz algo que o plano afirma — a biblioteca se
 comporta de outro jeito, o símbolo mudou, o teste que o plano escreveu falha por causa do
 **mecanismo**, não do teu código.
 
@@ -348,7 +348,7 @@ registrada é armadilha que a próxima pessoa reintroduz.
 - **Não compacte a própria sessão por iniciativa própria.** Alguns harnesses dão ao agente um botão
   de compactar ("marco lógico"); quem decide troca ou compactação é o árbitro, que é quem vê o
   relógio, o custo e a rodada seguinte. Medido em 17/08/2026: três compactações auto-chamadas em duas
-  sessões (241k e 187k de contexto descartados), uma delas **no meio da Task**, com um Step aberto,
+  sessões (241k e 187k de contexto descartados), uma delas **no meio da Task**, com um passo aberto,
   enquanto a sessão esperava resposta — e o contexto descartado é o que ela ia precisar na rodada de
   correção. Proibido por escrito num kick-off, o número foi a **zero** nas três sessões seguintes.
 
@@ -432,11 +432,11 @@ vezes** e corrompeu a configuração dele **uma**, em dois dias:
 
 "Escritor único" é sobre **sessões**, não sobre você. Subagente que você despacha escreve
 por você, sob o seu comando — e é a única paralelização disponível pra quem tem o portão
-serializando as Tasks. Step independente rodando em série é tempo jogado fora.
+serializando as Tasks. passo independente rodando em série é tempo jogado fora.
 
-**Sempre que der, despache em paralelo.** Antes, separe os Steps:
+**Sempre que der, despache em paralelo.** Antes, separe os passos:
 
-| Os Steps… | Como rodar |
+| Os passos… | Como rodar |
 |---|---|
 | tocam **conjuntos de arquivos disjuntos** | um subagente por conjunto, todos de uma vez |
 | um precisa da saída do outro (símbolo criado, assinatura mudada) | você mesmo, em série |
@@ -444,7 +444,7 @@ serializando as Tasks. Step independente rodando em série é tempo jogado fora.
 | são leitura (inventário de callers, rastrear fluxo, achar precedente) | subagentes à vontade, sempre em paralelo, sem risco nenhum |
 
 Ao despachar, cada braço recebe **a lista literal dos arquivos que pode tocar** — nunca "faz
-o Step 3". Sem essa lista, dois braços descobrem o mesmo arquivo e se sobrescrevem.
+o passo 3". Sem essa lista, dois braços descobrem o mesmo arquivo e se sobrescrevem.
 
 O que nenhum braço faz, em hipótese alguma:
 
@@ -476,7 +476,7 @@ você não pode defender no portão.
 ## Task de FLUXO: você tem que RODAR o fluxo
 
 Vale para toda Task que cria ou muda **orquestração** — tmux, CLI, processo, conta, rede — mesmo
-que o plano não tenha o Step de fumaça (plano incompleto não é permissão pra pular).
+que o plano não tenha o passo de fumaça (plano incompleto não é permissão pra pular).
 
 **O duplo de uma primitiva devolve o que a PRIMITIVA devolve.** Fake que reproduz a sua suposição
 sobre o tmux prova a suposição, não o tmux. Medido em 17/08/2026: uma Task entregou com

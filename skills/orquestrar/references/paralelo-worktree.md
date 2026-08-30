@@ -14,8 +14,8 @@ quando a Task é grande o bastante pra justificar uma **sessão inteira** por el
 
 **Quem responde as quatro é a AUDITORIA do planejador, não o plano.** Nenhum método é obrigado a
 entregar isto escrito, e vários não entregam — o planejador levanta ele mesmo, com o comando do item
-3 do portão de saída (`planejamento.md`): arquivos por Task tirados **do texto dos Steps** ×
-`git merge-tree`, saída colada. Esperar que o plano declare independência é o defeito, não a
+3 do portão de saída (`planejamento.md`): arquivos por Task × `git merge-tree`, saída colada — do
+texto dos passos quando o material os declara, **do repo, por subagente, quando não declara**. Esperar que o plano declare independência é o defeito, não a
 prudência: a declaração de 15/08/2026 estava escrita, e era falsa. A auditoria é a fase 1, com o
 usuário; o árbitro não deduz depois.
 
@@ -29,8 +29,8 @@ e é para elas serem respondidas rápido que existe o comando.
 1. **Arquivos disjuntos.** Nenhum arquivo aparece em duas Tasks do lote. Não é "quase" nem
    "só o `types.ts`" — um arquivo compartilhado já é a serialização voltando pela porta dos
    fundos, com merge no meio.
-   **Confira no texto dos STEPS, não no cabeçalho da Task.** Foi ali que a colisão de
-   15/08/2026 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py` e o Step 8 dela mandava
+   **Confira nos PASSOS, não no cabeçalho da Task.** Foi ali que a colisão de
+   15/08/2026 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py` e o passo 8 dela mandava
    editá-lo — a declaração "nenhum arquivo em comum" estava escrita e era falsa.
 2. **Nenhum símbolo atravessa.** Nada que a Task A cria é consumido pela Task B do mesmo
    lote. Se B espera uma função que A ainda está escrevendo, B trabalha contra o vazio.

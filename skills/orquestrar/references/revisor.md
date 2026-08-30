@@ -351,8 +351,8 @@ aquele ponto virou nota de lacuna. Na segunda metade do mesmo trabalho a técnic
 dos sete pareceres, e uma das mutações devolveu **880 testes verdes com o defeito de volta inteiro**.
 Não é sugestão: é a única coisa que separa teste que prova o cenário de teste decorativo.
 
-**E a mutação é do PORTÃO, não do executor.** Pedir a ele que rode a mutação antes de marcar o Step
-é barato e ajuda — e não substitui você rodá-la em **todo teste novo que um Step ou uma receita
+**E a mutação é do PORTÃO, não do executor.** Pedir a ele que rode a mutação antes de marcar o passo
+é barato e ajuda — e não substitui você rodá-la em **todo teste novo que um passo ou uma receita
 exigiu**: teste que nasce com o nome certo e não exercita o que promete passa por qualquer leitura,
 inclusive a de quem o escreveu. Medido em 22–24/08/2026: a régua "rode a mutação antes de marcar"
 entrou no contrato de um grupo na Task 9 (um `useActivity.test.ts` que **não importava** o

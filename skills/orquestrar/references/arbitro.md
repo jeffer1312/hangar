@@ -1017,7 +1017,7 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 | "Repasso o essencial do parecer" | Paráfrase perde a lista de arquivos, e é a lista que conserta. |
 | "O executor disse que commitou" | `git log` custa 2 segundos e já pegou drift. |
 | "Não troco de executor com o portão aberto" | O portão pode não fechar. Falha repetida ou meia janela autorizam trocar agora. |
-| "O próximo Step é aditivo, não encosta no que está sob revisão" | Aditivo hoje, alvo apagado amanhã. |
+| "O próximo passo é aditivo, não encosta no que está sob revisão" | Aditivo hoje, alvo apagado amanhã. |
 | "Isso o usuário não fechou, melhor acordar" | Só se duas leituras dão trabalhos diferentes. |
 | "Paro agora que a cota apertou" (no meio da Task) | Pare no fim da Task. Meia Task é bagunça. |
 | "A sessão sumiu, preciso descobrir por quê" | Abre outra e segue. Lê o transcript dela antes, e só. |

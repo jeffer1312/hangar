@@ -122,7 +122,7 @@ desta máquina, por symlink para `~/Projetos/mattpocock-skills/skills/engineerin
 **Artefato que o método não gera NÃO é motivo pra recusar o método — é trabalho do planejador, e
 ele já tem o procedimento.** O portão de saída da fase 1 é agnóstico de método por construção, e
 dois dos seus itens são justamente auditoria feita pelo planejador, com comando: arquivos por Task
-levantados **do texto dos Steps** × `git merge-tree` (item 3) e a procura por estado compartilhado
+levantados **do texto dos passos** × `git merge-tree` (item 3) e a procura por estado compartilhado
 (item 4). Ele não espera que o plano venha com isso escrito — ele levanta. *Medido no `to-tickets`
 (SKILL.md lido em 28/08/2026):* ele entrega arestas de bloqueio ("Blocked by"), que são ordem e não
 disjunção, não tem campo de estimativa em nenhum dos dois templates, e manda explicitamente *"avoid
@@ -137,7 +137,7 @@ texto, não comando.
 
 Nenhum papel escolhe método, e **nenhum troca de método no meio**. Plano nascido num método e
 executado noutro é o defeito que esta seção existe para impedir: os dois escrevem o trabalho em formatos
-diferentes (Task com Steps em `- [ ]` de um lado, ticket do outro), e quem lê depois — o executor, o
+diferentes (Task com Steps de um lado, ticket com critérios do outro), e quem lê depois — o executor, o
 árbitro que recorta a Task, a barra de progresso do app — passa a ler uma coisa que não existe.
 
 Três regras, e as três são do árbitro:
@@ -151,6 +151,27 @@ Método que você não conhece, ou pedido de trocar no meio: **pare e pergunte a
 dele, como modelo e conta. Troca que ele aprovar não se faz por emenda: roda
 `references/replanejar.md`, e o plano do trabalho restante nasce **inteiro** no método novo — nunca
 metade em cada.
+
+## Duas palavras: Task e passo
+
+O trabalho tem duas camadas, e esta skill fala das duas o tempo todo. Elas não pertencem a método
+nenhum:
+
+- **Task** — a unidade de trabalho: tem nome, um conjunto de arquivos, uma verificação e o que a
+  bloqueia. É o que o portão abre e fecha, e o que vira **um** commit. No `superpowers` é uma Task;
+  no `mattpocock` é um ticket; num plano escrito à mão é um item.
+- **passo** — a menor coisa **marcável** dentro de uma Task. No `superpowers` é um Step; no
+  `mattpocock` é um critério de aceitação (o template dele já usa `- [ ]`); num plano à mão é o que
+  o planejador escrever no plano de orquestração.
+
+Tudo que esta skill pendura no passo — marcar progresso, prever o ponto de rotação de contexto,
+exigir teste de fumaça, declarar pré-condição com dono, separar braços em paralelo, disparar o teste
+de mutação do revisor — funciona igual nas três formas. **A única exceção é literal e está isolada:**
+a barra de progresso do celular casa a palavra `Step` por regex (`planejamento.md`, "A barra de
+progresso do app"), e barra é opcional.
+
+Método que não traga a camada de baixo não reprova nada: o planejador escreve os passos no plano de
+orquestração, que é dele — é o mesmo procedimento de qualquer item que o método não gera.
 
 ## A SKILL DE DOMÍNIO, quando existe, é quem manda no trabalho
 
@@ -296,11 +317,17 @@ trabalho.
 é o seu par. Isso vai no kick-off, que é sempre fresco por definição. Arquivo com estado da vez é
 arquivo que envelhece entre a escrita e a leitura.
 
-**A Task da vez vai RECORTADA, não o plano inteiro.** O plano tem todas as Tasks; o executor
-implementa uma e o revisor revisa uma. Recorte a seção daquela Task mais o cabeçalho curto
-(goal/architecture) para `~/.claude/orq-retros/<data>-<gid>/tasks/task-<N>.md` — caminho durável, não
-`/tmp`, que some no reboot — e mande esse caminho. No mesmo trabalho
-de 14/08: plano inteiro ~30k tokens, Task recortada ~2,9k.
+**O executor recebe UMA Task, nunca o plano inteiro.** Ele implementa uma e o revisor revisa uma.
+Como isso é feito depende do formato do material:
+
+- **Plano monolítico** (um arquivo com todas as Tasks) → **recorte**: a seção daquela Task mais o
+  cabeçalho curto (goal/architecture) para `~/.claude/orq-retros/<data>-<gid>/tasks/task-<N>.md` —
+  caminho durável, não `/tmp`, que some no reboot — e mande esse caminho. No trabalho de 14/08:
+  plano inteiro ~30k tokens, Task recortada ~2,9k.
+- **Um arquivo por unidade** (tickets) → **aponte o arquivo do usuário**, sem copiar. A cópia
+  envelhece: o executor marca os critérios no original e o recorte passa a mentir sobre o que está
+  pronto. O contexto do trabalho que o ticket não traz — porque o `to-tickets` manda escrever só a
+  fatia — vai **colado** no kick-off, três ou quatro linhas, como já se faz com as lições.
 
 **Quem é do grupo sai do contrato, nunca de `hangar-send --list`.** Sessão viva no mesmo
 diretório é só uma sessão viva no mesmo diretório — o usuário abre sessões pro que quiser, e
