@@ -75,7 +75,7 @@
     sendToPair?: boolean;
     onToggleSendToPair?: () => void;
     inputText?: string;  // bindable: o pai injeta um draft (ex: interrupt devolve a msg pendente)
-    // Faixa de estatísticas da sessão (evento SSE `stats`). null = sem faixa (ex: Codex).
+    // Faixa de estatísticas da sessão (evento SSE `stats`). null = sem faixa.
     stats?: StatsEvent | null;
     // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —

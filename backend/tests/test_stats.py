@@ -1,5 +1,6 @@
 """stats.Accumulator: fold incremental por provider (shapes copiados dos arquivos reais)."""
 import json
+from pathlib import Path
 
 from app.stats import Accumulator
 
@@ -116,6 +117,116 @@ def test_kimi_usage_llm_e_tool(tmp_path):
                     "cache_pct": 75, "ttft_ms": 2000}
 
 
+# -- Codex --------------------------------------------------------------------
+
+def _codex_item(ts, payload):
+    return {"timestamp": ts, "type": "response_item", "payload": payload}
+
+
+def _codex_token_count(ts, inp, cached, out, last=None):
+    # Os números são o ACUMULADO da thread (`total_token_usage`); `input_tokens` já inclui cache.
+    return {"timestamp": ts, "type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"input_tokens": inp, "cached_input_tokens": cached,
+                              "output_tokens": out},
+        "last_token_usage": last or {"input_tokens": inp, "cached_input_tokens": cached,
+                                     "output_tokens": out}}}}
+
+
+def test_codex_usage_llm_e_tool(tmp_path):
+    p = tmp_path / "rollout.jsonl"
+    _w(p, [
+        _codex_item("2026-08-30T12:00:00.000Z",
+                    {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "oi"}]}),
+        _codex_item("2026-08-30T12:00:02.000Z",
+                    {"type": "message", "role": "assistant",
+                     "content": [{"type": "output_text", "text": "vou olhar"}]}),
+        _codex_item("2026-08-30T12:00:03.000Z",
+                    {"type": "custom_tool_call", "call_id": "c1", "name": "exec"}),
+        _codex_item("2026-08-30T12:00:08.000Z",
+                    {"type": "custom_tool_call_output", "call_id": "c1", "output": "ok"}),
+        _codex_token_count("2026-08-30T12:00:08.010Z", 400, 300, 50),
+    ])
+    snap = Accumulator("codex", str(p)).collect()
+    assert snap["turns"] == 1 and snap["steps"] == 1
+    assert snap["in_tok"] == 400 and snap["out_tok"] == 50
+    assert snap["cache_pct"] == 75
+    assert snap["ttft_ms"] == 2000        # user -> 1ª linha do assistente
+    assert snap["llm_ms"] == 3000         # 2s até a resposta + 1s gerando a chamada
+    assert snap["tool_ms"] == 5000        # 12:00:03 -> 12:00:08
+
+
+def test_codex_contexto_injetado_nao_e_turno(tmp_path):
+    # O Codex injeta role:"user" com contexto interno (environment_context, AGENTS.md) no
+    # começo da thread — mesma regra do parser de chat, senão todo rollout nasce com 3 turnos.
+    p = tmp_path / "rollout.jsonl"
+    _w(p, [
+        _codex_item("2026-08-30T12:00:00.000Z",
+                    {"type": "message", "role": "user",
+                     "content": [{"type": "input_text",
+                                  "text": "<environment_context>cwd</environment_context>"}]}),
+        _codex_item("2026-08-30T12:00:00.100Z",
+                    {"type": "message", "role": "developer",
+                     "content": [{"type": "input_text", "text": "instruções"}]}),
+        _codex_item("2026-08-30T12:00:01.000Z",
+                    {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "pedido de verdade"}]}),
+        _codex_item("2026-08-30T12:00:04.000Z",
+                    {"type": "message", "role": "assistant",
+                     "content": [{"type": "output_text", "text": "ok"}]}),
+        _codex_token_count("2026-08-30T12:00:04.010Z", 10, 0, 5),
+    ])
+    snap = Accumulator("codex", str(p)).collect()
+    assert snap["turns"] == 1
+    assert snap["ttft_ms"] == 3000        # medido do pedido real
+
+
+def test_codex_reasoning_conta_tempo_e_token_count_nao(tmp_path):
+    # O token_count é gravado junto com o item que o precede (mesmo instante): contar o gap
+    # dele como LLM dobraria o tempo da última chamada.
+    p = tmp_path / "rollout.jsonl"
+    _w(p, [
+        _codex_item("2026-08-30T12:00:00.000Z",
+                    {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "oi"}]}),
+        _codex_item("2026-08-30T12:00:04.000Z", {"type": "reasoning"}),
+        _codex_token_count("2026-08-30T12:00:04.000Z", 10, 0, 5),
+        _codex_token_count("2026-08-30T12:00:09.000Z", 30, 0, 9),
+    ])
+    snap = Accumulator("codex", str(p)).collect()
+    assert snap["steps"] == 2             # um por chamada de LLM
+    assert snap["llm_ms"] == 4000         # só o gap até o reasoning
+
+
+def test_codex_token_count_repetido_nao_conta_duas_vezes(tmp_path):
+    # Medido nos rollouts de 25/07/2026: um turno abortado grava duas linhas seguidas com o
+    # MESMO `last_token_usage`, e uma compactação grava outra com o `last` zerado. Somar os
+    # deltas estourava a entrada em exatamente o valor repetido; o acumulado não se move.
+    p = tmp_path / "rollout.jsonl"
+    _w(p, [
+        _codex_item("2026-08-30T12:00:00.000Z",
+                    {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "oi"}]}),
+        _codex_token_count("2026-08-30T12:00:03.000Z", 1000, 800, 20),
+        _codex_token_count("2026-08-30T12:00:04.000Z", 1000, 800, 20),       # turno abortado
+        _codex_token_count("2026-08-30T12:00:05.000Z", 1000, 800, 20,
+                           last={"input_tokens": 0, "cached_input_tokens": 0,
+                                 "output_tokens": 0}),                        # compactação
+    ])
+    snap = Accumulator("codex", str(p)).collect()
+    assert snap["steps"] == 1
+    assert snap["in_tok"] == 1000 and snap["out_tok"] == 20
+
+
+def test_codex_fixture_de_rollout_real():
+    fixture = Path(__file__).parent / "fixtures" / "codex" / "rollout_sample.jsonl"
+    snap = Accumulator("codex", str(fixture)).collect()
+    assert snap["turns"] == 1 and snap["steps"] == 1
+    assert snap["in_tok"] == 14371 and snap["out_tok"] == 18
+    assert snap["cache_pct"] == 53        # 7552 / 14371
+    assert snap["ttft_ms"] > 0 and snap["llm_ms"] > 0
+
+
 # -- Pi -----------------------------------------------------------------------
 
 def test_pi_usage_e_toolresult(tmp_path):
@@ -173,7 +284,7 @@ def test_pi_duracao_vem_do_campo_e_tool_desconta_geracao(tmp_path):
 
 
 def test_provider_sem_fold_retorna_none():
-    assert Accumulator.for_provider("codex", "/x") is None
+    assert Accumulator.for_provider("opencode", "/x") is None
     assert Accumulator.for_provider("claude", "") is None
 
 

@@ -526,7 +526,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         try:
             acc = StatsAccumulator.for_provider(current_provider, path)
             if acc is None:
-                return                       # provider sem fold (codex, por ora) -> sem faixa
+                return                       # provider sem fold -> sem faixa
             last = None
             while True:
                 snap = await asyncio.to_thread(acc.collect)

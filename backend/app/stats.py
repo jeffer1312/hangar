@@ -6,8 +6,9 @@ de bytes e a cada `collect()` folda só as linhas novas. Nenhum estado de módul
 acumulador vive dentro do `merged_events` de uma conexão e morre com ela.
 
 Todos os números de tempo/velocidade são APROXIMADOS (atribuição de gaps entre
-timestamps de linhas); o front prefixa "~" neles. Codex fica de fora nesta leva:
-o usage dele chega pelo app-server, não por arquivo (v2 = alimentar pelo adapter).
+timestamps de linhas); o front prefixa "~" neles. O Codex entra pelo mesmo caminho:
+o rollout jsonl que o chat dele já lê grava o usage por chamada (`token_count`), então
+não é preciso pedir nada ao app-server.
 
 Campos do snapshot (todos opcionais — o front só desenha o que veio):
   turns, steps, llm_ms, tool_ms, in_tok, out_tok, cache_pct, tok_s, ttft_ms
@@ -20,6 +21,7 @@ from pathlib import Path
 # Mesmo filtro de linha sintética do parser de chat: eco de /comando, <task-notification> de
 # subagente e bloco <system-reminder> chegam como `type: user` SEM isMeta (transcript.py:261).
 # Importar em vez de duplicar — duas heurísticas iguais divergem com o tempo.
+from app.adapters.codex.rollout import _is_context_wrapper
 from app.transcript import _is_command_meta, _strip_meta_blocks
 
 # Gap acima disto não é trabalho, é sessão parada (pane aberto de um dia pro outro).
@@ -67,6 +69,12 @@ class _Fold:
         t0 = self._tools.pop(call_id, None) if call_id else None
         if t0 is not None and ts is not None and 0 <= ts - t0 <= _GAP_TETO_S:
             self.tool_ms += (ts - t0) * 1000.0
+
+    def _llm(self, ts: float | None) -> None:
+        """Gap até esta linha é tempo de LLM (e avança o cursor)."""
+        gap = self._gap(ts)
+        if gap is not None:
+            self.llm_ms += gap * 1000.0
 
     def _ttft(self, ts: float | None) -> None:
         if self._prompt_ts is not None and ts is not None and 0 <= ts - self._prompt_ts <= _GAP_TETO_S:
@@ -253,7 +261,83 @@ class _FoldPi(_Fold):
             self._gap(ts)            # espera de tool — só avança o cursor
 
 
-_FOLDS = {"claude": _FoldClaude, "kimi": _FoldKimi, "pi": _FoldPi}
+class _FoldCodex(_Fold):
+    """rollout jsonl do Codex: envelope `{timestamp, type, payload}`. O usage vem no
+    `event_msg`/`token_count`, e a conta sai do `total_token_usage` (acumulado da thread), NÃO do
+    `last_token_usage` ao lado: medido nos rollouts de 25/07/2026, um `turn_aborted` grava duas
+    linhas seguidas repetindo o MESMO `last`, e somar os deltas estourava o total em exatamente o
+    valor repetido (18.304.039 contra 18.118.035 de entrada). Um `context_compacted` grava outra
+    com o `last` zerado — chamada que nunca houve. Diferença dos outros três: o `input_tokens` do
+    Codex JÁ inclui o cache lido.
+
+    Tempo sai dos `response_item`, não dos `event_msg`: cada `agent_message` do event_msg tem um
+    `message` gêmeo no mesmo instante, e contar os dois é gap zero de brinde. O `token_count`
+    também não conta tempo — ele é gravado no mesmo instante do item que o precede."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._total: tuple[int, int, int] | None = None   # último total_token_usage visto
+
+    def _usage(self, info: dict) -> None:
+        tot = info.get("total_token_usage")
+        if not isinstance(tot, dict):
+            return
+        atual = (_int(tot.get("input_tokens")), _int(tot.get("cached_input_tokens")),
+                 _int(tot.get("output_tokens")))
+        ant = self._total or (0, 0, 0)
+        self._total = atual
+        # Acumula o DELTA do total, e não o total, pra sobreviver a um reset dele (compactação
+        # agressiva): delta negativo vira zero em vez de subtrair da faixa.
+        d = tuple(max(0, a - b) for a, b in zip(atual, ant))
+        if not (d[0] or d[2]):
+            return                           # total parado = nenhuma chamada nova aconteceu
+        self.steps += 1
+        self.in_tok += d[0]
+        self.cache_read_tok += d[1]
+        self.out_tok += d[2]
+
+    def feed(self, obj: dict) -> None:
+        t = obj.get("type")
+        payload = obj.get("payload")
+        if not isinstance(payload, dict):
+            return
+        ts = _iso_ts(obj.get("timestamp"))
+        ptype = payload.get("type")
+
+        if t == "event_msg":
+            info = payload.get("info")
+            if ptype == "token_count" and isinstance(info, dict):
+                self._usage(info)
+            return
+        if t != "response_item":
+            return
+
+        if ptype == "message":
+            role = payload.get("role")
+            if role == "assistant":
+                self._llm(ts)
+                self._ttft(ts)
+            elif role == "user":
+                # Contexto que o Codex injeta como role "user" (environment_context, AGENTS.md)
+                # não é turno humano — mesma regra do parser de chat, importada de lá.
+                texto = "".join(b.get("text") or "" for b in payload.get("content") or []
+                                if isinstance(b, dict))
+                if not _is_context_wrapper(texto):
+                    self.turns += 1
+                    self._prompt_ts = ts
+                self._gap(ts)    # espera humana, não LLM — só avança o cursor
+            # developer/system: prompt interno, nem tempo nem turno.
+        elif ptype in ("function_call", "custom_tool_call"):
+            self._llm(ts)                    # o modelo gerando a chamada ainda é LLM
+            self._tool_start(payload.get("call_id"), ts)
+        elif ptype in ("function_call_output", "custom_tool_call_output"):
+            self._tool_end(payload.get("call_id"), ts)
+            self._gap(ts)                    # espera de tool — só avança o cursor
+        elif ptype == "reasoning":
+            self._llm(ts)
+
+
+_FOLDS = {"claude": _FoldClaude, "kimi": _FoldKimi, "pi": _FoldPi, "codex": _FoldCodex}
 
 
 class Accumulator:
