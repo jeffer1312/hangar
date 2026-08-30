@@ -231,6 +231,63 @@ async def test_ensure_running_com_app_server_morto_e_sessao_morta(tmp_path):
     assert "cx" not in adapter._sessions
 
 
+async def test_pane_vivo_sem_controle_nunca_e_substituido(tmp_path):
+    """Reiniciar o backend nao pode custar o pane de quem esta trabalhando na TUI.
+
+    Sidecar do desenho antigo (sem endpoint) + pane vivo: o caminho de recriar a TUI mataria o pane
+    para pendurar outro no lugar. Aqui a resposta e "sessao sem controle vivo" — quem abriu o chat
+    ve o estado morto, que tem tela propria, e o pane fica intocado."""
+    codex_sessions.save("cx", "tid-1", "/x/rollout.jsonl", "/tmp/a")   # sem endpoint/app_pid
+    adapter = CodexAdapter()
+    with patch.object(codex_adapter.tmux, "has_session", return_value=True), \
+         patch.object(codex_adapter, "AppServerClient") as cliente, \
+         patch.object(codex_adapter, "ensure_tmux_tui") as tui:
+        assert await adapter.ensure_running("cx") is None
+    cliente.assert_not_called()   # nem chega a spawnar um app-server
+    tui.assert_not_called()       # e muito menos a derrubar o pane
+
+
+async def test_sem_pane_o_resume_do_desenho_antigo_ainda_recria(tmp_path):
+    """A guarda acima nao pode matar o resume: sem pane nao ha tela de ninguem pra destruir, e
+    reabrir a conversa pelo app continua valendo."""
+    codex_sessions.save("cx", "tid-1", "/x/rollout.jsonl", "/tmp/a")
+    adapter = CodexAdapter()
+    fake = _FakeClient()
+    with patch.object(codex_adapter.tmux, "has_session", return_value=False), \
+         patch.object(codex_adapter, "AppServerClient", lambda *a, **k: fake), \
+         patch.object(codex_adapter, "ensure_tmux_tui") as tui:
+        assert await adapter.ensure_running("cx") is fake
+    assert tui.call_args.kwargs["replace"] is True
+    assert [m for m, _ in fake.requests] == ["initialize", "thread/resume"]
+
+
+async def test_app_server_morto_com_pane_vivo_nao_tira_a_sessao_da_lista(tmp_path):
+    """A cadeia inteira do segundo critério, num teste só.
+
+    App-server morto e pane vivo: `ensure_running` desiste (quem abriu o chat vê o estado morto,
+    que tem tela própria), o pane NÃO é tocado, e a sessão continua listada como ociosa. O board tem
+    três colunas fixas e nenhuma de morto — sumir da lista faria o card desaparecer enquanto a
+    pessoa trabalha na TUI, que é pior que o defeito que este ticket corrige."""
+    codex_sessions.save("cx", "tid-1", "/x/rollout.jsonl", "/tmp/a",
+                        endpoint="ws://127.0.0.1:1", app_pid=4242)
+    adapter = CodexAdapter()
+    with patch.object(codex_adapter, "pid_vivo", return_value=False), \
+         patch.object(codex_adapter.tmux, "has_session", return_value=True), \
+         patch.object(codex_adapter, "AppServerClient") as cliente, \
+         patch.object(codex_adapter, "ensure_tmux_tui") as tui:
+        assert await adapter.ensure_running("cx") is None
+    cliente.assert_not_called()
+    tui.assert_not_called()
+
+    # E o sidecar segue no disco, entao a sessao segue na lista. `_watch_tmux` e o unico que apaga,
+    # e ele so age quando o PANE some — nunca por causa do app-server.
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "list_panes_all", return_value={}), \
+         patch.object(procinfo, "_proc_children_map", return_value={}):
+        out = reg.list()
+    assert [(s.name, s.provider) for s in out] == [("cx", "codex")]
+
+
 def test_pane_codex_sem_sidecar_nao_vira_sessao_claude(tmp_path):
     """A janela entre o pane nascer e o lancador gravar o sidecar tem dono.
 

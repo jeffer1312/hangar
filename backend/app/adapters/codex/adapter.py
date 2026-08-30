@@ -526,8 +526,9 @@ class CodexAdapter:
           backend so se liga nele e sobreviver ao restart do backend deixa de ser problema dele.
         - sidecar SEM endpoint (sessao nascida no desenho antigo, em que o app-server era filho do
           backend) -> reabre o app-server, initialize, RETOMA o thread via `thread/resume` e recria
-          a TUI. Sem este ramo, uma sessao viva ficaria inalcancavel so por ter nascido antes da
-          atualizacao.
+          a TUI, mas SO quando nao ha pane. Sem este ramo, uma sessao viva ficaria inalcancavel so
+          por ter nascido antes da atualizacao; com ele sem a guarda de pane, o primeiro acesso pelo
+          app matava o pane em que a pessoa estava trabalhando.
 
         Lock por-nome (IMPORTANT 1): sem ele, 2 chamadores concorrentes pro mesmo nome sem client
         vivo spawnavam 2 AppServerClient e o 2o attach() sobrescrevia o 1o no dict, vazando o
@@ -547,6 +548,16 @@ class CodexAdapter:
                 return None
             if meta.get("endpoint") and meta.get("app_pid"):
                 return await self._conectar(name, meta)
+            # Daqui pra baixo o app-server e SPAWNADO e a TUI e RECRIADA — o pane atual morre. Isso
+            # so pode acontecer quando nao ha pane nenhum: com pane vivo, recriar destroi a tela de
+            # quem esta trabalhando ali, e era esse o efeito de reiniciar o backend. Sessao que ficou
+            # sem controle vivo e sessao MORTA pra quem abriu o chat (o _state_stream emite `dead`,
+            # que tem tela propria) e segue ociosa na lista — a lista nao tem coluna de morto, entao
+            # some-la faria o card desaparecer enquanto a pessoa usa a TUI.
+            if await asyncio.to_thread(tmux.has_session, name):
+                _log.info("codex: sessao %s sem controle vivo, mas o pane existe — nao recriado",
+                          name)
+                return None
             client = AppServerClient()
             try:
                 endpoint = await client.start_shared()
