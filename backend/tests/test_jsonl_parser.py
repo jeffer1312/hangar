@@ -73,7 +73,8 @@ def test_parallel_tool_results_all_emitted():
 
 def test_assistant_text_and_tool_use_same_entry():
     # text + tool_use na MESMA entrada assistant: os dois viram evento, na ordem do content
-    # (antes o tool_use vencia e o texto sumia do chat). thinking e ignorado.
+    # (antes o tool_use vencia e o texto sumia do chat). O thinking COM texto entra junto, na
+    # ordem, com kind proprio — e o que deixa "pensou -> buscou -> pensou" aparecer sozinho.
     evs = parse_line(_line({
         "type": "assistant", "uuid": "a9",
         "message": {"role": "assistant", "content": [
@@ -82,9 +83,25 @@ def test_assistant_text_and_tool_use_same_entry():
             {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}},
         ]},
     }))
-    assert [(e.kind, e.id) for e in evs] == [("assistant_msg", "a9"), ("tool_use", "a9:1")]
-    assert evs[0].text == "vou rodar"
-    assert evs[1].tool_use_id == "toolu_1"
+    assert [(e.kind, e.id) for e in evs] == [
+        ("thinking", "a9"), ("assistant_msg", "a9:1"), ("tool_use", "a9:2")]
+    assert evs[0].text == "hmm"
+    assert evs[1].text == "vou rodar"
+    assert evs[2].tool_use_id == "toolu_1"
+
+
+def test_thinking_cifrado_nao_vira_evento():
+    # Sessao aberta SEM showThinkingSummaries: a API devolve o bloco cifrado — assinatura e
+    # `thinking: ""`. Medido: 8746 de 8746 blocos de opus-5 assim antes de ligar a chave. Emitir
+    # isso encheria a conversa de linhas que nao abrem nada.
+    evs = parse_line(_line({
+        "type": "assistant", "uuid": "a10",
+        "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "", "signature": "CAISzAQKhwEIEBgC"},
+            {"type": "text", "text": "pronto"},
+        ]},
+    }))
+    assert [(e.kind, e.id) for e in evs] == [("assistant_msg", "a10")]
 
 
 def test_command_meta_entries_are_skipped():

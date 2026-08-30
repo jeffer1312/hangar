@@ -9,8 +9,9 @@ tools). Medido no Kimi 0.34.0 em sessoes reais desta maquina:
               message.origin.kind=="user": cada prompt gera um SEGUNDO append_message com
               origin.kind=="injection" (o system-reminder de permission mode) que, sem o filtro,
               vira bolha fantasma no chat.
-  - texto:    loop event content.part, part.type=="text" ("think" e rascunho interno -> fora,
-              igual ao thinking do Claude/Pi). Um part por step (medido: sem chunking).
+  - texto:    loop event content.part, part.type=="text". Um part por step (medido: sem chunking).
+  - thinking: content.part com part.type=="think" (o campo e `think`) -> kind="thinking", que o
+              front mostra recolhido. Ate 29/08/2026 era descartado como rascunho interno.
   - tool_use: loop event tool.call {toolCallId, name, args}.
   - tool_result: loop event tool.result {toolCallId, result:{output}}.
   - ts:       envelope "time" em MILISSEGUNDOS -> ChatEvent.ts em segundos.
@@ -95,6 +96,10 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             return []
         if part.get("type") == "text" and (part.get("text") or "").strip():
             return [ChatEvent(kind="assistant_msg", id=eid, text=part["text"], ts=_ts(obj))]
+        # `think` e o raciocinio CRU (medido no wire: {"type":"think","think":"..."}), nao o resumo
+        # que a API da Anthropic devolve. Vai pro chat RECOLHIDO, numa linha so.
+        if part.get("type") == "think" and (part.get("think") or "").strip():
+            return [ChatEvent(kind="thinking", id=eid, text=part["think"], ts=_ts(obj))]
         return []
 
     if et == "tool.call":

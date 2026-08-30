@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
-ChatKind = Literal["user_msg", "assistant_msg", "tool_use", "tool_result"]
+ChatKind = Literal["user_msg", "assistant_msg", "tool_use", "tool_result", "thinking"]
 State = Literal["working", "idle", "awaiting_input", "dead"]
 
 # Surrogate SOLTO (sem par) num str vindo de json.loads. O json aceita "\ud83d" sozinho e o Python

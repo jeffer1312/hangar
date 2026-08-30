@@ -7,6 +7,7 @@
   import AssistantBubble from './AssistantBubble.svelte';
   import ToolCard from './ToolCard.svelte';
   import ToolGroup from './ToolGroup.svelte';
+  import ThinkingBlock from './ThinkingBlock.svelte';
   import TaskRows from './TaskRows.svelte';
   import { foldTasks } from '../lib/tasks';
   import { taskRows } from '../lib/taskRows.svelte';
@@ -213,7 +214,21 @@
     | { type: 'event'; id: string; ev: ChatEvent }
     | { type: 'tool'; id: string; ev: ChatEvent }
     | { type: 'group'; id: string; tools: ChatEvent[] }
+    | { type: 'pensamento'; id: string; eventos: ChatEvent[] }
     | { type: 'tasks'; id: string };
+
+  // Busca feita NO MEIO do raciocínio entra dentro do bloco recolhido, e não como card solto: no
+  // app do Claude ela só aparece quando você abre o pensamento, porque foi ali que aconteceu.
+  // Só a busca — medido nos transcripts desta máquina: 89,6% das chamadas caem entre dois
+  // pensamentos (4333 de 4838), e a maioria é Bash (1646), Edit (918) e Read (327). Engolir todas
+  // esconderia a sessão inteira atrás de uma linha; a busca é o caso raro (376 no acervo todo) e é
+  // a única que ninguém acompanha passo a passo.
+  const EH_BUSCA = (n?: string | null) => n === 'WebSearch' || n === 'WebFetch';
+  // O ToolSearch é o carregador das outras ferramentas ("select:WebSearch,WebFetch"): entra no
+  // bloco junto e nem é desenhado lá dentro. Sem isto ele CAI NO MEIO do pensamento e da busca,
+  // fecha o bloco, e as primeiras buscas do turno ficam de fora enquanto as seguintes entram —
+  // dois blocos com regra diferente na mesma conversa.
+  const EH_CARREGADOR = (n?: string | null) => n === 'ToolSearch';
 
   // Lista de tarefas do agente, dobrada do fluxo INTEIRO (não só da janela visível): o TaskCreate
   // que nomeou a tarefa pode ter rolado pra fora da janela enquanto o TaskUpdate que a concluiu
@@ -231,6 +246,13 @@
       else for (const t of run) items.push({ type: 'tool', id: t.id, ev: t });
       run = [];
     };
+    // Pensamentos consecutivos (e as buscas entre eles) viram UM bloco recolhido. Qualquer outra
+    // ferramenta fecha o bloco: ela é trabalho visível, e o pensamento seguinte abre outro bloco.
+    let pens: ChatEvent[] = [];
+    const flushPens = () => {
+      if (pens.length) items.push({ type: 'pensamento', id: `p-${pens[0].id}`, eventos: pens });
+      pens = [];
+    };
     for (const ev of visibleEvents) {
       // Com a chave ligada, a chamada de tarefa sai da lista como LINHA e a cápsula ocupa o lugar
       // dela — senão a mesma tarefa apareceria duas vezes (a linha crua e a cápsula). Desligada,
@@ -240,6 +262,13 @@
       // presa no rodapé ela se descolava do ponto de uso e ainda escorregava pra baixo a cada
       // mensagem nova. Cada nova chamada tira a cápsula do lugar anterior e a repõe aqui — só a
       // posição MAIS RECENTE vale, porque o conteúdo dela é o estado atual da lista inteira.
+      if (ev.kind === 'thinking') { flush(); pens.push(ev); continue; }
+      // Busca só é engolida quando há um pensamento ABERTO antes dela — busca solta (o usuário
+      // pediu "pesquisa X", sem raciocínio no meio) continua card normal, senão sumiria numa
+      // linha que não explica nada.
+      if (pens.length && ev.kind === 'tool_use'
+          && (EH_BUSCA(ev.tool_name) || EH_CARREGADOR(ev.tool_name))) { pens.push(ev); continue; }
+      flushPens();
       if (taskRows.ativo && ev.kind === 'tool_use' && EH_TASK(ev.tool_name)) {
         flush();
         const antiga = items.findIndex((x) => x.type === 'tasks');
@@ -252,6 +281,7 @@
       items.push({ type: 'event', id: ev.id, ev });
     }
     flush();
+    flushPens();
     // Rede de seguranca do {#each} keyed: no Svelte 5 chave repetida e THROW, e ele derruba a arvore
     // toda — a conversa abre vazia e a tela trava, com navbar e composer ainda desenhados por cima.
     // Aconteceu de verdade: duas entradas de fila consumidas no MESMO milissegundo com o MESMO texto
@@ -314,6 +344,8 @@
         <TaskRows tasks={tarefas} />
       {:else if item.type === 'group'}
         <ToolGroup tools={item.tools} {toolResults} {sessionName} animate={!histIds.has(item.tools[0].id)} />
+      {:else if item.type === 'pensamento'}
+        <ThinkingBlock eventos={item.eventos} />
       {:else}
         {@const ev = item.ev}
         {#if ev.kind === 'user_msg' && (ev.text || ev.image_count)}

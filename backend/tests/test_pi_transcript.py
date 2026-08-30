@@ -25,10 +25,20 @@ def test_assistant_text_becomes_assistant_msg_with_cache_read():
     assert ev[0].cache_read == 8704
 
 
-def test_thinking_block_is_dropped():
-    # Igual ao Claude: raciocinio nao vira bolha de chat. Sem isto o app mostraria o rascunho
-    # interno do modelo como se fosse resposta.
+def test_thinking_block_vira_evento_proprio():
+    # Raciocinio NAO e resposta: sai com kind proprio, que o front mostra recolhido. Emitir como
+    # assistant_msg poria o rascunho interno no lugar da resposta.
     ev = pt.parse_obj(_msg("assistant", [{"type": "thinking", "thinking": "hmm",
+                                          "thinkingSignature": "s"}]))
+    assert len(ev) == 1
+    assert ev[0].kind == "thinking"
+    assert ev[0].text == "hmm"
+
+
+def test_thinking_vazio_nao_vira_evento():
+    # Bloco sem texto (so assinatura) e o caso do Claude com o resumo desligado: uma linha que nao
+    # abre nada.
+    ev = pt.parse_obj(_msg("assistant", [{"type": "thinking", "thinking": "   ",
                                           "thinkingSignature": "s"}]))
     assert ev == []
 
@@ -107,7 +117,7 @@ def test_parses_the_format_guard_fixture_without_raising():
     for line in fx.read_text(encoding="utf-8").splitlines():
         events.extend(pt.parse_line(line))
     kinds = {e.kind for e in events}
-    assert kinds <= {"user_msg", "assistant_msg", "tool_use", "tool_result"}
+    assert kinds <= {"user_msg", "assistant_msg", "tool_use", "tool_result", "thinking"}
     assert "tool_use" in kinds and "tool_result" in kinds and "user_msg" in kinds
     # todo tool_result aponta pra um tool_use presente no mesmo arquivo
     tool_use_ids = {e.tool_use_id for e in events if e.kind == "tool_use"}

@@ -46,6 +46,10 @@ import { intlLocale } from '../../lib/locale';
       ajuda: m.config_server_guardar_ajuda() },
     { chave: 'automations', rotulo: m.config_server_automacoes(), tipo: 'liga', secao: 'avancado',
       ajuda: m.config_server_automacoes_ajuda() },
+    // Não mora no runtime-config.json como os outros: escreve `showThinkingSummaries` no
+    // settings.json do Claude Code (app/pensamento.py). Vale só pra sessão NOVA.
+    { chave: 'mostrar_pensamento', rotulo: m.config_server_pensamento(), tipo: 'liga', secao: 'avancado',
+      ajuda: m.config_server_pensamento_ajuda() },
     { chave: 'notify_finished', rotulo: m.config_server_avisar_terminar(), tipo: 'liga', secao: 'notificacoes',
       ajuda: m.config_server_avisar_terminar_ajuda() },
     { chave: 'finish_min_seconds', rotulo: m.config_server_turno_curto(), tipo: 'numero', sufixo: m.config_server_seg(), secao: 'notificacoes',

@@ -997,6 +997,19 @@ export function reiniciarServidor(): Promise<{ ok: boolean; pid: number }> {
   return apiFetch('/api/atualizacao/reiniciar', { method: 'POST' });
 }
 
+/**
+ * Resumo do pensamento em português, curto. Chamado quando a pessoa ABRE o bloco — nunca no
+ * carregamento da conversa, porque a maioria dos pensamentos ninguém abre.
+ *
+ * O backend NUNCA falha aqui: sem provedor ou com o provedor fora do ar ele devolve o texto
+ * original. Quem chama trata rejeição de rede só voltando ao que já estava na tela.
+ */
+export function pensamentoEmPt(textos: string[]): Promise<{ textos: string[] }> {
+  return apiFetch('/api/pensamento/pt', {
+    method: 'POST', body: JSON.stringify({ textos }), signal: AbortSignal.timeout(30000),
+  });
+}
+
 export function getConfigForServer(s: Server): Promise<ConfigServidor> {
   return apiFetchForServer(s, '/api/config');
 }

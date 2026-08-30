@@ -16,9 +16,11 @@ from app.models import ChatEvent, scrub_surrogates
 
 _log = logging.getLogger("hangar.pi_transcript")
 
-# Blocos que nao viram bolha de chat. `thinking` fica de fora igual no Claude: e rascunho interno,
-# nao resposta.
-_DROPPED_BLOCK_TYPES = {"thinking"}
+# Blocos que nao viram bolha de chat. Vazio desde 29/08/2026: o `thinking`, que ficava de fora por
+# ser rascunho interno, hoje vira ChatEvent(kind="thinking") — o front o mostra RECOLHIDO, numa
+# linha so, entao ele nao disputa espaco com a resposta. No Pi o texto e o raciocinio CRU (nao o
+# resumo que a API da Anthropic devolve), e por isso pode ser longo.
+_DROPPED_BLOCK_TYPES: set[str] = set()
 
 # O Pi grava o texto JA COLORIDO no JSONL: toda resposta final termina com
 # "\x1b[38;2;136;136;136m✻ Turn took 2s\x1b[0m", e alguns resultados de tool tambem vem com cor.
@@ -97,6 +99,9 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             if t == "text" and (b.get("text") or "").strip():
                 out.append(ChatEvent(kind="assistant_msg", id=_sub_id(node_id, k),
                                      text=_clean(b["text"]), cache_read=cache_read, ts=ts))
+            elif t == "thinking" and (b.get("thinking") or "").strip():
+                out.append(ChatEvent(kind="thinking", id=_sub_id(node_id, k),
+                                     text=_clean(b["thinking"]), ts=ts))
             elif t == "toolCall":
                 args = b.get("arguments")
                 out.append(ChatEvent(kind="tool_use", id=_sub_id(node_id, k),

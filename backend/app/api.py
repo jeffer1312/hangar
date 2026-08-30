@@ -15,14 +15,14 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from fastapi import FastAPI, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import atomico, atualizacoes, atualizar, diag, migracao_sidecars, tmux
+from app import atomico, atualizacoes, atualizar, diag, migracao_sidecars, pensamento_pt, tmux
 from app.auth import require_auth, require_loopback
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
 from app.bastao import montar as bastao_montar
@@ -3767,6 +3767,25 @@ async def relimpar_ditado(body: RelimparBody):
     texto, aviso = await asyncio.to_thread(narrar.limpar_ditado, body.texto, body.estilo)
     aplicado = "cru" if (aviso or texto == body.texto) else narrar.estilo_efetivo(body.texto, body.estilo)
     return {"text": texto, "aviso": aviso, "estilo_aplicado": aplicado}
+
+
+class PensamentoPtBody(_StrictBody):
+    # Teto por ITEM, e não só na quantidade: o texto vai pro provedor de LLM, e no Pi e no Kimi
+    # este campo carrega raciocínio CRU, sem tamanho previsível. Mesma regra do TtsBody.
+    textos: list[Annotated[str, Field(max_length=pensamento_pt.MAX_CHARS)]] = Field(
+        min_length=1, max_length=20)
+
+
+@app.post("/api/pensamento/pt", dependencies=[Depends(require_auth)])
+async def pensamento_para_pt(body: PensamentoPtBody):
+    """Resumo do pensamento em portugues, curto. Chamado quando a pessoa ABRE o bloco.
+
+    Nunca 502: falha de provedor devolve o texto ORIGINAL (ver pensamento_pt.traduzir). O bloco ja
+    esta aberto na tela quando esta chamada sai — trocar o conteudo por uma mensagem de erro seria
+    apagar o que ela acabou de pedir pra ler.
+    """
+    saida = await asyncio.to_thread(pensamento_pt.traduzir_varios, body.textos)
+    return {"textos": saida}
 
 
 @app.get("/api/sessions/{name}/uploads/{filename}", dependencies=[Depends(require_auth)])

@@ -392,6 +392,15 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                 out.append(ChatEvent(kind="assistant_msg", id=_sub_id(uid, len(out)),
                                      text=it.get("text", ""), ts=ts,
                                      cache_read=cache_read, cache_ttl_s=ttl))
+            elif it.get("type") == "thinking":
+                # Só com TEXTO. Sem `showThinkingSummaries` no settings.json o Claude Code pede o
+                # pensamento `omitted`, e a API devolve o bloco cifrado: `thinking: ""` mais a
+                # assinatura. Medido nesta máquina: 8746 de 8746 blocos de opus-5 vazios antes de
+                # ligar a chave. Emitir os vazios encheria a conversa de linhas que não abrem nada.
+                pensamento = it.get("thinking") or ""
+                if pensamento.strip():
+                    out.append(ChatEvent(kind="thinking", id=_sub_id(uid, len(out)),
+                                         text=pensamento, ts=ts))
         return out
     return []
 
