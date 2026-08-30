@@ -1423,6 +1423,65 @@ def test_resume_archived_route_404_when_transcript_missing(api_client):
     assert r.status_code == 404
 
 
+# --- Retomar conversa CODEX do Arquivo (ticket 08) ---
+# A rota recusava com 409. O id da conversa e o uuid do fim do nome do rollout, e e ele que o
+# `codex resume` recebe — o mesmo id que o Arquivo ja usa pra listar e abrir a conversa.
+
+def test_resume_archived_codex_cria_sessao_ligada_a_conversa(api_client):
+    with patch("app.api.archive_cwd", return_value="/home/u/my-proj"), \
+         patch.object(tmux, "has_session", return_value=False), \
+         patch("app.api.codex_sessions.exists", return_value=False), \
+         patch("app.api.registry.create",
+               return_value=SessionInfo(name="my-proj", cwd="/home/u/my-proj",
+                                        provider="codex")) as create:
+        r = api_client.post(f"/api/archive/codex/{_SID}/resume", headers=_h(),
+                            json={"provider": "codex"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "codex"
+    create.assert_called_once_with("my-proj", "/home/u/my-proj", config_dir=None, provider="codex",
+                                   resume_session_id=_SID, engine=None)
+
+
+def test_resume_archived_codex_desvia_de_nome_de_sessao_codex_viva(api_client):
+    """A sessao Codex viva nao esta no tmux com aquele nome — esta no sidecar. Olhando so o tmux, o
+    conflito estourava la dentro do create, com a mensagem de outro assunto."""
+    with patch("app.api.archive_cwd", return_value="/home/u/my-proj"), \
+         patch.object(tmux, "has_session", return_value=False), \
+         patch("app.api.codex_sessions.exists", side_effect=[True, False]), \
+         patch("app.api.registry.create",
+               return_value=SessionInfo(name="my-proj-2", cwd="/home/u/my-proj")) as create:
+        r = api_client.post(f"/api/archive/codex/{_SID}/resume", headers=_h(),
+                            json={"provider": "codex"})
+    assert r.status_code == 200
+    assert create.call_args[0][0] == "my-proj-2"
+
+
+def test_resume_archived_codex_recusa_nome_de_rollout_sem_id(api_client):
+    """Nome fora do padrao nao tem id pra retomar, e "caminho invalido" mandaria procurar defeito no
+    lugar errado."""
+    r = api_client.post("/api/archive/codex/rollout-sem-uuid/resume", headers=_h(),
+                        json={"provider": "codex"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_rollout_sem_id"
+
+
+def test_resume_archived_codex_id_com_36_chars_fora_do_formato_tambem_e_recusado(api_client):
+    """Uma definição mais frouxa de "id válido" aqui do que a que o Arquivo usa deixava um id de 36
+    caracteres passar por esta guarda e falhar mais adiante como "caminho inválido" — a mensagem que
+    explica o problema não aparecia justo no caso em que ela é útil."""
+    r = api_client.post(f"/api/archive/codex/{'-' * 36}/resume", headers=_h(),
+                        json={"provider": "codex"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_rollout_sem_id"
+
+
+def test_resume_archived_codex_404_em_conversa_inexistente(api_client):
+    with patch("app.api.archive_cwd", side_effect=FileNotFoundError()):
+        r = api_client.post(f"/api/archive/codex/{_SID}/resume", headers=_h(),
+                            json={"provider": "codex"})
+    assert r.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # /answer: fallback por texto quando o drive da TUI falha (DriveError)
 # ---------------------------------------------------------------------------

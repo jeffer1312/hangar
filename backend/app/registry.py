@@ -1416,8 +1416,8 @@ class SessionRegistry:
         # resume_session_id (retomar conversa MORTA do Arquivo): reusa o uuid existente e sobe com
         # `--resume` em vez de `--session-id` -> o claude CONTINUA aquele jsonl (nao comeca um novo).
         # Mesmo uuid ja validado no endpoint, mas revalida aqui tambem (vai direto pro comando do shell).
-        # ponytail: resume so cobre o path do Claude por ora (--resume nao existe no Codex — a Task 5
-        # do plano de Codex resolve o resume dele por fora deste branch).
+        # Os quatro providers retomam por aqui, cada um com o comando DELE: `claude --resume`,
+        # `pi --session-id`, `kimi --session`, e o lancador com `codex resume`.
         if resume_session_id is not None:
             if provider == "kimi":
                 # Sid do Kimi e `session_<uuid>` (nao uuid puro) e o resume e `--session`, nao
@@ -1430,6 +1430,17 @@ class SessionRegistry:
                 # join_cmd e byte por byte o f-string de antes (no POSIX ele E o shlex.join).
                 cmd = tmux.join_cmd(["kimi", "--session", sid]
                                  + model_args.args_de(provider, model, effort))
+            elif provider == "codex":
+                # O id da conversa Codex e o uuid do fim do nome do rollout (o mesmo que o Arquivo
+                # lista). Vai pro lancador, que abre a TUI com `codex resume <id>` — o historico ja
+                # esta no rollout, entao a sessao nova nasce com a conversa inteira.
+                # O MESMO criterio que a rota do Arquivo usa (uma definicao só de id de conversa).
+                from app.archive_providers import UUID_RE
+                if not UUID_RE.match(resume_session_id):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                from app.adapters.codex.lancador import comando_do_lancador
+                cmd = tmux.join_cmd(comando_do_lancador(cwd, thread_id=sid))
             elif provider == "pi":
                 # `pi --session-id <id>` RETOMA quando o id ja existe ("creating it if missing", no
                 # --help do 0.82.1) -> o comando do resume e o mesmo do spawn, so com o id antigo.

@@ -29,7 +29,11 @@ _log = logging.getLogger("hangar.archive_providers")
 
 PROVIDERS = ("pi", "kimi", "codex")
 
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# Publico: e o id que identifica uma conversa nestes providers, e quem retoma uma do Arquivo tem
+# que validar pelo MESMO criterio (api.resume_archived, registry.create). Duas definicoes de "id
+# valido" faziam um id de 36 caracteres fora do formato passar numa e cair na outra, trocando a
+# mensagem que explica o problema por um "caminho invalido" generico.
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _KIMI_SID_RE = re.compile(r"^session_[0-9a-fA-F-]{36}$")
 
 
@@ -83,7 +87,7 @@ def _pi_conversas() -> list[Conversa]:
         # `<stem>/<taskId>/run-N/session.jsonl` dos subagentes, que nao e conversa.
         for f in pasta.glob("*.jsonl"):
             sid = f.stem.split("_", 1)[-1]
-            if not _UUID_RE.match(sid):
+            if not UUID_RE.match(sid):
                 continue
             cwd = _cwd_do_cabecalho(f, lambda o: o.get("cwd") if o.get("type") == "session" else None)
             out.append(Conversa("pi", cwd, sid, f, _mtime(f)))
@@ -92,7 +96,7 @@ def _pi_conversas() -> list[Conversa]:
 
 def _pi_jsonl(session_id: str) -> Optional[Path]:
     from app.adapters.pi import sessions as pi_sessions
-    if not _UUID_RE.match(session_id):
+    if not UUID_RE.match(session_id):
         raise ValueError("session_id invalido")
     try:
         achados = sorted(pi_sessions.sessions_root().glob(f"*/*_{session_id}.jsonl"),
@@ -161,14 +165,14 @@ def _codex_conversas() -> list[Conversa]:
         return []
     for f in arquivos:
         sid = f.stem[-36:]
-        if not _UUID_RE.match(sid):
+        if not UUID_RE.match(sid):
             continue
         out.append(Conversa("codex", _cwd_do_cabecalho(f, _codex_cwd), sid, f, _mtime(f)))
     return out
 
 
 def _codex_jsonl(session_id: str) -> Optional[Path]:
-    if not _UUID_RE.match(session_id):
+    if not UUID_RE.match(session_id):
         raise ValueError("session_id invalido")
     try:
         achados = sorted(_codex_raiz().glob(f"*/*/*/rollout-*-{session_id}.jsonl"),

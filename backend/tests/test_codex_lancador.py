@@ -198,6 +198,30 @@ def test_app_server_que_morre_na_largada_diz_o_motivo(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
+def test_lancador_retoma_a_conversa_pedida(tmp_path):
+    """`--resume` troca o comando da TUI por `codex resume <id>`. Sem `-C`: a conversa carrega o cwd
+    dela, e o pane ja nasce la."""
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    env = _ambiente(tmp_path, cwd)
+    env["FAKE_TUI_SLEEP"] = "0.3"
+    proc = subprocess.Popen(
+        [sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd),
+         "--resume", "01a052d1-3e59-7441-9ed3-6bbd9e2704fc"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    proc.wait(timeout=30)
+    argv = (tmp_path / "tui-argv.txt").read_text().split("\n")
+    assert argv[0] == "resume"
+    assert argv[-1] == "01a052d1-3e59-7441-9ed3-6bbd9e2704fc"
+    assert "-C" not in argv
+    # A politica de sandbox/aprovacao vale na conversa retomada tambem: sem ela a TUI pode parar
+    # num pedido de aprovacao que ninguem responde, e o app fica olhando uma sessao muda.
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert argv[argv.index("--ask-for-approval") + 1] == "never"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
 def test_lancador_recusa_sem_nome(tmp_path):
     cwd = tmp_path / "proj"
     cwd.mkdir()

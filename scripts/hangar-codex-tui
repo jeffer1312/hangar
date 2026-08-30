@@ -54,6 +54,19 @@ def _com_websockets() -> None:
     os.execv(str(venv), [str(venv), os.path.abspath(__file__), *sys.argv[1:]])
 
 
+def _rollout_de(thread_id: str) -> str:
+    """O arquivo da conversa, pelo id. "" quando nao existe.
+
+    O id e o final do nome do arquivo — mesmo layout que o Arquivo do app lê pra listar as
+    conversas (`app/archive_providers.py`, `_codex_jsonl`). Mais de um arquivo com o mesmo id nao
+    acontece na pratica; havendo, o mais recente e o que o `codex resume` abre.
+    """
+    raiz = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")) / "sessions"
+    achados = sorted(raiz.glob(f"*/*/*/rollout-*-{thread_id}.jsonl"),
+                     key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(achados[0]) if achados else ""
+
+
 def _porta_livre() -> str:
     # Reserva e solta uma porta loopback. Ha uma janela minima ate o app-server dar bind; quem
     # perde a corrida ve o servidor sair, e a espera abaixo falha em vez de deixar uma TUI apontando
@@ -117,6 +130,8 @@ def main() -> int:
     ap.add_argument("--name", default=os.environ.get("CP_SESSION_NAME"))
     ap.add_argument("--cwd", default=None)
     ap.add_argument("--prompt", default=None)
+    ap.add_argument("--resume", default=None,
+                    help="retoma a conversa deste id em vez de abrir uma nova")
     args = ap.parse_args()
     if not args.name:
         print("hangar-codex-tui: --name (ou CP_SESSION_NAME) e obrigatorio", file=sys.stderr)
@@ -142,16 +157,36 @@ def main() -> int:
         codex_sessions.save(args.name, thread_id, rollout, cwd,
                             endpoint=endpoint, app_pid=servidor.pid)
 
-    threading.Thread(target=_espera_thread, args=(endpoint, cwd, servidor, erros, salvar),
-                     daemon=True).start()
+    if args.resume:
+        # Retomando, a identidade JA e conhecida e nao ha `thread/started` pra esperar — medido:
+        # numa conversa retomada o evento nao vem, e ficar esperando por ele deixava a sessao sem
+        # sidecar, ou seja, invisivel no app que mandou retomar.
+        rollout = _rollout_de(args.resume)
+        if not rollout:
+            print(f"hangar-codex-tui: nao achei o rollout da conversa {args.resume}",
+                  file=sys.stderr)
+        else:
+            salvar(args.resume, rollout)
+    else:
+        threading.Thread(target=_espera_thread, args=(endpoint, cwd, servidor, erros, salvar),
+                         daemon=True).start()
 
     # SIGTERM/SIGHUP viram SystemExit pra que o `finally` rode: `tmux kill-session` derruba o pane
     # por sinal, e sem isto o app-server ficaria escutando sem dono.
     for sinal in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sinal, lambda *_: sys.exit(143))
 
-    argv = ["codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
-            "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL]
+    if args.resume:
+        # Sandbox e politica de aprovacao valem AQUI TAMBEM (`codex resume --help` lista as duas):
+        # sem elas a conversa retomada roda no padrao do Codex e pode parar num pedido de aprovacao
+        # que ninguem vai responder — a TUI trava e o app fica olhando uma sessao muda.
+        # `-C` fica de fora porque o pane ja nasce no cwd certo (`tmux new-session -c`) e a conversa
+        # carrega o dela; o id vai no fim, onde o subcomando o espera.
+        argv = ["codex", "resume", "--remote", endpoint, "--no-alt-screen",
+                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL, args.resume]
+    else:
+        argv = ["codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
+                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL]
     if args.prompt:
         argv.append(args.prompt)
     try:

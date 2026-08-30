@@ -1714,7 +1714,7 @@
   "erro_terminal_abertura_falhou": "falha ao abrir o emulador de terminal: {erro}",
   "erro_terminal_saiu_cedo": "emulador de terminal saiu logo após abrir: {saida}",
   "erro_config_dir_invalido": "config_dir inválido",
-  "erro_resume_codex": "Conversa do Codex não pode ser retomada por aqui — ela vive no app-server, não num --resume de linha de comando.",
+  "erro_rollout_sem_id": "Esta conversa do Codex não tem id no nome do arquivo, então não há o que retomar.",
   "erro_motor_sem_claude": "motor só vale para provider claude",
   "erro_conta_reconciliacao_falhou": "não consegui reconciliar a conta {nome_conta}: {erro}",
   "erro_nome_invalido": "nome inválido",

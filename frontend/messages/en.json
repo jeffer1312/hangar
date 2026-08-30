@@ -1714,7 +1714,7 @@
   "erro_terminal_abertura_falhou": "failed to open the terminal emulator: {erro}",
   "erro_terminal_saiu_cedo": "terminal emulator exited right after opening: {saida}",
   "erro_config_dir_invalido": "invalid config_dir",
-  "erro_resume_codex": "A Codex conversation can't be resumed here — it lives in the app-server, not in a command-line --resume.",
+  "erro_rollout_sem_id": "This Codex conversation has no id in its file name, so there is nothing to resume.",
   "erro_motor_sem_claude": "engine only applies to the claude provider",
   "erro_conta_reconciliacao_falhou": "couldn't reconcile account {nome_conta}: {erro}",
   "erro_nome_invalido": "invalid name",

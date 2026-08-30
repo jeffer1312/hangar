@@ -94,6 +94,32 @@ def test_create_codex_usa_o_lancador_e_nao_pre_semeia_transcript(tmp_path):
     assert "revise este projeto" in comando
 
 
+def test_create_codex_com_resume_abre_a_conversa_existente(tmp_path):
+    """Retomar do Arquivo: o id vai pro lancador, que abre a TUI com `codex resume <id>`. O
+    historico ja esta no rollout, entao a sessao nova nasce com a conversa inteira."""
+    reg = SessionRegistry(projects_dir=tmp_path)
+    sid = "01a052d1-3e59-7441-9ed3-6bbd9e2704fc"
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.shutil, "which", return_value="/usr/bin/hangar-codex-tui"), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_sess:
+        info = reg.create("retomada", "/tmp/proj", provider="codex", resume_session_id=sid)
+    assert info.provider == "codex"
+    comando = new_sess.call_args[0][2]
+    assert "--resume" in comando and sid in comando
+
+
+def test_create_codex_recusa_id_de_conversa_invalido(tmp_path):
+    """O id vai pro comando do pane: aceitar lixo aqui e mandar lixo pro shell."""
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.shutil, "which", return_value="/usr/bin/hangar-codex-tui"), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_sess:
+        with pytest.raises(ValueError, match="session_id invalido"):
+            reg.create("retomada", "/tmp/proj", provider="codex",
+                       resume_session_id="; rm -rf /")
+    new_sess.assert_not_called()
+
+
 def test_create_codex_recusa_quando_o_lancador_nao_esta_no_path(tmp_path):
     """Sem o lancador o pane morre no ato e o tmux devolve 0 — a sessao evaporaria calada."""
     reg = SessionRegistry(projects_dir=tmp_path)

@@ -4567,13 +4567,14 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
     from app import tmux
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
-    # Codex nao retoma por aqui: a conversa dele vive num app-server (thread + rollout), nao num
-    # `--resume` de linha de comando. Recusa explicita — sem ela o create cairia no ramo do Claude e
-    # subiria o agente ERRADO com um uuid que ele nao conhece.
-    if body.provider == "codex":
-        raise HTTPException(409, detail=erro("erro_resume_codex", "codex resume nao suportado"))
     if body.provider != "claude" and body.provider not in archive_providers.PROVIDERS:
         raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
+    # O id da conversa Codex e o uuid do FIM do nome do rollout, e e ele que o `codex resume` recebe.
+    # Um nome fora desse padrao nao tem id pra retomar — e dizer "caminho invalido" (o que o
+    # ValueError generico daqui a pouco daria) manda procurar defeito no lugar errado.
+    if body.provider == "codex" and not archive_providers.UUID_RE.match(session_id):
+        raise HTTPException(400, detail=erro("erro_rollout_sem_id",
+                                             "nome de rollout sem id de conversa"))
     # Conta omitida (link antigo, chamador que nao sabe): descobre no disco. Deixar None aqui subia
     # o pane na conta do backend e o `--resume` morria com "No conversation found with session ID".
     # Conversa que nao existe nao vira erro AQUI: o archive_cwd logo abaixo faz a mesma busca e e
@@ -4597,7 +4598,10 @@ def resume_archived(project: str, session_id: str, body: ResumeArchivedBody = Re
         raise HTTPException(400, detail=erro("erro_motor_invalido", "motor invalido"))
     base = sanitize_session_name(Path(cwd).name) or "sessao"
     name, i = base, 2
-    while tmux.has_session(name):
+    # As MESMAS duas fontes que a criacao normal consulta (registry.create). Olhando so o tmux, um
+    # nome ja usado por uma sessao Codex viva passava por aqui e o conflito estourava la dentro,
+    # como um 409 com a mensagem de outro assunto.
+    while tmux.has_session(name) or codex_sessions.exists(name):
         name = f"{base}-{i}"
         i += 1
     try:

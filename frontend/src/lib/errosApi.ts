@@ -207,7 +207,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // Entrada invalida: nome, caminho, modelo, motor
   erro_config_dir_invalido: () => m.erro_config_dir_invalido(),
-  erro_resume_codex: () => m.erro_resume_codex(),
+  erro_rollout_sem_id: () => m.erro_rollout_sem_id(),
   erro_motor_sem_claude: () => m.erro_motor_sem_claude(),
   erro_conta_reconciliacao_falhou: (p) => m.erro_conta_reconciliacao_falhou({ nome_conta: String(p.nome_conta), erro: String(p.erro) }),
   erro_cwd_indisponivel: () => m.erro_cwd_indisponivel(),

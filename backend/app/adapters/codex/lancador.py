@@ -21,13 +21,18 @@ APPROVAL = "never"
 EXECUTAVEL = "hangar-codex-tui"
 
 
-def comando_do_lancador(cwd: str, initial_prompt: str | None = None) -> list[str]:
+def comando_do_lancador(cwd: str, initial_prompt: str | None = None,
+                        thread_id: str | None = None) -> list[str]:
     """O comando do pane de uma sessao Codex: o lancador unico, o MESMO nos tres chamadores.
 
     O nome da sessao nao entra aqui — `tmux new-session` carimba CP_SESSION_NAME no pane e o
     lancador le de la. Assim o comando nao repete a identidade que o tmux ja garante.
+
+    `thread_id` retoma uma conversa que ja existe (o "Retomar" do Arquivo) em vez de abrir uma nova.
     """
     argv = [EXECUTAVEL, "--cwd", cwd]
+    if thread_id:
+        argv += ["--resume", thread_id]
     if initial_prompt:
         argv += ["--prompt", initial_prompt]
     return argv

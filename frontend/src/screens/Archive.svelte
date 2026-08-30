@@ -181,16 +181,9 @@ import { intlLocale } from '../lib/locale';
              ler) -- so o nome do modelo fica gravado no transcript. Escolha e sua, nao memoria. -->
         <p class="engine-pick-hint">{m.arquivo_motor_escolha()}</p>
       {/if}
-      <!-- Codex nao retoma por aqui (o backend recusa com 409): a conversa dele vive no app-server.
-           Ler continua funcionando — o botao e que nao pode prometer o que nao acontece. -->
-      <button class="resume-btn" onclick={resumeConversation}
-              disabled={resuming || sel.provider === 'codex'}
-              title={sel.provider === 'codex' ? m.erro_resume_codex() : ''}>
+      <button class="resume-btn" onclick={resumeConversation} disabled={resuming}>
         {resuming ? m.arquivo_retomando() : m.sessao_retomar()}
       </button>
-      {#if sel.provider === 'codex'}
-        <p class="engine-pick-hint">{m.erro_resume_codex()}</p>
-      {/if}
       {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
     </div>
     {#if loadingChat}
