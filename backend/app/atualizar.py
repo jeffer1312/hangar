@@ -504,6 +504,14 @@ def _avisar_sessoes() -> None:
     Fail-soft de ponta a ponta: máquina sem `hangar-send` instalado não pode ter a atualização
     barrada por causa de um aviso.
     """
+    # Sob pytest o aviso NÃO sai. `_rodar` chama o `hangar-send` de VERDADE, e um teste do fluxo
+    # inteiro que esqueça de substituir esta função manda recado às sessões vivas de quem está
+    # rodando a suíte: medido em 30/08/2026, três avisos falsos de restart por execução do
+    # `pytest -q`, vindos de três testes, e o usuário os viu na tela. A trava mora aqui, e não em
+    # cada teste, porque teste novo nasce com o mesmo furo aberto.
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        _log.debug("sob pytest: aviso de restart suprimido")
+        return
     aviso = ("[hangar] o backend vai reiniciar agora por causa de uma atualização. "
              "Sua sessão continua viva; o app reconecta sozinho.")
     try:

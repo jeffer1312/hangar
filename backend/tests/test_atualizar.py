@@ -292,8 +292,28 @@ def test_hangar_send_ausente_nao_derruba_a_atualizacao(repo, monkeypatch):
     """Aviso é cortesia: máquina sem `hangar-send` não pode ficar sem atualizar por causa dele."""
     def _sem_binario(*a, **kw):
         raise OSError("hangar-send: not found")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")     # sem isto o aviso nem é tentado — ver abaixo
     monkeypatch.setattr(atualizar, "_rodar", _sem_binario)
     atualizar._avisar_sessoes()   # não levanta
+
+
+def test_a_suite_nunca_manda_recado_pras_sessoes_vivas(repo, monkeypatch):
+    """Medido em 30/08/2026: três testes do fluxo inteiro chamavam `_avisar_sessoes` sem substituí-la
+    e o `hangar-send` saía de verdade — três avisos falsos de restart por `pytest -q`, na tela de
+    quem estava trabalhando. A trava é da função, não de cada teste."""
+    chamadas = []
+
+    def _espia(args, **kw):
+        chamadas.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(atualizar, "_rodar", _espia)
+    atualizar._avisar_sessoes()
+    assert chamadas == []
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")     # fora do pytest o aviso sai como sempre
+    atualizar._avisar_sessoes()
+    assert chamadas and chamadas[0][:2] == ["hangar-send", "--group"]
 
 
 def test_falhou_mede_se_o_servidor_esta_no_ar(repo, monkeypatch):
