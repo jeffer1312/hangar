@@ -1,4 +1,4 @@
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 from pathlib import Path
 
 HOOK = str(Path(__file__).resolve().parent.parent / "hooks" / "state_hook.py")
@@ -60,4 +60,30 @@ def test_session_start_writes_active_marker(tmp_path):
 
 def test_no_active_marker_without_transcript_path(tmp_path):
     _run({"hook_event_name": "Stop", "session_id": "Y"}, tmp_path)
+    assert _active_jsonls(tmp_path) == []
+
+
+def test_sem_ancestral_claude_nao_grava_o_marcador_de_ativo(tmp_path):
+    """O marcador de ativo diz 'este transcript e o da sessao Claude <chave>'. Sem ancestral claude
+    a chave caia no `session_id` do PROPRIO evento — entao um hook rodando sob OUTRO agente (o
+    Codex tem motor de hooks com o mesmo contrato) gravava o rollout dele como se fosse transcript
+    de uma sessao Claude, e o registry o adotava por descendencia. Fechar na direcao segura: sem
+    ancestral encontrado, nao ha o que afirmar.
+
+    `setsid --fork` e o seam: o pai sai na hora e o hook e reparentado, entao a subida da arvore
+    nao acha o `claude` que roda a suite (sem isso o caso passaria por acidente do ambiente)."""
+    payload = {"hook_event_name": "Stop", "session_id": "SID-DE-OUTRO-AGENTE",
+               "transcript_path": "/r/rollout-x-01a05077-a46d-7cb3-a0cd-9d850d4baec4.jsonl"}
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(tmp_path)}
+    subprocess.run(["setsid", "--fork", sys.executable, HOOK],
+                   input=json.dumps(payload).encode(), env=env, check=True, timeout=10)
+    # O `--fork` devolve na hora: espera o hook terminar (ele grava o de ESTADO sempre, e e o
+    # ultimo sinal de que passou pelo bloco do ativo).
+    marcador = tmp_path / ".hangar-state" / "SID-DE-OUTRO-AGENTE.json"
+    for _ in range(50):
+        if marcador.exists():
+            break
+        time.sleep(0.1)
+    assert marcador.exists(), "o hook nem chegou a rodar"
+    time.sleep(0.2)
     assert _active_jsonls(tmp_path) == []

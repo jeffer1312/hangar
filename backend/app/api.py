@@ -246,6 +246,10 @@ async def _lifespan(app: FastAPI):
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
     # A linha vive no loop do servidor, mas o send_prompt roda em thread — ver pi_inbox.entregar_sync.
     INBOX.ligar_loop(asyncio.get_running_loop())
+    # Mesmo motivo, outro caminho: o drain do Codex e assincrono (app-server) e quem o chama sao
+    # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
+    global _loop_servidor
+    _loop_servidor = asyncio.get_running_loop()
     try:
         yield
     finally:
@@ -753,12 +757,49 @@ _CONFIRM_GRACE_KIMI = 30.0
 _RECHECA_KIMI = 5.0
 
 
+# Loop do servidor, pra pontes sync->async (mesmo papel do `INBOX.ligar_loop`). Setado no lifespan.
+_loop_servidor: asyncio.AbstractEventLoop | None = None
+
+
+def _drenar(name: str, jsonl: str, provider: str) -> int:
+    """Entrega a fila pendente pelo caminho DAQUELE provider.
+
+    O `terminal_input.drain` digita no pane, e no Codex isso poria a mensagem do usuario duas vezes
+    na conversa (a entrega de verdade e o `turn/start` do app-server). Como o adapter do Codex e
+    assincrono e quem chama isto e sempre uma thread (Timer, hook, request fora do loop), a ponte e
+    a mesma do `pi_inbox.entregar_sync`: agendar no loop do servidor e esperar o resultado."""
+    if provider != "codex":
+        return drain(name, jsonl, provider)
+    loop = _loop_servidor
+    if loop is None:
+        _log.warning("drain codex name=%s: sem loop do servidor (fila fica pendente)", name)
+        return 0
+    fut = None
+    try:
+        fut = asyncio.run_coroutine_threadsafe(get_adapter("codex").drain(name, jsonl), loop)
+        # Teto so pra nao pendurar a thread se o loop morrer no meio (restart): quem manda no
+        # relogio e o proprio adapter, que ja tem os timeouts do app-server.
+        return fut.result(120)
+    except Exception:
+        # `cancel()` pelo mesmo motivo do `pi_inbox.entregar_sync`: sem ele a corrotina segue viva
+        # no loop e pode ENTREGAR depois de este chamador ja ter decidido "ficou pendente" — a
+        # proxima rodada entrega de novo e a mesma mensagem chega duas vezes ao agente. So tem
+        # efeito se ela ainda nao passou do proximo await; passou disso, a fila ja esta marcada.
+        # `fut` continua None se o proprio run_coroutine_threadsafe levantar (loop fechando).
+        if fut is not None:
+            fut.cancel()
+        # Falha VISIVEL, nunca mensagem duplicada: a entrada segue pendente e o proximo fim de
+        # turno tenta de novo; a bolha "na fila" continua na tela enquanto isso.
+        _log.warning("drain codex name=%s falhou (fila segue pendente)", name, exc_info=True)
+        return 0
+
+
 def _drain_session(name: str) -> None:
     """Entrega enfileiradas pendentes desta sessao (best-effort, roda fora do request)."""
     try:
         info = _cached_info_sync(name)
         if info and info.jsonl:
-            drain(name, info.jsonl, info.provider)
+            _drenar(name, info.jsonl, info.provider)
     except Exception:
         pass
 
@@ -858,7 +899,7 @@ def _confirm_and_drain(name: str) -> None:
                               "transcript=%r", name, r.get("id"), r.get("attempts"), txt[:200],
                               (linha_mais_parecida(txt, committed) or "")[:200])
                 _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
-                drain(name, info.jsonl, info.provider)
+                _drenar(name, info.jsonl, info.provider)
         # Sobrou entrada AINDA DENTRO do prazo (o reconcile a pulou por "recente demais")? Volta a
         # olhar. Os agendamentos usam _CONFIRM_GRACE (8,5s) e o prazo do Kimi e 30s, entao num turno
         # curto a unica checagem caia cedo demais e a entrada ficava sem confirmar E sem desistir —
@@ -1031,7 +1072,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                     m = hook_state.get_state(session_id)
                     if m and corrige_ocioso_kimi(m, info.jsonl)[0] == "working":
                         real = "working"
-                sent = drain(info.name, info.jsonl, info.provider)
+                sent = _drenar(info.name, info.jsonl, info.provider)
                 # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
                 # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
                 if sent or real == "idle":

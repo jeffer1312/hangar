@@ -610,6 +610,9 @@ def deliverable(name: str) -> bool:
 # Enter de A submetia os dois CONCATENADOS. setdefault e atomico no CPython (pior caso: Lock orfao).
 _send_locks: dict[str, threading.Lock] = {}
 
+# Providers cuja entrega NAO passa pelo teclado do pane — ver o guard no topo do `drain`.
+_SEM_TECLA = frozenset({"codex"})
+
 
 def _send_lock(name: str) -> threading.Lock:
     return _send_locks.setdefault(name, threading.Lock())
@@ -619,6 +622,15 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
     Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
     entrada 'stranded', nao o lote, e recheca o overlay (via send_prompt) a cada iteracao."""
+    # Provider sem entrega por TECLA sai aqui, ANTES de qualquer coisa que toque o pane. No Codex a
+    # fila e entregue pelo adapter (`turn/start` no app-server): a TUI ja recebeu o texto por outro
+    # caminho, entao digitar seria a mensagem do usuario entrando duas vezes na conversa — o mesmo
+    # incidente ja registrado no Pi e no Kimi, aqui com o agravante de a entrega original ter sido
+    # bem-sucedida. A entrada fica pendente de proposito: quem a entrega e `CodexAdapter.drain`.
+    if provider in _SEM_TECLA:
+        _log.debug("drain name=%s: provider %s nao entrega por tecla (fila fica pro adapter)",
+                   name, provider)
+        return 0
     q = PromptQueue(name)
     # ECC: cheap-check SEM subprocess primeiro — a maioria das reconexoes nao tem pendencia; sem isto,
     # todo (re)connect dispararia um capture-pane atoa (pressao no threadpool em rajada de mobile).

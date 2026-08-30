@@ -11,7 +11,9 @@ close_sync). ensure_running e o resume LAZY: pos-restart do backend o processo a
 o sidecar duravel (app.adapters.codex.sessions) guarda thread_id/rollout_path/cwd -> ensure_running
 reabre o AppServerClient e retoma pelo thread/resume sob demanda."""
 import asyncio
+import json
 import logging
+import os
 import shlex
 import time
 from dataclasses import dataclass
@@ -20,6 +22,8 @@ from typing import AsyncIterator, Callable, Optional
 
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.appserver import AppServerClient
+from app.hook_state import hook_state
+from app.models import session_key
 from app.adapters.codex.preview import CodexPreviewSource
 from app.adapters.codex.rollout import parse_rollout_line
 from app import tmux
@@ -231,6 +235,61 @@ def format_status_line(
     if not parts:
         return None
     return " │ ".join(parts)
+
+
+# Quanto do FIM do rollout basta pra achar o ultimo `token_count` e o ultimo `turn_context`. Um
+# turno grande (varias ferramentas) cabe folgado; nao achando, a linha sai incompleta em vez de
+# custar a leitura do arquivo inteiro a cada poll da lista.
+_STATUS_TAIL = 512 << 10
+
+
+def status_line_do_rollout(path: str, now: Optional[float] = None) -> Optional[str]:
+    """A statusline do CARD, montada do proprio rollout. None quando nao ha nada util.
+
+    O card e a lista, sem SSE aberto — e a TUI do Codex nao pode ser raspada (sem regua nem caixa
+    de composer, a captura devolveria as duas ultimas linhas verbatim, uma segunda statusline).
+    Entao a linha sai do mesmo arquivo que o chat ja le. Os campos do rollout sao snake_case; o
+    `format_status_line` fala o camelCase do app-server, e a traducao mora aqui."""
+    tc = ctx = None
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _STATUS_TAIL))
+            linhas = fh.read().split(b"\n")
+    except OSError:
+        return None
+    for ln in reversed(linhas):
+        if not ln.strip():
+            continue
+        try:
+            obj = json.loads(ln)
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        payload = obj.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if tc is None and payload.get("type") == "token_count":
+            tc = payload
+        elif ctx is None and obj.get("type") == "turn_context":
+            ctx = payload
+        if tc is not None and ctx is not None:
+            break
+
+    info = (tc or {}).get("info") or {}
+    total = info.get("last_token_usage") or {}
+    usage = {"last": {"inputTokens": total.get("input_tokens"),
+                      "outputTokens": total.get("output_tokens")},
+             "modelContextWindow": info.get("model_context_window")} if total else None
+    limites = (tc or {}).get("rate_limits") or {}
+    janelas = {k: {"windowDurationMins": (limites.get(k) or {}).get("window_minutes"),
+                   "usedPercent": (limites.get(k) or {}).get("used_percent"),
+                   "resetsAt": (limites.get(k) or {}).get("resets_at")}
+               for k in ("primary", "secondary") if limites.get(k)}
+    modo = ((ctx or {}).get("collaboration_mode") or {}).get("settings") or {}
+    return format_status_line((ctx or {}).get("model"), modo.get("reasoning_effort"),
+                              usage, janelas or None, now)
 
 
 class CodexAdapter:
@@ -678,6 +737,16 @@ class CodexAdapter:
             return False
         return True
 
+    def _marcador_diz_ocioso(self, name: str) -> bool:
+        """O marcador de estado desta sessao diz que nao ha turno aberto? Ausente = nao sabe (False:
+        so o que se prova destrava)."""
+        meta = codex_sessions.load(name) or {}
+        rollout = meta.get("rollout_path")
+        if not rollout:
+            return False
+        m = hook_state.get_state(session_key(rollout))
+        return bool(m and m[0] == "idle")
+
     async def deliverable(self, name: str) -> bool:
         # Predicado BARATO (nao spawna): so olha o in_progress cacheado. Sessao nao anexada = nada
         # em andamento -> True (send_prompt e quem chama ensure_running e realmente entrega).
@@ -685,6 +754,16 @@ class CodexAdapter:
         if sess is None:
             return True
         if not sess["in_progress"]:
+            return True
+        # O marcador do hook e uma fonte INDEPENDENTE do nosso estado em memoria, e quem o escreve e
+        # o proprio Codex. Turno fechado la = nao ha turno aqui, ponto. Sem isto, um `turn/completed`
+        # perdido (app-server retomado no meio, SSE caido) deixava a sessao ASSINADA "ocupada" pra
+        # sempre: todo envio virava fila e a fila nunca drenava — medido em 30/08/2026, com a lista
+        # mostrando a sessao ociosa e o /input respondendo "sessao ocupada" no mesmo instante. O
+        # escape por tempo logo abaixo nao cobria isso: ele so vale pra sessao nao assinada.
+        # So DESTRAVA: marcador "working" nao e usado pra segurar nada (quem segura e o in_progress).
+        if self._marcador_diz_ocioso(name):
+            sess["in_progress"] = False
             return True
         # Quem LIMPA in_progress e o turn/completed -- e ele so chega pra quem assinou a thread.
         # Numa sessao que nunca assinou, in_progress ficaria True pra sempre: deliverable() eterno

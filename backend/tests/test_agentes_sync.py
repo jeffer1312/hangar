@@ -258,6 +258,31 @@ def test_codex_guarda_env_key_e_nao_a_chave(tmp_path):
     assert d["projects"]["/tmp"]["trust_level"] == "trusted"
 
 
+def test_reescrever_o_bloco_nao_apaga_o_que_o_codex_apendou(tmp_path):
+    """O Codex grava a confiança de cada hook aprovado como `[hooks.state."..."]` NO FIM do
+    arquivo — e o fim do arquivo é o nosso marcador de fechamento, então essas tabelas caem dentro
+    do nosso bloco. Medido em 30/08/2026: 18 delas ali. Reescrever o bloco as apagaria, e o
+    sintoma seria criar sessão Codex voltando a falhar sem nada ligando uma coisa à outra."""
+    _homes(tmp_path, "codex")
+    cfg = tmp_path / ".codex" / "config.toml"
+    ok, _ = agentes_sync.gravar_codex("cred", "https://x.dev/v1", "sk-1", MODELOS, home=tmp_path)
+    assert ok
+    # O Codex apenda depois de tudo — ou seja, DENTRO do bloco, antes do marcador de fim.
+    texto = cfg.read_text()
+    fim = agentes_sync._sentinelas("cred")[1]
+    confianca = '[hooks.state."/h/hooks.json:stop:1:0"]\ntrusted_hash = "sha256:abc"\n'
+    cfg.write_text(texto.replace(fim, confianca + fim))
+
+    ok, _ = agentes_sync.gravar_codex("cred", "https://y.dev/v1", "sk-2", MODELOS, home=tmp_path)
+    assert ok
+    d = tomllib.loads(cfg.read_text())
+    assert d["hooks"]["state"]["/h/hooks.json:stop:1:0"]["trusted_hash"] == "sha256:abc"
+    assert d["model_providers"]["cred"]["base_url"] == "https://y.dev/v1"   # o bloco atualizou
+    # E saiu de dentro do bloco: o próximo append do Codex já cai fora.
+    corpo = cfg.read_text()
+    assert corpo.index("hooks.state") > corpo.index(fim)
+
+
 def test_agente_nao_instalado_nao_e_erro(tmp_path):
     r = agentes_sync.sincronizar("cred", "https://x.dev", "sk-abc", MODELOS,
                                  homes={a: tmp_path for a in agentes_sync.ALVOS})

@@ -277,7 +277,11 @@ def _list_sig(infos) -> str:
           getattr(i, "plan_task", None), getattr(i, "plan_task_total", None),
           getattr(i, "plan_complete", None),
           tuple(map(tuple, getattr(i, "plan_tasks", None) or [])),
-          getattr(i, "plan_hidden", None))
+          getattr(i, "plan_hidden", None),
+          # `problema` entra pelo mesmo motivo do engine: ele aparece e some sem mexer em mais
+          # nada (o hook e aprovado na TUI e a sessao passa a ter marcador), e sem isto o aviso na
+          # tela ficaria preso ate outra coisa qualquer mudar a assinatura.
+          getattr(i, "problema", None))
          for i in infos],
         ensure_ascii=False,
     )

@@ -336,6 +336,7 @@
   "sessao_limite_volta": "Limite de uso atingido — volta {n}",
   "sessao_motor": "Motor: {n}",
   "sessao_travada": "Pode estar travada — sem atividade há um tempo",
+  "problema_codex_hooks": "Trabalhando, mas o estado não chega: abra o codex no terminal e aprove os hooks",
   "board_pareada_com_clicar": "pareada com {n} — clicar reúne o grupo aqui",
   "board_pareada_com": "pareada com {n}",
   "board_peer_grupo": "📣 grupo · {n}",

@@ -24,8 +24,9 @@ from app.adapters.codex import adapter as codex_adapter
 from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
-                       aprovacao_kimi, status_line as _pane_status)
+                       aprovacao_kimi, codex_turno_aberto, status_line as _pane_status)
 from app.statusline import read as _sidecar_status
+from app.adapters.codex.adapter import status_line_do_rollout as _codex_status_line
 from app.hook_state import hook_state
 from app.planprog import plan_progress, plano_escondido
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
@@ -1132,11 +1133,25 @@ class SessionRegistry:
             corrigidos, aprovacoes = await asyncio.to_thread(_kimi_sweep)
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
         for info in infos:
-            # Sessoes Codex nao vivem no tmux -> nunca raspar o pane (capture_pane erraria numa
-            # sessao inexistente). O estado vivo (working/idle) chega em runtime pelo adapter via SSE;
-            # aqui fica o default idle + last_activity do rollout.
+            # Codex: le o marcador como os outros, mas NUNCA raspa o pane. A TUI dele nao tem regua
+            # nem caixa de composer, entao `classify` devolveria as duas ultimas linhas verbatim —
+            # viraria uma segunda statusline, pior que a que o adapter ja monta. Sem marcador nao
+            # ha fallback nenhum: fica o default idle (ou o aviso de hooks, logo abaixo).
             if getattr(info, "provider", "claude") == "codex":
                 info.last_activity = _jsonl_mtime(info.jsonl)
+                marker = hook_state.get_state(_sid(info.jsonl))
+                if marker and marker[0] != "awaiting_input":
+                    # awaiting_input nao existe no Codex (o evento equivalente nao existe la); se
+                    # aparecer, e marcador de outra coisa e nao vale mais que o default.
+                    info.state = marker[0]
+                    if marker[0] != "working":
+                        self._label_cache.pop(info.name, None)
+                elif await asyncio.to_thread(codex_turno_aberto, info.jsonl):
+                    # Turno andando no rollout e marcador nenhum = o hook nao esta rodando, e a
+                    # unica causa conhecida e hook nao aprovado na TUI do Codex. Dizer isso e o que
+                    # torna visivel o unico modo de falha deste desenho — calado, a sessao ficaria
+                    # eternamente "ociosa" enquanto trabalha.
+                    info.problema = "codex_hooks_nao_aprovados"
                 continue
             aprov = aprovacoes.get(info.name)
             if aprov is not None:
@@ -1250,8 +1265,29 @@ class SessionRegistry:
                 # Label NAO segue o preserve do status_line: statusline velha ainda e verdadeira
                 # (modelo/custo mudam devagar); spinner velho vira fantasma — melhor sem barrinha.
                 self._label_cache.pop(info.name, None)
+        # Codex: a linha sai do PROPRIO rollout (modelo, contexto e cota estao la), com o mesmo
+        # cache e o mesmo TTL do sweep de pane — o card nao tem SSE aberto, e raspar a TUI esta
+        # proibido. SEM o `_STATUS_BUDGET` de proposito: aquele teto existe pra limitar FORKS de
+        # `capture-pane`, e aqui e leitura do fim de um arquivo no threadpool.
+        # O ticket pedia isto "pelo sidecar de status". Nao ha sidecar: quem escreveria seria este
+        # mesmo processo, lendo este mesmo arquivo — o sidecar existe pra que QUEM RENDERIZA
+        # publique o que so ele sabe (ver app/statusline.py), e aqui o backend sabe tudo. Gravar
+        # um arquivo pra ler de volta seria so um passo a mais entre a mesma fonte e o mesmo card.
+        codexes = [i for i in infos
+                   if getattr(i, "provider", "claude") == "codex" and i.jsonl
+                   and now_m - self._status_cache.get(i.name, (0.0, None))[0] > _STATUS_TTL]
+        if codexes:
+            linhas = await asyncio.gather(*[
+                asyncio.to_thread(_codex_status_line, i.jsonl) for i in codexes])
+            for info, linha in zip(codexes, linhas):
+                # Linha nova ou a ULTIMA BOA: preservar segue a regra do sweep de pane — apagar
+                # piscaria o badge do card e forcaria re-emissao da lista a toa.
+                anterior = self._status_cache.get(info.name, (0.0, None))[1]
+                self._status_cache[info.name] = (time.monotonic(), linha or anterior)
         for info in infos:
-            if getattr(info, "provider", "claude") != "codex":
+            if getattr(info, "provider", "claude") == "codex":
+                info.status_line = self._status_cache.get(info.name, (0.0, None))[1]
+            else:
                 # Sidecar antes do pane: a captura traz a linha ja CORTADA na largura da janela
                 # (quem renderiza trunca antes de imprimir, ver app/statusline.py). Ler o arquivo e
                 # muito mais barato que a captura — nao entra no budget de forks acima.

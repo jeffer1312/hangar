@@ -120,7 +120,12 @@ try:
     if tp:
         boot_sid, claude_pid = _boot_claude(os.getppid())
         boot = boot_sid or sid  # sem sid no cmdline (sessao bare) -> chave = o proprio session_id
-        if boot:
+        # `claude_pid is not None` = um ancestral claude foi REALMENTE encontrado. Sem essa
+        # condicao, o hook rodando sob outro agente (o Codex tem motor de hooks com o mesmo
+        # contrato e o mesmo payload) caia no `sid` do proprio evento e gravava o rollout DELE como
+        # se fosse o transcript de uma sessao Claude — que o registry entao adota por descendencia.
+        # Marcador que nao se pode provar nao e gravado.
+        if boot and claude_pid is not None:
             # cwd + pid: permitem ao backend casar marcador<->pane por descendencia de processo,
             # resolvendo sessoes BARE (sem --session-id) de forma deterministica.
             _write_marker(base, ".hangar-active", boot,

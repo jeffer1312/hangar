@@ -53,6 +53,10 @@ export interface SessionInfo {
   // True quando "working" ha mais de CP_STALL_SECONDS sem avancar (feature #7: watchdog de travada) —
   // so tinge a linha; o backend (stall_watch.py) e quem decide o push.
   stalled?: boolean;
+  // Problema DESTA sessão que o app mostra em vez de esconder. Vem como CÓDIGO do backend e é
+  // traduzido aqui (regra de i18n). Hoje só 'codex_hooks_nao_aprovados': sessão Codex com turno
+  // andando no rollout e nenhum marcador de estado — sem isto ela apareceria ociosa trabalhando.
+  problema?: string | null;
   // Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (best-effort). limit_reset
   // = horario cru do reset ("3pm"/"15:30"), pro chip "limitado · HH:MM".
   limited?: boolean;

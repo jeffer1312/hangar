@@ -1,4 +1,5 @@
 """Testes do parser do rollout JSONL do Codex CLI -> ChatEvent (mesmo shape do Claude)."""
+import json
 from pathlib import Path
 
 from app.adapters.codex.rollout import parse_rollout_line, parse_rollout_obj
@@ -113,3 +114,36 @@ def test_real_fixture_parses():
            for e in parse_rollout_line(ln)]
     kinds = {e.kind for e in evs}
     assert "user_msg" in kinds and "assistant_msg" in kinds
+
+
+# -- Os dois pré-requisitos do estado ao vivo (ticket 02) ----------------------
+# Ligar o marcador de estado do Codex faz o backend passar a rodar o gatilho de transição também
+# nesse provider, e lá dentro moram dois caminhos que digitam no pane. Estes casos travam a
+# regressão ANTES de ela existir.
+
+def test_confirmacao_de_entrega_entende_o_rollout(tmp_path):
+    # Sem o ramo do Codex o oráculo devolve set() vazio, e vazio ali significa "nada chegou" — que
+    # é exatamente o que autoriza o reconcile a re-enfileirar e o drain a REDIGITAR a mensagem do
+    # usuário na conversa (o incidente já registrado no Pi e no Kimi).
+    from app import pqueue
+    texto = "responda apenas: ok"
+    f = tmp_path / "rollout-2026-08-30T10-00-00-019f5c00-5d7d-7dd2-b2cb-085ca6d76251.jsonl"
+    f.write_text("\n".join([
+        json.dumps({"timestamp": "2026-08-30T10:00:00.000Z", "type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text",
+                         "text": "<environment_context>x</environment_context>"}]}}),
+        json.dumps({"timestamp": "2026-08-30T10:00:01.000Z", "type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": texto}]}}),
+    ]) + "\n", encoding="utf-8")
+
+    committed = pqueue.committed_user_lines(str(f), provider="codex")
+    assert texto in committed
+    assert "<environment_context>x</environment_context>" not in committed   # não é fala do usuário
+
+
+def test_confirmacao_de_entrega_no_rollout_real():
+    from app import pqueue
+    p = Path(__file__).parent / "fixtures/codex/rollout_sample.jsonl"
+    assert "responda apenas: ok" in pqueue.committed_user_lines(str(p), provider="codex")

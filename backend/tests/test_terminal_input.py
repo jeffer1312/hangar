@@ -71,6 +71,19 @@ def test_drain_sends_pending_and_marks_delivered(tmp_queue, monkeypatch):
     assert all(e["delivered"] for e in PromptQueue("cc").load())
 
 
+def test_drain_recusa_o_codex_antes_de_tocar_o_pane(tmp_queue, monkeypatch):
+    # No Codex a entrega e a do adapter (`turn/start` no app-server), NUNCA tecla no pane: a TUI
+    # de la ja recebeu o texto por outro caminho, e digitar de novo poe a mensagem do usuario duas
+    # vezes na conversa. Este caminho recusa o provider em vez de tentar.
+    PromptQueue("cx").append("um", delivered=False)
+    monkeypatch.setattr(
+        terminal_input.TerminalInput, "send_prompt",
+        lambda self, name, text, provider="claude", pane_id=None, msg_id=None: pytest.fail(
+            "o drain de terminal digitou no pane de uma sessao Codex"))
+    assert terminal_input.drain("cx", "/no/such.jsonl", "codex") == 0
+    assert PromptQueue("cx").load()[0]["delivered"] is False   # segue pendente pro adapter entregar
+
+
 def test_drain_noop_and_reverts_when_overlay(tmp_queue, monkeypatch):
     PromptQueue("cc").append("um", delivered=False)
     monkeypatch.setattr(

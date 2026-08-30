@@ -296,16 +296,16 @@ def _avisa_uma_vez(chave: str, msg: str, *args) -> None:
     _log.warning(msg, *args)
 
 
-def _kimi_turno_aberto(jsonl: str, teto: int = _KIMI_TETO) -> Optional[bool]:
-    """Ha turno ABERTO no fim do wire.jsonl? True/False; None = nao deu pra saber.
+def _turno_aberto(jsonl: str, filtro: re.Pattern, decide, teto: int, aviso: str) -> Optional[bool]:
+    """Le o fim do arquivo de TRAS PRA FRENTE ate a primeira linha que `decide` reconheca como
+    fronteira de turno. True = turno aberto, False = fechado, None = nao deu pra saber.
 
-    Le o arquivo de TRAS PRA FRENTE ate a primeira linha que seja uma fronteira de turno — na
-    pratica isso e uma ou duas linhas, porque o wire de uma sessao parada termina no `turn.ended`.
-    O `teto` existe pro caso patologico (arquivo sem nenhum evento de turno): melhor devolver None e
-    cair no mtime do que varrer megabytes a cada poll.
+    Na pratica isso e uma ou duas linhas, porque o transcript de uma sessao parada termina na
+    propria fronteira. O `teto` existe pro caso patologico (arquivo sem evento de turno nenhum):
+    melhor devolver None do que varrer megabytes a cada poll.
 
-    O regex e so o filtro barato — quem decide e o `type` de TOPO da linha, via json. Sem isso, uma
-    mensagem do usuario CITANDO "turn.ended" (este commit, por exemplo) seria lida como fronteira.
+    `filtro` e so o filtro BARATO (regex sobre os bytes) — quem decide e o `decide`, que le o json.
+    Sem essa separacao, uma mensagem do usuario CITANDO o nome do evento vira fronteira.
     """
     try:
         with open(jsonl, "rb") as fh:
@@ -321,25 +321,57 @@ def _kimi_turno_aberto(jsonl: str, teto: int = _KIMI_TETO) -> Optional[bool]:
                 # rabo cortado pelo chunk e volta colada no proximo pedaco.
                 resto, inicio = (b"", 0) if pos == 0 else (linhas[0], 1)
                 for ln in reversed(linhas[inicio:]):
-                    if not _KIMI_TURNO_RE.search(ln):
+                    if not filtro.search(ln):
                         continue
                     try:
-                        tipo = json.loads(ln).get("type")
+                        obj = json.loads(ln)
                     except (ValueError, AttributeError):
                         continue
-                    if tipo in _KIMI_FECHA:
-                        return False
-                    if tipo in _KIMI_ABRE:
-                        return True
+                    r = decide(obj)
+                    if r is not None:
+                        return r
     except OSError:
         # None faz o chamador voltar a decidir SO pelo mtime — que e exatamente o comportamento que
         # esta funcao existe pra corrigir. Sem log, "decidiu False" e "desistiu e caiu no mtime"
         # ficam indistinguiveis, e uma sessao presa em "em execucao" nao tem onde ser diagnosticada.
-        _avisa_uma_vez(jsonl, "kimi: nao deu pra ler o fim do wire jsonl=%s", jsonl)
+        _avisa_uma_vez(jsonl, aviso + ": nao deu pra ler o fim de %s", jsonl)
         return None
-    _avisa_uma_vez(jsonl, "kimi: nenhuma fronteira de turno no fim de %s — decidindo pelo mtime",
-                   jsonl)
+    _avisa_uma_vez(jsonl, aviso + ": nenhuma fronteira de turno no fim de %s", jsonl)
     return None
+
+
+def _kimi_turno_aberto(jsonl: str, teto: int = _KIMI_TETO) -> Optional[bool]:
+    """Ha turno ABERTO no fim do wire.jsonl do Kimi? True/False; None = nao deu pra saber."""
+    def decide(obj):
+        tipo = obj.get("type")
+        return False if tipo in _KIMI_FECHA else (True if tipo in _KIMI_ABRE else None)
+
+    return _turno_aberto(jsonl, _KIMI_TURNO_RE, decide, teto, "kimi")
+
+
+# Fronteira de turno no rollout do Codex. `task_started` abre; `task_complete` e `turn_aborted`
+# fecham (medido nos rollouts reais: um turno interrompido termina em `turn_aborted`, sem
+# `task_complete`). Sao `event_msg`, entao o tipo mora no `payload`, nao no topo da linha.
+_CODEX_ABRE = ("task_started",)
+_CODEX_FECHA = ("task_complete", "turn_aborted")
+_CODEX_TURNO_RE = re.compile(rb'"type"\s*:\s*"(task_started|task_complete|turn_aborted)"')
+# Mesmo valor do teto do Kimi, com nome proprio: a razao dele e o tamanho de um turno, e o turno de
+# um provider nao e o do outro — reusar a constante alheia esconderia isso na hora de calibrar.
+_CODEX_TETO = 4 << 20
+
+
+def codex_turno_aberto(jsonl: str, teto: int = _CODEX_TETO) -> Optional[bool]:
+    """Ha turno ABERTO no fim do rollout do Codex? True/False; None = nao deu pra saber.
+
+    Quem pergunta e a lista: sessao Codex com turno andando e marcador de estado NENHUM significa
+    que o hook nao esta rodando — e a unica causa conhecida disso e hook nao aprovado na TUI."""
+    def decide(obj):
+        if obj.get("type") != "event_msg":
+            return None
+        tipo = (obj.get("payload") or {}).get("type")
+        return False if tipo in _CODEX_FECHA else (True if tipo in _CODEX_ABRE else None)
+
+    return _turno_aberto(jsonl, _CODEX_TURNO_RE, decide, teto, "codex")
 
 
 def _kimi_mtime_da_sessao(jsonl: str) -> Optional[float]:

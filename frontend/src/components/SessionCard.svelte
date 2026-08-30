@@ -58,6 +58,11 @@ import * as m from '../paraglide/messages';
   // Travada (feature #7): "working" ha muito tempo sem avancar (watchdog do backend). Tinge o chip
   // de estado com um anel âmbar sutil — nao grita, so avisa.
   const stalled = $derived(session.stalled === true);
+  // Código -> texto: o backend manda só o código (regra de i18n). Código desconhecido some em vez
+  // de virar um id cru na tela.
+  const problema = $derived(
+    session.problema === 'codex_hooks_nao_aprovados' ? m.problema_codex_hooks() : null,
+  );
 
   // Rate-limit radar (feature #8): banner de limite de uso detectado no pane (best-effort). Chip
   // proprio "⏳ HH:MM" ao lado do state-chip — calmo, so avisa quando volta.
@@ -362,7 +367,13 @@ import * as m from '../paraglide/messages';
     <div class="row-right">
       <!-- Chip so quando o estado pede atencao (idle = ponto colorido no lead, sem pilula "pronto"
            repetida em toda linha). -->
-      {#if showStateChip}
+      {#if problema}
+        <!-- Problema desta sessão (hoje: sessão Codex trabalhando sem hook aprovado, que sem isto
+             apareceria "pronta" para sempre). Mesma família visual do travada: âmbar, calmo. -->
+        <span class="state-chip stalled" title={problema}>
+          <StateChip state={session.state} title={problema} />
+        </span>
+      {:else if showStateChip}
         <!-- O envelope .state-chip existe pelo anel de travada e pela regra de papel de parede do
              app.css que ja mirava essa classe; a pilula em si e o StateChip. -->
         <span class="state-chip" class:stalled>

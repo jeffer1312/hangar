@@ -66,6 +66,23 @@ def test_desempate_prefere_o_home_principal(tmp_path, ordem):
     assert _rodar(home) == str(home / PRINCIPAL / "skills" / "uma-skill")
 
 
+def test_hook_de_estado_do_app_entra_no_hooks_json_do_codex(tmp_path):
+    """O estado ao vivo da sessão Codex vem do marcador que este hook grava, e o dono do arquivo é
+    o INSTALADOR: o comando carrega o caminho do venv deste checkout, então recriar venv, mover o
+    repo ou subir de outra worktree mudaria o arquivo — e hook alterado é hook não aprovado, que
+    não roda e não avisa. Escrevendo aqui, o arquivo só muda num momento explícito."""
+    home = _home(tmp_path, [PRINCIPAL])
+    _rodar(home)
+    cfg = json.loads((home / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    eventos = cfg["hooks"]
+    for ev in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"):
+        comandos = [e["command"] for g in eventos.get(ev, []) for e in g["hooks"]]
+        assert any("state_hook.py" in c for c in comandos), f"sem hook de estado em {ev}"
+    # `Notification` não existe no Codex — escrevê-lo seria hook que nunca roda, que é pior que
+    # hook ausente (parece ligado).
+    assert "Notification" not in eventos
+
+
 def test_poda_link_antigo_para_conta_secundaria(tmp_path):
     """Link que a ponte fez para o cache de uma conta secundária e que não volta ao `wanted` (o
     agente já varre aquela skill sozinho) tem que sair — parado ele aponta pra um cache que a

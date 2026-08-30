@@ -375,6 +375,10 @@ import * as m from '../paraglide/messages';
   const planChip = $derived(planBadge(session));
   // Provider do card — só as não-Claude ganham chip (ver providerTag em lib/format).
   const provTag = $derived(providerTag(session.provider));
+  // Código -> texto, igual ao SessionCard: código desconhecido some em vez de virar id cru na tela.
+  const problema = $derived(
+    session.problema === 'codex_hooks_nao_aprovados' ? m.problema_codex_hooks() : null,
+  );
 </script>
 
 <article class="bcard" class:attention={session.state === 'awaiting_input'} class:fill>
@@ -395,6 +399,12 @@ import * as m from '../paraglide/messages';
          por-sessão do Chat; ver CLAUDE.md). -->
     {#if fill}
       <StateChip state={session.state} />
+    {/if}
+    <!-- Problema desta sessão: no board e no canvas ela está numa COLUNA por estado, então uma
+         sessão Codex trabalhando sem hook aprovado ficaria calada na coluna errada. O aviso vem
+         junto do nome, onde o olho já está. -->
+    {#if problema}
+      <span class="bc-problema" title={problema} aria-label={problema}>⚠</span>
     {/if}
     <span class="bc-time">{relativeTime(session.last_activity)}</span>
     <span class="bc-open" title={m.board_abrir_chat()}>⤢</span>
@@ -669,6 +679,7 @@ import * as m from '../paraglide/messages';
     min-height: 0; min-width: 0; line-height: inherit;
   }
   .bc-chip-btn:hover { filter: brightness(1.2); }
+  .bc-problema { color: var(--warning); flex-shrink: 0; cursor: help; }
   .bc-time { margin-left: auto; }
   .bc-open { color: var(--text-muted); flex-shrink: 0; }
   /* Fade SÓ no topo (o rodapé é a msg mais recente — o que você não quer apagar). Dois masks:

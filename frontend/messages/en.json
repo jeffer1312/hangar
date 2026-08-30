@@ -336,6 +336,7 @@
   "sessao_limite_volta": "Usage limit reached — resets {n}",
   "sessao_motor": "Engine: {n}",
   "sessao_travada": "May be stuck — no activity for a while",
+  "problema_codex_hooks": "Working, but its state never arrives: open codex in the terminal and approve the hooks",
   "board_pareada_com_clicar": "paired with {n} — clicking gathers the group here",
   "board_pareada_com": "paired with {n}",
   "board_peer_grupo": "📣 group · {n}",

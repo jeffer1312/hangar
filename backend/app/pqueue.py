@@ -300,8 +300,16 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str] | Non
     # Import local pelo mesmo motivo do merged_history: app.adapters importa app.pqueue no boot.
     pi_parse = None
     kimi_parse = None
+    codex_parse = None
     if provider == "pi":
         from app.adapters.pi.transcript import parse_obj as pi_parse
+    elif provider == "codex":
+        # Codex: o texto do usuario vive em `response_item`/`message` com role "user", e o parser
+        # ainda tira o contexto que o CLI injeta com esse mesmo role (environment_context,
+        # AGENTS.md). Sem este ramo o oraculo devolve set() vazio -> "nada chegou" -> o reconcile
+        # re-enfileira e o drain REDIGITA a mensagem do usuario, o incidente ja visto no Pi e no
+        # Kimi, aqui com o agravante de o texto ja ter sido entregue pelo `turn/start`.
+        from app.adapters.codex.rollout import parse_rollout_obj as codex_parse
     elif provider == "kimi":
         # Kimi: sem o parser proprio, NENHUMA linha do wire casa o shape do Claude (o role mora em
         # `context.append_message`) -> oraculo vazio -> reconcile lia TODA entrega como engolida e
@@ -315,7 +323,7 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str] | Non
                     obj = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                parse = pi_parse or kimi_parse
+                parse = pi_parse or kimi_parse or codex_parse
                 if parse is not None:
                     for ev in parse(obj):
                         if ev.kind == "user_msg" and ev.text:

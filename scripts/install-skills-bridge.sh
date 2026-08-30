@@ -22,6 +22,17 @@ set -euo pipefail
 SETTINGS="$HOME/.claude/settings.json"
 INSTALLED="$HOME/.claude/plugins/installed_plugins.json"
 
+# Hook de ESTADO do app no `hooks.json` do Codex. Quem escreve é este instalador, e não o backend na
+# subida: o comando carrega o caminho do venv DESTE checkout, então recriar venv, mover o repo ou
+# subir de outra worktree mudaria o arquivo — e no Codex hook alterado é hook NÃO APROVADO, que não
+# roda e não avisa. Com o instalador como dono, o arquivo só muda num momento explícito, onde
+# re-aprovar na TUI faz sentido.
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+HOOK_ESTADO="$REPO/backend/hooks/state_hook.py"
+PY_HOOK="$REPO/backend/.venv/bin/python"
+[ -x "$PY_HOOK" ] || PY_HOOK="$(command -v python3 || true)"
+export HOOK_ESTADO PY_HOOK
+
 if [ ! -f "$SETTINGS" ] || [ ! -f "$INSTALLED" ]; then
   echo "pulado: sem $SETTINGS ou $INSTALLED (Claude Code não instalado nesta conta)"
   exit 0
@@ -242,12 +253,40 @@ def hooks_para(eventos_suportados):
     return out, fora
 
 
+# Eventos do Codex em que o hook de ESTADO do app entra. `Stop` grava "ociosa"; os outros, "em
+# execução". `Notification` NÃO existe lá — e é por isso que sessão Codex nunca reporta "aguardando".
+_ESTADO_EVENTOS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop")
+
+
+def com_hook_de_estado(cfg):
+    """Acrescenta o hook de estado do app a `cfg` (o que já foi espelhado do Claude).
+
+    Sem ele a sessão Codex aparece ociosa para sempre: é este marcador que a lista lê. O comando
+    sai daqui com caminho absoluto do python do venv deste checkout — ver o cabeçalho do script."""
+    hook = os.environ.get("HOOK_ESTADO") or ""
+    py = os.environ.get("PY_HOOK") or ""
+    if not (hook and py and os.path.isfile(hook)):
+        return cfg, "sem o state_hook.py deste checkout"
+    # `|| true`: hook que falha NÃO pode bloquear o turno de quem está trabalhando. Mesma regra do
+    # `_FALHA_NAO_BLOQUEIA` do hook_installer.py do lado Claude.
+    comando = f'"{py}" "{hook}" || true'
+    for ev in _ESTADO_EVENTOS:
+        grupos = cfg.setdefault(ev, [])
+        ja = any(e.get("command") == comando for g in grupos for e in g.get("hooks", []))
+        if not ja:
+            grupos.append({"hooks": [{"type": "command", "command": comando}]})
+    return cfg, None
+
+
 def gravar_hooks(raiz, arquivo, eventos):
     """Gera o hooks.json do agente. Guarda uma cópia do que escrevemos em `.hangar-hooks.json`:
     se o arquivo vivo divergir dela, alguém editou à mão e nós NÃO passamos por cima."""
     alvo = os.path.join(raiz, arquivo)
     espelho = os.path.join(raiz, ".hangar-hooks.json")
     cfg, fora = hooks_para(eventos)
+    cfg, sem_estado = com_hook_de_estado(cfg)
+    if sem_estado:
+        fora = fora + [f"hook de estado do app ({sem_estado})"]
     if not cfg:
         return None, fora
     texto = json.dumps({"hooks": cfg}, indent=2, ensure_ascii=False) + "\n"
@@ -293,7 +332,15 @@ for ag in AGENTES:
         if n == "mao":
             avisos.append(f"{ag['nome']}: {ag['hooks']} foi editado à mão — não sobrescrevi")
         elif n:
-            avisos.append(f"{ag['nome']}: {n} hooks do Claude espelhados em {ag['hooks']}")
+            avisos.append(f"{ag['nome']}: {n} hooks espelhados em {ag['hooks']}")
+            if ag["nome"] == "codex":
+                # A confiança do Codex é por hash E POR ÍNDICE (`[hooks.state."<arquivo>:<evento>:
+                # <i>:<j>"]` no config.toml), então QUALQUER escrita aqui desaprova os hooks
+                # afetados. Enquanto não forem reaprovados, a TUI abre em "Hooks need review" e
+                # fica parada esperando escolha — e uma sessão Codex criada pelo app nesse estado
+                # estoura o tempo do handshake e NÃO nasce (medido em 30/08/2026).
+                avisos.append("codex: ABRA o `codex` no terminal uma vez e aprove os hooks — até "
+                              "lá, a sessão Codex criada pelo app não nasce")
         if fora:
             avisos.append(f"{ag['nome']}: fora do espelho — " + ", ".join(sorted(set(fora))))
 
