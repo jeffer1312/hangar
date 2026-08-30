@@ -132,6 +132,9 @@ def main() -> int:
     ap.add_argument("--prompt", default=None)
     ap.add_argument("--resume", default=None,
                     help="retoma a conversa deste id em vez de abrir uma nova")
+    ap.add_argument("--model", default=None, help="modelo do Codex (vira `-m` na TUI)")
+    ap.add_argument("--effort", default=None,
+                    help="nivel de raciocinio; vira sobrescrita de config, nao flag")
     args = ap.parse_args()
     if not args.name:
         print("hangar-codex-tui: --name (ou CP_SESSION_NAME) e obrigatorio", file=sys.stderr)
@@ -154,7 +157,12 @@ def main() -> int:
     )
 
     def salvar(thread_id: str, rollout: str) -> None:
+        # A escolha do usuario vai pro sidecar, nao so pro comando da TUI: quem responde a pill do
+        # app e `CodexAdapter.current_model`, que le daqui. Sem isto a sessao NASCIA no modelo certo
+        # (o `-m` da TUI) e a pill mostrava vazio — o ramo `_conectar` do sidecar com endpoint so
+        # conecta, entao o `default_model` da thread nunca chega a ser lido.
         codex_sessions.save(args.name, thread_id, rollout, cwd,
+                            model=args.model, effort=args.effort,
                             endpoint=endpoint, app_pid=servidor.pid)
 
     if args.resume:
@@ -176,6 +184,22 @@ def main() -> int:
     for sinal in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sinal, lambda *_: sys.exit(143))
 
+    # A escolha de modelo do usuario, traduzida pro que o binario entende. Sao DUAS gramaticas
+    # diferentes e e por isso que a traducao mora aqui, e nao no model_args como a dos outros
+    # agentes: o modelo tem flag (`-m`), o esforco NAO tem — ele e uma chave de configuracao
+    # (`model_reasoning_effort`, confirmada com `codex exec --strict-config`, que recusa chave
+    # inventada). O valor vai entre aspas porque o `-c` parseia como TOML.
+    # Medido em 30/08/2026 (codex-cli 0.151.0): nivel fora do suporte do modelo NAO mata o
+    # arranque — o binario DESCARTA o nivel e segue com o dele. Por isso quem recusa a escolha
+    # errada e o backend, cruzando modelo x nivel no catalogo (`codex_models.checar_escolha`).
+    # As flags valem nos DOIS ramos, resume incluido: hoje ninguem passa modelo num resume, mas
+    # montar so num deles faria um `--model` com `--resume` ser aceito e ignorado calado.
+    flags_da_escolha = []
+    if args.model:
+        flags_da_escolha += ["-m", args.model]
+    if args.effort:
+        flags_da_escolha += ["-c", f'model_reasoning_effort="{args.effort}"']
+
     if args.resume:
         # Sandbox e politica de aprovacao valem AQUI TAMBEM (`codex resume --help` lista as duas):
         # sem elas a conversa retomada roda no padrao do Codex e pode parar num pedido de aprovacao
@@ -183,10 +207,11 @@ def main() -> int:
         # `-C` fica de fora porque o pane ja nasce no cwd certo (`tmux new-session -c`) e a conversa
         # carrega o dela; o id vai no fim, onde o subcomando o espera.
         argv = ["codex", "resume", "--remote", endpoint, "--no-alt-screen",
-                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL, args.resume]
+                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL,
+                *flags_da_escolha, args.resume]
     else:
         argv = ["codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
-                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL]
+                "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL, *flags_da_escolha]
     if args.prompt:
         argv.append(args.prompt)
     try:

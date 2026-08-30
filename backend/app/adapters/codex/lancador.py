@@ -22,17 +22,27 @@ EXECUTAVEL = "hangar-codex-tui"
 
 
 def comando_do_lancador(cwd: str, initial_prompt: str | None = None,
-                        thread_id: str | None = None) -> list[str]:
+                        thread_id: str | None = None, model: str | None = None,
+                        effort: str | None = None) -> list[str]:
     """O comando do pane de uma sessao Codex: o lancador unico, o MESMO nos tres chamadores.
 
     O nome da sessao nao entra aqui — `tmux new-session` carimba CP_SESSION_NAME no pane e o
     lancador le de la. Assim o comando nao repete a identidade que o tmux ja garante.
 
     `thread_id` retoma uma conversa que ja existe (o "Retomar" do Arquivo) em vez de abrir uma nova.
+
+    `model`/`effort` viajam pro lancador em vez de virar flag aqui porque a traducao e diferente
+    das dos outros agentes: o modelo e `-m`, mas o esforco NAO e flag do binario — vai como
+    sobrescrita de configuracao (`-c model_reasoning_effort=`). Quem faz essa traducao e o lancador,
+    que e quem monta o argv do `codex`.
     """
     argv = [EXECUTAVEL, "--cwd", cwd]
     if thread_id:
         argv += ["--resume", thread_id]
+    if model:
+        argv += ["--model", model]
+    if effort:
+        argv += ["--effort", effort]
     if initial_prompt:
         argv += ["--prompt", initial_prompt]
     return argv

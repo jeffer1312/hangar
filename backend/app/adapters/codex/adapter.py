@@ -986,9 +986,13 @@ class CodexAdapter:
         # app-server e a TUI juntos (ver comando_do_lancador).
         # session_id nao entra: a identidade da conversa e o threadId, que so existe depois que a
         # TUI chama thread/start — quem grava isso no sidecar e o lancador.
-        # model/effort tambem nao: escolher modelo na criacao de sessao Codex e recusado na API
-        # (assunto do ticket 09); aceitar aqui e ignorar la seria escolha que some calada.
-        return comando_do_lancador(cwd, initial_prompt)
+        # model/effort NAO viram flag aqui (nem passam por model_args.args_de): o esforco do Codex
+        # nao e flag do binario, e a traducao dos dois e do lancador. permission_mode e do Claude.
+        # `validar` continua sendo a barreira — o comando vira UMA string executada por `$SHELL -c`
+        # (tmux.py), e sem esta chamada o Codex seria o unico provider cujo id nao passa por ela.
+        from app import model_args
+        model, effort = model_args.validar("codex", model, effort)
+        return comando_do_lancador(cwd, initial_prompt, model=model, effort=effort)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
         # O rollout path vem do thread/start (result.thread.path), gravado no sidecar -- nao ha como

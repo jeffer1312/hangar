@@ -222,6 +222,52 @@ def test_lancador_retoma_a_conversa_pedida(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
+def test_lancador_traduz_a_escolha_de_modelo(tmp_path):
+    """Duas gramaticas: o modelo TEM flag (`-m`), o esforco NAO — ele e uma chave de configuracao,
+    e o `-c` parseia o valor como TOML (dai as aspas). Mandar `--effort` pro `codex` mataria o
+    processo no arranque com o pane ja criado."""
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    env = _ambiente(tmp_path, cwd)
+    env["FAKE_TUI_SLEEP"] = "6"
+    proc = subprocess.Popen(
+        [sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd),
+         "--model", "gpt-5.6-luna", "--effort", "xhigh"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert _espera(_sidecar(env, "sess").exists), "o sidecar nunca apareceu"
+        meta = json.loads(_sidecar(env, "sess").read_text())
+    finally:
+        if proc.poll() is None:
+            proc.wait(timeout=20)
+    argv = (tmp_path / "tui-argv.txt").read_text().split("\n")
+    assert argv[argv.index("-m") + 1] == "gpt-5.6-luna"
+    assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="xhigh"'
+    assert "--effort" not in argv
+    # A escolha tambem vai pro SIDECAR: e de la que a pill do app le o modelo da sessao. Sem isto a
+    # sessao nascia no modelo certo e a pill mostrava vazio (medido ao vivo em 30/08/2026) — o ramo
+    # `_conectar` do sidecar com endpoint so conecta, entao o default da thread nunca e lido.
+    assert (meta["model"], meta["effort"]) == ("gpt-5.6-luna", "xhigh")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
+def test_lancador_sem_escolha_e_o_comando_de_hoje(tmp_path):
+    """Ninguem pediu modelo: nem `-m` nem `-c` no comando, byte por byte como antes do ticket."""
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    env = _ambiente(tmp_path, cwd)
+    env["FAKE_TUI_SLEEP"] = "0.3"
+    proc = subprocess.Popen(
+        [sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd)],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    proc.wait(timeout=30)
+    argv = (tmp_path / "tui-argv.txt").read_text().split("\n")
+    assert "-m" not in argv and "-c" not in argv
+
+
+@pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
 def test_lancador_recusa_sem_nome(tmp_path):
     cwd = tmp_path / "proj"
     cwd.mkdir()

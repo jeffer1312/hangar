@@ -31,6 +31,7 @@ from app.fs import FsError, list_roots, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
 from app import kimi_models
+from app import codex_models
 from app import model_args
 from app import filesearch, filetree, git_ops
 from app.filesearch import SearchError
@@ -1495,6 +1496,19 @@ async def create_session(body: CreateBody):
         if "permission_mode" in msg:
             raise HTTPException(409, detail=erro("erro_permissao_invalida", msg)) from None
         raise HTTPException(400, str(e)) from None
+    # O nível do Codex não tem lista fechada em model_args (varia POR MODELO), então quem cruza
+    # modelo×nível é o catálogo. Sem isto, `--effort ultra` num `gpt-5.5` sobe a sessão e o binário
+    # descarta o nível calado — sucesso reportado sobre escolha que não valeu.
+    if body.provider == "codex" and (body.model or body.effort):
+        try:
+            await asyncio.to_thread(codex_models.checar_escolha, body.model, body.effort)
+        except ValueError as e:
+            raise HTTPException(422, detail=erro("erro_codex_escolha_invalida", str(e), erro=str(e))) from None
+        except (RuntimeError, OSError) as e:
+            # Catálogo fora do ar (ou `codex` ausente — o CodexAusente é um RuntimeError) não pode
+            # IMPEDIR de abrir sessão: mesma decisão da janela do motor, logo abaixo. A escolha
+            # segue pro comando e o CLI decide. A falha não some — fica no log.
+            _log.warning("codex: catalogo indisponivel, escolha nao conferida: %s", e)
 
     # Janela do modelo escolhido, pra entrar no env do motor (Task 3). O número já está no cache do
     # catálogo do provedor (_engine_models); vir do navegador seria deixar um terceiro escolher uma
@@ -3329,7 +3343,7 @@ class CodexModelBody(_StrictBody):
 
 
 @app.get("/api/sessions/{name}/models", dependencies=[Depends(require_auth)])
-async def codex_models(name: str):
+async def modelos_da_sessao_codex(name: str):
     # Task C: modelo + reasoning effort so pra Codex (via model/list) -- o /model do Claude e o
     # picker interativo dedicado (/model-effort), sem esta rota.
     if _provider_of(name) != "codex":
@@ -5184,8 +5198,23 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
                                                  "catalogo do Kimi indisponível — ~/.kimi-code/config.toml "
                                                  "ausente ou sem seções [models.*]"))
         return {"kind": "kimi", "reduced": False, "models": cat["models"], "default": cat["default"]}
+    if provider == "codex":
+        # Nem config no disco (o ~/.codex/config.toml guarda o modelo escolhido, nunca a lista) nem
+        # `codex --list-models`: a fonte e o `model/list` de um app-server efemero em stdio, a MESMA
+        # que a folha da sessao viva usa. Ver app/codex_models.py.
+        try:
+            return {"kind": "codex", "reduced": False,
+                    "models": await asyncio.to_thread(codex_models.listar)}
+        except codex_models.CodexAusente as e:
+            # Codigo proprio pelo mesmo motivo do Pi: "nao achei o codex" nao e "o codex falhou".
+            raise HTTPException(502, detail=erro("erro_codex_ausente", str(e), erro=str(e)))
+        except (RuntimeError, OSError) as e:
+            # Sem `TimeoutExpired` aqui, ao contrario do ramo do Pi: o teto de tempo do
+            # `codex_models` mata o processo por um Timer, entao ele vira "nao respondeu" (um
+            # RuntimeError) — capturar a outra seria um ramo que o codigo nunca produz.
+            raise HTTPException(502, detail=erro("erro_codex_model_list", f"codex app-server model/list falhou: {e}", erro=str(e)))
     if provider != "claude":
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi' ou 'kimi'"))
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi', 'kimi' ou 'codex'"))
     if engine:
         modelos = await _engine_models(engine)
         return {"kind": "engine", "reduced": False,

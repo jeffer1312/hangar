@@ -86,6 +86,10 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   // Sem `{erro}` de proposito: o texto do backend aqui e a instrucao ("instale o Pi / ajuste o
   // PATH"), nao um errno pra repassar — o que a pessoa precisa ler ja esta na frase traduzida.
   erro_pi_ausente: () => m.erro_pi_ausente(),
+  // Mesmo par pro Codex, e pelo mesmo motivo: "nao achei o codex" e outra conversa que "o
+  // model/list falhou". O `{erro}` so viaja no segundo, onde a mensagem do provedor e a pista.
+  erro_codex_model_list: (p) => m.erro_codex_model_list({ erro: String(p.erro) }),
+  erro_codex_ausente: () => m.erro_codex_ausente(),
   erro_provider_invalido: () => m.erro_provider_invalido(),
   // POST /api/ditado/relimpar — so aparece se o cliente mandar um estilo fora da lista (os botoes
   // da barra do ditado saem de estilosDitado, entao na pratica e defesa de contrato).

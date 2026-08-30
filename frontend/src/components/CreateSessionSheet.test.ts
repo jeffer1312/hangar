@@ -716,3 +716,86 @@ describe('CreateSessionSheet — modo bastão', () => {
     unmount(comp);
   });
 });
+
+describe('CreateSessionSheet — modelo e esforço do Codex', () => {
+  // O catálogo do Codex vem do `model/list` (backend: app/codex_models.py) e os níveis são POR
+  // MODELO — medido em 30/08/2026, codex-cli 0.151.0: `gpt-5.6-sol` aceita `ultra`, `gpt-5.5` não,
+  // e `gpt-5.5` também não aceita `max`. Uma lista fechada na tela esconderia metade do catálogo.
+  const CODEX = {
+    kind: 'codex', reduced: false,
+    models: [
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], default_effort: 'low' },
+      { id: 'gpt-5.5', name: 'GPT-5.5', efforts: ['low', 'medium', 'high', 'xhigh'], default_effort: 'medium' },
+    ],
+  };
+
+  async function abrirNoCodex() {
+    vi.mocked(api.modelOptions).mockImplementation(async (p) =>
+      p === 'codex' ? (CODEX as never)
+                    : ({ kind: 'claude', reduced: true, models: [{ id: 'opus' }] } as never));
+    const montado = montar();
+    await flush();
+    await escolherPasta();
+    [...(document.querySelectorAll('.provider-tile') as unknown as HTMLElement[])]
+      .find((b) => b.textContent!.trim().endsWith('Codex'))!.click();
+    await flush();
+    return montado;
+  }
+
+  it('oferece a lista do catálogo do Codex', async () => {
+    const { comp } = await abrirNoCodex();
+    expect(vi.mocked(api.modelOptions).mock.calls.at(-1)![0]).toBe('codex');
+    (document.querySelector('#model-pick') as HTMLElement).click();
+    await tick();
+    const itens = [...document.querySelectorAll('.sel-item')].map((b) => b.textContent);
+    expect(itens.some((t) => t?.includes('GPT-5.6-Sol'))).toBe(true);
+    unmount(comp);
+  });
+
+  it('os níveis de esforço saem do modelo escolhido, não de uma lista fixa', async () => {
+    const { comp } = await abrirNoCodex();
+    // Sem modelo escolhido não há níveis conhecidos: o padrão do Codex é o do config.toml dele, e
+    // inventar uma lista aqui ofereceria nível que aquele modelo pode não aceitar.
+    expect(document.querySelector('#effort-pick')).toBeNull();
+
+    const niveisAbertos = async () => {
+      (document.querySelector('#effort-pick') as HTMLElement).click();
+      await tick();
+      return [...document.querySelectorAll('.sel-item')].map((b) => b.textContent!.trim());
+    };
+    await escolherNoCombo('#model-pick', 'GPT-5.6-Sol');
+    expect(await niveisAbertos()).toContain('ultra');
+    (document.body.querySelector('.sel-fora') as HTMLElement)?.click();
+    await tick();
+
+    await escolherNoCombo('#model-pick', 'GPT-5.5');
+    const niveis = await niveisAbertos();
+    expect(niveis).toContain('xhigh');
+    expect(niveis).not.toContain('ultra');
+    expect(niveis).not.toContain('max');
+    unmount(comp);
+  });
+
+  it('trocar pra um modelo sem aquele nível limpa o esforço escolhido', async () => {
+    // Senão a sessão nasceria pedindo `ultra` num modelo que não o lista, e o combo mostraria um
+    // valor que não está mais entre as opções.
+    const { comp } = await abrirNoCodex();
+    await escolherNoCombo('#model-pick', 'GPT-5.6-Sol');
+    await escolherNoCombo('#effort-pick', 'ultra');
+    expect(document.querySelector('#effort-pick')!.textContent).toContain('ultra');
+    await escolherNoCombo('#model-pick', 'GPT-5.5');
+    expect(document.querySelector('#effort-pick')!.textContent).toContain(m.criar_padrao());
+    unmount(comp);
+  });
+
+  it('a escolha chega ao create', async () => {
+    const { comp } = await abrirNoCodex();
+    await escolherNoCombo('#model-pick', 'GPT-5.6-Sol');
+    await escolherNoCombo('#effort-pick', 'xhigh');
+    (document.querySelector('.primary-btn') as HTMLElement).click();
+    await flush();
+    // (nome, cwd, configDir, provider, engine, model, effort, permissao)
+    expect(onCreate).toHaveBeenCalledWith('x', '/tmp/x', null, 'codex', null, 'gpt-5.6-sol', 'xhigh', null);
+    unmount(comp);
+  });
+});

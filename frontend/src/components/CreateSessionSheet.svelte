@@ -122,6 +122,16 @@
     pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   };
 
+  // O Codex é o terceiro caso: os níveis dele são POR MODELO e vêm do provedor (`model/list` —
+  // medido em 30/08/2026, `gpt-5.6-sol` aceita `ultra` e `gpt-5.5` não aceita nem `max`). Sem
+  // modelo escolhido, lista vazia — e aí o campo nem aparece: o padrão do Codex é o do config.toml
+  // dele, e inventar uma lista ofereceria nível que aquele modelo pode não aceitar.
+  const niveisDe = (id: string) =>
+    provider === 'codex'
+      ? (modelos.find((mod) => mod.id === id)?.efforts ?? [])
+      : (NIVEIS[provider] ?? []);
+  const niveis = $derived(niveisDe(modelo));
+
   // Modos de permissão do Claude Code (--permission-mode), mesma lista do backend (model_args.py).
   const MODOS_PERMISSAO = ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'];
   let permissao = $state('');
@@ -171,7 +181,11 @@
       modelos = r.models;
       listaReduzida = r.reduced;
       if (r.lembrado) modelo = r.lembrado;
-      esforco = r.esforcoLembrado;
+      // O esforço lembrado só vale se couber no modelo que ficou. O `lembrado` já é conferido
+      // contra a lista (modelosPorConta), mas o nível não era: com o modelo fora do catálogo o
+      // campo de esforço nem aparece (`niveis.length > 0`) e o valor antigo ia pro create assim
+      // mesmo — a sessão nascia com um `-c model_reasoning_effort=` que ninguém escolheu nem viu.
+      esforco = niveisDe(modelo).includes(r.esforcoLembrado) ? r.esforcoLembrado : '';
     } catch (e) {
       if (seq !== modSeq) return;
       erroModelos = e instanceof Error ? e.message : m.criar_modelos_erro();
@@ -968,7 +982,7 @@
            colunas, num estreito (celular, ou só um dos três visível) volta a empilhar sem media
            query, que aqui seria errada: quem aperta é a largura do PAINEL, não a da janela. -->
       <div class="trio">
-      {#if !conversaAlvo && (provider === 'claude' || provider === 'pi' || provider === 'kimi')}
+      {#if !conversaAlvo && temEscolhaDeModelo(provider)}
         <div class="field">
           <label class="field-label" for="model-pick">{m.composer_modelo()}</label>
           <Select id="model-pick" class="field-input" ariaLabel={m.composer_modelo()} value={modelo}
@@ -983,7 +997,13 @@
                        hint: [mod.provider,
                               mod.context ?? (mod.context_length ? `${Math.round(mod.context_length / 1000)}K` : null),
                               (mod.vision ?? mod.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
-            onchange={(v) => (modelo = v)} />
+            onchange={(v) => {
+              // Trocar de modelo pode tirar o nível escolhido do mapa (só o Codex: os níveis dele
+              // são por modelo). Deixar ficar faria a sessão nascer pedindo um nível que aquele
+              // modelo não lista, e o combo mostraria um valor fora das próprias opções.
+              modelo = v;
+              if (esforco && !niveisDe(v).includes(esforco)) esforco = '';
+            }} />
           {#if listaReduzida}
             <p class="model-hint" role="status" aria-live="polite" aria-atomic="true">{m.criar_lista_reduzida()}</p>
           {/if}
@@ -993,15 +1013,15 @@
         </div>
       {/if}
 
-      {#if !conversaAlvo && (provider === 'claude' || provider === 'pi')}
+      {#if !conversaAlvo && niveis.length > 0}
         <!-- Esforço fica FORA do if de cima de propósito: o Kimi tem modelo mas NÃO tem nível
-             (o CLI não tem flag; mora no [thinking] do config.toml, global) — um NIVEIS['kimi']
-             undefined derrubaria a folha inteira no .map. -->
+             (o CLI não tem flag; mora no [thinking] do config.toml, global), e o Codex só tem
+             níveis depois de o modelo estar escolhido (eles vêm dele). Quem decide é `niveis`. -->
         <div class="field">
           <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()}</label>
           <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
             opcoes={[{ value: '', label: m.criar_padrao() },
-                     ...NIVEIS[provider].map((n) => ({ value: n, label: n }))]} 
+                     ...niveis.map((n) => ({ value: n, label: n }))]}
             onchange={(v) => (esforco = v)} />
         </div>
       {/if}

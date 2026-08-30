@@ -508,6 +508,10 @@ export interface ModelOption {
   context?: string;
   vision?: boolean | null;
   images?: boolean;
+  // Níveis de esforço DAQUELE modelo (Codex e Kimi): variam por modelo e vêm do provedor, então a
+  // tela não pode ter lista fechada — ver app/codex_models.py e app/kimi_models.py.
+  efforts?: string[];
+  default_effort?: string | null;
 }
 
 // Orquestração: política de contas da máquina e papéis do grupo (tipos em lib/orquestracao.ts).

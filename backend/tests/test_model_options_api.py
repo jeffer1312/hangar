@@ -10,6 +10,7 @@ reduzida" pra sempre na conta padrão sem ninguém perceber.
 import subprocess
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,6 +26,7 @@ def _models_cache_isolado(models_cache_em_tmp):
 from app import api
 from app import engines as eng
 from app.api import app
+from app.models import SessionInfo
 from app.config import settings
 
 TOKEN = "t-model-options"
@@ -126,12 +128,50 @@ def test_pi_que_falha_vira_502(cli, monkeypatch):
 
 
 def test_provider_fora_de_escopo_vira_400(cli):
-    # codex segue fora (a lista dele vem do app-server da sessão viva, não da abertura); kimi
-    # ENTROU no escopo — ver test_kimi_serve_o_catalogo_do_config.
-    for provider in ("codex", ""):
-        r = cli.get("/api/model-options", headers=AUTH, params={"provider": provider})
-        assert r.status_code == 400, provider
-        assert "claude" in r.json()["detail"]["msg"]
+    # Os quatro providers ENTRARAM no escopo; o que sobra aqui é o pedido sem provider nenhum.
+    r = cli.get("/api/model-options", headers=AUTH, params={"provider": ""})
+    assert r.status_code == 400
+    assert "claude" in r.json()["detail"]["msg"]
+
+
+_CODEX_CAT = [{"id": "gpt-5.6-sol", "name": "GPT-5.6-Sol", "desc": "Latest frontier model.",
+               "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+               "default_effort": "low"},
+              {"id": "gpt-5.5", "name": "GPT-5.5", "desc": "",
+               "efforts": ["low", "medium", "high", "xhigh"],
+               "default_effort": "medium"}]
+
+
+def test_codex_serve_o_catalogo_do_app_server(cli, monkeypatch):
+    monkeypatch.setattr(api.codex_models, "listar", lambda: _CODEX_CAT)
+    r = cli.get("/api/model-options", headers=AUTH, params={"provider": "codex"})
+    assert r.status_code == 200
+    assert r.json()["kind"] == "codex"
+    assert r.json()["reduced"] is False
+    # Os níveis vêm POR MODELO: é a razão de o catálogo existir em vez de uma lista no código.
+    assert r.json()["models"][0]["efforts"][-1] == "ultra"
+    assert "ultra" not in r.json()["models"][1]["efforts"]
+
+
+def test_codex_ausente_tem_codigo_proprio(cli, monkeypatch):
+    def some(*a, **k):
+        raise api.codex_models.CodexAusente("nao achei o executavel `codex`")
+    monkeypatch.setattr(api.codex_models, "listar", some)
+    r = cli.get("/api/model-options", headers=AUTH, params={"provider": "codex"})
+    assert r.status_code == 502
+    assert r.json()["detail"]["code"] == "erro_codex_ausente"
+
+
+def test_codex_que_falha_vira_502(cli, monkeypatch):
+    # Sem `TimeoutExpired` na lista, ao contrário do Pi: o teto de tempo do `codex_models` mata o
+    # processo por um Timer, então estouro de tempo chega como RuntimeError. Injetar a outra aqui
+    # provaria a captura de algo que o código real não produz.
+    for err in (RuntimeError("model/list nao respondeu"), OSError("codex: no such file")):
+        def quebra(*a, **k):
+            raise err
+        monkeypatch.setattr(api.codex_models, "listar", quebra)
+        r = cli.get("/api/model-options", headers=AUTH, params={"provider": "codex"})
+        assert r.status_code == 502, err
 
 
 _KIMI_CAT = {"default": "apikey/k3",
@@ -155,6 +195,39 @@ def test_kimi_sem_config_vira_409(cli, monkeypatch):
     r = cli.get("/api/model-options", headers=AUTH, params={"provider": "kimi"})
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "erro_catalogo_kimi_indisponivel"
+
+
+def test_criar_codex_com_nivel_que_o_modelo_nao_lista_vira_422(cli, monkeypatch):
+    """`model_args` só valida a FORMA do nível do Codex (ele varia por modelo). Quem cruza
+    modelo×nível é o catálogo — sem isso a sessão nascia e o binário descartava o nível calado.
+
+    `registry.create` mockado como no test_api_permissao: a recusa tem que vir ANTES de qualquer
+    efeito, e um POST de verdade aqui abriria uma sessão tmux na máquina de quem roda a suíte.
+    """
+    monkeypatch.setattr(api.codex_models, "listar", lambda: _CODEX_CAT)
+    with patch("app.api.registry.create") as cr:
+        r = cli.post("/api/sessions", headers=AUTH, json={
+            "name": "c1", "cwd": "/tmp", "provider": "codex", "model": "gpt-5.5", "effort": "ultra"})
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "erro_codex_escolha_invalida"
+    cr.assert_not_called()
+
+
+def test_catalogo_fora_do_ar_nao_impede_criar_sessao(cli, monkeypatch, caplog):
+    """Mesma decisão da janela do motor: provedor parado não pode IMPEDIR de abrir sessão. A
+    escolha segue pro comando e o CLI decide — mas a falha NÃO some: fica no log."""
+    def quebra():
+        raise RuntimeError("model/list nao respondeu")
+    monkeypatch.setattr(api.codex_models, "listar", quebra)
+    alvo = SessionInfo(name="c2", cwd="/tmp", provider="codex")
+    with caplog.at_level("WARNING", logger="hangar"), \
+            patch("app.api.registry.create", return_value=alvo) as cr:
+        r = cli.post("/api/sessions", headers=AUTH, json={
+            "name": "c2", "cwd": "/tmp", "provider": "codex", "model": "gpt-5.5", "effort": "high"})
+    assert r.status_code == 200
+    # A escolha segue INTEIRA pro comando do pane, não é descartada junto com a checagem.
+    assert (cr.call_args.kwargs.get("model"), cr.call_args.kwargs.get("effort")) == ("gpt-5.5", "high")
+    assert "catalogo indisponivel" in caplog.text
 
 
 def test_sem_token_vira_401(cli):
