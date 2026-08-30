@@ -6,6 +6,7 @@ o próprio binário — e ele responde `account/rateLimits/read` num app-server 
 sessão viva e sem pane (medido em 30/08/2026, codex-cli 0.151.0, 1,2s). É o mesmo mecanismo do
 catálogo de modelos, então a I/O trocada aqui é o `codex_appserver.perguntar`.
 """
+import io
 import json
 
 import pytest
@@ -150,6 +151,52 @@ def test_codex_home_manda_no_caminho(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path / "vazio")
     monkeypatch.setenv("CODEX_HOME", str(outro / ".codex"))
     assert cotas.id_conta_codex() == f"codex:{outro / '.codex'}"
+
+
+def _app_server_falso(monkeypatch, linhas: list[str], stderr: str = ""):
+    """Um `codex app-server` de mentira: devolve as linhas dadas no stdout e nunca roda nada."""
+    class ProcFalso:
+        def __init__(self):
+            self.stdin = io.StringIO()
+            self.stdout = iter(linhas)
+            self.stderr = io.StringIO(stderr)
+            self.morto = False
+
+        def kill(self):
+            self.morto = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    proc = ProcFalso()
+    monkeypatch.setattr(codex_appserver, "_binario", lambda: "codex")
+    monkeypatch.setattr(codex_appserver.subprocess, "Popen", lambda *a, **kw: proc)
+    return proc
+
+
+def test_erro_do_app_server_vira_o_motivo_real(monkeypatch):
+    """Resposta de ERRO é resposta.
+
+    O laço só casava `result`, então um `error` JSON-RPC legítimo não casava nada, a leitura seguia
+    até o EOF e quem chamou ouvia "nao respondeu" — para um servidor que respondeu, dizendo o porquê.
+    Como isto alimenta a cota e o catálogo, o motivo real sumia do log."""
+    _app_server_falso(monkeypatch, [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}) + "\n",
+        json.dumps({"jsonrpc": "2.0", "id": 2,
+                    "error": {"code": -32601, "message": "sem credencial"}}) + "\n",
+    ])
+    with pytest.raises(RuntimeError, match="sem credencial"):
+        codex_appserver.perguntar("account/rateLimits/read")
+
+
+def test_resposta_boa_continua_passando(monkeypatch):
+    """Contra-prova do teste acima: o ramo novo não pode roubar o caminho feliz."""
+    _app_server_falso(monkeypatch, [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}) + "\n",
+        json.dumps({"jsonrpc": "2.0", "method": "algumaNotificacao"}) + "\n",
+        json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"rateLimits": {"primary": {}}}}) + "\n",
+    ])
+    assert codex_appserver.perguntar("account/rateLimits/read") == {"rateLimits": {"primary": {}}}
 
 
 def test_a_fonte_so_existe_com_credencial(monkeypatch, tmp_path):

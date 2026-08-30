@@ -131,6 +131,40 @@ def test_create_codex_recusa_quando_o_lancador_nao_esta_no_path(tmp_path):
     new_sess.assert_not_called()
 
 
+def test_create_codex_recusa_quando_o_binario_codex_nao_esta_no_path(tmp_path):
+    """Mesmo desfecho do lancador ausente, por outra porta: o lancador esta la e o `codex` nao.
+
+    Ele so chama `codex app-server` DEPOIS que o pane nasceu, entao a falta virava
+    FileNotFoundError dentro do pane — que morre com o `new-session` ja tendo devolvido 0. Sem
+    sidecar escrito, a sessao nao aparece nem no tmux nem em `list_all()`: sucesso reportado,
+    sessao inexistente."""
+    reg = SessionRegistry(projects_dir=tmp_path)
+    presentes = {"hangar-codex-tui": "/usr/bin/hangar-codex-tui"}
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.shutil, "which", side_effect=presentes.get), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_sess:
+        with pytest.raises(ValueError, match="codex nao esta no PATH"):
+            reg.create("mysess", "/tmp/proj", provider="codex")
+    new_sess.assert_not_called()
+
+
+def test_kill_codex_falho_nao_derruba_o_app_server_antes(tmp_path):
+    """`kill_session` falhando, a sessao SEGUE viva — entao o app-server dela nao pode ter morrido.
+
+    Na ordem antiga o `close_sync` vinha primeiro: o KillFailed dizia "nao consegui encerrar" com a
+    TUI ja sem servidor, e o que sobrava na tela nao falava mais com ninguem."""
+    codex_sessions.save("cx", "tid-1", "/tmp/rollout.jsonl", "/tmp/a")
+    reg = SessionRegistry(projects_dir=tmp_path)
+    adapter = CodexAdapter()
+    with patch.object(registry.tmux, "kill_session", return_value=False), \
+         patch("app.adapters.get_adapter", return_value=adapter), \
+         patch.object(adapter, "close_sync") as close:
+        with pytest.raises(registry.KillFailed):
+            reg.kill("cx")
+    close.assert_not_called()
+    assert codex_sessions.exists("cx"), "sidecar de sessao viva nao pode ser apagado"
+
+
 # --- Teste 2: list() inclui Codex (sidecar) E Claude (tmux) ---------------------------------
 
 def test_list_includes_codex_sidecar_and_tmux(tmp_path):

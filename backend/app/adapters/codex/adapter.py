@@ -54,7 +54,10 @@ def matar_app_server(name: str) -> None:
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:
-        _log.debug("codex: nao deu pra matar o app-server pid=%s name=%s: %s", pid, name, exc)
+        # warning, nao debug: o pid esta VIVO (checado acima) e nao morreu. E exatamente o
+        # app-server orfao escutando em loopback que esta funcao existe pra evitar, e em `debug`
+        # ninguem ve.
+        _log.warning("codex: nao deu pra matar o app-server pid=%s name=%s: %s", pid, name, exc)
 
 
 def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,

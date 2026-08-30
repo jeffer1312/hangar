@@ -165,6 +165,7 @@ def main() -> int:
                             model=args.model, effort=args.effort,
                             endpoint=endpoint, app_pid=servidor.pid)
 
+    escuta = None
     if args.resume:
         # Retomando, a identidade JA e conhecida e nao ha `thread/started` pra esperar — medido:
         # numa conversa retomada o evento nao vem, e ficar esperando por ele deixava a sessao sem
@@ -176,8 +177,9 @@ def main() -> int:
         else:
             salvar(args.resume, rollout)
     else:
-        threading.Thread(target=_espera_thread, args=(endpoint, cwd, servidor, erros, salvar),
-                         daemon=True).start()
+        escuta = threading.Thread(target=_espera_thread,
+                                  args=(endpoint, cwd, servidor, erros, salvar), daemon=True)
+        escuta.start()
 
     # SIGTERM/SIGHUP viram SystemExit pra que o `finally` rode: `tmux kill-session` derruba o pane
     # por sinal, e sem isto o app-server ficaria escutando sem dono.
@@ -222,6 +224,12 @@ def main() -> int:
             servidor.wait(timeout=5)
         except subprocess.TimeoutExpired:
             servidor.kill()
+        # A thread de escuta SAI sozinha com o servidor morto (ela testa `servidor.poll()`), mas
+        # ainda precisa de um instante — e ela le o `erros` e chama `salvar()`. Sem esperar, ou ela
+        # lia um arquivo ja fechado, ou gravava um sidecar apontando pro servidor que acabou de
+        # morrer: sessao fantasma que nada limpa depois.
+        if escuta is not None:
+            escuta.join(timeout=5)
         erros.close()
         # So apaga o sidecar que e NOSSO: uma sessao recriada com o mesmo nome ja teria reescrito o
         # arquivo, e apagar o dela deixaria a sessao viva invisivel pro app.

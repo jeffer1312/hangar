@@ -291,12 +291,19 @@ def _exigir_lancador_codex() -> None:
     ato e o `tmux new-session` devolve 0: o app diria "sessao criada" e a sessao sumiria sem rastro.
     """
     from app.adapters.codex.lancador import EXECUTAVEL
-    if shutil.which(EXECUTAVEL):
-        return
-    raise ValueError(
-        f"{EXECUTAVEL} nao esta no PATH deste servidor — sem ele a sessao Codex nasce e morre na "
-        "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
-        "Windows, install.ps1.")
+    if not shutil.which(EXECUTAVEL):
+        raise ValueError(
+            f"{EXECUTAVEL} nao esta no PATH deste servidor — sem ele a sessao Codex nasce e morre "
+            "na hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; "
+            "no Windows, install.ps1.")
+    # O `codex` tambem: o lancador so o chama DEPOIS que o pane ja nasceu, entao a falta dele nao
+    # cai aqui — cai num `FileNotFoundError` dentro do pane, que morre no ato com o `new-session`
+    # ja tendo devolvido 0. Mesmo desfecho da linha acima (sucesso reportado, sessao inexistente),
+    # e por isso a mesma guarda: alto e antes de criar nada.
+    if not shutil.which("codex"):
+        raise ValueError(
+            "codex nao esta no PATH deste servidor — o lancador sobe o app-server com ele, e sem "
+            "isso a sessao Codex nasce e morre na hora, sem erro. Instale o CLI do Codex.")
 
 
 def _provider_do_argv(argv: list[str]) -> Optional[str]:
@@ -1624,9 +1631,13 @@ class SessionRegistry:
         if codex_sessions.exists(name):
             # Sessao Codex: fecha app-server e TUI tmux, apaga o sidecar e limpa estado duravel.
             from app.adapters import get_adapter
-            get_adapter("codex").close_sync(name)
+            # O tmux PRIMEIRO. Invertido, `close_sync` matava o app-server e so entao o kill era
+            # tentado: falhando ele (o caso que esta funcao existe pra pegar), a excecao dizia "nao
+            # consegui encerrar" com a TUI ja sem servidor — sinal trocado, e a sessao que sobrou na
+            # tela nao fala mais com ninguem. Agora falha antes de qualquer estrago.
             if not tmux.kill_session(name):
                 raise KillFailed(name)
+            get_adapter("codex").close_sync(name)
             self._kill_hidden_shell(name)
             codex_sessions.delete(name)
             self._forget(name)

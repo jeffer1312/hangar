@@ -91,8 +91,15 @@ def perguntar(metodo: str, timeout: float = _TIMEOUT) -> dict:
                 msg = json.loads(linha)
             except ValueError:
                 continue  # o app-server também escreve notificação e log; linha torta não é erro
-            if isinstance(msg, dict) and msg.get("id") == 2 and isinstance(msg.get("result"), dict):
-                return msg["result"]
+            if isinstance(msg, dict) and msg.get("id") == 2:
+                if isinstance(msg.get("result"), dict):
+                    return msg["result"]
+                # Resposta de ERRO e resposta: sem este ramo ela nao casava, o laco seguia ate o EOF
+                # e quem chamou ouvia "nao respondeu" — para um servidor que respondeu, dizendo o
+                # motivo. Como isto alimenta a cota e o catalogo do Codex, o motivo real sumia do log.
+                if "error" in msg:
+                    proc.kill()
+                    raise RuntimeError(f"codex app-server recusou {metodo}: {msg['error']}")
         # Mata ANTES de ler o stderr: o `read()` vai até o EOF, e um processo ainda vivo com o
         # stderr aberto penduraria quem chamou justamente no caminho de falha.
         proc.kill()
