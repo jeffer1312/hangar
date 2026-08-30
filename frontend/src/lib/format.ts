@@ -597,6 +597,10 @@ export function summarizeToolInput(
   }
   if (name === 'Write' || name === 'Edit') return summarizeText(one('file_path') || one('path'), TOOL_MAX);
   if (name === 'Bash') return summarizeText(one('command'), TOOL_MAX);
+  // `exec` é o Bash do Codex, e ele é a ferramenta que o Codex mais usa. O comando não vem pronto:
+  // o backend o extrai do código JavaScript da chamada e só o entrega quando conseguiu — sem
+  // extração sobra o código, que é o que foi executado de verdade. Nunca uma linha vazia.
+  if (name === 'exec') return summarizeText(one('command') || one('code'), TOOL_MAX);
   if (name === 'Grep' || name === 'Glob') {
     // O argumento saliente e o PADRAO, nunca o diretorio (o pacote faz `"pattern" in path`); sem
     // este ramo o fallback preferiria `path` e a linha esconderia o que foi procurado.

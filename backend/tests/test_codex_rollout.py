@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from app.adapters.codex.rollout import parse_rollout_line, parse_rollout_obj
 
 
@@ -147,3 +149,105 @@ def test_confirmacao_de_entrega_no_rollout_real():
     from app import pqueue
     p = Path(__file__).parent / "fixtures/codex/rollout_sample.jsonl"
     assert "responda apenas: ok" in pqueue.committed_user_lines(str(p), provider="codex")
+
+
+# -- Ticket 06: o comando que o Codex rodou aparece na conversa ----------------
+# `exec` e a ferramenta que ele mais usa, e ela chega como `custom_tool_call`/
+# `custom_tool_call_output` — os dois tipos que o parser descartava. A fixture e COPIADA de
+# rollouts reais desta maquina (ja houve regressao por um teste fabricar um campo que o agente
+# nunca manda).
+
+def _eventos_exec():
+    p = Path(__file__).parent / "fixtures/codex/rollout_exec.jsonl"
+    return [e for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()
+            for e in parse_rollout_line(ln)]
+
+
+def test_exec_vira_tool_use_e_tool_result():
+    evs = _eventos_exec()
+    assert [e.kind for e in evs] == ["tool_use", "tool_result"] * 4
+    assert {e.tool_name for e in evs if e.kind == "tool_use"} == {"exec", "apply_patch"}
+    # O par continua ligado pelo call_id — e o que o front usa pra casar chamada e resultado.
+    assert evs[0].tool_use_id == evs[1].tool_use_id
+
+
+def test_comando_e_extraido_do_codigo_com_e_sem_aspas_na_chave():
+    """O `cmd` vem dentro de codigo JavaScript, e o Codex escreve a chave das duas formas:
+    `{cmd:"..."}` e `{"cmd":"..."}`. As duas aparecem na fixture real."""
+    usos = [e for e in _eventos_exec() if e.kind == "tool_use"]
+    assert usos[0].tool_input["command"] == "sleep 30"
+    assert usos[2].tool_input["command"] == "echo oi"
+
+
+def test_codigo_cru_fica_guardado_sempre():
+    """Contrato do ticket: o codigo cru fica no evento MESMO quando o comando saiu — o resumo usa o
+    comando, e quem abre o card ainda ve o que foi executado de verdade."""
+    usos = [e for e in _eventos_exec() if e.kind == "tool_use"]
+    assert usos[0].tool_input["code"].startswith("const r = await tools.exec_command(")
+
+
+def test_sem_cmd_no_codigo_sobra_o_codigo_e_nunca_um_campo_vazio():
+    """`tools.write_stdin(...)` nao tem `cmd`. Falhando a extracao, o resumo mostra o codigo — um
+    `command: ""` faria a linha aparecer vazia, que e pior que mostrar o codigo."""
+    uso = [e for e in _eventos_exec() if e.kind == "tool_use"][1]
+    assert "command" not in uso.tool_input
+    assert "tools.write_stdin" in uso.tool_input["code"]
+
+
+def test_saida_em_lista_de_blocos_vira_texto():
+    """A saida do `exec` e uma LISTA de blocos, nao um escalar como no function_call_output."""
+    res = [e for e in _eventos_exec() if e.kind == "tool_result"]
+    assert "Script completed" in res[0].result
+    assert "wall_time_seconds" in res[0].result   # o 2o bloco tambem entra, nao so o 1o
+
+
+def test_saida_em_string_continua_valendo():
+    """O mesmo tipo tambem aparece com `output` string na maquina — os dois formatos sao reais."""
+    res = [e for e in _eventos_exec() if e.kind == "tool_result"]
+    assert res[1].result.startswith("Script running with cell ID 2")
+
+
+def test_apply_patch_resume_pelos_arquivos_e_nao_pelo_diff():
+    """`apply_patch` e o `Edit` do Codex, e vem pelo MESMO tipo de entrada que o `exec`. Sem campo
+    saliente, o front cai no generico e a linha de resumo vira o diff cortado — trocaria
+    "invisivel" por "lixo truncado", que nao e melhora. `file_path` e a chave que ele ja sabe
+    resumir."""
+    uso = [e for e in _eventos_exec() if e.tool_name == "apply_patch"][0]
+    assert uso.tool_input["file_path"] == [
+        "/home/jefferson/Projetos/claude-cockpit/backend/tests/test_codex_registry.py"]
+    assert uso.tool_input["code"].startswith("*** Begin Patch")
+    assert "command" not in uso.tool_input
+
+
+@pytest.mark.parametrize("codigo", [
+    "const r = await tools.exec_command({cmd:'echo oi'});",       # aspas SIMPLES
+    "const r = await tools.exec_command({cmd:`echo oi`});",       # template literal
+])
+def test_forma_de_aspas_que_a_regex_nao_le_cai_no_codigo(codigo):
+    """Nenhuma das duas aparece nos rollouts desta maquina — nao da pra saber se o Codex as produz,
+    e o ticket proibe fabricar fixture. O que este caso trava e a DEGRADACAO: seja qual for a forma,
+    o card nunca fica com a linha em branco; sobra o codigo, que e o que foi executado."""
+    obj = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec", "call_id": "c1", "input": codigo}}
+    entrada = parse_rollout_obj(obj)[0].tool_input
+    assert "command" not in entrada
+    assert entrada["code"] == codigo
+
+
+def test_bloco_de_outro_tipo_nao_entra_na_saida():
+    """A saida usa o MESMO leitor de blocos das mensagens, com o mesmo filtro de tipo: um bloco de
+    outro tipo entrando aqui e nao la seria uma diferenca que ninguem escreveu de proposito."""
+    obj = {"type": "response_item", "payload": {
+        "type": "custom_tool_call_output", "call_id": "c1",
+        "output": [{"type": "input_text", "text": "vale"},
+                   {"type": "output_audio", "text": "nao vale"}]}}
+    assert parse_rollout_obj(obj)[0].result == "vale"
+
+
+def test_function_call_output_com_lista_nao_vira_repr_de_python():
+    """Irmao do mesmo defeito: este tipo TAMBEM chega com lista de blocos (ferramenta `wait`), e o
+    `str()` de antes punha `[{'type': 'input_text', ...}]` na conversa em vez da saida."""
+    obj = {"type": "response_item", "payload": {
+        "type": "function_call_output", "call_id": "c1",
+        "output": [{"type": "input_text", "text": "Script completed\n"}]}}
+    assert parse_rollout_obj(obj)[0].result == "Script completed\n"

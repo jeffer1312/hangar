@@ -651,6 +651,12 @@ describe('summarizeToolInput', () => {
     expect(summarizeToolInput('Read', { file_path: '/tmp/x.ts' })).toBe('/tmp/x.ts');
     expect(summarizeToolInput('Write', { path: '/tmp/y.ts' })).toBe('/tmp/y.ts');
     expect(summarizeToolInput('Bash', { command: 'npm test' })).toBe('npm test');
+    // `exec` é o Bash do Codex. O comando sai do código pelo backend; sem ele, sobra o código —
+    // que é o que foi executado, e é melhor que uma linha em branco.
+    expect(summarizeToolInput('exec', { command: 'echo oi', code: 'const r = await tools…' }))
+      .toBe('echo oi');
+    expect(summarizeToolInput('exec', { code: 'const r = await tools.write_stdin({…});' }))
+      .toBe('const r = await tools.write_stdin({…});');
     expect(summarizeToolInput('WebSearch', { query: 'svelte 5 runes' })).toBe('svelte 5 runes');
     expect(summarizeToolInput('WebFetch', { url: 'https://x.dev' })).toBe('https://x.dev');
   });

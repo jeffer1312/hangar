@@ -48,6 +48,62 @@ def _blocks_text(content, block_type: str) -> str:
     )
 
 
+# The `exec` command comes INSIDE JavaScript code, not as an argument:
+#   const r = await tools.exec_command({cmd:"echo oi","workdir":"/tmp",...}); text(r.output);
+# The key appears with and without quotes (both forms are in this machine's rollouts), and the
+# value is a JS string literal — it can carry escaped quotes and backslashes (`$'1\\n2'`, `\"...\"`).
+_CMD_RE = re.compile(r'\bcmd"?\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _command_from_code(code: str) -> str:
+    """The command inside the code, or "" when it can't be extracted.
+
+    "" is a legitimate and frequent answer: `tools.write_stdin(...)` has no `cmd` at all. The caller
+    keeps the raw code in that case — an empty `command` would draw an EMPTY summary line, which is
+    worse than showing the code that actually ran. Single quotes and template literals also land
+    here; neither appears in this machine's rollouts, so the fallback is what covers them.
+    """
+    m = _CMD_RE.search(code or "")
+    if not m:
+        return ""
+    raw = m.group(1)
+    try:
+        # The JS literal matches JSON on the escapes seen here (\" \\ \n \t \uXXXX). On an escape
+        # only JS has (\' , \x41) json fails and the raw value serves — it is already readable.
+        return json.loads(f'"{raw}"')
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
+# `apply_patch` is the other custom tool, and it is Codex's `Edit`. Its input is the patch itself,
+# which names each file it touches on a `*** <verb> File: <path>` line.
+_PATCH_FILE_RE = re.compile(r"^\*{3} (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
+
+
+def _files_from_patch(code: str) -> list[str]:
+    """Paths a patch touches, or [] when it doesn't look like one.
+
+    Without this the whole diff would be the summary line: the front has no `apply_patch` case, so
+    it falls back to the first known key — and `file_path` is exactly that key. Handing over the raw
+    patch would trade "invisible" for "truncated garbage", which is not an improvement.
+    """
+    return _PATCH_FILE_RE.findall(code or "")
+
+
+def _output_text(output) -> str | None:
+    """Text of a tool output: a LIST of blocks or a raw string — both shapes appear in real
+    rollouts, so handling only the list would leave half the results empty."""
+    if output is None:
+        return None
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        # Same block reader the messages use, with the same type filter: a block of another type
+        # entering here and NOT there would be a difference nobody wrote on purpose.
+        return _blocks_text(output, "input_text")
+    return str(output)
+
+
 def parse_rollout_obj(obj: dict) -> list[ChatEvent]:
     """Eventos de chat de UMA linha ja parseada do rollout. So `response_item` vira chat —
     session_meta/turn_context/world_state/compacted/event_msg sao estado, nao conversa."""
@@ -83,12 +139,44 @@ def parse_rollout_obj(obj: dict) -> list[ChatEvent]:
             tool_input=tool_input if isinstance(tool_input, dict) else {},
         )]
 
-    if ptype == "function_call_output":
-        output = payload.get("output")
+    if ptype == "custom_tool_call":
+        # `exec`, the tool Codex uses the most. Unlike `function_call`: `input` is a STRING of
+        # code, not JSON arguments.
+        code = payload.get("input")
+        code = code if isinstance(code, str) else ""
+        tool_input = {"code": code}
+        # Only when it really came out: an empty value would make the front draw an EMPTY summary
+        # line, worse than showing the code (see summarizeToolInput on the front). Which field is
+        # salient depends on the tool — `exec` runs a command, `apply_patch` touches files — and
+        # both names are ones the front already knows how to summarize.
+        command = _command_from_code(code)
+        files = _files_from_patch(code)
+        if command:
+            tool_input["command"] = command
+        elif files:
+            tool_input["file_path"] = files
+        return [ChatEvent(
+            kind="tool_use", id=_event_id(obj),
+            tool_name=payload.get("name"), tool_use_id=payload.get("call_id"),
+            tool_input=tool_input,
+        )]
+
+    if ptype == "custom_tool_call_output":
+        # Output here is a LIST of blocks, not a scalar like in function_call_output.
         return [ChatEvent(
             kind="tool_result", id=_event_id(obj),
             tool_use_id=payload.get("call_id"),
-            result=str(output) if output is not None else None,
+            result=_output_text(payload.get("output")),
+        )]
+
+    if ptype == "function_call_output":
+        # Same conversion as custom_tool_call_output: this type ALSO arrives as a list of blocks
+        # (seen on the `wait` tool), and the previous `str()` put Python's repr in the conversation
+        # — `[{'type': 'input_text', 'text': '...'}]` instead of the output.
+        return [ChatEvent(
+            kind="tool_result", id=_event_id(obj),
+            tool_use_id=payload.get("call_id"),
+            result=_output_text(payload.get("output")),
         )]
 
     # reasoning: encrypted_content opaco no rollout -> ignora no v1 (texto legivel so ao vivo).
