@@ -34,7 +34,8 @@
   import ClaudeEffortPopover from './ClaudeEffortPopover.svelte';
   import ClaudePermissionPopover from './ClaudePermissionPopover.svelte';
   import Popover from './Popover.svelte';
-  import CodexModelSheet from './CodexModelSheet.svelte';
+  import CodexModelPopover from './CodexModelPopover.svelte';
+  import CodexEffortPopover from './CodexEffortPopover.svelte';
   import PiModelPopover from './PiModelPopover.svelte';
   import KimiModelPopover from './KimiModelPopover.svelte';
   import KimiEffortPopover from './KimiEffortPopover.svelte';
@@ -466,8 +467,13 @@
   // statusline -- mais preciso (o backend guarda o valor exato escolhido). O anel de contexto
   // (Task D) ja vem da statusline, igual ao Claude, ja que o CodexAdapter agora acumula
   // tokenUsage/rateLimits e emite o status_line no mesmo formato. Seedado ao montar/trocar de
-  // sessao; o sheet atualiza via onApplied apos um POST /model com sucesso.
-  let codexSheetOpen = $state(false);
+  // sessao; os popovers atualizam via onApplied apos um POST /model com sucesso.
+  // Pill DUPLA como as outras tres (ticket 12): modelo e esforco em metades proprias, cada uma
+  // com seu popover ancorado. Antes era uma folha so, com o esforco escondido atras da lista.
+  let codexPopOpen = $state(false);
+  let codexPillEl = $state<HTMLElement | null>(null);
+  let codexEffortOpen = $state(false);
+  let codexEffortPillEl = $state<HTMLElement | null>(null);
   let codexModel = $state<string | null>(null);
   let codexEffort = $state<string | null>(null);
 
@@ -486,6 +492,10 @@
 
   function handleCodexModelApplied(model: string, effort: string | null) {
     codexModel = model;
+    codexEffort = effort;
+  }
+
+  function handleCodexEffortApplied(effort: string) {
     codexEffort = effort;
   }
 
@@ -1776,17 +1786,36 @@
                  linha dentro do seletor de modelo (ClaudeModelPopover), que é onde se mexe nela. -->
           </span>
         {:else}
-          <button
-            class="model-pill"
-            onclick={() => (codexSheetOpen = true)}
-            aria-label={m.composer_modelo_codex()}
-          >
-            <span class="pill-label">
-              <span class="pill-model">{codexModel ?? m.composer_modelo()}</span>
-              {#if codexEffort}<span class="pill-effort">· {codexEffort}</span>{/if}
-            </span>
-            <ContextRing pct={status?.ctxPct ?? null} />
-          </button>
+          <!-- Codex: pill-duo como os outros três. O esforço tem metade própria em vez de virar
+               um sufixo "· high" dentro da pill de modelo — os níveis dele são POR MODELO, e
+               escolher um pede a lista daquele modelo, não um rótulo. -->
+          <span class="pill-duo">
+            <button
+              class="model-pill"
+              bind:this={codexPillEl}
+              onclick={() => (codexPopOpen = true)}
+              aria-haspopup="dialog"
+              aria-expanded={codexPopOpen}
+              aria-label={m.composer_modelo_codex()}
+            >
+              <span class="pill-label">
+                <span class="pill-model">{codexModel ?? m.composer_modelo()}</span>
+              </span>
+              <ContextRing pct={status?.ctxPct ?? null} />
+            </button>
+            <button
+              class="model-pill"
+              bind:this={codexEffortPillEl}
+              onclick={() => (codexEffortOpen = true)}
+              aria-haspopup="dialog"
+              aria-expanded={codexEffortOpen}
+              aria-label={m.composer_esforco_raciocinio()}
+            >
+              <span class="pill-label">
+                <span class="pill-model">{codexEffort ?? m.composer_esforco()}</span>
+              </span>
+            </button>
+          </span>
         {/if}
         <button class="attach-btn" onclick={() => fileInput?.click()} aria-label={m.composer_anexar_arquivo()}>
           <IconAttach size={20} />
@@ -1915,11 +1944,20 @@
     onClose={() => (permPopOpen = false)}
   />
 
-  <CodexModelSheet
-    open={codexSheetOpen}
+  <CodexModelPopover
+    open={codexPopOpen}
+    anchor={codexPillEl}
     {sessionName}
     onApplied={handleCodexModelApplied}
-    onClose={() => (codexSheetOpen = false)}
+    onClose={() => (codexPopOpen = false)}
+  />
+
+  <CodexEffortPopover
+    open={codexEffortOpen}
+    anchor={codexEffortPillEl}
+    {sessionName}
+    onApplied={handleCodexEffortApplied}
+    onClose={() => (codexEffortOpen = false)}
   />
 
   <PiModelPopover
@@ -2235,11 +2273,6 @@
     max-width: 130px;
     color: var(--text-primary);
     font-weight: 600;
-  }
-
-  .pill-effort {
-    flex-shrink: 0;
-    color: var(--text-muted);
   }
 
   /* Botao [ / ]: abre o CommandSheet. Chip compacto na faixa do topo, igual ao cost-chip.
