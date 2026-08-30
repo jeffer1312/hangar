@@ -99,6 +99,34 @@ class AppServerClient:
             f"codex app-server nao abriu {self._endpoint}: {last_error}"
         )
 
+    async def connect(self, endpoint: str, timeout: float = 5.0) -> str:
+        """Conecta a um app-server que JA existe, sem spawnar nada.
+
+        E o caminho normal desde que o lancador (scripts/hangar-codex-tui) passou a ser o dono do
+        servidor: ele nasce no pane e morre com o pane, entao o backend so se liga nele. Falha ALTO
+        quando o handshake nao responde — porta de loopback e reciclada, e um servidor que nao
+        responde e sessao morta, nunca sessao viva a espera de outra tentativa.
+        """
+        try:
+            self._ws = await websockets.connect(
+                endpoint, max_size=_READ_LIMIT, open_timeout=timeout
+            )
+        except (OSError, TimeoutError, websockets.WebSocketException) as exc:
+            raise ConnectionError(f"codex app-server nao respondeu em {endpoint}: {exc}") from exc
+        self._endpoint = endpoint
+        self._reader_task = asyncio.create_task(self._read_loop())
+        return endpoint
+
+    @property
+    def tem_processo_proprio(self) -> bool:
+        """False quando este cliente apenas se CONECTOU a um servidor de outro dono (o lancador).
+
+        Quem encerra a sessao precisa saber disto: `close()`/`terminate()` daqui nao tem processo
+        pra matar, e parar neles deixaria o app-server vivo. Quem mata e o registry, pelo pid
+        gravado no sidecar.
+        """
+        return self._proc is not None
+
     def _attach(self, reader: asyncio.StreamReader, writer) -> None:
         # seam de teste: quem chama start() usa proc.stdout/stdin reais; os testes injetam
         # um StreamReader alimentado manualmente + um writer fake em memoria.
@@ -197,11 +225,17 @@ class AppServerClient:
     def terminate(self) -> None:
         """Best-effort SIGTERM SINCRONO no subprocess -- seguro de chamar de outra thread (so manda
         o sinal, nao toca o event loop). Usado pelo registry.kill() (sync) sem precisar de bridge
-        async: o read loop no loop principal vai ver o EOF e rodar seu finally (dead-detection)."""
-        proc = self._proc
-        if proc is not None:
-            with contextlib.suppress(ProcessLookupError, Exception):
-                proc.terminate()
+        async: o read loop no loop principal vai ver o EOF e rodar seu finally (dead-detection).
+
+        Quando o servidor e do LANCADOR, aqui nao ha o que matar — e isso e dito em voz alta, nao
+        engolido: quem encerra a sessao precisa saber que o SIGTERM tem que ir pelo pid do sidecar
+        (adapter.matar_app_server), senao o app-server fica escutando sem dono."""
+        if not self.tem_processo_proprio:
+            logger.debug("codex app-server: nada a terminar aqui — o processo e do lancador, "
+                         "o SIGTERM vai pelo pid do sidecar")
+            return
+        with contextlib.suppress(ProcessLookupError, Exception):
+            self._proc.terminate()
 
     async def close(self) -> None:
         if self._reader_task is not None:

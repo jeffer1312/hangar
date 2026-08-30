@@ -18,13 +18,19 @@ def test_pi_spawn_com_escolha_usa_thinking():
         "pi", "--session-id", "sid", "--model", "kimi-coding/k3", "--thinking", "high"]
 
 
-def test_codex_spawn_continua_recusando_com_a_assinatura_nova():
-    """Sem os kwargs novos isso daria TypeError de argumento inesperado; com eles, a recusa de
-    hoje é preservada. O teste prova as duas coisas de uma vez."""
-    with pytest.raises(NotImplementedError):
-        get_adapter("codex").spawn_command("/tmp", "sid", None, None, None)
-    with pytest.raises(NotImplementedError):
-        get_adapter("codex").spawn_command("/tmp", "sid", None, None, "plan")
+def test_codex_spawn_devolve_o_lancador_e_ignora_escolha_de_modelo():
+    """O Codex nasce como os outros: um comando no pane, o lançador.
+
+    Modelo/esforço são aceitos na assinatura (é o Protocol) e NÃO entram no comando: escolher
+    modelo na criação de sessão Codex é recusado na API, e obedecer aqui faria a escolha sumir
+    calada num lugar e valer noutro."""
+    assert get_adapter("codex").spawn_command("/tmp", "sid", None, None, None) == [
+        "hangar-codex-tui", "--cwd", "/tmp"]
+    assert get_adapter("codex").spawn_command(
+        "/tmp", "sid", "gpt-5.6-luna", "high", "plan") == ["hangar-codex-tui", "--cwd", "/tmp"]
+    assert get_adapter("codex").spawn_command(
+        "/tmp", "sid", initial_prompt="revise") == [
+            "hangar-codex-tui", "--cwd", "/tmp", "--prompt", "revise"]
 
 
 def test_id_hostil_nao_chega_no_comando():

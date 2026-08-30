@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shlex
+import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,8 +23,10 @@ from typing import AsyncIterator, Callable, Optional
 
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.appserver import AppServerClient
+from app.adapters.codex.constantes import APPROVAL, CLIENT_INFO, SANDBOX
 from app.hook_state import hook_state
 from app.models import session_key
+from app.procinfo import pid_vivo
 from app.adapters.codex.preview import CodexPreviewSource
 from app.adapters.codex.rollout import parse_rollout_line
 from app import tmux
@@ -33,11 +36,36 @@ from app.transcript import ChatEvent, TranscriptTailer
 
 _log = logging.getLogger("hangar.codex.adapter")
 
-# clientInfo do handshake initialize (ver docs/codex-app-server-contract.md).
-_CLIENT_INFO = {"name": "hangar", "title": None, "version": "0.1.0"}
-# Codex pode EDITAR arquivos no cwd da sessao -> workspace-write (nao read-only do spike).
-_SANDBOX = "workspace-write"
-_APPROVAL = "never"
+
+
+def comando_do_lancador(cwd: str, initial_prompt: str | None = None) -> list[str]:
+    """O comando do pane de uma sessao Codex: o lancador unico, o MESMO que o terminal chama.
+
+    O nome da sessao nao entra aqui — `tmux new-session` carimba CP_SESSION_NAME no pane e o
+    lancador le de la. Assim o comando nao repete a identidade que o tmux ja garante.
+    """
+    argv = ["hangar-codex-tui", "--cwd", cwd]
+    if initial_prompt:
+        argv += ["--prompt", initial_prompt]
+    return argv
+
+
+def matar_app_server(name: str) -> None:
+    """Mata o app-server DAQUELA sessao pelo pid do sidecar. Best-effort, idempotente.
+
+    Desde o lancador unico o servidor nao e mais filho do backend: `client.terminate()` nao tem
+    processo pra matar (ver AppServerClient.tem_processo_proprio) e virava um no-op silencioso.
+    Normalmente quem o derruba e o proprio lancador ao ver a TUI sair; isto cobre o caso em que ele
+    nao chegou la (SIGKILL no pane), que e como app-server orfao ja ficou escutando em loopback.
+    """
+    meta = codex_sessions.load(name) or {}
+    pid = meta.get("app_pid")
+    if not isinstance(pid, int) or not pid_vivo(pid):
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        _log.debug("codex: nao deu pra matar o app-server pid=%s name=%s: %s", pid, name, exc)
 
 
 def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
@@ -65,7 +93,7 @@ def ensure_tmux_tui(name: str, cwd: str, thread_id: str | None, endpoint: str,
         # o thread/started emitido por esta TUI e passa a controlar a mesma thread.
         argv = [
             "codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
-            "--sandbox", _SANDBOX, "--ask-for-approval", _APPROVAL,
+            "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL,
         ]
         if initial_prompt:
             argv.append(initial_prompt)
@@ -347,6 +375,9 @@ class CodexAdapter:
             sub = self._subscribers.pop(name, None)
             if sub is not None:
                 sub.cancel()
+            # Antes do delete: o pid do app-server mora no sidecar. Normalmente o lancador ja o
+            # derrubou ao ver a TUI sair; isto cobre o pane morto de SIGKILL.
+            matar_app_server(name)
             term = getattr(sess["client"], "terminate", None)
             if callable(term):
                 term()
@@ -403,8 +434,8 @@ class CodexAdapter:
                 result = await sess["client"].request("thread/resume", {
                     "threadId": sess["thread_id"],
                     "cwd": cwd,
-                    "sandbox": _SANDBOX,
-                    "approvalPolicy": _APPROVAL,
+                    "sandbox": SANDBOX,
+                    "approvalPolicy": APPROVAL,
                 })
             except asyncio.CancelledError:
                 raise
@@ -460,14 +491,54 @@ class CodexAdapter:
         if watch_tmux:
             self._start_tmux_watcher(name)
 
+    async def _conectar(self, name: str, meta: dict) -> Optional[AppServerClient]:
+        """Liga o backend ao app-server que o LANCADOR subiu (o caminho normal desde o ticket 03).
+
+        O servidor mora no pane, nao aqui: nada e spawnado e a TUI nao e recriada. O pid vem antes
+        do endereco de proposito — porta de loopback e reciclada, entao conectar so pelo endpoint
+        pode cair num processo alheio que tomou a porta. Pid morto (ou handshake sem resposta) e
+        sessao MORTA: devolver None deixa quem chamou tratar como sessao que acabou, em vez de
+        ressuscitar uma TUI que nao existe mais.
+
+        A assinatura vai pelo retry de sempre (start_subscription) e nao por um thread/resume aqui:
+        a sessao pode estar no turno ZERO, quando o rollout ainda nao existe e o resume e recusado.
+        """
+        if not pid_vivo(meta["app_pid"]):
+            _log.info("codex: app-server morto (pid=%s) name=%s — sessao encerrada",
+                      meta.get("app_pid"), name)
+            return None
+        client = AppServerClient()
+        try:
+            await client.connect(meta["endpoint"])
+            await client.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": None})
+        # Estreito de proposito: sao as falhas de CONVERSA com o servidor, as unicas que significam
+        # "sessao morta". Um `except Exception` aqui transformaria erro de programacao (um nome
+        # errado, um shape mudado) em "sessao morta" no log — a falha viraria um card sumindo, sem
+        # ninguem nunca ver o traceback.
+        except (ConnectionError, OSError, TimeoutError, RuntimeError) as exc:
+            await client.close()
+            _log.warning("codex: handshake falhou em %s name=%s: %s", meta["endpoint"], name, exc)
+            return None
+        except Exception:
+            await client.close()
+            raise
+        self.attach(name, client, meta["thread_id"], model=meta.get("model"),
+                    effort=meta.get("effort"), watch_tmux=True)
+        self.start_subscription(name, meta.get("cwd") or ".")
+        _log.info("codex: conectado ao app-server do pane endpoint=%s name=%s",
+                  meta["endpoint"], name)
+        return client
+
     async def ensure_running(self, name: str) -> Optional[AppServerClient]:
-        """Garante um AppServerClient VIVO pra sessao Codex `name` (resume LAZY):
+        """Garante um AppServerClient VIVO pra sessao Codex `name` (ligacao LAZY):
         - ja ha client vivo no dict -> retorna ele (caso quente).
         - senao, le o sidecar duravel; sem sidecar -> None (sessao Codex desconhecida).
-        - com sidecar (pos-restart): reabre o app-server, initialize, e RETOMA o thread existente
-          via `thread/resume` passando o threadId gravado (metodo confirmado no schema da 0.141.0;
-          docstring do ThreadResumeParams: 'Prefer using thread_id whenever possible'). O historico
-          nao se perde: ja esta no rollout JSONL; o resume so reconecta o processo vivo.
+        - sidecar com endpoint/app_pid (lancador unico) -> _conectar: o servidor e do pane, o
+          backend so se liga nele e sobreviver ao restart do backend deixa de ser problema dele.
+        - sidecar SEM endpoint (sessao nascida no desenho antigo, em que o app-server era filho do
+          backend) -> reabre o app-server, initialize, RETOMA o thread via `thread/resume` e recria
+          a TUI. Sem este ramo, uma sessao viva ficaria inalcancavel so por ter nascido antes da
+          atualizacao.
 
         Lock por-nome (IMPORTANT 1): sem ele, 2 chamadores concorrentes pro mesmo nome sem client
         vivo spawnavam 2 AppServerClient e o 2o attach() sobrescrevia o 1o no dict, vazando o
@@ -485,15 +556,17 @@ class CodexAdapter:
             meta = codex_sessions.load(name)
             if meta is None:
                 return None
+            if meta.get("endpoint") and meta.get("app_pid"):
+                return await self._conectar(name, meta)
             client = AppServerClient()
             try:
                 endpoint = await client.start_shared()
-                await client.request("initialize", {"clientInfo": _CLIENT_INFO, "capabilities": None})
+                await client.request("initialize", {"clientInfo": CLIENT_INFO, "capabilities": None})
                 result = await client.request("thread/resume", {
                     "threadId": meta["thread_id"],
                     "cwd": meta.get("cwd"),
-                    "sandbox": _SANDBOX,
-                    "approvalPolicy": _APPROVAL,
+                    "sandbox": SANDBOX,
+                    "approvalPolicy": APPROVAL,
                 })
             except Exception:
                 # resume falhou (app-server morreu, thread perdido, etc.): nao deixa o subprocess orfao.
@@ -525,8 +598,12 @@ class CodexAdapter:
 
     def close_sync(self, name: str) -> None:
         """Encerramento SINCRONO do client vivo (chamado pelo registry.kill, que e sync). Manda
-        SIGTERM best-effort no subprocess e esquece a sessao da memoria; o read loop (loop
-        principal) ve o EOF e roda seu finally. NAO apaga o sidecar duravel -- isso e o kill()."""
+        SIGTERM best-effort no app-server e esquece a sessao da memoria; o read loop (loop
+        principal) ve o EOF e roda seu finally. NAO apaga o sidecar duravel -- isso e o kill().
+
+        O SIGTERM vai pelo PID do sidecar: desde o lancador unico o servidor nao e filho do backend,
+        entao `client.terminate()` sozinho seria um no-op e o servidor sobreviveria ao encerrar."""
+        matar_app_server(name)
         sess = self._sessions.pop(name, None)
         watcher = self._tmux_watchers.pop(name, None)
         if watcher is not None:
@@ -903,13 +980,15 @@ class CodexAdapter:
 
     def spawn_command(self, cwd: str, session_id: str,
                       model: str | None = None, effort: str | None = None,
-                      permission_mode: str | None = None) -> list[str]:
-        # Assinatura aceita model/effort so pra conformar com o Protocol — o caminho Codex e morto
-        # (registry.create recusa provider codex antes da montagem) e a recusa e o comportamento.
-        # Sessao Codex NAO nasce de um comando tmux -- nasce de thread/start no app-server
-        # (registry.create_codex). registry.create ramifica por provider ANTES de chamar isto no
-        # caminho Codex, entao chegar aqui e uso incorreto -> falha alto (Protocol honesto).
-        raise NotImplementedError("Codex nao usa spawn_command; use registry.create_codex")
+                      permission_mode: str | None = None,
+                      initial_prompt: str | None = None) -> list[str]:
+        # Sessao Codex nasce como as outras: um comando no pane. O comando e o lancador, que sobe o
+        # app-server e a TUI juntos (ver comando_do_lancador).
+        # session_id nao entra: a identidade da conversa e o threadId, que so existe depois que a
+        # TUI chama thread/start — quem grava isso no sidecar e o lancador.
+        # model/effort tambem nao: escolher modelo na criacao de sessao Codex e recusado na API
+        # (assunto do ticket 09); aceitar aqui e ignorar la seria escolha que some calada.
+        return comando_do_lancador(cwd, initial_prompt)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
         # O rollout path vem do thread/start (result.thread.path), gravado no sidecar -- nao ha como

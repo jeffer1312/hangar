@@ -872,29 +872,32 @@ def test_create_explicit_claude_provider_routes_to_claude_create(api_client):
                                model=None, effort=None, context_window=None)
 
 
-def test_create_codex_provider_routes_to_create_codex(api_client):
-    from unittest.mock import AsyncMock
-    fake = AsyncMock(return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex"))
-    with patch("app.api.registry.create_codex", fake), \
-         patch("app.api.registry.create") as claude_create:
+def test_create_codex_provider_routes_to_create_normal(api_client):
+    # Desde o lancador unico o Codex nao tem mais caminho de criacao proprio: ele passa pelo MESMO
+    # registry.create dos outros, com o provider chegando la (senao o pane subiria claude).
+    with patch("app.api.registry.create",
+               return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex", jsonl=None)) as cr:
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
     assert r.status_code == 200
     assert r.json()["provider"] == "codex"
-    fake.assert_awaited_once_with("cx", "/tmp", None)
-    claude_create.assert_not_called()   # nao passa pelo caminho tmux/Claude
+    # jsonl vazio como no Pi/Kimi: o rollout so existe depois que a TUI abre a thread.
+    assert r.json()["jsonl"] is None
+    cr.assert_called_once_with("cx", "/tmp", None, provider="codex", engine=None,
+                               model=None, effort=None, context_window=None)
 
 
 def test_create_codex_forwards_wrapper_initial_prompt(api_client):
-    from unittest.mock import AsyncMock
-    fake = AsyncMock(return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex"))
-    with patch("app.api.registry.create_codex", fake):
+    # O prompt inicial vai no COMANDO do pane (a TUI e quem abre a thread), entao ele precisa
+    # atravessar ate o create.
+    with patch("app.api.registry.create",
+               return_value=SessionInfo(name="cx", cwd="/tmp", provider="codex")) as cr:
         r = api_client.post("/api/sessions", headers=_h(), json={
             "name": "cx", "cwd": "/tmp", "provider": "codex",
             "initial_prompt": "revise este projeto",
         })
     assert r.status_code == 200
-    fake.assert_awaited_once_with("cx", "/tmp", "revise este projeto")
+    assert cr.call_args.kwargs["initial_prompt"] == "revise este projeto"
 
 
 def test_create_pi_provider_routes_to_claude_create_with_provider(api_client):
@@ -921,8 +924,7 @@ def test_create_pi_with_engine_is_refused(api_client):
 
 
 def test_create_rejects_unknown_provider(api_client):
-    with patch("app.api.registry.create") as cr, \
-         patch("app.api.registry.create_codex") as cc:
+    with patch("app.api.registry.create") as cr:
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "x", "cwd": "/tmp", "provider": "gemini"})
     assert r.status_code == 400
@@ -930,7 +932,6 @@ def test_create_rejects_unknown_provider(api_client):
     # (que orienta so claude/pi) — a criacao aceita codex/kimi e o texto tem que ser generico.
     assert r.json()["detail"]["code"] == "erro_provider_sessao_invalido"
     cr.assert_not_called()
-    cc.assert_not_called()
 
 
 def test_rename_falha_usa_a_mesma_chave_da_sidebar(api_client):
@@ -944,9 +945,8 @@ def test_rename_falha_usa_a_mesma_chave_da_sidebar(api_client):
 
 
 def test_create_codex_conflict_maps_to_409(api_client):
-    from unittest.mock import AsyncMock
-    fake = AsyncMock(side_effect=ValueError("ja existe uma sessao com esse nome"))
-    with patch("app.api.registry.create_codex", fake):
+    fake = MagicMock(side_effect=ValueError("ja existe uma sessao com esse nome"))
+    with patch("app.api.registry.create", fake):
         r = api_client.post("/api/sessions", headers=_h(),
                             json={"name": "cx", "cwd": "/tmp", "provider": "codex"})
     assert r.status_code == 409

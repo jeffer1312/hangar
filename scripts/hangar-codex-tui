@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Lancador UNICO da sessao Codex: um comando que sobe o app-server e a TUI no mesmo pane.
+
+O backend e o terminal chamam exatamente isto. Antes o app-server era filho do processo do
+BACKEND (registry.create_codex spawnava o subprocess e segurava o client), o que deixava duas
+marcas: o servidor sobrevivia ao pane (ja houve app-server orfao escutando em loopback nesta
+maquina) e a criacao de sessao Codex nao passava pelo caminho normal dos outros agentes.
+
+O servidor nasce em segundo plano e a TUI roda em PRIMEIRO plano -- nunca `exec`. E a unica forma
+de o servidor morrer junto com o pane: quem o mata e o `finally` daqui, e o `exec` apagaria este
+processo antes de ele chegar la.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent.parent
+# Quanto esperamos a TUI abrir a thread. Estourar NAO e fatal: o pane segue sendo um Codex
+# utilizavel; o que se perde e o vinculo com o app ate a proxima abertura.
+_ESPERA_THREAD = 60.0
+# Quanto do stderr do app-server sai na tela quando ele morre na largada. E a cauda, porque a
+# ultima linha e que costuma dizer o motivo.
+_ERRO_MAX = 2000
+
+
+def _com_websockets() -> None:
+    """Garante a lib de WebSocket, re-exec no python do backend quando o do sistema nao a tem.
+
+    O comando do pane e montado tanto pelo backend quanto pelo wrapper de shell, e nenhum dos dois
+    sabe qual python vai atender o shebang. Falhar aqui deixaria um pane que morre no ato.
+    """
+    try:
+        import websockets  # noqa: F401
+        return
+    except ImportError:
+        pass
+    venv = _REPO / "backend" / ".venv" / "bin" / "python"
+    if os.environ.get("_HANGAR_CODEX_REEXEC") or not venv.exists():
+        raise SystemExit(
+            "hangar-codex-tui: falta o pacote `websockets` e o venv do backend nao esta em "
+            f"{venv} — rode o instalador do hangar"
+        )
+    os.environ["_HANGAR_CODEX_REEXEC"] = "1"
+    os.execv(str(venv), [str(venv), os.path.abspath(__file__), *sys.argv[1:]])
+
+
+def _porta_livre() -> str:
+    # Reserva e solta uma porta loopback. Ha uma janela minima ate o app-server dar bind; quem
+    # perde a corrida ve o servidor sair, e a espera abaixo falha em vez de deixar uma TUI apontando
+    # pro servidor errado.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        porta = sock.getsockname()[1]
+    return f"ws://127.0.0.1:{porta}"
+
+
+def _espera_thread(endpoint: str, cwd: str, servidor, erros, salvar) -> None:
+    """Escuta o app-server ate a TUI abrir a thread e grava o sidecar. Roda numa thread propria.
+
+    A TUI e quem chama thread/start: uma thread aberta por outro cliente e ainda sem turno nao tem
+    rollout no disco, e `codex resume` a rejeita. Aqui so olhamos.
+    """
+    from websockets.sync.client import connect
+    from app.adapters.codex.constantes import CLIENT_INFO
+
+    limite = time.monotonic() + _ESPERA_THREAD
+    ws = None
+    while ws is None and time.monotonic() < limite:
+        if servidor.poll() is not None:
+            # Morreu antes de abrir a porta. O motivo esta no stderr DELE, e sem imprimir isto a
+            # unica pista seria a espera estourando 60s depois — falha calada, no processo com mais
+            # chance de falhar aqui.
+            erros.seek(0)
+            cauda = erros.read()[-_ERRO_MAX:].decode(errors="replace").strip()
+            print(f"hangar-codex-tui: o app-server saiu com codigo {servidor.returncode} antes de "
+                  f"abrir {endpoint}" + (f":\n{cauda}" if cauda else ""), file=sys.stderr)
+            return
+        try:
+            ws = connect(endpoint, open_timeout=1, max_size=None)
+        except Exception:
+            time.sleep(0.1)
+    if ws is None:
+        print(f"hangar-codex-tui: app-server nao respondeu em {endpoint}", file=sys.stderr)
+        return
+    with ws:
+        ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                            "params": {"clientInfo": CLIENT_INFO, "capabilities": None}}))
+        for cru in ws:
+            try:
+                msg = json.loads(cru)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict) or msg.get("method") != "thread/started":
+                continue
+            thread = (msg.get("params") or {}).get("thread") or {}
+            if thread.get("cwd") != cwd:
+                continue
+            if thread.get("id") and thread.get("path"):
+                salvar(thread["id"], thread["path"])
+            return
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="hangar-codex-tui")
+    # O nome vem do env por padrao: `tmux new-session` ja carimba CP_SESSION_NAME no pane, entao o
+    # backend nao precisa repetir a identidade no comando.
+    ap.add_argument("--name", default=os.environ.get("CP_SESSION_NAME"))
+    ap.add_argument("--cwd", default=None)
+    ap.add_argument("--prompt", default=None)
+    args = ap.parse_args()
+    if not args.name:
+        print("hangar-codex-tui: --name (ou CP_SESSION_NAME) e obrigatorio", file=sys.stderr)
+        return 2
+    cwd = os.path.abspath(args.cwd or os.getcwd())
+
+    _com_websockets()
+    sys.path.insert(0, str(_REPO / "backend"))
+    from app.adapters.codex import sessions as codex_sessions
+    from app.adapters.codex.constantes import APPROVAL, SANDBOX
+
+    endpoint = _porta_livre()
+    # stdout no lixo (no modo WebSocket o protocolo nao passa por ele), mas o stderr vai pra um
+    # arquivo temporario: PIPE sem consumidor encheria numa sessao longa, e DEVNULL jogaria fora
+    # justamente a mensagem que explica uma largada que falhou.
+    erros = tempfile.TemporaryFile()
+    servidor = subprocess.Popen(
+        ["codex", "app-server", "--listen", endpoint],
+        stdout=subprocess.DEVNULL, stderr=erros,
+    )
+
+    def salvar(thread_id: str, rollout: str) -> None:
+        codex_sessions.save(args.name, thread_id, rollout, cwd,
+                            endpoint=endpoint, app_pid=servidor.pid)
+
+    threading.Thread(target=_espera_thread, args=(endpoint, cwd, servidor, erros, salvar),
+                     daemon=True).start()
+
+    # SIGTERM/SIGHUP viram SystemExit pra que o `finally` rode: `tmux kill-session` derruba o pane
+    # por sinal, e sem isto o app-server ficaria escutando sem dono.
+    for sinal in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sinal, lambda *_: sys.exit(143))
+
+    argv = ["codex", "--remote", endpoint, "--no-alt-screen", "-C", cwd,
+            "--sandbox", SANDBOX, "--ask-for-approval", APPROVAL]
+    if args.prompt:
+        argv.append(args.prompt)
+    try:
+        return subprocess.run(argv).returncode
+    finally:
+        servidor.terminate()
+        try:
+            servidor.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            servidor.kill()
+        erros.close()
+        # So apaga o sidecar que e NOSSO: uma sessao recriada com o mesmo nome ja teria reescrito o
+        # arquivo, e apagar o dela deixaria a sessao viva invisivel pro app.
+        meta = codex_sessions.load(args.name)
+        if meta and meta.get("app_pid") == servidor.pid:
+            codex_sessions.delete(args.name)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -46,15 +46,15 @@ def test_effort_fora_da_lista_devolve_400():
 
 
 def test_codex_sem_modelo_nao_e_barrado_pela_validacao():
-    """Regressão: a validação nova não pode transformar criação de Codex em 400. O create_codex
-    vai mocado (convenção de tests/test_api.py:790) — sem isso o teste sobe um `codex --remote`
-    de verdade na máquina, e da 2ª rodada em diante passa por 409, sem exercitar nada."""
-    fake = AsyncMock(return_value=SessionInfo(name="cx-modelo", cwd="/tmp", provider="codex"))
-    with patch("app.api.registry.create_codex", fake):
+    """Regressão: a validação nova não pode transformar criação de Codex em 400. O registry.create
+    vai mocado (convenção de tests/test_api.py:790) — sem isso o teste sobe um pane de verdade na
+    máquina, e da 2ª rodada em diante passa por 409, sem exercitar nada."""
+    with patch("app.api.registry.create",
+               return_value=SessionInfo(name="cx-modelo", cwd="/tmp", provider="codex")) as cr:
         r = TestClient(app).post("/api/sessions", headers=AUTH, json={
             "name": "cx-modelo", "cwd": "/tmp", "provider": "codex"})
     assert r.status_code == 200
-    fake.assert_awaited_once()
+    cr.assert_called_once()
 
 
 def test_kimi_sem_modelo_nao_e_barrado_pela_validacao():

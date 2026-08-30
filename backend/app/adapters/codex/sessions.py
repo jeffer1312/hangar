@@ -33,14 +33,21 @@ def _path(name: str) -> Path:
 
 
 def save(name: str, thread_id: str, rollout_path: str, cwd: str,
-         model: str | None = None, effort: str | None = None) -> None:
+         model: str | None = None, effort: str | None = None,
+         endpoint: str | None = None, app_pid: int | None = None) -> None:
     """Grava (ou sobrescreve) o sidecar duravel da sessao Codex. Escrita ATOMICA (tmp + replace,
     mesmo padrao de PromptQueue._write_atomic em pqueue.py) -- write_text direto podia corromper
     o sidecar em crash/concorrencia no meio da escrita.
 
     model/effort (Task C): escolha de modelo/reasoning effort da sessao, opcional -- None pra
     sessao nova (usa o default da thread) ou sidecar antigo (chave ausente = load().get() -> None,
-    sem quebrar)."""
+    sem quebrar).
+
+    endpoint/app_pid: o app-server DAQUELA sessao, escrito pelo lancador (scripts/hangar-codex-tui).
+    Sao o que deixa o backend se conectar a um servidor que nao e filho dele. O pid anda junto do
+    endpoint porque porta de loopback e reciclada: reconectar so pelo endereco pode cair num
+    processo alheio que ja tomou a porta. Ausentes = sidecar do desenho antigo, em que o servidor
+    era filho do backend."""
     _dir().mkdir(parents=True, exist_ok=True)
     p = _path(name)
     tmp = p.with_suffix(".json.tmp")
@@ -52,6 +59,8 @@ def save(name: str, thread_id: str, rollout_path: str, cwd: str,
         "cwd": cwd,
         "model": model,
         "effort": effort,
+        "endpoint": endpoint,
+        "app_pid": app_pid,
     }), encoding="utf-8")
     atomico.substituir(tmp, p)
 
@@ -63,7 +72,10 @@ def update_model(name: str, model: str | None, effort: str | None) -> None:
     meta = load(name)
     if meta is None:
         return
-    save(name, meta["thread_id"], meta["rollout_path"], meta["cwd"], model=model, effort=effort)
+    # endpoint/app_pid seguem juntos: sem eles aqui, trocar o modelo apagaria o endereco do
+    # app-server e o backend passaria a tratar a sessao viva como sessao do desenho antigo.
+    save(name, meta["thread_id"], meta["rollout_path"], meta["cwd"], model=model, effort=effort,
+         endpoint=meta.get("endpoint"), app_pid=meta.get("app_pid"))
 
 
 def load(name: str) -> dict | None:
@@ -92,7 +104,8 @@ def rename(old: str, new: str) -> None:
     meta = load(new)
     if meta is not None:
         save(new, meta["thread_id"], meta["rollout_path"], meta["cwd"],
-             model=meta.get("model"), effort=meta.get("effort"))
+             model=meta.get("model"), effort=meta.get("effort"),
+             endpoint=meta.get("endpoint"), app_pid=meta.get("app_pid"))
 
 
 def list_all() -> list[dict]:

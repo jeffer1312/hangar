@@ -37,6 +37,7 @@ class _FakeClient:
         self.requests: list[tuple[str, dict]] = []
         self.started = False
         self.closed = False
+        self.conectado = None
         self._thread_id = "019f5c00-5d7d-7dd2-b2cb-085ca6d76251"
         self._path = "/home/u/.codex/sessions/2026/07/13/rollout-x.jsonl"
 
@@ -46,6 +47,10 @@ class _FakeClient:
     async def start_shared(self):
         self.started = True
         return "ws://127.0.0.1:45123"
+
+    async def connect(self, endpoint, timeout=5.0):
+        self.conectado = endpoint
+        return endpoint
 
     async def request(self, method, params, timeout=30.0):
         self.requests.append((method, params))
@@ -68,42 +73,35 @@ class _FakeClient:
         self.closed = True
 
 
-# --- Teste 1: create_codex grava sidecar duravel + attach -----------------------------------
+# --- Teste 1: criar sessao Codex e o caminho NORMAL, com o lancador no pane ------------------
 
-async def test_create_codex_writes_sidecar_and_returns_provider(tmp_path):
+def test_create_codex_usa_o_lancador_e_nao_pre_semeia_transcript(tmp_path):
     reg = SessionRegistry(projects_dir=tmp_path)
-    fake = _FakeClient()
-    adapter = CodexAdapter()
-    with patch.object(registry, "AppServerClient", lambda *a, **k: fake), \
-         patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(registry.tmux, "has_session", return_value=False):
-        info = await reg.create_codex("mysess", "/tmp/proj")
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.shutil, "which", return_value="/usr/bin/hangar-codex-tui"), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_sess:
+        info = reg.create("mysess", "/tmp/proj", provider="codex",
+                          initial_prompt="revise este projeto")
     assert info.provider == "codex"
-    assert info.jsonl == fake._path
-    # sidecar duravel gravado com thread_id + rollout_path + cwd
-    saved = codex_sessions.load("mysess")
-    assert saved["thread_id"] == fake._thread_id
-    assert saved["rollout_path"] == fake._path
-    assert saved["cwd"] == "/tmp/proj"
-    # client vivo anexado no adapter (memoria efemera)
-    assert "mysess" in adapter._sessions
-    # A TUI cria a thread; o backend nao abre uma thread concorrente via JSON-RPC.
-    methods = [m for m, _ in fake.requests]
-    assert "initialize" in methods
-    assert "thread/start" not in methods
+    # O rollout so nasce quando a TUI abre a thread: um path do layout do Claude aqui envenenaria o
+    # _jsonl_cache, que e de classe e compartilhado com o SSE.
+    assert info.jsonl is None
+    assert "mysess" not in SessionRegistry._jsonl_cache
+    comando = new_sess.call_args[0][2]
+    assert "hangar-codex-tui" in comando
+    assert "/tmp/proj" in comando
+    assert "revise este projeto" in comando
 
 
-async def test_create_codex_leaves_model_unselected_until_catalog_or_user_choice(tmp_path):
+def test_create_codex_recusa_quando_o_lancador_nao_esta_no_path(tmp_path):
+    """Sem o lancador o pane morre no ato e o tmux devolve 0 — a sessao evaporaria calada."""
     reg = SessionRegistry(projects_dir=tmp_path)
-    fake = _FakeClient()
-    adapter = CodexAdapter()
-    with patch.object(registry, "AppServerClient", lambda *a, **k: fake), \
-         patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(registry.tmux, "has_session", return_value=False):
-        await reg.create_codex("mysess", "/tmp/proj")
-    sess = adapter._sessions["mysess"]
-    assert sess["default_model"] is None
-    assert sess["model"] is None
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.shutil, "which", return_value=None), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_sess:
+        with pytest.raises(ValueError, match="hangar-codex-tui"):
+            reg.create("mysess", "/tmp/proj", provider="codex")
+    new_sess.assert_not_called()
 
 
 # --- Teste 2: list() inclui Codex (sidecar) E Claude (tmux) ---------------------------------
@@ -201,31 +199,88 @@ def test_create_claude_rejects_existing_codex_name(tmp_path):
     new_sess.assert_not_called()  # nao chegou a spawnar pane tmux orfao
 
 
-async def test_create_codex_rejects_existing_tmux_name(tmp_path):
-    reg = SessionRegistry(projects_dir=tmp_path)
+async def test_ensure_running_conecta_no_app_server_do_pane(tmp_path):
+    """Sidecar com endpoint+pid: o backend se LIGA ao servidor do pane, sem spawnar nem recriar TUI."""
+    codex_sessions.save("cx", "tid-1", "/x/rollout.jsonl", "/tmp/a",
+                        endpoint="ws://127.0.0.1:45999", app_pid=4242)
     adapter = CodexAdapter()
-    with patch.object(registry.tmux, "has_session", return_value=True), \
-         patch.object(registry, "AppServerClient", lambda *a, **k: _FakeClient()), \
-         patch("app.adapters.get_adapter", return_value=adapter):
-        with pytest.raises(ValueError):
-            await reg.create_codex("dup", "/tmp/proj")
-
-
-# --- Orfao de processo se save() falhar (review Important #2) --------------------------------
-
-async def test_create_codex_closes_client_when_save_fails(tmp_path):
-    reg = SessionRegistry(projects_dir=tmp_path)
     fake = _FakeClient()
+    with patch.object(codex_adapter, "AppServerClient", lambda *a, **k: fake), \
+         patch.object(codex_adapter, "pid_vivo", return_value=True), \
+         patch.object(codex_adapter, "ensure_tmux_tui") as tui:
+        client = await adapter.ensure_running("cx")
+    assert client is fake
+    assert fake.conectado == "ws://127.0.0.1:45999"
+    assert fake.started is False     # nao subiu app-server nenhum
+    tui.assert_not_called()          # a TUI ja esta viva no pane; recriar mataria a conversa na tela
+    assert "cx" in adapter._sessions
+
+
+async def test_ensure_running_com_app_server_morto_e_sessao_morta(tmp_path):
+    """Pid morto: nao adianta tentar o endereco — porta de loopback e reciclada e o outro lado
+    pode ser um processo alheio. A sessao acabou, e dizer isso e melhor que reconectar as cegas."""
+    codex_sessions.save("cx", "tid-1", "/x/rollout.jsonl", "/tmp/a",
+                        endpoint="ws://127.0.0.1:45999", app_pid=4242)
     adapter = CodexAdapter()
-    with patch.object(registry, "AppServerClient", lambda *a, **k: fake), \
-         patch("app.adapters.get_adapter", return_value=adapter), \
-         patch.object(registry.tmux, "has_session", return_value=False), \
-         patch.object(codex_sessions, "save", side_effect=OSError("disco cheio")):
-        with pytest.raises(OSError):
-            await reg.create_codex("mysess", "/tmp/proj")
-    assert fake.closed is True                       # client fechado, sem orfao
-    assert codex_sessions.load("mysess") is None     # nenhum sidecar orfao
-    assert "mysess" not in adapter._sessions         # nao anexado
+    fake = _FakeClient()
+    with patch.object(codex_adapter, "AppServerClient", lambda *a, **k: fake), \
+         patch.object(codex_adapter, "pid_vivo", return_value=False):
+        assert await adapter.ensure_running("cx") is None
+    assert fake.conectado is None
+    assert "cx" not in adapter._sessions
+
+
+def test_pane_codex_sem_sidecar_nao_vira_sessao_claude(tmp_path):
+    """A janela entre o pane nascer e o lancador gravar o sidecar tem dono.
+
+    Sem isto o pane cai no default "claude" e e casado com o transcript do Claude do mesmo
+    diretorio — a regressao que ja custou caro no Pi."""
+    reg = SessionRegistry(projects_dir=tmp_path)
+    panes = {"cx": [{"name": "cx", "cwd": "/tmp/a", "pid": 321, "pane_id": "%3", "active": True}]}
+    with patch.object(registry.tmux, "list_panes_all", return_value=panes), \
+         patch.object(procinfo, "_proc_children_map", return_value={}), \
+         patch.object(registry, "provider_of_pane", return_value="codex"), \
+         patch.object(SessionRegistry, "resolve_tracked") as resolve, \
+         patch.object(SessionRegistry, "_repl_sid", return_value=None):
+        out = reg.list()
+    resolve.assert_not_called()   # nem chega a procurar transcript do Claude
+    assert [(s.name, s.provider, s.jsonl, s.tracked) for s in out] == [("cx", "codex", None, False)]
+
+
+def test_kill_manda_sigterm_no_pid_do_app_server(tmp_path):
+    """Encerrar pelo app tem que matar o app-server POR PID.
+
+    Ele nao e mais filho do backend, entao o `client.terminate()` do desenho antigo nao tem
+    processo pra matar — parar nele deixaria o servidor escutando em loopback sem dono, que e
+    exatamente o orfao que ja aconteceu nesta maquina."""
+    codex_sessions.save("cx", "tid-1", "/x/rollout.jsonl", "/tmp/a",
+                        endpoint="ws://127.0.0.1:45999", app_pid=4242)
+    mortos = []
+    with patch.object(codex_adapter, "pid_vivo", return_value=True), \
+         patch.object(codex_adapter.os, "kill", lambda pid, sig: mortos.append((pid, sig))):
+        codex_adapter.matar_app_server("cx")
+    assert mortos == [(4242, codex_adapter.signal.SIGTERM)]
+
+
+def test_kill_nao_manda_sinal_pra_pid_morto(tmp_path):
+    """Pid reciclado e de outra pessoa: mandar SIGTERM as cegas mataria processo alheio."""
+    codex_sessions.save("cx", "tid-1", "/x/rollout.jsonl", "/tmp/a",
+                        endpoint="ws://127.0.0.1:45999", app_pid=4242)
+    mortos = []
+    with patch.object(codex_adapter, "pid_vivo", return_value=False), \
+         patch.object(codex_adapter.os, "kill", lambda pid, sig: mortos.append((pid, sig))):
+        codex_adapter.matar_app_server("cx")
+    assert mortos == []
+
+
+def test_create_codex_rejects_existing_tmux_name(tmp_path):
+    reg = SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=True), \
+         patch.object(registry.shutil, "which", return_value="/usr/bin/hangar-codex-tui"), \
+         patch.object(registry.tmux, "new_session", return_value=True) as new_sess:
+        with pytest.raises(ValueError):
+            reg.create("dup", "/tmp/proj", provider="codex")
+    new_sess.assert_not_called()
 
 
 # --- Teste 5: ensure_running pos-restart reabre client e retoma pelo thread_id --------------

@@ -20,8 +20,6 @@ from app.pqueue import PromptQueue
 from app.chain import ThenLink
 from app.pair import PairLink, rename_pair, leave as pair_leave
 from app.adapters.codex import sessions as codex_sessions
-from app.adapters.codex import adapter as codex_adapter
-from app.adapters.codex.appserver import AppServerClient
 from app.askquestion import clear_pending_askq
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
                        aprovacao_kimi, codex_turno_aberto, status_line as _pane_status)
@@ -242,7 +240,12 @@ def _kimi_corrige_ocioso(info, marker):
 # sessões antigas (0.36.x) reescrevem o argv0 como `kimi`; a 0.37.2 reescreve como `kimi-code` —
 # sem a segunda entrada, a sessão recém-criada virava "claude" na re-descoberta e herdava até o
 # transcript do Claude do mesmo cwd (medido no e2e de 19/08/2026).
-_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi"}
+# O `codex` entra por causa da JANELA entre o pane nascer e o sidecar existir: a TUI e o app-server
+# sobem juntos pelo lancador, e ate a thread abrir nao ha sidecar nenhum. Sem esta linha o pane cai
+# no default "claude" e e casado com o transcript do CLAUDE do mesmo diretorio — a mesma regressao
+# que ja custou caro no Pi.
+_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
+                  "codex": "codex"}
 
 # Windows: o argv0 vem com extensao (`claude.exe`), que nao casa em _EXEC_PROVIDER; e um CLI
 # instalado por `npm -g` nao aparece com o nome dele nenhuma vez — o processo e o
@@ -277,6 +280,20 @@ def _exigir_cp_engine() -> None:
         return
     raise ValueError(
         "hangar-engine nao esta no PATH deste servidor — sem ele a sessao com motor nasce e morre na "
+        "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
+        "Windows, install.ps1.")
+
+
+def _exigir_lancador_codex() -> None:
+    """Mesma guarda do `_exigir_cp_engine`, pro lancador do Codex — e pelo mesmo motivo exato.
+
+    `hangar-codex-tui` e o COMANDO do pane de toda sessao Codex. Faltando no PATH, o pane morre no
+    ato e o `tmux new-session` devolve 0: o app diria "sessao criada" e a sessao sumiria sem rastro.
+    """
+    if shutil.which("hangar-codex-tui"):
+        return
+    raise ValueError(
+        "hangar-codex-tui nao esta no PATH deste servidor — sem ele a sessao Codex nasce e morre na "
         "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
         "Windows, install.ps1.")
 
@@ -1009,6 +1026,13 @@ class SessionRegistry:
                 # toda sessao recem-criada fica untracked ate o 1o turno.
                 jsonl = kimi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
                 tracked = jsonl is not None
+            elif prov == "codex":
+                # Chegar aqui significa pane de Codex SEM sidecar (o filtro acima ja tirou os que
+                # tem): a TUI subiu e ainda nao abriu a thread. Nao ha transcript a resolver — o
+                # rollout so nasce com a thread —, e cair no resolve_tracked pescaria o jsonl do
+                # Claude do mesmo cwd. Some sozinho: o lancador grava o sidecar e a proxima
+                # varredura ja acha a sessao pelo caminho normal.
+                jsonl, tracked = None, False
             else:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
@@ -1024,6 +1048,8 @@ class SessionRegistry:
                 info.provider = "pi"
             elif prov == "kimi":
                 info.provider = "kimi"
+            elif prov == "codex":
+                info.provider = "codex"
             # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
             # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.
@@ -1052,6 +1078,10 @@ class SessionRegistry:
                 cfg_pi = _config_dir_of(p["pid"]) if p.get("pid") else None
                 atual = pi_models.provider_atual(jsonl, cfg_pi) if jsonl else None
                 info.conta = cotas.conta_de_provider_pi(atual)
+            elif prov == "codex":
+                # Codex tem conta propria (OAuth do proprio CLI), que nao e nenhuma das chaves do
+                # /api/cotas. Cair no `else` abaixo carimbaria uma conta Claude que ela nao gasta.
+                info.conta = None
             else:
                 cdir = (_config_dir_of(p["pid"]) if p.get("pid") else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
@@ -1139,6 +1169,12 @@ class SessionRegistry:
             # ha fallback nenhum: fica o default idle (ou o aviso de hooks, logo abaixo).
             if getattr(info, "provider", "claude") == "codex":
                 info.last_activity = _jsonl_mtime(info.jsonl)
+                if not info.jsonl:
+                    # Janela entre o pane nascer e o lancador gravar o sidecar: nao ha rollout, e
+                    # tanto a chave do marcador quanto a leitura do turno EXIGEM um caminho
+                    # (session_key(None) levanta TypeError). Sem esta saida, uma sessao Codex
+                    # recem-criada derrubaria a lista INTEIRA — todas as sessoes de todo mundo.
+                    continue
                 marker = hook_state.get_state(_sid(info.jsonl))
                 if marker and marker[0] != "awaiting_input":
                     # awaiting_input nao existe no Codex (o evento equivalente nao existe la); se
@@ -1339,7 +1375,8 @@ class SessionRegistry:
                resume_session_id: str | None = None, provider: str = "claude",
                engine: str | None = None, model: str | None = None,
                effort: str | None = None, context_window: int | None = None,
-               permission_mode: str | None = None) -> SessionInfo:
+               permission_mode: str | None = None,
+               initial_prompt: str | None = None) -> SessionInfo:
         # Nome tmux nao aceita "."/":"/espaco -> sanitiza igual ao rename. Varias sessoes na MESMA
         # pasta sao permitidas: cada uma tem nome unico + --session-id proprio -> jsonl proprio.
         name = sanitize_session_name(name)
@@ -1351,12 +1388,6 @@ class SessionRegistry:
             from app import engines
             if engine not in engines.listar():
                 raise ValueError(f"motor '{engine}' nao existe")
-        # Codex nao e tmux: o caminho async (spawn do app-server, thread/start) roda no loop
-        # principal via create_codex(); o create() sync spawnaria o AppServerClient num loop
-        # descartavel (asyncio.run) que morre ao retornar -> orfanaria o subprocess/reader task.
-        # Por isso o create() sync e Claude-only e recusa Codex alto (Task 6 fia o endpoint async).
-        if provider == "codex":
-            raise ValueError("sessoes Codex sao criadas via create_codex (async)")
         # Pi anda no MESMO caminho tmux do Claude, mas duas coisas daqui pra baixo sao Claude puro e
         # recusam alto em vez de "quase funcionar":
         #  - motor: o `hangar-engine --exec` so exporta ANTHROPIC_* / CLAUDE_CODE_*, que o pi ignora ->
@@ -1369,6 +1400,12 @@ class SessionRegistry:
         # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
         if provider == "kimi" and engine:
             raise ValueError("motor so vale para provider claude")
+        # Codex idem: o `hangar-engine --exec` so exporta ANTHROPIC_*/CLAUDE_CODE_*, que o codex
+        # ignora — a sessao subiria na conta do proprio Codex PARECENDO estar no motor pedido.
+        if provider == "codex":
+            if engine:
+                raise ValueError("motor so vale para provider claude")
+            _exigir_lancador_codex()
         # Unicidade contra tmux (Claude) E sidecars Codex: sem o segundo check, um nome de sessao
         # Codex reusado aqui geraria DOIS SessionInfo com o mesmo name no list() (front keyed por
         # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem
@@ -1419,7 +1456,12 @@ class SessionRegistry:
             # spawn_command vem do Adapter do provider (import local: get_adapter->ClaudeAdapter nao
             # importa registry, mas evita qualquer ciclo se um adapter futuro vier a importar daqui).
             from app.adapters import get_adapter
-            cmd = tmux.join_cmd(get_adapter(provider).spawn_command(cwd, sid, model, effort, permission_mode))
+            # initial_prompt so vai pro Codex: e a TUI dele que abre a thread, entao o 1o prompt tem
+            # que estar no comando do pane. Os outros providers recebem prompt inicial por /input,
+            # e aceitar o argumento neles seria escolha que some calada.
+            extra = {"initial_prompt": initial_prompt} if provider == "codex" else {}
+            cmd = tmux.join_cmd(get_adapter(provider).spawn_command(
+                cwd, sid, model, effort, permission_mode, **extra))
         if engine:
             # `hangar-engine --exec` aplica o env DENTRO do pane (os.execvpe). Não usamos `tmux -e` porque
             # a key ficaria em /proc/<pid>/cmdline, legível por qualquer usuário da máquina. Depois do
@@ -1446,7 +1488,10 @@ class SessionRegistry:
         # Quem liga o pane ao transcript e o bilhete que a extensao escreve (ver pi_session_file).
         # Kimi idem (sessions/<wd>/session_<uuid>/agents/main/wire.jsonl, sessao so no 1o prompt);
         # quem liga e o bilhete do hook (ver kimi_session_file).
-        jsonl = None if provider in ("pi", "kimi") else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        # Codex pelo mesmo motivo: o rollout so existe depois que a TUI abre a thread, e o caminho
+        # dele nao se deriva de cwd+id (vem do thread/start). Devolver um path do layout do Claude
+        # aqui envenenaria o _jsonl_cache, que e de CLASSE e compartilhado com o SSE.
+        jsonl = None if provider in ("pi", "kimi", "codex") else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         # Pré-confia a pasta no .claude.json: sem isto, uma sessão criada pelo app numa pasta NOVA
         # nasce presa no "trust this folder?" do Claude Code (invisível/ininteragível pelo chat até
         # aceitar na TUI). Só é o 1º acesso à pasta — depois o próprio Claude Code grava. Best-effort.
@@ -1454,10 +1499,12 @@ class SessionRegistry:
         # lista de pastas confiadas do Claude com pasta que ele talvez nunca abra.
         # Kimi tem trust PROPRIO (medido: pasta nova trava no "Trust this folder?" do boot) ->
         # pré-confia no formato dele (~/.kimi-code/workspace-trust), nao no do Claude.
+        # Codex tem confianca propria e a TUI ja sobe com --sandbox/--ask-for-approval explicitos:
+        # escrever no .claude.json por ele so sujaria a lista de pastas confiadas do Claude.
         if provider == "kimi":
             from app.adapters.kimi import sessions as kimi_sessions
             kimi_sessions.pretrust_cwd(cwd)
-        elif provider != "pi":
+        elif provider not in ("pi", "codex"):
             _pretrust_cwd(cwd, config_dir)
         if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")
@@ -1479,79 +1526,6 @@ class SessionRegistry:
         if jsonl is not None:
             self._jsonl_cache[name] = jsonl
         return SessionInfo(name=name, cwd=cwd, jsonl=jsonl, provider=provider, engine=engine)
-
-    async def create_codex(self, name: str, cwd: str,
-                           initial_prompt: str | None = None) -> SessionInfo:
-        # Caminho Codex: spawna um app-server WebSocket local, abre um thread e cria uma TUI
-        # `codex --remote` no tmux ligada ao mesmo servidor. O backend conserva o controle JSON-RPC.
-        name = sanitize_session_name(name)
-        if not name:
-            raise ValueError("nome invalido")
-        # Unicidade contra sessoes tmux (Claude) E sidecars Codex existentes.
-        if tmux.has_session(name) or codex_sessions.exists(name):
-            raise ValueError("ja existe uma sessao com esse nome")
-        client = AppServerClient()
-        try:
-            endpoint = await client.start_shared()
-            await client.request("initialize", {
-                "clientInfo": codex_adapter._CLIENT_INFO, "capabilities": None})
-            codex_adapter.ensure_tmux_tui(
-                name, cwd, None, endpoint, initial_prompt=initial_prompt,
-            )
-
-            # A TUI cria a thread e publica sua identidade a todos os clientes do app-server.
-            # Isso tambem garante que o rollout ja exista, permitindo `codex resume` no restart.
-            async def _tui_thread() -> dict:
-                async for notification in client.notifications():
-                    if notification.get("method") != "thread/started":
-                        continue
-                    thread = (notification.get("params") or {}).get("thread") or {}
-                    if thread.get("cwd") == cwd:
-                        return thread
-                raise ConnectionError("app-server encerrou antes de a TUI criar a thread")
-
-            thread = await asyncio.wait_for(_tui_thread(), timeout=20)
-        except Exception:
-            # Falha no handshake: nao deixa o subprocess orfao.
-            await client.close()
-            if tmux.has_session(name):
-                tmux.kill_session(name)
-            raise
-        thread_id = thread.get("id")
-        rollout_path = thread.get("path")
-        if not thread_id or not rollout_path:
-            await client.close()
-            tmux.kill_session(name)
-            raise ValueError("thread/start nao devolveu id/path")
-        # save() (mkdir+write_text -> pode dar OSError: disco cheio/permissao) e attach() rodam com o
-        # app-server JA spawnado -> qualquer falha aqui tem que fechar o client, senao vira orfao. Se
-        # save deu certo mas attach falhou, remove o sidecar recem-escrito (estado consistente: nao
-        # fica sidecar apontando pra um client fechado).
-        try:
-            # Sidecar duravel: sobrevive ao restart do backend (identidade + ponteiro pro rollout).
-            codex_sessions.save(name, thread_id, rollout_path, cwd)
-            # Client vivo (efemero) anexado no adapter; limpa fila/then herdados de nome reusado.
-            # A sessao nova ainda nao tem escolha explicita de modelo; o catalogo/picker e os
-            # eventos dos turnos populam o display depois.
-            from app.adapters import get_adapter
-            adapter = get_adapter("codex")
-            adapter.attach(name, client, thread_id, watch_tmux=True)
-            # ASSINA a thread que a TUI criou. Sem isto o backend so recebe eventos globais do
-            # app-server -- nada de turn/*, item/* ou tokenUsage -- e a sessao fica "viva mas
-            # surda": estado congelado, sem preview/statusline e com a fila do celular presa (o
-            # drain-on-complete mora no turn/completed). Em background porque thread/resume so
-            # e aceito depois que o 1o turno grava o rollout; ver _subscribe_when_ready.
-            adapter.start_subscription(name, cwd)
-        except Exception:
-            await client.close()
-            codex_sessions.delete(name)  # idempotente; remove sidecar orfao se save ja tinha passado
-            if tmux.has_session(name):
-                tmux.kill_session(name)
-            raise
-        PromptQueue(name).clear()
-        ThenLink(name).clear()
-        self._clear_pair(name)  # mesmo motivo do create(): grupo orfao de sessao morta fora do kill
-        return SessionInfo(name=name, cwd=cwd, jsonl=rollout_path, provider="codex")
 
     def rename(self, old: str, new: str) -> None:
         if codex_sessions.exists(old):

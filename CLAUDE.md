@@ -20,6 +20,18 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
 - `terminal_input.py` + `tmux.py` — input via `tmux send-keys` (prompt / option select via `(n-1)×Down`+`Enter` / `Esc`).
 - `adapters/codex/` — one loopback WebSocket app-server per Codex session; the backend consumes
   structured JSON-RPC events while a `codex --remote` TUI for the same thread runs inside tmux.
+  **O app-server é do PANE, não do backend** (`scripts/hangar-codex-tui`, o lançador único que o
+  backend e o terminal chamam igual): ele escolhe a porta, sobe o servidor em segundo plano, roda a
+  TUI em primeiro plano — nunca `exec`, que é o que o deixaria sem quem matar o servidor na saída —
+  e grava `endpoint`+`app_pid` no sidecar junto de thread/rollout/cwd. O backend só se **liga**
+  nele (`AppServerClient.connect`), conferindo o pid antes: porta de loopback é reciclada, e
+  conectar só pelo endereço pode cair num processo alheio. Pid morto é sessão morta, não sessão a
+  reconectar. Por isso criar sessão Codex passou a ser o caminho normal de criação (`registry.create`
+  com `provider="codex"`, transcript vazio como Pi/Kimi) — não há mais `create_codex`. Duas armadilhas
+  que sobram: o `codex` está no `_EXEC_PROVIDER` porque entre o pane nascer e o sidecar existir o pane
+  cairia no default `claude` e seria casado com o transcript do Claude do mesmo diretório; e nessa
+  janela `info.jsonl` é `None`, então tudo que deriva chave do transcript (`session_key`) tem que
+  desviar — `session_key(None)` levanta `TypeError` e derrubaria a lista inteira, de todas as sessões.
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in

@@ -1459,8 +1459,9 @@ def costs_endpoint(period: str = "all"):
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=SessionInfo)
 async def create_session(body: CreateBody):
-    # handler async pra poder `await registry.create_codex` (precisa viver no loop principal —
-    # ver docstring de create_codex). O caminho Claude (registry.create) e SINCRONO e spawna um
+    # Handler async por causa da trava de conta mais abaixo. Todo provider passa pelo MESMO
+    # registry.create — o Codex tambem, desde que o lancador unico virou o comando do pane dele.
+    # registry.create e SINCRONO e spawna um
     # subprocess tmux (bloqueante) -> rodar direto aqui travaria o event loop / o SSE de outras
     # sessoes; vai pro threadpool via asyncio.to_thread, igual aos outros handlers async deste
     # arquivo que chamam registry.list()/save_upload (menor risco de regressao: comportamento e
@@ -1515,7 +1516,7 @@ async def create_session(body: CreateBody):
             janela = None
 
     # Reconciliar e criar a sessão sob a MESMA trava (ciclo_conta), só no caminho que consome o
-    # config dir (Claude/Pi — codex nem recebe ele no create_codex). Sem o ciclo, um DELETE da
+    # config dir (Claude/Pi — o Codex tem conta propria e nao le config dir do Claude). Sem o ciclo, um DELETE da
     # conta no meio via a lista de sessões ainda vazia e apagaria a pasta embaixo da sessão que
     # está subindo (a criação roda em thread).
     if body.config_dir is not None and body.provider in ("claude", "pi"):
@@ -1560,12 +1561,12 @@ async def create_session(body: CreateBody):
                 # Conta sumiu entre a validação e a trava (ex: DELETE concorrente).
                 raise HTTPException(e.status, e.detail) from None
     try:
-        if body.provider == "codex":
-            return await registry.create_codex(body.name, body.cwd, body.initial_prompt)
         _kw2 = dict(provider=body.provider, engine=body.engine, model=body.model,
                      effort=body.effort, context_window=janela)
         if body.permission_mode is not None:
             _kw2["permission_mode"] = body.permission_mode
+        if body.initial_prompt is not None:
+            _kw2["initial_prompt"] = body.initial_prompt
         return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw2)
     except ValueError as e:
         raise HTTPException(409, str(e))
