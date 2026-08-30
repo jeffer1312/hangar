@@ -71,7 +71,7 @@ def _espera_thread(endpoint: str, cwd: str, servidor, erros, salvar) -> None:
     rollout no disco, e `codex resume` a rejeita. Aqui so olhamos.
     """
     from websockets.sync.client import connect
-    from app.adapters.codex.constantes import CLIENT_INFO
+    from app.adapters.codex.lancador import CLIENT_INFO
 
     limite = time.monotonic() + _ESPERA_THREAD
     ws = None
@@ -126,7 +126,7 @@ def main() -> int:
     _com_websockets()
     sys.path.insert(0, str(_REPO / "backend"))
     from app.adapters.codex import sessions as codex_sessions
-    from app.adapters.codex.constantes import APPROVAL, SANDBOX
+    from app.adapters.codex.lancador import APPROVAL, SANDBOX
 
     endpoint = _porta_livre()
     # stdout no lixo (no modo WebSocket o protocolo nao passa por ele), mas o stderr vai pra um

@@ -23,7 +23,8 @@ from typing import AsyncIterator, Callable, Optional
 
 from app.adapters.codex import sessions as codex_sessions
 from app.adapters.codex.appserver import AppServerClient
-from app.adapters.codex.constantes import APPROVAL, CLIENT_INFO, SANDBOX
+from app.adapters.codex.lancador import (APPROVAL, CLIENT_INFO, SANDBOX,
+                                          comando_do_lancador)
 from app.hook_state import hook_state
 from app.models import session_key
 from app.procinfo import pid_vivo
@@ -36,18 +37,6 @@ from app.transcript import ChatEvent, TranscriptTailer
 
 _log = logging.getLogger("hangar.codex.adapter")
 
-
-
-def comando_do_lancador(cwd: str, initial_prompt: str | None = None) -> list[str]:
-    """O comando do pane de uma sessao Codex: o lancador unico, o MESMO que o terminal chama.
-
-    O nome da sessao nao entra aqui — `tmux new-session` carimba CP_SESSION_NAME no pane e o
-    lancador le de la. Assim o comando nao repete a identidade que o tmux ja garante.
-    """
-    argv = ["hangar-codex-tui", "--cwd", cwd]
-    if initial_prompt:
-        argv += ["--prompt", initial_prompt]
-    return argv
 
 
 def matar_app_server(name: str) -> None:

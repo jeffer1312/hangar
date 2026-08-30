@@ -10,10 +10,16 @@ Local: ~/.hangar/codex-sessions/<name>.json (mesma familia de ~/.hangar usada pe
 sync-vault). Global por usuario (sessao Codex nao pertence a um config-dir do Claude). Um arquivo
 por sessao, keyed pelo NOME sanitizado da sessao."""
 import json
+import logging
+import os
+import threading
 from pathlib import Path
 
 from app import atomico
 from app.names import sanitize_session_name
+
+_log = logging.getLogger("hangar.codex.sessions")
+_pretrust_lock = threading.Lock()
 
 
 def _dir() -> Path:
@@ -125,3 +131,63 @@ def list_all() -> list[dict]:
 
 def exists(name: str) -> bool:
     return _path(name).exists()
+
+
+# Onde o bloco que a ponte de skills gerencia COMECA no ~/.codex/config.toml (app/agentes_sync).
+# A entrada de confianca entra ANTES dele: o Codex apenda `[hooks.state."..."]` no fim do arquivo,
+# e o fim, hoje, esta dentro daquele bloco — escrever la seria pendurar a nossa tabela no meio de
+# um trecho que outro codigo reescreve inteiro.
+_MARCA_BLOCO = "# >>> hangar:"
+
+
+def pretrust_cwd(cwd: str) -> None:
+    """Pre-confia a pasta no `~/.codex/config.toml`: sem isso, uma sessao criada pelo app numa
+    pasta NOVA nasce presa no "Do you trust the contents of this directory?" da TUI do Codex.
+
+    Medido em 30/08/2026 (codex-cli 0.151.0), e cada um destes fatos e o motivo de uma linha aqui:
+    a TUI nao abre a thread enquanto a pergunta esta na tela, entao a sessao fica sem rollout e sem
+    sidecar — invisivel no proprio app que a criou, e sem ninguem no celular pra responder;
+    a confianca NAO e herdada por subpasta (com `/tmp` confiado, `/tmp/proj-x` ainda pergunta);
+    e o override de linha de comando (`-c projects."...".trust_level="trusted"`) NAO vale para isto
+    — a TUI pergunta do mesmo jeito, entao a unica via e o arquivo.
+
+    Mesmo papel do `_pretrust_cwd` do Claude (.claude.json) e do `pretrust_cwd` do Kimi. Quem digita
+    `codex` no terminal nao passa por aqui: ali a pergunta tem quem responda, e responder por ela
+    seria decidir confianca no lugar da pessoa.
+
+    Best-effort: nunca levanta — falha aqui so devolve o comportamento de sem-pretrust.
+    """
+    import tomllib
+    # Import LOCAL: quem escreve neste arquivo ja tem a funcao certa pra isso (ela preserva o modo
+    # e poe o pid no temporario, porque nome fixo com duas escritas simultaneas promove bytes
+    # entrelacados). Local, e nao no topo, porque `scripts/hangar-codex` importa este modulo com o
+    # `python3` do sistema e nunca chama pretrust — ele nao pode pagar por esta dependencia.
+    from app.agentes_sync import _gravar_preservando
+
+    cfg = Path.home() / ".codex" / "config.toml"
+    alvo = os.path.abspath(os.path.expanduser(cwd))
+    # Um create() por thread (registry.create roda em to_thread): dois nascendo juntos fariam
+    # read-modify-write no MESMO arquivo e o ultimo apagaria a entrada do outro, calado. Mesmo
+    # padrao do _pretrust_lock do lado Claude (registry._pretrust_cwd).
+    with _pretrust_lock:
+        try:
+            raw = cfg.read_text(encoding="utf-8") if cfg.exists() else ""
+            # tomllib, e nao um regex procurando `[projects."<alvo>"]`: escrita por texto so e
+            # segura depois de uma leitura que entenda TOML de verdade. Uma tabela ja existente
+            # escrita de outra forma (aspas simples, nome sem aspas) passaria batida pelo regex, e
+            # apendar a nossa seria REDEFINIR a tabela — o arquivo inteiro pararia de abrir, pro
+            # Codex e pra ponte.
+            if alvo in (tomllib.loads(raw).get("projects") or {}):
+                return
+            entrada = f'[projects.{json.dumps(alvo)}]\ntrust_level = "trusted"\n\n'
+            corte = raw.find(_MARCA_BLOCO)
+            # Sem backup, ao contrario do _gravar_bloco_toml: aquele SUBSTITUI um bloco inteiro, e
+            # aqui so se insere uma tabela nova — nao ha conteudo do usuario em risco de sumir.
+            novo = raw + "\n" + entrada if corte < 0 else raw[:corte] + entrada + raw[corte:]
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            _gravar_preservando(cfg, novo)
+        except (OSError, ValueError) as e:
+            # Best-effort NAO e mudo: o unico sintoma de um pre-trust que nao foi gravado e a TUI
+            # parada na pergunta de confianca, e sem esta linha nao ha nada no log ligando uma
+            # coisa a outra.
+            _log.warning("pretrust do codex falhou pra %s: %r", cwd, e)

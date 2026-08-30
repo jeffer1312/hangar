@@ -4,6 +4,7 @@ Mocka o AppServerClient (NAO spawna o codex real). Cobre sidecar, attach, dedup 
 kill dos dois processos e ensure_running pos-restart (dict vazio -> thread/resume + nova TUI)."""
 import asyncio
 import json
+import os
 
 import pytest
 from unittest.mock import patch
@@ -245,6 +246,61 @@ def test_pane_codex_sem_sidecar_nao_vira_sessao_claude(tmp_path):
         out = reg.list()
     resolve.assert_not_called()   # nem chega a procurar transcript do Claude
     assert [(s.name, s.provider, s.jsonl, s.tracked) for s in out] == [("cx", "codex", None, False)]
+
+
+def _config_codex(tmp_path, conteudo):
+    casa = tmp_path / "casa"
+    (casa / ".codex").mkdir(parents=True)
+    cfg = casa / ".codex" / "config.toml"
+    cfg.write_text(conteudo, encoding="utf-8")
+    return casa, cfg
+
+
+def test_pretrust_escreve_antes_do_bloco_gerenciado(tmp_path):
+    """A entrada nao pode cair no fim do arquivo: o fim, hoje, esta DENTRO do bloco que a ponte de
+    skills reescreve inteiro (o Codex apenda a confianca dos hooks la)."""
+    casa, cfg = _config_codex(tmp_path, 'model = "x"\n\n# >>> hangar: provedor\nfoo = 1\n')
+    with patch.object(codex_sessions.Path, "home", staticmethod(lambda: casa)):
+        codex_sessions.pretrust_cwd("/tmp/pasta-nova")
+    texto = cfg.read_text()
+    assert texto.index('[projects."/tmp/pasta-nova"]') < texto.index("# >>> hangar:")
+    assert texto.endswith("foo = 1\n")     # o bloco de terceiro segue intacto no fim
+
+
+@pytest.mark.skipif(os.name != "posix", reason="modo de arquivo POSIX")
+def test_pretrust_preserva_o_modo_do_config(tmp_path):
+    """O config do Codex guarda credencial de provedor. Um pretrust nao pode afrouxar o arquivo
+    pro umask so por ter passado por um temporario."""
+    casa, cfg = _config_codex(tmp_path, 'model = "x"\n')
+    cfg.chmod(0o600)
+    with patch.object(codex_sessions.Path, "home", staticmethod(lambda: casa)):
+        codex_sessions.pretrust_cwd("/tmp/pasta-nova")
+    assert cfg.stat().st_mode & 0o777 == 0o600
+
+
+def test_pretrust_e_idempotente(tmp_path):
+    casa, cfg = _config_codex(tmp_path, '[projects."/tmp/ja"]\ntrust_level = "trusted"\n')
+    antes = cfg.read_text()
+    with patch.object(codex_sessions.Path, "home", staticmethod(lambda: casa)):
+        codex_sessions.pretrust_cwd("/tmp/ja")
+    assert cfg.read_text() == antes
+
+
+def test_pretrust_nao_redefine_tabela_escrita_de_outra_forma(tmp_path):
+    """Uma checagem por regex de `[projects."<alvo>"]` nao veria esta forma, e apendar a nossa
+    REDEFINIRIA a tabela: o config pararia de abrir, pro Codex e pra ponte."""
+    casa, cfg = _config_codex(tmp_path, "[projects]\n'/tmp/ja' = { trust_level = 'trusted' }\n")
+    antes = cfg.read_text()
+    with patch.object(codex_sessions.Path, "home", staticmethod(lambda: casa)):
+        codex_sessions.pretrust_cwd("/tmp/ja")
+    assert cfg.read_text() == antes
+
+
+def test_pretrust_nao_derruba_a_criacao_com_config_quebrado(tmp_path):
+    casa, cfg = _config_codex(tmp_path, "isto ] nao [ e toml\n")
+    with patch.object(codex_sessions.Path, "home", staticmethod(lambda: casa)):
+        codex_sessions.pretrust_cwd("/tmp/pasta-nova")   # best-effort: nao levanta
+    assert cfg.read_text() == "isto ] nao [ e toml\n"    # e nao corrompe mais ainda
 
 
 def test_kill_manda_sigterm_no_pid_do_app_server(tmp_path):

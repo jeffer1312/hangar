@@ -290,10 +290,11 @@ def _exigir_lancador_codex() -> None:
     `hangar-codex-tui` e o COMANDO do pane de toda sessao Codex. Faltando no PATH, o pane morre no
     ato e o `tmux new-session` devolve 0: o app diria "sessao criada" e a sessao sumiria sem rastro.
     """
-    if shutil.which("hangar-codex-tui"):
+    from app.adapters.codex.lancador import EXECUTAVEL
+    if shutil.which(EXECUTAVEL):
         return
     raise ValueError(
-        "hangar-codex-tui nao esta no PATH deste servidor — sem ele a sessao Codex nasce e morre na "
+        f"{EXECUTAVEL} nao esta no PATH deste servidor — sem ele a sessao Codex nasce e morre na "
         "hora, sem erro. Instale o lancador: no Linux, scripts/install-claude-wrapper.sh; no "
         "Windows, install.ps1.")
 
@@ -1499,12 +1500,15 @@ class SessionRegistry:
         # lista de pastas confiadas do Claude com pasta que ele talvez nunca abra.
         # Kimi tem trust PROPRIO (medido: pasta nova trava no "Trust this folder?" do boot) ->
         # pré-confia no formato dele (~/.kimi-code/workspace-trust), nao no do Claude.
-        # Codex tem confianca propria e a TUI ja sobe com --sandbox/--ask-for-approval explicitos:
-        # escrever no .claude.json por ele so sujaria a lista de pastas confiadas do Claude.
+        # Codex tem trust PROPRIO tambem (medido: pasta nova trava no "Do you trust the contents of
+        # this directory?" da TUI, e ali a sessao nem abre a thread -> nasce sem sidecar, invisivel
+        # no app que a criou) -> pre-confia no formato dele, nao no do Claude.
         if provider == "kimi":
             from app.adapters.kimi import sessions as kimi_sessions
             kimi_sessions.pretrust_cwd(cwd)
-        elif provider not in ("pi", "codex"):
+        elif provider == "codex":
+            codex_sessions.pretrust_cwd(cwd)
+        elif provider != "pi":
             _pretrust_cwd(cwd, config_dir)
         if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")

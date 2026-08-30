@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Cria uma sessao Codex gerenciada pelo Cockpit e anexa o terminal ao tmux."""
+"""Cria uma sessao Codex gerenciada pelo hangar e anexa o terminal ao tmux.
+
+Funciona com o backend DESLIGADO, como `claude`, `pi` e `kimi` ja funcionavam. A fonte de verdade
+sobre quais sessoes Codex existem e o SIDECAR em disco, que o lancador grava; a API local so entra
+onde ela agrega algo (criar com as limpezas de nome reusado, entregar prompt a uma sessao viva).
+"""
 from __future__ import annotations
 
 import json
 import os
+import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -14,6 +21,46 @@ from pathlib import Path
 
 def _repo() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def _do_backend():
+    """Os dois modulos do backend que este wrapper usa, ou (None, None).
+
+    Carregados por CAMINHO, e nao por `from app.adapters.codex import ...`: o import normal executa
+    `app/adapters/__init__.py`, que instancia os quatro adapters e puxa `app.config` -> pydantic. Os
+    dois modulos daqui sao stdlib puro de proposito (ver o cabecalho de lancador.py), mas isso nao
+    adianta nada se o caminho ate eles nao for. Este wrapper roda no `python3` do sistema, sem o
+    venv: numa maquina sem pydantic instalado no sistema, o import normal falharia e o wrapper
+    voltaria a depender da API — que e exatamente o que ele nao pode fazer.
+
+    Falhando mesmo assim, tudo aqui cai no plano B da API.
+    """
+    import importlib.machinery
+    import importlib.util
+
+    base = _repo() / "backend"
+    sys.path.insert(0, str(base))   # `sessions.py` importa `app.atomico`/`app.names` (stdlib)
+
+    def carregar(nome: str, caminho: Path):
+        loader = importlib.machinery.SourceFileLoader(nome, str(caminho))
+        spec = importlib.util.spec_from_loader(nome, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+
+    codex = base / "app" / "adapters" / "codex"
+    try:
+        return (carregar("hangar_codex_sessions", codex / "sessions.py"),
+                carregar("hangar_codex_lancador", codex / "lancador.py"))
+    except (ImportError, OSError) as exc:
+        print(f"hangar-codex: sem os modulos do backend ({exc}); usando a API", file=sys.stderr)
+        return None, None
+
+
+def _tmux_vivas() -> set[str]:
+    r = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                       capture_output=True, text=True)
+    return {ln.strip() for ln in r.stdout.splitlines() if ln.strip()}
 
 
 def _env() -> dict[str, str]:
@@ -60,38 +107,84 @@ def _base_name(cwd: str) -> str:
     return clean.strip("-") or "codex"
 
 
-def _resume_target(cwd: str) -> str | None:
+def _atividade(rollout: str | None) -> float:
+    # Mesma medida que o backend usa pra ordenar a lista (registry._jsonl_mtime): a hora da ultima
+    # escrita no rollout. Arquivo que ainda nao existe (sessao aberta e sem turno) vale zero.
+    try:
+        return os.path.getmtime(rollout) if rollout else 0.0
+    except OSError:
+        return 0.0
+
+
+def _candidatas_do_disco(cwd: str, codex_sessions) -> list[tuple[float, str]]:
+    """(atividade, nome) das sessoes Codex deste cwd que TEM pane vivo, do disco."""
+    vivas = _tmux_vivas()
+    return sorted(
+        (_atividade(m.get("rollout_path")), m["name"])
+        for m in codex_sessions.list_all()
+        # Sidecar sem pane e sessao que ja acabou: anexar nela falharia. Isso tambem e o que
+        # impede um sidecar orfao de sequestrar o `codex` daquela pasta pra sempre.
+        if m.get("cwd") == cwd and m.get("name") in vivas
+    )
+
+
+def _candidatas_da_api(cwd: str) -> list[tuple[float, str]]:
+    return sorted(
+        (s.get("last_activity") or 0.0, s.get("name") or "")
+        for s in _api("GET", "/api/sessions")
+        if s.get("provider") == "codex" and s.get("cwd") == cwd
+    )
+
+
+def _resume_target(cwd: str, codex_sessions) -> str | None:
     """Sessao Codex JA existente deste cwd, se houver — pra ANEXAR em vez de criar outra.
 
     Sem isto, todo `codex` no mesmo diretorio criava uma sessao nova (repo, repo-2, repo-3...):
     a conversa comecada no celular era inalcancavel do terminal, que era exatamente o oposto da
     proposta ("o app e uma extensao do terminal").
 
-    Escolhe por ATIVIDADE, nao pela ordem da lista: ela vem de `sorted(glob("*.json"))` no backend,
-    ou seja, alfabetica pelo nome do arquivo -- com dois digitos de sufixo "repo-9" > "repo-10",
-    entao pegar a ultima anexava numa sessao arbitraria e dizia "retomando" com confianca. Havendo
-    mais de uma candidata, avisa quais ficaram de fora em vez de escolher em silencio.
+    Le o DISCO, nao a API: com o backend parado a pergunta continua tendo resposta, e ela e a mesma
+    (o backend monta a lista dele desses mesmos sidecars). A API e plano B, pra quando os modulos
+    do backend nao importam.
+
+    Escolhe por ATIVIDADE, nao pela ordem da lista: ela vem de `sorted(glob("*.json"))`, ou seja,
+    alfabetica pelo nome do arquivo -- com dois digitos de sufixo "repo-9" > "repo-10", entao pegar
+    a ultima anexava numa sessao arbitraria e dizia "retomando" com confianca. Havendo mais de uma
+    candidata, avisa quais ficaram de fora em vez de escolher em silencio.
     """
-    sessions = [s for s in _api("GET", "/api/sessions")
-                if s.get("provider") == "codex" and s.get("cwd") == cwd]
-    if not sessions:
+    if codex_sessions is not None:
+        candidatas = _candidatas_do_disco(cwd, codex_sessions)
+    else:
+        try:
+            candidatas = _candidatas_da_api(cwd)
+        except RuntimeError as exc:
+            # Sem disco E sem API nao da pra saber se ja existe sessao aqui. "Nao sei" vira "nao ha"
+            # e o fluxo segue pra criacao: deixar o erro subir encerraria o `codex` sem abrir nada,
+            # que e o defeito inteiro que este wrapper existe pra nao ter.
+            print(f"hangar-codex: nao deu pra listar as sessoes existentes ({exc}); "
+                  "seguindo como se nao houvesse nenhuma neste diretorio", file=sys.stderr)
+            candidatas = []
+    if not candidatas:
         return None
-    sessions.sort(key=lambda s: (s.get("last_activity") or 0, s.get("name") or ""))
-    escolhida = sessions[-1]
-    if len(sessions) > 1:
-        outras = ", ".join(s["name"] for s in sessions[:-1])
-        print(f"hangar-codex: {len(sessions)} sessoes Codex neste diretorio; retomando a mais recente "
-              f"({escolhida['name']}). Outras: {outras}", file=sys.stderr)
-    return escolhida["name"]
+    escolhida = candidatas[-1][1]
+    if len(candidatas) > 1:
+        outras = ", ".join(n for _, n in candidatas[:-1])
+        print(f"hangar-codex: {len(candidatas)} sessoes Codex neste diretorio; retomando a mais "
+              f"recente ({escolhida}). Outras: {outras}", file=sys.stderr)
+    return escolhida
+
+
+def _nomes_livres(cwd: str, ocupados: set[str]):
+    base = _base_name(cwd)
+    for index in range(1, 1000):
+        name = base if index == 1 else f"{base}-{index}"
+        if name not in ocupados:
+            yield name
 
 
 def _create(cwd: str, prompt: str | None) -> str:
     existing = {item["name"] for item in _api("GET", "/api/sessions")}
-    base = _base_name(cwd)
-    for index in range(1, 1000):
-        name = base if index == 1 else f"{base}-{index}"
-        if name in existing:
-            continue
+    for name in _nomes_livres(cwd, existing):
         try:
             result = _api("POST", "/api/sessions", {
                 "name": name,
@@ -106,27 +199,90 @@ def _create(cwd: str, prompt: str | None) -> str:
     raise RuntimeError("nao foi possivel escolher um nome de sessao livre")
 
 
+def _create_local(cwd: str, prompt: str | None, lancador) -> str:
+    """Cria a sessao direto no tmux, sem backend. O comando do pane e o MESMO que o backend usa.
+
+    O que se perde sem a API sao as limpezas de nome reusado (fila duravel, vinculo 'then',
+    pareamento) e o escopo transiente do systemd. Nenhuma delas impede a sessao de funcionar, e
+    todas voltam a valer na proxima criacao com o backend no ar — enquanto nao abrir nada e o
+    defeito que este ticket existe pra corrigir.
+
+    NAO pre-confia o cwd (o `codex_sessions.pretrust_cwd` que o backend chama na criacao pelo app),
+    e isso e deliberado: aqui tem uma pessoa na frente do terminal, e a pergunta "voce confia nesta
+    pasta?" e dela. Pelo app ninguem tem como responder, e por isso la a resposta e dada; aqui,
+    responder por ela seria decidir confianca no lugar de quem digitou o comando — o `claude` e o
+    `pi` do shell tambem nao pre-confiam nada.
+    """
+    ocupados = _tmux_vivas()
+    name = next(_nomes_livres(cwd, ocupados))
+    cmd = shlex.join(lancador.comando_do_lancador(cwd, prompt))
+    r = subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", cwd,
+                        "-e", f"CP_SESSION_NAME={name}", cmd],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"tmux recusou criar a sessao {name}: {r.stderr.strip()}")
+    return name
+
+
+def _limpar_local(name: str, codex_sessions) -> None:
+    """Limpeza que o backend faria no DELETE: mata o app-server por pid e apaga o sidecar.
+
+    Normalmente o proprio lancador ja fez isto ao ver a TUI sair. Isto cobre o pane derrubado sem
+    que ele chegasse la — e, sem backend, era o caso em que sobrava sidecar orfao mais um servidor
+    escutando em loopback, calado.
+    """
+    if codex_sessions is None:
+        print(f"hangar-codex: sem API e sem os modulos do backend — o sidecar de {name} pode ter "
+              "ficado para tras", file=sys.stderr)
+        return
+    meta = codex_sessions.load(name) or {}
+    pid = meta.get("app_pid")
+    if isinstance(pid, int):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass          # ja morreu (o caso comum: o lancador chegou primeiro)
+    codex_sessions.delete(name)
+
+
 def main() -> int:
     if len(sys.argv) > 2:
         print("uso: hangar-codex [prompt]", file=sys.stderr)
         return 2
     prompt = sys.argv[1] if len(sys.argv) == 2 else None
     cwd = os.getcwd()
+    codex_sessions, lancador = _do_backend()
     try:
         # ANEXAR vence CRIAR: `codex` no mesmo diretorio volta pra conversa que ja existe (a
         # mesma que o celular esta vendo), com todo o historico. Criar so quando nao ha nenhuma.
         # `codex "prompt"` num cwd com sessao viva tambem anexa — o prompt vai pela sessao
         # existente (via /input), em vez de abrir uma thread paralela.
-        name = _resume_target(cwd)
+        name = _resume_target(cwd, codex_sessions)
         resumed = name is not None
         if resumed and prompt:
-            _api("POST", f"/api/sessions/{name}/input", {"text": prompt})
+            try:
+                _api("POST", f"/api/sessions/{name}/input", {"text": prompt})
+            except RuntimeError as exc:
+                # Digitar na TUI e trabalho do backend (ele tem o guard de composer ocupado e a
+                # fila duravel). Sem ele, a sessao abre do mesmo jeito — mas o prompt NAO foi
+                # entregue, e isso se diz em voz alta em vez de sumir.
+                print(f"hangar-codex: o prompt nao foi enviado ({exc}); a sessao abre sem ele",
+                      file=sys.stderr)
         if not resumed:
-            name = _create(cwd, prompt)
+            try:
+                name = _create(cwd, prompt)
+            except RuntimeError as exc:
+                # A API agrega as limpezas de nome reusado e o escopo do systemd; sem ela, criar
+                # direto no tmux e melhor que nao abrir nada.
+                if lancador is None:
+                    raise
+                print(f"hangar-codex: backend fora ({exc}); criando direto no tmux",
+                      file=sys.stderr)
+                name = _create_local(cwd, prompt, lancador)
     except RuntimeError as exc:
         print(f"hangar-codex: {exc}", file=sys.stderr)
         return 1
-    verbo = "retomando" if resumed else "gerenciado pelo Cockpit"
+    verbo = "retomando" if resumed else "gerenciado pelo hangar"
     print(f"Codex {verbo}: {name} (detach: Ctrl-b d)", file=sys.stderr)
     in_tmux = bool(os.environ.get("TMUX") and os.environ.get("TMUX_PANE"))
     if in_tmux:
@@ -153,7 +309,7 @@ def main() -> int:
         try:
             _api("DELETE", f"/api/sessions/{name}")
         except RuntimeError:
-            pass
+            _limpar_local(name, codex_sessions)
     return attached
 
 
