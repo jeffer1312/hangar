@@ -45,7 +45,7 @@ from typing import Callable, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app import apelidos, contas, engines, opencode_cota, renova_token
+from app import apelidos, codex_appserver, contas, engines, opencode_cota, renova_token
 from app.adapters.kimi import sessions as kimi_sessions
 from app.auth import require_auth
 from app.config import list_config_dirs
@@ -65,7 +65,7 @@ _URL_CLAUDE = "https://api.anthropic.com/api/oauth/usage"
 _BETA_CLAUDE = "oauth-2025-04-20"
 
 Estado = Literal["lida", "sem_credencial", "expirada", "indisponivel"]
-Provedor = Literal["claude", "kimi", "opencode", "commandcode"]
+Provedor = Literal["claude", "kimi", "opencode", "commandcode", "codex"]
 
 
 class JanelaCota(BaseModel):
@@ -362,6 +362,97 @@ def _ler_commandcode(api_key: str) -> _Leitura:
     return "lida", janelas, None
 
 
+# Presença da credencial do Codex, cacheada pelo mtime do `auth.json` (ver _tem_credencial_codex).
+_cred_codex_cache: tuple[tuple[float, ...], bool] | None = None
+
+
+def _auth_codex() -> Path:
+    """O `auth.json` do Codex. A pasta sai do `codex_appserver.home()` — `CODEX_HOME` é respeitado
+    pelo mesmo motivo do lançador: quem move a pasta move a credencial junto."""
+    return codex_appserver.home() / "auth.json"
+
+
+def _tem_credencial_codex() -> bool:
+    """Par OAuth presente no disco. Sem isto não há o que perguntar — e perguntar custa um processo
+    de ~1,2s, então a checagem vem antes.
+
+    Cache pelo mtime do arquivo, mesma razão do `_mapa_pi`: `id_conta_codex` roda POR SESSÃO Codex
+    a cada varredura da lista, e ler+parsear um JSON de 4KB nesse laço é o tipo de custo que o tick
+    do SSE não pode pagar (o `_mtimes` sobra um `stat`).
+    """
+    global _cred_codex_cache
+    chave = _mtimes(_auth_codex())
+    if _cred_codex_cache and _cred_codex_cache[0] == chave:
+        return _cred_codex_cache[1]
+    try:
+        auth = json.loads(_auth_codex().read_text(encoding="utf-8"))
+        tokens = auth.get("tokens")
+        tem = isinstance(tokens, dict) and bool(tokens.get("access_token"))
+    except (OSError, ValueError):
+        tem = False
+    _cred_codex_cache = (chave, tem)
+    return tem
+
+
+def id_conta_codex() -> str | None:
+    """O id desta credencial no `/api/cotas`, ou None quando não há credencial.
+
+    Uma função só porque o id vive em DOIS lugares: a fonte, aqui, e o campo `conta` da sessão
+    Codex (`registry.list`). Ids diferentes fariam a pílula do topo procurar uma linha que a faixa
+    desenha com outro nome, e cair no pior-geral sem ninguém entender — o mesmo cuidado que o
+    comentário do `chave:<motor>` já registra.
+    """
+    return f"codex:{_auth_codex().parent}" if _tem_credencial_codex() else None
+
+
+def _janela_codex(o: object) -> JanelaCota | None:
+    """O percentual já vem PRONTO (`usedPercent`), e a janela se identifica pela duração em minutos
+    — o mesmo `_rotulo_janela` do Kimi. `resetsAt` é epoch em SEGUNDOS, ao contrário do
+    CommandCode: dividir por 1000 aqui poria o reset em 1970."""
+    if not isinstance(o, dict):
+        return None
+    pct = _num(o.get("usedPercent"))
+    if pct is None:
+        return None
+    reset = _num(o.get("resetsAt"))
+    return JanelaCota(rotulo=_rotulo_janela(o.get("windowDurationMins")),
+                      pct=max(0.0, min(100.0, pct)), reset_ts=reset or None)
+
+
+def _ler_codex() -> _Leitura:
+    """Cota da conta do Codex, pelo `account/rateLimits/read` de um app-server efêmero.
+
+    Não é HTTP como as outras porque a credencial é um par OAuth do ChatGPT e o endpoint que a
+    traduz em cota não é público — quem sabe fazer essa conta é o próprio binário. Medido em
+    30/08/2026 (codex-cli 0.151.0): o método responde sem thread aberta, sem pane e sem sessão
+    viva, em 1,2s. É por credencial, que é exatamente o que este painel pede.
+
+    Nada aqui levanta, mesma regra do `_get_json`: um provedor que não responde não pode derrubar a
+    lista das outras contas.
+    """
+    # A fonte só nasce com credencial (ver `_fontes`), então isto cobre a corrida: um logout entre
+    # a montagem da fonte e a leitura pagaria o processo à toa e voltaria "falhou" no lugar de
+    # "não há credencial".
+    if not _tem_credencial_codex():
+        return "sem_credencial", [], None
+    try:
+        # Mesmo teto das fontes HTTP: `_atualizar` espera TODAS as leituras juntas, então uma fonte
+        # com teto maior que as outras vira o tempo de resposta do `/api/cotas` inteiro.
+        r = codex_appserver.perguntar("account/rateLimits/read", timeout=_HTTP_TIMEOUT)
+    except codex_appserver.CodexAusente:
+        return "indisponivel", [], "codex-ausente"
+    except (RuntimeError, OSError) as e:
+        _log.debug("cota: codex nao respondeu: %r", e)
+        return "indisponivel", [], "sem-resposta"
+    limites = r.get("rateLimits")
+    limites = limites if isinstance(limites, dict) else {}
+    janelas = [j for j in (_janela_codex(limites.get("primary")),
+                           _janela_codex(limites.get("secondary"))) if j is not None]
+    if not janelas:
+        return "indisponivel", [], "formato-desconhecido"
+    return "lida", janelas, None
+
+
 def _ler_opencode(cfg: dict[str, str]) -> _Leitura:
     """Adapta o leitor do painel do OpenCode ao formato de leitura deste módulo."""
     estado, janelas, motivo = opencode_cota.ler(cfg["workspace_id"], cfg["auth_cookie"])
@@ -504,6 +595,11 @@ def _fontes() -> list[_Fonte]:
         if contas.e_conta(p) or c.active:
             out.append(_Fonte(f"claude:{c.path}", c.label, "claude",
                               lambda p=p, at=bool(c.active): _ler_claude(p, at), bool(c.active)))
+    # Codex: UMA credencial por máquina (o `auth.json` do CODEX_HOME), e ela só vira linha quando
+    # existe — quem não usa Codex não ganha uma linha vazia nem paga o processo que a leitura custa.
+    cid_codex = id_conta_codex()
+    if cid_codex:
+        out.append(_Fonte(cid_codex, "Codex", "codex", _ler_codex))
     for nome, key, base in _providers_kimi():
         # CommandCode plugado como provider do Kimi Code: o `<base>/usages` dele é 403 — a rota
         # de cota é a do CommandCode, escolhida pela base_url, igual ao ramo das chaves abaixo.

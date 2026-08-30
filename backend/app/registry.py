@@ -974,6 +974,13 @@ class SessionRegistry:
         # state (sai 'idle' default): este caminho so resolve transcript; quem quer state usa
         # list_with_state(). Usado por varios endpoints que so precisam do jsonl por nome.
         children = _proc_children_map()
+        # A conta do Codex é UMA por máquina (o `auth.json` do CODEX_HOME) e agora tem fonte no
+        # painel de cotas — sem carimbá-la nas sessões Codex, a pílula do topo continuaria caindo no
+        # pior-geral numa sessão cuja cota o app já sabe ler. `None` quando não há credencial no
+        # disco. Resolvida UMA vez aqui porque serve aos dois lugares que montam sessão Codex (o
+        # pane sem sidecar, logo abaixo, e o laço dos sidecars no fim) e isto roda a cada varredura.
+        from app import cotas
+        conta_codex = cotas.id_conta_codex()
         out = []
         sids: dict[str, Optional[str]] = {}
         for panes in tmux.list_panes_all().values():
@@ -1080,9 +1087,9 @@ class SessionRegistry:
                 atual = pi_models.provider_atual(jsonl, cfg_pi) if jsonl else None
                 info.conta = cotas.conta_de_provider_pi(atual)
             elif prov == "codex":
-                # Codex tem conta propria (OAuth do proprio CLI), que nao e nenhuma das chaves do
-                # /api/cotas. Cair no `else` abaixo carimbaria uma conta Claude que ela nao gasta.
-                info.conta = None
+                # Codex tem conta propria (o OAuth do proprio CLI), que nao e nenhuma das chaves do
+                # /api/cotas — cair no `else` abaixo carimbaria uma conta Claude que ela nao gasta.
+                info.conta = conta_codex
             else:
                 cdir = (_config_dir_of(p["pid"]) if p.get("pid") else None) or (Path.home() / ".claude")
                 info.conta = f"claude:{Path(cdir).resolve()}"
@@ -1096,7 +1103,7 @@ class SessionRegistry:
             br, wt = head_info(meta.get("cwd"))
             out.append(SessionInfo(
                 name=meta["name"], cwd=meta.get("cwd"), jsonl=meta.get("rollout_path"),
-                provider="codex", tracked=True,
+                provider="codex", tracked=True, conta=conta_codex,
                 branch=br, worktree=wt,
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),

@@ -66,8 +66,8 @@ def _dir(path, label, active=False):
     return SimpleNamespace(path=path, label=label, active=active)
 
 
-def _cota(cid, pct=13.0, estado="lida"):
-    return cotas.CotaConta(id=cid, label="x", provedor="claude", estado=estado,
+def _cota(cid, pct=13.0, estado="lida", label="x"):
+    return cotas.CotaConta(id=cid, label=label, provedor="claude", estado=estado,
                            janelas=[cotas.JanelaCota(rotulo="5h", pct=pct)] if estado == "lida" else [],
                            ts=1000.0)
 
@@ -104,9 +104,22 @@ def test_apelido_troca_o_nome_mas_guarda_o_original(casa, monkeypatch):
 def test_credencial_que_so_a_cota_conhece_aparece_na_lista(casa, monkeypatch):
     """O provider do Kimi vem do config.toml dele, não do cadastro do app. Se ele aparece na faixa
     do rodapé e não na tela, a tela mente sobre ser "todas as credenciais desta máquina"."""
-    _monta(monkeypatch, cotas_lista=[_cota("kimi:apikey", 5.0)])
+    _monta(monkeypatch, cotas_lista=[_cota("kimi:apikey", 5.0, label="apikey")])
     linhas = credenciais.listar()
     assert [(c.id, c.tipo, c.usos) for c in linhas] == [("kimi:apikey", "chave", ["kimi_cli"])]
+    assert linhas[0].nome_natural == "apikey"
+
+
+def test_credencial_do_codex_tambem_aparece(casa, monkeypatch):
+    """Mesma regra do Kimi acima: a conta do Codex é um OAuth do CLI dele, não um cadastro do app.
+    Ela virou fonte de cota, então aparecer na faixa e sumir aqui seria a contradição que o
+    comentário do `listar` proíbe — e o botão "atualizar" da tela pagaria a leitura sem mostrá-la."""
+    _monta(monkeypatch, cotas_lista=[_cota("codex:/home/u/.codex", 5.0, label="Codex")])
+    linhas = credenciais.listar()
+    assert [(c.id, c.tipo, c.usos) for c in linhas] == [
+        ("codex:/home/u/.codex", "chave", ["codex_cli"])]
+    # O nome vem do rótulo da FONTE, não do id: sem isso a tela mostraria o caminho cru.
+    assert linhas[0].nome_natural == "Codex"
 
 
 def test_conta_sem_cota_lida_continua_na_lista(casa, monkeypatch):

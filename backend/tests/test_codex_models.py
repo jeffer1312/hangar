@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from app import codex_appserver as cx
 from app import codex_models as cm
 
 
@@ -91,7 +92,7 @@ def test_resposta_sem_modelo_nenhum_estoura():
 
 def test_listar_sem_o_binario_tem_erro_proprio(monkeypatch):
     """"não achei o codex" não é "o codex falhou" — mesma separação do PiAusente."""
-    monkeypatch.setattr(cm.shutil, "which", lambda _: None)
+    monkeypatch.setattr(cx.shutil, "which", lambda _: None)
     with pytest.raises(cm.CodexAusente):
         cm.listar(fresco=True)
 
@@ -122,8 +123,9 @@ def _fake_popen(monkeypatch, linhas, erro=""):
         criados.append(p)
         return p
 
-    monkeypatch.setattr(cm.shutil, "which", lambda _: "/usr/bin/codex")
-    monkeypatch.setattr(cm.subprocess, "Popen", popen)
+    # O processo mora no `codex_appserver` (a mesma máquina serve o catálogo e a cota).
+    monkeypatch.setattr(cx.shutil, "which", lambda _: "/usr/bin/codex")
+    monkeypatch.setattr(cx.subprocess, "Popen", popen)
     cm._cache = None
     return criados
 
