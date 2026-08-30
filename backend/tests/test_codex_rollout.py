@@ -165,8 +165,11 @@ def _eventos_exec():
 
 def test_exec_vira_tool_use_e_tool_result():
     evs = _eventos_exec()
-    assert [e.kind for e in evs] == ["tool_use", "tool_result"] * 4
-    assert {e.tool_name for e in evs if e.kind == "tool_use"} == {"exec", "apply_patch"}
+    assert [e.kind for e in evs] == ["tool_use", "tool_result"] * 6
+    # O `exec` e so o INVOLUCRO: o nome que sai e o da ferramenta chamada dentro dele. E o mesmo
+    # nome que as versoes antigas do Codex ja mandavam direto — os dois formatos, um vocabulario.
+    assert [e.tool_name for e in evs if e.kind == "tool_use"] == [
+        "exec_command", "write_stdin", "exec_command", "apply_patch", "update_plan", "apply_patch"]
     # O par continua ligado pelo call_id — e o que o front usa pra casar chamada e resultado.
     assert evs[0].tool_use_id == evs[1].tool_use_id
 
@@ -217,6 +220,92 @@ def test_apply_patch_resume_pelos_arquivos_e_nao_pelo_diff():
         "/home/jefferson/Projetos/claude-cockpit/backend/tests/test_codex_registry.py"]
     assert uso.tool_input["code"].startswith("*** Begin Patch")
     assert "command" not in uso.tool_input
+
+
+# -- Ticket 07: edicao vira diff, plano vira tarefas --------------------------
+# Medido em 30/08/2026: o codex-cli 0.151.0 embrulha TUDO num `exec` e poe a ferramenta de verdade
+# dentro do codigo (`tools.apply_patch(...)`, `tools.update_plan(...)`), enquanto rollouts mais
+# antigos do mesmo acervo trazem `apply_patch` como ferramenta propria. A fixture tem os dois.
+
+def test_o_patch_sai_de_dentro_da_string_javascript():
+    """No formato novo o patch chega ESCAPADO dentro de `tools.apply_patch("...")`: os `\\n` ali
+    sao dois caracteres, entao sem desescapar nao ha linha `*** Add File:` pra ninguem ler."""
+    usos = [e for e in _eventos_exec() if e.tool_name == "apply_patch"]
+    novo = usos[-1].tool_input
+    assert novo["patch"].startswith("*** Begin Patch\n*** Add File: /tmp/proj-codex14/notas.md")
+    assert novo["file_path"] == ["/tmp/proj-codex14/notas.md"]
+
+
+def test_o_formato_antigo_do_patch_continua_valendo():
+    """O acervo tem conversas das duas versoes, e o app abre as duas."""
+    antigo = [e for e in _eventos_exec() if e.tool_name == "apply_patch"][0].tool_input
+    assert antigo["patch"].startswith("*** Begin Patch")
+    assert antigo["file_path"] == [
+        "/home/jefferson/Projetos/claude-cockpit/backend/tests/test_codex_registry.py"]
+
+
+def test_plano_vira_lista_de_passos():
+    """O objeto do plano e JavaScript, nao JSON (chaves sem aspas), entao os campos sao lidos um a
+    um. O shape de saida e o das versoes antigas — um vocabulario so pro front."""
+    plano = [e for e in _eventos_exec() if e.tool_name == "update_plan"][0].tool_input["plan"]
+    assert plano == [
+        {"step": 'Criar notas.md com a linha "primeira"', "status": "in_progress"},
+        {"step": 'Editar notas.md, trocando "primeira" por "segunda"', "status": "pending"},
+    ]
+
+
+def test_patch_que_cita_tools_nao_e_confundido_com_involucro():
+    """Formato ANTIGO: o `input` E o patch. Um patch que cite `tools.apply_patch(` — um patch que
+    edite ESTE arquivo cita — nao pode fazer o leitor sair cacando uma string JS no meio do diff e
+    largar o patch de verdade pelo caminho."""
+    patch = ('*** Begin Patch\n*** Update File: /x/rollout.py\n@@\n'
+             '+_TOOL_RE = re.compile(r"tools.apply_patch(")\n*** End Patch')
+    obj = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "apply_patch", "call_id": "c1", "input": patch}}
+    entrada = parse_rollout_obj(obj)[0].tool_input
+    assert entrada["patch"] == patch
+    assert entrada["file_path"] == ["/x/rollout.py"]
+
+
+def test_passo_com_chave_no_texto_nao_some_do_plano():
+    """Uma chave dentro do proprio texto quebrava a divisao por blocos `{...}` e o item sumia do
+    painel — a pessoa leria um plano com uma etapa a menos e culparia o agente."""
+    obj = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec", "call_id": "c1",
+        "input": 'await tools.update_plan({plan:[{step:"lidar com {config} aqui",status:"pending"},'
+                 '{step:"depois",status:"in_progress"}]});'}}
+    assert parse_rollout_obj(obj)[0].tool_input["plan"] == [
+        {"step": "lidar com {config} aqui", "status": "pending"},
+        {"step": "depois", "status": "in_progress"},
+    ]
+
+
+def test_status_nao_vaza_do_item_seguinte():
+    """O status lido tem que ser o DESTE item: pegar o proximo deslocaria o plano inteiro em um."""
+    obj = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec", "call_id": "c1",
+        "input": 'await tools.update_plan({plan:[{step:"A"},{step:"B",status:"completed"}]});'}}
+    assert parse_rollout_obj(obj)[0].tool_input["plan"] == [
+        {"step": "A", "status": "pending"},
+        {"step": "B", "status": "completed"},
+    ]
+
+
+def test_item_de_plano_sem_status_nao_inventa_estado():
+    obj = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec", "call_id": "c1",
+        "input": 'await tools.update_plan({plan:[{step:"A"}]});'}}
+    assert parse_rollout_obj(obj)[0].tool_input["plan"] == [{"step": "A", "status": "pending"}]
+
+
+def test_ferramenta_de_dentro_desconhecida_mantem_o_involucro():
+    """Nome que nao reconhecemos nao vira invencao: fica `exec`, e o codigo cru continua ali."""
+    obj = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec", "call_id": "c1",
+        "input": "const x = 1 + 1;"}}
+    ev = parse_rollout_obj(obj)[0]
+    assert ev.tool_name == "exec"
+    assert ev.tool_input["code"] == "const x = 1 + 1;"
 
 
 @pytest.mark.parametrize("codigo", [

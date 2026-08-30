@@ -157,3 +157,37 @@ describe('rotuloDeComando', () => {
     expect(rotuloDeComando('>/dev/null')).toBe('>/dev/null');
   });
 });
+
+// O plano do Codex (`update_plan`). Mesma natureza do TodoWrite: a lista INTEIRA a cada chamada,
+// a última vence. Campos copiados de rollouts reais desta máquina: `plan[].step` + `status`.
+describe('activity — plano do Codex', () => {
+  const plano = (itens: { step: string; status: string }[]): ChatEvent =>
+    ({ kind: 'tool_use', id: `p${seq++}`, tool_name: 'update_plan', tool_use_id: `c${seq}`,
+       tool_input: { plan: itens } });
+
+  it('vira lista de tarefas com os mesmos status das outras listas', () => {
+    const s = run([plano([
+      { step: 'Ler regras do repositório', status: 'completed' },
+      { step: 'Validar app-server', status: 'in_progress' },
+      { step: 'Implementar', status: 'pending' },
+    ])]);
+    expect(s.tasks.map((t) => [t.title, t.status])).toEqual([
+      ['Ler regras do repositório', 'completed'],
+      ['Validar app-server', 'in_progress'],
+      ['Implementar', 'pending'],
+    ]);
+  });
+
+  it('a última chamada vence, como no TodoWrite', () => {
+    const s = run([
+      plano([{ step: 'A', status: 'in_progress' }]),
+      plano([{ step: 'A', status: 'completed' }, { step: 'B', status: 'in_progress' }]),
+    ]);
+    expect(s.tasks.map((t) => [t.title, t.status])).toEqual([['A', 'completed'], ['B', 'in_progress']]);
+  });
+
+  it('item sem `step` é descartado em vez de virar linha sem título', () => {
+    const s = run([plano([{ step: 'A', status: 'pending' }, { status: 'pending' } as never])]);
+    expect(s.tasks.map((t) => t.title)).toEqual(['A']);
+  });
+});

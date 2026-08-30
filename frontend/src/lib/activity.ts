@@ -187,6 +187,23 @@ export function createActivityFolder(): ActivityFolder {
         }
         break;
       }
+      // O plano do Codex. Mesma natureza do TodoWrite — a lista INTEIRA a cada chamada, a última
+      // vence —, só com outros nomes de campo: `plan[].step` no lugar de `todos[].content`, e o
+      // mesmo trio de status. Sem este caso ele chegava como ferramenta anônima e o painel de
+      // tarefas ficava vazio numa sessão que tinha plano.
+      case 'update_plan': {
+        const plano = input.plan;
+        if (Array.isArray(plano)) {
+          todoWrite = plano
+            .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object' && typeof (t as Record<string, unknown>).step === 'string')
+            .map((t, i) => ({
+              id: String(i),
+              title: String(t.step),
+              status: normStatus(t.status),
+            }));
+        }
+        break;
+      }
       case 'TaskCreate': {
         createSeq += 1;
         const id = String(createSeq); // TaskUpdate.taskId é o id sequencial "1","2",...

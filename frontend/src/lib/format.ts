@@ -553,6 +553,10 @@ const MULTI_KEYS: Record<string, string> = {
   urls: 'urls',
   paths: 'arquivos',
   file_paths: 'arquivos',
+  // No singular também: um patch do Codex toca N arquivos e o backend os entrega em `file_path`,
+  // que é a chave que o resto do app já lê. Sem esta linha o cartão dizia "(+2 itens)" onde
+  // Read/Edit dizem "(+2 arquivos)".
+  file_path: 'arquivos',
 };
 // Ordem de preferência do fallback genérico: a chave saliente vem primeiro, não a 1ª do objeto
 // (a ordem do JSON do transcript não é contrato).
@@ -597,10 +601,29 @@ export function summarizeToolInput(
   }
   if (name === 'Write' || name === 'Edit') return summarizeText(one('file_path') || one('path'), TOOL_MAX);
   if (name === 'Bash') return summarizeText(one('command'), TOOL_MAX);
-  // `exec` é o Bash do Codex, e ele é a ferramenta que o Codex mais usa. O comando não vem pronto:
-  // o backend o extrai do código JavaScript da chamada e só o entrega quando conseguiu — sem
-  // extração sobra o código, que é o que foi executado de verdade. Nunca uma linha vazia.
-  if (name === 'exec') return summarizeText(one('command') || one('code'), TOOL_MAX);
+  // O Bash do Codex. O comando não vem pronto: o backend o extrai do código JavaScript da chamada
+  // e só o entrega quando conseguiu — sem extração sobra o código, que é o que foi executado de
+  // verdade. Nunca uma linha vazia. Os três nomes porque o Codex embrulha tudo num `exec` e o
+  // backend desembrulha para a ferramenta de dentro (`exec_command`, `write_stdin`, …); `exec`
+  // continua chegando quando a chamada interna não é reconhecida.
+  if (name === 'exec' || name === 'exec_command' || name === 'write_stdin') {
+    // `cmd` é o nome do campo quando a chamada NÃO vem embrulhada em código (aí ela chega com os
+    // argumentos em JSON). Não achando nenhum dos três, o caso se cala e deixa o genérico lá
+    // embaixo escolher — retornar aqui é que produzia linha em branco numa chamada que tinha o
+    // campo com outro nome. (Entrada sem nenhum campo legível não tem resumo mesmo, e aí o vazio
+    // é a resposta honesta: o cartão ainda mostra a saída da ferramenta.)
+    const alvo = one('command') || one('cmd') || one('code');
+    if (alvo) return summarizeText(alvo, TOOL_MAX);
+  }
+  // Plano do Codex: a linha diz em que passo ele está, que é o que se quer saber de relance — a
+  // lista inteira aparece no painel de tarefas (lib/activity.ts). Sem isto o cartão mostrava o
+  // código JavaScript da chamada, igual para todas as revisões do plano.
+  if (name === 'update_plan') {
+    const plano = Array.isArray(input['plan']) ? (input['plan'] as Record<string, unknown>[]) : [];
+    const passo = plano.find((p) => p?.status === 'in_progress') ?? plano[0];
+    const texto = typeof passo?.step === 'string' ? passo.step : one('code');
+    if (texto) return summarizeText(texto, TOOL_MAX);
+  }
   if (name === 'Grep' || name === 'Glob') {
     // O argumento saliente e o PADRAO, nunca o diretorio (o pacote faz `"pattern" in path`); sem
     // este ramo o fallback preferiria `path` e a linha esconderia o que foi procurado.

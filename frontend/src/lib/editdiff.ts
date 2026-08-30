@@ -128,6 +128,55 @@ function normEdit(e: unknown): { oldText: string; newText: string } | null {
   return oldText !== null && newText !== null ? { oldText, newText } : null;
 }
 
+/** Edições de um patch do Codex (`apply_patch`), que chega como texto e não como campos.
+ *
+ * O formato nomeia cada arquivo numa linha `*** <verbo> File: <path>` e daí em diante usa as marcas
+ * de diff de sempre: ` ` contexto, `-` saiu, `+` entrou. Aqui os dois lados são RECONSTRUÍDOS — o
+ * lado velho é contexto + removidas, o novo é contexto + adicionadas — e o EditDiff recalcula o
+ * diff a partir deles, então o cartão sai igual ao de uma edição do Claude.
+ *
+ * Um bloco por arquivo, e não um só com tudo junto: dois arquivos concatenados virariam um diff
+ * onde o fim de um e o começo do outro parecem a mesma mudança.
+ */
+// Os marcadores são reconhecidos pela FORMA INTEIRA, não pelo prefixo `*** `: uma linha de conteúdo
+// que comece assim (um divisor de markdown sendo editado, por exemplo) fecharia o bloco do arquivo
+// no meio e o resto do diff sumiria do cartão, calado.
+const MARCA_ARQUIVO = /^\*\*\* (?:Add|Update|Delete|Move) File: /;
+const MARCA_PATCH = /^\*\*\* (?:Begin|End) Patch\s*$/;
+// `*** Move to: <path>` é o renomear, e vem DENTRO de um bloco `Update File:` — não abre bloco novo
+// nem é conteúdo do arquivo. Sem esta linha ele caía no ramo de contexto e aparecia nos dois lados
+// do diff, como se fosse texto do arquivo.
+const MARCA_MOVE = /^\*\*\* Move to: /;
+
+function patchEdits(patch: string): { oldText: string; newText: string }[] | null {
+  const out: { oldText: string; newText: string }[] = [];
+  let velho: string[] | null = null;
+  let novo: string[] = [];
+  const fecha = () => {
+    if (velho === null) return;
+    // Bloco sem nenhuma linha (`*** Delete File:` sozinho, arquivo vazio) não vira cartão de diff:
+    // "sem mudança" seria mentira, e o <pre> com o texto do patch diz mais.
+    if (velho.length || novo.length) out.push({ oldText: velho.join('\n'), newText: novo.join('\n') });
+    velho = null;
+    novo = [];
+  };
+  for (const linha of patch.split('\n')) {
+    if (MARCA_ARQUIVO.test(linha)) { fecha(); velho = []; novo = []; continue; }
+    if (MARCA_PATCH.test(linha)) { fecha(); continue; }    // Begin/End Patch
+    if (velho === null) continue;
+    if (MARCA_MOVE.test(linha)) continue;                  // renomear: metadado, não conteúdo
+    if (linha.startsWith('@@')) continue;                  // cabeçalho de trecho: não é conteúdo
+    // `\ No newline at end of file` é NOTA do diff, não linha do arquivo — entrando nos dois lados
+    // ela apareceria como contexto no cartão, texto que não existe em arquivo nenhum.
+    if (linha.startsWith('\\')) continue;
+    if (linha.startsWith('-')) velho.push(linha.slice(1));
+    else if (linha.startsWith('+')) novo.push(linha.slice(1));
+    else { const ctx = linha.startsWith(' ') ? linha.slice(1) : linha; velho.push(ctx); novo.push(ctx); }
+  }
+  fecha();
+  return out.length ? out : null;
+}
+
 /** Extrai a lista de edicoes do tool_input (Edit/MultiEdit do Claude, edit do Pi — case-insensitive).
  * Write entra como edicao de oldText vazio (tudo adicao), que e como o proprio Claude Code desenha.
  * null = shape desconhecido (provider mudou o formato) -> o card cai no <pre> cru de sempre. */
@@ -154,6 +203,14 @@ export function extractEdits(toolName: string | null | undefined, input: unknown
       ? [{ oldText: '', newText: rec.content }]
       : null;
   }
+  if (name === 'apply_patch') {
+    // O `apply_patch` é a edição de arquivo do Codex. O backend entrega o patch já limpo em
+    // `patch` (nas versões novas ele chega escapado dentro de uma string JS); `code` é o que ficou
+    // do invólucro. Sem este caso a edição caía no <pre> cru, enquanto a mesma edição feita pelo
+    // Claude ganhava cartão de diff.
+    const patch = typeof rec.patch === 'string' ? rec.patch : rec.code;
+    return typeof patch === 'string' ? patchEdits(patch) : null;
+  }
   if (name !== 'edit' && name !== 'multiedit') return null;
   const single = normEdit(rec);
   if (single) return [single];
@@ -173,5 +230,10 @@ export function extractEdits(toolName: string | null | undefined, input: unknown
 export function extractFilePath(input: unknown): string {
   if (!input || typeof input !== 'object') return '';
   const rec = input as Record<string, unknown>;
-  return String(rec.file_path ?? rec.path ?? '');
+  const bruto = rec.file_path ?? rec.path ?? '';
+  // Um patch do Codex toca N arquivos, então `file_path` chega como LISTA. `String(['/a','/b'])`
+  // daria "/a,/b", que não é caminho nenhum — quem lê isto quer UM caminho (é daí que sai a
+  // linguagem do realce), e o primeiro é o que o cartão está mostrando no topo.
+  if (Array.isArray(bruto)) return bruto.length ? String(bruto[0]) : '';
+  return String(bruto);
 }

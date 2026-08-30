@@ -48,6 +48,21 @@ def _blocks_text(content, block_type: str) -> str:
     )
 
 
+# Which tool the `exec` wrapper actually invoked. Codex calls a tool in two shapes: WRAPPED, as JS
+# inside an `exec` (`tools.apply_patch(...)`), or LOOSE, as a tool of its own with JSON arguments.
+# Counted per rollout on this machine, 30/08/2026: the two live SIDE BY SIDE — one 0.144.6 session
+# has 65 wrapped calls and 23 loose `apply_patch`, while every 0.146.1 and 0.151.0 session here is
+# wrapped only. So this is NOT a version boundary, and nothing may branch on version: what decides
+# is the shape of the line in hand. Naming the inner tool lands both on ONE vocabulary, so the
+# front doesn't have to know either shape exists.
+_TOOL_IN_CODE_RE = re.compile(r"\btools\.(\w+)\s*\(")
+# First JS string literal after the call — how `apply_patch` receives the whole patch.
+_FIRST_STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+# Fields of an `update_plan` item. The object is JS, not JSON (unquoted keys), so they are read one
+# by one instead of parsed whole.
+_STEP_RE = re.compile(r'\bstep\s*:\s*"((?:[^"\\]|\\.)*)"')
+_STATUS_RE = re.compile(r'\bstatus\s*:\s*"(\w+)"')
+
 # The `exec` command comes INSIDE JavaScript code, not as an argument:
 #   const r = await tools.exec_command({cmd:"echo oi","workdir":"/tmp",...}); text(r.output);
 # The key appears with and without quotes (both forms are in this machine's rollouts), and the
@@ -64,20 +79,50 @@ def _command_from_code(code: str) -> str:
     here; neither appears in this machine's rollouts, so the fallback is what covers them.
     """
     m = _CMD_RE.search(code or "")
-    if not m:
-        return ""
-    raw = m.group(1)
-    try:
-        # The JS literal matches JSON on the escapes seen here (\" \\ \n \t \uXXXX). On an escape
-        # only JS has (\' , \x41) json fails and the raw value serves — it is already readable.
-        return json.loads(f'"{raw}"')
-    except (json.JSONDecodeError, ValueError):
-        return raw
+    return _unescape_js(m.group(1)) if m else ""
 
 
 # `apply_patch` is the other custom tool, and it is Codex's `Edit`. Its input is the patch itself,
 # which names each file it touches on a `*** <verb> File: <path>` line.
 _PATCH_FILE_RE = re.compile(r"^\*{3} (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
+
+
+def _unescape_js(raw: str) -> str:
+    """Contents of a JS string literal, unescaped. Falls back to the raw value.
+
+    The JS literal matches JSON on the escapes seen here (\\" \\\\ \\n \\t \\uXXXX). On an escape
+    only JS has (\\' , \\x41) json fails and the raw value serves — it is already readable.
+    """
+    try:
+        return json.loads(f'"{raw}"')
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
+def _js_string(text: str) -> str:
+    """First JS string literal in `text`, unescaped, or "" when there is none."""
+    m = _FIRST_STRING_RE.search(text or "")
+    return _unescape_js(m.group(1)) if m else ""
+
+
+def _plan_from_code(code: str) -> list[dict]:
+    """Plan items of an `update_plan` call, or []. Each item keeps the shape the older rollouts
+    used (`step` + `status`), so both formats reach the front as the same thing.
+
+    Walks step by step instead of splitting the text into `{...}` blocks: a step whose own words
+    contain a brace ("lidar com {config}") breaks the block split, and the item would vanish from
+    the task panel — the person would read a plan with a stage missing and blame the agent.
+    """
+    out = []
+    passos = list(_STEP_RE.finditer(code or ""))
+    for i, step in enumerate(passos):
+        # The status of THIS item: the first one before the next step starts. Beyond it belongs to
+        # the following item, and reading it here would shift every status by one.
+        fim = passos[i + 1].start() if i + 1 < len(passos) else len(code)
+        status = _STATUS_RE.search(code, step.end(), fim)
+        out.append({"step": _unescape_js(step.group(1)),
+                    "status": status.group(1) if status else "pending"})
+    return out
 
 
 def _files_from_patch(code: str) -> list[str]:
@@ -144,20 +189,44 @@ def parse_rollout_obj(obj: dict) -> list[ChatEvent]:
         # code, not JSON arguments.
         code = payload.get("input")
         code = code if isinstance(code, str) else ""
+        name = payload.get("name")
         tool_input = {"code": code}
-        # Only when it really came out: an empty value would make the front draw an EMPTY summary
-        # line, worse than showing the code (see summarizeToolInput on the front). Which field is
-        # salient depends on the tool — `exec` runs a command, `apply_patch` touches files — and
-        # both names are ones the front already knows how to summarize.
-        command = _command_from_code(code)
-        files = _files_from_patch(code)
-        if command:
-            tool_input["command"] = command
-        elif files:
-            tool_input["file_path"] = files
+        # The wrapper's own name (`exec`) says nothing about what ran. The inner call does, and on
+        # the older shape it IS the name — so both end up here under the same one.
+        #
+        # `inner` is only asked for when the payload IS the wrapper. On the older shape `code` is
+        # the raw patch, and a patch that happens to quote `tools.apply_patch(` — a patch editing
+        # THIS file would — used to match here and send the reader hunting for a JS string in the
+        # middle of a diff, dropping the real patch without a word.
+        embrulhado = name == "exec"
+        inner = _TOOL_IN_CODE_RE.search(code) if embrulhado else None
+        if inner:
+            name = inner.group(1)
+        # Each tool has a different salient field, and an empty value would make the front draw an
+        # EMPTY summary line — worse than showing the code (see summarizeToolInput on the front).
+        # `command`, `file_path` and `plan` are names the front already knows how to render.
+        patch = ""
+        if name == "apply_patch":
+            # Older shape: `input` IS the patch. Newer shape: it is a JS string argument of
+            # `tools.apply_patch(...)`, escaped — the `\n` there are two characters, so the patch
+            # has to come out of the literal before anything can read its file lines.
+            patch = _js_string(code[inner.end():]) if inner else code
+        if name == "update_plan":
+            plan = _plan_from_code(code)
+            if plan:
+                tool_input["plan"] = plan
+        elif patch:
+            tool_input["patch"] = patch
+            files = _files_from_patch(patch)
+            if files:
+                tool_input["file_path"] = files
+        else:
+            command = _command_from_code(code)
+            if command:
+                tool_input["command"] = command
         return [ChatEvent(
             kind="tool_use", id=_event_id(obj),
-            tool_name=payload.get("name"), tool_use_id=payload.get("call_id"),
+            tool_name=name, tool_use_id=payload.get("call_id"),
             tool_input=tool_input,
         )]
 

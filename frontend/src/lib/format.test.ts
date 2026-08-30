@@ -657,6 +657,28 @@ describe('summarizeToolInput', () => {
       .toBe('echo oi');
     expect(summarizeToolInput('exec', { code: 'const r = await tools.write_stdin({…});' }))
       .toBe('const r = await tools.write_stdin({…});');
+    // Plano do Codex: a linha diz em que passo ele está. Sem isto todas as revisões do plano
+    // mostravam o mesmo código JavaScript.
+    expect(summarizeToolInput('update_plan', { plan: [
+      { step: 'Criar notas.md', status: 'completed' },
+      { step: 'Editar notas.md', status: 'in_progress' },
+    ] })).toBe('Editar notas.md');
+    // Nenhum em andamento (plano recém-aberto ou já fechado) -> o primeiro passo.
+    expect(summarizeToolInput('update_plan', { plan: [{ step: 'Só um', status: 'pending' }] }))
+      .toBe('Só um');
+    // Plano ilegível não deixa a linha vazia: sobra o código, como no exec.
+    expect(summarizeToolInput('update_plan', { code: 'await tools.update_plan({…})' }))
+      .toBe('await tools.update_plan({…})');
+    // Chamada NÃO embrulhada em código: os argumentos chegam em JSON, e o comando está em `cmd`.
+    // Sem este caso o ramo do exec devolvia linha VAZIA, que é o que ele existe pra evitar.
+    expect(summarizeToolInput('exec_command', { cmd: 'rg -n foo', workdir: '/tmp' }))
+      .toBe('rg -n foo');
+    // Nem `command`, nem `cmd`, nem `code`: o ramo se cala e o genérico acha o campo saliente.
+    expect(summarizeToolInput('write_stdin', { session_id: 84850, chars: '' }))
+      .toBe('84850');
+    // Patch multi-arquivo conta "arquivos", como Read/Edit — não "itens".
+    expect(summarizeToolInput('apply_patch', { file_path: ['/a.ts', '/b.ts', '/c.ts'] }))
+      .toContain('arquivos');
     expect(summarizeToolInput('WebSearch', { query: 'svelte 5 runes' })).toBe('svelte 5 runes');
     expect(summarizeToolInput('WebFetch', { url: 'https://x.dev' })).toBe('https://x.dev');
   });
