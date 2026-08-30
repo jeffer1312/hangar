@@ -151,7 +151,15 @@ def collect(plugins):
     for name, entries in installed.get("plugins", {}).items():
         if name not in plugins:
             continue
-        for e in entries:
+        # O mesmo plugin pode estar instalado em mais de um config dir (~/.claude e
+        # ~/.claude-<conta>): quem sobrescreve é o ÚLTIMO, então a ordenação estável põe o do home
+        # principal por último e ele ganha. Sem isto as skills espelhadas para Pi, Kimi e Codex
+        # ficavam apontando para uma conta secundária — se ela limpa ou atualiza o cache dela, as
+        # skills somem dos outros agentes sem explicação. Empate (nenhum ou os dois sob o
+        # principal) segue resolvido pela última entrada, como sempre foi.
+        ordenadas = sorted(entries, key=lambda e: os.path.abspath(
+            e["installPath"]).startswith(cache_prefix + os.sep))
+        for e in ordenadas:
             for d in skill_dirs(e["installPath"]):
                 wanted[skill_name(d)] = d
     return wanted
@@ -171,6 +179,19 @@ def ligar(link, target):
     return True
 
 
+def _nosso(alvo):
+    """Link que ESTE script cria — o único que ele pode remover; um posto à mão apontando pra
+    outro lugar não é nosso.
+
+    O cache de plugin conta em QUALQUER config dir do Claude (`~/.claude` e `~/.claude-<conta>`),
+    não só no principal: link pra conta secundária foi feito por nós antes do desempate de
+    `collect`, e reconhecer só o principal deixava-o parado pra sempre — foi o caso medido de um
+    plugin de marketplace no Kimi, que ele já varre sozinho e por isso nunca volta pro `wanted`."""
+    if alvo.startswith(os.path.join(home, ".claude/skills") + os.sep):
+        return True
+    return bool(re.match(re.escape(home + os.sep) + r"\.claude[^/]*/plugins/cache/", alvo))
+
+
 def sync(bridge, wanted):
     os.makedirs(bridge, exist_ok=True)
     for name, target in wanted.items():
@@ -181,12 +202,9 @@ def sync(bridge, wanted):
     # causa de uma surpresa de parse.
     if not wanted:
         return
-    # Só poda o que ESTE script cria: link pro cache de plugin ou pras skills soltas do Claude.
-    # Um link que alguém pôs à mão apontando pra outro lugar não é nosso pra remover.
-    nossos = (cache_prefix + os.sep, os.path.join(home, ".claude/skills") + os.sep)
     for f in os.listdir(bridge):
         link = os.path.join(bridge, f)
-        if os.path.islink(link) and os.readlink(link).startswith(nossos) and f not in wanted:
+        if os.path.islink(link) and _nosso(os.readlink(link)) and f not in wanted:
             os.unlink(link)
 
 
