@@ -40,8 +40,9 @@ Duas conferências que valem por si:
 
 - **As três perguntas** do `SKILL.md` ("Ferramenta de fora — skill, subagente, comando"): existe com
   esse nome, serve ao fluxo, serve aos arquivos desta Task. A do meio e a de baixo são as que mordem
-  aqui — skill de revisão de PR não ajuda quem commita em branch local, e ferramenta que filtra
-  `*.ts`/`*.tsx` não lê o teu `.svelte`.
+  aqui — skill de revisão de PR não ajuda quem trabalha em branch local, e ferramenta que filtra
+  `*.ts`/`*.tsx` não lê o teu `.svelte`. Ferramenta que lê **mudança não commitada**, essa serve: é
+  exatamente onde o teu código está quando a rodada abre.
 - **A ferramenta é sua, a responsabilidade também.** Saída de skill ou de subagente é insumo, não
   entrega: você lê, decide e assina. Diff que você não consegue explicar é diff que você não defende
   no portão.
@@ -98,11 +99,37 @@ entrega saiu com o nome da skill em cima e o conteúdo dela pela metade.
    sobrevive se você perder o contexto.
 3. Rode a verificação que o plano manda pra essa Task.
 4. **Seu diff encostou em pixel?** (`.svelte`/`.tsx`/`.vue`, CSS, template, qualquer coisa
-   que desenhe) → o portão visual lá embaixo é obrigatório **antes** de commitar, mesmo que
+   que desenhe) → o portão visual lá embaixo é obrigatório **antes de mandar revisar**, mesmo que
    o plano não peça e mesmo que a suíte esteja verde. Plano que não pede é plano incompleto,
    não permissão pra pular.
-5. Commite **só os paths da Task**, por caminho explícito.
-6. **PARE.** Não comece a Task seguinte. Não emende "o Step aditivo que não encosta em nada".
+5. **NÃO commite.** Congele a rodada — os quatro comandos, nesta ordem, e cada um por um motivo
+   medido em 30/08/2026:
+
+   ```bash
+   git add <paths da Task>              # explícitos. Sem isso, arquivo NOVO fica de fora do objeto
+   H=$(git stash create)                # objeto com o seu trabalho; não toca a árvore nem o índice
+   git stash store -m "task-<N> rodada <R>" "$H"   # dá uma ref ao objeto: `create` sozinho é dangling
+   git diff HEAD > <durável>/diff-task-<N>-r<R>.txt  # HEAD, não `git diff` — depois do add ele sai VAZIO
+   ```
+
+   O `$H` é a **identidade da rodada**: é ele que responde "qual código foi julgado" sem existir
+   commit, e é ele que recupera o seu trabalho se a sessão morrer (`git stash apply <H>`). Verificado:
+   com o `store`, o objeto sobrevive a `gc --prune=now` com reflog expirado.
+6. Mande ao **revisor que o kick-off nomeou** — direto, não pelo árbitro — e appende a linha de
+   `entrega` no `eventos.jsonl` (tipo fechado que já existe: `task`, `rodada`, e aqui o hash da
+   rodada no lugar do commit). O árbitro lê quando acordar; a linha não o acorda.
+7. **PARE de escrever.** Enquanto o revisor lê, a árvore não é sua: nada de "só ajeitar um
+   detalhe". O parecer é sobre o objeto que você congelou, e mexer aqui faz um APROVA valer sobre
+   código que já não existe.
+8. **APROVA** → aí sim: commite **só os paths da Task**, por caminho explícito, e reporte o hash do
+   commit ao árbitro. **REPROVA** → a receita chega direto em você; aplique, volte ao passo 3 e
+   congele uma rodada nova.
+9. **PARE.** Não comece a Task seguinte. Não emende "o Step aditivo que não encosta em nada".
+
+> **Regra de leitura para o resto desta página:** onde estiver escrito *"antes de commitar"* ou
+> *"antes do commit"*, entenda **antes de mandar a rodada ao revisor** (passo 6). O commit passou a
+> ser a última coisa da Task, então segurar um aviso "até o commit" é segurá-lo até depois de a
+> revisão já ter acontecido — tarde demais para tudo que aquelas regras protegem.
 
 **Conserto de bloqueador entra com a TRAVA no mesmo commit.** Antes de declarar qualquer conserto
 feito, exista o teste que **cai sem ele**: desfaça a sua correção e veja o teste ficar vermelho. Sem
@@ -112,15 +139,26 @@ que já estava morto não muda teste nenhum. Medido em 25/08/2026: um conserto e
 faltava falhou de cara quando foi escrito. Vale também para achado que um revisor automático
 provocou e que você resolveu no mesmo commit: é conserto como qualquer outro.
 
-Reporte ao árbitro **neste formato, e só ele**:
+São **dois** reportes, com destinos e momentos diferentes. Não mande o mesmo texto pros dois.
+
+Ao **revisor**, quando a rodada abre (passo 6), **neste formato, e só ele**:
 
 ```
-Task: <N> | Hash: <hash>
+Task: <N> | Rodada: <R> | Objeto: <hash do stash> | Base: <hash do HEAD>
+Diff: <caminho do diff-task-N-rR.txt>
 Verificação: <comando> → <últimas ~3 linhas da saída, COLADAS>
    (uma linha dessas por comando que o plano manda)
 git status --short: <saída colada>
 Irmãos fora da correção: <lista com motivo, ou "nenhum">   ← só em round de correção
 Riscos: <o que você conhece do que escreveu, ou "nenhum">
+```
+
+Ao **árbitro**, depois do APROVA e do commit (passo 8) — e só então:
+
+```
+Task: <N> | Hash: <hash do commit> | Rodadas: <quantas>
+Aprovado na rodada: <hash do stash da rodada aprovada>
+git status --short: <saída colada>
 ```
 
 Saída **colada** é o que separa prova de relato: "passou tudo" e contagem descrita de cabeça
@@ -264,6 +302,12 @@ registrada é armadilha que a próxima pessoa reintroduz.
 - **Árvore suja que NÃO é da sua Task → PARE e reporte.** Nunca `git checkout --`, `stash` ou commit
   de arquivo que você não tocou. Medido em 21/08/2026: um executor "limpou" a árvore e apagou **+58
   linhas não commitadas de outra sessão**, trabalho que não estava em commit nenhum e sumiu do disco.
+  **Agora que o commit vem depois da revisão, árvore suja virou o estado normal — e por isso a
+  pergunta mudou de "está suja?" para "é minha?".** Quem responde isso é o kick-off, na linha
+  `Rodada congelada: <hash> · a árvore suja é SUA`: com ela, você assumiu uma Task no meio e o que
+  está no disco é o trabalho do seu antecessor. **Sem ela, a árvore devia estar limpa** — suja é
+  sujeira alheia, e a trava acima vale inteira. Na dúvida, o hash do kick-off é conferível:
+  `git stash show <hash>` diz o que aquele objeto contém.
 - **Sessão do grupo NÃO é cenário de teste.** Precisa de uma sessão aparecendo ou sumindo num print?
   Crie a **sua** (`hangar-send --new fixture-tN <cwd>`) e mate a **sua**. Nunca mate, renomeie ou altere
   sessão que você não abriu — na dúvida, pergunte ao árbitro, que é quem sabe quem é do time. Medido
@@ -293,8 +337,11 @@ registrada é armadilha que a próxima pessoa reintroduz.
   que abriria um buraco permanente foi trocada por **uma palavra** no rótulo, e outra por **dois
   caracteres** num comentário. Precisou mesmo da exceção? A justificativa diz **a causa**, senão
   quem ler depois não tem como saber que ela era removível.
-- **Acima de 50% da própria janela de contexto: termine o passo atual, commite o que está são e
-  peça substituição no reporte.** Não espere o árbitro medir por você. Sessão inchada erra mais e
+- **Acima de 50% da própria janela de contexto: termine o passo atual, congele o que está são
+  (`git add` + `stash create` + `stash store`) e peça substituição no reporte, mandando o hash.**
+  Não espere o árbitro medir por você — essa medida é sua, e ele conta com isso. Você **não commita**
+  para trocar de sessão: quem atravessa a passagem é o hash da rodada, e a sucessora ou segue na
+  própria árvore (que ninguém tocou) ou recupera com `git stash apply <hash>`. Sessão inchada erra mais e
   paga mais por turno (medido em 17/08/2026: a 65% da janela, cada chamada custava 2,6× a da
   primeira hora); e a troca **não** refaz a sua prova — os prints já capturados vivem no diretório
   durável, não no seu contexto.

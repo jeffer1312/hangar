@@ -96,7 +96,15 @@ Duas regras fecham o desenho:
   "certo sozinho", e é exatamente essa a lacuna que o paralelo abre.
 
 Vermelho pós-merge **volta pro ciclo inteiro**, igualzinho ao conflito: executor conserta na
-principal, e o **revisor julga o commit de correção** antes de você fechar. Você não vira quem
+principal e o **revisor julga a correção antes do commit dela**, como em qualquer rodada — árvore
+suja, objeto congelado, APROVA, e só então o commit.
+
+**Enquanto houver conserto aberto na principal, você PARA de mergear.** Antes isso não importava,
+porque o conserto virava commit em minutos e a janela era curta; agora ele fica com a árvore suja
+até o APROVA, e um merge que entre nesse meio-tempo mistura as duas coisas: `git merge` de arquivos
+não sobrepostos passa sem conflito, e a verificação completa que você roda depois dele estaria
+rodando sobre código **não revisado** de outra Task — verde que não prova nada, vermelho cobrado do
+executor errado. Um merge parado alguns minutos é mais barato que uma verificação sem significado. Você não vira quem
 diz que o código está certo só porque a verificação ficou verde na tua mão — a única coisa que
 fecha portão neste tubo é `APROVA` de quem revisa, e é justamente na integração, onde a
 tentação de resolver sozinho é maior, que essa regra precisa estar escrita.

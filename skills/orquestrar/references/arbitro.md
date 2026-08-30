@@ -43,7 +43,12 @@ Você é o único que escreve no contrato.
   mais num kick-off são baratas; a régua que não chegou custou uma rodada, três vezes em 48h.
 - **`~/.claude/orq-retros/<data>-<gid>/eventos.jsonl` — o esqueleto que máquina lê.** Uma
   linha JSON por acontecimento, escrita NO EVENTO, junto da linha de prosa do registro — não
-  "depois". Tipos fechados: `execucao_inicio` (plano, branch, gid), `task_inicio` (task,
+  "depois". **É o único dos quatro com mais de um escritor:** o executor appenda a `entrega` de
+  cada rodada e o revisor appenda o `veredito` dela, direto, sem passar por você. É o que mantém o
+  diário completo enquanto o laço roda sem a sua presença — e não fere o motivo da exclusividade dos
+  outros três, que é impedir uma sessão de registrar a **própria autorização**: anotar o veredito
+  que você acabou de dar é fato, não permissão. O contrato, o registro e as lições continuam só
+  seus. Tipos fechados: `execucao_inicio` (plano, branch, gid), `task_inicio` (task,
   titulo, executor, par), `entrega` (task, rodada, commit), `veredito` (task, rodada,
   resultado `aprova|reprova|devolvido` — o MESMO vocabulário do parecer —, sessao, motivo
   curto quando houver), `sessao_trocada` (de, para, motivo), `execucao_fim` (resultado).
@@ -252,7 +257,9 @@ do trabalho.
    pendurado 3×, 77 min).
 2. Kick-off/receita em arquivo; mensagem = caminho, via `"$(cat <<'EOF' … EOF)"` — nunca aspas duplas cruas.
 3. `entregue` lido? Agora confira engajamento: o ctx saiu do zero em 1 min? (medido: 24 min perdidos sem isso).
-4. Vigia reescrita com quem tem a bola AGORA (medido: 5 alarmes falsos numa execução, 10 na anterior).
+   **Só no kick-off** — no meio do laço quem confere isso é quem está esperando a bola.
+4. Vigia armada e cobrindo as **duas janelas cegas** (abaixo). Quem a reescreve a cada passe é quem
+   **pega** a bola, não você (medido: 5 alarmes falsos numa execução, 10 na anterior).
 5. Registro: a linha JSON entra antes do parágrafo, e os dois antes da próxima ação.
 6. Mandei conferir alguma coisa? Então mandei o **comando que descobre a lista**, não a lista.
 
@@ -279,11 +286,18 @@ sobreviveu à branch inteira. Vale para receita, para kick-off e para pergunta d
 **Onde você não conseguir escrever um comando, escreva a pergunta** ("quem mais chama esta função?"),
 nunca a resposta.
 
-1. Você libera **uma** Task ao executor.
-2. Ele executa, marca os Steps, roda as verificações, commita só os paths da Task e para.
-3. Ele reporta hash, saída dos testes, `git status --short`, riscos.
-4. **Você confere o relato contra o repo** — `git log --oneline -1` (o hash é a ponta?),
-   `git show --stat <hash>` (os arquivos batem com a Task?), nenhum intocável stageado — **e uma
+1. Você libera **uma** Task ao executor, e o kick-off dela **nomeia o revisor**. Sem esse nome o
+   executor não tem para quem mandar a rodada, e o passe volta pra você por falta de endereço.
+2. Ele executa, marca os passos, roda as verificações e **para SEM commitar**, com a árvore suja.
+3. Ele congela a rodada — `git add` dos paths, `git stash create`, `git stash store` — e **chama o
+   revisor direto**. Uma linha no `eventos.jsonl` diz que a rodada abriu; ela não te acorda.
+4. Revisor julga o objeto congelado. **REPROVA** → receita direto ao executor, e o laço roda **sem
+   você**, deixando uma linha de veredito por rodada no `eventos.jsonl`. **APROVA** → o revisor
+   avisa o executor (que pode commitar) e você.
+5. O executor commita só os paths da Task, por caminho explícito, e reporta o hash a você.
+6. **Você confere o relato contra o repo** — `git log --oneline -1` (o hash é a ponta?),
+   `git show --stat <hash>` (os arquivos batem com a Task, **e com a rodada que foi aprovada**?),
+   nenhum intocável stageado — **e uma
    linha de ANDAMENTO**: quanto tempo a Task já leva e quantas rodadas já teve, contra o que a
    estimativa dizia. **Task acima de 2× o relógio ou 2× as rodadas estimadas sem fechar é espiral
    com outro nome:** pare e pergunte, como na espiral de rodadas.
@@ -296,17 +310,32 @@ nunca a resposta.
 
    Relato é relato; o repo é o fato. Divergiu → volta pro executor, não pro revisor.
    **A lista é fechada e é só metadado**: esses comandos, e mais nenhum. Rodar teste, abrir o
-   diff linha a linha ou julgar o código é o passo 5 — do revisor.
-5. Você manda o hash ao revisor.
-6. **APROVA** → chega em você; atualiza o contrato e libera a próxima Task.
-   **REPROVA** → **não chega em você.** O revisor manda a receita direto ao executor, que aplica,
-   testa, para e **reporta a você** — é aí que você entra de novo, no passo 4, e chama o revisor pro
-   commit de correção.
-   **DEVOLVIDO** → chega em você; portão continua fechado, conserte o que foi devolvido e mande
-   revisar de novo.
+   diff linha a linha ou julgar o código é do revisor, e já aconteceu no passo 4.
+   **Commit que diverge da rodada aprovada não é "um commit a mais e pronto":** o delta não foi
+   revisado. Ele volta pro executor como rodada nova, e o segundo commit que sair dali é legítimo —
+   `--amend` continua proibido, e apagar o rastro seria pior que tê-lo.
+7. Fechou: atualiza o contrato, escreve o registro e libera a próxima Task.
+   **DEVOLVIDO** (em qualquer rodada) → chega em você; o portão continua fechado, resolva o que foi
+   devolvido e mande revisar de novo.
 
-Você não é intermediário de correção. Entre o REPROVA e o relatório do executor, o trabalho anda sem
-você — e é assim que tem que ser.
+## Você sai do transporte, não da autoridade
+
+Deixam de passar por você **três** coisas, e só essas: o hash a caminho do revisor, a receita a
+caminho do executor, e a conferência do commit **antes** da revisão — essa última era conferência
+dobrada, já que o revisor ia ler o mesmo diff em seguida.
+
+Continuam chegando em você, porque são decisão e não transporte: DEVOLVIDO, discordância de receita,
+passo de skill não rodado, pixel sem barra no contrato, aba de navegador roubada, pedido de
+substituição de sessão, e tudo o que a seção "Autonomia — gatilhos" já manda.
+
+**Dentro do laço executor↔revisor, sua porta é uma só: a segunda reprovação da mesma Task.** A régua
+já existia ("mesma causa reprovada 2×"); o que muda é ela ser agora o único gatilho que te puxa pra
+dentro. Chegou a segunda: peça receita com abordagem nova, ou rotacione o revisor.
+
+**O commit nasce revisado.** Não existe "commit de correção" dentro do ciclo: o laço roda sobre a
+árvore suja e o commit só acontece depois do APROVA. Uma Task = um commit **no caminho normal**,
+mesmo tendo levado quatro rodadas. Antes, cada reprova virava um commit a mais na branch — na
+execução de 28–29/08/2026, 6 reprovações em 16 Tasks viraram 6 commits que não precisavam existir.
 
 **Conserto de bloqueador entra com a TRAVA no mesmo commit. "Consertado" sem um teste que morde é
 relato, não fato** — e isso vale dos dois lados do portão: o executor não declara sem, e você não
@@ -324,9 +353,11 @@ nenhuma, e desfazer qualquer uma das duas metades deixava tudo verde.
 Isso inclui o conserto que **um revisor automático provocou no meio da Task**: achado que entra no
 mesmo commit é conserto como qualquer outro e paga a mesma prova.
 
-**Um hash, UM revisor.** Rotação de revisor com parecer em voo **mata o parecer do aposentado**:
-quem assume julga do zero, e o hash só fecha com o veredito de um revisor nomeado no registro.
-Chegaram dois vereditos pro mesmo hash → o portão **não** fechou; trate como DEVOLVIDO e mande um
+**Uma rodada, UM revisor.** A rodada é identificada pelo hash do `git stash store` — objeto
+referenciado no repo, então "qual código foi julgado" continua tendo resposta exata mesmo sem
+commit. Rotação de revisor com parecer em voo **mata o parecer do aposentado**:
+quem assume julga do zero, e a rodada só fecha com o veredito de um revisor nomeado no registro.
+Chegaram dois vereditos pra mesma rodada → o portão **não** fechou; trate como DEVOLVIDO e mande um
 julgamento novo. Medido em 17/08/2026: um APROVA e um REPROVA sobre o mesmo commit, o merge saiu
 com o APROVA, e o defeito que o REPROVA nomeava entrou na `main`.
 
@@ -405,8 +436,15 @@ As sete regras que saem disso, e as sete são baratas:
 ## A correção não passa por você
 
 O revisor escreve o parecer num `.md` e manda o caminho **direto ao executor**. Você **não recebe o
-REPROVA**: fica sabendo dele quando o executor te reporta o commit de correção. Não reproduza o
-achado, não confirme nada, não repasse.
+REPROVA**: ele deixa uma linha no `eventos.jsonl` (tipo `veredito`, com a Task, a rodada, o
+resultado e o motivo curto), que você lê quando já estiver acordado por outro motivo. Não abra o
+parecer, não reproduza o achado, não confirme nada, não repasse.
+
+A linha existe porque o diário é a matéria-prima da fase 5 e sem ela você só veria a espiral no
+fechamento. Ela **não** te põe no laço — e é linha em arquivo, não recado, justamente por isso:
+recado chega como prompt e **acorda a sessão**, então "uma linha que não pede resposta" enviada por
+mensagem reduziria o trabalho do turno sem reduzir o número de turnos. Quem te põe no laço é a
+**segunda reprovação da mesma Task**, e o revisor marca isso na própria linha.
 
 Isso é economia medida, não preferência. Reproduzir a receita antes de repassar faz o mesmo
 trabalho duas vezes: o executor tem que reproduzir de qualquer jeito — quem aplica precisa
@@ -505,9 +543,25 @@ Depois do "pode ir", você decide. Estes três são **automáticos**, sem espera
 |---|---|
 | Sessão sem reportar há 15 min | `hangar-send --list`; `idle` sem reporte → lê o transcript dele, depois cutuca. **`working` também se confere**: olhe o ÚLTIMO comando dela — igual há 3 leituras é loop, não trabalho (medido 17/08/2026: 1.231× o mesmo comando por 3h, `working` o tempo todo) |
 | **Sessão do time sumiu e não foi você que fechou** | **abre outra e continua.** Não investigue. |
-| Escritor acima de **50% da própria janela** (500k numa de 1M) | **não recebe mais despacho: a troca vem ANTES da próxima rodada, sempre.** "No próximo marco" não existe — o marco pode não chegar (medido 17/08/2026: 65% da janela sem troca, cada chamada custando 2,6× a da primeira hora, numa Task que nunca fechou). E trocar não refaz prova: os prints vivem no diretório durável |
+| Escritor acima de **50% da própria janela** (500k numa de 1M) | quem mede é **ele**, e ele pede a troca no próprio reporte (`references/executor.md`). Você abre a substituta. **A troca vem ANTES da próxima rodada, sempre.** "No próximo marco" não existe — o marco pode não chegar (medido 17/08/2026: 65% da janela sem troca, cada chamada custando 2,6× a da primeira hora, numa Task que nunca fechou). E trocar não refaz prova: os prints vivem no diretório durável |
 | **Revisor acima de 50% da própria janela — OU cujo `ctx atual + custo medido de uma rodada` passe do teto** | abre a substituta **antes** de a correção chegar — e **despachar rodada pra quem já avisou que passou é proibido** (medido: rodada mandada a 86%, estourou 100% no meio do julgamento). O gatilho é igual ao do escritor (decisão do usuário, 23/08/2026, corrigindo o 85% que valia aqui: *"vc não abriu uma nova sessão pro review? ele já tava com mais de 600k"*). **Meça o custo de uma rodada na primeira Task e SOME antes de despachar**: uma rodada de julgamento de tela custou **~120k** (476k → 597k) — 483k está abaixo de 50%, mas 483k + 120k fecha em ~600k, então a substituta abre antes |
-| Mesma causa reprovada 2× | pede ao revisor receita com abordagem nova — ou rotaciona o revisor. Você não desenha receita. |
+| Mesma causa reprovada 2× | pede ao revisor receita com abordagem nova — ou rotaciona o revisor. Você não desenha receita. **É a sua única porta de entrada no laço**, e o revisor a marca na linha do `eventos.jsonl`. |
+
+### As duas janelas cegas — quem olha, agora que você acorda menos
+
+O laço executor↔revisor tem uma sentinela natural: **quem está esperando a bola percebe o silêncio**.
+O revisor esperando a rodada nota o executor que sumiu; o executor esperando o parecer nota o
+revisor que sumiu. Isso cobre o meio do laço sem custar nada.
+
+Sobram dois trechos em que **ninguém está esperando**, e os dois são da vigia:
+
+1. **Do kick-off até a primeira rodada.** O revisor ainda não foi acionado; você já despachou. Uma
+   sessão que morre aqui não é notada por ninguém.
+2. **Do APROVA até o commit.** O revisor deu o veredito e saiu de cena; você espera o hash sem
+   prazo ("entrega não é resposta"); e o trabalho existe só como objeto congelado. Esta janela é
+   **criada** pelo desenho novo — antes dela o commit já existia quando a revisão começava.
+
+Arme a vigia para as duas no lançamento, e quem **pega** a bola a reescreve com o próprio nome.
 
 **O gatilho é fração, não número absoluto.** O teto de 500k nasceu do escritor de janela de 1M e não
 serve pra revisor de janela curta: 209k de 272k é muito mais perto do fim que 403k de 1M. Medido em
@@ -1260,8 +1314,11 @@ se o achado procede vira o autor do código — e não sobra ninguém entre a op
 commit. **O contrato também não te pega**, porque quem escreve nele é você: registrar "corrigido
 em `<hash>`" sem registrar **quem corrigiu** faz a violação sumir do próprio registro.
 
-Registre sempre o autor de cada commit de correção no contrato. É a linha que denuncia o desvio
-enquanto ele ainda é de um commit só.
+Registre sempre o autor de cada **rodada de correção** no contrato — quem escreveu o código daquela
+rodada, não só o hash que fechou. É a linha que denuncia o desvio enquanto ele ainda é de uma rodada
+só. E ficou mais necessária, não menos: com o commit vindo depois da revisão, uma Task rende **um**
+commit, então o `git log` não guarda mais quem escreveu cada tentativa. O `eventos.jsonl` guarda
+(campo `sessao` do `veredito`), e o contrato é onde isso vira decisão.
 
 **Você volta a ser árbitro mesmo depois de o usuário te pedir código direto.** Se em algum
 momento ele te mandou escrever (fora do tubo, numa rodada de tela, num ajuste rápido), aquilo

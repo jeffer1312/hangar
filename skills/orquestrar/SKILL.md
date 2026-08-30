@@ -25,6 +25,19 @@ cujo produto não é código — é `references/retrospectiva.md`.
 
 Push e MR são sempre do usuário.
 
+**Na fase 3, o commit vem DEPOIS da revisão, e o árbitro sai do transporte.** O executor para com a
+árvore suja, congela a rodada e chama **o revisor direto**; o laço executor↔revisor roda sem o
+árbitro, e cada rodada deixa uma linha no `eventos.jsonl`, que ninguém precisa ler na hora. Com o
+APROVA, o revisor autoriza o executor a commitar e avisa o árbitro — e só aí nasce o commit, já
+revisado. **Uma Task = um commit no caminho normal**, mesmo tendo levado quatro rodadas: rodada
+reprovada não deixa rastro na branch.
+
+Sair do transporte **não é sair da autoridade**. Deixam de passar pelo árbitro o hash a caminho do
+revisor, a receita a caminho do executor e a conferência do commit antes da revisão. Continuam
+chegando nele, porque são decisão: DEVOLVIDO, discordância de receita, passo de skill não rodado,
+pixel sem barra no contrato, aba de navegador roubada e pedido de substituição de sessão. Dentro do
+laço, ele entra por uma porta só — a **segunda reprovação da mesma Task**.
+
 ## Leia SÓ a página do seu papel
 
 Este arquivo é o roteador. O resto está separado de propósito: papel misturado é como uma
@@ -189,11 +202,13 @@ Método: <superpowers | mattpocock | nenhum — o plano é o do usuário>.
 Skill de domínio: <nome | nenhuma>.
 Repo/branch: <caminho> / <branch>.   HEAD esperado: <hash>.
 Regras do grupo: <caminho do regras-<gid>.md>.
-A Task da vez, recortada: <caminho do task-<N>.md>.
+A Task da vez: <caminho do arquivo dela>.
 Intocáveis: <paths, um a um — não "os do contrato">.
 Lições que valem nesta Task: <coladas aqui, 3 ou 4, não o caminho do arquivo>.
-Sua vez agora: <Task N | esperar o primeiro hash>.
-Ao terminar, reporte para <sessao-do-arbitro> e PARE.
+Revisor desta Task: <sessão>.        ← só no kick-off de executor
+Rodada congelada: <hash> · a árvore suja é SUA.   ← só quando você substitui um executor no meio
+Sua vez agora: <Task N | esperar a primeira rodada>.
+Ao terminar, mande a rodada para <sessao-do-revisor> e PARE.
 
 Leia SÓ esses dois arquivos além da skill. O plano inteiro, o registro e o arquivo de lições
 NÃO são seus.
@@ -321,14 +336,19 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
   três:** (1) **existe com esse nome?** Pode ter virado comando em vez de skill, mudado de nome, ou
   não estar instalada nesta conta (plugin é por diretório de configuração, e uma sessão em conta
   secundária vê outra lista). (2) **Serve ao FLUXO?** Ferramenta que monta o diff a partir de
-  mudanças **não commitadas** ou de um PR não serve a um portão que revisa **commit já feito** em
-  branch local: o diff chega vazio e a saída sai bonita e oca. (3) **Serve aos ARQUIVOS desta
+  um **PR** não serve a um portão que revisa uma rodada em branch local: o diff chega vazio e a
+  saída sai bonita e oca. E atenção ao lado que virou: **desde que o commit passou a vir depois da
+  revisão, ferramenta que monta o diff de mudanças NÃO COMMITADAS é a que serve** — era o contrário
+  até 30/08/2026. A pergunta não muda: de onde ela tira o diff, e onde o código está *nesta* rodada.
+  (3) **Serve aos ARQUIVOS desta
   Task?** Revisor por linguagem costuma montar o próprio diff com filtro de extensão; filtro que
   não pega os arquivos tocados devolve "nada a apontar" sobre código que ele **não leu**, e ausência
   vira falsa evidência — o conserto é passar os caminhos explicitamente no pedido. Reprovou em
   alguma: registre **por que não serve**, numa linha, e isso vale tanto quanto a lista do que usar.
   E **silêncio de ferramenta só conta se você souber o que ela leu.**
-- **Sem `--amend`/rebase/squash** em commit já commitado. Correção é commit novo.
+- **Sem `--amend`/rebase/squash** em commit já commitado. Correção é commit novo. Isso quase nunca
+  aparece na fase 3, porque a correção acontece **antes** do commit; quando aparece — commit que
+  divergiu da rodada aprovada, conserto pós-merge de lote —, é commit novo, com rastro.
 - **Escreva primeiro, avise depois — sempre nessa ordem.** Parecer, reporte e receita nascem como
   **arquivo** no diretório durável do trabalho **antes** de qualquer envio, e a mensagem carrega o
   **caminho**, nunca o conteúdo. Não é formatação: é o que faz o trabalho sobreviver ao canal —

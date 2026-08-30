@@ -37,7 +37,11 @@ primeira aprovação, o árbitro abre uma revisão de conjunto só deles. O esco
 kick-off (`<hash da 1ª aprovação>..<ponta>`): revise **esse** range e nada além — a branch antiga já
 passou. O resto desta página vale igual.
 
-Achado seu volta pro ciclo normal: o árbitro repassa, o executor aplica, e você revê.
+Achado seu volta pro ciclo normal, e o ciclo normal **não tem intermediário**: mande a receita
+direto a quem vai corrigir, e ele te devolve a rodada congelada — árvore suja, `git stash store`,
+revisão antes do commit, como em qualquer Task. O árbitro entra no fechamento, não no meio. Se o
+argumento de tirá-lo do transporte vale numa Task, vale mais aqui, onde ele está com o contexto mais
+cheio e mais caro do trabalho inteiro.
 
 Uma síntese, uma mensagem, para o árbitro. Push e MR são decisão do usuário — nunca sua.
 
