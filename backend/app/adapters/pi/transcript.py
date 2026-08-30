@@ -99,7 +99,9 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             if t == "text" and (b.get("text") or "").strip():
                 out.append(ChatEvent(kind="assistant_msg", id=_sub_id(node_id, k),
                                      text=_clean(b["text"]), cache_read=cache_read, ts=ts))
-            elif t == "thinking" and (b.get("thinking") or "").strip():
+            elif t == "thinking" and isinstance(b.get("thinking"), str) and b["thinking"].strip():
+                # isinstance: campo de outro tipo faria `.strip()` levantar AttributeError, que o
+                # parse_line nao captura — e derrubaria o tail da sessao inteira.
                 out.append(ChatEvent(kind="thinking", id=_sub_id(node_id, k),
                                      text=_clean(b["thinking"]), ts=ts))
             elif t == "toolCall":

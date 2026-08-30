@@ -60,8 +60,9 @@
   // Falhou? Fica o inglês. Trocar o texto por erro apagaria justamente o que ela está lendo.
   let pt = $state<Record<string, string>>({});
   let pedindo = false;
+  let pronto = false;    // já traduzido: não repete a chamada nem no clique nem no scroll
   async function traduzir() {
-    if (pedindo || !pensamentos.length) return;
+    if (pedindo || pronto || !pensamentos.length) return;
     pedindo = true;
     const ids = pensamentos.map((e) => e.id);
     try {
@@ -69,13 +70,18 @@
       const mapa: Record<string, string> = {};
       r.textos.forEach((t, i) => { if (t) mapa[ids[i]] = t; });
       pt = mapa;
+      pronto = true;
     } catch {
-      pedindo = false;   // rede caiu: deixa tentar de novo no próximo clique
+      // Rede caiu: NÃO marca pronto, então abrir o bloco tenta de novo. O observador não serve de
+      // segunda chance — ele se desliga na primeira interseção.
+    } finally {
+      pedindo = false;
     }
   }
 
   function abrir() {
     aberto = !aberto;
+    if (aberto) void traduzir();
   }
 
   // `raiz` é o elemento do bloco; o observador dispara uma vez e se desliga.

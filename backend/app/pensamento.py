@@ -73,6 +73,13 @@ def gravar(valor: bool) -> None:
     tmp+replace com pid+uuid no nome, como o `contas._espelhar_do_principal`: um `claude` vivo lendo
     o settings.json no meio da escrita pegaria JSON truncado, e o nome fixo ainda deixaria duas
     gravacoes simultaneas se atropelarem.
+
+    Ler-modificar-escrever aqui NAO tem lock proprio, e isso depende de dois fatos — quebrou um
+    deles, precisa de lock: (1) o unico chamador e `runtime_config._aplicar_travado`, que ja roda
+    sob o `_LOCK` do modulo, entao dois PATCH nao se atropelam; (2) o outro escritor deste arquivo
+    dentro do backend e o `hook_installer`, que roda em `main.main()` ANTES do `uvicorn.run` — ou
+    seja, termina antes de existir requisicao. Escritor de fora (o proprio `claude`, um `/config`)
+    nenhum lock nosso alcanca; contra ele o que vale e a escrita atomica.
     """
     d = _ler()
     if d is None:

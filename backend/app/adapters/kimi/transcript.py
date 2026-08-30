@@ -98,8 +98,11 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
             return [ChatEvent(kind="assistant_msg", id=eid, text=part["text"], ts=_ts(obj))]
         # `think` e o raciocinio CRU (medido no wire: {"type":"think","think":"..."}), nao o resumo
         # que a API da Anthropic devolve. Vai pro chat RECOLHIDO, numa linha so.
-        if part.get("type") == "think" and (part.get("think") or "").strip():
-            return [ChatEvent(kind="thinking", id=eid, text=part["think"], ts=_ts(obj))]
+        # isinstance: campo de outro tipo faria `.strip()` levantar AttributeError, que o
+        # parse_line nao captura — e derrubaria o tail da sessao inteira.
+        pensa = part.get("think")
+        if part.get("type") == "think" and isinstance(pensa, str) and pensa.strip():
+            return [ChatEvent(kind="thinking", id=eid, text=pensa, ts=_ts(obj))]
         return []
 
     if et == "tool.call":

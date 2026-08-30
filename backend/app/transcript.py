@@ -397,8 +397,12 @@ def parse_obj(obj: dict) -> list[ChatEvent]:
                 # pensamento `omitted`, e a API devolve o bloco cifrado: `thinking: ""` mais a
                 # assinatura. Medido nesta máquina: 8746 de 8746 blocos de opus-5 vazios antes de
                 # ligar a chave. Emitir os vazios encheria a conversa de linhas que não abrem nada.
-                pensamento = it.get("thinking") or ""
-                if pensamento.strip():
+                # isinstance, e nao `or ""`: campo com outro tipo (JSON malformado, formato que
+                # muda) faria `.strip()` levantar AttributeError, que nenhum parse_line captura —
+                # e a excecao derrubaria o tail da sessao INTEIRA, nao so esta linha. Mesmo defeito
+                # que o `_peer_nome` ja teve aqui.
+                pensamento = it.get("thinking")
+                if isinstance(pensamento, str) and pensamento.strip():
                     out.append(ChatEvent(kind="thinking", id=_sub_id(uid, len(out)),
                                          text=pensamento, ts=ts))
         return out

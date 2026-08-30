@@ -229,6 +229,12 @@ def _aplicar_travado(mudancas: dict[str, Any]) -> dict[str, Any]:
     for campo, valor in externos.items():
         if not isinstance(valor, EXTERNOS[campo]):
             raise ValueError(f"{campo}: esperado true/false")
+    # Escreve o EXTERNO primeiro. Não há como comitar dois arquivos junto, então a ordem escolhe
+    # qual falha deixa a máquina inteira. A falha realista aqui é o settings.json ilegível — e
+    # nessa ordem ela para tudo antes de gravar qualquer coisa. A ordem contrária gravaria o
+    # runtime-config e só então descobriria o problema, com a tela dizendo que nada foi salvo.
+    for campo, valor in externos.items():
+        _gravar_externo(campo, valor)
     destino = _caminho()
     destino.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(destino.parent), suffix=".tmp")
@@ -245,8 +251,6 @@ def _aplicar_travado(mudancas: dict[str, Any]) -> dict[str, Any]:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-    for campo, valor in externos.items():
-        _gravar_externo(campo, valor)
     return atual
 
 

@@ -68,7 +68,10 @@ def traduzir(texto: str) -> str:
     try:
         saida = chamar_chat(_SYSTEM, texto, temperature=_TEMPERATURA, timeout=_TIMEOUT).strip()
     except NarrarError as e:
-        _log.info("traducao do pensamento falhou (%s): %s", e.status, e.detail)
+        # warning, e não info: na tela isto some (o texto original volta no lugar), então o log é o
+        # ÚNICO sinal de que a chave está errada ou o provedor caiu. Em info ele se mistura ao
+        # tráfego normal e ninguém descobre por que a tradução parou de acontecer.
+        _log.warning("traducao do pensamento falhou (%s): %s", e.status, e.detail)
         return texto
     except Exception:                       # noqa: BLE001 — tradução nunca derruba a leitura
         _log.warning("traducao do pensamento falhou", exc_info=True)
