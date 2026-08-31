@@ -113,7 +113,7 @@ Method: superpowers    # planner: brainstorming → writing-plans · executor: e
 Method: mattpocock     # planner: /grill-me → /to-spec → /to-tickets · executor: /implement
 ```
 
-**`superpowers` is the default — the user's decision, 2026-08-17.** Another method enters only on
+**`superpowers` is the default — the user's decision.** Another method enters only on
 their explicit request, and the **single** check before accepting is: **does the executing half
 exist in the ACCOUNT that will execute?** Skills and plugins are per config directory — check the
 path, not your memory. An artifact the method doesn't produce does **not** disqualify it: the
@@ -185,10 +185,9 @@ Domain skill: none
 
 1. **Does any Task do what the skill already does internally?** If so, that Task **does not
    exist** — what exists is the demand for that step's evidence inside the Task that contains it.
-   Measured on 2026-08-25: the step that generates the backend contract became a separate Task at
-   the end of a 19-Task plan; two screens passed the gate without it, the backend could not start
-   in parallel, and the gate never enforced the step, because "there is already a Task for that".
-   The user was the one who saw it, on the tenth Task.
+   A skill step promoted to its own Task at the end of the plan makes the gate stop enforcing it
+   ("there is already a Task for that"): everything before it passes unchecked, whatever depended
+   on the step cannot start, and the one who notices is the user, many Tasks later.
 2. **Is any skill step left without an owner?** A step no Task cites is a step nobody will run.
    Also look at what the skill does **not** have: a screen-porting skill may end at its last step
    without ever asking for the whole screen to be tested — work assembled only from its steps is
@@ -229,8 +228,8 @@ knows which lessons do. Sending the path would make the session read everything,
 the cost the three-file separation exists to avoid.
 
 The last line is an **instruction**, not a comment: without it the session goes after the full
-plan and the journal on its own — exactly what happened in the 2026-08-14 run, costing 110k of
-context before the first commit.
+plan and the journal on its own — and pays tens of thousands of tokens of closed history before
+its first commit.
 
 `Expected HEAD` and the literal untouchables list exist because a new session, without them,
 derives both from `git status`/`git log` and may find a HEAD nobody explained.
@@ -295,7 +294,7 @@ reviews one. How that is done depends on the material's format:
 
 - **Monolithic plan** (one file with all the Tasks) → **excerpt**: that Task's section plus the
   short header (goal/architecture) into `~/.hangar/orq/<date>-<gid>/tasks/task-<N>.md` — a durable
-  path, not `/tmp`, which vanishes on reboot — and send that path. In the 08-14 run: whole plan
+  path, not `/tmp`, which vanishes on reboot — and send that path. In one run: whole plan
   ~30k tokens, excerpted Task ~2.9k.
 - **One file per unit** (tickets) → **point at the user's file**, without copying. Copies go
   stale: the executor checks the criteria off in the original and the copy starts lying about
@@ -358,7 +357,7 @@ three leaves this skill the next time someone reads it.
   diff from a **PR** does not serve a gate that reviews a round on a local branch: the diff comes
   back empty and the output looks pretty and hollow. And mind which side flipped: **since the
   commit moved to after the review, the tool that reads UNCOMMITTED changes is the one that
-  serves** — it was the opposite until 2026-08-30. The question doesn't change: where does it get
+  serves** — it was the opposite before the commit moved. The question doesn't change: where does it get
   its diff, and where is the code in *this* round. (3) **Does it serve the FILES of this Task?**
   Per-language reviewers usually build their own diff with an extension filter; a filter that
   misses the touched files returns "nothing to report" about code it **never read**, and absence
@@ -372,9 +371,9 @@ three leaves this skill the next time someone reads it.
 - **Write first, notify after — always in that order.** Review reports, reports and recipes are
   born as a **file** in the work's durable directory **before** any sending, and the message
   carries the **path**, never the content. It is not formatting: it is what makes the work survive
-  the channel — measured on 2026-08-17/18, four different failure modes on the same channel in
-  48h, and in all four nothing was lost because the file already existed. It is also what makes a
-  mutilated message impossible: text that travels as a path has no backticks for the shell to eat.
+  the channel — a channel fails in several different ways, and with the file already on disk none
+  of them loses work. It is also what makes a mutilated message impossible: text that travels as a
+  path has no backticks for the shell to eat.
 - **The transport ladder, in order, and the next rung only after the previous one failed:**
   **look at the recipient's pane** (an open overlay/menu refuses typing, and is what the backend
   reports as "session unavailable") → `SendMessage` → `hangar-send --tmux <session>` →

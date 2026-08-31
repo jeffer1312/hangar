@@ -238,8 +238,8 @@ document.querySelector('.target').dataset.reviewerStamp = 'i-stamped-this-instan
 // same stamp back = SAME instance = it didn't unmount = your cleanup never runs there
 ```
 
-The proof takes two calls — and a cleanup once prescribed without it came out wrong, with the
-open half being exactly the case the reviewer had named first.
+The proof takes two calls — and a cleanup prescribed without it comes out wrong, with the open
+half being exactly the case the reviewer named first.
 
 **2. A recipe that picks a NUMBER to contain a symptom** (a cap, a reserve, a layout limit).
 Before picking the number, measure **why the element has the size it has**. A number that

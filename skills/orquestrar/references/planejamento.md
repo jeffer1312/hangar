@@ -11,19 +11,20 @@ This skill orchestrates; the *method* is what plans and executes, and there is m
 `Method:` line, which you write in phase 2 and which **every kick-off repeats**.
 
 - `superpowers` → you use `superpowers:brainstorming` and then `superpowers:writing-plans`; the
-  executor uses `superpowers:executing-plans`. **It is the default and the recommendation** (user's
-  decision, 2026-08-17).
+  executor uses `superpowers:executing-plans`. **It is the default and the recommendation** (the
+  user's decision).
 - `mattpocock` → you use `/grill-me` (or `/grill-with-docs`) → `/to-spec` → `/to-tickets`; the
   executor uses `/implement`. **Only on the user's explicit request, and only after checking that
-  `/implement` is installed in the account that will execute** — the 08-16/17 run went without it
-  and the arbiter had to improvise; checked on 2026-08-28, today it is in all five agent accounts
-  of this machine. The executor's kick-off **starts** with the `/implement` line (both skills carry
-  `disable-model-invocation: true`, so the session won't auto-invoke them — but the kick-off
-  arrives as typing in the pane). Whatever the method, the **phase 1 exit gate** (section at the
-  end of this page) holds the same: an artifact the method doesn't produce, you produce by hand —
-  and items 2, 3 and 4 are your audit, with a command, not something you wait to arrive written.
-  `to-tickets` delivers blocking edges (order), not estimates nor disjointness; that doesn't
-  disqualify it, it only says which part of the gate is left to you.
+  `/implement` is installed in the account that will execute** — a method run without its
+  executing half leaves the arbiter improvising, and an install is a fact of a machine, not of
+  the skill: check it in the executing account, every time. The executor's kick-off **starts**
+  with the `/implement` line (both skills carry `disable-model-invocation: true`, so the session
+  won't auto-invoke them — but the kick-off arrives as typing in the pane). Whatever the method,
+  the **phase 1 exit gate** (section at the end of this page) holds the same: an artifact the
+  method doesn't produce, you produce by hand — and items 2, 3 and 4 are your audit, with a
+  command, not something you wait to arrive written. `to-tickets` delivers blocking edges
+  (order), not estimates nor disjointness; that doesn't disqualify it, it only says which part of
+  the gate is left to you.
 
 - `none` → **the plan already exists and belongs to no method**: the user wrote it by hand, it came
   from another ticket, or there is no written plan. A legitimate and frequent case — see the next
@@ -91,15 +92,11 @@ exists in a session's context dies on `/clear`. Can the plan be written without 
 Absence is not a fact of the repository; it is the result of one query, and two queries over the
 same base return opposite answers. Before recording "the field doesn't exist" / "there's nothing
 about this", write the phrase you searched for, and **redo the search by a second path** whenever
-the absence supports a decision.
-
-Measured on 2026-08-26: a conclusion stood for two days — "none of the 104 columns represents
-'done'" — and fell when the user ordered a new search. The first pass searched for a **date**; the
-product uses **status**. Five independent searches found four situation concepts the first one
-missed. In the same Task something else surfaced: **the missing rule had been written in the ticket
-description the whole time**, and the group treated the subject as a product decision pending with
-the user for two days. So: **before declaring that something depends on their decision, re-read
-what they already wrote.**
+the absence supports a decision. A conclusion of absence can stand for days and fall at the first
+search made with another word — searching for a *date* when the product uses a *status* is the
+typical shape. And something else hides in the same place: **the missing rule is often already
+written in the user's own material** — before declaring that something depends on their decision,
+re-read what they already wrote.
 
 The same holds for database and service queries, where missing permission and missing object
 return exactly the same output — zero rows.
@@ -125,16 +122,14 @@ written for a generic executor that doesn't exist, and every real trait of the m
 correction round.
 
 **A step or recipe that creates screen state fed by a request declares the THREE outcomes —
-success, failure, pending — and the WHEN of each call (mount × interaction).** Measured on
-2026-08-19/20, three different authors made the same omission and each one cost a round: the plan
-declared failure and stayed silent on pending (fail-open holding for an in-flight request); the
-arbiter's recipe said "fetch the list live" without saying when (the probe that types ran on the
-mount of every conversation — the most serious blocker of the work); the reviewer's recipe closed
-success and "loading" and stayed silent on failure (a failed request became an assertion on
-screen). With a literal-recipe executor, the undeclared outcome is the unimplemented outcome. And
-if the plan declares that a Task's recipe closes AFTER another one (planned replanning), it names
-WHO closes it — and that who is a planner, never the arbiter by gravity (`replanejar.md`, "the
-miniature").
+success, failure, pending — and the WHEN of each call (mount × interaction).** This omission is
+made independently by planners, arbiters and reviewers, and each instance costs a round: failure
+declared and pending silent (fail-open holding for an in-flight request); "fetch the list live"
+without a when (a probe that types running on every mount); success and "loading" closed and
+failure silent (a failed request becoming an assertion on screen). With a literal-recipe executor,
+the undeclared outcome is the unimplemented outcome. And if the plan declares that a Task's recipe
+closes AFTER another one (planned replanning), it names WHO closes it — and that who is a planner,
+never the arbiter by gravity (`replanejar.md`, "the miniature").
 
 **A team model with no card yet:** the sweep (vendor + community, via `last30days`) and the initial
 card format are in `references/modelos/README.md`, "A new model on the team". What the sweep does
@@ -150,38 +145,35 @@ Beyond what `writing-plans` already asks, the plan carries:
   and 4, which are your work whatever the method.
 - **A-priori estimate, written BEFORE the kick-off**: one line per Task — expected **clock and
   rounds**. It is not guessing: it is the yardstick that lets the arbiter see "blown" while it
-  happens. Measured in both directions: the 08-15 run wrote it first and the yardstick caught a
-  Task blowing up (3h–6h → 10h50, documented on the spot); the 08-16/17 run didn't write it for
-  Tasks 1–5 and one Task ran **4h19 with zero commits** with no number screaming. A plan without
-  this fails the exit gate.
+  happens. With the line written, a Task blowing its estimate is caught and documented on the
+  spot; without it, a Task can run for hours with zero commits and no number screaming. A plan
+  without this fails the exit gate.
 
   **It lives in the plan, and the ACTUALS live only in `eventos.jsonl` — there is no second
   table.** The estimate is written once, here; the actuals the arbiter already records event by
-  event in `eventos.jsonl`, and phase 5 crosses the two. Keeping a manual "estimated × actual"
-  table that duplicates data the machine already has is the twice-written obligation that gets
-  half-fulfilled: measured on 2026-08-28, the manual table **stopped at Task 9** of a 33-Task work
-  and nobody noticed for 24 Tasks, while the structured trail only started existing at Task 21 —
-  **eleven Tasks had neither source**, exactly the most expensive third.
+  event in `eventos.jsonl`, and phase 5 crosses the two. A manual "estimated × actual" table that
+  duplicates data the machine already has is the twice-written obligation that gets
+  half-fulfilled: it stops being filled mid-work with nobody noticing, and the stretch covered by
+  neither source is usually the most expensive one.
   **A team with more than one authorized executor: the estimate carries consumption PER MODEL, not
   only per Task** — in **quota and context** (the accounts are subscriptions; there is no
   per-token invoice to analyze): expected context per Task, sessions per Task and which
   account/window each model spends — with the rule of when the heavy model enters declared
-  alongside. Measured on 2026-08-23: in the same Task, one model closed rounds at ~340–550k of
-  context per session and the other burned the window ~10× faster on the same account — both
-  authorized, and the single estimate line described neither. The cards in `~/.hangar/orq/modelos/`
-  are the source of the per-model number.
+  alongside. Two authorized models can burn the same account's window at rates an order of
+  magnitude apart, and a single estimate line describes neither. The cards in
+  `~/.hangar/orq/modelos/` are the source of the per-model number.
 - **External preconditions with an OWNER**: every step whose proof depends on something the
   executor doesn't control within the turn (a server up, a tmux session, a test account, an element
   on screen) declares who creates it — and the owner is **the executor itself**, as an explicit
   prior step ("bring the backend up on port X, confirm with curl, THEN capture"). A wait with no
-  declared owner becomes infinite polling: measured on 2026-08-17, an executor checked 1,179× for a
-  proof session that only it could create.
+  declared owner becomes infinite polling — an executor checking, hundreds of times, for a thing
+  only it could create.
 - **Untouchables**: paths with parallel changes in the tree, listed one by one.
 - **Verification per Task**: the exact command and what counts as passing. An **orchestration**
   Task (tmux, CLI, process, account, network) carries a **smoke-test step against the real
-  source**, with the literal command — a green suite of fakes proves no flow: measured on
-  2026-08-17, a module passed with 2,167+935 green tests and the whole flow dead (405 lines of new
-  tests reproduced the code's wrong assumption; no plan step touched tmux).
+  source**, with the literal command — a green suite of fakes proves no flow: a module can pass
+  thousands of green tests with the whole flow dead, because the new tests reproduce the code's
+  own wrong assumption and no step touches the real thing.
 - **Steps written as `- [ ] **Step N: …**` (the word is literal here) — only if you want the
   progress bar on the phone**, and then in the file **you** write (the orchestration plan), never
   by reformatting the user's. It is the format the app's progress counter recognizes (`### Task N:`
@@ -197,9 +189,8 @@ Beyond what `writing-plans` already asks, the plan carries:
 - **Quota and fallback** — and **not** a money cap; see the rule below. What enters is what **runs
   out**: each team account's remaining quota (pasted, with the reading time) and the **fallback
   authorized in writing** ("X's quota runs out → executors migrate to Y, known effect: ...").
-  Measured on 2026-08-17: the executors' provider quota blew at 23:35 with the user asleep, all 4
-  died in the same minute, and the fallback decision cost 3 of his interventions overnight —
-  because it wasn't written.
+  A provider quota blows overnight with the user asleep, every session on it dies in the same
+  minute, and an unwritten fallback becomes middle-of-the-night interventions.
 - **The team**, with each role's engine and account.
 
 **There is no money cap in this skill.** Whoever uses this controls spend some other way — through
@@ -223,23 +214,17 @@ None of the three is a value the user "agrees to spend": all three are facts the
 
 Two Tasks that mount hosts of the same store, singleton or registry **are not independent**, no
 matter how disjoint the files — and the collision doesn't show at merge time: it shows up as review
-rounds.
-
-Measured on 2026-08-16: a store was a module singleton retained by three components with the same
-key, born in three Tasks the plan treated as independent. **8 of the 11 rounds** of the last two
-were one host writing into state the other clears, reads or deletes.
+rounds, one host writing into state the other clears, reads or deletes, round after round.
 
 Found one? The plan writes the **ownership contract** before the first of the two Tasks: who
 writes, who clears, what happens when a host unmounts, and what happens on resize. Two lines in the
-plan; without them, six rounds.
+plan; without them, rounds.
 
 **An ownership contract ("file X is closed in this batch; each new module creates its own") avoids
-merge conflicts and creates duplicates — declare what happens to them.** Measured on 2026-08-18:
-the rule was written with those words across three modules and produced **four nearly identical
-network clients**, with the 401-recovery block copied **three times**. When two different Tasks
-discovered, each on its own, the same destination defect, each fixed it inside its own copy —
-**there was no single place to fix**, and the defect survived the whole branch, including the last
-commit, which touched exactly the affected screen.
+merge conflicts and creates duplicates — declare what happens to them.** Written without that
+clause, the rule produces near-identical copies of the same client across modules — and when two
+Tasks discover the same defect, each fixes its own copy, because **there is no single place to
+fix**; the defect outlives the branch.
 
 When writing the ownership rule, write alongside it:
 - **how many copies it will create** (it's the number of Tasks touching the pattern), and
@@ -247,19 +232,17 @@ When writing the ownership rule, write alongside it:
   and the set review checks all N" — which is what the final reviewer will enforce.
 
 And the small version of the same thing, which holds inside a single commit: **two computations
-that MUST give the same result become one, derived in one place** — not two copies. Measured on
-2026-08-18: the same `serverId` computed at three spots of the same component, two with `??` and
-one with `||`; on the legacy route the value is an empty string, which `??` doesn't catch, and the
-panel opened and closed in the same flush — a regression introduced by the very commit that fixed
-the screen (parent green, child red).
+that MUST give the same result become one, derived in one place** — not two copies. The same value
+computed at several spots of one component, with operators that differ on the edge case (`??` ×
+`||` over an empty string), is a regression introduced by the very commit that fixes the screen —
+parent green, child red.
 
 **It is the same cause that makes screen-Task estimates miss, which is why a screen Task is
 estimated by the STATE it touches, not by the pixel.** A screen that mounts a host of an existing
-store costs 4 to 6 rounds; a screen that draws a new component over its own state costs 1 to 2.
-Don't estimate by the blind comparison: of the 11 measured rounds, **none** was rejected for
-diverging from the mock — there were 6 divergences and all 6 became notes. What rejected was **24
-code blockers**, and three screens estimated at 3h–6h took 10h50. Decomposing by screen is great
-for splitting work and terrible for predicting risk.
+store costs several rounds; a screen that draws a new component over its own state costs one or
+two. Don't estimate by the blind comparison either: mock divergences become notes, while **code
+blockers** are what reject rounds. Decomposing by screen is great for splitting work and terrible
+for predicting risk.
 
 ### The review's rigor enters the contract before Task 1
 
@@ -275,24 +258,23 @@ state nobody listed is a state nobody looks at.
 #### Capture belongs to the EXECUTOR: how many screenshots, and whether a dedicated session pays off
 
 The list above is about coverage — which states the Task must prove. **How many screenshots to
-take, and who takes them, is the executor's decision at execution time** (user's decision,
-2026-08-28). The plan imposes no number: it doesn't know how many screens the Task will end up
-having, and a cap written here limits legitimate work.
+take, and who takes them, is the executor's decision at execution time** (the user's decision).
+The plan imposes no number: it doesn't know how many screens the Task will end up having, and a
+cap written here limits legitimate work.
 
-What the plan does is **tell the executor what it has already cost**, so they decide with data, not
-hunches. Measured in both directions: the 08-13/14 run took the sweep out of the executor and ran
-it in its own session (71 screenshots, 2 languages × 2 widths) and closed in hours; the 08-16/17
-run embedded "screenshot of every state × 2 hosts × 2 languages" inside the executor and the two
-most expensive Tasks sat **12h53 stuck in capture, with no merge**. When the sweep is large, the
-cheap way out is a disposable capture session, with the state list in its kick-off — the executor
-delivers code, verifications and the sanity screenshot, and the capturer sweeps the rest. **The
-executor chooses this, and the choice goes in the report.**
+What the plan does is **tell the executor what capture costs**, so they decide with data, not
+hunches. It cuts both ways: a large sweep run in its own disposable session closes in hours,
+while the same sweep embedded inside the executor ("screenshot of every state × hosts ×
+languages") can hold the most expensive Tasks hostage for half a day with no merge. When the
+sweep is large, the cheap way out is a disposable capture session, with the state list in its
+kick-off — the executor delivers code, verifications and the sanity screenshot, and the capturer
+sweeps the rest. **The executor chooses this, and the choice goes in the report.**
 
 And the mother rule, which holds for every gate in this skill: **a demand for new proof (outcome,
 more states, more variants) only enters with the OWNER in the same sentence** — who produces that
-proof, and where. It was exactly the pair "proof ends at the outcome" (right rule, no stage owner)
-+ "the cap only counts bar rounds" (right rule, which left capture unbounded), added on the same
-day, that produced the 12h53.
+proof, and where. Two right rules added without owners ("proof ends at the outcome" with no stage
+owner, "the cap only counts bar rounds" leaving capture unbounded) are how capture becomes
+unbounded work.
 
 ### A visual Task also enters with a BAR
 
@@ -358,8 +340,8 @@ in this work. Filling the table on your own is indistinguishable, in the journal
 the user made.
 
 **But the question is asked ONCE, and it has a way out.** Someone with a single account has nothing
-to choose, and stalling the work on an unanswerable question is what already drove an outside user
-away. Start with this one, and proceed on any answer:
+to choose, and stalling the work on an unanswerable question drives users away. Start with this
+one, and proceed on any answer:
 
 > "Do you want to pick the team (account and model per role), or do we go with the default?"
 
@@ -387,7 +369,7 @@ pi --list-models | awk 'NR>1{print $1}' | sort -u   # Pi providers (run from the
 ls -d ~/.claude ~/.claude-*       # Claude accounts
 ```
 
-Two traps measured on 2026-08-13, both capable of making you propose something that doesn't exist:
+Two traps, both capable of making you propose something that doesn't exist:
 
 - **Harness ≠ engine.** An account may be unreachable via `--engine` and perfectly reachable via
   `--provider pi` or its own CLI. Listing only the engines hides half the real options.
@@ -452,9 +434,8 @@ table from there and only adjust the session names — it is their choice, not y
 **The table is born with ALL the pipeline's roles, including phases 4 and 5.** Branch review and
 retrospective arrive days later, when whoever launched is no longer in the session — and without
 the row, that moment's arbiter picks account, model and effort alone for a role the user never
-saw. Measured on 2026-08-28: a contract carried the phase-4 row and forgot phase 5's; the arbiter
-decided by analogy and recorded it as his own decision. The row costs ten seconds here and removes
-a decision from his hands there.
+saw, and records it as his own decision. The row costs ten seconds here and removes a decision
+from his hands there.
 
 - `provider`: `claude` | `codex` | `pi` | `kimi`.
 - `conta`: on Claude, the config-dir name (`padrao` for `~/.claude`, `200-01` for
@@ -480,7 +461,7 @@ row of the roles table is born in its Task's repo.
 
 **The header is exact and the table is machine-read**: the hangar's Orchestration modal shows this
 table to the user, with what each live session measures next to it, and writes back here whatever
-they change. A cell with prose ("Opus 5, effort `medium`, accounts X and Y (decision of 08-25)")
+they change. A cell with prose ("Opus 5, effort `medium`, accounts X and Y (decision of <date>)")
 is not read — the role vanishes from the screen. Everything that is explanation — why that
 account, what to do when quota runs out, the final review's trigger — goes as prose **outside**
 the table.
@@ -505,23 +486,21 @@ lost round in execution.
 **This subagent runs with the model in its own definition — force nothing.** The machine's account
 policy governs the **team's sessions**, which haven't even been decided at this point; it does not
 govern a subagent you dispatch during planning. Passing `model:` here "to respect the table" is
-applying a rule outside its scope, and it also overrides the model the agent's author chose.
-Error measured on 2026-08-13: the planner tried to pin `model: opus` on an adversarial pass citing
-the accounts table, in a phase where the user had defined no team at all.
+applying a rule outside its scope, and it also overrides the model the agent's author chose — the
+table cannot be respected in a phase where the user has defined no team at all.
 
 Offer the pass — don't run it on your own, and don't skip it because you think you've checked
-everything. It catches what you cannot see: on that same date, it found 20 problems in a reviewed
-plan, 5 of which would make a Task close red — including three cited files that **did not exist**
-and the plan's own guard regex, which would start matching the wrong map after the Task that fixed
-it.
+everything. It catches what you cannot see: cited files that don't exist, an order that doesn't
+hold, and even the plan's own guard regex that would start matching the wrong thing after the Task
+that fixes it — the class of problem that makes Tasks close red.
 
 ## Code that enters the plan is code YOU ran
 
-A rule measured on 2026-08-15, in a well-written, audited 12-Task plan: six of its defects reached
-execution — an attribute that didn't exist, a `TypeError`, a test filter that selected nothing,
-wrong counts, a "disjoint" batch that collided, a bar demanding what the reused component doesn't
-do — and all six had the **same** cause: the plan described code its author never executed. None
-is a reasoning error: they are things **a command would have answered in seconds**.
+Even a well-written, audited plan ships defects that all share the **same** cause: the plan
+described code its author never executed — an attribute that doesn't exist, a `TypeError`, a test
+filter that selects nothing, wrong counts, a "disjoint" batch that collides, a bar demanding what
+the reused component doesn't do. None is a reasoning error: they are things **a command would
+have answered in seconds**.
 
 Before closing the plan:
 
@@ -529,54 +508,47 @@ Before closing the plan:
   you paste the real output — including a "0 selected", which is the answer that exposes a test
   filter written in the dark.
 - **Every function, attribute and fixture the plan cites, check that it exists** — `grep` the
-  repo. The 08-13 adversarial audit found three cited files that didn't exist; the same class of
-  hole passed on 08-15 at the attribute level.
+  repo. The same class of hole passes at file level and at attribute level alike.
 - **Test counts: count, don't estimate.** A wrong "Expected: N PASS" makes the executor think they
   broke something and hunt for a defect that isn't there.
 - **Batch disjointness is checked in the STEPS' text, not in the "Files" block.** That is exactly
-  where the 08-15 collision hid: Task 1's header didn't cite the file; its step 8 ordered editing
+  where collisions hide: a Task's header doesn't cite the file; one of its steps orders editing
   it.
 - **The bar must be possible with the code the plan orders reused.** A mock drawing what the
   existing component doesn't do is guaranteed divergence — decide it in the plan, not in the Task.
 - **A MEASUREMENT Task whose result depends on initial state sweeps more than one starting state —
-  and declares which it swept.** Measured on 2026-08-19/20: "the permission cycle has 4 modes" was
-  an artifact of measuring only sessions born in `plan`; born in `bypassPermissions` the cycle has
-  5 and loops back into it, and `dontAsk` exists only at startup. The user caught it, not the
-  process — and the wrong conclusion would have shaped the entire next Task.
+  and declares which it swept.** A cycle measured from a single starting state reports fewer modes
+  than it has; the wrong conclusion shapes the entire next Task, and the one who catches it is the
+  user, not the process.
 
 Whatever you cannot run enters marked: `<!-- NOT VERIFIED: … -->`. The executor treats that as
 description, not recipe — and it is infinitely better than them finding out alone mid-Task.
 
-Four things the plan gets wrong **silently**, and all four cost a round or a blocker on
-2026-08-21/22:
+Four things the plan gets wrong **silently**, each worth a round or a blocker:
 
 - **Every claim about an external lib's BEHAVIOR carries the mark, or the installed source snippet
   pasted alongside** — not just the API name. "Option X is a watchdog" and "after `error` the lib
-  stops reconnecting" are exactly the sentences that fail without warning: both failed in the same
-  work, the first cost a round and the second became a set-level blocker in the branch review. The
-  `tsc` enforces API names; behavior, nobody does.
+  stops reconnecting" are exactly the sentences that fail without warning. The type checker
+  enforces API names; behavior, nobody does.
 - **A Task that MOVES a file lists the old path's consumers** — and they are not just imports:
-  infra (CI, deploy, installers) and **tests that sweep the tree** (`i18nGuard`, `boundary`) point
-  by string. The raw-text gate sweeping `frontend/src` went blind to the 6 modules moved to core
-  and to the whole `mobile/`, and nobody saw until phase 4. Add `vi.mock`, which points at paths
-  by string and shows up neither in `import` searches nor in the compiler.
+  infra (CI, deploy, installers) and **tests that sweep the tree** point by string, and a
+  raw-text gate sweeping the old root goes blind to everything that moved out. Add mock helpers
+  that point at paths by string and show up neither in `import` searches nor in the compiler.
 - **State shared between Tasks is a design decision written in the plan's HEADER**, not inside a
-  Task. "Global active server × route's server" crossed 5 Tasks approved one by one and only
-  showed in the set review — as blocker number 1.
-- **The phase 1 exit gate does not close with `___` in the estimates file.** The "providers'
-  quota" line stayed blank and the cost showed mid-batch: provider `429`s and four sessions
-  hurriedly switched accounts. And **estimate ≥2 sessions per Task on a flaky provider** — it took
-  23 executor sessions for 10 Tasks; the model's card, in `~/.hangar/orq/modelos/`, says how many
-  drops per hour to expect.
+  Task — it crosses Tasks approved one by one and only shows in the set review, as the number-one
+  blocker.
+- **The phase 1 exit gate does not close with `___` in the estimates file.** A blank
+  "providers' quota" line surfaces mid-batch as provider errors and sessions hurriedly switched
+  accounts. And **estimate ≥2 sessions per Task on a flaky provider** — the model's card, in
+  `~/.hangar/orq/modelos/`, says how many drops per hour to expect.
 
 ## Phase 1 exit gate — a closed, method-agnostic checklist
 
 Phase 1 only closes with the thirteen below checked, **one by one, in writing in the plan or the
 contract**. Each item already exists as a rule in some section; the list exists because a rule
-scattered in prose is a rule a new method doesn't know — measured on 2026-08-16/17: `/to-tickets`
-came out without items 2 and 3, and the cost was the batch torn down 3 times and a Task running
-4h19 with no overrun yardstick. An item the chosen method doesn't produce, **you produce by
-hand**.
+scattered in prose is a rule a new method doesn't know, and the missing items are exactly the
+batch torn down repeatedly and the Task running for hours with no overrun yardstick. An item the
+chosen method doesn't produce, **you produce by hand**.
 
 **Each item says what it is**, because that changes your work when the user arrives with the work
 already decided (a spec and ready tickets, for example):
@@ -610,15 +582,15 @@ file paths.
 5. **PRODUCE** — A bar (or `none — user's decision`) recorded per visual Task.
 6. **PRODUCE** — Long screen Task: context-rotation point planned in the steps ("step N is a safe
    switching milestone"). **How many screenshots, and whether capture becomes a separate session,
-   is the executor's call at the time** — user's decision, 2026-08-28 (see "Capture belongs to the
+   is the executor's call at the time** — the user's decision (see "Capture belongs to the
    EXECUTOR", above).
 7. **PRODUCE** — Orchestration Task: smoke step against the real source, literal command.
 8. **PRODUCE** — External precondition with a declared owner in every step that waits for
    something. **A stage on a separate device or process is the case that escapes here the most**,
    because it looks like an execution detail and isn't: from which directory the server rises,
    which port belongs to each Task, who holds the device and when it is released. The executor
-   decides none of that — they only prove what they carried. In a 24h run those three missing
-   lines cost three and a half rounds, all green on the serving side.
+   decides none of that — they only prove what they carried; the missing lines cost rounds that
+   stay green on the serving side.
 9. **PRODUCE** — Parallel batch with visual proof: an exclusive browser per executor or proof as a
    critical section (`paralelo-worktree.md`).
 10. **AUDIT** — Remaining quota of each team account, with the reading time, and the fallback
@@ -631,18 +603,15 @@ file paths.
     owner (`SKILL.md`, "The DOMAIN SKILL").
 
 And a prudence rule that is not an item but a posture: **one debut at a time.** A new planning
-method, a freshly edited skill and a new provider don't enter the same run together — the 08-16/17
-run debuted all three on the same day, and the retrospective's one-line summary was exactly
-"everything was a debut".
+method, a freshly edited skill and a new provider don't enter the same run together — a run where
+everything is a debut has no baseline left to tell which debut is failing.
 
 **The same rule holds for factual claims** — in the plan, in the Task excerpt and in the
 kick-off. The executor and the reviewer read the excerpt as data, not as its author's opinion; a
 wrong sentence there becomes a wrong comment in the code, and a comment asserting something false
-is the seed of a future bug. If you didn't measure it, write "I assume", or don't write it.
-Measured on 2026-08-16: the excerpt asserted that filling a field with the dev server's origin
-"would give a connection error that looks like a bug"; the reviewer measured and it **connects**,
-because `vite.config.ts` proxies `/api` to the backend in that mode too. The sentence became a
-code comment, and its correction had to be carried into the next Task.
+is the seed of a future bug. If you didn't measure it, write "I assume", or don't write it — an
+unmeasured claim of "this would error" about a thing that actually works becomes a wrong code
+comment whose correction has to be carried into the next Task.
 
 ## Phase 2 — Launch (the user's single "go ahead")
 
@@ -660,11 +629,11 @@ with the user. Didn't resolve → then it is their decision.
 
 **The fourth line is not decoration: you show up in your own list.** Without it, the `working`
 session in your cwd looks like a second writer, and you spend a round sending a message — to
-yourself, which comes back as `[de: <you>]`. Measured on 2026-08-13.
+yourself, which comes back as `[de: <you>]`.
 
 **Branch: the question is MANDATORY at every launch, and the recommendation is a new branch off
-`main`.** User's decision, 2026-08-17, after two whole runs landed straight on `main`. Before
-creating the first session, ask where the work will run, recommendation first:
+`main`.** The user's decision, born from whole runs landing straight on `main`. Before creating
+the first session, ask where the work will run, recommendation first:
 
 > "Where does this work run? (a) **new branch off `main`** — recommended: N team commits are not
 > born on the main line, and the push becomes a single decision at the end; (b) directly on
@@ -701,11 +670,9 @@ member's sidecar holds the SAME `task`, and each new `--pair` **overwrites every
 a group-wide notice with that text. Pairing the executor with `"role: executor"` and then the
 reviewer with `"role: independent reviewer"`, the executor receives a notice saying it is the
 reviewer — and assumes it, because the message came through the infrastructure, looking like
-authority.
-
-It really happened on 2026-08-13: the executor's session announced *"the second message corrected
-my role: I am now i18n-review"* and went to read the contract as a reviewer. It cost a role
-correction in both sessions and a rewrite of the three sidecars.
+authority: a session announcing *"the second message corrected my role"* and reading the contract
+as another role is the direct product, and fixing it costs role corrections and sidecar
+rewrites.
 
 The `--pair` string is **neutral and points at the contract**, never asserts a role:
 
@@ -748,7 +715,7 @@ into each session's first kick-off:
 
 Review reports, Task excerpts, kick-offs and screenshots live there, **never in `/tmp`**, which
 vanishes on reboot. Phase 5 reads exactly the review reports — each round's waste line is its raw
-material. Deciding this mid-work costs moving files by hand, measured on 2026-08-16.
+material. Deciding this mid-work costs moving files by hand.
 
 The boundary is the content's type: **it happened → journal; it is the agreement → rules; it is a
 new guideline → lessons.** Without that separation the file everyone reads grows with every
@@ -764,10 +731,10 @@ what the review must cover, quota and accounts. **New guidelines do NOT enter he
 ### The contract is born from a skeleton, not from memory
 
 The contract's content is described in prose across three files; rebuilding it from memory is how
-a forgotten field shows up — mid-execution, as a gap nobody decided (it already cost a reviewer
-reviewing with none of the installed subagents, because the tooling section was left blank). Copy
-and fill; a field that doesn't apply gets `n/a`, **never disappears** — a deleted field is
-invisible to whoever reads later:
+a forgotten field shows up — mid-execution, as a gap nobody decided, like a reviewer reviewing
+with none of the installed subagents because the tooling section was left blank. Copy and fill; a
+field that doesn't apply gets `n/a`, **never disappears** — a deleted field is invisible to
+whoever reads later:
 
 ````markdown
 > Arbiter's journal. Group rules (what the team reads): <path to regras-<gid>.md>.

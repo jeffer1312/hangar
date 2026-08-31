@@ -14,9 +14,9 @@ Type gate, build and tests passing is the **floor**, not the report. Beyond it:
 - **concurrency**: delayed response, double click, target switched mid-flight, unmount;
 - **final state**: what remained on disk/storage/URL afterwards — not only the return value;
 - **An orchestration Task (tmux, CLI, process, account): RUN the smoke test against the real
-  source, yourself.** A green suite of fakes is no proof of flow: a module once arrived with
-  over three thousand green tests and the flow dead — 405 lines of new tests proved the code's
-  own wrong assumption, and the reviewer reproducing against the real tmux caught the 10
+  source, yourself.** A green suite of fakes is no proof of flow: a module can arrive with
+  thousands of green tests and the flow dead — new tests proving the code's own wrong
+  assumption — and the reviewer reproducing against the real source is who catches the
   blockers. And **check the suite's COUNT against the base**: a count that dropped with no note
   in the report is a blocker by itself (in that same Task, one silent unit less hid 7 deleted
   tests of an approved Task). **And a test that swaps the whole library for a double proves the
@@ -25,9 +25,9 @@ Type gate, build and tests passing is the **floor**, not the report. Beyond it:
   what distinguishes the two paths).
 - **the empty case**: code that **deletes**, that matches by similarity, or that decides from a
   list of the living — what does it do when the set comes **empty**? A pruning where "I don't
-  know who is alive" became "nobody is alive" once deleted 8 of 8 live session files, queue
-  included: the querying function returns empty without raising, so the author's `except` never
-  fired. Short rule: **an empty list of the living is a reason NOT to delete.**
+  know who is alive" becomes "nobody is alive" deletes every live file, queue included: the
+  querying function returns empty without raising, so the author's `except` never fires. Short
+  rule: **an empty list of the living is a reason NOT to delete.**
 - **the same rule written twice**: two sides that must agree (backend and front, two components,
   two copies of the same client) agree **today** and nothing guarantees tomorrow. It happened
   with a floor duplicated on both sides: one gained a new notion, the other kept only the floor,
@@ -77,8 +77,8 @@ one of them failed **by excess** before the fix.
 The question is not answered by reading the test. It is answered by **breaking the code on
 purpose and watching the test fall**:
 
-1. Copy the subproject outside the repo (the repo stays untouched — a regex mutation in the
-   working tree once deleted `role`/`aria-live` in a run, see `executor.md`).
+1. Copy the subproject outside the repo (the repo stays untouched — a mutation in the working
+   tree leaves residue that rides into the commit, see `executor.md`).
 2. Remove **the fix's line**, one at a time, and run the suite.
 3. Only the new test fell → it proves the scenario. Nothing fell → **that point has no test**,
    and that is a finding (a `NOTED` gap, not a blocker).
@@ -109,17 +109,16 @@ vanished, and no test in the batch would see it.
 **And the fixture cannot be the world where the defect is invisible.** The test proving "the
 dead one disappears" uses a **different living one**, never a world with no living: with the
 world empty, "the dead disappears" and "everything is deleted" give the same output, and the
-suite signs off on the defect. Six test calls once passed "nobody is alive" as the fixture, and
-it was the data-loss path.
+suite signs off on the defect — and "nobody is alive" passed as a fixture is exactly the
+data-loss path.
 
 **Nor a world the server NEVER produces.** It is the previous one's opposite shape and costs
 more: there the test couldn't fail; here it **asserts** an impossible state, and the green suite
 signs off. Every fixture supporting an assertion is checked against real data — a `curl` on the
-route, a row from the table — before counting as proof. A fixture once arrived with a field
-filled that the service returns null in **all** real records, with a test asserting the label
-only that state produces; it appeared in three files across two Tasks, and the second occurrence
-rejected a round. **A corrected fixture enters the SAME commit as the fix it locks** — otherwise
-the lock is illusory.
+route, a row from the table — before counting as proof. A fixture carrying a field filled that
+the service returns null in **all** real records, with a test asserting the label only that
+state produces, spreads across files and Tasks and keeps rejecting rounds. **A corrected fixture
+enters the SAME commit as the fix it locks** — otherwise the lock is illusory.
 
 #### Before accepting a sabotage battery, four checks
 
@@ -130,9 +129,9 @@ ones forgotten in the moment, so they stay together, as a list, not prose:
    another explanation for these tests falling?* A cut landing in shared code — an error mapper,
    a common `catch`, a helper — fells all paths together and is compatible with opposite
    hypotheses: it proves something there is exercised, not the sentence written next to it. A
-   cut in a mapper shared between save and delete once supported both "the new test closes a
-   hole" and "it is a copy of its sibling"; redone disabling only the claimed path, exactly the
-   two right tests fell, with the rest as control. **A true claim with incomplete proof:
+   cut in a mapper shared between save and delete supports both "the new test closes a hole" and
+   "it is a copy of its sibling"; redone disabling only the claimed path, exactly the right
+   tests fall, with the rest as control. **A true claim with incomplete proof:
    complete the evidence, don't reject** — rejecting there charges the executor for the proof's
    design, not the work.
 2. **Does each cut say WHICH TEST FILE accused?** "It felled 7 tests" doesn't separate *the new
@@ -156,8 +155,8 @@ ones forgotten in the moment, so they stay together, as a list, not prose:
    function has no caller", "the field doesn't exist" are answers to **one** specific question,
    and different questions about the same repository return opposite answers. Write in the
    report **which question the search asked**, and redo it by a second path before it becomes a
-   blocker. An absence recorded for two days once fell at the first search made with another
-   word.
+   blocker. An absence can stand recorded for days and fall at the first search made with
+   another word.
 
 **The other half: a recipe that installs a LOCK demands the inverted proof.** The mutation
 answers "does the test prove the scenario?"; the inverted proof answers "does the lock lock?".

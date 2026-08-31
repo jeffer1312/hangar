@@ -1,10 +1,9 @@
 # Replanning midway: rewriting the plan and the contract without discarding what already landed
 
 Not a fixed role — a procedure, triggered in the middle of phase 3, that runs phase 1 **again,
-smaller, only over what remains**. It was born from a real need (2026-08-17): a plan written in a
-method the user had abandoned, with two Tasks stuck and new guidelines the plan didn't know —
-patching Task by Task was throwing rounds away, and there was no provided way to swap the whole
-plan.
+smaller, only over what remains**. It exists because a plan can stop deserving trust mid-flight —
+an abandoned method, stuck Tasks, guidelines the plan doesn't know — and patching Task by Task
+throws rounds away.
 
 ## Triggers — the user fires it, or the arbiter proposes
 
@@ -17,10 +16,9 @@ plan.
 - **A Task stuck BEFORE the gate.** Two consecutive Tasks past 2× the estimate **for the same
   cause** is a signal — and it is the **late** signal, because it counts rounds, and a Task stuck
   before its first commit produces no round to count. The trigger that would have fired in time
-  is simpler: **a Task with over 3 hours of executor clock and ZERO commits.** Measured on
-  2026-08-16/17: two Tasks added up to ~13h of clock, 958k of output and **no commit** — hence no
-  round, no verdict and no spiral rule firing. After the replanning, the **same two Tasks**
-  closed in 2h52, with 329k of output and two merges.
+  is simpler: **a Task with over 3 hours of executor clock and ZERO commits.** A Task stuck
+  before its first commit produces no round, no verdict and no spiral rule to fire — and the same
+  Tasks, replanned, tend to close in a fraction of the clock.
 
 The arbiter **proposes** ("replan, or keep patching? cost so far: X"), the user decides. The
 arbiter doesn't replan on his own — and **doesn't rewrite his own plan**: whoever plans again is
@@ -93,11 +91,10 @@ inputs, receives the closed recipe and excerpts it into the kick-off, as with an
 recipe closed midway passes the phase-1 step format (the three request outcomes, the
 who-types trigger — `planejamento.md`), because it IS plan.
 
-Measured on 2026-08-19/20: the plan said "the arbiter closes T5's recipe after T4"; the arbiter —
-without the planning context — closed it without saying WHEN the call fires, and from that gap
-was born the work's most serious blocker (the typing probe running on the mount of every open
-conversation). The miniature doesn't demand the 13-item gate again: it demands only the right
-owner and the step format.
+An arbiter closing that recipe without the planning context leaves exactly the planning-shaped
+gaps — a WHEN nobody declared, an outcome nobody named — and those become the most serious class
+of blocker. The miniature doesn't demand the 13-item gate again: it demands only the right owner
+and the step format.
 
 ## What replanning is NOT
 

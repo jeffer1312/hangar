@@ -7,15 +7,14 @@ Read-only in everything. You don't commit, don't fix, don't opine on the product
 
 **The trigger is "the branch is in the user's hands and nothing is in flight"** — not the final
 review's first approval. An approved branch opens the door for findings to become Tasks, and a
-few more usually enter. Called before that, your report ages: measured on 2026-08-16, one went
-stale in seven hours, with four Tasks and two set reviews entering afterwards. If that is the
-case, tell the arbiter an **addendum** will be missing — fresh session, scope only of what
-entered later, numbering continuing from the last P.
+few more usually enter. Called before that, your report ages within hours, with more Tasks and
+set reviews entering after it. If that is the case, tell the arbiter an **addendum** will be
+missing — fresh session, scope only of what entered later, numbering continuing from the last P.
 
 ## Why a fresh session
 
 Whoever executed carries the executor's bias, and at the end is the most saturated. Twice in a
-real work of 2026-08-15 the spiral was only seen from outside: the arbiter wrote nine guidelines
+real work the spiral was only seen from outside: the arbiter wrote nine guidelines
 while Task 4 lapped the same defect family nine times, and none of those guidelines noticed the
 problem was the design. Whoever reads the journal **afterwards**, without having lived it, sees
 it in ten minutes.
@@ -58,7 +57,7 @@ list ready-made, with date and proof next to each — the cheapest input you hav
 
 ## What the report holds — five sections, in this order
 
-**There is no time-analysis section, and that is the user's decision (2026-08-28).** Block by
+**There is no time-analysis section, and that is the user's decision.** Block by
 block, estimated against actual, doesn't change what the next run does: calendar clock is made of
 waiting on their decisions, of the database being down and of the VPN dropping, and separating
 that from the work costs more than it yields. What **really** costs a run is repeated rounds, and
@@ -92,7 +91,7 @@ that depended on it.
 Sweep the executors' "declared deviation" reports in the journal — each is a place where reality
 didn't match the plan — and classify:
 
-| Plan error type | How to detect | Measured example (2026-08-15) |
+| Plan error type | How to detect | Measured example |
 |---|---|---|
 | **Code nobody ran** | executor reports `TypeError`, a missing attribute, a failed import | a fixture with `__import__("app.main").app`; `erro(code, msg, msg=msg)` raising `TypeError` |
 | **A command that doesn't do what it says** | executor reports "selected nothing" / a "nothing to run" exit code | a name-filtered test command matching no test |
@@ -129,10 +128,10 @@ impressions.
 **The fourth field is what keeps the skill from only swelling, and it is the one forgotten.**
 Either the proposal names the guideline that died — stopped holding, became code, was absorbed by
 the new one, was an arbitrary number that became a principle — or it says, in one line, **why
-nothing left**. Without one of the two, it isn't ready. Measured on 2026-08-28: a report with 18
-proposals carried the field in none; raised afterwards, four deleted something, three were
-already written in the skill and needed no proposing, and five all landed in the same section of
-one file, which would double in size. None of that was visible without the field.
+nothing left**. Without one of the two, it isn't ready. In a report that skips the field, some
+proposals turn out to delete something, some are already written in the skill and need no
+proposing, and several land in the same section of one file, doubling it — none of that is
+visible without the field.
 
 A departing guideline doesn't vanish traceless: it goes into the report, with the date and the
 reason. History lives in the report; what still holds lives in the skill.

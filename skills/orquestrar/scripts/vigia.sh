@@ -2,11 +2,10 @@
 # The pipeline's watchdog. It watches ALL the work's live sessions — every executor, every
 # reviewer and the arbiter itself — and wakes the arbiter by message when NOBODY has the ball.
 #
-# Why all three and not just the pair: on 2026-08-14 the arbiter took an `API Error: 529
-# Overloaded` at 03:36 and stayed dead until 06:09. The executor had delivered at 03:32; its
-# report sat stuck in the queue, the reviewer had nothing to review, and the whole team stopped
-# for 2h30. The watchdog of that era only watched the pair and sent `echo` — which only becomes a
-# notification if the arbiter's turn is ALIVE. It shouted into the void.
+# Why all three and not just the pair: an arbiter knocked out by a provider error leaves the
+# executor's report stuck in the queue, the reviewer with nothing to review, and the whole team
+# stopped for hours. A watchdog that only watches the pair and sends `echo` — which only becomes
+# a notification if the arbiter's turn is ALIVE — shouts into the void.
 #
 # Two fixes, and both matter:
 #   1. It watches the ARBITER too. A stalled judge is the failure mode nobody was watching.
@@ -21,7 +20,7 @@
 # another executor worked.
 #
 # Run it as a SERVICE, never as a background process of the turn (`setsid nohup … &` dies with
-# the turn that launched it — gone from ps, empty log, no error; measured on 2026-08-17):
+# the turn that launched it — gone from ps, empty log, no error):
 #   systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
 #     "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <session> [session...] <arbiter> -m 5 -d <registro.md>
 # `Restart=always` is the other half: without it, a unit that falls leaves the work without a net.
@@ -39,13 +38,13 @@
 #   systemctl --user show vigia-<gid> -p ActiveState -p MainPID
 # And wait one full cycle (60s). The real proof is the synthetic alarm arriving (below).
 #
-# Three alarms beyond "everybody stopped", each born from a real failure of 2026-08-17:
+# Three alarms beyond "everybody stopped", each guarding a real failure mode:
 #   - REPETITION: a `working` session whose last command is the SAME for N straight readings is
 #     looping, not working — polling produces an event every few seconds and fools the idleness
-#     sensor. Measured: 1,231 runs of the same command over 3h, `working` the whole time, 68% of
-#     the run's bill. Repeated success is as stalled as repeated error.
-#   - JOURNAL (-d): the arbiter's journal 60min without a write with the group active. Measured:
-#     6h45 without a line, exactly the two most expensive Tasks.
+#     sensor, and thousands of repeats can become most of a run's bill. Repeated success is as
+#     stalled as repeated error.
+#   - JOURNAL (-d): the arbiter's journal 60min without a write with the group active — the hours
+#     that go unrecorded are exactly the most expensive ones.
 #   - PROVEN ARMING: on start, the watchdog sends a synthetic alarm to the arbiter THROUGH THE
 #     SAME path as the real ones. "Working" is that prompt arriving — not `is-active`, not a
 #     hand-typed test (both "proved" twice a channel that was broken).
@@ -103,8 +102,8 @@ printf 'header = "Authorization: Bearer %s"\n' "$T" > "$CURLRC"
 # Where the reader's errors go. The default CANNOT be /dev/stderr: running without a terminal
 # (systemd, cron, redirected nohup) it doesn't open for writing, the `2>>` redirection FAILS, and
 # bash doesn't run the command — `st` comes back empty and the watchdog concludes "API not
-# answering". Measured on 2026-08-17: the unit sat `active` for five minutes shouting "I am
-# watching nothing" with the backend answering 200 in 11ms. Test once and fall back to a file.
+# answering", sitting `active` while shouting "I am watching nothing" with the backend answering
+# 200 in milliseconds. Test once and fall back to a file.
 if [ -z "${CP_VIGIA_LOG:-}" ]; then
   if : 2>>/dev/stderr; then CP_VIGIA_LOG=/dev/stderr
   else CP_VIGIA_LOG=${TMPDIR:-/tmp}/vigia-$$.err; fi
@@ -133,8 +132,8 @@ if [ "$rc_arm" -ne 0 ]; then
   exit 1
 fi
 
-# The state reader lives in a file, not in a `python3 -c '...'` line inside the loop. Reason
-# measured on 2026-08-14: the `-c` sat between the shell's SINGLE quotes, and a `\"` there
+# The state reader lives in a file, not in a `python3 -c '...'` line inside the loop. The
+# reason: with `-c` between the shell's SINGLE quotes, a `\"` there
 # reaches Python as backslash-plus-quote inside an f-string — `SyntaxError`. Since the call ended
 # in `2>/dev/null`, the error vanished, `st` came back empty and the `continue` below skipped the
 # reading. The watchdog ran the whole time, process alive and log clean, having NEVER looked at a
@@ -145,10 +144,9 @@ trap 'rm -f "$LEITOR" "$CURLRC"' EXIT
 cat > "$LEITOR" <<'PY'
 import json, sys, time
 
-# `working` is NOT proof that someone has the ball. Measured on 2026-08-14: the executor fired an
-# AskUserQuestion to prove the sheet in English, and AskUserQuestion BLOCKS the firing turn. It
-# sat 1h17 stalled waiting for an answer nobody would give — and the app reported `working` the
-# whole time, because the Pi hook (`scripts/pi/hangar-state.ts`) only publishes `working` or
+# `working` is NOT proof that someone has the ball: an executor that fires an AskUserQuestion
+# BLOCKS its own turn and sits stalled waiting for an answer nobody will give — with the app
+# reporting `working` the whole time, because the Pi hook (`scripts/pi/hangar-state.ts`) only publishes `working` or
 # `idle`: there is no `awaiting_input` for a Pi session. The watchdog stayed silent and was right
 # by the rule it had.
 #
@@ -242,10 +240,10 @@ for i in $(seq 1 1440); do
 
   # PER SESSION: any one of the pair stopped for LIMITE straight readings warns ON ITS OWN,
   # without waiting for the whole team to stop. The collective firing below ("nobody has the
-  # ball") exists for a deadlocked pipeline, and it NEVER closes while the arbiter works — that
-  # is how, on 2026-08-17, the three executors died together on a provider timeout at 12:41 and
-  # nobody was told: the arbiter had the ball, so `quieto` never became 1. The user summarized
-  # the real requirement: "if some session stops and stays stopped for a long time, it must warn".
+  # ball") exists for a deadlocked pipeline, and it NEVER closes while the arbiter works — which
+  # is how a whole set of executors can die together on a provider timeout with nobody told: the
+  # arbiter has the ball, so `quieto` never becomes 1. The real requirement: "if some session
+  # stops and stays stopped for a long time, it must warn".
   # Re-warns every LIMITE minutes while it stays stopped (the counter resets on warning).
   ULT=$(( ${#SESSOES[@]} - 1 ))
   for k in "${!SESSOES[@]}"; do
@@ -256,7 +254,7 @@ for i in $(seq 1 1440); do
     esac
     if [ "${PSEQ[$k]:-0}" -ge "$LIMITE" ]; then
       # FIRST nudge the session itself, THEN warn the arbiter. The order matters: the most
-      # common case (measured 2026-08-17) is a turn dead on a provider timeout with the 3
+      # common case is a turn dead on a provider timeout with the 3
       # retries blown — Pi does not retry on its own and the session stays alive, stopped,
       # until someone types into it. One push solves that with nobody waking. Only warning the
       # arbiter didn't solve it: he may be down too, and then it was the user who came looking.
@@ -277,8 +275,8 @@ for i in $(seq 1 1440); do
 
   # LOOP: a pair session `working` with the SAME command for REP_LIMITE readings. The idleness
   # sensor never catches this (polling produces an event every few seconds and looks like work);
-  # measured on 2026-08-17: 1,231 runs of the same command over 3h, `working` the whole time, and
-  # the one who noticed was the user. One tail curl per working session, per cycle — cheap.
+  # the same command can repeat thousands of times over hours, `working` the whole time, and the
+  # one who notices ends up being the user. One tail curl per working session, per cycle — cheap.
   for k in "${!SESSOES[@]}"; do
     [ "$k" -eq "$ULT" ] && continue
     if [ "${ESTADOS[$k]:-?}" = "working" ]; then
@@ -294,9 +292,8 @@ for i in $(seq 1 1440); do
         msg="[vigia] ${SESSOES[$k]} MAY be looping: it says working but the last command is the SAME for ${RSEQ[$k]} readings (~${RSEQ[$k]} min). Look at the pane before deciding — wait-polling is not work, but long work also repeats commands. You give the stop order, after looking. Team: $resumo"
         echo "$msg"
         # A question, never an order: the watchdog reads two numbers and does not know whether
-        # the session is stuck or working. Measured 2026-08-24/28: 3 false alarms in one day,
-        # one ordered a STOP in the middle of 44 min of legitimate work. Stop orders come from
-        # the arbiter, after looking.
+        # the session is stuck or working — an imperative false alarm has ordered a STOP in the
+        # middle of legitimate work. Stop orders come from the arbiter, after looking.
         hangar-send --tmux "${SESSOES[$k]}" "[vigia] You repeat the SAME command for ~${RSEQ[$k]} min. Is this a wait on an external condition? If so, the cap has blown: report to the arbiter what you wait for and the last return (executor.md rule). If you are working, ignore this notice." >/dev/null 2>&1
         hangar-send --tmux "$ARB" "$msg" >/dev/null 2>&1
         RAVISO[$k]=1
@@ -307,8 +304,7 @@ for i in $(seq 1 1440); do
   done
 
   # Stalled JOURNAL: the arbiter's journal is the retrospective's net; >60min without a write
-  # with the group active is the arbiter working without a trail (measured: 6h45 without a
-  # line). Re-warns hourly.
+  # with the group active is the arbiter working without a trail. Re-warns hourly.
   if [ -n "$DIARIO" ] && [ -f "$DIARIO" ]; then
     # eventos.jsonl is the journal's sibling in the same directory, and stalled during work is
     # the SAME failure — so the check looks at the OLDER of the two, and names the stalled one.
@@ -330,7 +326,7 @@ for i in $(seq 1 1440); do
 
   # A STUCK session in the pair warns immediately, without waiting for all three to stop: the
   # arbiter holds the ball precisely because he thinks the other one is working. It was the
-  # 08-14 case — 1h17 of stalled queue with everyone thinking the Task moved.
+  # real case — 1h17 of stalled queue with everyone thinking the Task moved.
   case "$par_estados" in
     *stuck*)
       if [ "$avisou_travado" != "$par_estados" ]; then

@@ -42,9 +42,8 @@ Answer the message only if it asks for an answer.
 ## Survey the tooling BEFORE opening the team
 
 A new session doesn't know what the machine has. If you don't say, each one reviews and builds by
-whatever method it invents — which is what happened in a real run: the reviewer found three real
-blockers **using none** of the installed review subagents, because the contract had left that part
-blank.
+whatever method it invents — a reviewer with that part of the contract left blank finds real
+blockers **using none** of the installed review subagents, and the lost coverage is invisible.
 
 One sweep, once, at the start. Then **write into the contract a table per work type** — which
 subagents and skills the reviewer dispatches, and which help the executor deliver. Every new
@@ -98,7 +97,7 @@ in their middle.
    through a gateway, router or API is **not** a session of that agent — it is another provider
    serving a similar model, with another account and other behavior.
 
-   **Model, effort and permission go ON the `hangar-send --new` itself** (since 2026-08-25):
+   **Model, effort and permission go ON the `hangar-send --new` itself**:
    `--model <id>`, `--effort <level>` and `--permissao <mode>`. A contract that names model and
    thinking (the normal case when the team runs on Pi) fits in the command — the session is
    already born on it:
@@ -133,14 +132,14 @@ in their middle.
    what the kick-off asked is not proof.
 
    Don't read `/proc/<pid>/cmdline` expecting the flags: Pi rewrites its own argv and the cmdline
-   shows only `pi`. That once looked, for a minute, like a session created with no model at all.
+   shows only `pi` — which looks, for a minute, like a session created with no model at all.
 
    **And a model proof proves the model, not the HARNESS.** A Claude Code session with an engine
    pointed at provider X and a Pi session running model X show **the same status line**. What
    distinguishes them is the `pane_start_command` (`claude` × `pi`) and the `provider` the API
-   returns — check both. Measured on 2026-08-15: three executors were born in the wrong shape and
-   still proved model and effort correctly before the first `Edit`; zero cost only because the
-   worktrees were still clean.
+   returns — check both. An executor born in the wrong shape can still prove model and effort
+   correctly — the harness check is what catches it, and it is cheap only while the tree is still
+   clean.
 
    Also: **proof via status sidecar must match the `session-id` of the live session** — the
    directory keeps one file per id and doesn't delete them when a session dies. Two of those
@@ -154,9 +153,8 @@ in their middle.
    **And `entregue` proves delivery, not EXECUTION.** Before recording (or reporting) that the
    session is working, check engagement: its ctx left zero on the statusline, or the pane is
    processing. A session that received the kick-off and died on a provider timeout sits `idle`
-   with the same face as an idle session — measured on 2026-08-20: ctx stuck at 1k/1M with
-   `Retry failed after 3 attempts` in the pane, and the Task reported as "running"; the user was
-   the one who saw it. On the resend, point only at the kick-off's PATH (it worked: ctx went from
-   1k to 109k in a minute — that is the cheap proof).
+   with the same face as an idle session — ctx frozen near zero with a retry error in the pane,
+   while the Task gets reported as "running". On the resend, point only at the kick-off's PATH;
+   the ctx leaving zero within a minute is the cheap proof.
 5. Only then does the turn close. **A session opened with an undelivered request is a session
    nobody will use** and that you will believe is working.

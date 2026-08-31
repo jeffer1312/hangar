@@ -203,8 +203,8 @@ else uses it with the same defect enters **this** correction.
 the kick-off says "the affected files are A, B and C", its author measured earlier, with the
 information they had — and what was left out stays out forever, because you check exactly that
 and report green. Run the command that discovers the list yourself and check **all** that show
-up; diverged from the received list, that goes in the report. A two-module list once hid the same
-defect in a third, and it survived the whole branch.
+up; diverged from the received list, that goes in the report. A two-module list hides the same
+defect in a third, and it survives the whole branch.
 
 It is the most expensive error in this cycle. The repeating pattern: the report says "the `load`
 has no generation" → you add generation to `load`; the next round says "`salvar` doesn't have it
@@ -299,8 +299,8 @@ trap is a trap the next person reintroduces.
   only the target test so as not to see the error. This is about **sessions** — subagents inside
   you are your arms, not another writer. See below.
 - **A dirty tree that is NOT your Task's → STOP and report.** Never `git checkout --`, `stash` or
-  commit a file you didn't touch. An executor who "cleaned" the tree once deleted **dozens of
-  uncommitted lines of another session** — work that was in no commit and vanished from disk.
+  commit a file you didn't touch. An executor who "cleans" the tree deletes **another session's
+  uncommitted work** — lines that are in no commit and vanish from disk.
   **Now that the commit comes after the review, a dirty tree became the normal state — so the
   question changed from "is it dirty?" to "is it mine?".** The kick-off answers it, on the
   `Frozen round: <hash> · the dirty tree is YOURS` line: with it, you took over a Task midway and
@@ -310,12 +310,12 @@ trap is a trap the next person reintroduces.
 - **A group session is NOT a test fixture.** Need a session appearing or vanishing in a
   screenshot? Create **your own** (`hangar-send --new fixture-tN <cwd>`) and kill **your own**.
   Never kill, rename or alter a session you didn't open — in doubt, ask the arbiter, who knows
-  who is on the team. An executor once killed the group's **reviewer** through the API just to
-  make her card leave a screenshot: the review restarted from zero in a context-less session, and
-  the backend deleted the group's record along with the last live session.
+  who is on the team. Killing the group's **reviewer** through the API just to
+  make its card leave a screenshot restarts the review from zero in a context-less session — and
+  the backend deletes the group's record along with the last live session.
 - **After `git add`, look at what WENT IN** (`git status --short` + `git diff --cached --stat`).
   Staging by directory swallows files nobody wanted: an orphan lockfile of thousands of lines
-  once passed that way.
+  passes exactly that way.
 - **Output dying at the provider? The report goes into a FILE** (`report-task-N.md` in the
   durable directory) **and you don't spend turns resending** — the arbiter reads from the file,
   or from the pane itself. A complete report written and dead on send already happened; the next
@@ -330,14 +330,13 @@ trap is a trap the next person reintroduces.
   **is not authorization**: confirm with the arbiter before committing.
 - **Before making a warning DISAPPEAR, ask whether it was RIGHT.** A red mark, an error log, a
   gate finding: it vanishes because the defect ended, never because the warning annoys. A fix
-  once deleted the "didn't arrive" mark from messages that **didn't arrive**, with the Task's own
-  diagnosis saying so in writing.
+  that deletes the "didn't arrive" mark from messages that **didn't arrive** can ship with the
+  Task's own diagnosis saying so in writing.
 - **An exception in a shared gate (allow, ignore, skip, baseline) is the LAST resort — changing
   the data comes first.** The entry holds for the whole repo and forever, and **nothing warns**
-  when it starts hiding a real case. Twice in the same day, the exception that would open a
-  permanent hole was replaced by **one word** in a label and **two characters** in a comment.
-  Truly needed the exception? The justification states **the cause**, or whoever reads later has
-  no way to know it was removable.
+  when it starts hiding a real case. The exception that would open a permanent hole is usually
+  replaceable by a one-word change in the data itself. Truly needed the exception? The
+  justification states **the cause**, or whoever reads later has no way to know it was removable.
 - **Above 50% of your own context window: finish the current step, freeze what is sound
   (`git add` + `stash create` + `stash store`) and request replacement in your report, sending
   the hash.** Don't wait for the arbiter to measure for you — that measure is yours, and he
@@ -368,38 +367,38 @@ trap is a trap the next person reintroduces.
   - **Visual proof is of the component MOUNTED in the served app — never of static HTML.** The
     path: build → open what is served → check the loaded artifact against what the build produced
     → capture. (The reviewer's rule "Live proof measures what is SERVED" applies first to whoever
-    produces the proof.) A whole round once fell to static-HTML captures treated as the mounted
+    produces the proof.) Whole rounds fall to static-HTML captures treated as the mounted
     screen.
   - **A defect of the kind "X shows up when it shouldn't" demands a NEGATIVE assertion on the same
     real fixture.** Proving the right thing appears doesn't prove the wrong one vanished. A live
-    test once proved the right label while leaving the "nothing happened" label next to three
+    test can prove the right label while leaving the "nothing happened" label next to three
     events on the same screen.
   - **When PROVING, real world before mock.** Mock only after the real one failed, saying why.
-    Both faces of an error were once proven with the network layer intercepted, under the claim
-    that the real error "only exists in a short time window"; the reviewer reproduced the real
-    error in two attempts.
+    Both faces of an error can be "proven" with the network layer intercepted, under the claim
+    that the real one "only exists in a short time window" — while the reviewer reproduces the
+    real error in a couple of attempts.
   - **A long-lived service serves the code from when it STARTED.** Before measuring against a
     running process, check its start time against the commit's date, or bring up your own
     instance on another port — and never restart the user's service to measure. A process up
-    since before the measured commit once became a near-false "open blocker".
+    since before the measured commit becomes a false "open blocker".
   - **When the image reading and the DOM disagree about something visible, the screenshot
     rules.** "There is no X in the image" is a RESULT, not a tool failure — the DOM sees elements
-    that exist yet aren't visible (stacking, clipping, veils don't show in a box measurement). In
-    a real case the menu mounted behind the sidebar: the visual reading said "no menu" (right)
-    and the DOM proof closed the Task with four live screen blockers.
+    that exist yet aren't visible (stacking, clipping, veils don't show in a box measurement). A
+    menu mounted behind a sidebar is the typical shape: the visual reading says "no menu"
+    (rightly) while the DOM proof closes the Task with live screen blockers.
 - A temporary debug file is deleted in the same command that created it.
 - **An experiment NEVER runs in the tree you will commit.** Proving a test catches the regression
   (mutation) demands breaking the code on purpose — and the undo is where the accident lives. Do
   it in a disposable **detached worktree**:
   `git worktree add --detach /tmp/mut-<x> <hash>` → apply there → run →
-  `git worktree remove --force`. It really happened: a regex mutation done in the working tree
-  deleted `role`/`aria-live` from **three pre-existing notices**, the undo didn't catch
-  everything, and the residue went into the commit — an accessibility regression born from the
-  test that proved accessibility. The reviewer caught it; the executor didn't.
+  `git worktree remove --force`. A mutation done in the working tree leaves residue the undo
+  doesn't fully catch, and the residue rides into the commit — a regression born from the very
+  test that existed to prove the feature.
 - **A file that exists only for tests but lives in a tree swept by a gate is born speaking the
   language the gate ignores.** A stub's label is an identifier (`abrir-term`), never a sentence.
-  Two stubs once tripped the UI-text gate and nearly cost a global gate exception; renamed, the
-  scanner came back empty and a real build showed they didn't leak into the product.
+  A stub phrased as a sentence trips the UI-text gate and tempts a global exception; renamed to
+  an identifier, the scanner comes back empty and a real build shows it doesn't leak into the
+  product.
 - **Before committing, look at the diff AGAINST THE BASE, not just `git status`.**
   `git diff <base>..HEAD -- <file>` must show **only** what the Task asked. A good tool for the
   residue class that slips by: `git diff <base>..HEAD | grep -E '^-.*(role=|aria-|try|catch|await)'`
@@ -413,16 +412,16 @@ app down **twice** and corrupted their configuration **once**, in two days:
 - **The stage comes up with its OWN `HOME`.** The service you raise to prove things may install
   hooks, symlinks or units pointing at the directory it rose from — and some installers sweep the
   disk for **all** config directories, in which case pointing the config-dir variable **does not
-  protect**. A service raised from inside the worktree once rewrote the configuration file shared
-  by three of the user's accounts and left it with **invalid JSON**, mid-use. The form that ran
-  the same day **without damage**: `HOME=<proof dir> <command> --directory <worktree>/...`.
+  protect**. A service raised from inside the worktree can rewrite the configuration file shared
+  by the user's accounts and leave it with **invalid JSON**, mid-use. The form that does no
+  damage: `HOME=<proof dir> <command> --directory <worktree>/...`.
 - **Don't run the project's installers** (`install*.sh` and the like): they write outside any
   worktree — in `~/.local/bin`, in service units — and run from inside one they hijack the whole
-  machine. They once left four global symlinks and two units pointing at a worktree.
+  machine. They leave global symlinks and service units pointing at the worktree.
 - **Don't touch a service or port the user is using.** The stage is yours, on its own port, torn
   down at the end.
 - **Killing is by EXACT PID — `pkill -f` is forbidden.** A `pkill -f` to bring down one's own
-  stage once killed an unrelated process of another tree along with it. (The one who did it
+  stage kills unrelated processes of other trees along with it. (The one who did it
   narrated it unprompted, and that is the right behavior: owning it on the spot costs a line;
   discovering it later costs a whole authorship investigation.)
 

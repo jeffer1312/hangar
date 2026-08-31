@@ -9,9 +9,9 @@ sit in its middle. You are the only one who writes to the contract.
 > (`arbitro-vigia.md`) · baseline measured with the hash next to it · closing items (phase 4 +
 > phase 5, with triggers) written in the journal (`arbitro-encerramento.md`) · a-priori estimate
 > written · account policy read and copied into the contract (`arbitro-lancamento.md`). The
-> closing items once entered ~7h after launch in a real run: the order existed, but lived on the
-> page that is the last to look urgent at launch time. This index is no new rule — it is the map
-> of the existing ones, and the reason it sits up here and not there.
+> closing items are the ones that arrive late when left to their own page: the order exists, but
+> lives on the page that is the last to look urgent at launch time. This index is no new rule —
+> it is the map of the existing ones, and the reason it sits up here and not there.
 
 ## You maintain FOUR files, and the team reads only one of them whole
 
@@ -23,9 +23,8 @@ sit in its middle. You are the only one who writes to the contract.
 
   > **The journal and the lessons live in the work's durable directory, which nothing manages** —
   > not in `<config>/.hangar-pair/`, which belongs to the backend: it deletes `grupo-<gid>.md`
-  > together with the group. Measured on 2026-08-22: an executor killed the group's last live
-  > session and the whole 10h diary vanished with it; the arbiter had to rebuild from memory. **The
-  > rules stay there** — it is the path the app shows the team.
+  > together with the group, so a killed last session takes a whole diary with it. **The rules
+  > stay there** — it is the path the app shows the team.
 - **`regras-<gid>.md` — the rules.** **This work's agreement**, written at launch and nearly
   immutable after it: who is who, untouchables, gates, method, domain skill, branch, bars, what
   the review must cover, accounts. It is the only one the team reads **whole**, and it fits in two
@@ -35,17 +34,15 @@ sit in its middle. You are the only one who writes to the contract.
   and nothing is ever deleted from it.** Nobody reads this file whole: at each kick-off you pick
   the three or four that serve that Task and **paste their text** into the kick-off.
 
-  > **Guidelines are not thrown away to fit.** The old design was a 200-line cap on the file the
-  > team reads, with compaction before each kick-off — and it produced the very defect this file
-  > exists to prevent: measured on 2026-08-28, a guideline was deleted **for being rare** and its
-  > case reappeared **one hour later**. A rare guideline is rare, not dead; what does die is a
-  > guideline of an already-closed batch or a decision that became code, and those still leave —
-  > from the **kick-off**, not from the file.
+  > **Guidelines are not thrown away to fit.** A line cap on the file the team reads orders
+  > throwing guidelines away to fit — and the one deleted **for being rare** is the one whose
+  > case comes right back. A rare guideline is rare, not dead; what does die is a guideline of an
+  > already-closed batch or a decision that became code, and those still leave — from the
+  > **kick-off**, not from the file.
 
   How to pick what to paste, at every dispatch: **does the lesson serve this Task?** The criterion
   is the subject (screen, database, channel, this specific file), never the age. In doubt, paste:
-  four extra lines in a kick-off are cheap; the guideline that didn't arrive cost a round, three
-  times in 48h.
+  a few extra lines in a kick-off are cheap; the guideline that doesn't arrive costs a round.
 - **`~/.hangar/orq/<date>-<gid>/eventos.jsonl` — the skeleton machines read.** One JSON line per
   event, written AT the event, alongside the journal's prose line — not "later". **It is the only
   one of the four with more than one writer:** the executor appends each round's `entrega` and the
@@ -68,11 +65,9 @@ separates each:
 | this work's agreement | **rules** | was this decided at launch and holds to the end? |
 | a guideline born now that holds from here on | **lessons** | would this change what the next session does? |
 
-Why this is cost, not tidiness: on 2026-08-14 the journal reached 54 KB (~14k tokens), because
-every approved Task added a paragraph and nothing left. Together with the whole plan (~30k), **a
-freshly opened reviewer burned 110k of context before receiving its first commit** — reading,
-among other things, how a Task had been rejected four times weeks earlier. It needed two pages,
-and its model has a 272k window.
+Why this is cost, not tidiness: a journal where every approved Task adds a paragraph and nothing
+leaves grows until a freshly opened session burns a large slice of its window reading how
+long-closed Tasks were once rejected — history it needed two pages of, not dozens.
 
 **And the journal is written AT the event, not "later" — the JSON line FIRST, the paragraph
 after.** Review report arrived, merge done, session swapped → `eventos.jsonl` **and** journal,
@@ -99,15 +94,13 @@ Two obligations come with it, or this becomes the very problem it came to solve:
 
 - **The guideline is born in `licoes.md`, with date and proof, and nothing there is deleted.**
   What you choose is **which ones** to paste into each kick-off — three or four, on that Task's
-  subject. Don't measure the file's size and don't compact: the previous design was a line cap on
-  the file the team reads, and it **ordered throwing guidelines away to fit** — one left for
-  being rare and its case came back an hour later. The rare guideline is the one nobody remembers
-  in the moment; it is exactly the one that needs to be written.
+  subject. Don't measure the file's size and don't compact: compaction orders throwing guidelines
+  away to fit, and the rare guideline — the one nobody remembers in the moment — is exactly the
+  one that needs to stay written.
 - **Two consecutive rounds whose waste is "closed only the case the previous report named"** is
   not a case for one more guideline: it is a sign the *design* is wrong. Then you don't write a
   guideline — you **ask the user** whether the path is worth the cost, with what has been spent in
-  hand. That is what unblocked the worst recorded spiral — and it was the user who asked, not the
-  arbiter.
+  hand. Spirals of that shape are seen from outside, not from inside them.
 
 **The user is unavailable and the spiral has already begun?** You neither stop the work nor invent
 a design change: you **tighten the criterion, in writing, in the next reviewer's kick-off**.
@@ -118,8 +111,8 @@ a design change: you **tighten the criterion, in writing, in the next reviewer's
 > contract, wrong text on screen, a gate regression, an untouchable in the commit.
 
 And declare, in the same message, the **family's limit**: "another variation of this same defect
-is a note". Where that was done, the Task closed on the next round; the alternative — letting the
-gate charge every new case — is the spiral above.
+is a note". With the limit declared, the Task closes on the next round; the alternative — letting
+the gate charge every new case — is the spiral above.
 
 That is your decision and goes into the journal with the date. It loosens **nothing** of what
 remains a full blocker, and it doesn't apply before the third round.
@@ -127,14 +120,12 @@ remains a full blocker, and it doesn't apply before the third round.
 **Every lesson that serves the Task goes PASTED into the kick-off — pointing at the file is not
 enough.** It is the same principle as the three-file separation, seen from the other side: a new
 session reads the kick-off whole and everything else diagonally, so a guideline buried on page 5
-of some file never reaches whoever was born after it — a guideline decided in the morning was
-violated the same day by two of the three sessions opened afterwards. **A mandatory case of this
-rule: the visual-proof invalidators** (size/viewport, both sides' language, capture edge,
-self-sufficient screenshot — see `executor-visual.md`) **are repeated in the kick-off of EVERY
-visual Task**, even when already in the contract: they are the only class of guideline whose
-violation produces no error — the proof comes out pretty and is garbage. It has already cost a
-whole round on a blind comparison with one side in `pt` and the other in `en`, with the guideline
-written in the contract and absent from the kick-off.
+of some file never reaches whoever was born after it. **A mandatory case of this rule: the
+visual-proof invalidators** (size/viewport, both sides' language, capture edge, self-sufficient
+screenshot — see `executor-visual.md`) **are repeated in the kick-off of EVERY visual Task**,
+even when already in the contract: they are the only class of guideline whose violation produces
+no error — the proof comes out pretty and is garbage, and a blind comparison with the two sides
+in different languages judges translation, not the work.
 
 **You decide when the other two weren't enough — you don't redo what they do.** Verification has
 an owner: the executor runs, the reviewer re-runs. "Checking", for you, is git metadata against
@@ -166,11 +157,9 @@ with the app in hand, a finishing touch: none of that went through planning, so 
 a question again**, the way it was in phase 1 (`planejamento.md`, "you PROPOSE, the user
 chooses").
 
-Inheriting looks harmless and isn't: the new Task is usually of **another nature**. Measured on
-2026-08-16 — four off-plan Tasks, and on the last one, which was editing this very skill (prose,
-not code), the arbiter opened the contract's executor by reflex. The user vetoed on the spot:
-*"you could have run the skill edit yourself, no need to send it to DeepSeek"*. The table was
-right for the work it described, and wrong for that one.
+Inheriting looks harmless and isn't: the new Task is usually of **another nature** — a prose edit
+dispatched by reflex to the code executor's session is the table being right for the work it
+described and wrong for this one, and the user is the one who ends up vetoing it.
 
 How to ask without spending their time: **one question, with a proposal and the measured why**.
 You have the history — the cards in `~/.hangar/orq/modelos/` and this work's own journal say who
@@ -183,10 +172,9 @@ And record the answer in the table, with the date — an off-plan Task becomes i
 amendment to the old one.
 
 The hole is not opening sessions — opening sessions is your job. The hole is opening **something
-other** than what is written. It really happened: the contract said executor = `mod-exec-t<N>`,
-Pi with `deepseek-v4-flash` on the opencode key, thinking max. The arbiter needed an executor,
-didn't re-read the contract, and opened a Claude session on an account the machine policy reserves
-for the **reviewer**. Nobody stopped it, because the contract's writer is the arbiter himself.
+other** than what is written: an arbiter who needs a role and doesn't re-read the contract's row
+opens a session on the wrong provider or on an account the policy reserves for another role — and
+nobody stops it, because the contract's writer is the arbiter himself.
 
 The practical rule: **before creating any session, re-read its row in the contract's table and say
 out loud, in the message, which engine/model you are using and where you got it.** If the row
@@ -211,11 +199,10 @@ Forbidden: `<heavy checker>` in this repo — locks the user's machine (~4 min, 
 Allowed: `<the cheap variant>` (12s) — it is what catches type errors here.
 ```
 
-Widening the prohibition "to be safe" is the defect, not the care: measured on 2026-08-24, their
-rule forbade **one** heavy type checker; the arbiter wrote "don't run the gates" and forbade the
-cheap version too — exactly the one that caught the defect. The work went on with no type
-checking at all, and the errors showed at the end, all at once. **In doubt about the extent of one
-of their rules, ask them; don't round toward the restrictive side.**
+Widening the prohibition "to be safe" is the defect, not the care: a ban written as "don't run
+the gates" when the user forbade **one** heavy checker also bans the cheap variant — exactly the
+one that catches the defect — and the errors all arrive at the end, at once. **In doubt about the
+extent of one of their rules, ask them; don't round toward the restrictive side.**
 
 **Permission to touch an untouchable file enters the contract BEFORE the dispatch, never via
 message.** It will happen: a Task needs to touch a path on the list, the user authorizes, and the
@@ -243,47 +230,46 @@ session and the user's approval). You don't rewrite your own plan: you propose t
 conduct the swap. **And the miniature version is not yours either**: a plan that declared "Task
 N's recipe closes after N-1" named an act of planning — the planner closes it (or a fresh session
 with the spec), and you only deliver the inputs and excerpt the result (`replanejar.md`, "the
-miniature"). Measured on 2026-08-20: the arbiter closing that recipe without the planning context
-produced the work's most serious blocker.
+miniature"): an arbiter closing that recipe without the planning context leaves exactly the
+planning-shaped gaps that become the most serious class of blocker.
 
 ## A Task's cycle
 
-**Before every handoff — five lines, in order, always:**
+**Before every handoff — six lines, in order, always:**
 
 1. Is this finding's new guideline already in `regras-<gid>.md`? If not, write it NOW, before
-   notifying the session — a notified session repeats the pattern on the next variation (measured:
-   the same log command hanging 3×, 77 min lost).
+   notifying the session — a notified session repeats the pattern on the next variation.
 2. Kick-off/recipe in a file; message = the path, via `"$(cat <<'EOF' … EOF)"` — never raw double
    quotes.
-3. `entregue` read? Now check engagement: did the ctx leave zero within 1 min? (measured: 24 min
-   lost without this). **Kick-off only** — mid-loop, whoever is waiting for the ball checks this.
+3. `entregue` read? Now check engagement: did the ctx leave zero within 1 min? **Kick-off only** —
+   mid-loop, whoever is waiting for the ball checks this.
 4. Watchdog armed and covering the **two blind windows** (below). Whoever **takes** the ball
-   rewrites it at each handoff, not you (measured: 5 false alarms in one run, 10 in the previous).
+   rewrites it at each handoff, not you — a watchdog pointed at the wrong pair is a factory of
+   false alarms.
 5. Journal: the JSON line before the paragraph, and both before the next action.
 6. Did I send something to check? Then I sent the **command that discovers the list**, not the
    list.
 
-These six are not news — the first four were already written on this page, in prose, and were
-still violated by the arbiter in a 24h run. A guideline in prose doesn't protect at dispatch time;
-that is why they became a checklist, up here.
+These six are not news — they are this page's own rules turned into a checklist, because a
+guideline in prose does not protect at dispatch time.
 
 **The sixth deserves the full paragraph, because it looks like help and is the cheapest way to
 hide a defect.** When you send someone to check a set — "check these two modules", "the callers
 are these three", "the affected files are A, B and C" — your list **closes the subject**: the
 receiver checks exactly that and reports green, and whatever was left out stays out forever. Your
 list is a measurement of yours, taken earlier, possibly stale or incomplete — and the reader has
-no way to know that.
+no way to know that. A two-module list hides the same defect in a third, and it survives the
+whole branch.
 
 Send the **command**, and let the list be born in the hands of whoever will check:
 
 ```
-# no:  "check cp_token in ServidoresSettings.svelte and App.svelte"
+# no:  "check cp_token in the two settings components"
 # yes: "run `git grep -n cp_token -- src/` and check ALL that show up"
 ```
 
-Measured on 2026-08-28: a two-module list hid the same defect in a third, and it survived the
-whole branch. Holds for recipes, for kick-offs and for directed questions. **Where you can't
-write a command, write the question** ("who else calls this function?"), never the answer.
+Holds for recipes, for kick-offs and for directed questions. **Where you can't write a command,
+write the question** ("who else calls this function?"), never the answer.
 
 1. You release **one** Task to the executor, and its kick-off **names the reviewer**. Without that
    name the executor has nobody to send the round to, and the handoff comes back to you for lack
@@ -304,11 +290,11 @@ write a command, write the question** ("who else calls this function?"), never t
    estimated rounds without closing is a spiral by another name:** stop and ask, as with the round
    spiral.
 
-   **Context does NOT enter that account.** Blown context signals a big Task, not a spiral —
-   measured on 2026-08-24/28, an entire work ran with context 2–3× above forecast and the clock
-   **inside** the estimate on nearly every Task; charging context here would stop work that was
-   going well. Where context rules is session rotation ("Autonomy — triggers"), which is another
-   thing: there it says *when to swap sessions*, not *whether the work went sour*.
+   **Context does NOT enter that account.** Blown context signals a big Task, not a spiral — a
+   whole work can run with context far above forecast and the clock inside the estimate on nearly
+   every Task, and charging context here would stop work that is going well. Where context rules
+   is session rotation ("Autonomy — triggers"), which is another thing: there it says *when to
+   swap sessions*, not *whether the work went sour*.
 
    A report is a report; the repo is the fact. Diverged → back to the executor, not the reviewer.
    **The list is closed and is metadata only**: those commands, and no others. Running tests,
@@ -339,9 +325,8 @@ approach, or rotate the reviewer.
 
 **The commit is born reviewed.** There is no "correction commit" inside the cycle: the loop runs
 over the dirty tree and the commit only happens after the APROVA. One Task = one commit **on the
-normal path**, even after four rounds. Before, every rejection became one more commit on the
-branch — in the 2026-08-28/29 run, 6 rejections across 16 Tasks became 6 commits that didn't need
-to exist.
+normal path**, even after four rounds. Without this design, every rejection becomes one more
+commit that didn't need to exist on the branch.
 
 **A blocker fix enters with its TRAP in the same commit. "Fixed" without a test that bites is
 report, not fact** — and that holds on both sides of the gate: the executor doesn't declare
@@ -350,12 +335,9 @@ without one, and you don't accept the declaration without one.
 The reason is mechanical: deleting code that was already dead **changes no test**. So a
 half-delivered fix passes through everything — the suite stays green, the reviewer undoes the fix
 and sees the suite stay green, and their correct conclusion ("there is no proof") is
-indistinguishable from "the code already did nothing". Measured on 2026-08-25, twice in the same
-day: a fix was **approved at the gate** with half of it missing (the piece existed and was never
-invoked), the defect went on whole, and the missing test **failed immediately** when someone
-finally wrote it; on the same date, another Task was rejected because a fix provoked by an
-automatic reviewer entered the same commit with no trap at all, and undoing either half left
-everything green.
+indistinguishable from "the code already did nothing". A fix approved at the gate with half of it
+missing (the piece exists and is never invoked) carries the defect on whole, and the missing test
+fails immediately once someone finally writes it.
 
 That includes the fix **an automatic reviewer provoked mid-Task**: a finding that enters the same
 commit is a fix like any other and pays the same proof.
@@ -365,8 +347,8 @@ referenced in the repo, so "which code was judged" keeps an exact answer even wi
 Rotating reviewers with a report in flight **kills the retired one's report**: whoever takes over
 judges from scratch, and the round only closes with the verdict of a reviewer named in the
 journal. Two verdicts arrived for the same round → the gate did **not** close; treat it as
-DEVOLVIDO and order a new judgment. Measured on 2026-08-17: one APROVA and one REPROVA over the
-same commit, the merge went out with the APROVA, and the defect the REPROVA named entered `main`.
+DEVOLVIDO and order a new judgment — when an APROVA and a REPROVA land on the same object and the
+APROVA wins by default, the defect the REPROVA named is what enters the main line.
 
 The same holds when the role rotates between accounts: rotation changes **who** reviews from one
 Task to the next, it never puts two reviewers on the same commit. Two verdicts for the same hash
@@ -399,39 +381,36 @@ full verification after each merge — is in `paralelo-worktree.md`. A plan that
 ## An arbiter's fact has a timestamp — and a scope. The one from two hours ago is a memory
 
 You are the only session that crosses the whole work, and therefore the only one that speaks from
-memory without noticing — six wrong from-memory claims in 48 hours in a real run (2026-08-17/18),
-each costing from a round to a merge onto a stale base. The seven rules that come out of it, all
-seven cheap:
+memory without noticing — and each from-memory claim costs from a round to a merge onto a stale
+base. The seven rules that come out of it, all seven cheap:
 
 0. **Time comes from a command, never from your head.** Before writing any time — in the journal,
    in `eventos.jsonl`, in a report, in a baton pass — run `date -Iseconds` and use the output. It
-   costs one call. Measured on 2026-08-24/28, in a five-day work: the journal's times were
-   memories, drifting from 0 to **+6h13** — in one case the arbiter wrote 19h when it was 14h38 —
-   and the only event with an exact time was the one where he declared having copied git's stamp.
-   No internal clock reading counts: from inside a session, the time between two turns is
-   invisible.
+   costs one call. Times written from memory drift by hours over a long work, and no internal
+   clock reading counts: from inside a session, the time between two turns is invisible.
 1. **The baseline goes in the kick-off with the hash next to it**, measured on the base the branch
    has as parent: `Baseline (<hash>): backend N · check N · front N + <named known red>`.
    Inheriting a number from two hours earlier is sending the executor to prove your measurement.
-2. **`git fetch` before every merge.** The `## main...origin/main` line only counts after it.
+2. **`git fetch` before every merge.** The `## main...origin/main` line only counts after it — a
+   `status` without a `fetch` is an old photograph, and "ahead" read from it can really be
+   "behind".
 3. **Time correlation is not authorship.** Before naming an author, the command has to appear in
    their transcript. It didn't → the report says "author unidentified" and the investigation goes
-   to the **mechanism**. It was the mechanism that closed the case, and it became a real fix in
-   the repo.
+   to the **mechanism** — it is the mechanism that closes cases and becomes a real fix in the
+   repo.
 4. **A user's suspicion about the product is a verification item, not a question to answer.**
    Write the suspicion in the journal and hand it to the next reviewer as a **directed
-   question**. Measured twice in 48h: both times the user was right and the arbiter answered it
-   wasn't so — and both times the directed question, when finally asked, returned the round's
-   finest finding.
+   question**. Answering "it isn't so" from memory is how the arbiter contradicts a suspicion
+   that was right; the directed question, when finally asked, tends to return the round's finest
+   finding.
 5. **A number you report carries the measurement's scope** — what entered the count and from
-   where. "Orphans: 746" without saying only one directory was counted is a wrong number that
-   looks like a measurement, and the one who corrected it was the executor.
-6. **A model's capability is proven IN THE SESSION, with a 10-second read — never copied from
+   where. A total that counted only one directory of several is a wrong number that looks like a
+   measurement.
+6. **A model's capability is proven IN THE SESSION, with a ten-second read — never copied from
    another work's contract.** The arbiter's instruction becomes fact to the executor: they cannot
-   check what you assert about themselves. Measured on 2026-08-22: "you can NOT see images",
-   copied from the previous plan's contract against the current plan's table, entered a handoff,
-   the executor reproduced it in caps in the report and the Task's blind comparison was not done —
-   the real measurement (one `Read` on a PNG) took 10 seconds and knocked the claim down.
+   check what you assert about themselves. A "this model cannot see images" copied from an old
+   contract silently cancels the proof protocol of the current Task — while the real measurement
+   (one `Read` on a PNG) takes seconds and settles it.
 
 ## The correction does not pass through you
 
@@ -451,9 +430,9 @@ This is measured economics, not preference. Reproducing the recipe before relayi
 work twice: the executor has to reproduce anyway — whoever applies must understand — and every
 pass through you re-injects your whole context, the most expensive token at the table. The check
 that **only you** do is another one: the executor's report against the repo (step 4 of the
-cycle). It was that check that caught, in a real run, that the working branch was merged and 8
-commits behind main, with a new adapter the plan didn't know — something neither the executor
-(who got the base in the kick-off) nor the reviewer (who looks at one commit's diff) could see.
+cycle). It is the check that catches a working branch silently merged and behind the main line —
+something neither the executor (who got the base in the kick-off) nor the reviewer (who looks at
+one commit's diff) can see.
 
 **The arrow is one-way.** Reviewer → executor sends the recipe; the executor does **not** reply to
 the reviewer. A grounded disagreement comes to you, with the evidence, and you decide. Without
@@ -469,9 +448,9 @@ swapped base, a contract decision). A wrong recipe is **not yours to catch** —
 receive it, and reading recipes hunting for defects is reviewing the review: the same work paid
 twice. It surfaces through the paths that already end at you: the executor reproduces the cause
 before editing (their first step) and grounded disagreement arrives with evidence; or the proof
-fails and the report says so. In the bake-off, one recipe ordered two functions to hold the same
-`flock`, which is not reentrant — the executor blocks that during reproduction, and what reaches
-you is the disagreement to decide.
+fails and the report says so. A recipe ordering two functions to hold the same non-reentrant lock
+is blocked by the executor during reproduction — and what reaches you is the disagreement to
+decide.
 
 **Disagreement is decided on the presented evidence, never by re-running.** Both sides already
 ran: the reviewer has the "Verified by me", the executor has the reproduction. Compare the two
@@ -480,10 +459,9 @@ usually the reviewer, who re-verifies and answers — and decide with the answer
 the third execution of the same verification.
 
 When you do relay, send **the path**, never prose. Paraphrase loses the enumeration, and the
-enumeration is always what matters: "remove `clearCredentials` from the necessary callers" cost a
-whole round because "necessary" is not a list — the original report named
-`ServidoresSettings.svelte:131-132` and `App.svelte:370-375`, and what was left out (`Sidebar`,
-`SessionList`) came back as the same blocker on the next round.
+enumeration is always what matters: "remove it from the necessary callers" costs a whole round
+precisely because "necessary" is not a list — the original report names files and lines, and the
+callers left out of the paraphrase come back as the same blocker on the next round.
 
 **Form you enforce; merit never.** The executor reports a recipe missing the six fields or the
 caller inventory ("I got a diagnosis, not a recipe") → return it to the reviewer asking for the
@@ -511,10 +489,8 @@ what already passed — that lives in the journal and the commits, which is wher
 
 **Don't write:** what you are doing, what you will do, a summary of a finished step, "waiting for
 the reviewer", "analyzing the plan". The same holds for what you **ask** of the sessions: short
-delivery reports, no process narration.
-
-A rule requested by a real user on 2026-08-15, mid-way through a 13-Task work, in these words:
-*"cut the narration; he won't follow on the screen, the work is meant to run on its own"*.
+delivery reports, no process narration. The work is meant to run on its own; nobody is following
+the screen.
 
 ## With ANY review open, the tree freezes — not only in the final review
 
@@ -522,10 +498,9 @@ The rule is written for phase 4, and it is easy to think it only holds there. **
 review in progress**, including a Task's mid-work: the reviewer reads the disk, not just
 `git show`, and their subagents open files directly.
 
-An error measured on 2026-08-15: the arbiter committed to `main` twice during a Task's review —
-both commits were **documentation**, not a line of code — and the reviewer still returned
-`DEVOLVIDO: the tip moved during the review`. He was right: from inside, he cannot know the delta
-was harmless, and reviewing over a moving tip is reviewing over nothing.
+Even a documentation-only commit during a review earns a `DEVOLVIDO: the tip moved during the
+review` — and the reviewer is right: from inside, they cannot know the delta was harmless, and
+reviewing over a moving tip is reviewing over nothing.
 
 Really had to commit? Then **before**: announce what you will touch. **After**: send the new hash,
 say what changed **and what didn't**, and hand over the command that proves it:
@@ -543,10 +518,10 @@ After the "go ahead", you decide. These three are **automatic**, waiting for nob
 
 | Measure | Action |
 |---|---|
-| Session silent for 15 min | `hangar-send --list`; `idle` without a report → read its transcript, then nudge. **`working` gets checked too**: look at its LAST command — identical for 3 readings is a loop, not work (measured 2026-08-17: 1,231× the same command over 3h, `working` the whole time) |
+| Session silent for 15 min | `hangar-send --list`; `idle` without a report → read its transcript, then nudge. **`working` gets checked too**: look at its LAST command — identical for 3 readings is a loop, not work |
 | **A team session vanished and you didn't close it** | **open another and continue.** Don't investigate. |
-| Writer above **50% of its own window** (500k on a 1M) | **the writer** measures it, and asks for the swap in its own report (`references/executor.md`). You open the substitute. **The swap comes BEFORE the next round, always.** "At the next milestone" doesn't exist — the milestone may never come (measured 2026-08-17: 65% of the window without a swap, each call costing 2.6× the first hour's, on a Task that never closed). And swapping redoes no proof: the screenshots live in the durable directory |
-| **Reviewer above 50% of its own window — OR whose `current ctx + measured round cost` crosses the cap** | open the substitute **before** the correction arrives — and **dispatching a round to someone who already said they crossed is forbidden** (measured: a round sent at 86% blew 100% mid-judgment). The trigger equals the writer's (user's decision, 2026-08-23, correcting the 85% that held here: *"didn't you open a new session for review? it was already past 600k"*). **Measure a round's cost on the first Task and ADD before dispatching**: one screen-judgment round cost **~120k** (476k → 597k) — 483k is under 50%, but 483k + 120k lands at ~600k, so the substitute opens earlier |
+| Writer above **50% of its own window** | **the writer** measures it, and asks for the swap in its own report (`references/executor.md`). You open the substitute. **The swap comes BEFORE the next round, always.** "At the next milestone" doesn't exist — the milestone may never come, and past half the window each call costs multiples of the first hour's. And swapping redoes no proof: the screenshots live in the durable directory |
+| **Reviewer above 50% of its own window — OR whose `current ctx + measured round cost` crosses the cap** | open the substitute **before** the correction arrives — and **dispatching a round to someone who already said they crossed is forbidden**: it blows the window mid-judgment. **Measure a round's cost on the first Task and ADD it before dispatching**: below-half plus one round can land past the window, so the substitute opens earlier |
 | Same cause rejected 2× | ask the reviewer for a recipe with a new approach — or rotate the reviewer. You don't design recipes. **It is your only door into the loop**, and the reviewer marks it on the `eventos.jsonl` line. |
 
 ### The two blind windows — who watches, now that you wake less
@@ -567,19 +542,18 @@ Two stretches remain where **nobody is waiting**, and both belong to the watchdo
 Arm the watchdog for both at launch, and whoever **takes** the ball rewrites it with their own
 name.
 
-**The trigger is a fraction, not an absolute number.** The 500k cap was born from the 1M-window
-writer and doesn't fit a short-window reviewer: 209k of 272k is much closer to the end than 403k
-of 1M. Measured on 2026-08-15, and the price of ignoring it is sessions that **compact
-mid-judgment** — two closed above their own window (310k and 309k of 272k), and the second could
-no longer even report its own `ctx`.
+**The trigger is a fraction, not an absolute number.** A cap born from a wide-window writer does
+not fit a short-window reviewer: three quarters of a small window is much closer to the end than
+two fifths of a large one. The price of ignoring it is sessions that **compact mid-judgment** —
+closing above their own window, no longer able even to report their own `ctx`.
 
-**A screen Task with a short-window reviewer: count one reviewer per round.** Measured on
-2026-08-16: 8 sessions for 9 rounds, each swap re-paying ~85k of initial reading. If the user's
-machine has a **wide-window** model, using it on a screen Task from **round 1** is the choice the
-numbers support — 3 sessions covered the 4 Tasks and 8 reports of the same work's other half,
-with zero compaction. That is a **suggestion for the plan**, and the user chooses: a wide window
-may not exist on their account, and **no rule of this pipeline depends on it existing** — without
-it, the 50% + round-cost trigger above holds, which is what makes rotation happen in time.
+**A screen Task with a short-window reviewer: count one reviewer per round** — each swap re-pays
+the initial reading. If the user's machine has a **wide-window** model, using it on a screen Task
+from **round 1** is the choice the numbers support: a few sessions cover what would otherwise
+take one per round, with zero compaction. That is a **suggestion for the plan**, and the user
+chooses: a wide window may not exist on their account, and **no rule of this pipeline depends on
+it existing** — without it, the 50% + round-cost trigger above holds, which is what makes
+rotation happen in time.
 
 And the line between deciding and waking the user:
 
@@ -598,10 +572,9 @@ And the line between deciding and waking the user:
 
 ### Asking has a SCORE — and below 8 the pipeline doesn't stop
 
-The table above says **when** to wake; this rule says **what to do while the answer doesn't come**
-(user's request, 2026-08-24: *"you sat over 6 hrs waiting for an answer that wasn't hard to figure
-out, that is not autonomy (…) it needs a timeout (…) some kind of classification"*). Three axes;
-the **highest** wins:
+The table above says **when** to wake; this rule says **what to do while the answer doesn't
+come** — hours of stalled queue waiting on an easy answer is not autonomy, and the user is the
+one who pays for the wait. Three axes; the **highest** wins:
 
 | Axis | 0–3 | 4–7 | 8–10 |
 |---|---|---|---|
@@ -614,11 +587,8 @@ the **highest** wins:
   proceed. The user corrects when they read.
 - **0–3** → decide, record, report later.
 
-Measured on 2026-08-22/24: **~8h30 of stalled queue on three questions scoring 2, 2 and 6** — and
-in all three the answer was the recommended one ("which model to apply an already-closed recipe?"
-scores 2 and cost ~6h; "switch to the contract's sibling model?" scores 2 and cost 2h; "round 4 or
-replan?" scores 6 and cost 20 min). The rule ran once still during the event — opening phase 5
-scored 1 and was decided without asking.
+The questions that stall a queue for hours almost always score low, and their answer is almost
+always the recommended one — which is exactly why the low scores don't stop the pipeline.
 
 Stopping **between** Tasks is clean; stopping **during** leaves the tree in a state nobody
 understands later. When waking the user, deliver the decision ready: what is at stake, the
@@ -630,14 +600,12 @@ review report itself: when the defect is what was **said** about the evidence, r
 evidence is paying the expensive part to fix the cheap one — and it usually **hides** the defect
 the description would start naming.
 
-The measured case is captions. **A caption blocker pays for no new stage:** a description finding
+The typical case is captions. **A caption blocker pays for no new stage:** a description finding
 (the caption says what the image doesn't show) is fixed in the **description**, with two
 conditions: where the image **repeats another frame**, the caption declares it and points at where
 that state is truly proven; where the image **shows a defect**, the caption says it is broken and
-names the defect. Measured on 2026-08-18, five caption blockers: 38 lines rewritten, zero "idem",
-and the next round touched **+239 bytes** — recapture would have cost a whole stage (241 calls
-and 54.7M of cache reads on the first mount) and would have **hidden** exactly the defects the
-captions started naming.
+names the defect. Rewriting the captions costs bytes; recapturing costs a whole stage — and hides
+exactly the defects the captions would start naming.
 
 ### Visual Task without a bar: ask BEFORE releasing
 
@@ -656,7 +624,7 @@ Write the answer into the contract, on that Task's line, either way:
 
 ```markdown
 Task 3 — Bar: `EnginesSheet.svelte`, desktop 1440px, centered modal
-Task 5 — Bar: none — user's decision, 2026-08-12
+Task 5 — Bar: none — user's decision
 ```
 
 **A recorded `none` is worth as much as a bar.** It is what makes the reviewer judge the Task by
@@ -670,38 +638,30 @@ One session per Task: retired at the approved milestone, context still clean.
 Swapping **mid-gate** is allowed — and mandatory — in two cases:
 
 - **repeated failure on the same cause** (the same defect class returning round after round), or
-- **context above half its own window** (~500k on a 1M — the fraction rules, see "Autonomy —
-  gatilhos").
+- **context above half its own window** (the fraction rules, see "Autonomy — triggers").
 
 **A flaky provider is NOT a reason to swap; throughput is.** A drop the watchdog revives costs
 minutes, and swapping throws the whole context away. The right measure is **how much the session
-moves between drops**: swap when the ctx barely moves from one drop to the next (measured on
-2026-08-22: 9k of context in 35 minutes, on a Task already at 2h36 with no commit — the
-substitute committed in 20 min), or when the drop **doesn't revive after two nudges**. One model
-dropped 8 times in a run and still delivered its best visual proof: counting drops decides
-nothing.
+moves between drops**: swap when the ctx barely moves from one drop to the next, or when the drop
+**doesn't revive after two nudges**. A model can drop many times in a run and still deliver its
+best work: counting drops decides nothing.
 
 **The handover to the substitute goes in a FILE and POINTS instead of pasting** — HEAD,
 `git status`, what is on disk uncommitted, what remains, the traps already paid for, and the paths
 of the plan, the contract and the excerpted Task. There is no line count: the size is whatever the
 successor needs to continue rebuilding nothing, and the one who knows that is the one leaving.
 
-What the handover **cannot** be is a copy of the whole context. Measured in both directions: a
-14 KB handover went unread by the successor and she restarted from zero; and one too short made
-the user himself have to point out decisions already made that the new session didn't know
-(2026-08-28 — the handover had to be rewritten whole). **Point at files, don't paste content; and
-what was DECIDED goes along, because a decision lives in no file if you didn't write it.**
+What the handover **cannot** be is a copy of the whole context — nor a summary so short the user
+has to point out, themselves, decisions already made that the new session doesn't know. **Point at
+files, don't paste content; and what was DECIDED goes along, because a decision lives in no file
+if you didn't write it.**
 
 **Retiring is an ACT, with a message — "stopping sending work" retires no one.** A turn dead by
 provider **comes back to life** and resumes where it stopped, and then there are two writers on
 the same stage. The stop order says: stop, don't capture, don't commit, **release the stage
 without killing it**, nothing was lost. And **in the same act, notify whoever can send recipes to
 them** — the REPROVA goes straight from reviewer to executor, by design, and the reviewer doesn't
-know the new address. Measured on 2026-08-22/23: a session "retired" without a written order
-resurrected capturing on the same stage and the same fixtures as the substitute (what avoided the
-two writers was her asking, not the arbiter warning); and a recipe was dispatched to a session
-already closed at 631k because the reviewer hadn't been told. Told BEFORE the fact (next round),
-the case didn't repeat.
+know the new address: a recipe dispatched to a retired session is a round lost in silence.
 
 There is no "I'll wait for the gate to close before swapping": the gate may never close, and the
 saturated session keeps producing ever-worse rounds. The first factually wrong report is already
@@ -720,12 +680,10 @@ What is open and **who carries each thing**. At minimum: the closing items (bran
 retrospective), the bars already decided, the live sessions with each one's `ctx`, and the **last
 line written to `eventos.jsonl`** — it is how the successor knows how current the trail is.
 
-Measured on 2026-08-16: an arbiter was swapped overnight and the work's journal stopped at the
-previous block; the most expensive block, the total and the visual-round count stayed **blank**,
-and phase 5 had to rebuild everything from `git log --format='%ad'`. It is the 2026-08-28 defect
-seen from another angle: what the machine records by itself survives the swap, what depends on
-someone remembering to write does not. **That is why the structured trail is what gets handed
-over; it doesn't vanish with you.**
+An arbiter swapped with the journal stalled leaves the most expensive blocks blank, and phase 5
+has to rebuild everything from `git log`. What the machine records by itself survives the swap;
+what depends on someone remembering to write does not. **That is why the structured trail is what
+gets handed over; it doesn't vanish with you.**
 
 ## Authorization from outside
 
@@ -746,11 +704,11 @@ If the user really wants to release early, the form is:
 
 | Excuse | Reality |
 |---|---|
-| "This case isn't in the table, so I choose" | Outside the table is **stop and ask**, never a license. The model comes from the ROLE: whoever writes code uses the executor's model, whoever reviews uses the reviewer's — including bug worktrees, one-off tasks and anything opened in parallel. Wrong twice on 2026-08-14, both times with this reasoning. |
+| "This case isn't in the table, so I choose" | Outside the table is **stop and ask**, never a license. The model comes from the ROLE: whoever writes code uses the executor's model, whoever reviews uses the reviewer's — including bug worktrees, one-off tasks and anything opened in parallel. |
 | "I planned, so I execute" | Whoever planned has the plan in context: it is the bias the gate punctures. |
 | "Small finding, goes in with the next Task" | If it goes in the next, it is a blocker of this one. |
 | "I'll relay the report's essentials" | Paraphrase loses the file list, and the list is what fixes. |
-| "The executor said they committed" | `git log` costs 2 seconds and has already caught drift. |
+| "The executor said they committed" | `git log` costs 2 seconds and catches drift. |
 | "I don't swap executors with the gate open" | The gate may never close. Repeated failure or half the window authorize swapping now. |
 | "The next step is additive, it doesn't touch what's under review" | Additive today, target deleted tomorrow. |
 | "The user didn't settle this, better wake them" | Only if two readings yield different work. |
@@ -776,8 +734,8 @@ If the user really wants to release early, the form is:
 - The next Task starting with the previous report still open.
 - A session silent for over 15 minutes without you having checked.
 - **A watchdog `active` that you never saw read.** `active` proves it was born, not that it works
-  — check the journal for one full cycle. That is how a whole work sat stalled 3h with no
-  warning.
+  — check the journal for one full cycle. A watchdog that never read is a whole work stalled for
+  hours with no warning.
 - **Work in progress with no live watchdog.** `ps -eo pid,ppid,cmd | grep vigia.sh` empty, or
   pointing at the retired pair, is the pipeline running without a net.
 - **You answering "I didn't stop" when the user says you stopped.** An API drop is invisible from
@@ -785,9 +743,8 @@ If the user really wants to release early, the form is:
   Accept it, check the counterpart's state, and resume.
 - **The SESSION that executed reviewing its own commit** — including after a `/clear`. Separate
   sessions on the same model are fine: the gate's independence comes from CONTEXT, not from the
-  model (user, 2026-08-23: *"the model is agnostic, it doesn't know what it executed (…) a new
-  session with the same model, that's fine"* — the old wording, "same model/family", cost an
-  unnecessary team inversion).
+  model — a session doesn't know what it executed once the context is gone, and forbidding the
+  model (rather than the session) inverts teams without need.
 - **A worktree removed without checking its trail in global configuration**
   (`paralelo-worktree.md`): once removed, the trail points at a path that no longer exists and
   the damage goes silent.

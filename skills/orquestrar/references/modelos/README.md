@@ -10,7 +10,7 @@ construction. What lives here is only this page: the rule of how a card is writt
 
 ## Rules for these files
 
-1. **Measured facts only, dated.** "Seems better at X" doesn't enter. "On 2026-08-15, 3 rounds
+1. **Measured facts only, dated.** "Seems better at X" doesn't enter. "In one run, 3 rounds
    against the siblings' 2, 2.3× the day's cost" enters.
 2. **What changes in the PLAN, not praise.** Every card line answers: *what do I write
    differently because of this?* If it changes nothing, it isn't card material, it is trivia.
@@ -45,11 +45,10 @@ record it in its own section. Two sources, and the second is usually worth more:
 - <finding> — community (<where>), read on <date>
 ```
 
-Why the community pays more: it reports the **limitation and the workaround together**. Two
-examples that arrived that way on 2026-08-15, which no official guide would carry: that the
-cheap executor model is blind and a pair of CLIs gives it sight; and a self-improvement loop
-where one model executes and another notes each lap's waste — the second became a rule of this
-skill the same day (`revisor.md`, the WASTE line).
+Why the community pays more: it reports the **limitation and the workaround together** — the
+kind of thing no official guide carries: that a blind executor model has a CLI pair that gives it
+sight, or a loop where one model executes and another notes each lap's waste (the origin of this
+skill's WASTE line, `revisor.md`).
 
 Two rules, and the second is the point:
 
@@ -58,7 +57,7 @@ Two rules, and the second is the point:
    was read somewhere.
 2. **When they diverge, the measured wins, and the divergence stays written.** It is the card's
    most valuable information: it is where the model behaves differently from the advertised in
-   *this* kind of work. An example from 2026-08-15: the Opus 5 guide advises against extra
+   *this* kind of work. A real example: the Opus 5 guide advises against extra
    verification instructions ("it verifies on its own, and asking more makes it over-verify") —
    and what solved things here was demanding an explicit read command, because the failure
    wasn't lack of care, it was truncating its own check with `head`.

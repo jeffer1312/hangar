@@ -24,11 +24,11 @@ already your memory — succession is closing it well and opening whoever will r
    `eventos.jsonl`, durable directory.
 
    **No line cap, and no context copying.** The size is what the successor needs to continue; what
-   it cannot be is a pasted transcript or a summary of the work. Measured on 2026-08-28: a
-   handover written too short made the user himself point out decisions already made that the new
-   session didn't know — and it had to be rewritten from scratch. Cutting by number errs on one of
-   the two sides; the criterion is **what the next session cannot discover on its own by reading
-   the files you pointed at**.
+   it cannot be is a pasted transcript or a summary of the work. A handover written too short
+   makes the user themselves point out decisions already made that the new session doesn't know —
+   and it gets rewritten from scratch. Cutting by number errs on one of the two sides; the
+   criterion is **what the next session cannot discover on its own by reading the files you
+   pointed at**.
 3. **Open the successor** by the usual recipe (create via the API on the `árbitro` row's **new**
    configuration, prove model/effort, kick-off in a file): the skill with the arbiter role, the
    path of the journal (they read the handover section FIRST), of the rules and of the plan, and
@@ -54,12 +54,11 @@ Two locks, and they hold for every baton pass, of any role:
 - **Who arrives acts on nothing marked as proposed, nor on a sentence with no origin.** Confirm
   with the user first — and the confirmation is asked of **them**, not of the session that left.
 
-Measured on 2026-08-28, twice in the same day. This has since become code in the app: the handover
-dossier propagates the sentence together with the fact, which is why the label has to be written
-at the origin.
+This has since become code in the app: the handover dossier propagates the sentence together with
+the fact, which is why the label has to be written at the origin.
 
-Measured in a real work (2026-08-25): three arbiters in the same run; the handover that worked was
-the short one pointing at files, the one that failed was "read the previous one's transcript".
+Across successive arbiters of one work, the handover that works is the short one pointing at
+files; the one that fails is "read the previous one's transcript".
 
 ## Phase 4 — the final review
 
@@ -76,10 +75,10 @@ session, on the day the user defines the role — not at the end, from memory.
 not only as closing items.** Branch review and retrospective arrive days later, when whoever
 launched is no longer in the session; without the row, that moment's arbiter picks alone the
 configuration of a role the user never saw — which is exactly what this skill takes out of his
-hands everywhere else. Measured on 2026-08-28: a contract carried the final review's row and
-forgot the retrospective's; the arbiter decided by analogy with the reviewer and recorded it as
-his own decision. It was cheap and reasonable, and still the wrong class of decision. **A missing
-row in the table = stop and ask**, like any off-plan Task.
+hands everywhere else. A contract that carries one closing role's row and forgets the other
+leaves the arbiter deciding by analogy and recording it as his own — cheap, reasonable, and
+still the wrong class of decision. **A missing row in the table = stop and ask**, like any
+off-plan Task.
 
 **And record phase 5 together, at the same time.** They are two items, not one:
 
@@ -179,10 +178,9 @@ gates and **were never looked at together**. When two or more of them touch the 
 **set review of the delta**: fresh session, declared scope (only the delta, not the old branch),
 the same format as the final review.
 
-Measured on 2026-08-16: five post-approval commits, 18 files, +672 −277, three of them touching
-the same four files in consecutive rounds. The set review found **two new defects** and confirmed
-a third — none seen by the individual gates, which were all green. It became one more Task. Cost:
-one 240k session and ~30 min.
+A handful of post-approval commits touching the same files in consecutive rounds hides defects
+none of the individual gates saw — all of them green — and the set review finds them at the cost
+of one session and half an hour.
 
 **2. A review finding enters; a new user request is new work — and you state the price before
 accepting.** A finding from the branch itself, with a closed recipe and an objective defect, is
@@ -196,10 +194,9 @@ answer one sentence, and it has the price inside.
 They choose; the push is theirs. What **you** don't do is accept without stating the price,
 because the price doesn't show: the Task looks small and the set review it forces doesn't.
 
-And the price is smaller than the wall-clock impression suggests. Measured on 2026-08-16, four
-post-approval Tasks cost **~2h30 of work** (18 min + ~15 min + ~1h + ~20 min), inside ~7h of
-clock that included **3h40 with nobody working**, while the user tested the app. **A small
-post-approval Task is cheap; what costs is the set review it forces at the end** (one session,
-~30 min) — that is the price to say out loud, not a number inflated by waiting. All four closed
-real defects and the series converged: the last one produced no new finding. **The error is not
-opening; it is stating the wrong price.**
+And the price is smaller than the wall-clock impression suggests: most of a post-approval Task's
+clock is waiting while the user tests the app; the work itself is small. **A small post-approval
+Task is cheap; what costs is the set review it forces at the end** (one session, a fraction of an
+hour) — that is the price to say out loud, not a number inflated by waiting. The series
+converges: the late Tasks stop producing new findings. **The error is not opening; it is stating
+the wrong price.**

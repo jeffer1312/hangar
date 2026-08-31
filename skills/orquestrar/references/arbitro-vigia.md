@@ -109,8 +109,8 @@ work either. Two exceptions warn immediately, without waiting for silence: a **s
 without an event, and whether the last command repeated — and from that it does **not know**
 whether the session is stuck or working well. An alarm written in the imperative makes the
 recipient obey without checking, because the message arrives through the same door as real
-orders. Measured on 2026-08-24/28: **three false alarms in one day**, and one of them ordered the
-executor to STOP in the middle of 44 minutes of legitimate work.
+orders. An imperative false alarm has ordered executors to STOP in the middle of legitimate
+work; a question never has.
 
 Every message the watchdog sends to a team session is a **question with the evidence attached**
 (the text lives in the script); the one that goes to **you** may be affirmative — you are the
@@ -120,9 +120,8 @@ they just come from you, after looking, and not from a minute counter.
 **The proof that it works is the synthetic alarm ARRIVING.** On arming, the watchdog fires a
 `[vigia] ARMADA ...` to you by itself, **through the same path as real alarms** — if that prompt
 reached your session, the channel is proven; if the unit came up and it didn't arrive within 2
-minutes, the channel is broken and "active" is worth nothing. A hand-typed test doesn't count: on
-2026-08-17 it "proved" twice a path that wasn't the broken one, while 10 real alarms went into
-the void.
+minutes, the channel is broken and "active" is worth nothing. A hand-typed test doesn't count: it
+proves a path that isn't the broken one, while the real alarms go into the void.
 
 **Confirming it came up is NOT confirming it lives.** `is-active` right after the `systemd-run`
 answers `active` because the unit was just born — a watchdog once sat `active` for hours without
@@ -140,9 +139,9 @@ A session's message arrives as a prompt and already wakes you by itself: the wat
 ## Night mode — three preconditions, or you don't put the group to sleep
 
 Letting the team run through the night without the user is legitimate — with three things proven
-BEFORE, because overnight there is nobody to discover what you didn't foresee. Measured on
-2026-08-16/17: the executors' provider quota blew at 23:35, all 4 died in the same minute, the
-watchdog was `inactive` — and the one who found out was the user, at 05:56, 6h21 later.
+BEFORE, because overnight there is nobody to discover what you didn't foresee. A provider quota
+that blows overnight kills every executor on it in the same minute — and with the watchdog
+`inactive`, the one who finds out is the user, hours later.
 
 1. **Watchdog proven** — not `active`: the synthetic alarm it fires on arming arrived as a prompt
    in your session (see the watchdog section).
@@ -172,9 +171,8 @@ What to do, in order, without asking anyone:
    and died before sending — in that case the work is not lost and you don't even redo it.
    **And look at the pane before requesting anything again**:
    `tmux capture-pane -p -t "=<name>:" -S -200`. With the output channel dying (it happens on
-   flaky providers), the whole report sits **on screen**, complete, having never left. Measured on
-   2026-08-22: a Task report with screenshots described one by one was there the whole time; the
-   one who noticed the session "couldn't send" was the user.
+   flaky providers), the whole report sits **on screen**, complete, having never left — and the
+   one who notices that the session "couldn't send" shouldn't have to be the user.
 2. **Open the substitute** by the usual recipe (create → prove → request in a file → check
    delivery), with the full kick-off: role, expected HEAD, literal untouchables, contract, plan,
    and the current commit or recipe.

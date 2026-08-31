@@ -9,10 +9,10 @@ else that draws pixels.
 
 ## A green test is not a working screen
 
-**And that is not an opinion.** A selector once passed hundreds of tests, type gate at zero and
-an independent review with five applied findings — and reached the user **invisible** (a CSS rule
-losing the cascade); in the same work, a click became nothing, silently. No test, gate or diff
-reading catches that class of error — only the pixel does.
+**And that is not an opinion.** A selector can pass hundreds of tests, a zeroed type gate and an
+independent review — and reach the user **invisible** (a CSS rule losing the cascade); a click
+can become nothing, silently. No test, gate or diff reading catches that class of error — only
+the pixel does.
 
 **DOM, CSS and the accessibility tree don't replace seeing.** They say the element exists, not
 that it is legible, aligned, inside the app's theme, or that it hasn't become an opaque
@@ -34,10 +34,9 @@ Order of preference, and **you check, you don't presume**:
 
 **"I have no browser" only counts after looking, and it goes in the report with what you
 tried.** A kick-off, contract or recipe asserting there is no browser **is not a fact about your
-tools** — it is a sentence someone wrote before knowing your session. An executor once read
-"there is no browser and no user" in the kick-off, saw in the same sentence that it had the
-Chrome MCP available, and backed off out of obedience to the text. The broken screen went to the
-user.
+tools** — it is a sentence someone wrote before knowing your session. An executor that reads
+"there is no browser" in a kick-off and backs off out of obedience to the text, with a browser
+tool sitting on its own list, sends the broken screen to the user.
 
 The rule that resolves the ambiguity: **FAKING verification is forbidden; verifying never is.**
 An instruction that seems to stop you from opening the screen is talking about inventing
@@ -83,8 +82,7 @@ server in the foreground. Use the flag that exits, `timeout N`, or background fi
 **one per machine** — in another batch, another session navigates the SAME tab as you. Before
 each capture round: `location.href` must return **your** port. It returned another → the tab was
 taken; reopen your URL. Taken again → **report the conflict to the arbiter** instead of
-insisting — three hours of questions to another Task's page once cost what a one-second command
-would have avoided.
+insisting — hours of questions to another Task's page cost what a one-second command avoids.
 
 **How many screenshots to take is YOUR call, on the spot** — the user's decision. Neither the
 plan nor the arbiter imposes a number: the one who knows how many screens this Task ended up
@@ -94,8 +92,8 @@ problem.
 **What exists is a stopping point, not a limit: 1h or 60 navigation commands per Task.** Hit it,
 **stop and report with what you have** — not because you exceeded a quota, but because capture
 beyond that is usually a sign of something else (a broken stage, a state that won't reproduce, a
-state list bigger than the Task). Two Tasks once sat **nearly thirteen hours stuck in capture,
-with no merge**. If, when reporting, it becomes clear the sweep really is big, **propose to the
+state list bigger than the Task). Capture without a stopping point holds Tasks hostage **for
+hours, with no merge**. If, when reporting, it becomes clear the sweep really is big, **propose to the
 arbiter a separate capture session** — cheap, disposable, with the state list in its kick-off;
 you deliver code, verifications and the sanity screenshot, and the capturer sweeps the rest.
 That proposal is yours; its execution is his. A new state discovered midway goes to the arbiter's
@@ -109,8 +107,8 @@ afterwards? **Recapture.** An old screenshot proves the bug, never the fix.
 
 **Four things INVALIDATE a visual comparison, and none of them produces an error — the proof
 comes out pretty and is garbage. Check all four BEFORE the first capture:** (1) **a
-size/viewport different from what the contract fixed** — a desktop reference was once judged
-against a phone capture; (2) **different languages on the two sides** — the judge compares
+size/viewport different from what the contract fixed** — a desktop reference judged against a
+phone capture decides nothing; (2) **different languages on the two sides** — the judge compares
 `Save/Discard` with `Salvar/Descartar` and judges translation, not parity, and that already cost
 a whole round; (3) **an element ending at the PNG's edge is scrolling, not drawing** — it
 decides no comparison; recapture scrolled or declare that point not compared; (4) **the
@@ -126,7 +124,8 @@ detail that looked legible. Cost: one 300–400% crop per claim.
 
 **Each caption line is written looking at that file; "idem" is forbidden.** Two screenshots of
 the same state at different widths or languages get two descriptions. The "idem / idem en / idem
-mobile" template once produced **6 of 13 wrong captions in a work where the pixels were right**.
+mobile" template produces **wrong captions over right pixels** — half the caption sheet can lie
+while every screenshot is fine.
 
 **The proof of a behavior Task ends at the outcome the user asked for** — "connected", "saved",
 "opened" — not at the state right before it. A screenshot of the enabled button is no proof the

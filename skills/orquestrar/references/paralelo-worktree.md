@@ -16,7 +16,7 @@ justify a **whole session** of its own.
 this written, and several don't — the planner surveys it themselves, with exit-gate item 3's
 command (`planejamento.md`): files per Task × `git merge-tree`, output pasted — from the steps'
 text when the material declares them, **from the repo, via subagent, when it doesn't**. Waiting
-for the plan to declare independence is the defect, not the prudence: the 2026-08-15 declaration
+for the plan to declare independence is the defect, not the prudence: a real declaration
 was written, and it was false. The audit is phase 1, with the user; the arbiter doesn't deduce
 it later.
 
@@ -30,17 +30,16 @@ pass more easily on a greenfield, and the command exists precisely so they are a
 1. **Disjoint files.** No file appears in two Tasks of the batch. Not "almost" nor "just
    `types.ts`" — one shared file is serialization coming back through the back door, with a
    merge in the middle.
-   **Check in the STEPS, not the Task's header.** That is where the 2026-08-15 collision hid:
-   Task 1's header didn't cite the file and its step 8 ordered editing it — the "no file in
-   common" declaration was written and was false.
+   **Check in the STEPS, not the Task's header.** That is where collisions hide: a Task's header
+   doesn't cite the file while one of its steps orders editing it — the "no file in common"
+   declaration is written and false.
 2. **No symbol crosses.** Nothing Task A creates is consumed by Task B of the same batch. If B
    expects a function A is still writing, B works against a void.
 3. **No shared STATE.** Store, module singleton, registry, cache, table: two Tasks mounting
    hosts of the same state are not independent however disjoint the files, and the collision
-   **doesn't show at the merge** — it shows as review rounds, where it costs most. Measured on
-   2026-08-16: a singleton store retained by three components born in three Tasks treated as
-   independent; **8 of the 11 rounds** of the last two were one host writing into state the
-   other clears, reads or deletes.
+   **doesn't show at the merge** — it shows as review rounds, where it costs most: a singleton
+   store retained by components born in Tasks treated as independent turns most of their rounds
+   into one host writing into state the other clears, reads or deletes.
 4. **Isolated verification.** Each Task's verification command runs alone, in its worktree,
    without depending on what the others did.
 
@@ -117,8 +116,8 @@ checkout nobody explains.
 **And the trail check runs BEFORE removing**, hunting the worktree's path in every global
 configuration, not just symlinks: `grep -rl "<worktree path>" ~/.local/bin <agent config dirs>
 <service unit dir>`. Once removed, the trail points at a path that no longer exists and the
-damage goes silent — measured on 2026-08-18: the hooks of the user's **three** accounts pointed
-at a proof worktree, 10 occurrences in the default account alone.
+damage goes silent — agent hooks and global symlinks pointing at a removed worktree are the
+typical finds, spread across every account on the machine.
 
 ## The gate parallel creates
 
@@ -137,9 +136,8 @@ parallel, in doubt: serialize.
 
 **And the ports are not enough: the automation BROWSER is one per machine.** `agent-browser` and
 the like have a single tab — two executors capturing at the same time steal the page from each
-other, with no error at all. Measured on 2026-08-17: one executor's tab returned the neighboring
-Task's URL at 13:44, and she spent 3h asking the wrong page whether her screen had come back. A
-batch with 2+ visual Tasks: either **a browser instance per executor** (separate profile/port,
+other, with no error at all — an executor whose tab silently swapped to a neighboring Task's URL
+can spend hours asking the wrong page whether its screen came back. A batch with 2+ visual Tasks: either **a browser instance per executor** (separate profile/port,
 if the machine can take it), or **visual proof as a critical section** — one executor captures
 at a time, the arbiter grants the turn. The plan declares which of the two; the executor checks
 the tab before every capture regardless (`executor.md`, step 3).
@@ -153,32 +151,30 @@ block**, in alphabetical order — not at the end — and the executor's gate de
 newline (`tail -c1 | xxd` = `0a`). Whatever positional conflict remains **is the arbiter's, at
 the merge**: he proves it by **content** (key counts on each side before and after, zero values
 changed) and resolves it by merge strategy — **never returns it to the executor**, who cannot
-resolve it on the origin branch. Measured on 2026-08-22: two message rounds spent trying to push
-onto the executor a conflict that only resolved at the merge, one of them over a single byte.
+resolve it on the origin branch — message rounds spent pushing it onto them are spent over what
+can be a single byte.
 
 **A GLOBAL DEVICE resource is a critical section like the browser**: the device itself, the port
 forwarding (which is the device's, not the session's) and the app's storage. A port per Task in
 the plan (T5→8083 … T10→8086 worked) and the forwarding redone immediately before every capture.
 The executors negotiating the device among themselves by message, in 10–15 min slots, worked
 without the arbiter in the middle — but **a session that dies holding the resource becomes a
-silent deadlock**: measured on 2026-08-22, a reviewer sat stalled over 30 minutes waiting for a
-device held by a session that had died. Two rules from that: **whoever holds releases BEFORE
+silent deadlock**: a reviewer sits stalled indefinitely waiting for a device held by a session
+that died. Two rules from that: **whoever holds releases BEFORE
 closing their own work**, and the arbiter **looks at who holds what** whenever someone goes idle
 with no apparent reason.
 
 **Git hooks are shared, which is why a worktree does NOT run `git merge main`.** `.git/hooks`
 holds for the main checkout and for every worktree. A `post-merge` that runs the project's
 installer executes with the toplevel being **the worktree** — and repoints service units, global
-symlinks and the front build into it. Measured on 2026-08-17, matching to the minute in both
-incidents: the user's app went down twice. **The one who integrates into `main` is the arbiter,
-in the main checkout**, where the hook runs in the right place. Disabling a git hook is the
-user's decision, not the team's way out.
+symlinks and the front build into it, taking the user's own app down mid-work. **The one who
+integrates into `main` is the arbiter, in the main checkout**, where the hook runs in the right
+place. Disabling a git hook is the user's decision, not the team's way out.
 
 **An installer NEVER runs from inside a worktree.** A global symlink pointing at a worktree dies
-with it: measured on 2026-08-17, removing a rehearsal worktree took 6 symlinks (`hangar-send`,
-`hangar-engine`, 2 skills…), silenced the whole machine's watchdog and knocked down the
-statusline of every Claude session. Machine setup runs from the main checkout, always — and when
-removing a worktree, check the trail: `ls -la ~/.local/bin | grep <worktree>`.
+with it: removing the worktree then takes commands, skills, the machine's watchdog and every
+session's statusline down with it, silently. Machine setup runs from the main checkout, always —
+and when removing a worktree, check the trail: `ls -la ~/.local/bin | grep <worktree>`.
 
 ## Rationalizations — all of them mean STOP
 
