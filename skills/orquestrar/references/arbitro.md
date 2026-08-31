@@ -82,17 +82,13 @@ antes. Ele precisava de duas páginas, e o modelo dele tem 272k de janela.
 Parecer chegou, merge feito, sessão trocada → `eventos.jsonl` **e** registro, antes da próxima ação.
 A ordem não é estilo: os dois têm o mesmo gatilho e leitores diferentes — a prosa é sua, o JSON é o
 que as telas do app agregam e o que a fase 5 lê com número —, e escrever a prosa primeiro **dá a
-sensação de ter registrado**, então a linha curta é a que some. Medido em 28/08/2026, três
-ocorrências em dois dias e **nas duas direções**: 69 minutos com duas revisões de conjunto abertas e
-nenhuma linha JSON, e 82 minutos com o JSON escrito e a prosa parada. O próprio árbitro nomeou a
-causa: *"a prosa é o que eu quero escrever; o JSON é o que a máquina lê"*. Escreva a que some
-primeiro.
+sensação de ter registrado**, então a linha curta é a que some. Escreva primeiro a que some — e a
+falha acontece nas duas direções, JSON sem prosa e prosa sem JSON.
 
-Não existe "atualizo no fim do dia": medido em 17/08/2026, o registro de uma execução parou às 10:39
-e as 6h45 seguintes — justamente as duas Tasks mais caras — ficaram sem diário; a retrospectiva
-virou arqueologia de git e mtime. A vigia cobra o mtime do arquivo (flag `--diario`), e a cobrança
-vale para os **dois**: registro parado ou `eventos.jsonl` parado durante trabalho é a mesma falha.
-Mas a vigia é rede, não desculpa.
+Não existe "atualizo no fim do dia": diário que para deixa justamente as horas mais caras sem
+registro, e a retrospectiva vira arqueologia de git e mtime. A vigia cobra o mtime do arquivo (flag
+`--diario`), e a cobrança vale para os **dois**: registro parado ou `eventos.jsonl` parado durante
+trabalho é a mesma falha. Mas a vigia é rede, não desculpa.
 
 ### Você é o único que escreve lições — e elas vão no kick-off, não no arquivo que o time lê
 
@@ -105,14 +101,13 @@ Duas obrigações vêm junto, e sem elas isso vira o problema que veio resolver:
 
 - **A régua nasce no `licoes.md`, com data e prova, e nada de lá é apagado.** O que você escolhe é
   **quais** colar em cada kick-off — três ou quatro, as do assunto daquela Task. Não meça o tamanho
-  do arquivo e não compacte: o desenho anterior era um teto de 200 linhas no arquivo que o time lê,
-  e ele **mandava jogar régua fora para caber**. Medido em 28/08/2026: uma régua saiu por ser rara e
-  o caso dela voltou uma hora depois. Régua rara é a que ninguém lembra na hora — é justamente a que
-  precisa estar escrita.
+  do arquivo e não compacte: o desenho anterior era um teto de linhas no arquivo que o time lê, e
+  ele **mandava jogar régua fora para caber** — uma saiu por ser rara e o caso dela voltou uma hora
+  depois. Régua rara é a que ninguém lembra na hora; é justamente a que precisa estar escrita.
 - **Duas rodadas seguidas cujo desperdício é "fechou só o caso que o parecer anterior nomeou"** não
   é caso de mais uma régua: é sinal de que o *desenho* está errado. Aí você não escreve régua —
   **pergunta ao usuário** se o caminho vale o custo, com o que já foi gasto na mão. Foi o que
-  destravou a espiral de nove rodadas de 15/08, e quem perguntou foi ele, não o árbitro.
+  destravou a pior espiral registrada — e quem perguntou foi ele, não o árbitro.
 
 **O usuário não está disponível e a espiral já começou?** Você não para o trabalho nem inventa
 mudança de desenho: você **aperta o critério, por escrito, no kick-off do próximo revisor**.
@@ -123,8 +118,8 @@ mudança de desenho: você **aperta o critério, por escrito, no kick-off do pr�
 > regressão de portão, intocável no commit.
 
 E declare, na mesma mensagem, o **limite da família**: "outra variação deste mesmo defeito é nota".
-Medido em 16/08/2026, duas vezes: nas duas a Task fechou na rodada seguinte. A alternativa medida —
-deixar o portão cobrar cada caso novo — custou 9 rodadas e 3h58 numa Task estimada em 1h.
+Onde isso foi feito, a Task fechou na rodada seguinte; a alternativa — deixar o portão cobrar cada
+caso novo — é a espiral acima.
 
 Isso é decisão sua e vai no registro com a data. **Não** afrouxa nada do que continua bloqueador
 cheio, e não se aplica antes da terceira rodada.
@@ -132,14 +127,13 @@ cheio, e não se aplica antes da terceira rodada.
 **Toda lição que vale para a Task vai COLADA no kick-off — apontar o arquivo não basta.** É o mesmo
 princípio da separação dos três arquivos, visto do outro lado: sessão nova lê o kick-off inteiro e o
 resto por alto, então régua enterrada na página 5 de um arquivo qualquer não alcança quem nasceu
-depois dela. Medido em 16/08/2026 com a régua "parecer não mora em `/tmp`",
-decidida de manhã: **duas** das três sessões abertas depois dela salvaram prova em `/tmp` assim
-mesmo, e você teve de copiar os arquivos à mão. **Caso obrigatório dessa regra: os invalidadores de
-prova visual** (tamanho/viewport, idioma dos dois lados, borda da captura, print auto-suficiente —
-ver `executor.md`) **vão repetidos no kick-off de TODA Task visual**, mesmo já estando no contrato:
-são a única classe de régua cuja violação não produz erro nenhum — a prova sai bonita e é lixo.
-Medido em 23/08/2026: a régua do idioma existia no contrato, o kick-off da sessão nova não a
-repetiu, e a comparação cega saiu com um lado em `pt` e outro em `en` — uma rodada inteira.
+depois dela — uma régua decidida de manhã foi violada no mesmo dia por duas das três sessões
+abertas depois. **Caso obrigatório dessa regra: os invalidadores de prova visual**
+(tamanho/viewport, idioma dos dois lados, borda da captura, print auto-suficiente — ver
+`executor.md`) **vão repetidos no kick-off de TODA Task visual**, mesmo já estando no contrato: são
+a única classe de régua cuja violação não produz erro nenhum — a prova sai bonita e é lixo. Já
+custou uma rodada inteira por uma comparação cega com um lado em `pt` e outro em `en`, com a régua
+escrita no contrato e ausente do kick-off.
 
 **Você decide quando os outros dois não bastaram — não refaz o que eles fazem.** Verificação
 tem dono: o executor roda, o revisor re-roda. "Conferir", pra você, é metadado do git contra o
@@ -673,24 +667,22 @@ três se resolvem sem perguntar a ninguém:
    o mais recente, mensagens `type: "assistant"`; a última costuma ser exatamente o que faltou).
 3. **A sessão sumiu** → seção abaixo: abre outra e segue.
 
-**E você não reenvia antes de olhar o disco.** Dono da vez `idle` e nada chegou: o arquivo dele pode
-já estar lá (foi o que aconteceu três vezes em 48h), e o transcript quase sempre tem o texto inteiro.
-Ler custa um `cat`; reenviar custa um turno da sessão paga e pode chegar duplicado.
+**Você não reenvia antes de olhar o disco.** O arquivo dele pode já estar lá, e o transcript quase
+sempre tem o texto inteiro. Ler custa um `cat`; reenviar custa um turno da sessão paga e pode
+chegar duplicado.
 
-**Antes de culpar o canal, olhe o pane do destinatário.** Um assistente de primeira execução aberto
-na sessão dela recusa toda digitação, e o backend reporta isso como "sessão indisponível" — que
-parece fila quebrada. Medido em 18/08/2026: um `Esc` no pane fez a entrega passar de primeira, e
-duas conclusões que o árbitro tinha escrito sobre "a fila está quebrada" estavam erradas.
+**E antes de culpar o canal, olhe o pane do destinatário.** Um assistente de primeira execução
+aberto na sessão dela recusa toda digitação, e o backend reporta isso como "sessão indisponível" —
+que parece fila quebrada e não é.
 
 **Todo mundo do time ocioso ao mesmo tempo é o alarme mais forte que existe**, porque em operação
-normal alguém está sempre com a bola. Se você chegou nesse estado sem ter fechado uma Task, alguma
-coisa não chegou.
+normal alguém está sempre com a bola. Chegou nesse estado sem ter fechado uma Task: alguma coisa
+não chegou.
 
 Não fique olhando, e **não pergunte "e aí?"**: as duas coisas gastam turno seu, que é o token mais
 caro da mesa. Deixe uma **vigia em segundo plano** — um laço de shell, não um turno de modelo — que
-consulta o estado das sessões e termina (te acordando) quando o dono da vez fica ocioso.
-
-Use o script que já vem com a skill:
+consulta o estado das sessões e te acorda quando o dono da vez fica ocioso. Use o script que já vem
+com a skill:
 
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
@@ -698,19 +690,17 @@ systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=Resta
   -d ~/.hangar/orq/<data>-<gid>/registro.md
 ```
 
-**Os minutos vão por flag (`-m 5`), NUNCA como número solto no fim.** Com mais de três sessões, o
-número posicional era lido como NOME de sessão e os alarmes iam pra uma sessão chamada "5" —
-medido em 17/08/2026: 10 alarmes corretos entregues a sessões chamadas "10" e "8", enquanto o
-grupo parava por horas. Foi a própria documentação desta seção que ensinou a forma errada. O
-`-d` aponta o registro: a vigia te cobra se ele ficar 60 min sem escrita.
+Três detalhes do comando, e cada um já custou o alarme inteiro:
 
-**Por que não `setsid nohup … &`** (que era a receita até 17/08/2026): medido duas vezes numa máquina
-real, o processo **não sobrevive ao turno** — some do `ps`, log vazio, e o script roda sem erro nenhum
-em primeiro plano. Uma vigia que morre junto com você não cobre o caso que ela existe para cobrir, que
-é justamente você morrer. O `--property=Restart=always` é a outra metade: sem ele, a unidade que
-morrer por qualquer motivo deixa o trabalho sem rede, e você só descobre horas depois.
-
-**O último nome é sempre o árbitro**, e o número no fim são os minutos de silêncio (padrão 5).
+- **Os minutos vão por flag (`-m 5`), nunca como número solto no fim** — com mais de três sessões o
+  número posicional vira NOME de sessão, e os alarmes passam a ser entregues a uma sessão chamada
+  "5" enquanto o grupo para.
+- **Serviço, não `setsid nohup … &`**: o processo em segundo plano do turno **não sobrevive a
+  ele** — some do `ps`, log vazio, sem erro nenhum. Vigia que morre junto com você não cobre o caso
+  que ela existe pra cobrir, que é justamente você morrer. E `Restart=always` é a outra metade: sem
+  ele, a unidade que cair deixa o trabalho sem rede e você descobre horas depois.
+- **O último nome é sempre o árbitro**, e o `-d` aponta o registro: a vigia te cobra se ele ficar
+  60 min sem escrita.
 
 **A vigia cobre quem tem a BOLA agora, mais você — e mais ninguém.** A lista de sessões do comando é
 o estado da vez, não a tabela do contrato: sessão que ainda não abriu, sessão aposentada e sessão
@@ -730,17 +720,12 @@ sem trabalho (tudo aprovado, esperando decisão do usuário) com a vigia viva s�
 cutucão em sessão paga. Desarme **antes** de perguntar ao usuário, e rearme quando a resposta
 chegar. Árbitro em `awaiting_input` esperando resposta humana não é árbitro caído — é o estado
 legítimo de quem já entregou a decisão; a vigia não distingue os dois, e quem distingue é você, que
-é justamente quem ela acorda. Medido em 24/08/2026: vigia deixada apontada para uma sessão que já
-tinha ENTREGADO disparou **dezenas** de alarmes em ~3h30 e cobrou silêncio de um registro que não
-tinha o que registrar.
+é justamente quem ela acorda.
 
-Medido em 17–18/08/2026: **dez alarmes falsos, todos da mesma família** — sessão parada por ordem do
-árbitro lida como sessão quebrada. Dois por sessões que a tabela do contrato previa e que o árbitro
-tinha decidido **não abrir ainda**; três por revisores que já tinham entregado o parecer; os outros
-por executores esperando veredito. A vigia não sabe distinguir "parada porque acabou" de "parada
-porque quebrou" — e quem sabe é você, que é justamente quem ela acorda. **Cutucão em sessão parada de
-propósito não é só ruído: é um turno pago**, e a sessão cutucada divide árvore com quem está medindo
-os portões.
+**Alarme falso tem uma família só, e ela é grande:** sessão parada por ordem sua lida como sessão
+quebrada — a que ainda não abriu, a que já entregou, a que espera veredito. A vigia não distingue
+"parada porque acabou" de "parada porque quebrou". **Cutucão em sessão parada de propósito não é só
+ruído: é um turno pago**, e a sessão cutucada divide árvore com quem está medindo os portões.
 
 E o comando da vigia **não** vai no arquivo de regras com a lista de nomes: vai a forma. Lista de
 sessões escrita num arquivo envelhece entre a escrita e a leitura, que é a mesma razão de o estado da
@@ -749,34 +734,27 @@ vez morar no kick-off.
 Ela consulta a cada 60s e acorda você depois de N leituras paradas seguidas. Três coisas nela não
 são detalhe de implementação — são o que a faz funcionar, e cada uma custou uma falha real:
 
-**1. Ela vigia TODAS, incluindo VOCÊ.** Cada executor, cada revisor e o árbitro. Vigiar só o par
-deixa de fora o modo de falha que ninguém estava olhando: o juiz cair. Medido em 14/08/2026 — o
-árbitro levou `API Error: 529 Overloaded` às 03:36 e ficou morto até 06:09. O executor tinha
-entregado às 03:32, o relato ficou preso na fila, o revisor não tinha o que revisar, e **o time
-inteiro parou 2h30**. Do lado de dentro isso é invisível: o turno seguinte parece continuar de onde
-o anterior parou.
+**1. Ela vigia TODAS, incluindo VOCÊ.** Vigiar só o par deixa de fora o modo de falha que ninguém
+olhava: o juiz cair. Árbitro derrubado por erro de provedor de madrugada já parou um time inteiro
+por 2h30 com o relato preso na fila — e do lado de dentro isso é invisível, porque o turno seguinte
+parece continuar de onde o anterior parou.
 
-**2. Ele acorda por `hangar-send --tmux`, não por `echo`.** Um `echo` num processo de fundo só vira
-notificação se o turno do árbitro estiver **vivo** — com ele morto, a vigia grita para o vazio, que
-foi exatamente o que aconteceu. Um `hangar-send` entra como **prompt** e reanima turno morto. O
-`--tmux` é obrigatório: o `hangar-send` normal **recusa** falar com sessão Claude da mesma máquina
-(rc=3, "use SendMessage"), e um script de shell não tem `SendMessage`.
+**2. Ela acorda por `hangar-send --tmux`, não por `echo`.** Um `echo` de processo de fundo só vira
+notificação se o turno já estiver **vivo**; com ele morto, a vigia grita pro vazio. O `hangar-send`
+entra como **prompt** e reanima turno morto. O `--tmux` é obrigatório: o `hangar-send` normal
+**recusa** falar com sessão Claude da mesma máquina (rc=3, "use SendMessage"), e script de shell não
+tem `SendMessage`.
 
 **3. Ela dispara quando o DONO DA VEZ para — não quando todos param.** Árbitro parado com alguém
-trabalhando é o estado **normal** (ele está esperando, e acordá-lo ali é ruído). `sumiu` conta como
-parado: sessão morta também não está trabalhando. Duas exceções avisam na hora, sem esperar o
-silêncio: sessão **travada** (diz `working` mas não produz evento há 10 min) e sessão **sem cota**.
+trabalhando é o estado **normal**. `sumiu` conta como parado: sessão morta também não trabalha. Duas
+exceções avisam na hora, sem esperar o silêncio: sessão **travada** (diz `working` e não produz
+evento há 10 min) e sessão **sem cota**.
 
-> **Por que não "todas paradas", que era a regra até 22/08/2026.** Duas medições que a condição
-> antiga não concilia: em 14/08 o árbitro morreu por 2h30 e o time parou junto — por isso ele
-> **continua na lista**; e em 22/08 um executor ficou **mais de 30 minutos morto sem nenhum alarme**,
-> porque o árbitro, conversando com o usuário, contava como "trabalhando" e mascarava o silêncio dele.
-> Quem percebeu foi o usuário. Ou seja: com o árbitro dentro, a condição "todas paradas" fica cega
-> justamente para o caso que a vigia existe pra cobrir. O árbitro é vigiado por regra própria —
-> árbitro parado **com relato na fila** é alarme; árbitro respondendo ao usuário não mascara ninguém.
->
-> Enquanto o script não distinguir os dois papéis, o paliativo é **tirar o árbitro da lista sempre
-> que houver executor com a bola** e devolvê-lo quando ninguém tiver.
+> A condição "todas paradas" foi tentada e é cega justamente para o caso que a vigia cobre: com o
+> árbitro na lista, ele conversando com o usuário conta como "trabalhando" e mascara um executor
+> morto — já custou 30 minutos de silêncio que quem percebeu foi o usuário. Enquanto o script não
+> separar os dois papéis, o paliativo é **tirar o árbitro da lista sempre que houver executor com a
+> bola** e devolvê-lo quando ninguém tiver.
 
 **A vigia PERGUNTA; ela não manda parar.** É um laço de shell que lê dois números — quanto tempo
 sem evento, e se o último comando repetiu — e a partir disso ela **não sabe** se a sessão está
@@ -1057,49 +1035,34 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 
 ## Antes do time: leia a política de contas da máquina
 
-**`~/.hangar/orquestracao-contas.md`** diz quais contas existem, quais são assinatura (trocar de
-modelo dentro delas é de graça), quais estão travadas num modelo só e quais **cobram por token** —
-essas últimas são proibidas, porque a conta errada vira fatura do usuário, não erro de execução.
+**A política mora em `~/.hangar/orquestracao-contas.md`, não aqui.** Leia antes de abrir a primeira
+sessão e **copie pro contrato só o que este trabalho vai usar**, na tabela `## Quem é quem` das
+regras. Não repasse o arquivo inteiro: sessão escolhe pelo que está no contrato.
 
-**Leia pela tabela, não pela prosa.** A seção `## O que pode` traz a tabela fixa
-`| conta | provider | apelido | modelos | trocar? |` — é ela que o modal Orquestração do hangar
-grava quando o usuário liga/desliga uma conta pela tela. **Conta que não está na tabela é
-proibida**, mesmo que um parágrafo mais abaixo pareça permitir: prosa envelhece, a tabela é o que
-o usuário mexeu por último. `modelos` = ids liberados naquela conta (`*` = qualquer);
-`trocar?` = `não` significa travada no único modelo da lista.
+Três regras de leitura, e as três protegem a mesma coisa — a fatura de quem confiou em você:
 
-Leia antes de abrir a primeira sessão e **copie pro contrato só o que este trabalho vai usar** —
-na tabela `## Quem é quem` das regras: uma linha por papel, ou mais de uma quando ele reveza entre
-contas (coluna `vez` — formato em `planejamento.md`, fase 2, e a regra do rodízio em "Abrir uma
-sessão", abaixo). Não repasse o arquivo inteiro: sessão escolhe pelo que está no contrato.
+- **Vale a tabela, não a prosa.** O arquivo tem uma tabela de contas liberadas, gravada pelo painel
+  quando o usuário liga ou desliga uma conta pela tela. **Conta fora da tabela é proibida**, mesmo
+  que um parágrafo abaixo pareça permitir: prosa envelhece, a tabela é o que ele mexeu por último.
+- **Conta que cobra por token é proibida.** Você descobre que uma conta existe; só o usuário sabe
+  se ela debita. Discovery lista provider, modelo e endereço — nada disso diz de quem é a conta nem
+  se ele quer gastar ali. Provider novo que apareceu desde a última revisão **não entra por conta
+  própria**. Numa máquina real, 341 dos 390 modelos do catálogo eram de um provider pago por token.
+- **Arquivo ausente ou velho → monte o inventário e faça UMA pergunta** (quais podem, quais são
+  assinatura, quais cobram), escreva a resposta lá com a data, e **não abra sessão nenhuma** até
+  ela chegar — nem "só pra testar". A receita de levantamento está dentro do próprio arquivo.
 
-**Recado que começa com "A configuração de modelos do grupo mudou no painel"** vem do modal, não
-de uma sessão: o usuário trocou provider/conta/modelo/esforço de um papel pela tela, e a linha já
-está gravada no `regras-<gid>.md`. Regra, sem exceção: **releia o arquivo** e aplique assim
-(decisão do usuário, 26/08/2026):
-- sessão daquele papel **parada** (idle) → feche-a e abra outra já na configuração nova (o Claude
-  não troca conta nem modelo com a sessão aberta; trocar É fechar e abrir);
-- sessão **trabalhando** → deixe terminar a tarefa em curso; a próxima sessão daquele papel nasce
-  na configuração nova. Não mate trabalho em andamento — o contexto que ela construiu vale mais
-  que o modelo dela;
-- o papel é o **seu** (árbitro) → termine a tarefa em curso e passe o bastão a um árbitro novo,
-  aberto na configuração nova, pelo rito de "Sucessão do árbitro" (acima).
+**Recado "a configuração de modelos do grupo mudou no painel"** vem da tela, não de uma sessão: a
+linha já está no `regras-<gid>.md`. Releia o arquivo e aplique — trocar conta ou modelo **é** fechar
+e abrir, o Claude não troca com a sessão aberta:
+
+| A sessão daquele papel está… | O que fazer |
+|---|---|
+| parada | feche e abra outra já na configuração nova |
+| trabalhando | deixe terminar; a **próxima** nasce na nova. O contexto dela vale mais que o modelo |
+| é você (árbitro) | termine a tarefa e passe o bastão pelo rito de "Sucessão do árbitro" |
+
 Responda o recado só se ele pedir.
-
-O arquivo não existe, ou está velho? **Monte o inventário e pergunte** — a receita de levantamento
-está dentro dele (motores do `engines.json`, providers do catálogo do agente, config dirs de conta).
-Chegue com a lista pronta e faça **uma pergunta só**: quais podem ser usadas, quais são assinatura,
-quais cobram por token. Escreva a resposta lá, com a data. Enquanto não houver resposta, **não abra
-sessão nenhuma** — nem "só pra testar".
-
-**Você descobre que a conta existe; só o usuário sabe se ela cobra.** Discovery lista provider,
-modelo e `base_url` — nada disso diz se é assinatura ou se debita por token, de quem é a conta, nem
-se ele quer que agente gaste ali. A pista serve pra formular a pergunta, nunca pra pular ela.
-
-**Toda vez que for montar time, compare os providers do catálogo com a tabela do arquivo.** Provider
-novo que apareceu desde a última revisão **não entra por conta própria**: pare e pergunte. Numa
-máquina real, 341 dos 390 modelos do catálogo eram de um provider pago por token — escolher "pelo que
-aparece na lista" é o caminho mais curto pra gastar dinheiro de quem confiou em você.
 
 ## Levante o ferramental ANTES de abrir o time
 
@@ -1134,36 +1097,18 @@ dele**: sai do contrato, como o de todo mundo — mas quem cria e confere é ele
 
 ### Papel com rodízio: qual linha da tabela vale para esta Task
 
-A tabela `## Quem é quem` pode ter uma sétima coluna, `vez` — ela só aparece quando algum papel do
-time de fato reveza entre contas; um contrato sem rodízio continua com as seis colunas de sempre e
-nada aqui muda. Papel com `vez` vazia ou `-` é o caso comum: uma conta só, sempre a mesma, decida
-como sempre decidiu.
+A tabela `## Quem é quem` ganha uma sétima coluna, `vez`, **só** quando algum papel reveza entre
+contas. Sem rodízio, ela não existe e nada aqui muda.
 
-Papel com `vez` numérica **reveza**: mais de uma linha para o mesmo papel, cada uma numa conta.
-**A Task N cabe à linha de índice `(N-1) % total`**, contando só as linhas daquele papel, na ordem
-em que aparecem na tabela — normalmente numeradas 1, 2, 3… nessa mesma ordem. Ninguém "decide" de
-quem é a vez: é aritmética sobre o número da Task, e por isso duas sessões que fazem a conta
-separadas chegam ao mesmo resultado, sem precisar combinar nada. Exemplo, 3 contas de revisor e 6
-Tasks:
-
-| Task (N) | (N-1) % 3 | linha da tabela |
-|---|---|---|
-| 1 | 0 | 1ª |
-| 2 | 1 | 2ª |
-| 3 | 2 | 3ª |
-| 4 | 0 | 1ª |
-| 5 | 1 | 2ª |
-| 6 | 2 | 3ª |
-
-Cada conta roda 2 das 6 Tasks. **A Task 4 volta pra 1ª linha, não continua de onde a Task 3
-parou** — é o erro mais fácil de cometer aqui, junto do desvio de 1: é `(N-1)`, não `N` — a Task 1
-usa a **1ª** linha (índice 0), não a segunda.
+Papel com `vez` numérica tem mais de uma linha, uma por conta, e **a Task N cabe à linha de índice
+`(N-1) % total`** daquele papel, na ordem da tabela. Ninguém decide de quem é a vez — é aritmética
+sobre o número da Task, e é por isso que duas sessões que fazem a conta separadas chegam ao mesmo
+resultado sem combinar nada. Os dois erros fáceis: é `(N-1)`, não `N` (a Task 1 usa a **primeira**
+linha), e a volta reinicia — com 3 contas, a Task 4 é da primeira de novo, não a continuação da 3.
 
 O rodízio **não** é paralelismo: numa Task existe **uma** sessão daquele papel, na conta da vez.
-Rodar Tasks ao mesmo tempo é outra coisa, com outro mecanismo — Tasks de verdade independentes,
-uma worktree cada, cada uma com o seu executor e o seu revisor —, declarada no PLANO e não na
-tabela de papéis. Está em `paralelo-worktree.md`. Um papel que reveza continua servindo às Tasks
-uma de cada vez, e a regra "Um hash, UM revisor" vale inteira.
+Rodar Tasks ao mesmo tempo é outro mecanismo — worktree por Task, declarado no PLANO, em
+`paralelo-worktree.md` —, e a regra "uma rodada, UM revisor" vale inteira nos dois casos.
 
 Vale para toda sessão que você cria. Os cinco passos são **uma unidade**: o turno não fecha
 no meio deles.
@@ -1276,15 +1221,13 @@ momento que ela vai precisar de adendo**, com o gatilho do adendo escrito junto:
       depois de `<hash da 1ª aprovação>`. Sessão nova, numeração continuando do último P.
 ```
 
-Medido em 16/08/2026: a fase 5 rodou às 09:xx em paralelo com uma Task e ficou obsoleta em sete
-horas — quatro Tasks e duas revisões de conjunto depois. O adendo custou uma sessão inteira e só
-existiu porque o árbitro lembrou dele. Sem o item escrito, a metade mais recente do trabalho —
-justamente a que rodou com o time e as réguas já ajustados — não teria sido destilada por ninguém.
+Uma fase 5 lançada cedo já ficou obsoleta em sete horas, quatro Tasks depois, e o adendo só existiu
+porque alguém lembrou. Sem o item escrito, a metade mais recente do trabalho — justamente a que
+rodou com o time e as réguas já ajustados — não é destilada por ninguém.
 
 Escreva os dois **antes de abrir a primeira sessão do time**. No fim você estará saturado, e branch
-aprovada *parece* o fim do trabalho — é por isso que o revisor final também tem ordem de te lembrar
-(`revisao-final.md`, última seção). Duas redes, porque a sua memória no fim é a menos confiável das
-três.
+aprovada *parece* o fim do trabalho — por isso o revisor final também tem ordem de te lembrar
+(`revisao-final.md`). Duas redes, porque a sua memória no fim é a menos confiável das três.
 
 **Revisor final é sempre sessão nova**, criada pela receita acima, que não participou de
 nada. Subagente dentro da sua sessão não serve: seu contexto já viu o trabalho todo, e é
