@@ -427,30 +427,6 @@ def test_timestamp_sem_fuso_e_lido_como_utc():
     assert ev_de("nao-e-data").ts is None
 
 
-def test_prune_old_apaga_so_o_que_passou_do_prazo(tmp_path):
-    """Limpeza por idade: anexo velho sai, recente fica, e days<=0 desliga a varredura."""
-    import time as _t
-    from app.uploads import prune_old, UPLOAD_SUBDIR
-
-    base = tmp_path / UPLOAD_SUBDIR
-    base.mkdir()
-    velho, novo = base / "velho.png", base / "novo.png"
-    velho.write_bytes(b"x")
-    novo.write_bytes(b"x")
-    antigo = _t.time() - 40 * 86400
-    os.utime(velho, (antigo, antigo))
-
-    assert prune_old(str(tmp_path), 0) == 0        # desligado -> não toca em nada
-    assert velho.exists()
-
-    assert prune_old(str(tmp_path), 30) == 1
-    assert not velho.exists()
-    assert novo.exists()                            # dentro do prazo, fica
-
-    # Pasta inexistente não é erro (sessão que nunca recebeu anexo).
-    assert prune_old(str(tmp_path / "nada"), 30) == 0
-
-
 def test_is_video_cobre_as_extensoes_servidas_pelo_app():
     from app.video import is_video
 

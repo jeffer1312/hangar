@@ -174,6 +174,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 
 ## Conventions & gotchas (read before touching UI / backend lifecycle)
 
+- **Comentário explica o PORQUÊ, e é curto. A história medida mora AQUI, não no código.** Este
+  arquivo é longo de propósito: é o lugar onde decisão medida, com data e número, sobrevive e é
+  relida. O código não é. Lá vale a regra, não a arqueologia dela: se o comentário repete o que o
+  nome da função já diz, sai; se a explicação ficou maior que o trecho que ela explica, o excedente
+  vira linha de commit ou entrada nesta seção. **Medição, versão de CLI e data envelhecem** — num
+  comentário elas viram afirmação falsa que ninguém revisa, enquanto aqui e na mensagem de commit
+  estão datadas por construção. Isso não é licença pra código mudo: o porquê não-óbvio continua
+  obrigatório, em uma ou duas linhas.
 - **O nome antigo (`claude-pocket`) só existe em ponte de compatibilidade** (rename de 25/08/2026).
   O código conhece **um** nome: as pastas de dados são `<config>/.hangar-*`, o cofre do sync é
   `~/.hangar/`, os comandos são `hangar-send`/`hangar-engine`/`hangar-codex`/`hangar-conta` e
@@ -190,9 +198,17 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     primeiro (`migracao_sidecars.caminho_de_leitura`), porque no Windows link de ARQUIVO exige
     privilégio — para pasta há junção (`mklink /J`), para arquivo não há equivalente. **Escrita
     sempre no nome novo.**
-  - `<cwd>/.hangar-uploads/` é a única pasta que mora no projeto, fora do alcance da migração da
-    subida: `uploads._base()` a migra na primeira leitura daquele cwd, senão todo anexo antigo
-    citado por caminho absoluto no histórico viraria 404.
+  - Anexo e diário de orquestração **saíram do projeto e do config dir da conta** (31/08/2026) e
+    moram no cofre: `~/.hangar/uploads/<projeto>/<sessão>/` (`uploads._base()`) e `~/.hangar/orq/`
+    (`orq.raiz_padrao()`). Os dois estavam no lugar errado pelo mesmo motivo — um lugar que
+    pertence a *outra coisa*. O anexo nascia dentro do repositório trabalhado, e o `.gitignore` que
+    o esconde é o DESTE projeto: em qualquer outro repositório ele aparecia como
+    untracked (32 pastas dessas na máquina, uma no próprio `~`). O diário morava em
+    `~/.claude/orq-retros`, que é o config dir de UMA conta, enquanto o contrato de um trabalho põe
+    papéis em contas diferentes de propósito — e um executor Pi/Kimi/Codex não tem `~/.claude`.
+    **Nada foi migrado**, por decisão do usuário: o que ficou no lugar antigo continua no disco,
+    vira 404 no histórico do celular e some do painel de orquestração. A trava do endpoint `/file`
+    não muda nada disso — ela exige que o caminho apareça no transcript, e aceita absoluto.
   - **Marcador de bloco gerenciado** (rc do shell, `~/.tmux.conf`, `keybinds.lua`, o bloco
     "Sessões-irmãs" do `~/.claude/CLAUDE.md`) virou `hangar`, e cada installer **arranca o bloco do
     marcador antigo antes** de escrever o novo — sem isso o arquivo do usuário fica com os dois, um

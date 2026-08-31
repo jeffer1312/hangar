@@ -162,5 +162,6 @@ def test_execucao_sem_fim_e_viva(tmp_path):
     assert e.fim is None and e.resultado is None
 
 
-def test_raiz_padrao_aponta_orq_retros():
-    assert orq.raiz_padrao() == Path.home() / ".claude" / "orq-retros"
+def test_raiz_padrao_e_o_cofre_nao_o_config_dir_de_uma_conta():
+    # `~/.claude` é o config dir de UMA conta, e um trabalho põe papéis em contas diferentes.
+    assert orq.raiz_padrao() == Path.home() / ".hangar" / "orq"

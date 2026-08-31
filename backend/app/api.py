@@ -3723,7 +3723,7 @@ async def upload(name: str, request: Request):
     filename = request.headers.get("x-filename") or request.query_params.get("name")
     try:
         # write_bytes (ate 100 MiB) no threadpool pra nao bloquear o loop durante o disco.
-        path = await asyncio.to_thread(save_upload, info.cwd, data, filename)
+        path = await asyncio.to_thread(save_upload, info.cwd, name, data, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
 
@@ -3774,7 +3774,7 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
     data = await request.body()
     filename = request.headers.get("x-filename") or request.query_params.get("name")
     try:
-        path = await asyncio.to_thread(save_upload, info.cwd, data, filename)
+        path = await asyncio.to_thread(save_upload, info.cwd, name, data, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     # Transcricao (chamada de rede bloqueante) no threadpool pra nao travar o loop.
@@ -3850,7 +3850,7 @@ def serve_upload(name: str, filename: str):
     if info is None or not info.cwd:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     try:
-        path = resolve_upload(info.cwd, filename)
+        path = resolve_upload(info.cwd, name, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return FileResponse(path)
@@ -3864,7 +3864,7 @@ def list_session_uploads(name: str):
     info = _cached_info_sync(name)
     if info is None or not info.cwd:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    return {"files": list_uploads(info.cwd, runtime_config.get("upload_retention_days"))}
+    return {"files": list_uploads(info.cwd, name, runtime_config.get("upload_retention_days"))}
 
 
 class CheckoutBody(_StrictBody):

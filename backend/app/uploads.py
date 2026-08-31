@@ -2,30 +2,33 @@ import os
 import re
 import secrets
 import time
+import unicodedata
 from pathlib import Path
-
-from app import migracao_sidecars
 
 # Qualquer tipo de arquivo (imagem, video, pdf, ...). A extensao vem do filename do cliente,
 # sanitizada; o NOME e gerado pelo servidor (sem path traversal). O assistente le/preview pelo path.
 MAX_BYTES = 100 * 1024 * 1024  # 100 MiB
-UPLOAD_SUBDIR = ".hangar-uploads"
-_UPLOAD_SUBDIR_ANTIGO = ".claude-pocket-uploads"
 _EXT_RE = re.compile(r"[^a-z0-9]")
+_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
-def _base(cwd: str) -> Path:
-    """A pasta de anexos do projeto, migrando o nome antigo na primeira vez que se olha pra ela.
+def _raiz() -> Path:
+    """A raiz do cofre de anexos. Seam de teste: a suíte troca isto para não escrever no HOME real."""
+    return Path.home() / ".hangar" / "uploads"
 
-    Esta é a única pasta do app que mora no diretório do PROJETO, e não num `~/.claude*` — a
-    migração da subida do backend (app/migracao_sidecars.py) não tem como enumerar todos os cwds.
-    Aqui ela sai de graça: quem faz upload ou pede um anexo já sabe o cwd. Sem isso, todo anexo
-    mandado antes do rename viraria 404 no histórico, porque a mensagem antiga cita o caminho
-    absoluto com o nome velho.
-    """
-    base = Path(os.path.realpath(cwd)) / UPLOAD_SUBDIR
-    migracao_sidecars.migrar_caminho(base.with_name(_UPLOAD_SUBDIR_ANTIGO), base)
-    return base
+
+def _slug(txt: str) -> str:
+    """Nome de pasta seguro. Acento vira a letra base antes do filtro, senão "Área de trabalho"
+    sairia como "rea-de-trabalho". `..` vira `_`: o nome vem de fora e é concatenado no caminho."""
+    plano = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode()
+    s = _SLUG_RE.sub("-", plano).strip("-") or "_"
+    return "_" if s in (".", "..") else s[:64]
+
+
+def _base(cwd: str, sessao: str) -> Path:
+    """`~/.hangar/uploads/<projeto>/<sessão>/`. Fora do cwd porque o `.gitignore` que esconde a
+    pasta é o DESTE repo — em qualquer outro ela aparece untracked. Sem migração do que já existe."""
+    return _raiz() / _slug(Path(os.path.realpath(cwd)).name) / _slug(sessao)
 
 
 class UploadError(Exception):
@@ -44,8 +47,8 @@ def _safe_ext(filename: str | None) -> str:
     return ext or "bin"
 
 
-def save_upload(cwd: str, content: bytes, filename: str | None) -> str:
-    """Salva os bytes em <cwd>/.hangar-uploads/ com nome gerado pelo servidor
+def save_upload(cwd: str, sessao: str, content: bytes, filename: str | None) -> str:
+    """Salva os bytes em ~/.hangar/uploads/<projeto>/<sessão>/ com nome gerado pelo servidor
     (nunca o filename do cliente -> sem path traversal). Devolve o path absoluto.
     Levanta UploadError(status, detail) em arquivo vazio / grande demais."""
     if not content:
@@ -54,7 +57,7 @@ def save_upload(cwd: str, content: bytes, filename: str | None) -> str:
         raise UploadError(413, "arquivo maior que 100 MiB")
 
     ext = _safe_ext(filename)
-    base = _base(cwd)
+    base = _base(cwd, sessao)
     base.mkdir(parents=True, exist_ok=True)
     fname = f"{int(time.time())}-{secrets.token_hex(3)}.{ext}"
     dest = base / fname
@@ -69,18 +72,18 @@ def save_upload(cwd: str, content: bytes, filename: str | None) -> str:
 def prune_old(cwd: str, days: int) -> int:
     """Apaga anexos com mais de `days` dias e devolve quantos saíram. days <= 0 = não limpa.
 
-    A pasta nunca era varrida e só crescia dentro do projeto. Roda no upload (barato: um listdir)
-    em vez de num job separado — sem agendador pra manter. Erro de arquivo individual não derruba a
-    varredura nem o upload; a limpeza é higiene, não pode custar o anexo do usuário.
+    Varre o projeto inteiro, não só a sessão que está enviando: sessão encerrada também cresce.
+    Roda no upload em vez de num job — sem agendador pra manter. Erro de arquivo individual não
+    derruba a varredura: a limpeza é higiene, não pode custar o anexo do usuário.
     """
     if days <= 0:
         return 0
-    base = _base(cwd)
-    if not base.is_dir():
+    projeto = _base(cwd, "_").parent
+    if not projeto.is_dir():
         return 0
     corte = time.time() - days * 86400
     n = 0
-    for f in base.iterdir():
+    for f in projeto.rglob("*"):
         try:
             if f.is_file() and f.stat().st_mtime < corte:
                 f.unlink()
@@ -90,7 +93,7 @@ def prune_old(cwd: str, days: int) -> int:
     return n
 
 
-def list_uploads(cwd: str, retention_days: int) -> list[dict]:
+def list_uploads(cwd: str, sessao: str, retention_days: int) -> list[dict]:
     """Anexos da sessão (mais recente primeiro) pra galeria: filename, size, mtime, expires_in_days.
 
     A expiração vem daqui e não da UI porque quem sabe o prazo é o servidor (`upload_retention_days`);
@@ -100,7 +103,7 @@ def list_uploads(cwd: str, retention_days: int) -> list[dict]:
     alguém enviar o próximo. Mentir "0.1 dia" esconderia justamente o arquivo prestes a sumir.
     Erro de arquivo individual pula o item — a galeria inteira não pode cair por um stat quebrado.
     """
-    base = _base(cwd)
+    base = _base(cwd, sessao)
     if not base.is_dir():
         return []
     agora = time.time()
@@ -125,12 +128,12 @@ def list_uploads(cwd: str, retention_days: int) -> list[dict]:
     return out
 
 
-def resolve_upload(cwd: str, filename: str) -> str:
-    """Resolve <cwd>/.hangar-uploads/<filename> com seguranca, pra servir o arquivo.
+def resolve_upload(cwd: str, sessao: str, filename: str) -> str:
+    """Resolve ~/.hangar/uploads/<projeto>/<sessão>/<filename> com seguranca, pra servir o arquivo.
     Rejeita filename com separador/.. (400) e arquivo inexistente (404)."""
     if "/" in filename or "\\" in filename or ".." in filename or not filename:
         raise UploadError(400, "filename invalido")
-    base = _base(cwd)
+    base = _base(cwd, sessao)
     real_base = os.path.realpath(base)
     real = os.path.realpath(base / filename)
     if real != os.path.join(real_base, filename):

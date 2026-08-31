@@ -48,7 +48,9 @@ class ExecucaoResumo:
 
 
 def raiz_padrao() -> Path:
-    return Path.home() / ".claude" / "orq-retros"
+    """O cofre, não o config dir de uma conta: um trabalho põe papéis em contas diferentes, e
+    executor Pi/Kimi/Codex não tem `~/.claude` nenhum. Sem migração do que ficou no lugar antigo."""
+    return Path.home() / ".hangar" / "orq"
 
 
 def _int_ou_none(v) -> int | None:
