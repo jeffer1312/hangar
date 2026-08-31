@@ -1922,6 +1922,8 @@
   "contas_secao_lista": "Accounts on this server",
   "contas_legenda": "Every credential in one place — Claude sign-in or API key. Each has its own limit, history and name.",
   "contas_atualizar": "Refresh list and quotas",
+  "contas_ver_compacta": "Compact list view",
+  "contas_ver_completa": "Full list view",
   "contas_atualizado_ha": "updated {n} ago",
   "contas_em_uso": "in use",
   "contas_nao_conectada": "Not connected — never signed in to this account.",

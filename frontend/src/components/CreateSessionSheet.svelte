@@ -994,7 +994,11 @@
                        // images, motor traz context_length/vision, cache do Claude traz name, e os
                        // aliases reduzidos não trazem nada. Campos ausentes simplesmente somem do
                        // hint (.filter(Boolean)) — nenhum formato pode quebrar a linha.
-                       hint: [mod.provider,
+                       // O id (a chave) abre o hint quando o label é o NOME: com nome repetido na
+                       // lista (duas contas com o mesmo modelo) o hint é o único lugar que os
+                       // distingue. Quando label já é o id, mostrá-lo de novo seria redundância.
+                       hint: [(mod.name && mod.name !== mod.id) ? mod.id : null,
+                              mod.provider,
                               mod.context ?? (mod.context_length ? `${Math.round(mod.context_length / 1000)}K` : null),
                               (mod.vision ?? mod.images) ? '👁' : null].filter(Boolean).join(' · ') }))]}
             onchange={(v) => {

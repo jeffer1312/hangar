@@ -1922,6 +1922,8 @@
   "contas_secao_lista": "Contas neste servidor",
   "contas_legenda": "Toda credencial num lugar só — login do Claude ou chave de API. Cada uma tem seu limite, seu histórico e seu nome.",
   "contas_atualizar": "Atualizar lista e cotas",
+  "contas_ver_compacta": "Ver lista compacta",
+  "contas_ver_completa": "Ver lista completa",
   "contas_atualizado_ha": "atualizado há {n}",
   "contas_em_uso": "em uso",
   "contas_nao_conectada": "Não está conectada — nunca entrou nesta conta.",

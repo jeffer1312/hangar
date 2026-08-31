@@ -69,10 +69,18 @@
     // Abre pra baixo por padrão; pra cima só quando lá caberia mais. `maxH` é o espaço REAL do lado
     // escolhido, então a lista rola dentro de si em vez de vazar (que era o bug do nativo).
     const paraCima = abaixo < 180 && acima > abaixo;
+    // Em tela estreita a largura do CAMPO não basta: num formulário de duas colunas (o trio de
+    // modelo/esforço do CreateSessionSheet) cada campo tem ~170px e id de modelo fica ilegível.
+    // A lista aberta então toma quase a viewport, ancorada no campo mas sem vazar pelas bordas.
+    const estreito = window.innerWidth < 820;
+    const width = estreito ? Math.min(window.innerWidth - margem * 2, 480) : r.width;
+    const left = estreito
+      ? Math.min(Math.max(margem, r.left), window.innerWidth - width - margem)
+      : r.left;
     pos = {
       top: paraCima ? Math.max(margem, r.top - Math.min(acima, 320)) : r.bottom + 4,
-      left: r.left,
-      width: r.width,
+      left,
+      width,
       maxH: Math.min(paraCima ? acima : abaixo, 320),
       acima: paraCima,
     };
@@ -270,7 +278,13 @@
   }
   .sel-item[data-ativo='true'] { background: var(--bg-hover); }
   .sel-item.atual { color: var(--accent); }
-  .sel-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Label quebra linha em vez de truncar: id de modelo (muse-spark-1.2-contributor-free) não cabe
+     numa linha nem com a lista larga, e cortado o usuário não distingue um modelo do irmão. */
+  .sel-item-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .sel-item-hint { flex: none; color: var(--text-secondary); font-size: 12px; }
+  /* Alvo de toque: 7px de padding vertical dá ~30px de item, abaixo dos ~44px de dedo. */
+  @media (pointer: coarse) {
+    .sel-item { padding: 10px var(--space-2); }
+  }
   .sel-vazio { margin: 0; padding: var(--space-3); color: var(--text-secondary); font-size: 13px; text-align: center; }
 </style>
