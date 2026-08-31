@@ -21,6 +21,7 @@
   import { navMode, type NavMode } from '../../lib/navMode.svelte';
   import { toolLook, type ToolLook } from '../../lib/toolLook.svelte';
   import { taskRows, type TaskRowsPref } from '../../lib/taskRows.svelte';
+  import { pensamentoTools, type PensamentoTools } from '../../lib/pensamentoTools.svelte';
   import { tableChartPref, type TableChartPref } from '../../lib/tableChartPref.svelte';
   import * as m from '../../paraglide/messages';
 
@@ -311,6 +312,27 @@
       ]}
       ariaLabel={m.config_aparencia_tarefas()}
       onPick={(v) => { taskRows.pref = v as TaskRowsPref; }}
+    />
+  </div>
+
+  <!-- Quanto da chamada feita no meio do raciocínio some dentro do bloco recolhido. "Tudo" esconde
+       Bash/Edit/Read também — medido, 89,6% das chamadas caem entre dois pensamentos, então ali a
+       sessão de código inteira fica atrás de um clique. Por isso o padrão é só a busca, e por isso
+       a descrição avisa em vez de deixar a pessoa descobrir sozinha. -->
+  <div class="ap-row">
+    <div class="ap-label">
+      <strong>{m.config_aparencia_pensamento_tools()}</strong>
+      <span>{m.config_aparencia_pensamento_tools_desc()}</span>
+    </div>
+    <SegmentedPicker
+      value={pensamentoTools.pref}
+      options={[
+        { v: 'nada', label: m.config_aparencia_pensamento_nada(), aria: m.config_aparencia_pensamento_nada_aria() },
+        { v: 'busca', label: m.config_aparencia_pensamento_busca(), aria: m.config_aparencia_pensamento_busca_aria() },
+        { v: 'tudo', label: m.config_aparencia_pensamento_tudo(), aria: m.config_aparencia_pensamento_tudo_aria() },
+      ]}
+      ariaLabel={m.config_aparencia_pensamento_tools()}
+      onPick={(v) => { pensamentoTools.pref = v as PensamentoTools; }}
     />
   </div>
 

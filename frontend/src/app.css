@@ -112,7 +112,7 @@
      mesmo veu (regra em html[data-bg="image"] la embaixo). Ideal continua sendo `transparent`, como
      a textarea do Composer: quem carrega o material e o container. Estes dois sao pra quando a
      superficie precisa existir mesmo — campo de texto, chip, bloco de saida. */
-  --surface-raised:  var(--bg-elevated);   /* chip, botao pequeno, menu flutuante */
+  --surface-raised:  var(--bg-elevated);   /* chip, botao pequeno */
   --surface-inset:   var(--bg-base);       /* campo de texto, area de entrada */
   --surface-card:    var(--bg-surface);    /* card, caixa de leitura (board, plano, contrato) */
 

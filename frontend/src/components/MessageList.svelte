@@ -11,6 +11,7 @@
   import TaskRows from './TaskRows.svelte';
   import { foldTasks } from '../lib/tasks';
   import { taskRows } from '../lib/taskRows.svelte';
+  import { entraNoPensamento } from '../lib/pensamentoTools.svelte';
   import OptionButtons from './OptionButtons.svelte';
   import AskQuestionCard from './AskQuestionCard.svelte';
   import Spinner from './Spinner.svelte';
@@ -217,18 +218,10 @@
     | { type: 'pensamento'; id: string; eventos: ChatEvent[] }
     | { type: 'tasks'; id: string };
 
-  // Busca feita NO MEIO do raciocínio entra dentro do bloco recolhido, e não como card solto: no
-  // app do Claude ela só aparece quando você abre o pensamento, porque foi ali que aconteceu.
-  // Só a busca — medido nos transcripts desta máquina: 89,6% das chamadas caem entre dois
-  // pensamentos (4333 de 4838), e a maioria é Bash (1646), Edit (918) e Read (327). Engolir todas
-  // esconderia a sessão inteira atrás de uma linha; a busca é o caso raro (376 no acervo todo) e é
-  // a única que ninguém acompanha passo a passo.
-  const EH_BUSCA = (n?: string | null) => n === 'WebSearch' || n === 'WebFetch';
-  // O ToolSearch é o carregador das outras ferramentas ("select:WebSearch,WebFetch"): entra no
-  // bloco junto e nem é desenhado lá dentro. Sem isto ele CAI NO MEIO do pensamento e da busca,
-  // fecha o bloco, e as primeiras buscas do turno ficam de fora enquanto as seguintes entram —
-  // dois blocos com regra diferente na mesma conversa.
-  const EH_CARREGADOR = (n?: string | null) => n === 'ToolSearch';
+  // Chamada feita NO MEIO do raciocínio pode ficar escondida dentro do bloco recolhido, em vez de
+  // card solto: no app do Claude a busca só aparece quando você abre o pensamento, porque foi ali
+  // que ela aconteceu. QUANTO entra é escolha da pessoa (Aparência → O que entra no pensamento) —
+  // ver lib/pensamentoTools, que também guarda o porquê de o padrão ser só a busca.
 
   // Lista de tarefas do agente, dobrada do fluxo INTEIRO (não só da janela visível): o TaskCreate
   // que nomeou a tarefa pode ter rolado pra fora da janela enquanto o TaskUpdate que a concluiu
@@ -266,8 +259,10 @@
       // Busca só é engolida quando há um pensamento ABERTO antes dela — busca solta (o usuário
       // pediu "pesquisa X", sem raciocínio no meio) continua card normal, senão sumiria numa
       // linha que não explica nada.
-      if (pens.length && ev.kind === 'tool_use'
-          && (EH_BUSCA(ev.tool_name) || EH_CARREGADOR(ev.tool_name))) { pens.push(ev); continue; }
+      if (pens.length && ev.kind === 'tool_use' && entraNoPensamento(ev.tool_name)) {
+        pens.push(ev);
+        continue;
+      }
       flushPens();
       if (taskRows.ativo && ev.kind === 'tool_use' && EH_TASK(ev.tool_name)) {
         flush();

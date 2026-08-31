@@ -10,7 +10,6 @@ import * as m from '../paraglide/messages';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
   import SessionContextMenu from './SessionContextMenu.svelte';
   import Git from './Git.svelte';
-  import LoopSheet from './LoopSheet.svelte';
 import ConfirmDialog from './ConfirmDialog.svelte';
   import SessionSwitcherSheet from './SessionSwitcherSheet.svelte';
   import HoverPreview from './HoverPreview.svelte';
@@ -504,18 +503,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     gitSheet = null;
     if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
   }
-  // Loop runner (LoopSheet) aberto pelo menu de contexto, no repo da sessao, SEM abrir o chat.
-  // Mesma mecânica do gitSheet/menuGit acima (mira o server dono, restaura no fechar).
-  let loopSheet = $state<{ name: string } | null>(null);
-  let loopSheetPrevServer: string | null = null;
-  function menuLoop() {
-    if (!menu) return;
-    const { name, serverId } = menu;
-    loopSheetPrevServer = getActiveId();
-    selectServer(serverId);
-    loopSheet = { name };
-    closeMenu();
-  }
   // Passar o bastão: abre a folha de criar já sabendo quem é a origem. Ao contrário do Git/Loop, o
   // servidor NÃO é apontado aqui — quem faz isso é a própria folha (o `pickTarget` da abertura), e
   // travado no da origem: o dossiê é arquivo no disco daquela máquina.
@@ -524,10 +511,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     bastaoAlvo = { name: menu.name, cwd: menu.cwd, serverId: menu.serverId };
     showCreate = true;
     closeMenu();
-  }
-  function closeLoopSheet() {
-    loopSheet = null;
-    if (loopSheetPrevServer) { selectServer(loopSheetPrevServer); loopSheetPrevServer = null; }
   }
   async function doCheckout(name: string, serverId: string, branch: string) {
     flash(`checkout ${branch}…`);
@@ -1265,7 +1248,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   <SessionContextMenu x={m.x} y={m.y} name={m.name} serverId={m.serverId} cwd={m.cwd} thenTarget={m.thenTarget}
     chainCandidates={chainCandidates(m.serverId, m.name)}
     onClose={closeMenu}
-    onRename={menuRename} onDelete={menuDelete} onGit={menuGit} onLoop={menuLoop} onBastao={menuBastao}
+    onRename={menuRename} onDelete={menuDelete} onGit={menuGit} onBastao={menuBastao}
     onPickBranch={(branch, dirty) => {
       if (dirty) confirmBranch = { name: m.name, serverId: m.serverId, branch };
       else doCheckout(m.name, m.serverId, branch);
@@ -1314,10 +1297,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   <Git open={true} sessionName={gitSheet.name} desktop={true} {filesInContext} onClose={closeGitSheet} />
 {/if}
 
-<!-- Loop runner aberto pelo menu de contexto / botao da linha (repo da sessao, sem abrir o chat). -->
-{#if loopSheet}
-  <LoopSheet open={true} sessionName={loopSheet.name} onClose={closeLoopSheet} />
-{/if}
 
 <!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
 {#if confirmDel}

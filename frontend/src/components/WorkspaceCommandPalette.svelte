@@ -176,7 +176,11 @@
     overflow: hidden;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-xl, 16px);
-    background: var(--surface-raised);
+    /* Fundo SÓLIDO, mesma regra do Popover e do menu de contexto: a paleta flutua sobre a
+       conversa, e texto sobre texto não se lê nem com a Solidez alta. */
+    background: var(--bg-elevated);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
     animation: palette-in 160ms var(--ease-out);
   }

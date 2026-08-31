@@ -189,7 +189,12 @@
     max-width: min(320px, calc(100vw - var(--space-6)));
     max-height: min(70vh, 560px);
     overflow-y: auto;
-    background: var(--surface-raised);
+    /* Fundo SÓLIDO, mesma regra do Popover e do menu de contexto: menu flutuante cobre conteúdo
+       que rola por baixo, e o slider Solidez (pensado pra chip sobre papel de parede) deixava a
+       lista de trás legível através dos itens. */
+    background: var(--bg-elevated);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);

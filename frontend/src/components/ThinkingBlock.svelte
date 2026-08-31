@@ -2,6 +2,7 @@
   import * as m from '../paraglide/messages';
   import { summarizeToolInput } from '../lib/format';
   import { pensamentoEmPt } from '../lib/api';
+  import { ehBusca } from '../lib/pensamentoTools.svelte';
   import type { ChatEvent } from '../lib/types';
 
   // Um turno de raciocínio RECOLHIDO numa linha só, do tamanho do cabeçalho de grupo de ferramenta
@@ -22,7 +23,7 @@
   const pensamentos = $derived(eventos.filter((e) => e.kind === 'thinking'));
   // O ToolSearch vem junto (senão quebraria o bloco, ver MessageList), mas não é desenhado: ele é
   // encanamento — "select:WebSearch,WebFetch" não diz nada a quem quer saber o que foi pesquisado.
-  const buscas = $derived(
+  const chamadas = $derived(
     eventos.filter((e) => e.kind === 'tool_use' && e.tool_name !== 'ToolSearch'),
   );
 
@@ -35,16 +36,18 @@
     return fim > 0 && fim < 140 ? limpo.slice(0, fim + 1) : limpo;
   });
 
-  // Rótulo do estado aberto. Sem contagem de passos: eles estão à vista logo abaixo, e a contagem
-  // ainda obrigava a decidir entre "1 passos" e "1 passo". O que a lista aberta NÃO conta sozinha
-  // é quantas buscas há mais abaixo, fora da tela — por isso só a busca é contada.
-  const rotulo = $derived(
-    buscas.length === 0
-      ? m.pensamento_rotulo()
-      : buscas.length === 1
-        ? m.pensamento_uma_busca()
-        : m.pensamento_buscas({ n: buscas.length }),
-  );
+  // Rótulo do estado aberto. Sem contagem de passos: eles estão à vista logo abaixo. O que a lista
+  // aberta NÃO conta sozinha é quanta chamada há mais abaixo, fora da tela — essa é a contada.
+  // Conta BUSCA quando só há busca lá dentro, e CHAMADA quando entrou Bash/Edit/Read junto (modo
+  // "Tudo"): dizer "3 buscas" pra um bloco que esconde cinco curl seria mentir sobre o que o
+  // clique revela.
+  const soBusca = $derived(chamadas.every((e) => ehBusca(e.tool_name)));
+  const rotulo = $derived.by(() => {
+    const n = chamadas.length;
+    if (n === 0) return m.pensamento_rotulo();
+    if (soBusca) return n === 1 ? m.pensamento_uma_busca() : m.pensamento_buscas({ n });
+    return n === 1 ? m.pensamento_uma_chamada() : m.pensamento_chamadas({ n });
+  });
 
   function paragrafos(texto: string): string[] {
     return texto.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
@@ -121,13 +124,20 @@
           {#each paragrafos(pt[ev.id] ?? ev.text ?? '') as p, i (i)}<p>{p}</p>{/each}
         {:else if ev.tool_name === 'ToolSearch'}
           <!-- encanamento: entra no bloco só pra não quebrá-lo, não vira linha -->
-        {:else}
+        {:else if ehBusca(ev.tool_name)}
           <p class="th-busca">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="1.7" aria-hidden="true">
               <circle cx="12" cy="12" r="9" />
               <path d="M3 12h18M12 3c2.5 2.7 2.5 15.3 0 18M12 3c-2.5 2.7-2.5 15.3 0 18" />
             </svg>
+            <span>{summarizeToolInput(ev.tool_name ?? '', ev.tool_input ?? {})}</span>
+          </p>
+        {:else}
+          <!-- No modo "Tudo" entra Bash, Read, Edit… O globo é da BUSCA: pôr o mesmo ícone num
+               `sed` diria que ele foi à rede. Aqui o nome da ferramenta é que identifica. -->
+          <p class="th-busca th-chamada">
+            <span class="th-tool">{ev.tool_name}</span>
             <span>{summarizeToolInput(ev.tool_name ?? '', ev.tool_input ?? {})}</span>
           </p>
         {/if}
@@ -207,4 +217,13 @@
     overflow-wrap: anywhere;
   }
   .th-busca svg { flex-shrink: 0; margin-top: 2px; color: var(--text-muted); }
+
+  /* Chamada que não é busca (modo "Tudo"): o nome da ferramenta no lugar do globo, em mono como no
+     card da conversa — é o que deixa `Bash` e `Read` distinguíveis de uma linha de pensamento. */
+  .th-chamada .th-tool {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
 </style>
