@@ -2,6 +2,7 @@
 name: orquestrar
 description: |
   Use quando o usuario pedir para tocar um trabalho grande com revisao independente e pouca interacao dele depois do planejamento - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - ou quando um plano grande/arriscado vai virar MR ou push. Use TAMBEM quando um kick-off mandar voce invocar esta skill e disser seu papel, e quando ja existe um trabalho desses em andamento e voce precisa saber o que fazer agora. Serve a trabalho de um repositorio ou de varios - o que a define e o trabalho quebrado em Tasks, o portao entre elas e o revisor independente, nao a quantidade de checkouts; para varios repos ela combina as interfaces antes e abre uma sessao por repo. Nao exige plano em formato nenhum - vale com plano do superpowers, plano de outro metodo, plano que o usuario escreveu a mao, ou nenhum plano (ela escreve um plano de orquestracao curto apontando pro material dele). NAO use para - tarefa pequena que uma sessao so resolve, revisao avulsa de um diff (subagent de review direto).
+allowed-tools: Bash(hangar-send:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git branch:*), Bash(git grep:*), Bash(tmux display:*), Bash(date:*)
 ---
 
 # Tubo: research → plano → execução autônoma com portão
