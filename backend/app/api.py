@@ -60,7 +60,6 @@ from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events
 from app.state import corrige_ocioso_kimi
-from app.uploads import rename_sessao as uploads_rename_sessao
 from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
@@ -1615,17 +1614,11 @@ def rename_session(name: str, body: RenameBody):
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if new == name:
         return {"ok": True, "name": name}
-    info_antes = _cached_info_sync(name)   # o cwd, pra mover a pasta de anexos depois do rename
     if tmux.has_session(new):
         raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
     if not tmux.rename_session(name, new):
         raise HTTPException(500, detail=erro("sessao_falha_renomear", "falha ao renomear"))
     registry.rename(name, new)  # migra o cache name->jsonl (senao serve transcript errado pos-rename)
-    if info_antes is not None and info_antes.cwd:   # anexos: a pasta do cofre e por sessao
-        try:
-            uploads_rename_sessao(info_antes.cwd, name, new)
-        except OSError:
-            _log.warning("rename: anexos de %s ficaram no nome antigo", name, exc_info=True)
     from app.pqueue import PromptQueue
     try:
         oq, nq = PromptQueue(name).path, PromptQueue(new).path
@@ -3711,6 +3704,13 @@ async def engine_modelos(body: EngineProbeBody):
     return {"modelos": modelos}
 
 
+def _id_upload(info: SessionInfo) -> str:
+    """Id durável da sessão, que é como a pasta de anexos é chaveada — nome muda no rename, id não.
+    Sessão sem transcript ainda cai no nome: janela curta, e um anexo mandado nela fica para trás
+    se ela for renomeada depois."""
+    return session_key(info.jsonl) if info.jsonl else info.name
+
+
 @app.post("/api/sessions/{name}/upload", dependencies=[Depends(require_auth)])
 async def upload(name: str, request: Request):
     # Resolve o cwd da sessao (registry.list() ja traz cwd via tmux #{pane_current_path}).
@@ -3730,7 +3730,7 @@ async def upload(name: str, request: Request):
     filename = request.headers.get("x-filename") or request.query_params.get("name")
     try:
         # write_bytes (ate 100 MiB) no threadpool pra nao bloquear o loop durante o disco.
-        path = await asyncio.to_thread(save_upload, info.cwd, name, data, filename)
+        path = await asyncio.to_thread(save_upload, info.cwd, _id_upload(info), data, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
 
@@ -3781,7 +3781,7 @@ async def transcribe_audio(name: str, request: Request, limpar: bool = False, es
     data = await request.body()
     filename = request.headers.get("x-filename") or request.query_params.get("name")
     try:
-        path = await asyncio.to_thread(save_upload, info.cwd, name, data, filename)
+        path = await asyncio.to_thread(save_upload, info.cwd, _id_upload(info), data, filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     # Transcricao (chamada de rede bloqueante) no threadpool pra nao travar o loop.
@@ -3857,7 +3857,7 @@ def serve_upload(name: str, filename: str):
     if info is None or not info.cwd:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     try:
-        path = resolve_upload(info.cwd, name, filename)
+        path = resolve_upload(info.cwd, _id_upload(info), filename)
     except UploadError as e:
         raise HTTPException(e.status, e.detail)
     return FileResponse(path)
@@ -3871,7 +3871,7 @@ def list_session_uploads(name: str):
     info = _cached_info_sync(name)
     if info is None or not info.cwd:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    return {"files": list_uploads(info.cwd, name, runtime_config.get("upload_retention_days"))}
+    return {"files": list_uploads(info.cwd, _id_upload(info), runtime_config.get("upload_retention_days"))}
 
 
 class CheckoutBody(_StrictBody):

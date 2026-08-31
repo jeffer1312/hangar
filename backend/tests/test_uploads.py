@@ -75,23 +75,15 @@ def test_projetos_de_mesmo_nome_em_lugares_diferentes_nao_se_misturam(tmp_path, 
     assert pb.exists()
 
 
-def test_renomear_sessao_leva_os_anexos_junto(tmp_path):
-    # registry.rename move fila, then, pareamento e o shell escondido; sem isto os anexos ficavam
-    # no nome antigo e a galeria voltava vazia — indistinguivel de "sem anexos".
-    p = Path(save_upload(str(tmp_path), "nome-velho", PNG, "x.png"))
-    uploads.rename_sessao(str(tmp_path), "nome-velho", "nome-novo")
-    assert not p.exists()
-    achados = list_uploads(str(tmp_path), "nome-novo", 30)
-    assert [f["filename"] for f in achados] == [p.name]
-    assert list_uploads(str(tmp_path), "nome-velho", 30) == []
+def test_a_pasta_e_chaveada_pelo_ID_entao_o_rename_nao_a_alcanca(tmp_path):
+    # O identificador é o id da sessão (models.session_key), não o nome: renomear a sessão não muda
+    # o id, então a galeria continua de pé sem ninguém precisar mover pasta.
+    from app.models import session_key
 
-
-def test_rename_nao_sobrescreve_pasta_existente(tmp_path):
-    save_upload(str(tmp_path), "a", PNG, "x.png")
-    alvo = save_upload(str(tmp_path), "b", PNG, "y.png")
-    uploads.rename_sessao(str(tmp_path), "a", "b")   # destino ocupado -> nao mexe
-    assert Path(alvo).exists()
-    assert len(list_uploads(str(tmp_path), "a", 30)) == 1
+    sid = session_key("/qualquer/projects/dir/0fa9dee8-3392-4bf1-a65a-95cd0007cf60.jsonl")
+    p = Path(save_upload(str(tmp_path), sid, PNG, "x.png"))
+    assert p.parent.name == "0fa9dee8-3392-4bf1-a65a-95cd0007cf60"
+    assert [f["filename"] for f in list_uploads(str(tmp_path), sid, 30)] == [p.name]
 
 
 def test_save_upload_accepts_any_type(tmp_path):

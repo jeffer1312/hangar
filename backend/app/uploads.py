@@ -34,19 +34,12 @@ def _projeto(cwd: str) -> str:
     return f"{_slug(Path(real).name)}-{digest}"
 
 
-def rename_sessao(cwd: str, antigo: str, novo: str) -> None:
-    """Move a pasta de anexos quando a sessão é renomeada. Sem isto o rename os orfaniza: a galeria
-    volta vazia (indistinguível de "sem anexos") e o link antigo do transcript vira 404."""
-    de, para = _base(cwd, antigo), _base(cwd, novo)
-    if not de.is_dir() or de == para or para.exists():
-        return
-    para.parent.mkdir(parents=True, exist_ok=True)
-    de.rename(para)
-
-
 def _base(cwd: str, sessao: str) -> Path:
-    """`~/.hangar/uploads/<projeto>/<sessão>/`. Fora do cwd porque o `.gitignore` que esconde a
-    pasta é o DESTE repo — em qualquer outro ela aparece untracked. Sem migração do que já existe."""
+    """`~/.hangar/uploads/<projeto>/<id da sessão>/`. Fora do cwd porque o `.gitignore` que esconde
+    a pasta é o DESTE repo — em qualquer outro ela aparece untracked. Sem migração do que já existe.
+
+    `sessao` é o **id** (`models.session_key`), não o nome: nome muda com o rename e levaria a
+    galeria junto. Quem chama cai no nome só enquanto o transcript não nasceu."""
     return _raiz() / _projeto(cwd) / _slug(sessao)
 
 
