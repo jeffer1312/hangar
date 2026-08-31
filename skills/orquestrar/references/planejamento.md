@@ -56,8 +56,8 @@ Plano do usuário: <caminho absoluto>   (é ele que manda; isto aqui só orquest
 ## Tasks
 | # | O que é | Onde está no plano dele | Arquivos | Verificação | Prova |
 |---|---|---|---|---|---|
-| 1 | subir o esquema | seção "Banco", 2º parágrafo | migrations/… | `uv run pytest tests/test_schema.py` | suíte verde + a tabela existe |
-| 2 | tela de listagem | passo 3 da skill portar-tela | frontend/src/screens/… | `npm run check` | print da tela + comparação com a barra |
+| 1 | subir o esquema | seção "Banco", 2º parágrafo | `<paths de migração>` | `<comando de teste do repo>` | suíte verde + a tabela existe |
+| 2 | tela de listagem | passo 3 da skill de porte | `<paths de tela>` | `<comando de typecheck do repo>` | print da tela + comparação com a barra |
 
 ## O que o plano dele NÃO decide, e eu decidi aqui
 - Ordem: 1 antes de 2 (a tela lê a tabela).
@@ -74,8 +74,8 @@ decidir. Essa lista é o que você mostra a ele antes de lançar.
 método que o usuário escolher, ou à mão com você. O portão de saída vale igual.
 
 **A barra de progresso do app é a única coisa que depende de formato.** Ela lê `### Task N:` e
-`- [ ] **Step N: …**` (`backend/app/planprog.py`), e só — a palavra `Step` ali é literal, casada por
-regex, e é o único lugar desta skill onde ela ainda vale. Plano do usuário sem esse formato não
+`- [ ] **Step N: …**`, e só — a palavra `Step` ali é literal, casada por regex pelo contador do
+app, e é o único lugar desta skill onde ela ainda vale. Plano do usuário sem esse formato não
 mostra barra no celular — é **limitação, não defeito**: o trabalho roda igual. Quem quiser a barra
 escreve os passos nesse formato **no plano de orquestração**, que é seu; o do usuário fica intocado.
 
@@ -200,13 +200,13 @@ Além do que o `writing-plans` já pede, o plano carrega:
 - **passos escritos como `- [ ] **Step N: …**` (a palavra em inglês é literal aqui) — só se você
   quiser a barra de progresso no celular**,
   e então no arquivo que **você** escreve (o plano de orquestração), nunca reformatando o do
-  usuário. É o formato que o contador de progresso reconhece
-  (`_STEP_RE` em `backend/app/planprog.py`; `### Task N:` para os cabeçalhos). Numerar de outro
+  usuário. É o formato que o contador de progresso do app reconhece (`### Task N:` para os
+  cabeçalhos). Numerar de outro
   jeito (`Passo A`, `Etapa 1`) faz a Task inteira contar **zero** e a barra que o usuário acompanha
   no celular ficar parada com o trabalho andando. Receita partilhada por várias Tasks: escreva-a
   como texto explicativo e **repita os passos dentro de cada Task** — o executor lê uma Task por vez
-  e não pode depender de ter lido a anterior. Confira antes de aprovar:
-  `uv run python -c "from app.planprog import parse_plan; p=parse_plan('<caminho>', require_started=False); print(p.total, [t.total for t in p.tasks])"`
+  e não pode depender de ter lido a anterior. Antes de aprovar, confira que a barra conta o que você
+  espera: abra o plano no app e compare o total com o número de passos que você escreveu.
 - **Barra** das Tasks que mexem em pixel: contra o que o resultado vai ser comparado — ver abaixo.
 - **O que a revisão precisa cobrir** — ver abaixo. Isso entra **antes da Task 1**.
 - **Decisões em aberto**: o que ainda não foi decidido e quem decide. Lista vazia é a meta.
@@ -531,25 +531,25 @@ nunca executou.
 |---|---|
 | fixture com `__import__("app.main").app` | esse atributo não existe no projeto |
 | `raise HTTPException(..., erro(e.code, e.msg, msg=e.msg))` | `TypeError` — o parâmetro já é nomeado |
-| `pytest tests/test_git_ops.py -k path_diff` | **zero** testes selecionados: nenhum teste que o próprio plano escreveu tem `path_diff` no nome |
+| um comando de teste filtrado por nome | **zero** testes selecionados: nenhum teste que o próprio plano escreveu casava com o filtro |
 | "Expected: 6 PASS" | eram 8, e no passo seguinte 9 contra 11 reais |
-| "Lote A: nenhum arquivo em comum" | `git_ops.py` estava na Task 3 por desenho **e** na Task 1 por um passo — conflito de merge |
+| "Lote A: nenhum arquivo em comum" | um arquivo estava na Task 3 por desenho **e** na Task 1 por um passo — conflito de merge |
 | barra com coluna de número de linha | o componente que o próprio plano manda reusar não numera |
 
 Nenhum deles é erro de raciocínio: são coisas que **um comando teria respondido em segundos**.
 
 Antes de fechar o plano:
 
-- **Rode o que dá pra rodar.** Todo comando de verificação que você escreveu (`pytest -k …`,
-  `npm run …`) roda **agora**, no repo, e você cola a saída real — inclusive `0 selected`, que é a
-  resposta que denuncia o `-k` errado.
+- **Rode o que dá pra rodar.** Todo comando de verificação que você escreveu roda **agora**, no
+  repo, e você cola a saída real — inclusive um "0 selecionados", que é a resposta que denuncia
+  filtro de teste escrito no escuro.
 - **Toda função, atributo e fixture que o plano cita, confira que existe** — `grep` no repo. O
   auditor adversarial de 13/08 achou três arquivos citados que não existiam; o mesmo tipo de furo
   passou em 15/08 em nível de atributo.
 - **Contagem de teste: conte, não estime.** "Expected: N PASS" errado faz o executor achar que
   quebrou algo e ir procurar defeito onde não há.
 - **Disjunção de lote se confere no texto dos STEPS, não no bloco "Files".** Foi exatamente ali que a
-  colisão de 15/08 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py`; o passo 8 dela mandava
+  colisão de 15/08 se escondeu: o cabeçalho da Task 1 não citava o arquivo; o passo 8 dela mandava
   editá-lo.
 - **A barra tem que ser possível com o código que o plano manda reusar.** Mock desenhando o que o
   componente existente não faz é divergência garantida — decida no plano, não na Task.
@@ -626,6 +626,11 @@ arquivo.
    executor na hora** — decisão do usuário, 28/08/2026 (ver "A captura é do executor", acima).
 7. **PRODUZ** — Task de orquestração: passo de fumaça contra a fonte real, comando literal.
 8. **PRODUZ** — Pré-condição externa com dono declarado em cada passo que espera algo.
+   **Palco em aparelho ou processo separado é o caso que mais escapa aqui**, porque parece detalhe
+   de execução e não é: de que diretório o servidor sobe, qual porta cabe a cada Task, quem segura o
+   aparelho e quando libera. O executor não decide nada disso — ele só prova o que carregou. Numa
+   execução de 24h essas três linhas ausentes custaram três rodadas e meia, todas verdes do lado de
+   quem servia.
 9. **PRODUZ** — Lote paralelo com prova visual: navegador exclusivo por executor ou prova como seção
    crítica (`paralelo-worktree.md`).
 10. **AUDITA** — Cota restante de cada conta do time, com a hora da leitura, e o fallback autorizado
@@ -747,7 +752,7 @@ E um **diretório durável pros artefatos do trabalho**, decidido agora e escrit
 primeiro kick-off de cada sessão:
 
 ```
-~/.claude/orq-retros/<data>-<gid>/{pareceres,tasks,kickoffs,visual}/
+~/.hangar/orq/<data>-<gid>/{pareceres,tasks,kickoffs,visual}/
 ```
 
 Pareceres, recortes de Task, kick-offs e prints moram ali, **nunca em `/tmp`**, que some no reboot.

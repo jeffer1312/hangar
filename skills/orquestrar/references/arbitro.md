@@ -14,7 +14,7 @@ Você é o único que escreve no contrato.
 
 ## Você mantém QUATRO arquivos, e só um deles o time lê inteiro
 
-- **`~/.claude/orq-retros/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
+- **`~/.hangar/orq/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
   Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à
   vontade. **Só você lê.** Não mande esse caminho a ninguém.
 
@@ -27,7 +27,7 @@ Você é o único que escreve no contrato.
   imutável depois dele: quem é quem, intocáveis, gates, método, skill de domínio, branch, barras, o
   que a revisão precisa cobrir, contas. É o único que o time lê **inteiro**, e ele cabe em duas
   páginas porque quase nada é acrescentado depois.
-- **`~/.claude/orq-retros/<data>-<gid>/licoes.md` — as lições.** Toda régua que nascer no meio do
+- **`~/.hangar/orq/<data>-<gid>/licoes.md` — as lições.** Toda régua que nascer no meio do
   trabalho vai aqui, uma por bloco, com a **data** e a **prova medida** ao lado. **Cresce à vontade
   e nada nunca é apagado daqui.** Ninguém lê este arquivo inteiro: você escolhe, a cada kick-off, as
   três ou quatro que valem para aquela Task e **cola o texto delas** no kick-off.
@@ -41,7 +41,7 @@ Você é o único que escreve no contrato.
   Como escolher o que colar, a cada despacho: **lição serve a esta Task?** O critério é o assunto
   (tela, banco, canal, este arquivo específico), nunca a idade. Na dúvida, cola: quatro linhas a
   mais num kick-off são baratas; a régua que não chegou custou uma rodada, três vezes em 48h.
-- **`~/.claude/orq-retros/<data>-<gid>/eventos.jsonl` — o esqueleto que máquina lê.** Uma
+- **`~/.hangar/orq/<data>-<gid>/eventos.jsonl` — o esqueleto que máquina lê.** Uma
   linha JSON por acontecimento, escrita NO EVENTO, junto da linha de prosa do registro — não
   "depois". **É o único dos quatro com mais de um escritor:** o executor appenda a `entrega` de
   cada rodada e o revisor appenda o `veredito` dela, direto, sem passar por você. É o que mantém o
@@ -211,8 +211,8 @@ proibição dele para o contrato, escreva os três: o comando literal, o motivo,
 liberado**.
 
 ```markdown
-Proibido: `npm run check` neste repo — trava a máquina do usuário (~4 min, 100% de CPU).
-Liberado: `npx tsc --noEmit -p tsconfig.json` (12s) — é o que pega erro de tipo aqui.
+Proibido: `<verificador pesado>` neste repo — trava a máquina do usuário (~4 min, 100% de CPU).
+Liberado: `<a variante barata>` (12s) — é o que pega erro de tipo aqui.
 ```
 
 Alargar a proibição "por segurança" é o defeito, não o cuidado: medido em 24/08/2026, a regra dele
@@ -230,8 +230,8 @@ distinguir, no registro, exceção autorizada de violação.
 A exceção se escreve na linha do intocável, com escopo e data, antes de a Task ser liberada:
 
 ```markdown
-Intocáveis: backend/app/api.py, frontend/src/lib/api.ts
-  - EXCEÇÃO: `api.py` liberado na Task 7, só a função `listar_sessoes` — usuário, 2026-08-26.
+Intocáveis: <path/do/arquivo>, <outro/path>
+  - EXCEÇÃO: `<arquivo>` liberado na Task 7, só a função `<nome>` — usuário, <data>.
 ```
 
 E o kick-off leva a lista **com a exceção dentro**, do mesmo jeito que leva os intocáveis: literal,
@@ -253,8 +253,8 @@ do trabalho.
 **Antes de cada passe de bola — cinco linhas, na ordem, sempre:**
 
 1. A régua nova deste achado já está no `regras-<gid>.md`? Se não, escreva AGORA, antes de avisar a
-   sessão — sessão avisada repete o padrão na variação seguinte (medido 22/08/2026: o mesmo `adb logcat`
-   pendurado 3×, 77 min).
+   sessão — sessão avisada repete o padrão na variação seguinte (medido: o mesmo comando de log
+   pendurando 3×, 77 min perdidos).
 2. Kick-off/receita em arquivo; mensagem = caminho, via `"$(cat <<'EOF' … EOF)"` — nunca aspas duplas cruas.
 3. `entregue` lido? Agora confira engajamento: o ctx saiu do zero em 1 min? (medido: 24 min perdidos sem isso).
    **Só no kick-off** — no meio do laço quem confere isso é quem está esperando a bola.
@@ -695,7 +695,7 @@ Use o script que já vem com a skill:
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 \
-  -d ~/.claude/orq-retros/<data>-<gid>/registro.md
+  -d ~/.hangar/orq/<data>-<gid>/registro.md
 ```
 
 **Os minutos vão por flag (`-m 5`), NUNCA como número solto no fim.** Com mais de três sessões, o
@@ -722,7 +722,7 @@ todos os escritores, porque ali todos têm — uma vigia só, com todos eles den
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
-  -d ~/.claude/orq-retros/<data>-<gid>/registro.md
+  -d ~/.hangar/orq/<data>-<gid>/registro.md
 ```
 
 **Ninguém com a bola = vigia desarmada — e a bola com o USUÁRIO também é ninguém com a bola.** Time
@@ -911,7 +911,7 @@ por provedor **volta a viver** e retoma de onde parou, e aí há dois escritores
 ordem de parada diz: pare, não capture, não commite, **solte o palco sem matá-lo**, nada se perdeu.
 E **no mesmo ato, avise quem pode mandar receita pra ele** — o REPROVA vai direto do revisor ao
 executor, por desenho, e o revisor não sabe do endereço novo. Medido em 22–23/08/2026: uma sessão
-"aposentada" sem ordem escrita ressuscitou capturando no mesmo Metro, emulador e fixture da
+"aposentada" sem ordem escrita ressuscitou capturando no mesmo palco e nas mesmas fixtures da
 substituta (quem evitou os dois escritores foi ela perguntando, não o árbitro avisando); e uma
 receita foi despachada a uma sessão já fechada em 631k porque o revisor não tinha sido avisado.
 Avisado ANTES do fato (rodada seguinte), o caso não se repetiu.
@@ -1057,7 +1057,7 @@ Se o usuário quiser mesmo liberar cedo, a forma é:
 
 ## Antes do time: leia a política de contas da máquina
 
-**`~/.claude/orquestracao-contas.md`** diz quais contas existem, quais são assinatura (trocar de
+**`~/.hangar/orquestracao-contas.md`** diz quais contas existem, quais são assinatura (trocar de
 modelo dentro delas é de graça), quais estão travadas num modelo só e quais **cobram por token** —
 essas últimas são proibidas, porque a conta errada vira fatura do usuário, não erro de execução.
 
@@ -1263,7 +1263,7 @@ pergunte**, como qualquer Task fora do plano.
 - [ ] **Revisão da branch** — gatilho: todas as Tasks de código aprovadas. Sessão nova, `<base>..ponta`.
 - [ ] **Retrospectiva (fase 5)** — gatilho: a branch está na mão do usuário e **nada mais em voo**.
       Sessão nova, `references/retrospectiva.md`. Produto: patch proposto para a skill, em
-      `~/.claude/orq-retros/<data>-<gid>.md`.
+      `~/.hangar/orq/<data>-<gid>.md`.
 ```
 
 **O gatilho da fase 5 não é a primeira aprovação da revisão final.** Branch aprovada abre a porta

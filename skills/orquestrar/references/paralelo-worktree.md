@@ -30,7 +30,7 @@ e é para elas serem respondidas rápido que existe o comando.
    "só o `types.ts`" — um arquivo compartilhado já é a serialização voltando pela porta dos
    fundos, com merge no meio.
    **Confira nos PASSOS, não no cabeçalho da Task.** Foi ali que a colisão de
-   15/08/2026 se escondeu: o cabeçalho da Task 1 não citava `git_ops.py` e o passo 8 dela mandava
+   15/08/2026 se escondeu: o cabeçalho da Task 1 não citava o arquivo e o passo 8 dela mandava
    editá-lo — a declaração "nenhum arquivo em comum" estava escrita e era falsa.
 2. **Nenhum símbolo atravessa.** Nada que a Task A cria é consumido pela Task B do mesmo
    lote. Se B espera uma função que A ainda está escrevendo, B trabalha contra o vazio.
@@ -154,12 +154,13 @@ depois, zero valor alterado) e resolve por estratégia de merge — **nunca devo
 tem como resolver isso na branch de origem. Medido em 22/08/2026: duas rodadas de mensagem gastas
 tentando empurrar pro executor um conflito que só se resolvia no merge, uma delas por um único byte.
 
-**Recurso GLOBAL do APARELHO é seção crítica como o navegador**: o emulador, o `adb reverse` (que é do
-aparelho, não da sessão) e o armazenamento do app. Porta por Task no plano (T5→8083 … T10→8086 funcionou)
-e reverse refeito imediatamente antes de cada captura. Os executores negociando o aparelho entre si por
-recado, com slots de 10–15 min, funcionou sem o árbitro no meio — mas **sessão que morre segurando o
-recurso vira impasse silencioso**: medido em 22/08/2026, uma revisora ficou parada mais de 30 minutos
-esperando um emulador preso por uma sessão que tinha morrido. Duas regras daí: **quem segura libera
+**Recurso GLOBAL do APARELHO é seção crítica como o navegador**: o aparelho em si, o encaminhamento
+de porta (que é dele, não da sessão) e o armazenamento do app. Porta por Task no plano (T5→8083 …
+T10→8086 funcionou) e encaminhamento refeito imediatamente antes de cada captura. Os executores
+negociando o aparelho entre si por recado, com slots de 10–15 min, funcionou sem o árbitro no meio —
+mas **sessão que morre segurando o recurso vira impasse silencioso**: medido em 22/08/2026, uma
+revisora ficou parada mais de 30 minutos esperando um aparelho preso por uma sessão que tinha
+morrido. Duas regras daí: **quem segura libera
 ANTES de fechar o próprio trabalho**, e o árbitro **olha quem segura o quê** sempre que alguém fica
 ocioso sem motivo aparente.
 

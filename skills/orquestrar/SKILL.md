@@ -258,9 +258,9 @@ próprio desvio, e o árbitro só descobre relendo o arquivo.
 
 | Arquivo | Contém | Quem lê |
 |---|---|---|
-| `~/.claude/orq-retros/<data>-<gid>/registro.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
+| `~/.hangar/orq/<data>-<gid>/registro.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
 | `regras-<gid>.md` — **as regras** | o combinado do trabalho, que quase não muda: quem é quem, intocáveis, gates, método, branch, barras, o que a revisão cobre, contas | executor e revisor, **inteiro** |
-| `~/.claude/orq-retros/<data>-<gid>/licoes.md` — **as lições** | as réguas que a execução vai fixando, uma por bloco, com a data e a prova | **ninguém lê inteiro** — o árbitro cola no kick-off só as que servem àquela Task |
+| `~/.hangar/orq/<data>-<gid>/licoes.md` — **as lições** | as réguas que a execução vai fixando, uma por bloco, com a data e a prova | **ninguém lê inteiro** — o árbitro cola no kick-off só as que servem àquela Task |
 
 Existe um quarto, que nenhuma sessão lê: o `eventos.jsonl`, uma linha por acontecimento, que
 alimenta as telas do app e a retrospectiva. Ele é do árbitro e está descrito em
@@ -274,9 +274,9 @@ alimenta as telas do app e a retrospectiva. Ele é do árbitro e está descrito 
 A fronteira entre os três é o **tipo** do conteúdo, não o assunto:
 
 - **já aconteceu → registro** (a Task 4 foi reprovada quatro vezes);
-- **é o combinado deste trabalho → regras** (o executor é a sessão X, `api.py` é intocável);
-- **é uma régua que nasceu no meio e vale daqui pra frente → lições** (o `adb logcat` pendura, use
-  o `-d`).
+- **é o combinado deste trabalho → regras** (o executor é a sessão X, tal arquivo é intocável);
+- **é uma régua que nasceu no meio e vale daqui pra frente → lições** (aquele comando de log
+  pendura sem a flag que o faz sair).
 
 **As regras quase não mudam depois do lançamento; as lições crescem o trabalho inteiro.** É essa
 separação que resolve o problema real: régua nova é o produto normal de uma execução — toda rodada
@@ -321,7 +321,7 @@ arquivo que envelhece entre a escrita e a leitura.
 Como isso é feito depende do formato do material:
 
 - **Plano monolítico** (um arquivo com todas as Tasks) → **recorte**: a seção daquela Task mais o
-  cabeçalho curto (goal/architecture) para `~/.claude/orq-retros/<data>-<gid>/tasks/task-<N>.md` —
+  cabeçalho curto (goal/architecture) para `~/.hangar/orq/<data>-<gid>/tasks/task-<N>.md` —
   caminho durável, não `/tmp`, que some no reboot — e mande esse caminho. No trabalho de 14/08:
   plano inteiro ~30k tokens, Task recortada ~2,9k.
 - **Um arquivo por unidade** (tickets) → **aponte o arquivo do usuário**, sem copiar. A cópia
@@ -338,6 +338,26 @@ peça ao usuário quem é quem antes de mandar recado a alguém que não pediu p
 foram decididos pelo usuário — nenhuma sessão reabre isso porque a situação mudou. Em dúvida,
 **releia o contrato** antes de agir; ele não previu o caso, **pergunte**. Detalhe em
 `references/arbitro.md`, seção "Contrato fechado".
+
+## O teste de pertencimento — antes de escrever QUALQUER coisa nesta skill
+
+Toda execução dolorida produz uma lição, e toda lição quer virar linha aqui. É assim, e só assim,
+que uma orquestradora vira um manual do último projeto que deu errado. Antes de acrescentar
+qualquer regra, as três perguntas — e ela só entra se passar nas **três**:
+
+1. **É sobre COORDENAR, ou sobre o TRABALHO?** Papel, portão, passe de bola, o que conta como
+   prova, rotação, registro → é daqui. Ferramenta, stack, arquivo, comando de build, ambiente → não.
+2. **Tirando isto, a orquestração ainda funciona?** Se sim, não é desta skill.
+3. **Vale no próximo trabalho, noutro repositório, noutra linguagem?** Se a resposta começa com
+   "depende do projeto", é do plano.
+
+Reprovou numa? **Não some — muda de endereço**, e os endereços existem: o **plano** (ambiente,
+pré-condição, comando, porta), o **`CLAUDE.md` do projeto** (decisão medida daquele código), uma
+**skill de domínio** (o passo a passo de um tipo de trabalho que se repete) ou as **lições do
+trabalho** (régua que nasceu no meio e vale até ele fechar).
+
+O teste vale para o que já está escrito, não só para o que vai entrar: regra que não passa nas três
+sai daqui na próxima vez que alguém a ler.
 
 ## Travas que valem para todos os papéis
 
@@ -356,9 +376,10 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
   receita do revisor, régua nova do árbitro, patch da fase 5. Antes de escrever qualquer uma,
   pergunte: **"e quando não for esse caso?"** Resposta não coberta → o que você escreveu é a
   instância, não a regra: enuncie a condição e mova o caso pra prova. Isso **não** afrouxa a
-  exigência de medição — o princípio vem na frente **e** o caso medido vem junto, com data e número;
-  as duas coisas, sempre. Detalhe em `references/revisor.md` (receita) e
-  `references/retrospectiva.md` (patch).
+  exigência de medição — o que muda é **onde a medição mora**: aqui fica o princípio, e o caso com
+  data e número fica no registro do trabalho, na mensagem de commit ou no `CLAUDE.md` do projeto.
+  Escrever os dois no mesmo lugar é o que faz esta skill dobrar de tamanho a cada execução dolorida.
+  Detalhe em `references/revisor.md` (receita) e `references/retrospectiva.md` (patch).
 - **Ferramenta de fora — skill, subagente, comando — passa por TRÊS perguntas, e são sempre as
   três:** (1) **existe com esse nome?** Pode ter virado comando em vez de skill, mudado de nome, ou
   não estar instalada nesta conta (plugin é por diretório de configuração, e uma sessão em conta
@@ -420,7 +441,7 @@ foram decididos pelo usuário — nenhuma sessão reabre isso porque a situaçã
   automático pode chegar lá. Padrão escrito na tabela é decisão dele por omissão, e ele troca
   quando quiser, pelo modal ou pedindo.
 - **MODELO É DECISÃO DO USUÁRIO. Ninguém escolhe modelo fora do padrão acima.** A política de contas da máquina fica em
-  **`~/.claude/orquestracao-contas.md`** — quais contas existem, quais são assinatura (troca livre
+  **`~/.hangar/orquestracao-contas.md`** — quais contas existem, quais são assinatura (troca livre
   dentro da conta), quais são travadas num modelo e quais são proibidas por cobrarem por token. O
   árbitro **lê esse arquivo antes de montar time** e copia pro contrato só o que aquele trabalho vai
   usar. Arquivo ausente ou desatualizado: **levante o inventário e pergunte ao usuário** (a receita

@@ -93,7 +93,7 @@ crase e `$`, e um bloqueador que chega mutilado vira round perdida.
 ## Formato do parecer
 
 **O parecer e os prints não moram em `/tmp`.** O lançamento decide um caminho durável — o padrão é
-`~/.claude/orq-retros/<data>-<gid>/{pareceres,tasks,kickoffs,visual}/` — e é lá que você salva. `/tmp` some
+`~/.hangar/orq/<data>-<gid>/{pareceres,tasks,kickoffs,visual}/` — e é lá que você salva. `/tmp` some
 no reboot, e a fase 5 lê **exatamente** os pareceres: a linha de desperdício de cada rodada é a
 matéria-prima dela. Medido em 16/08/2026: a régua foi decidida de manhã e **duas** das três sessões
 de revisor abertas depois dela salvaram prova em `/tmp` assim mesmo; o árbitro teve de copiar os
@@ -120,7 +120,7 @@ ela acontece, em vez de depois.
 O caso que a criou, medido em 15/08/2026: uma Task de rotas levou **nove REPROVA seguidos, todos da
 mesma família** — impedir que a leitura de arquivo alcançasse o `.git`. Cada parecer fechava o
 caminho que o anterior nomeava, a solução crescia (`rev-parse` → adivinhação por marcadores no disco
-→ estado de sessão em memória dentro do `api.py`), e cada rodada isolada parecia justificada. Gastou
+→ estado de sessão em memória dentro do módulo de rotas), e cada rodada isolada parecia justificada. Gastou
 **3h58 numa Task estimada em 1h**. Quem cortou foi o usuário, de fora, perguntando por que o git
 tinha virado o centro de um gerenciador de arquivos; a resposta foi um guard de três linhas, aprovado
 de primeira, com −283/+37.
@@ -449,8 +449,8 @@ do commit, ou suba instância própria em outra porta (e nunca reinicie o servi�
 medir). Medido em 20/08/2026: processo no ar desde 02:36 respondendo por um commit das 04:29 quase
 virou falso "bloqueador aberto".
 
-Medido em 16/08/2026, o mesmo defeito por dois mecanismos: primeiro uma porta rodando `npm run
-preview` serviu um bundle de 40 minutos antes do commit — custou **três** medições refeitas e uma
+Medido em 16/08/2026, o mesmo defeito por dois mecanismos: primeiro uma porta servindo build
+pré-compilado entregou um bundle de 40 minutos antes do commit — custou **três** medições refeitas e uma
 prova de parecer anterior que teve de ser retirada; depois, já com o `build` feito antes, um service
 worker instalado serviu o `index.html` do próprio cache — e portanto o JS anterior. Nas quatro
 rodadas seguintes todo parecer trouxe o par conferido (`dist/index.html` → `index-C752Y9Ah.js`; a

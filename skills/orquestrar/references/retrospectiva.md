@@ -24,16 +24,16 @@ o problema era o desenho. Quem lê o registro **depois**, sem ter vivido, vê em
 ```bash
 # 1. o registro do árbitro — o diário: Task → hash → veredito, rodadas, decisões com data
 #    (mora no diretório durável; o `grupo-<gid>.md` do backend é apagado junto com o grupo)
-cat ~/.claude/orq-retros/<data>-<gid>/registro.md
+cat ~/.hangar/orq/<data>-<gid>/registro.md
 
 # 1b. os pareceres — a linha de DESPERDÍCIO de cada rodada é a matéria-prima da análise
-ls ~/.claude/orq-retros/<data>-<gid>/pareceres/*.md
+ls ~/.hangar/orq/<data>-<gid>/pareceres/*.md
 
 # 1c. os kick-offs — como cada sessão foi despachada (o que ela sabia ao começar)
-ls ~/.claude/orq-retros/<data>-<gid>/kickoffs/
+ls ~/.hangar/orq/<data>-<gid>/kickoffs/
 
 # 2. as LIÇÕES — toda régua que o árbitro precisou escrever no meio do trabalho
-cat ~/.claude/orq-retros/<data>-<gid>/licoes.md
+cat ~/.hangar/orq/<data>-<gid>/licoes.md
 
 # 3. a branch: quantos commits por Task, quantas rodadas de correção
 git log --oneline <base>..<ponta>
@@ -43,7 +43,7 @@ git -C <repo-da-skill> log --oneline --since="<data-de-início>" -- skills/orque
 git -C <repo-da-skill> diff <commit-antes-do-trabalho>..HEAD -- skills/orquestrar
 
 # 5. o eventos.jsonl — rodadas, vereditos e tempos por task JÁ contados pelo árbitro
-cat ~/.claude/orq-retros/<data>-<gid>/eventos.jsonl
+cat ~/.hangar/orq/<data>-<gid>/eventos.jsonl
 ```
 
 A quinta é a que dá número sem recontar na mão: rodadas, vereditos e tempo por task já vêm
@@ -93,9 +93,9 @@ realidade não bateu com o plano — e classifique:
 | Tipo de erro do plano | Como detectar | Exemplo medido (15/08/2026) |
 |---|---|---|
 | **Código que ninguém rodou** | executor relata `TypeError`, atributo inexistente, import faltando | fixture com `__import__("app.main").app`; `erro(code, msg, msg=msg)` levantando `TypeError` |
-| **Comando que não faz o que diz** | executor relata "não selecionou nada" / exit 5 | `pytest -k path_diff` com zero testes de nome correspondente |
+| **Comando que não faz o que diz** | executor relata "não selecionou nada" / código de saída de "nada a rodar" | filtro de teste por nome que não casa com teste nenhum |
 | **Contagem inventada** | "esperado 6 PASS", vieram 8 | dois passos seguidos com o número errado |
-| **Lote declarado disjunto que não era** | conflito de merge | `git_ops.py` na Task 3 por desenho e na Task 1 por um passo |
+| **Lote declarado disjunto que não era** | conflito de merge | um arquivo na Task 3 por desenho e na Task 1 por um passo |
 | **Defeito que o plano carregou adiante** | achado numa Task tardia com origem numa antiga | `motivo` em português desde a Task 3, visto na 11, virou Task extra |
 | **Barra pedindo o que o código reusado não faz** | divergência mock × componente existente | coluna de número de linha que o `DiffView` não tem |
 
@@ -172,7 +172,7 @@ exatamente essa força. Ao varrer, agrupe por **condição**, nunca pelo nome da
 ## Onde salvar, e quem aplica
 
 ```
-~/.claude/orq-retros/<data>-<gid>.md
+~/.hangar/orq/<data>-<gid>.md
 ```
 
 O patch é **proposta**. Quem aplica na skill é **o usuário** — e essa trava é o ponto inteiro: uma

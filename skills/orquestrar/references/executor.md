@@ -574,35 +574,23 @@ colocou na tela:
 Clique que não faz nada visível é **defeito**, não "provavelmente funciona": vá atrás do
 motivo (console, rede, o handler) antes de reportar.
 
-### Palco em aparelho ou processo separado
+### Quando o código atravessa um processo, uma porta ou um aparelho
 
-**A prova é o artefato que o ALVO carregou, não o que a tua máquina serve.** É a mesma família de
-"serviço de longa duração serve o código de quando subiu" e de "prova ao vivo mede o que está
-servido": sempre que o código atravessa um processo, uma porta ou um aparelho antes de virar o que
-você vai julgar, a pergunta é **qual build aquele lado está rodando** — e ela se responde lendo um
-marcador do teu commit no artefato que ele baixou, não confirmando do teu lado que o build saiu.
-Vale pra emulador, para o servidor que outra sessão subiu e para o binário instalado.
+**A prova é o artefato que o ALVO carregou, não o que a tua máquina serve.** Sempre que o código
+passa por um servidor, uma porta ou um aparelho antes de virar o que você vai julgar, a pergunta é
+**qual build aquele lado está rodando** — e ela se responde lendo um marcador do seu commit no
+artefato que ele baixou, nunca confirmando do seu lado que o build saiu. Requisição local verde e
+aparelho servindo o bundle de outra worktree convivem sem erro nenhum na tela.
 
-O caso medido abaixo é um palco de aplicativo (emulador + servidor de bundle). Tudo do palco web
-vale aqui, e cinco coisas são só daqui — as três primeiras custaram **três rodadas e meia** numa
-execução de 24h (21–22/08/2026):
+Isto é regra de **evidência**, e por isso mora aqui: o defeito desta família não trava você — ele
+fica verde. Você não pede ajuda ao árbitro porque acredita que provou.
 
-- **Metro sobe de dentro de `mobile/`**, não da raiz da worktree: `expo start` com o cwd errado responde
-  `UnableToResolveError` a todo pedido de bundle, e o aparelho segue mostrando o **cache anterior**, sem
-  erro nenhum na tela.
-- **Prove pelo bundle que o APARELHO baixou, não por `curl` no host.** O APK de desenvolvimento busca
-  direto em `10.0.2.2:<porta>` e **o `adb reverse` não age sobre ele** — dá pra ter o `curl` local verde
-  e o aparelho rodando o bundle de outra worktree (medido: 0 ocorrências do símbolo novo e 1196
-  referências à worktree da irmã). Leia no aparelho qual host/porta ele usou (`debug_http_host` via
-  `run-as`, ou o log de download) e exija **≥1 ocorrência de um marcador do SEU commit** nesse bundle.
-  Print sem isso não é evidência.
-- **`adb reverse` é global por aparelho**: porta fixa por Task no plano, e refaça o **seu** reverse
-  imediatamente antes de cada captura — o da irmã continua lá e cruza calado.
-- **Toque antes do print: teclado fechado.** "Pressable morto" com o teclado aberto por cima da lista é
-  coordenada errada, não defeito.
-- **Comando que SEGUE um processo trava o turno inteiro** — `adb logcat` sem `-d`, `tail -f`,
-  `expo start` em primeiro plano. Use `-d`, `timeout N`, ou log em arquivo em segundo plano. Medido 3×
-  na mesma execução, ~77 minutos de sessão parada.
+Já **como** subir esse palco — de que diretório sobe o servidor, qual porta é de cada Task, quem
+segura o aparelho — é do plano, não seu: é o item de pré-condição externa com dono do portão da
+fase 1. Faltou no plano, é bloqueio pro árbitro, não improviso seu.
+
+**Comando que SEGUE um processo trava o turno inteiro** — log em modo contínuo, `tail -f`, servidor
+em primeiro plano. Use a flag que faz sair, `timeout N`, ou log em arquivo em segundo plano.
 
 ### 3. Capture
 
@@ -629,7 +617,7 @@ dela é dele. Estado novo descoberto no meio vai pra lista do árbitro, não pro
 rodadas lá embaixo é da comparação cega; este é do trabalho de capturar — os dois coexistem.)
 
 Um print por estado, em **caminho absoluto** e num diretório **durável** — o que o lançamento
-decidiu (o padrão é `~/.claude/orq-retros/<data>-<gid>/visual/`), nunca `/tmp`, que some no reboot e
+decidiu (o padrão é `~/.hangar/orq/<data>-<gid>/visual/`), nunca `/tmp`, que some no reboot e
 leva junto a matéria-prima da retrospectiva. Corrigiu alguma coisa depois? **Recapture.** Print velho
 prova o bug, nunca a correção.
 

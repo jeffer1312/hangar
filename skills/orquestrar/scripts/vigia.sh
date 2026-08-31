@@ -24,7 +24,7 @@
 #
 # Uso: vigia.sh <sessao> [sessao...] <arbitro> [-m <minutos>] [-d <diario.md>]
 #      O ÚLTIMO nome é sempre o árbitro. Ex.:
-#      vigia.sh t1 t2 t3 review review2 arbitro -m 10 -d ~/.claude/orq-retros/<data>-<gid>/registro.md
+#      vigia.sh t1 t2 t3 review review2 arbitro -m 10 -d ~/.hangar/orq/<data>-<gid>/registro.md
 #      A forma antiga `vigia.sh exec rev arb 5` continua valendo.
 #
 # Três alarmes além do "todo mundo parado", cada um nascido de uma falha real de 17/08/2026:
