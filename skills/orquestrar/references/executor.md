@@ -83,19 +83,10 @@ permanente dele proibir os gates de tipo, lint e build num repositório enquanto
 mandava rodá-los: venceu a regra permanente. Autoridade dele, dada antes — não uma dispensa criada
 na hora por quem estava tocando o trabalho.
 
-**E leia a proibição dele pelo COMANDO exato, não pela categoria.** O mesmo caso tem uma segunda
-metade, e ela custou defeito: a regra proibia **um** verificador de tipos pesado, que trava a
-máquina dele; o contrato chegou dizendo "não rodem os gates", e a versão barata — que roda em
-segundos e era justamente a que pegava o erro — foi proibida junto. O trabalho seguiu sem
-verificação de tipo nenhuma e os erros apareceram no fim, todos de uma vez. **Proibição sem o
-comando literal ao lado é proibição que você não sabe aplicar: pergunte ao árbitro qual comando
-exatamente está proibido, e o que continua liberado.**
-
-Aconteceu duas vezes, com skills diferentes e a mesma causa: um método declarado no contrato rodou
-sem a metade executora, e o árbitro improvisou que os passos do plano eram o método (`SKILL.md`, "O
-MÉTODO não é escolha sua"); e uma skill invocada dentro de uma Task rodou só parte dos passos — o
-que faltou chegou ao usuário como lista de pendências, não como bloqueio. Nos dois casos a entrega
-saiu com o nome da skill em cima e o conteúdo dela pela metade.
+**E leia a proibição dele pelo COMANDO exato, não pela categoria.** Proibição alargada já cortou
+junto a variante barata que era justamente a que pegava o defeito (`arbitro.md`, "Restrição do
+usuário"). **Proibição sem o comando literal ao lado é proibição que você não sabe aplicar:
+pergunte ao árbitro qual comando exatamente está proibido, e o que continua liberado.**
 
 ## O ciclo
 
@@ -249,13 +240,9 @@ aparecer, elemento renderizar, arquivo de outra sessão — não se espera re-ch
   passo explícito, antes de qualquer checagem. Checar se existe uma coisa que só você criaria é
   esperar por ninguém.
 
-As duas Tasks mais caras já registradas foram assim: uma rodou **mais de mil vezes o mesmo comando
-byte a byte** (três horas, porque a aba do navegador tinha sido levada por outra sessão); a outra,
-outras tantas, esperando um palco que só ela podia montar. Nenhuma parou sozinha; em milhares de
-turnos de laço houve **dois** blocos de pensamento; e como cada volta reinjetava o contexto inteiro,
-a última hora custou **2,6×** a primeira fazendo estritamente menos. Os laços foram **68% da
-fatura** daquela execução. Exit 0 não é progresso: sucesso repetido é tão parado quanto erro
-repetido.
+As duas Tasks mais caras já registradas foram laços desses — milhares de voltas, cada uma
+reinjetando o contexto inteiro, 68% da fatura da execução. **Exit 0 não é progresso: sucesso
+repetido é tão parado quanto erro repetido.**
 
 ## O plano errou uma premissa no meio da Task: decidir sozinho ou parar?
 
@@ -277,13 +264,9 @@ que ele precisa tomar, e o caminho pior entra no commit com prova a favor.
 É o caso típico da diferença que só aparece **depois**: robustez a upgrade de dependência,
 acoplamento a detalhe interno de biblioteca, custo de manutenção. Nenhum teste de hoje mede isso.
 
-Já aconteceu assim: o executor descobriu que uma biblioteca gravava um valor sozinha na primeira
-leitura, o que quebrava um comportamento que o plano prometia. Ele parou e propôs distinguir os
-casos pelo **formato da chamada interna** da biblioteca. Os dois caminhos deixavam a suíte verde —
-então a parada foi certa, e no portão o árbitro trocou o discriminador por uma flag de intenção
-própria, porque depender do formato interno de uma biblioteca quebra **calado** no dia em que ela
-mudar a assinatura. Se ele tivesse "testado e reportado", o frágil teria entrado com a suíte verde a
-favor.
+Já aconteceu: dois caminhos deixavam a suíte verde, o executor parou, e no portão o mais frágil
+(que dependia de detalhe interno de biblioteca) foi descartado — "testado e reportado" teria feito
+o frágil entrar com a suíte verde a favor.
 
 **Dois casos param sempre, sem passar por esta tabela:** o plano prescreveu **código literal** e você
 vai desviar dele; ou a descoberta contradiz uma **decisão registrada** no plano ou no contrato (não

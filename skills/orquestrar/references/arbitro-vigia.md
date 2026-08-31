@@ -44,17 +44,9 @@ systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=Resta
   -d ~/.hangar/orq/<data>-<gid>/registro.md
 ```
 
-Três detalhes do comando, e cada um já custou o alarme inteiro:
-
-- **Os minutos vão por flag (`-m 5`), nunca como número solto no fim** — com mais de três sessões o
-  número posicional vira NOME de sessão, e os alarmes passam a ser entregues a uma sessão chamada
-  "5" enquanto o grupo para.
-- **Serviço, não `setsid nohup … &`**: o processo em segundo plano do turno **não sobrevive a
-  ele** — some do `ps`, log vazio, sem erro nenhum. Vigia que morre junto com você não cobre o caso
-  que ela existe pra cobrir, que é justamente você morrer. E `Restart=always` é a outra metade: sem
-  ele, a unidade que cair deixa o trabalho sem rede e você descobre horas depois.
-- **O último nome é sempre o árbitro**, e o `-d` aponta o registro: a vigia te cobra se ele ficar
-  60 min sem escrita.
+O manual do comando — flags, por que serviço e não processo de fundo, como confirmar que ela vive —
+está no **cabeçalho do próprio `vigia.sh`**. Duas coisas que são suas, não do script: o último nome
+é sempre o árbitro, e o `-d` aponta o registro (a vigia te cobra se ele ficar 60 min sem escrita).
 
 **A vigia cobre quem tem a BOLA agora, mais você — e mais ninguém.** A lista de sessões do comando é
 o estado da vez, não a tabela do contrato: sessão que ainda não abriu, sessão aposentada e sessão
@@ -93,11 +85,9 @@ olhava: o juiz cair. Árbitro derrubado por erro de provedor de madrugada já pa
 por 2h30 com o relato preso na fila — e do lado de dentro isso é invisível, porque o turno seguinte
 parece continuar de onde o anterior parou.
 
-**2. Ela acorda por `hangar-send --tmux`, não por `echo`.** Um `echo` de processo de fundo só vira
-notificação se o turno já estiver **vivo**; com ele morto, a vigia grita pro vazio. O `hangar-send`
-entra como **prompt** e reanima turno morto. O `--tmux` é obrigatório: o `hangar-send` normal
-**recusa** falar com sessão Claude da mesma máquina (rc=3, "use SendMessage"), e script de shell não
-tem `SendMessage`.
+**2. Ela acorda por `hangar-send --tmux`, não por `echo`** — o recado entra como **prompt** e
+reanima turno morto; `echo` só vira notificação com o turno vivo. O porquê do `--tmux` está no
+cabeçalho do script.
 
 **3. Ela dispara quando o DONO DA VEZ para — não quando todos param.** Árbitro parado com alguém
 trabalhando é o estado **normal**. `sumiu` conta como parado: sessão morta também não trabalha. Duas
@@ -117,17 +107,10 @@ porque a mensagem chega pela mesma porta das ordens de verdade. Medido em 24–2
 alarmes falsos num dia**, e um deles mandou o executor PARAR no meio de 44 minutos de trabalho
 legítimo.
 
-A prova de que a forma do texto decide está dentro do próprio script: o aviso de ociosidade é
-**condicional** ("se ela re-checa a mesma condição, …") e ninguém nunca parou por causa dele; o de
-loop era **imperativo** ("PARE de re-checar") e quase abortou uma Task boa. Toda mensagem que a
-vigia manda a uma sessão do time é uma **pergunta com a evidência junto**:
-
-> `[vigia] Você repete o mesmo comando há ~N min. Isso é espera por condição externa? Se for,
-> o teto já estourou — reporte ao árbitro o que espera. Se você está trabalhando, ignore.`
-
-A que vai para **você** (árbitro) pode ser afirmativa: você é quem decide, e é o único que pode
-distinguir sessão parada de propósito de sessão quebrada. Ordem de parar continua existindo — só
-que ela vem de você, depois de olhar, e não de um contador de minutos.
+Toda mensagem que a vigia manda a uma sessão do time é uma **pergunta com a evidência junto** (o
+texto mora no script); a que vai para **você** pode ser afirmativa — você é o único que distingue
+sessão parada de propósito de sessão quebrada. Ordem de parar continua existindo, só que vem de
+você, depois de olhar, e não de um contador de minutos.
 
 **A prova de que ela funciona é o alarme sintético CHEGAR.** Ao armar, a vigia dispara sozinha um
 `[vigia] ARMADA ...` para você, **pelo mesmo caminho dos alarmes reais** — se esse prompt chegou na
@@ -135,19 +118,10 @@ sua sessão, o canal está provado; se a unidade subiu e ele não chegou em 2 mi
 quebrado e "active" não vale nada. Teste digitado à mão não conta: em 17/08/2026 ele "provou" duas
 vezes um caminho que não era o quebrado, enquanto 10 alarmes reais iam pro vazio.
 
-**Confirmar que ela subiu NÃO é confirmar que ela vive.** `systemctl --user is-active` logo depois do
-`systemd-run` responde `active` porque a unidade acabou de nascer — não porque ela está lendo a API.
-Medido em 17/08/2026: uma vigia ficou `active` por horas, **sem uma linha de log**, enquanto quatro
-executores paravam por cota e ninguém era avisado; quem percebeu foi o usuário. As duas confirmações
-que valem, e são baratas:
-
-```bash
-journalctl --user -u vigia-<gid> --since "-3min"   # tem que estar SEM erro repetido a cada ciclo
-systemctl --user show vigia-<gid> -p ActiveState -p MainPID
-```
-
-Espere **um ciclo inteiro** (o intervalo é de 60s) antes de dar por confirmada — e erro repetido a
-cada ciclo no journal é vigia quebrada, mesmo que a mensagem não se anuncie como erro dela.
+**Confirmar que ela subiu NÃO é confirmar que ela vive.** `is-active` logo depois do `systemd-run`
+responde `active` porque a unidade acabou de nascer — uma vigia já ficou `active` por horas sem uma
+linha de log enquanto quatro executores paravam por cota. As confirmações que valem (journal por um
+ciclo inteiro, `show -p ActiveState -p MainPID`) estão no cabeçalho do script.
 
 **Rearme a vigia toda vez que passar a bola** — ao liberar Task, ao mandar commit pro revisor. Vigia
 vencida e não rearmada é silêncio que ninguém percebe. **E mate a vigia antiga ao aposentar uma

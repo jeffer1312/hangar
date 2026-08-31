@@ -19,13 +19,24 @@
 # gasta o token mais caro da mesa. Num lote paralelo isso importa mais ainda: com UMA vigia por par,
 # cada uma enxergava só o seu pedaço e acordava o árbitro enquanto outro executor trabalhava.
 #
-# Rode com `setsid nohup … &`. Sem isso ela é filha do turno do árbitro e morre junto com ele —
-# exatamente o que não pode acontecer, já que a morte dele é o caso que ela existe para cobrir.
+# Rode como SERVIÇO, nunca como processo de fundo do turno (`setsid nohup … &` morre junto com o
+# turno que a lançou — some do ps, log vazio, sem erro; medido em 17/08/2026):
+#   systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
+#     "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 -d <registro.md>
+# `Restart=always` é a outra metade: sem ele, a unidade que cair deixa o trabalho sem rede.
 #
 # Uso: vigia.sh <sessao> [sessao...] <arbitro> [-m <minutos>] [-d <diario.md>]
-#      O ÚLTIMO nome é sempre o árbitro. Ex.:
+#      O ÚLTIMO nome é sempre o árbitro. Os minutos vão por FLAG (`-m 5`), nunca como número solto
+#      no fim: com mais de três sessões o número posicional vira NOME de sessão, e os alarmes vão
+#      pra uma sessão chamada "5" enquanto o grupo para. Ex.:
 #      vigia.sh t1 t2 t3 review review2 arbitro -m 10 -d ~/.hangar/orq/<data>-<gid>/registro.md
 #      A forma antiga `vigia.sh exec rev arb 5` continua valendo.
+#
+# Confirmar que ela VIVE (is-active logo após o systemd-run responde `active` porque acabou de
+# nascer, não porque lê a API — uma vigia já ficou `active` por horas sem uma linha de log):
+#   journalctl --user -u vigia-<gid> --since "-3min"   # sem erro repetido a cada ciclo
+#   systemctl --user show vigia-<gid> -p ActiveState -p MainPID
+# E espere um ciclo inteiro (60s). A prova de verdade é o alarme sintético chegar (abaixo).
 #
 # Três alarmes além do "todo mundo parado", cada um nascido de uma falha real de 17/08/2026:
 #   - REPETIÇÃO: sessão `working` cujo último comando é o MESMO por N leituras seguidas está em

@@ -120,12 +120,8 @@ DESPERDÍCIO desta rodada: <o que o executor fez que não virou nada> — teria 
 Ela não julga o executor: ela mede a **rodada**. É o que deixa o árbitro enxergar espiral enquanto
 ela acontece, em vez de depois.
 
-O caso que a criou: uma Task de rotas levou **nove REPROVA seguidos, todos da mesma família**. Cada
-parecer fechava o caminho que o anterior nomeava, a solução crescia a cada rodada, e cada rodada
-isolada parecia justificada — quatro horas numa Task estimada em uma. Quem cortou foi o usuário, de
-fora, perguntando por que aquilo tinha virado o centro do módulo; a resposta foi um guard de três
-linhas, aprovado de primeira, que apagava mais código do que acrescentava.
-
+O caso que a criou: nove REPROVA seguidos da mesma família, cada parecer fechando só o caminho que
+o anterior nomeava — quem cortou foi o usuário, de fora, e a resposta era um guard de três linhas.
 Rodada cujo desperdício é *"fechou só o caso que o parecer anterior nomeou"* duas vezes seguidas é o
 sinal. O `teria evitado` é o que vira **régua nova nas regras do grupo** — e é assim que o arquivo de
 regras melhora sem ninguém reescrever o critério de aceite no meio do caminho.
@@ -234,19 +230,15 @@ document.querySelector('.alvo').dataset.marcaDoRevisor = 'eu-marquei-esta-instan
 // mesma marca de volta = MESMA instância = não desmontou = seu cleanup nunca roda ali
 ```
 
-Já aconteceu: um revisor receitou um cleanup de efeito "pra fechar a classe", afirmando que recolher
-o painel desmontava o componente. O executor mediu, discordou e desviou; o revisor conferiu com o
-carimbo — **mesma instância** — e escreveu no parecer que estava errado e que a receita fechava
-metade, sendo a metade aberta justamente o caso que ele nomeara primeiro. A prova levou **duas**
-chamadas.
+A prova leva duas chamadas — e um cleanup receitado sem ela já saiu errado, com a metade aberta
+sendo justamente o caso que o revisor nomeara primeiro.
 
 **2. Receita que escolhe um NÚMERO para conter um sintoma** (um teto, uma reserva, um limite de
 layout). Antes de escolher o número, meça **por que o elemento tem o tamanho que tem**. Número que
 contém sintoma é receita de sintoma, e você acabou de gastar a rodada do executor com ela.
 
-Já custou **dois commits**: uma reserva de largura prescrita pra um botão parar de cobrir outro
-elemento, retirada pelo próprio revisor na rodada seguinte depois de medir que zerar um recuo
-lateral resolvia com folga. A caixa que provava isso já estava na medição dele da rodada anterior.
+Já custou dois commits: uma reserva de largura receitada e retirada na rodada seguinte, quando a
+medição mostrou que zerar um recuo resolvia — e a caixa que provava isso já estava na rodada anterior.
 
 **3. Receita que nomeia um CASO quando a regra é uma ORDEM** — é o caso particular da trava geral
 "Régua se escreve como PRINCÍPIO" (`SKILL.md`), aplicada à receita. "A linha que casa exato com outra
@@ -255,10 +247,6 @@ forma **mais específica**". Escrita como caso, ela deixa o resto do espaço sem
 espaço costuma ser exatamente o cenário da Task. **Antes de mandar, pergunte: "e quando nenhum dos
 dois casa?"** Uma rodada inteira já existiu só por isso, e a própria autora da receita abriu o
 parecer seguinte dizendo que o bloqueador era dela.
-
-As duas primeiras receitas erradas foram pegas antes do estrago — uma pela consciência do próprio
-revisor, outra por um executor que resolveu medir. Nenhuma das três é processo, e é por isso que o
-campo existe.
 
 ## Use o ferramental de revisão que a máquina tiver
 

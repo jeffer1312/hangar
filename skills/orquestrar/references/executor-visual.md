@@ -9,12 +9,9 @@ qualquer outra coisa que desenhe pixel.
 
 ## Teste verde não é tela funcionando
 
-**E essa não é uma opinião, e essa não é uma opinião.** Já aconteceu no mesmo dia: um
-seletor passou em centenas de testes de frontend, com o gate de tipos zerado e uma revisão
-independente com cinco achados aplicados — e chegou ao usuário **invisível**, porque uma regra de
-CSS perdia na cascata para outra declarada trinta linhas abaixo. No mesmo trabalho, um botão abria
-um diálogo nativo que o navegador suprime: o clique virava nada, calado. Nenhum dos dois defeitos
-existe fora do navegador. Nenhum teste, nenhum gate de tipos e nenhuma leitura de diff pega essa
+**E essa não é uma opinião.** Um seletor já passou em centenas de testes, gate de tipos zerado e
+revisão independente — e chegou ao usuário **invisível** (regra de CSS perdendo na cascata); no
+mesmo trabalho, um clique virava nada, calado. Nenhum teste, gate ou leitura de diff pega essa
 classe de erro — só o pixel pega.
 
 **DOM, CSS e árvore de acessibilidade não substituem ver.** Eles dizem que o elemento
@@ -84,10 +81,8 @@ em primeiro plano. Use a flag que faz sair, `timeout N`, ou log em arquivo em se
 **Primeiro, confirme que a aba é SUA.** O navegador de automação (`agent-browser` e afins) pode ser
 **um por máquina** — noutro lote, outra sessão navega a MESMA aba que você. Antes de cada rodada de
 captura: `location.href` tem que devolver a **sua** porta. Devolveu outra → a aba foi levada;
-reabra a sua URL. Levaram de novo → **reporte o conflito ao árbitro** em vez de insistir. Uma
-executora já perdeu a aba (a URL devolvida era a porta de OUTRA Task) e passou três horas
-perguntando "minha tela voltou?" a uma página que não era dela — um comando de um segundo teria
-virado um reporte no minuto seguinte.
+reabra a sua URL. Levaram de novo → **reporte o conflito ao árbitro** em vez de insistir — três
+horas de perguntas a uma página de outra Task já custaram o que um comando de um segundo evitava.
 
 **Quantos prints tirar é decisão SUA, na hora** — decisão do usuário. Nem o plano nem o árbitro
 impõem número: quem sabe quantas telas esta Task acabou tendo é você, executando. O plano diz quais
@@ -121,10 +116,8 @@ nasceu depois dela — foi exatamente assim que a nº 2 custou a rodada).
 
 **Toda afirmação sobre cor, sinal ou estado (`✓` / `✗` / `·`, habilitado, desabilitado) se escreve
 com o detalhe AMPLIADO, nunca a olho na imagem inteira** — e a legenda cita a cor junto do sinal.
-Numa Task de 38 prints, **todo achado que sobreviveu à revisão veio de ampliar um detalhe que
-parecia legível** — o botão aceso com o campo vazio, a barra lateral em inglês num arquivo marcado
-`pt`, o endereço partido caractere a caractere, e uma pastilha `✓` verde que duas leituras a olho
-tinham chamado de `✗`. Custo: um recorte a 300–400% por afirmação.
+Numa Task de 38 prints, todo achado que sobreviveu à revisão veio de ampliar um detalhe que parecia
+legível. Custo: um recorte a 300–400% por afirmação.
 
 **Cada linha de legenda se escreve olhando aquele arquivo; "idem" é proibido.** Dois prints do mesmo
 estado em larguras ou idiomas diferentes recebem duas descrições. Foi o template "idem / idem en /

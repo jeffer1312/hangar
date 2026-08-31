@@ -54,10 +54,7 @@ o parecer, diga em uma linha qual foi a sua unidade de leitura — e suba um ní
 | um porte de padrão | a **rota de destino**: número que veio junto (teto, prazo, limiar) é medida da origem e precisa ser justificado de novo aqui |
 | a correção de um defeito de família | a **branch**: `git grep` do símbolo, com a contagem no parecer |
 
-Seis rodadas já caíram nessa forma: um teto curto copiado para uma rota que espera minutos; uma
-escrita sem guard a uma linha da escrita guardada; uma função nova nascida fora da regra que as
-quatro irmãs seguiam; e o defeito que atravessou a branch inteira porque cada Task olhou o próprio
-arquivo. **Custo do remédio: um `git grep` de quatro segundos.**
+Seis rodadas já caíram nessa forma. **Custo do remédio: um `git grep` de quatro segundos.**
 
 **Rodada de CORREÇÃO tem duas perguntas fixas, e elas são espelhadas:** (1) *o que esta rodada mudou
 de identidade ou de ciclo de vida — e o que passou a RE-EXECUTAR por causa disso?* Se a resposta for
@@ -92,12 +89,8 @@ separa teste que prova o cenário de teste decorativo.
 **E a mutação é do PORTÃO, não do executor.** Pedir a ele que rode a mutação antes de marcar o passo
 é barato e ajuda — e não substitui você rodá-la em **todo teste novo que um passo ou uma receita
 exigiu**: teste que nasce com o nome certo e não exercita o que promete passa por qualquer leitura,
-inclusive a de quem o escreveu. A régua "rode a mutação antes de marcar" já entrou no contrato de um
-grupo depois de um teste que **não importava** o módulo que dizia testar — e o mesmo defeito voltou
-**duas vezes** depois dela, com o executor declarando o teste feito (um teste procurando string na
-saída de um `toString()`, sem render, com a suíte verde e o estado errado em produção). Nas cinco
-ocorrências daquele trabalho, quem matou o defeito foi o revisor mutando; a régua no executor não
-impediu nenhuma.
+inclusive a de quem o escreveu. Nas cinco ocorrências de um mesmo trabalho, quem matou o defeito
+foi o revisor mutando; a régua equivalente cobrada do executor não impediu nenhuma.
 
 **Harness fecha corrida determinística; não fecha fronteira externa.** Defeito que é **ordem de
 efeitos dentro do nosso próprio código** (carregar antes de `ready`, poll, evento fora de hora) se
@@ -181,12 +174,9 @@ longa duração: ele serve o código de quando subiu** — confira o início do 
 ou suba instância própria em outra porta (e nunca reinicie o serviço do usuário para medir). Um
 processo no ar desde antes do commit medido já virou quase um falso "bloqueador aberto".
 
-O mesmo defeito já apareceu por dois mecanismos no mesmo dia: uma porta servindo build pré-compilado
-entregou um bundle anterior ao commit — custou **três** medições refeitas e uma prova de parecer que
-teve de ser retirada; e, já com o build feito antes, um service worker serviu o `index.html` do
-próprio cache, e portanto o código anterior. Nas rodadas seguintes todo parecer trouxe o par
-conferido — o identificador do artefato que o build acabou de gerar e o que a página carregou — e
-nenhuma medição precisou ser refeita. A receita concreta de como conferir é **do repositório**, não desta skill: ela vive no
+O mesmo defeito já apareceu por dois mecanismos no mesmo dia (porta servindo build pré-compilado e
+service worker servindo o cache); com o par conferido em todo parecer, nenhuma medição precisou ser
+refeita. A receita concreta de como conferir é **do repositório**, não desta skill: ela vive no
 arquivo de regras do grupo, com o comando daquele projeto.
 
 **Antes de abrir o navegador, compare as expressões lado a lado.** Na revisão de uma branch, duas

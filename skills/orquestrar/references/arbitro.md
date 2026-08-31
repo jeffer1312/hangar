@@ -51,21 +51,11 @@ Você é o único que escreve no contrato.
   diário completo enquanto o laço roda sem a sua presença — e não fere o motivo da exclusividade dos
   outros três, que é impedir uma sessão de registrar a **própria autorização**: anotar o veredito
   que você acabou de dar é fato, não permissão. O contrato, o registro e as lições continuam só
-  seus. Tipos fechados: `execucao_inicio` (plano, branch, gid), `task_inicio` (task,
-  titulo, executor, par), `entrega` (task, rodada, commit), `veredito` (task, rodada,
-  resultado `aprova|reprova|devolvido` — o MESMO vocabulário do parecer —, sessao, motivo
-  curto quando houver), `sessao_trocada` (de, para, motivo), `execucao_fim` (resultado).
-  `ts` sempre ISO-8601 com offset (`date -Iseconds`); `task` e `rodada` são números, e
-  `rodada` começa em 1 — rodada desconhecida é rodada OMITIDA, nunca 0. Campo extra pode;
-  tipo novo não — o app agrega por esses seis. Prosa, contexto e julgamento continuam no
-  registro.md; o jsonl alimenta as telas de orquestração e as fichas com número.
-  Exemplo de linha, no fecho de uma rodada:
-
-      {"ts": "2026-08-25T14:02:11-03:00", "tipo": "veredito", "task": 7, "rodada": 3,
-       "resultado": "aprova", "sessao": "mx2-rev-t7", "commit": "8c34563b"}
-
-  Valide quando quiser com `python3 <repo>/scripts/orq-valida-eventos.py <arquivo>` (sai 0
-  se o contrato fecha).
+  seus. **O contrato dos seis tipos e dos campos mora no validador** —
+  `$SKILL/scripts/orq-valida-eventos.py` (o docstring é a especificação; rode-o quando quiser, sai
+  0 se o contrato fecha). Campo extra pode; tipo novo não — o app agrega por esses seis. Prosa,
+  contexto e julgamento continuam no registro.md; o jsonl alimenta as telas de orquestração e as
+  fichas com número.
 
 **A fronteira é o tipo do conteúdo, não o assunto.** Três destinos, e a pergunta que separa cada um:
 
