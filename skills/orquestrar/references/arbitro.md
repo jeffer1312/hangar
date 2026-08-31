@@ -16,8 +16,10 @@ Você é o único que escreve no contrato.
 ## Você mantém QUATRO arquivos, e só um deles o time lê inteiro
 
 - **`~/.hangar/orq/<data>-<gid>/registro.md` — o registro.** O diário da execução: progresso
-  Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Cresce à
-  vontade. **Só você lê.** Não mande esse caminho a ninguém.
+  Task→hash→veredito, o que cada rodada quebrou, sessões que queimaram, decisões com data. Teto de
+  500 linhas — e no teto ele **ARQUIVA**: move o bloco mais antigo **inteiro** para um irmão no
+  mesmo diretório (`registro-tasks-1-N.md`) e deixa um ponteiro no lugar. Nunca resume: ele é a
+  matéria-prima da fase 5. **Só você lê.** Não mande esse caminho a ninguém.
 
   > **O registro e as lições moram no diretório durável do trabalho, que nada gerencia** — não em
   > `<config>/.hangar-pair/`, que é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo.
@@ -172,7 +174,7 @@ mesmo podia ter rodado, não precisa mandar no DeepSeek"*. A tabela estava certa
 ela descrevia, e errada para aquele.
 
 Como perguntar sem gastar o tempo dele: **uma pergunta, com proposta e o porquê medido**. Você tem o
-histórico — as fichas em `references/modelos/` e o registro do próprio trabalho dizem quem se saiu
+histórico — as fichas em `~/.hangar/orq/modelos/` e o registro do próprio trabalho dizem quem se saiu
 bem em quê e a que custo. Chegue com isso pronto:
 
 > "Task nova: <o que é, e de que natureza>. Proponho <papel: sessão/modelo/conta>, porque
@@ -387,18 +389,9 @@ Plano que não declarou lote → serial, e você não promove nada a paralelo po
 ## Fato do árbitro tem hora — e escopo. O de duas horas atrás é lembrança
 
 Você é a única sessão que atravessa o trabalho inteiro, e por isso é a única que fala de memória sem
-perceber. Seis vezes em 48 horas, medido em 17–18/08/2026:
-
-| A afirmação | O fato | O que custou |
-|---|---|---|
-| baseline `2215` no kick-off | `2217` — a base da branch já tinha um commit a mais | uma rodada: o executor teve de provar o número antes de reportar o próprio delta |
-| `ahead 37`, lido no `git status` | **behind 2** — `status` sem `fetch` é foto velha | um merge de Task numa `main` desatualizada, e uma verificação completa refeita |
-| "o executor repontou as unidades do systemd" | o autor era o `post-merge` do próprio repo | uma acusação retirada por escrito e uma rodada de mensagem |
-| "não é o servidor ativo" (a uma suspeita do usuário) | era: a tela apagava conta e conversas na máquina errada | uma Task com três rodadas, 11 horas depois |
-| "a compactação de 241k foi o cutucão da vigia" | foi a própria sessão, 34 min antes do cutucão chegar | uma régua construída sobre a causa errada |
-| "139 + 183 + 178 + 142 + 104 sidecars órfãos" | você contou **um** diretório de configuração; o código varre todos — é ~4× isso | um número parcial entregue ao usuário como total |
-
-As sete regras que saem disso, e as sete são baratas:
+perceber — seis afirmações de memória erradas em 48 horas numa execução real (17–18/08/2026), cada
+uma custando de uma rodada a um merge numa base desatualizada. As sete regras que saem disso, e as
+sete são baratas:
 
 0. **Hora vem de comando, nunca da cabeça.** Antes de escrever qualquer horário — no registro, no
    `eventos.jsonl`, num reporte, numa passagem de bastão — rode `date -Iseconds` e use a saída.

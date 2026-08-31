@@ -105,7 +105,7 @@ essa linha aparecer de novo, o patch não é mais uma régua de execução — �
 
 ### 4. As fichas de modelo
 
-`references/modelos/<provider>-<id>.md`, uma por modelo do time. Para cada um que trabalhou:
+`~/.hangar/orq/modelos/<provider>-<id>.md`, uma por modelo do time. Para cada um que trabalhou:
 
 - **Números novos:** contexto por tipo de Task, tempo, custo. É o que faz o próximo plano prever
   rotação em vez de descobrir no meio.

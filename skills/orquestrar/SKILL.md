@@ -109,31 +109,12 @@ Método: mattpocock     # planejador: /grill-me → /to-spec → /to-tickets · 
 ```
 
 **`superpowers` é o padrão — decisão do usuário, 17/08/2026.** Outro método entra com pedido
-explícito dele, e a **única** coisa a conferir antes de aceitar é esta:
-
-**A metade executora existe na CONTA que vai executar.** Skill e plugin são por diretório de
-configuração, e a conta do executor pode não enxergar o que a tua enxerga — confira o caminho, não a
-lembrança. É o caso geral de "skill invocada roda inteira" (ver "Travas que valem para todos os
-papéis"). *Prova:* a execução de 16–17/08/2026 rodou `mattpocock` com o `/implement` ausente da
-máquina, e o árbitro improvisou "os Steps são o método". **Isto venceu para o `mattpocock`:**
-conferido em 28/08/2026, `implement` e `to-tickets` estão instalados nas cinco contas de agente
-desta máquina, por symlink para `~/Projetos/mattpocock-skills/skills/engineering/`.
-
-**Artefato que o método não gera NÃO é motivo pra recusar o método — é trabalho do planejador, e
-ele já tem o procedimento.** O portão de saída da fase 1 é agnóstico de método por construção, e
-dois dos seus itens são justamente auditoria feita pelo planejador, com comando: arquivos por Task
-levantados **do texto dos passos** × `git merge-tree` (item 3) e a procura por estado compartilhado
-(item 4). Ele não espera que o plano venha com isso escrito — ele levanta. *Medido no `to-tickets`
-(SKILL.md lido em 28/08/2026):* ele entrega arestas de bloqueio ("Blocked by"), que são ordem e não
-disjunção, não tem campo de estimativa em nenhum dos dois templates, e manda explicitamente *"avoid
-specific file paths"*. Nada disso o reprova: é exatamente a lacuna que a auditoria do planejador
-existe pra fechar, e ela fecharia igual num plano escrito à mão pelo usuário.
-
-**`disable-model-invocation: true` não é obstáculo.** As duas skills do `mattpocock` o trazem, então
-a sessão não as auto-invoca — mas o kick-off chega no pane como **digitação**, igual ao que o
-usuário manda do celular. Kick-off de executor nesse método **começa** com a linha `/implement` e o
-resto do texto vira argumento dela. Só não vale escrever `/implement` no meio do kick-off: ali é
-texto, não comando.
+explícito dele, e a **única** conferência antes de aceitar é: **a metade executora existe na CONTA
+que vai executar?** Skill e plugin são por diretório de configuração — confira o caminho, não a
+lembrança. Artefato que o método não gera **não** o reprova: o portão de saída da fase 1 é
+agnóstico de método, e o planejador gera à mão o que faltar. O detalhe operacional de cada método
+(comandos, `disable-model-invocation`, lacunas conhecidas) está em `references/planejamento.md`,
+"Antes da fase 0".
 
 Nenhum papel escolhe método, e **nenhum troca de método no meio**. Plano nascido num método e
 executado noutro é o defeito que esta seção existe para impedir: os dois escrevem o trabalho em formatos
@@ -267,9 +248,8 @@ alimenta as telas do app e a retrospectiva. Ele é do árbitro e está descrito 
 `references/arbitro.md` — por isso aquela página fala em **quatro** arquivos e esta, em três.
 
 > **O registro e as lições moram no diretório durável do trabalho, que nada gerencia.**
-> `<config>/.hangar-pair/` é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo (medido
-> 22/08/2026, quando um executor matou a última sessão viva e o diário de 10h sumiu). As **regras**
-> continuam lá — é o caminho que o app mostra ao time.
+> `<config>/.hangar-pair/` é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo. As
+> **regras** continuam lá — é o caminho que o app mostra ao time.
 
 A fronteira entre os três é o **tipo** do conteúdo, não o assunto:
 
@@ -283,24 +263,10 @@ separação que resolve o problema real: régua nova é o produto normal de uma 
 que reprova produz uma —, e enfiar todas elas no arquivo que toda sessão lê inteiro fazia esse
 arquivo dobrar de tamanho até alguém ter de jogar coisa fora.
 
-**Lição não se joga fora, e não tem teto.** Ela é escrita uma vez, com data e prova, e fica. O que
-tem teto é **quanto disso vai num kick-off**: o árbitro escolhe as que valem para aquela Task e
-cola no texto. Uma lição de Task de tela não vai no kick-off de uma Task de backend, e não é por
-ela estar velha — é por ser de outro assunto.
-
-Por que isto existe, medido em duas datas. Em 14/08/2026 o registro chegou a 54 KB (~14k tokens)
-porque toda Task aprovada acrescentava um parágrafo e nada saía; somado ao plano inteiro (~30k), um
-revisor recém-aberto para a Task 10 gastou **110k de contexto antes de receber o primeiro commit**.
-Em 15/08/2026, num trabalho de 13 Tasks, o arquivo que o time lê chegou a **316 linhas / 18 KB**
-porque o árbitro escrevia uma régua a cada achado, o dia todo. O remédio da época era um teto de
-200 linhas com compactação antes de cada kick-off — e ele **falhou de um jeito específico**: numa
-execução de 28/08/2026 uma régua foi apagada por ser rara e o caso dela reapareceu **uma hora
-depois**. Jogar régua boa fora para caber é o defeito, não a solução.
-
-**O registro tem teto (500 linhas) e no teto ele ARQUIVA** — move o bloco mais antigo **inteiro**
-para um arquivo irmão no mesmo diretório durável (`registro-tasks-1-N.md`) e deixa um ponteiro no
-lugar. Nunca resume: ele é a matéria-prima da fase 5, e resumir ali destrói o que ela vai destilar.
-Medido em 23/08/2026: 308 linhas arquivadas, nada perdido, e a retrospectiva leu os dois.
+**Lição não se joga fora, e não tem teto.** O que tem teto é **quanto disso vai num kick-off**: o
+árbitro escolhe as que valem para aquela Task e cola no texto. A gestão dos dois arquivos que
+crescem — as lições e o teto/arquivamento do registro — é do árbitro e está em
+`references/arbitro.md`, "Você mantém QUATRO arquivos".
 
 Primeira linha do arquivo de regras, pra sessão amnésica se reancorar sozinha:
 
@@ -370,16 +336,11 @@ sai daqui na próxima vez que alguém a ler.
   o que faltou como "pendência". **Dispensar passo de skill é do usuário, não do árbitro** — ele só
   cumpre dispensa já dada (no plano, no contrato, ou regra permanente dele) e leva o resto pra
   decisão. Detalhe em `references/executor.md`.
-- **Régua se escreve como PRINCÍPIO; o caso medido entra como prova.** Regra que nomeia um caso —
-  uma skill, uma ferramenta, um arquivo, uma data — deixa o resto do espaço sem regra, e o resto do
-  espaço costuma ser exatamente o cenário da próxima vez. Vale para tudo que esta skill produz:
-  receita do revisor, régua nova do árbitro, patch da fase 5. Antes de escrever qualquer uma,
-  pergunte: **"e quando não for esse caso?"** Resposta não coberta → o que você escreveu é a
-  instância, não a regra: enuncie a condição e mova o caso pra prova. Isso **não** afrouxa a
-  exigência de medição — o que muda é **onde a medição mora**: aqui fica o princípio, e o caso com
-  data e número fica no registro do trabalho, na mensagem de commit ou no `CLAUDE.md` do projeto.
-  Escrever os dois no mesmo lugar é o que faz esta skill dobrar de tamanho a cada execução dolorida.
-  Detalhe em `references/revisor.md` (receita) e `references/retrospectiva.md` (patch).
+- **Régua se escreve como PRINCÍPIO; o caso medido entra como prova — em outro lugar** (registro
+  do trabalho, mensagem de commit, `CLAUDE.md` do projeto). Vale para tudo que esta skill produz.
+  Antes de escrever qualquer régua, pergunte: **"e quando não for esse caso?"** Resposta não
+  coberta → você escreveu a instância, não a regra. O teste completo, com exemplos:
+  `references/retrospectiva.md`, seção 5 (e `references/revisor.md` para receita).
 - **Ferramenta de fora — skill, subagente, comando — passa por TRÊS perguntas, e são sempre as
   três:** (1) **existe com esse nome?** Pode ter virado comando em vez de skill, mudado de nome, ou
   não estar instalada nesta conta (plugin é por diretório de configuração, e uma sessão em conta
@@ -424,32 +385,18 @@ sai daqui na próxima vez que alguém a ler.
 
   Aspas duplas cruas fazem o shell comer crase e `$`, e receita mutilada é pior que receita
   nenhuma. Heredoc solto (`hangar-send <sessao> <<'EOF'`) devolve erro de uso — a mensagem não sai.
-- **Escolher o time é OFERTA, não obrigação — e a oferta se faz UMA vez.** Montar a tabela
-  conta↔modelo por papel trava quem tem uma conta só: não há o que escolher, e a pessoa fica parada
-  numa pergunta sem resposta possível (reclamação de um usuário de fora, 2026). O planejador
-  pergunta uma vez — *"quer escolher o time, ou seguimos no padrão?"* — e **qualquer resposta
-  destrava o trabalho**:
-  - **quer escolher** → a receita inteira de `references/planejamento.md` ("O time é saída do
-    planejamento"): inventário levantado, candidatas propostas, ele decide.
-  - **não quer, ou não respondeu** → **padrão, na conta que já está em uso**: executor em Opus
-    esforço `medium`; revisor, árbitro e revisão final em Opus esforço `high`. A tabela nasce
-    preenchida assim, com a data e a palavra `padrão` na linha, e o trabalho começa.
-
-  **Isto não é uma sessão escolhendo conta.** A conta continua sendo a que ele já está usando — o
-  padrão só preenche modelo e esforço dentro dela. Sair da conta em uso, ou entrar em conta que
-  **cobra por token**, continua proibido sem ele mandar: é a fatura dele, e nenhum padrão
-  automático pode chegar lá. Padrão escrito na tabela é decisão dele por omissão, e ele troca
-  quando quiser, pelo modal ou pedindo.
+- **Escolher o time é OFERTA, não obrigação — a pergunta se faz UMA vez e qualquer resposta
+  destrava o trabalho** (sem resposta → padrão, na conta que já está em uso). A receita inteira,
+  com o padrão por papel, está em `references/planejamento.md`, "O time é saída do planejamento".
+  Sair da conta em uso, ou entrar em conta que **cobra por token**, continua exigindo palavra dele.
 - **MODELO É DECISÃO DO USUÁRIO. Ninguém escolhe modelo fora do padrão acima.** A política de contas da máquina fica em
   **`~/.hangar/orquestracao-contas.md`** — quais contas existem, quais são assinatura (troca livre
   dentro da conta), quais são travadas num modelo e quais são proibidas por cobrarem por token. O
   árbitro **lê esse arquivo antes de montar time** e copia pro contrato só o que aquele trabalho vai
   usar. Arquivo ausente ou desatualizado: **levante o inventário e pergunte ao usuário** (a receita
   de levantamento está dentro do próprio arquivo), escreva a resposta lá com a data, e siga. O
-  contrato traz a tabela conta↔modelo por papel (`## Quem é quem` do `regras-<gid>.md`,
-  cabeçalho fixo `| papel | sessão | provider | conta | modelo | esforço |` — ou de 7 colunas com
-  `vez`, quando o papel reveza entre contas por Task (`references/arbitro-lancamento.md`)
-  — lida e gravada pelo modal Orquestração do app, então célula com prosa não é lida); ela é fechada. Modelo fora dela não se usa **nem pra teste**, nem porque "é mais barato",
+  contrato traz a tabela conta↔modelo por papel (`## Quem é quem` do `regras-<gid>.md`, formato
+  fixo em `references/planejamento.md` — lida por máquina: célula com prosa não é lida); ela é fechada. Modelo fora dela não se usa **nem pra teste**, nem porque "é mais barato",
   nem porque apareceu no catálogo. Cada conta tem cota e preço próprios, e provedor errado **cobra
   dinheiro do usuário** — um `openrouter/*` escolhido por conta própria é fatura, não experimento.
   - **Sessão nova nasce no padrão do harness, que não é o modelo da tabela.** Quem cria: troca,

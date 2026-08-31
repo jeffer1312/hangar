@@ -128,11 +128,10 @@ contrato junto com o lote, não depois.
 
 ## O custo real, antes de você achar que é de graça
 
-Neste repo cada worktree quer o **próprio** `node_modules` e `.venv`, e o portão visual
-precisa de backend e Vite no ar — que brigam pelas portas 8765/5173. Duas Tasks visuais em
-paralelo é uma delas esperando a porta, ou uma configuração de porta por worktree que alguém
-tem que escrever. **A tabela de portas por Task vai no PLANO** (Task → `CP_PORT` → porta do vite)
-— a execução de 16–17/08 escreveu e funcionou. Task visual em paralelo, na dúvida: serialize.
+Cada worktree paga ambiente próprio (dependências instaladas por árvore), e Tasks visuais em
+paralelo sobem servidores que brigam pelas mesmas portas. **A tabela de portas por Task vai no
+PLANO** — quais portas cada repo usa é dado do projeto, não desta skill. Task visual em paralelo,
+na dúvida: serialize.
 
 **E as portas não bastam: o NAVEGADOR de automação é um por máquina.** `agent-browser` e afins têm
 uma aba só — dois executores capturando ao mesmo tempo roubam a página um do outro, sem erro

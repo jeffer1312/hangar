@@ -4,6 +4,10 @@ Uma ficha por modelo, curta. Elas existem para o **planejador** ler antes de esc
 (`planejamento.md`, "O TIME se decide ANTES de escrever o plano") e para a **retrospectiva**
 atualizar no fim (`retrospectiva.md`).
 
+**As fichas moram no cofre — `~/.hangar/orq/modelos/` — não nesta skill.** Elas são registro
+datado da máquina de quem usa (a orquestração funciona inteira sem elas), e envelhecem por
+construção. O que mora aqui é só esta página: a regra de como uma ficha se escreve.
+
 ## Regras destes arquivos
 
 1. **Só coisa medida, com data.** "Parece melhor em X" não entra. "Em 15/08/2026, 3 rodadas contra
@@ -19,7 +23,8 @@ atualizar no fim (`retrospectiva.md`).
 
 ## Nome do arquivo
 
-`<provider>-<id>.md` — o mesmo par que o `--model` recebe, para não haver dúvida de qual é.
+`~/.hangar/orq/modelos/<provider>-<id>.md` — o mesmo par que o `--model` recebe, para não haver
+dúvida de qual é.
 
 ## Modelo novo no time: pesquise antes, mas guarde separado
 

@@ -146,16 +146,8 @@ journalctl --user -u vigia-<gid> --since "-3min"   # tem que estar SEM erro repe
 systemctl --user show vigia-<gid> -p ActiveState -p MainPID
 ```
 
-Espere **um ciclo inteiro** (o intervalo é de 60s) antes de dar por confirmada. E o modo de falha a
-procurar no journal é este, porque ele não se anuncia como erro de vigia:
-
-```
-vigia.sh: linha NNN: /dev/stderr: Endereço ou dispositivo inexistente
-```
-
-Sem terminal, `/dev/stderr` não abre pra escrita, o redirecionamento falha e **o comando nem roda** —
-a leitura volta vazia e a vigia conclui "API sem resposta" com o backend perfeito. O script já cai pra
-arquivo sozinho desde 17/08; se você vir essa linha, está rodando uma cópia velha.
+Espere **um ciclo inteiro** (o intervalo é de 60s) antes de dar por confirmada — e erro repetido a
+cada ciclo no journal é vigia quebrada, mesmo que a mensagem não se anuncie como erro dela.
 
 **Rearme a vigia toda vez que passar a bola** — ao liberar Task, ao mandar commit pro revisor. Vigia
 vencida e não rearmada é silêncio que ninguém percebe. **E mate a vigia antiga ao aposentar uma

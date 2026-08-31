@@ -111,28 +111,16 @@ Ordem que parece detalhe e não é. Quem vai executar muda **o que o plano preci
 é o único documento que o executor lê inteiro.
 
 Pergunte o time logo depois de fechar a spec, e **antes** da primeira Task. Depois leia a ficha de
-cada modelo em `references/modelos/` (uma por modelo, só coisa medida) e escreva o plano com aquilo
+cada modelo em `~/.hangar/orq/modelos/` (uma por modelo, só coisa medida; regras do formato em
+`references/modelos/README.md`) e escreva o plano com aquilo
 em mente. Não há ficha para o modelo escolhido? Escreva o plano de forma conservadora e **crie a
 ficha no fim**, na retrospectiva — é assim que ela nasce.
 
-O que a ficha muda no plano, com exemplo medido em 15/08/2026:
-
-| A ficha diz | O plano faz diferente |
-|---|---|
-| executor **não enxerga imagem** (MEDIDO, não hipótese) | protocolo de visão explícito nas Tasks de tela (`see <caminho>`), e barra em **código** (HTML/CSS do mock) sempre que possível, não só em print |
-| qualquer capacidade em estado de **HIPÓTESE** | a hipótese vira **teste de estreia** no primeiro kick-off (um turno: um `Read` num print + uma pergunta), nunca protocolo obrigatório — e a ficha é corrigida com o resultado |
-| executor **decide por argumento quando o critério não é numérico** | toda régua visual vira **número**: "linha de 24px, medida com `getBoundingClientRect` contra a aba irmã", nunca "densidade parecida com a do app" |
-| revisor tem **janela curta** (272k) | Task de tela não cabe duas na mesma sessão — e, medido, custa **um revisor por rodada**: o plano já prevê a rotação em vez de descobrir no meio |
-| executor **aplica receita literal muito bem** | vale investir no detalhe do passo; o mesmo plano num modelo que improvisa pediria menos passo a passo e mais critério |
-
-Sem isso o plano é escrito para um executor genérico que não existe, e cada característica real do
-modelo vira uma rodada de correção. A linha da hipótese existe porque o contrário foi medido em
-19/08/2026: "não enxerga imagem" (hipótese declarada na ficha) virou protocolo `see` obrigatório
-no plano; era falsa (o modelo lê imagem por `Read`), o usuário a derrubou no meio da primeira
-Task, e o intermediário que ela impôs estava na cadeia da rodada que fechou com 4 bloqueadores de
-tela vivos — a regra "nada não testado vira régua até uma execução confirmar", logo abaixo, já
-mandava o contrário. (A primeira linha da tabela dizia só "não enxerga imagem", sem o MEDIDO, e
-ensinava exatamente esse erro.)
+O que a ficha muda: capacidade **MEDIDA** vira protocolo nas Tasks (visão, régua visual em número,
+janela curta prevendo rotação, quanto detalhe cada passo precisa); capacidade em estado de
+**HIPÓTESE** vira **teste de estreia** no primeiro kick-off (um turno), nunca protocolo
+obrigatório — e a ficha é corrigida com o resultado. Sem ficha, o plano é escrito para um executor
+genérico que não existe, e cada característica real do modelo vira uma rodada de correção.
 
 **passo ou receita que cria estado de tela alimentado por request declara os TRÊS desfechos —
 sucesso, falha, pendente — e o QUANDO de cada chamada (mount × interação).** Medido em
@@ -145,16 +133,10 @@ literal, o desfecho não declarado é o desfecho não implementado. E se o plano
 receita de uma Task fecha DEPOIS de outra (replanejamento previsto), ele nomeia QUEM fecha — e
 esse quem é planejador, nunca o árbitro por gravidade (`replanejar.md`, "a miniatura").
 
-**Modelo do time que ainda não tem ficha:** antes de escrever o plano, faça uma varredura curta em
-**duas** fontes — o guia do fabricante e, principalmente, **a comunidade** (skill `last30days`:
-Reddit, HN, X, YouTube dos últimos 30 dias; depois vá fundo no que aparecer repetido). A comunidade
-reporta a limitação **e** o contorno juntos, que é o que muda o plano; o fabricante diz o que o
-modelo deveria fazer.
-
-Escreva a ficha inicial com isso, marcado como **hipótese**, em seção separada do que for medido
-depois (`modelos/README.md`). É barato, acontece uma vez por modelo, e evita o plano nascer cego. O
-que a varredura **não** faz é virar régua de kick-off: nada não testado aqui vira régua até uma
-execução confirmar.
+**Modelo do time que ainda não tem ficha:** a varredura (fabricante + comunidade, via `last30days`)
+e o formato da ficha inicial estão em `references/modelos/README.md`, "Modelo novo no time". O que
+a varredura **não** faz é virar régua de kick-off: nada não testado vira régua até uma execução
+confirmar.
 
 Além do que o `writing-plans` já pede, o plano carrega:
 
@@ -184,7 +166,7 @@ Além do que o `writing-plans` já pede, o plano carrega:
   quando o modelo pesado entra declarada junto. Medido em 23/08/2026: na mesma Task, um modelo
   fechava rodadas em ~340–550k de contexto por sessão e o outro consumia a janela ~10× mais rápido
   na mesma conta — os dois autorizados, e a linha única da estimativa não descrevia nenhum. As
-  fichas de `references/modelos/` são a fonte do número por modelo.
+  fichas de `~/.hangar/orq/modelos/` são a fonte do número por modelo.
 - **Pré-condição externa com DONO**: todo passo cuja prova depende de coisa que o executor não
   controla no turno (servidor de pé, sessão tmux, conta de teste, elemento na tela) declara quem a
   cria — e o dono é **o próprio executor**, como passo anterior explícito ("suba o backend na porta
@@ -523,20 +505,11 @@ guard do plano, que passaria a casar o mapa errado depois da Task que a conserta
 
 ## Código que entra no plano é código que VOCÊ rodou
 
-Regra medida em 15/08/2026, num plano bem escrito e auditado, de 12 Tasks. Seis defeitos dele
-chegaram na execução, e os seis tinham a **mesma** causa: o plano descrevia código que quem escreveu
-nunca executou.
-
-| O que o plano dizia | O que acontecia de verdade |
-|---|---|
-| fixture com `__import__("app.main").app` | esse atributo não existe no projeto |
-| `raise HTTPException(..., erro(e.code, e.msg, msg=e.msg))` | `TypeError` — o parâmetro já é nomeado |
-| um comando de teste filtrado por nome | **zero** testes selecionados: nenhum teste que o próprio plano escreveu casava com o filtro |
-| "Expected: 6 PASS" | eram 8, e no passo seguinte 9 contra 11 reais |
-| "Lote A: nenhum arquivo em comum" | um arquivo estava na Task 3 por desenho **e** na Task 1 por um passo — conflito de merge |
-| barra com coluna de número de linha | o componente que o próprio plano manda reusar não numera |
-
-Nenhum deles é erro de raciocínio: são coisas que **um comando teria respondido em segundos**.
+Regra medida em 15/08/2026, num plano bem escrito e auditado, de 12 Tasks: seis defeitos dele
+chegaram na execução — atributo que não existia, `TypeError`, filtro de teste que não selecionava
+nada, contagens erradas, lote "disjunto" que colidia, barra pedindo o que o componente reusado não
+faz — e os seis tinham a **mesma** causa: o plano descrevia código que quem escreveu nunca
+executou. Nenhum é erro de raciocínio: são coisas que **um comando teria respondido em segundos**.
 
 Antes de fechar o plano:
 
@@ -581,7 +554,7 @@ Quatro coisas que o plano erra **calado**, e as quatro custaram rodada ou bloque
 - **O portão de saída da fase 1 não fecha com `___` no arquivo de estimativas.** A linha "cota dos
   provedores" ficou em branco e o custo apareceu no meio do lote: `429` do provedor e quatro sessões
   trocadas de conta às pressas. E **estime ≥2 sessões por Task em provedor que cai** — foram 23
-  sessões executoras para 10 Tasks; a ficha do modelo, em `references/modelos/`, diz quantas quedas
+  sessões executoras para 10 Tasks; a ficha do modelo, em `~/.hangar/orq/modelos/`, diz quantas quedas
   por hora esperar.
 
 ## Portão de saída da fase 1 — checklist fechado, agnóstico de método
@@ -760,9 +733,8 @@ A fase 5 lê exatamente os pareceres — a linha de desperdício de cada rodada 
 Decidir isso no meio do trabalho custa mover arquivo à mão, medido em 16/08/2026.
 
 A fronteira é o tipo do conteúdo: **já aconteceu → registro; é o combinado → regras; é régua nova →
-lições.** Sem essa separação o arquivo que todo mundo lê cresce a cada Task aprovada, e num trabalho
-de 12 Tasks ele chegou a 54 KB — 14k tokens cobrados de cada sessão nova para contar como Tasks
-encerradas foram reprovadas. Detalhe em `SKILL.md`, "Três arquivos, cada um com um leitor".
+lições.** Sem essa separação o arquivo que todo mundo lê cresce a cada Task aprovada até cobrar de
+cada sessão nova a história inteira. Detalhe em `SKILL.md`, "Três arquivos, cada um com um leitor".
 
 O esqueleto do **registro** está abaixo. O de **regras** é a mesma coisa sem o histórico: a
 tabela `## Quem é quem` (formato fixo da fase 2, acima — é nas regras que ela mora, não no

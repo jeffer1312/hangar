@@ -102,12 +102,3 @@ passo.
 - **Não é licença pra decidir time, conta ou branch** — as três continuam do usuário.
 - **Não se repete como rotina.** Dois replanejamentos no mesmo trabalho = o problema não é o
   plano; pare e discuta o trabalho em si com o usuário.
-
-## O procedimento pagou na estreia
-
-O número é este: **13h sem merge viraram 2h52 com dois merges**, por ~2h15 de replanejamento (análise
-pronta 18:31 → primeira Task em voo 19:20), medido em 17–18/08/2026. O que fez a diferença não foi o
-plano ser novo — foi ele nascer com os artefatos que o portão da fase 1 cobra: estimativa a priori
-(que segurou a fase em +23%), captura como Task própria com lista fechada, e a fumaça contra a fonte
-real, que **destapou três bloqueadores na primeira vez que foi rodada**, depois de duas rodadas de
-suíte verde não terem visto nenhum.
