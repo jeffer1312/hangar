@@ -1,177 +1,186 @@
-# Árbitro — a vigia e o silêncio
+# Arbiter — the watchdog and the silence
 
-Esta página é do **momento em que alguém deveria estar trabalhando e você não recebeu nada**: como
-armar a vigia, o que fazer quando ela dispara, e como distinguir sessão parada de sessão morta.
+This page belongs to the **moment someone should be working and you received nothing**: how to arm
+the watchdog, what to do when it fires, and how to tell an idle session from a dead one.
 
-Você a lê ao armar a vigia (uma vez, no lançamento) e quando um alarme chega. O resto do tempo ela
-não é sua — o ciclo normal está em `arbitro.md`.
+You read it when arming the watchdog (once, at launch) and when an alarm arrives. The rest of the
+time it isn't yours — the normal cycle is in `arbitro.md`.
 
-## Ociosidade — o sinal de que alguma coisa não chegou
+## Idleness — the signal that something didn't arrive
 
-Você sempre sabe **quem deve trabalho**: o executor da Task liberada, ou o revisor do commit que
-você mandou. Enquanto o dono da vez está `working`, não existe nada a fazer — Task inteira demora, e
-cutucar quem está trabalhando é ruído.
+You always know **who owes work**: the executor of the released Task, or the reviewer of the round
+you know is open. While the current owner is `working`, there is nothing to do — a whole Task
+takes time, and nudging someone working is noise.
 
-O sinal é o inverso: **o dono da vez está `idle` e você não recebeu nada.** Só há três causas, e as
-três se resolvem sem perguntar a ninguém:
+The signal is the inverse: **the current owner is `idle` and you received nothing.** There are
+only three causes, and all three resolve without asking anyone:
 
-1. **A mensagem não chegou** (fila, sessão reiniciada) → reenvie uma vez, dizendo que é reenvio.
-2. **A resposta foi produzida e não enviada** — a sessão terminou o parecer e morreu antes do recado,
-   ou o envio falhou → **leia o transcript dela** (`~/.claude*/projects/<cwd-sanitizado>/<uuid>.jsonl`,
-   o mais recente, mensagens `type: "assistant"`; a última costuma ser exatamente o que faltou).
-3. **A sessão sumiu** → seção abaixo: abre outra e segue.
+1. **The message didn't arrive** (queue, restarted session) → resend once, saying it is a resend.
+2. **The reply was produced and not sent** — the session finished the report and died before the
+   message, or the send failed → **read its transcript**
+   (`~/.claude*/projects/<sanitized-cwd>/<uuid>.jsonl`, the most recent, messages
+   `type: "assistant"`; the last one is usually exactly what was missing).
+3. **The session vanished** → section below: open another and move on.
 
-**Você não reenvia antes de olhar o disco.** O arquivo dele pode já estar lá, e o transcript quase
-sempre tem o texto inteiro. Ler custa um `cat`; reenviar custa um turno da sessão paga e pode
-chegar duplicado.
+**You don't resend before looking at the disk.** Their file may already be there, and the
+transcript almost always holds the full text. Reading costs a `cat`; resending costs a paid
+session's turn and may arrive duplicated.
 
-**E antes de culpar o canal, olhe o pane do destinatário.** Um assistente de primeira execução
-aberto na sessão dela recusa toda digitação, e o backend reporta isso como "sessão indisponível" —
-que parece fila quebrada e não é.
+**And before blaming the channel, look at the recipient's pane.** A first-run assistant open in
+their session refuses all typing, and the backend reports that as "session unavailable" — which
+looks like a broken queue and isn't.
 
-**Todo mundo do time ocioso ao mesmo tempo é o alarme mais forte que existe**, porque em operação
-normal alguém está sempre com a bola. Chegou nesse estado sem ter fechado uma Task: alguma coisa
-não chegou.
+**The whole team idle at the same time is the strongest alarm there is**, because in normal
+operation someone always has the ball. Reached that state without a Task having closed: something
+didn't arrive.
 
-Não fique olhando, e **não pergunte "e aí?"**: as duas coisas gastam turno seu, que é o token mais
-caro da mesa. Deixe uma **vigia em segundo plano** — um laço de shell, não um turno de modelo — que
-consulta o estado das sessões e te acorda quando o dono da vez fica ocioso. Use o script que já vem
-com a skill:
+Don't sit watching, and **don't ask "how's it going?"**: both spend your turn, the most expensive
+token at the table. Leave a **watchdog in the background** — a shell loop, not a model turn — that
+polls the sessions' state and wakes you when the current owner goes idle. Use the script that
+ships with the skill:
 
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
-  "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 \
-  -d ~/.hangar/orq/<data>-<gid>/registro.md
+  "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <session> [session...] <arbiter> -m 5 \
+  -d ~/.hangar/orq/<date>-<gid>/registro.md
 ```
 
-O manual do comando — flags, por que serviço e não processo de fundo, como confirmar que ela vive —
-está no **cabeçalho do próprio `vigia.sh`**. Duas coisas que são suas, não do script: o último nome
-é sempre o árbitro, e o `-d` aponta o registro (a vigia te cobra se ele ficar 60 min sem escrita).
+The command's manual — flags, why a service and not a background process, how to confirm it is
+alive — lives in the **header of `vigia.sh` itself**. Two things that are yours, not the
+script's: the last name is always the arbiter, and `-d` points at the journal (the watchdog dings
+you if it goes 60 min without a write).
 
-**A vigia cobre quem tem a BOLA agora, mais você — e mais ninguém.** A lista de sessões do comando é
-o estado da vez, não a tabela do contrato: sessão que ainda não abriu, sessão aposentada e sessão
-**parada por ordem sua** ficam de fora, e você **reescreve o comando a cada passe de bola** — ao
-liberar Task, ao mandar commit pro revisor. Isso inclui o executor: depois de um `REPROVA` a bola
-passa do revisor pra ele **sem você ver**, e é o desenho. Num lote paralelo "quem tem a bola" é
-todos os escritores, porque ali todos têm — uma vigia só, com todos eles dentro:
+**The watchdog covers whoever has the BALL now, plus you — and nobody else.** The command's
+session list is the current turn's state, not the contract's table: a session not yet opened, a
+retired session and a session **stopped by your order** stay out, and you **rewrite the command at
+every handoff** — when releasing a Task, when sending a commit to review. That includes the
+executor: after a `REPROVA` the ball passes from reviewer to executor **without you seeing**, and
+that is the design. In a parallel batch "who has the ball" is every writer, because there all of
+them do — a single watchdog, with all of them inside:
 
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
   "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
-  -d ~/.hangar/orq/<data>-<gid>/registro.md
+  -d ~/.hangar/orq/<date>-<gid>/registro.md
 ```
 
-**Ninguém com a bola = vigia desarmada — e a bola com o USUÁRIO também é ninguém com a bola.** Time
-sem trabalho (tudo aprovado, esperando decisão do usuário) com a vigia viva só produz alarme falso e
-cutucão em sessão paga. Desarme **antes** de perguntar ao usuário, e rearme quando a resposta
-chegar. Árbitro em `awaiting_input` esperando resposta humana não é árbitro caído — é o estado
-legítimo de quem já entregou a decisão; a vigia não distingue os dois, e quem distingue é você, que
-é justamente quem ela acorda.
+**Nobody with the ball = watchdog disarmed — and the ball with the USER is also nobody with the
+ball.** A team with no work (everything approved, waiting for the user's decision) with a live
+watchdog only produces false alarms and nudges into paid sessions. Disarm **before** asking the
+user, and re-arm when the answer arrives. An arbiter in `awaiting_input` waiting for a human
+answer is not a fallen arbiter — it is the legitimate state of someone who already delivered the
+decision; the watchdog can't tell the two apart, and the one who can is you, exactly whom it
+wakes.
 
-**Alarme falso tem uma família só, e ela é grande:** sessão parada por ordem sua lida como sessão
-quebrada — a que ainda não abriu, a que já entregou, a que espera veredito. A vigia não distingue
-"parada porque acabou" de "parada porque quebrou". **Cutucão em sessão parada de propósito não é só
-ruído: é um turno pago**, e a sessão cutucada divide árvore com quem está medindo os portões.
+**False alarms have a single family, and it is large:** a session stopped by your order read as a
+broken session — the one not yet opened, the one that already delivered, the one waiting for a
+verdict. The watchdog can't tell "stopped because done" from "stopped because broken". **A nudge
+into a deliberately stopped session is not just noise: it is a paid turn**, and the nudged session
+shares a tree with whoever is measuring the gates.
 
-E o comando da vigia **não** vai no arquivo de regras com a lista de nomes: vai a forma. Lista de
-sessões escrita num arquivo envelhece entre a escrita e a leitura, que é a mesma razão de o estado da
-vez morar no kick-off.
+And the watchdog command does **not** go into the rules file with the name list: the form goes. A
+session list written in a file ages between writing and reading, the same reason the turn's state
+lives in the kick-off.
 
-Ela consulta a cada 60s e acorda você depois de N leituras paradas seguidas. Três coisas nela não
-são detalhe de implementação — são o que a faz funcionar, e cada uma custou uma falha real:
+It polls every 60s and wakes you after N consecutive stalled readings. Three things in it are not
+implementation detail — they are what makes it work, and each one cost a real failure:
 
-**1. Ela vigia TODAS, incluindo VOCÊ.** Vigiar só o par deixa de fora o modo de falha que ninguém
-olhava: o juiz cair. Árbitro derrubado por erro de provedor de madrugada já parou um time inteiro
-por 2h30 com o relato preso na fila — e do lado de dentro isso é invisível, porque o turno seguinte
-parece continuar de onde o anterior parou.
+**1. It watches EVERYONE, including YOU.** Watching only the pair leaves out the failure mode
+nobody was watching: the judge falling. An arbiter knocked out by a provider error overnight once
+stopped a whole team for 2h30 with the report stuck in the queue — and from the inside that is
+invisible, because the next turn feels like it continues from the previous one.
 
-**2. Ela acorda por `hangar-send --tmux`, não por `echo`** — o recado entra como **prompt** e
-reanima turno morto; `echo` só vira notificação com o turno vivo. O porquê do `--tmux` está no
-cabeçalho do script.
+**2. It wakes via `hangar-send --tmux`, not via `echo`** — the message enters as a **prompt** and
+revives a dead turn; an `echo` only becomes a notification with the turn alive. The why of
+`--tmux` is in the script's header.
 
-**3. Ela dispara quando o DONO DA VEZ para — não quando todos param.** Árbitro parado com alguém
-trabalhando é o estado **normal**. `sumiu` conta como parado: sessão morta também não trabalha. Duas
-exceções avisam na hora, sem esperar o silêncio: sessão **travada** (diz `working` e não produz
-evento há 10 min) e sessão **sem cota**.
+**3. It fires when the CURRENT OWNER stops — not when everyone stops.** An idle arbiter with
+someone working is the **normal** state. `vanished` counts as stopped: a dead session doesn't
+work either. Two exceptions warn immediately, without waiting for silence: a **stuck** session
+(says `working` and has produced no event for 10 min) and a session **out of quota**.
 
-> A condição "todas paradas" foi tentada e é cega justamente para o caso que a vigia cobre: com o
-> árbitro na lista, ele conversando com o usuário conta como "trabalhando" e mascara um executor
-> morto — já custou 30 minutos de silêncio que quem percebeu foi o usuário. Enquanto o script não
-> separar os dois papéis, o paliativo é **tirar o árbitro da lista sempre que houver executor com a
-> bola** e devolvê-lo quando ninguém tiver.
+> The "everyone stopped" condition was tried and is blind exactly to the case the watchdog
+> covers: with the arbiter on the list, him talking to the user counts as "working" and masks a
+> dead executor — it already cost 30 minutes of silence that the user noticed. Until the script
+> separates the two roles, the stopgap is **removing the arbiter from the list whenever an
+> executor has the ball** and putting him back when nobody does.
 
-**A vigia PERGUNTA; ela não manda parar.** É um laço de shell que lê dois números — quanto tempo
-sem evento, e se o último comando repetiu — e a partir disso ela **não sabe** se a sessão está
-travada ou trabalhando bem. Alarme escrito no imperativo faz o destinatário obedecer sem checar,
-porque a mensagem chega pela mesma porta das ordens de verdade. Medido em 24–28/08/2026: **três
-alarmes falsos num dia**, e um deles mandou o executor PARAR no meio de 44 minutos de trabalho
-legítimo.
+**The watchdog ASKS; it doesn't order a stop.** It is a shell loop reading two numbers — how long
+without an event, and whether the last command repeated — and from that it does **not know**
+whether the session is stuck or working well. An alarm written in the imperative makes the
+recipient obey without checking, because the message arrives through the same door as real
+orders. Measured on 2026-08-24/28: **three false alarms in one day**, and one of them ordered the
+executor to STOP in the middle of 44 minutes of legitimate work.
 
-Toda mensagem que a vigia manda a uma sessão do time é uma **pergunta com a evidência junto** (o
-texto mora no script); a que vai para **você** pode ser afirmativa — você é o único que distingue
-sessão parada de propósito de sessão quebrada. Ordem de parar continua existindo, só que vem de
-você, depois de olhar, e não de um contador de minutos.
+Every message the watchdog sends to a team session is a **question with the evidence attached**
+(the text lives in the script); the one that goes to **you** may be affirmative — you are the
+only one who can tell a deliberately stopped session from a broken one. Stop orders still exist —
+they just come from you, after looking, and not from a minute counter.
 
-**A prova de que ela funciona é o alarme sintético CHEGAR.** Ao armar, a vigia dispara sozinha um
-`[vigia] ARMADA ...` para você, **pelo mesmo caminho dos alarmes reais** — se esse prompt chegou na
-sua sessão, o canal está provado; se a unidade subiu e ele não chegou em 2 minutos, o canal está
-quebrado e "active" não vale nada. Teste digitado à mão não conta: em 17/08/2026 ele "provou" duas
-vezes um caminho que não era o quebrado, enquanto 10 alarmes reais iam pro vazio.
+**The proof that it works is the synthetic alarm ARRIVING.** On arming, the watchdog fires a
+`[vigia] ARMADA ...` to you by itself, **through the same path as real alarms** — if that prompt
+reached your session, the channel is proven; if the unit came up and it didn't arrive within 2
+minutes, the channel is broken and "active" is worth nothing. A hand-typed test doesn't count: on
+2026-08-17 it "proved" twice a path that wasn't the broken one, while 10 real alarms went into
+the void.
 
-**Confirmar que ela subiu NÃO é confirmar que ela vive.** `is-active` logo depois do `systemd-run`
-responde `active` porque a unidade acabou de nascer — uma vigia já ficou `active` por horas sem uma
-linha de log enquanto quatro executores paravam por cota. As confirmações que valem (journal por um
-ciclo inteiro, `show -p ActiveState -p MainPID`) estão no cabeçalho do script.
+**Confirming it came up is NOT confirming it lives.** `is-active` right after the `systemd-run`
+answers `active` because the unit was just born — a watchdog once sat `active` for hours without
+one log line while four executors stopped on quota. The confirmations that count (journal over
+one full cycle, `show -p ActiveState -p MainPID`) are in the script's header.
 
-**Rearme a vigia toda vez que passar a bola** — ao liberar Task, ao mandar commit pro revisor. Vigia
-vencida e não rearmada é silêncio que ninguém percebe. **E mate a vigia antiga ao aposentar uma
-sessão**, senão ela lê "sumiu" como parado e te acorda pra alarme falso. Uma vigia viva por vez,
-apontando pro par da vez.
+**Re-arm the watchdog every time the ball passes** — when releasing a Task, when sending a commit
+to review. An expired, un-rearmed watchdog is silence nobody notices. **And kill the old watchdog
+when retiring a session**, or it reads "vanished" as stopped and wakes you for a false alarm. One
+live watchdog at a time, pointed at the current pair.
 
-Recado de sessão chega como prompt e já te acorda sozinho: a vigia é a **rede** pro caso de o recado
-não vir, não o caminho normal.
+A session's message arrives as a prompt and already wakes you by itself: the watchdog is the
+**net** for the case where the message doesn't come, not the normal path.
 
-## Modo noturno — três pré-condições, ou você não dorme o grupo
+## Night mode — three preconditions, or you don't put the group to sleep
 
-Deixar o time virar a noite sem usuário é legítimo — com três coisas provadas ANTES, porque de
-madrugada não há quem descubra o que você não previu. Medido em 16–17/08/2026: a cota do provedor
-dos executores estourou às 23:35, os 4 morreram no mesmo minuto, a vigia estava `inactive` — e
-quem descobriu foi o usuário, às 05:56, 6h21 depois.
+Letting the team run through the night without the user is legitimate — with three things proven
+BEFORE, because overnight there is nobody to discover what you didn't foresee. Measured on
+2026-08-16/17: the executors' provider quota blew at 23:35, all 4 died in the same minute, the
+watchdog was `inactive` — and the one who found out was the user, at 05:56, 6h21 later.
 
-1. **Vigia provada** — não `active`: o alarme sintético que ela mesma dispara ao armar chegou como
-   prompt na sua sessão (ver a seção da vigia).
-2. **Cota conferida** — a cota restante de cada provedor do time contra o consumo médio por Task
-   já medido neste trabalho. Não cobre a noite → não largue.
-3. **Fallback válido** — o plano B de provedor que o contrato autorizou por escrito ainda existe.
+1. **Watchdog proven** — not `active`: the synthetic alarm it fires on arming arrived as a prompt
+   in your session (see the watchdog section).
+2. **Quota checked** — each team provider's remaining quota against this work's measured average
+   consumption per Task. Doesn't cover the night → don't launch.
+3. **Fallback valid** — the provider plan B the contract authorized in writing still exists.
 
-Qualquer uma falhando: **pare no fim da Task corrente e acorde o usuário ANTES de dormir** — uma
-pergunta às 23h custa uma resposta; a falta dela custou 3 intervenções de madrugada.
+Any of them failing: **stop at the current Task's end and wake the user BEFORE sleeping** — a
+question at 11pm costs one answer; its absence cost 3 overnight interventions.
 
-## Sessão que morre não é caso de investigação
+## A dying session is not a case for investigation
 
-Sessão do time desaparecida (some do `hangar-send --list` e do tmux) sem você ter mandado fechar: **abra
-outra e siga**. Autonomia é isso — o trabalho não pode parar porque uma sessão caiu.
+A team session gone (missing from `hangar-send --list` and from tmux) without you having ordered
+it closed: **open another and move on**. That is what autonomy is — the work cannot stop because a
+session fell.
 
-O usuário fecha sessão quando quer, a máquina reinicia, o processo morre. Nada disso é incidente;
-todos têm o mesmo conserto. Perseguir a causa custa turnos, interrompe o usuário com um alarme falso
-e não devolve a sessão. Já aconteceu aqui: um árbitro interrogou o executor sobre "qual `pkill` você
-rodou" quando o usuário simplesmente tinha fechado a janela.
+The user closes sessions whenever they want, the machine reboots, the process dies. None of that
+is an incident; all of it has the same fix. Chasing the cause costs turns, interrupts the user
+with a false alarm and doesn't bring the session back. It already happened here: an arbiter
+interrogated the executor about "which `pkill` did you run" when the user had simply closed the
+window.
 
-O que fazer, em ordem, sem perguntar a ninguém:
+What to do, in order, without asking anyone:
 
-1. **Leia o transcript da sessão morta** (`~/.claude*/projects/<cwd-sanitizado>/<uuid>.jsonl`, o mais
-   recente, mensagens `type: "assistant"`). Ela pode ter **produzido** o parecer ou o reporte e
-   morrido antes de enviar — nesse caso o trabalho não se perdeu e você nem precisa refazer.
-   **E olhe o pane antes de pedir qualquer coisa de novo**: `tmux capture-pane -p -t "=<nome>:" -S -200`.
-   Com o canal de saída morrendo (acontece em provedor instável), o reporte inteiro fica **na tela**,
-   completo, sem nunca ter saído. Medido em 22/08/2026: um reporte de Task com prints descritos um a um
-   estava ali o tempo todo; quem percebeu que a sessão "não conseguia enviar" foi o usuário.
-2. **Abra a substituta** pela receita de sempre (criar → provar → pedido em arquivo → conferir a
-   entrega), com o kick-off completo: papel, HEAD esperado, intocáveis literais, contrato, plano, e o
-   commit ou a receita da vez.
-3. **Registre no contrato** em uma linha: qual sessão sumiu, o que foi recuperado do transcript e
-   quem assumiu.
+1. **Read the dead session's transcript** (`~/.claude*/projects/<sanitized-cwd>/<uuid>.jsonl`, the
+   most recent, messages `type: "assistant"`). It may have **produced** the report or the review
+   and died before sending — in that case the work is not lost and you don't even redo it.
+   **And look at the pane before requesting anything again**:
+   `tmux capture-pane -p -t "=<name>:" -S -200`. With the output channel dying (it happens on
+   flaky providers), the whole report sits **on screen**, complete, having never left. Measured on
+   2026-08-22: a Task report with screenshots described one by one was there the whole time; the
+   one who noticed the session "couldn't send" was the user.
+2. **Open the substitute** by the usual recipe (create → prove → request in a file → check
+   delivery), with the full kick-off: role, expected HEAD, literal untouchables, contract, plan,
+   and the current commit or recipe.
+3. **Record in the contract** in one line: which session vanished, what was recovered from the
+   transcript and who took over.
 
-Só vire caso de investigação se o **repo** também estiver estranho — árvore suja que ninguém explica,
-commit que ninguém reportou, intocável mexido. Aí o assunto é o repo, não a sessão.
-
+It only becomes a case for investigation if the **repo** is also strange — a dirty tree nobody
+explains, a commit nobody reported, an untouchable touched. Then the subject is the repo, not the
+session.

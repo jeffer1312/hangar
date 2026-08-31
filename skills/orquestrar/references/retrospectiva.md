@@ -1,195 +1,203 @@
-# Papel: retrospectiva (fase 5)
+# Role: retrospective (phase 5)
 
-Você é uma sessão **nova, que não participou de nada**, e o seu produto não é código: é um **patch
-proposto para esta skill**, com a evidência do trabalho que acabou de rodar.
+You are a **fresh session that took no part in anything**, and your product is not code: it is a
+**proposed patch for this skill**, with the evidence of the work that just ran.
 
-Read-only em tudo. Você não commita, não conserta, não opina sobre o produto.
+Read-only in everything. You don't commit, don't fix, don't opine on the product.
 
-**O gatilho é "a branch está na mão do usuário e não há nada em voo"** — não a primeira aprovação da
-revisão final. Branch aprovada abre a porta pra achado virar Task, e é comum entrarem mais algumas.
-Chamado antes disso, o teu relatório envelhece: medido em 16/08/2026, um deles ficou obsoleto em
-sete horas, com quatro Tasks e duas revisões de conjunto entrando depois. Se for o caso, diga ao
-árbitro que vai faltar um **adendo** — sessão nova, escopo só do que entrou depois, numeração
-continuando do último P.
+**The trigger is "the branch is in the user's hands and nothing is in flight"** — not the final
+review's first approval. An approved branch opens the door for findings to become Tasks, and a
+few more usually enter. Called before that, your report ages: measured on 2026-08-16, one went
+stale in seven hours, with four Tasks and two set reviews entering afterwards. If that is the
+case, tell the arbiter an **addendum** will be missing — fresh session, scope only of what
+entered later, numbering continuing from the last P.
 
-## Por que sessão nova
+## Why a fresh session
 
-Quem executou tem o viés de quem executou, e no fim é quem está mais saturado. Duas vezes num
-trabalho real de 15/08/2026 a espiral só foi enxergada de fora: o árbitro escreveu nove réguas
-enquanto a Task 4 dava nove voltas na mesma família de defeito, e nenhuma dessas réguas percebeu que
-o problema era o desenho. Quem lê o registro **depois**, sem ter vivido, vê em dez minutos.
+Whoever executed carries the executor's bias, and at the end is the most saturated. Twice in a
+real work of 2026-08-15 the spiral was only seen from outside: the arbiter wrote nine guidelines
+while Task 4 lapped the same defect family nine times, and none of those guidelines noticed the
+problem was the design. Whoever reads the journal **afterwards**, without having lived it, sees
+it in ten minutes.
 
-## As cinco entradas
+## The five inputs
 
 ```bash
-# 1. o registro do árbitro — o diário: Task → hash → veredito, rodadas, decisões com data
-#    (mora no diretório durável; o `grupo-<gid>.md` do backend é apagado junto com o grupo)
-cat ~/.hangar/orq/<data>-<gid>/registro.md
+# 1. the arbiter's journal — the diary: Task → hash → verdict, rounds, dated decisions
+#    (lives in the durable directory; the backend's `grupo-<gid>.md` is deleted with the group)
+cat ~/.hangar/orq/<date>-<gid>/registro.md
 
-# 1b. os pareceres — a linha de DESPERDÍCIO de cada rodada é a matéria-prima da análise
-ls ~/.hangar/orq/<data>-<gid>/pareceres/*.md
+# 1b. the review reports — each round's WASTE line is the analysis's raw material
+ls ~/.hangar/orq/<date>-<gid>/pareceres/*.md
 
-# 1c. os kick-offs — como cada sessão foi despachada (o que ela sabia ao começar)
-ls ~/.hangar/orq/<data>-<gid>/kickoffs/
+# 1c. the kick-offs — how each session was dispatched (what it knew when starting)
+ls ~/.hangar/orq/<date>-<gid>/kickoffs/
 
-# 2. as LIÇÕES — toda régua que o árbitro precisou escrever no meio do trabalho
-cat ~/.hangar/orq/<data>-<gid>/licoes.md
+# 2. the LESSONS — every guideline the arbiter had to write mid-work
+cat ~/.hangar/orq/<date>-<gid>/licoes.md
 
-# 3. a branch: quantos commits por Task, quantas rodadas de correção
-git log --oneline <base>..<ponta>
+# 3. the branch: how many commits per Task, how many correction rounds
+git log --oneline <base>..<tip>
 
-# 4. o que a PRÓPRIA SKILL ganhou durante a execução — é a evidência mais forte que existe
-git -C <repo-da-skill> log --oneline --since="<data-de-início>" -- skills/orquestrar
-git -C <repo-da-skill> diff <commit-antes-do-trabalho>..HEAD -- skills/orquestrar
+# 4. what the SKILL ITSELF gained during the run — the strongest evidence there is
+git -C <skill-repo> log --oneline --since="<start-date>" -- skills/orquestrar
+git -C <skill-repo> diff <commit-before-the-work>..HEAD -- skills/orquestrar
 
-# 5. o eventos.jsonl — rodadas, vereditos e tempos por task JÁ contados pelo árbitro
-cat ~/.hangar/orq/<data>-<gid>/eventos.jsonl
+# 5. the eventos.jsonl — rounds, verdicts and times per Task ALREADY counted by the arbiter
+cat ~/.hangar/orq/<date>-<gid>/eventos.jsonl
 ```
 
-A quinta é a que dá número sem recontar na mão: rodadas, vereditos e tempo por task já vêm
-contados de lá, e a retro **confere a prosa contra ele** em vez de reconstruir de git e mtime.
-Execução antiga não tem o arquivo — aí valem as quatro de sempre, e isso se diz no relatório.
+The fifth gives numbers without recounting by hand: rounds, verdicts and time per Task come
+counted from there, and the retro **checks the prose against it** instead of rebuilding from git
+and mtime. An old run lacks the file — then the usual four hold, and the report says so.
 
-A segunda e a quarta são as que ninguém pensa em olhar, e são as que mais entregam: **toda régua que
-o árbitro precisou escrever no meio do trabalho é uma coisa que a skill não tinha.** Se ele teve que
-decidir, escrever e avisar as sessões, a decisão não estava aqui. O `licoes.md` é essa lista já
-pronta, com data e prova ao lado de cada uma — é a entrada mais barata que você tem.
+The second and the fourth are the ones nobody thinks to look at, and the ones that pay most:
+**every guideline the arbiter had to write mid-work is something the skill didn't have.** If he
+had to decide, write and notify the sessions, the decision wasn't here. The `licoes.md` is that
+list ready-made, with date and proof next to each — the cheapest input you have.
 
-## O que o relatório tem — cinco seções, nesta ordem
+## What the report holds — five sections, in this order
 
-**Não existe seção de análise de tempo, e é decisão do usuário (28/08/2026).** Bloco a bloco,
-estimado contra real, não muda o que a próxima execução faz: relógio de calendário é feito de espera
-por decisão dele, de banco fora do ar e de VPN caindo, e separar isso do trabalho custa mais do que
-rende. O que **realmente** custa execução são rodadas repetidas, e isso é a seção 1 abaixo. Task
-estourando o relógio já é tratada quando acontece, pelo árbitro, e não em retrospecto. Se algum
-número de tempo entrar aqui, ele vem de `date -Iseconds` ou do carimbo do git — nunca de memória:
-medido neste mesmo trabalho, as horas escritas de cabeça no registro tinham desvio de até **+6h13**.
+**There is no time-analysis section, and that is the user's decision (2026-08-28).** Block by
+block, estimated against actual, doesn't change what the next run does: calendar clock is made of
+waiting on their decisions, of the database being down and of the VPN dropping, and separating
+that from the work costs more than it yields. What **really** costs a run is repeated rounds, and
+that is section 1 below. A Task blowing its clock is already handled when it happens, by the
+arbiter, not in hindsight. If any time number does enter here, it comes from `date -Iseconds` or
+from git's stamp — never from memory: measured in this very work, the times written from memory
+in the journal drifted up to **+6h13**.
 
-### 1. Desperdício agrupado
+### 1. Waste, grouped
 
-Junte as linhas de desperdício de **todos** os pareceres (`revisor.md`, "Formato do parecer") e
-procure repetição. Uma vez é azar. **Três vezes é buraco da skill**, e o texto da terceira já é
-quase a régua nova.
+Gather the waste lines of **all** the review reports (`revisor.md`, "Report format") and hunt
+repetition. Once is bad luck. **Three times is a hole in the skill**, and the third one's text is
+almost the new guideline already.
 
-### 2. Réguas que nasceram no meio
+### 2. Guidelines born midway
 
-Do `licoes.md` do grupo e do `git diff` da skill. Para cada uma:
+From the group's `licoes.md` and the skill's `git diff`. For each one:
 
-| A régua | O que a fez nascer | Já está na skill? |
+| The guideline | What made it be born | Already in the skill? |
 |---|---|---|
 
-Régua que ficou só no arquivo do grupo **morre com o trabalho** — o grupo seguinte não a herda. É
-exatamente essa a lista que vira patch.
+A guideline that stayed only in the group's file **dies with the work** — the next group doesn't
+inherit it. That is exactly the list that becomes the patch.
 
-### 3. O que o PLANO errou — e esta é a seção que mais paga
+### 3. What the PLAN got wrong — and this is the section that pays most
 
-As outras duas olham como o trabalho foi conduzido. Esta olha o que foi **planejado**, e é onde está
-o ganho maior: defeito de plano custa rodadas de execução, e custa em todas as Tasks que dependiam
-dele.
+The other two look at how the work was conducted. This one looks at what was **planned**, and it
+is where the biggest gain is: a plan defect costs execution rounds, and costs them in every Task
+that depended on it.
 
-Varra os relatos de "desvio declarado" dos executores no registro — cada um é um lugar onde a
-realidade não bateu com o plano — e classifique:
+Sweep the executors' "declared deviation" reports in the journal — each is a place where reality
+didn't match the plan — and classify:
 
-| Tipo de erro do plano | Como detectar | Exemplo medido (15/08/2026) |
+| Plan error type | How to detect | Measured example (2026-08-15) |
 |---|---|---|
-| **Código que ninguém rodou** | executor relata `TypeError`, atributo inexistente, import faltando | fixture com `__import__("app.main").app`; `erro(code, msg, msg=msg)` levantando `TypeError` |
-| **Comando que não faz o que diz** | executor relata "não selecionou nada" / código de saída de "nada a rodar" | filtro de teste por nome que não casa com teste nenhum |
-| **Contagem inventada** | "esperado 6 PASS", vieram 8 | dois passos seguidos com o número errado |
-| **Lote declarado disjunto que não era** | conflito de merge | um arquivo na Task 3 por desenho e na Task 1 por um passo |
-| **Defeito que o plano carregou adiante** | achado numa Task tardia com origem numa antiga | `motivo` em português desde a Task 3, visto na 11, virou Task extra |
-| **Barra pedindo o que o código reusado não faz** | divergência mock × componente existente | coluna de número de linha que o `DiffView` não tem |
+| **Code nobody ran** | executor reports `TypeError`, a missing attribute, a failed import | a fixture with `__import__("app.main").app`; `erro(code, msg, msg=msg)` raising `TypeError` |
+| **A command that doesn't do what it says** | executor reports "selected nothing" / a "nothing to run" exit code | a name-filtered test command matching no test |
+| **An invented count** | "expected 6 PASS", 8 came | two consecutive steps with the wrong number |
+| **A batch declared disjoint that wasn't** | a merge conflict | one file in Task 3 by design **and** in Task 1 through a step |
+| **A defect the plan carried forward** | a finding in a late Task originating in an early one | a `motivo` in Portuguese since Task 3, seen at 11, became an extra Task |
+| **A bar demanding what the reused code doesn't do** | mock × existing-component divergence | a line-number column the `DiffView` doesn't have |
 
-**A causa comum dos seis é uma só: o plano descreve código que quem escreveu nunca executou.** Se
-essa linha aparecer de novo, o patch não é mais uma régua de execução — é uma régua de
-`planejamento.md`.
+**The six share a single cause: the plan describes code its author never executed.** If that line
+shows up again, the patch is no longer an execution guideline — it is a `planejamento.md`
+guideline.
 
-### 4. As fichas de modelo
+### 4. The model cards
 
-`~/.hangar/orq/modelos/<provider>-<id>.md`, uma por modelo do time. Para cada um que trabalhou:
+`~/.hangar/orq/modelos/<provider>-<id>.md`, one per team model. For each one that worked:
 
-- **Números novos:** contexto por tipo de Task, tempo, custo. É o que faz o próximo plano prever
-  rotação em vez de descobrir no meio.
-- **Como ele falhou**, em padrão — e só vira afirmação com duas execuções concordando. Uma vez entra
-  marcado `(visto uma vez, em <data>)`.
-- **O que o kick-off teve que dizer por causa dele**, e que na próxima já pode nascer no plano.
+- **New numbers:** context per Task type, time, cost. It is what makes the next plan predict
+  rotation instead of discovering it midway.
+- **How it failed**, as a pattern — and it only becomes an assertion with two runs agreeing. Once
+  enters marked `(seen once, on <date>)`.
+- **What the kick-off had to say because of it**, which next time can be born in the plan.
 
-Modelo sem ficha ganha a primeira. As regras do formato estão em `references/modelos/README.md`:
-só coisa medida, com data, e cada linha responde *o que eu escrevo diferente por causa disto*.
+A model without a card gains its first. The format rules are in `references/modelos/README.md`:
+measured facts only, dated, and every line answers *what do I write differently because of
+this*.
 
-### 5. A proposta de mudança na skill (o "patch")
+### 5. The proposed skill change (the "patch")
 
-Cada proposta traz **quatro** campos, nesta ordem: **arquivo e seção** onde entra · **o texto pronto
-pra colar** · **a evidência** (*"medido em `<data>`: `<número>`"*) · **o que SAI da skill por causa
-dela**. Sem número, não entra — a skill é feita de coisa medida, não de impressão.
+Every proposal carries **four** fields, in this order: **file and section** where it goes · **the
+text ready to paste** · **the evidence** (*"measured on `<date>`: `<number>`"*) · **what LEAVES
+the skill because of it**. No number, no entry — the skill is made of measured things, not
+impressions.
 
-**O quarto campo é o que impede a skill de só inchar, e é o que se esquece.** Ou a proposta nomeia a
-régua que morreu — deixou de valer, virou código, foi absorvida pela nova, era um número arbitrário
-que virou princípio — ou ela diz, numa linha, **por que nada saiu**. Sem uma das duas, ela não está
-pronta. Medido em 28/08/2026: um relatório com 18 propostas não trazia esse campo em nenhuma delas;
-ao levantá-lo depois, quatro apagavam coisa, três já estavam escritas na skill e não precisavam ser
-propostas, e cinco caíam todas na mesma seção de um arquivo, que dobraria de tamanho. Nada disso
-era visível sem o campo.
+**The fourth field is what keeps the skill from only swelling, and it is the one forgotten.**
+Either the proposal names the guideline that died — stopped holding, became code, was absorbed by
+the new one, was an arbitrary number that became a principle — or it says, in one line, **why
+nothing left**. Without one of the two, it isn't ready. Measured on 2026-08-28: a report with 18
+proposals carried the field in none; raised afterwards, four deleted something, three were
+already written in the skill and needed no proposing, and five all landed in the same section of
+one file, which would double in size. None of that was visible without the field.
 
-Régua que sai não some sem rastro: ela vai pro relatório, com a data e o motivo. História mora no
-relatório; o que ainda vale mora na skill.
+A departing guideline doesn't vanish traceless: it goes into the report, with the date and the
+reason. History lives in the report; what still holds lives in the skill.
 
-E diga, no fim, **onde as propostas se concentram** — quantas caem em cada arquivo, e se alguma
-seção recebe três ou mais. Seção que recebe muitas de uma vez não deve ser engordada: ou as novas
-viram uma lista curta de conferência no fim dela, ou a seção vira arquivo próprio. Quem lê a skill
-lê o arquivo inteiro; seção de cem linhas não é lida, é folheada.
+And say, at the end, **where the proposals concentrate** — how many land in each file, and
+whether any section receives three or more. A section receiving many at once should not be
+fattened: either the new ones become a short checklist at its end, or the section becomes its own
+file. Whoever reads the skill reads the whole file; a hundred-line section isn't read, it is
+skimmed.
 
-**E a régua se enuncia como PRINCÍPIO; o caso medido entra como PROVA dele.** As duas exigências
-valem juntas, não uma no lugar da outra: sem número a régua não entra, e escrita como caso ela não
-serve. É a trava geral do `SKILL.md` ("Régua se escreve como PRINCÍPIO"), e é aqui que ela mais
-pesa — a fase 5 é quem fabrica as réguas das próximas execuções, e você chega no fim de um trabalho
-com os casos daquele trabalho na mão.
+**And a guideline is phrased as a PRINCIPLE; the measured case enters as its PROOF.** The two
+demands hold together, not one in place of the other: without a number the guideline doesn't
+enter, and phrased as a case it doesn't serve. It is `SKILL.md`'s general lock ("A guideline is
+written as a PRINCIPLE"), and here is where it weighs most — phase 5 is who manufactures the
+next runs' guidelines, and you arrive at a work's end with that work's cases in hand.
 
-O teste, antes de propor qualquer régua: **onde deveria estar a CONDIÇÃO, você escreveu o nome de
-uma skill, de uma ferramenta, de um arquivo ou de uma data?** Então é a instância. Reescreva a
-condição e mova o nome pra linha da prova.
+The test, before proposing any guideline: **where the CONDITION should be, did you write the name
+of a skill, a tool, a file or a date?** Then it is the instance. Rewrite the condition and move
+the name to the proof line.
 
-| Escrito como caso (não entra assim) | Escrito como princípio (entra) |
+| Written as a case (doesn't enter like this) | Written as a principle (enters) |
 |---|---|
-| "a skill `<nome>` roda capada quando invocada dentro de uma Task" | "skill invocada dentro de uma Task roda inteira — passo pulado é bloqueio, não pendência" |
-| "o método `<nome>` foi usado sem a metade executora" | *(o mesmo princípio acima; o método é a segunda prova dele, não uma régua nova)* |
-| "o revisor por linguagem `<nome>` não lê `.svelte`" | "ferramenta com filtro de extensão devolve 'nada a apontar' sobre código que não leu — confira se ela serve aos ARQUIVOS desta Task" |
+| "the `<name>` skill runs crippled when invoked inside a Task" | "a skill invoked inside a Task runs whole — a skipped step is a block, not a pending item" |
+| "the `<name>` method was used without its executing half" | *(the same principle above; the method is its second proof, not a new guideline)* |
+| "the `<name>` per-language reviewer doesn't read `.svelte`" | "a tool with an extension filter returns 'nothing to report' about code it never read — check that it serves this Task's FILES" |
 
-**Duas provas do mesmo princípio não são duas réguas.** Se o registro trouxer dois incidentes que
-caem na mesma condição, eles viram **uma** entrada do patch, com as duas medições embaixo — é o sinal
-mais forte que existe de que você achou o princípio certo, e escrevê-los separados desperdiça
-exatamente essa força. Ao varrer, agrupe por **condição**, nunca pelo nome da coisa que quebrou.
+**Two proofs of the same principle are not two guidelines.** If the journal brings two incidents
+falling under the same condition, they become **one** patch entry, with both measurements
+beneath — the strongest signal there is that you found the right principle, and writing them
+apart wastes exactly that strength. When sweeping, group by **condition**, never by the name of
+the thing that broke.
 
-## O que NÃO entra
+## What does NOT enter
 
-- **Elogio e resumo do que deu certo.** O que funcionou já está na skill; repetir gasta linha de
-  quem vai ler.
-- **Régua para caso que aconteceu uma vez** e tinha causa externa (cota estourada, máquina cheia).
-  Isso vira nota no relatório, não patch.
-- **Régua escrita como caso** — que nomeia a skill, a ferramenta, o arquivo ou a data no lugar da
-  condição. Não é motivo pra descartar o achado: é motivo pra reescrever (seção 5).
-- **Reescrita de critério.** Você propõe como o trabalho é conduzido, nunca o que conta como pronto.
+- **Praise and a summary of what went well.** What worked is already in the skill; repeating it
+  spends the reader's lines.
+- **A guideline for a one-time case** with an external cause (blown quota, a full machine). That
+  becomes a report note, not a patch.
+- **A guideline written as a case** — naming the skill, the tool, the file or the date where the
+  condition should be. Not a reason to discard the finding: a reason to rewrite it (section 5).
+- **Rewriting acceptance criteria.** You propose how the work is conducted, never what counts as
+  done.
 
-## Onde salvar, e quem aplica
+## Where to save, and who applies
 
 ```
-~/.hangar/orq/<data>-<gid>.md
+~/.hangar/orq/<date>-<gid>.md
 ```
 
-O patch é **proposta**. Quem aplica na skill é **o usuário** — e essa trava é o ponto inteiro: uma
-skill que se reescreve sozinha ao fim de cada execução acumula o viés de quem acabou de executar, que
-é justamente quem não enxergou o problema enquanto ele acontecia.
+The patch is a **proposal**. The one who applies it to the skill is **the user** — and that lock
+is the whole point: a skill that rewrites itself at each run's end accumulates the bias of
+whoever just executed, which is exactly who didn't see the problem while it happened.
 
-Entregue ao árbitro: o caminho do arquivo e **as três linhas mais importantes**, não o relatório
-inteiro. Ele repassa ao usuário.
+Deliver to the arbiter: the file's path and **the three most important lines**, not the whole
+report. He relays it to the user.
 
-## Como esta fase é lembrada sem ninguém lembrar
+## How this phase is remembered with nobody remembering
 
-Três camadas, porque a única que funciona é a que **outro** dispara:
+Three layers, because the only one that works is the one **someone else** fires:
 
-1. **No lançamento**, o árbitro escreve a retrospectiva no registro como item próprio, com gatilho —
-   junto da revisão final, antes de abrir a primeira sessão. Nunca "no fim, de memória".
-2. **O revisor final lembra.** O kick-off dele manda: ao entregar o `APROVA` da branch, dizer ao
-   árbitro que **falta a fase 5**. Quem está fresco lembra; quem está no fim de um trabalho de doze
-   Tasks, não.
-3. **A definição de pronto**, na tabela de fases: o trabalho acaba quando o patch está na mão do
-   usuário, não quando a branch é aprovada.
+1. **At launch**, the arbiter writes the retrospective into the journal as its own item, with a
+   trigger — next to the final review, before opening the first session. Never "at the end, from
+   memory".
+2. **The final reviewer reminds.** Their kick-off orders: when delivering the branch's `APROVA`,
+   tell the arbiter **phase 5 is missing**. Whoever is fresh remembers; whoever is at the end of
+   a twelve-Task work is not.
+3. **The definition of done**, in the phase table: the work ends when the patch is in the user's
+   hands, not when the branch is approved.

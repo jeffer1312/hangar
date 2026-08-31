@@ -1,74 +1,76 @@
-# Fichas de modelo — o que cada um faz bem, mal, e o que isso muda no plano
+# Model cards — what each one does well, badly, and what that changes in the plan
 
-Uma ficha por modelo, curta. Elas existem para o **planejador** ler antes de escrever o plano
-(`planejamento.md`, "O TIME se decide ANTES de escrever o plano") e para a **retrospectiva**
-atualizar no fim (`retrospectiva.md`).
+One card per model, short. They exist for the **planner** to read before writing the plan
+(`planejamento.md`, "The TEAM is decided BEFORE writing the plan") and for the
+**retrospective** to update at the end (`retrospectiva.md`).
 
-**As fichas moram no cofre — `~/.hangar/orq/modelos/` — não nesta skill.** Elas são registro
-datado da máquina de quem usa (a orquestração funciona inteira sem elas), e envelhecem por
-construção. O que mora aqui é só esta página: a regra de como uma ficha se escreve.
+**The cards live in the vault — `~/.hangar/orq/modelos/` — not in this skill.** They are dated
+records of the user's machine (the orchestration works whole without them), and they age by
+construction. What lives here is only this page: the rule of how a card is written.
 
-## Regras destes arquivos
+## Rules for these files
 
-1. **Só coisa medida, com data.** "Parece melhor em X" não entra. "Em 15/08/2026, 3 rodadas contra
-   2 das irmãs, 2,3× o custo do dia" entra.
-2. **O que muda no PLANO, não elogio.** Cada linha da ficha responde: *o que eu escrevo diferente por
-   causa disto?* Se não muda nada, não é ficha, é curiosidade.
-3. **Curtas — 40 linhas.** Ficha que ninguém lê inteira não protege ninguém. O que envelheceu sai; a
-   data denuncia.
-4. **Não é tabela de contas.** Preço, cota e permissão vivem em `~/.claude/orquestracao-contas.md`,
-   que é da máquina e quem decide é o usuário. Aqui é comportamento.
-5. **Uma execução não faz ficha.** Padrão observado uma vez entra como "visto uma vez, em <data>".
-   Duas execuções concordando viram afirmação.
+1. **Measured facts only, dated.** "Seems better at X" doesn't enter. "On 2026-08-15, 3 rounds
+   against the siblings' 2, 2.3× the day's cost" enters.
+2. **What changes in the PLAN, not praise.** Every card line answers: *what do I write
+   differently because of this?* If it changes nothing, it isn't card material, it is trivia.
+3. **Short — 40 lines.** A card nobody reads whole protects nobody. What aged leaves; the date
+   gives it away.
+4. **Not an accounts table.** Price, quota and permission live in
+   `~/.claude/orquestracao-contas.md`, which belongs to the machine and whose decider is the
+   user. Here is behavior.
+5. **One run doesn't make a card.** A pattern observed once enters as "seen once, on <date>".
+   Two agreeing runs become an assertion.
 
-## Nome do arquivo
+## File name
 
-`~/.hangar/orq/modelos/<provider>-<id>.md` — o mesmo par que o `--model` recebe, para não haver
-dúvida de qual é.
+`~/.hangar/orq/modelos/<provider>-<id>.md` — the same pair `--model` receives, so there is no
+doubt which one it is.
 
-## Modelo novo no time: pesquise antes, mas guarde separado
+## A new model on the team: research first, but keep it apart
 
-Modelo que nunca trabalhou aqui não tem ficha. Antes de escrever o plano, faça **uma** varredura
-curta e registre numa seção própria. Duas fontes, e a segunda costuma valer mais:
+A model that never worked here has no card. Before writing the plan, do **one** short sweep and
+record it in its own section. Two sources, and the second is usually worth more:
 
-- **O fabricante** — guia de prompting, notas da versão, limites publicados. Diz o que o modelo
-  deveria fazer.
-- **A comunidade** — o que quem usa de verdade descobriu, incluindo o que o fabricante não conta:
-  onde ele quebra, que gambiarra virou padrão, com que ferramenta as pessoas contornam a limitação.
-  Use a skill **`last30days`** para a varredura ampla (Reddit, HN, X, YouTube, últimos 30 dias) e
-  depois vá fundo nas duas ou três fontes que aparecerem repetidas.
+- **The vendor** — the prompting guide, release notes, published limits. It says what the model
+  should do.
+- **The community** — what real users discovered, including what the vendor doesn't tell: where
+  it breaks, which workaround became standard, which tool people pair it with. Use the
+  **`last30days`** skill for the wide sweep (Reddit, HN, X, YouTube, last 30 days) and then go
+  deep on the two or three sources that repeat.
 
 ```markdown
-## O que dizem  <!-- HIPÓTESE — não testado aqui -->
-- <recomendação> — fabricante, lido em <data>
-- <descoberta> — comunidade (<onde>), lido em <data>
+## What they say  <!-- HYPOTHESIS — not tested here -->
+- <recommendation> — vendor, read on <date>
+- <finding> — community (<where>), read on <date>
 ```
 
-Por que a comunidade paga mais: ela reporta a **limitação e o contorno juntos**. Dois exemplos que
-chegaram por lá em 15/08/2026, e que nenhum guia oficial traria: que o modelo executor barato é cego
-e existe um par de CLIs que dá visão a ele; e um loop de auto-melhoria em que um modelo executa e
-outro anota o desperdício de cada volta — essa segunda virou régua desta skill no mesmo dia
-(`revisor.md`, "linha de DESPERDÍCIO").
+Why the community pays more: it reports the **limitation and the workaround together**. Two
+examples that arrived that way on 2026-08-15, which no official guide would carry: that the
+cheap executor model is blind and a pair of CLIs gives it sight; and a self-improvement loop
+where one model executes and another notes each lap's waste — the second became a rule of this
+skill the same day (`revisor.md`, the WASTE line).
 
-Duas regras, e a segunda é o ponto:
+Two rules, and the second is the point:
 
-1. **Seção separada, sempre.** Guia do fabricante e medição nossa nunca se misturam no mesmo
-   parágrafo — quem lê a ficha daqui a três meses precisa saber o que foi testado aqui e o que foi
-   lido em algum lugar.
-2. **Quando divergirem, ganha o medido, e a divergência fica escrita.** Ela é a informação mais
-   valiosa da ficha inteira: é onde o modelo se comporta diferente do anunciado *neste* tipo de
-   trabalho. Exemplo de 15/08/2026: o guia do Opus 5 desaconselha instrução extra de verificação
-   ("ele verifica sozinho, e pedir mais faz verificar demais") — e o que resolveu aqui foi cobrar
-   comando de leitura explícito, porque a falha não era falta de zelo, era truncar a própria
-   conferência com `head`.
+1. **A separate section, always.** The vendor's guide and our measurement never mix in the same
+   paragraph — whoever reads the card three months on must know what was tested here and what
+   was read somewhere.
+2. **When they diverge, the measured wins, and the divergence stays written.** It is the card's
+   most valuable information: it is where the model behaves differently from the advertised in
+   *this* kind of work. An example from 2026-08-15: the Opus 5 guide advises against extra
+   verification instructions ("it verifies on its own, and asking more makes it over-verify") —
+   and what solved things here was demanding an explicit read command, because the failure
+   wasn't lack of care, it was truncating its own check with `head`.
 
-Recomendação do fabricante que **nunca foi testada aqui** fica marcada como hipótese até uma
-execução confirmar. Não vire régua de kick-off sem medição: kick-off é onde o custo aparece.
+A vendor recommendation that was **never tested here** stays marked as a hypothesis until a run
+confirms it. Don't turn it into a kick-off rule without measurement: the kick-off is where the
+cost shows.
 
-## O que a ficha responde, na ordem
+## What the card answers, in order
 
-- **Janela e teto prático** — e quanto custa uma Task típica desse trabalho nele.
-- **Enxerga imagem?** — decide se a barra visual precisa de código ou se print basta.
-- **Como ele falha** — o padrão, não o caso isolado. É a seção que mais paga.
-- **O que o kick-off precisa dizer por causa dele.**
-- **Onde ele é bom** — para não desperdiçá-lo no papel errado.
+- **Window and practical ceiling** — and what a typical Task of this work costs on it.
+- **Does it see images?** — decides whether the visual bar needs code or a screenshot is enough.
+- **How it fails** — the pattern, not the isolated case. The section that pays most.
+- **What the kick-off must say because of it.**
+- **Where it is good** — so it isn't wasted in the wrong role.

@@ -34,17 +34,18 @@ arquivos=(SKILL.md references/*.md references/modelos/*.md)
 falhou=0
 
 # Trechos LITERAIS que podem casar um padrao proibido e mesmo assim estao certos.
-# Cada um traz o motivo: sem isso a allowlist vira lixeira.
+# Cada um traz o motivo: sem isso a allowlist vira lixeira. (Skill traduzida pra ingles em
+# 31/08/2026 — os padroes e a allowlist acompanham o texto novo.)
 allow=(
-  'os Steps são o método'                      # citacao historica: o que o arbitro improvisou em 16/08
   '`- [ ] **Step N: …**`'                      # formato literal que o planprog.py casa por regex
-  '**Step N: …**` (a palavra em inglês é literal aqui)'
-  'Task com Steps de um lado'                  # descreve os DOIS formatos, superpowers x mattpocock
-  'No `superpowers` é um Step'                 # a definicao de "passo"
-  'a palavra `Step` ali é literal'             # a excecao declarada da barra de progresso
-  'casa a palavra `Step` por regex'            # a mesma excecao, dita no roteador
-  'Não existe "commit de correção"'            # a frase que ANUNCIA que nao existe
-  'não existe "commit de correção"'
+  '(the word is literal here)'                 # o mesmo formato, enunciado no plano
+  'Task with Steps on one side'                # descreve os DOIS formatos, superpowers x mattpocock
+  "it's a Step"                                # a definicao de "step" (camada de baixo)
+  'the word `Step` there is literal'           # a excecao declarada da barra de progresso
+  'the word `Step` by regex'                   # a mesma excecao, dita no roteador
+  'There is no "correction commit"'            # a frase que ANUNCIA que nao existe
+  'there is no "correction commit"'
+  'Steps:'                                     # rotulo de campo do template da receita (revisor.md)
 )
 
 permitido() {  # $1 = linha inteira do grep
@@ -71,16 +72,16 @@ proibido() {
   done < <(grep -rn -- "$pat" "${arquivos[@]}" 2>/dev/null)
 }
 
-# 3. "Step" nao enuncia mecanica em lugar nenhum — a camada de baixo se chama "passo".
+# 3. "Step" (maiusculo) nao enuncia mecanica em lugar nenhum — a camada de baixo se chama "step".
 proibido 'Step' \
-  'A camada de baixo se chama "passo". "Step" so vale como formato literal ou citacao historica.'
+  'A camada de baixo se chama "step" (minusculo). "Step" so vale como formato literal do app.'
 
-# 2. "commit de correcao" nao e parte do ciclo: a correcao acontece ANTES do commit.
-proibido 'commit de correção' \
+# 2. "correction commit" nao e parte do ciclo: a correcao acontece ANTES do commit.
+proibido 'correction commit' \
   'Nao existe commit de correcao no ciclo — a rodada reprovada nao vira commit.'
 
 # 1. O executor nao reporta hash ao arbitro fora do fechamento, e o arbitro nao carrega o hash.
-proibido 'hash ao revisor\|manda o hash\|repassa, o executor aplica' \
+proibido 'sends the hash to the reviewer\|relays the hash\|forwards the hash\|relays, the executor applies' \
   'O arbitro saiu do transporte: nao carrega hash nem receita entre executor e revisor.'
 
 # 5. A prova da rodada e `git diff HEAD` — depois do `git add`, `git diff` sai VAZIO.
@@ -119,7 +120,7 @@ done
 
 # 4. As paginas que descrevem o mesmo fluxo em outro contexto usam o fluxo novo.
 for f in references/revisao-final.md references/paralelo-worktree.md references/replanejar.md; do
-  if ! grep -q 'rodada\|árvore suja\|stash' "$f"; then
+  if ! grep -qi 'round\|dirty tree\|stash' "$f"; then
     echo
     echo "✗ $f nao menciona o fluxo novo (rodada / arvore suja / stash) — provavel pagina esquecida."
     falhou=1

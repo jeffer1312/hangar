@@ -1,237 +1,243 @@
-# Executor — Task visual
+# Executor — the visual Task
 
-Esta página é da **Task que muda o que aparece na tela**, e só dela. Se o seu diff não encosta em
-pixel, volte para `executor.md`. Se encosta, este portão é seu e não é opcional — **mesmo que o
-plano não peça**.
+This page belongs to the **Task that changes what shows on screen**, and to it alone. If your
+diff doesn't touch pixels, go back to `executor.md`. If it does, this gate is yours and is not
+optional — **even if the plan doesn't ask**.
 
-Vale para toda Task cujo diff encosta em `.svelte`/`.tsx`/`.vue`, em CSS, em template, ou em
-qualquer outra coisa que desenhe pixel.
+It holds for every Task whose diff touches `.svelte`/`.tsx`/`.vue`, CSS, templates, or anything
+else that draws pixels.
 
-## Teste verde não é tela funcionando
+## A green test is not a working screen
 
-**E essa não é uma opinião.** Um seletor já passou em centenas de testes, gate de tipos zerado e
-revisão independente — e chegou ao usuário **invisível** (regra de CSS perdendo na cascata); no
-mesmo trabalho, um clique virava nada, calado. Nenhum teste, gate ou leitura de diff pega essa
-classe de erro — só o pixel pega.
+**And that is not an opinion.** A selector once passed hundreds of tests, type gate at zero and
+an independent review with five applied findings — and reached the user **invisible** (a CSS rule
+losing the cascade); in the same work, a click became nothing, silently. No test, gate or diff
+reading catches that class of error — only the pixel does.
 
-**DOM, CSS e árvore de acessibilidade não substituem ver.** Eles dizem que o elemento
-existe, não que ele está legível, alinhado, dentro do tema do app, ou que não virou um
-retângulo opaco por cima do papel de parede.
+**DOM, CSS and the accessibility tree don't replace seeing.** They say the element exists, not
+that it is legible, aligned, inside the app's theme, or that it hasn't become an opaque
+rectangle over the wallpaper.
 
-## O protocolo, em cinco passos
+## The protocol, in five steps
 
-Vale para todo executor; quem não enxerga imagem tem um passo a mais, marcado adiante.
+It holds for every executor; the one who can't see images has one extra step, marked ahead.
 
-### 1. Abra de verdade. As ferramentas existem — procure antes de dizer que não
+### 1. Truly open it. The tools exist — look before saying they don't
 
-Ordem de preferência, e **você confere, não presume**:
+Order of preference, and **you check, you don't presume**:
 
-| Caminho | Como saber se está aí |
+| Path | How to know it's there |
 |---|---|
-| skill de browser (`agent-browser` e afins) | está na sua lista de skills |
-| MCP do Chrome (`chrome-devtools`, `claude-in-chrome`) | aparece nas suas ferramentas |
-| CLI de automação (`agent-browser`, `playwright`, `puppeteer`) | `command -v agent-browser` |
+| a browser skill (`agent-browser` and the like) | it's on your skill list |
+| the Chrome MCP (`chrome-devtools`, `claude-in-chrome`) | it shows in your tools |
+| an automation CLI (`agent-browser`, `playwright`, `puppeteer`) | `command -v agent-browser` |
 
-**"Não tenho navegador" só vale depois de olhar, e vai no reporte com o que você tentou.**
-Kick-off, contrato ou receita afirmando que não há navegador **não é fato sobre as suas
-ferramentas** — é uma frase que alguém escreveu antes de conhecer a sua sessão. Um executor
-já leu "não há navegador nem usuário" no kick-off, viu na mesma frase que tinha o MCP do
-Chrome disponível, e recuou por obediência ao texto. A tela quebrada foi pro usuário.
+**"I have no browser" only counts after looking, and it goes in the report with what you
+tried.** A kick-off, contract or recipe asserting there is no browser **is not a fact about your
+tools** — it is a sentence someone wrote before knowing your session. An executor once read
+"there is no browser and no user" in the kick-off, saw in the same sentence that it had the
+Chrome MCP available, and backed off out of obedience to the text. The broken screen went to the
+user.
 
-Regra que resolve a ambiguidade: **é proibido FINGIR que verificou; nunca é proibido
-verificar.** Instrução que parece te impedir de abrir a tela está falando de inventar
-resultado, não de usar ferramenta que você tem. Na dúvida, abra — e diga no reporte que
-abriu.
+The rule that resolves the ambiguity: **FAKING verification is forbidden; verifying never is.**
+An instruction that seems to stop you from opening the screen is talking about inventing
+results, not about using a tool you have. In doubt, open it — and say in the report that you
+did.
 
-### 2. Exercite, não só olhe
+### 2. Exercise it, don't just look
 
-Screenshot de tela parada prova que desenhou, não que funciona. Para cada coisa que a Task
-colocou na tela:
+A screenshot of a still screen proves it drew, not that it works. For each thing the Task put on
+screen:
 
-- **clique** no que é clicável e confirme o efeito — o painel abriu, o campo apareceu, o
-  pedido saiu (rede/log), a mensagem de sucesso ou de erro surgiu;
-- passe pelos **estados** que a Task afeta: vazio, carregando, com dado, erro, desabilitado;
-- confira que **o que você criou tem a cara do resto do app** — mesma altura, mesma borda,
-  mesmo espaçamento dos irmãos ao lado. Componente novo que parece texto solto grudado na
-  borda está errado mesmo compilando.
+- **click** what is clickable and confirm the effect — the panel opened, the field appeared, the
+  request went out (network/log), the success or error message showed;
+- walk through the **states** the Task affects: empty, loading, with data, error, disabled;
+- check that **what you created looks like the rest of the app** — same height, same border,
+  same spacing as the siblings next to it. A new component that looks like loose text glued to
+  the edge is wrong even though it compiles.
 
-Clique que não faz nada visível é **defeito**, não "provavelmente funciona": vá atrás do
-motivo (console, rede, o handler) antes de reportar.
+A click that does nothing visible is a **defect**, not "probably works": chase the reason
+(console, network, the handler) before reporting.
 
-### Quando o código atravessa um processo, uma porta ou um aparelho
+### When the code crosses a process, a port or a device
 
-**A prova é o artefato que o ALVO carregou, não o que a tua máquina serve.** Sempre que o código
-passa por um servidor, uma porta ou um aparelho antes de virar o que você vai julgar, a pergunta é
-**qual build aquele lado está rodando** — e ela se responde lendo um marcador do seu commit no
-artefato que ele baixou, nunca confirmando do seu lado que o build saiu. Requisição local verde e
-aparelho servindo o bundle de outra worktree convivem sem erro nenhum na tela.
+**The proof is the artifact the TARGET loaded, not what your machine serves.** Whenever the code
+passes through a server, a port or a device before becoming what you will judge, the question is
+**which build that side is running** — and it is answered by reading a marker of your commit in
+the artifact it downloaded, never by confirming on your side that the build finished. A green
+local request and a device serving another worktree's bundle coexist with no error on screen.
 
-Isto é regra de **evidência**, e por isso mora aqui: o defeito desta família não trava você — ele
-fica verde. Você não pede ajuda ao árbitro porque acredita que provou.
+This is a rule of **evidence**, which is why it lives here: this family's defect doesn't block
+you — it stays green. You don't ask the arbiter for help because you believe you proved it.
 
-Já **como** subir esse palco — de que diretório sobe o servidor, qual porta é de cada Task, quem
-segura o aparelho — é do plano, não seu: é o item de pré-condição externa com dono do portão da
-fase 1. Faltou no plano, é bloqueio pro árbitro, não improviso seu.
+How to raise that stage — from which directory the server rises, which port belongs to each
+Task, who holds the device — is the plan's, not yours: it is the phase-1 gate's owned external
+precondition. Missing from the plan, it is a block for the arbiter, not your improvisation.
 
-**Comando que SEGUE um processo trava o turno inteiro** — log em modo contínuo, `tail -f`, servidor
-em primeiro plano. Use a flag que faz sair, `timeout N`, ou log em arquivo em segundo plano.
+**A command that FOLLOWS a process locks the whole turn** — logs in follow mode, `tail -f`, a
+server in the foreground. Use the flag that exits, `timeout N`, or background file logging.
 
 ### 3. Capture
 
-**Primeiro, confirme que a aba é SUA.** O navegador de automação (`agent-browser` e afins) pode ser
-**um por máquina** — noutro lote, outra sessão navega a MESMA aba que você. Antes de cada rodada de
-captura: `location.href` tem que devolver a **sua** porta. Devolveu outra → a aba foi levada;
-reabra a sua URL. Levaram de novo → **reporte o conflito ao árbitro** em vez de insistir — três
-horas de perguntas a uma página de outra Task já custaram o que um comando de um segundo evitava.
+**First, confirm the tab is YOURS.** The automation browser (`agent-browser` and the like) can be
+**one per machine** — in another batch, another session navigates the SAME tab as you. Before
+each capture round: `location.href` must return **your** port. It returned another → the tab was
+taken; reopen your URL. Taken again → **report the conflict to the arbiter** instead of
+insisting — three hours of questions to another Task's page once cost what a one-second command
+would have avoided.
 
-**Quantos prints tirar é decisão SUA, na hora** — decisão do usuário. Nem o plano nem o árbitro
-impõem número: quem sabe quantas telas esta Task acabou tendo é você, executando. O plano diz quais
-**estados** precisam ser provados; a contagem de arquivos é problema seu.
+**How many screenshots to take is YOUR call, on the spot** — the user's decision. Neither the
+plan nor the arbiter imposes a number: the one who knows how many screens this Task ended up
+having is you, executing. The plan says which **states** must be proven; the file count is your
+problem.
 
-**O que existe é um ponto de parada, não um limite: 1h ou 60 comandos de navegação por Task.**
-Bateu, **pare e reporte com o que já tem** — não porque você excedeu uma cota, mas porque captura
-que passa disso costuma ser sinal de outra coisa (palco quebrado, estado que não reproduz, lista de
-estados maior do que a Task). Duas Tasks já ficaram **quase treze horas presas em captura, sem
-nenhum merge**. Se, ao reportar, ficar claro que a varredura é grande mesmo, **proponha
-ao árbitro uma sessão capturadora separada** — barata, descartável, com a lista de estados no
-kick-off; você entrega código, verificações e o print de sanidade. Essa proposta é sua; a execução
-dela é dele. Estado novo descoberto no meio vai pra lista do árbitro, não pro seu laço. (O teto de 2
-rodadas lá embaixo é da comparação cega; este é do trabalho de capturar — os dois coexistem.)
+**What exists is a stopping point, not a limit: 1h or 60 navigation commands per Task.** Hit it,
+**stop and report with what you have** — not because you exceeded a quota, but because capture
+beyond that is usually a sign of something else (a broken stage, a state that won't reproduce, a
+state list bigger than the Task). Two Tasks once sat **nearly thirteen hours stuck in capture,
+with no merge**. If, when reporting, it becomes clear the sweep really is big, **propose to the
+arbiter a separate capture session** — cheap, disposable, with the state list in its kick-off;
+you deliver code, verifications and the sanity screenshot, and the capturer sweeps the rest.
+That proposal is yours; its execution is his. A new state discovered midway goes to the arbiter's
+list, not into your loop. (The 2-round cap further down belongs to the blind comparison; this one
+belongs to the work of capturing — the two coexist.)
 
-Um print por estado, em **caminho absoluto** e num diretório **durável** — o que o lançamento
-decidiu (o padrão é `~/.hangar/orq/<data>-<gid>/visual/`), nunca `/tmp`, que some no reboot e
-leva junto a matéria-prima da retrospectiva. Corrigiu alguma coisa depois? **Recapture.** Print velho
-prova o bug, nunca a correção.
+One screenshot per state, at an **absolute path** in a **durable** directory — the one the
+launch decided (the default is `~/.hangar/orq/<date>-<gid>/visual/`), never `/tmp`, which
+vanishes on reboot and takes the retrospective's raw material with it. Fixed something
+afterwards? **Recapture.** An old screenshot proves the bug, never the fix.
 
-**Quatro coisas INVALIDAM uma comparação visual, e nenhuma delas produz erro — a prova sai bonita e
-é lixo. Confira as quatro ANTES da primeira captura:** (1) **tamanho/viewport diferente do que o
-contrato fixou** — já se julgou uma referência de computador contra uma captura de celular;
-(2) **idiomas diferentes nos dois lados** — o juiz compara `Save/Discard` com `Salvar/Descartar` e
-julga tradução, não paridade, e isso já custou uma rodada inteira; (3) **elemento que termina
-na borda do PNG é rolagem, não desenho** — não decide comparação; recapture rolado ou declare
-não-comparado naquele ponto; (4) **o print enquadra a prova do ESTADO junto com o efeito** — print
-que só significa junto de um comando fora dele vira disputa de palavra na revisão seguinte. Essas
-quatro repetem no kick-off de toda Task visual (régua enterrada em contrato não alcança sessão que
-nasceu depois dela — foi exatamente assim que a nº 2 custou a rodada).
+**Four things INVALIDATE a visual comparison, and none of them produces an error — the proof
+comes out pretty and is garbage. Check all four BEFORE the first capture:** (1) **a
+size/viewport different from what the contract fixed** — a desktop reference was once judged
+against a phone capture; (2) **different languages on the two sides** — the judge compares
+`Save/Discard` with `Salvar/Descartar` and judges translation, not parity, and that already cost
+a whole round; (3) **an element ending at the PNG's edge is scrolling, not drawing** — it
+decides no comparison; recapture scrolled or declare that point not compared; (4) **the
+screenshot frames the STATE's proof together with the effect** — a screenshot that only means
+something next to a command outside it becomes a word dispute in the next review. These four are
+repeated in the kick-off of every visual Task (a guideline buried in a contract doesn't reach a
+session born after it — that is exactly how #2 cost the round).
 
-**Toda afirmação sobre cor, sinal ou estado (`✓` / `✗` / `·`, habilitado, desabilitado) se escreve
-com o detalhe AMPLIADO, nunca a olho na imagem inteira** — e a legenda cita a cor junto do sinal.
-Numa Task de 38 prints, todo achado que sobreviveu à revisão veio de ampliar um detalhe que parecia
-legível. Custo: um recorte a 300–400% por afirmação.
+**Every claim about color, sign or state (`✓` / `✗` / `·`, enabled, disabled) is written with
+the detail ZOOMED, never by eye on the whole image** — and the caption cites the color together
+with the sign. In a 38-screenshot Task, every finding that survived review came from zooming a
+detail that looked legible. Cost: one 300–400% crop per claim.
 
-**Cada linha de legenda se escreve olhando aquele arquivo; "idem" é proibido.** Dois prints do mesmo
-estado em larguras ou idiomas diferentes recebem duas descrições. Foi o template "idem / idem en /
-idem mobile" que produziu **6 de 13 legendas erradas num trabalho em que os pixels estavam certos**.
+**Each caption line is written looking at that file; "idem" is forbidden.** Two screenshots of
+the same state at different widths or languages get two descriptions. The "idem / idem en / idem
+mobile" template once produced **6 of 13 wrong captions in a work where the pixels were right**.
 
-**A prova de uma Task de comportamento termina no desfecho que o usuário pediu** — "conectou",
-"salvou", "abriu" —, não no estado imediatamente anterior a ele. Print do botão habilitado não é
-prova de que o clique funciona. Uma evidência que parou no botão desabilitado obrigou o portão a
-rodar o fim do fluxo pra descobrir que o desfecho funcionava — uma rodada de revisão gasta com o
-que a prova devia ter mostrado.
+**The proof of a behavior Task ends at the outcome the user asked for** — "connected", "saved",
+"opened" — not at the state right before it. A screenshot of the enabled button is no proof the
+click works. Evidence that stopped at the disabled button forced the gate to run the flow's end
+to discover the outcome worked — a review round spent on what the proof should have shown.
 
-### 4. Olhe o print. Só delegue se você não conseguir
+### 4. Look at the screenshot. Delegate only if you can't
 
-**Tente ler a imagem você mesmo primeiro**, pelo caminho absoluto. Muitos executores
-enxergam — se você é um deles, olhe, responda as perguntas do passo seguinte e **acabou**:
-delegar ali é só latência, e um intermediário a mais entre você e o pixel.
+**Try to read the image yourself first**, by absolute path. Many executors can see — if you are
+one of them, look, answer the next step's questions and **done**: delegating there is just
+latency, and one more middleman between you and the pixel.
 
-Delegue **apenas** quando a leitura falhar de fato — a ferramenta recusar o arquivo, um hook
-bloquear, ou o modelo não aceitar imagem. Nesse caso, e só nesse:
+Delegate **only** when the read actually fails — the tool refuses the file, a hook blocks it, or
+the model doesn't take images. In that case, and only then:
 
-1. comando de visão instalado nesta máquina, se houver (`see <imagem> "<pergunta>"` é o nome
-   usual — confira com `command -v see`);
-2. um subagente cujo modelo enxergue imagem, passando o **caminho absoluto**;
-3. nenhum dos dois existindo, **diga ao árbitro antes de commitar** — quem tem visão no time
-   (em geral o revisor) faz essa parte, e o combinado vai pro contrato.
+1. a vision command installed on this machine, if any (`see <image> "<question>"` is the usual
+   name — check with `command -v see`);
+2. a subagent whose model sees images, passing the **absolute path**;
+3. neither existing, **tell the arbiter before committing** — whoever on the team has vision
+   (usually the reviewer) does that part, and the arrangement goes into the contract.
 
-Quando você **não** enxerga, o que chega até você é um caminho de arquivo, não um desenho:
-descrever o print "pelo contexto", pelo nome do arquivo ou pelo que a conversa sugere é
-**invenção**, por mais plausível que soe. E responder "não consigo ver imagens" também é
-falso — consegue, por delegação. As duas saídas estão fechadas: ou você olha, ou alguém olha
-por você.
+When you can **not** see, what reaches you is a file path, not a picture: describing the
+screenshot "from context", from the file name or from what the conversation suggests is
+**invention**, however plausible it sounds. And answering "I can't see images" is also false —
+you can, by delegation. Both exits are closed: either you look, or someone looks for you.
 
-### Tamanho não se olha: mede-se no DOM
+### Size is not eyeballed: it is measured in the DOM
 
-Print responde **o que existe, onde, em que ordem**. Ele **não** responde tamanho, espaçamento nem
-alinhamento — e é aí que quem julga por imagem erra com confiança.
+A screenshot answers **what exists, where, in what order**. It does **not** answer size, spacing
+or alignment — and that is where whoever judges by image errs with confidence.
 
-Numa Task de tela o executor comparou o resultado com o mock por print, recebeu de volta "a
-densidade está diferente", decidiu por argumento que o app real mandava, e commitou. O revisor mediu
-a caixa: mock e aba irmã do mesmo painel em torno de 24px, entrega em 44px, em **sete** elementos.
-Não era o app real ganhando: era uma altura mínima global comendo o CSS do componente, sem ninguém
-sobrescrever. O print mostrava a diferença; só o número dizia de quem era a culpa.
+In a screen Task the executor compared the result with the mock by screenshot, got back "the
+density looks different", decided by argument that the real app ruled, and committed. The
+reviewer measured the box: mock and the same panel's sibling tab around 24px, the delivery at
+44px, across **seven** elements. It wasn't the real app winning: it was a global min-height
+eating the component's CSS, with nobody overriding it. The screenshot showed the difference;
+only the number said whose fault it was.
 
-Antes de decidir qualquer divergência de layout:
+Before deciding any layout divergence:
 
 ```js
-// no navegador, com a tela aberta
-[...document.querySelectorAll('.sua-classe')].map(e => e.getBoundingClientRect().height)
+// in the browser, screen open
+[...document.querySelectorAll('.your-class')].map(e => e.getBoundingClientRect().height)
 ```
 
-E meça **o vizinho real** — a aba irmã, a lista ao lado, o componente que já existe. "O app real
-ganha" é uma regra sobre o app **medido**, não sobre o app imaginado.
+And measure **the real neighbor** — the sibling tab, the list next door, the component that
+already exists. "The real app wins" is a rule about the **measured** app, not the imagined one.
 
-Pergunta **específica**, nunca "está bom?" — vale tanto pra você olhando quanto pra quem
-olha por você. Boas: *"o botão à direita do seletor tem moldura e a mesma altura dele, ou é
-texto solto?"*, *"o item ativo se distingue dos outros?"*, *"algum retângulo opaco cobre o
-fundo?"*, *"o texto cabe sem cortar nesta largura?"*. "Está bom?" devolve "está bom" e não
-custa nada a ninguém.
+Ask a **specific** question, never "does it look good?" — it holds both for you looking and for
+whoever looks for you. Good ones: *"does the button to the right of the selector have a frame
+and the same height, or is it loose text?"*, *"does the active item stand out from the
+others?"*, *"is any opaque rectangle covering the background?"*, *"does the text fit uncut at
+this width?"*. "Does it look good?" returns "it looks good" and costs no one anything.
 
-### 5. Compare cego com a barra
+### 5. Compare blind against the bar
 
-O plano dá uma **barra** pra toda Task que mexe em pixel: uma tela nomeada, que dá pra abrir
-e capturar, no mesmo estado e na mesma largura do seu print. Capture os dois lados e ponha um
-**subagente fresco** pra escolher — sem dizer qual é qual:
+The plan gives a **bar** to every pixel-touching Task: a named screen, which can be opened and
+captured, in the same state and width as your screenshot. Capture both sides and put a **fresh
+subagent** to choose — without saying which is which:
 
-> Duas imagens: `<dir-durável>/visual/A.png` e `<dir-durável>/visual/B.png`. Mesma tela, dois
-> desenhos. **Qual das duas parece mais acabada?** Responda `A` ou `B`, depois o **maior
-> buraco** da que perdeu, em uma frase concreta (o que está desalinhado, cortado, sem
-> contraste, com altura diferente dos irmãos).
+> Two images: `<durable-dir>/visual/A.png` and `<durable-dir>/visual/B.png`. Same screen, two
+> renderings. **Which of the two looks more finished?** Answer `A` or `B`, then the **biggest
+> hole** of the loser, in one concrete sentence (what is misaligned, cut off, low-contrast, or a
+> different height from its siblings).
 
-Três coisas que fazem isso valer alguma coisa:
+Three things that make this worth anything:
 
-- **Cego de verdade**: nome de arquivo neutro (`A`/`B`), e você **alterna** qual letra é o
-  seu trabalho entre as rodadas. `novo.png` vs `referencia.png` não é cego — é uma dica.
-- **Subagente fresco, nunca o braço que desenhou.** Quem construiu já sabe por que cada
-  escolha foi feita, e defende ela. É o mesmo motivo de o revisor nunca ser a sessão que executou.
-- **Escolha binária, não nota.** "Qual está melhor" tem resposta; "de 0 a 10, quanto está
-  bom" devolve 7 sempre.
+- **Truly blind**: neutral file names (`A`/`B`), and you **alternate** which letter is your work
+  between rounds. `new.png` vs `reference.png` is not blind — it is a hint.
+- **A fresh subagent, never the arm that drew.** Whoever built it already knows why each choice
+  was made, and defends it. It is the same reason the reviewer is never the session that
+  executed.
+- **A binary choice, not a score.** "Which is better" has an answer; "from 0 to 10, how good"
+  returns 7 every time.
 
-Perdeu → conserte **o maior buraco**, recapture, rode de novo. **Teto de 2 rodadas**, e daí
-você commita com o resultado no reporte, mesmo perdendo. O teto não é preguiça: laço sem
-fronteira de gasto é o modo de falha medido dessa técnica lá fora — gente torrando centenas
-de dólares e jogando fora 95% do que saiu. Perdeu as duas rodadas → isso vai no reporte como
-risco conhecido, e quem decide é o árbitro.
+Lost → fix **the biggest hole**, recapture, run it again. **Cap of 2 rounds**, then you commit
+with the result in the report, even losing. The cap is not laziness: a loop with no spending
+boundary is this technique's measured failure mode out there — people burning hundreds of
+dollars and throwing away 95% of what came out. Lost both rounds → it goes in the report as a
+known risk, and the arbiter decides.
 
-**O teto conta rodada de BARRA. Defeito de código não conta.** Rodada reprovada porque a tela está
-quebrada — largura errada, foco preso, alvo de toque abaixo de 44px — não é sobre fidelidade e não
-gasta o teto. Sem essa separação a Task estoura o teto com a tela quebrada, que é o oposto do que o
-teto existe pra evitar. Uma Task fechou em quatro rodadas, **só a primeira de barra**; e outra
-rodada reprovou por um recuo lateral empurrando o visor algumas centenas de pixels, que é bug de
-largura real, não acabamento.
+**The cap counts BAR rounds. Code defects don't count.** A round rejected because the screen is
+broken — wrong width, trapped focus, a touch target under 44px — is not about fidelity and
+doesn't spend the cap. Without that separation the Task blows the cap with a broken screen,
+which is the opposite of what the cap exists to avoid. One Task closed in four rounds, **only
+the first about the bar**; another round rejected over a side inset pushing the display a few
+hundred pixels, which is a real width bug, not finish.
 
-**E rodada que não toca pixel não paga barra de novo.** Commit de correção que só mexe em store,
-teste ou backend não refaz comparação nenhuma — o `git show --stat` prova.
+**And a round that touches no pixel doesn't pay the bar again.** A fix commit that only
+touches store, tests or backend redoes no comparison — `git show --stat` proves it.
 
-Você não enxerga imagem? O passo continua sendo seu — é o mesmo protocolo do passo 4: o
-subagente de visão (ou o `see`) é quem olha, você é quem manda e quem lê a resposta.
+You can't see images? The step is still yours — same protocol as step 4: the vision subagent
+(or `see`) looks, you command and read the answer.
 
-**Contrato dizendo `Barra: nenhuma — decisão do usuário`: pule este passo inteiro** e commite
-com os passos 1 a 4. Não invente uma barra por conta própria — a referência é escolha do
-usuário, e uma escolhida por você mede o teu palpite, não o trabalho.
+**Contract saying `Bar: none — user's decision`: skip this whole step** and commit with steps 1
+to 4. Don't invent a bar on your own — the reference is the user's choice, and one picked by you
+measures your own guess, not the work.
 
-**Seu diff encosta em pixel e o contrato não traz nem barra nem dispensa? Pare e reporte ao
-árbitro antes de commitar.** É decisão de fase 1 que ficou em branco; ele pergunta ao usuário
-e te devolve a resposta. Commitar assim custa a Task inteira, porque o revisor devolve.
+**Your diff touches pixels and the contract has neither a bar nor a waiver? Stop and report to
+the arbiter before committing.** It is a phase-1 decision left blank; he asks the user and
+brings you the answer. Committing anyway costs the whole Task, because the reviewer returns it.
 
-### O que vai no reporte
+### What goes in the report
 
-Por estado: caminho do print, o que você **clicou** e o que aconteceu, a pergunta que fez a
-quem enxerga (se delegou) e o que voltou, e o que você mudou por causa disso.
+Per state: the screenshot's path, what you **clicked** and what happened, the question you asked
+whoever sees (if delegated) and what came back, and what you changed because of it.
 
-Task com barra leva também: **quem venceu cada rodada cega** (e qual letra era a sua), o
-maior buraco apontado, o que você consertou, e o caminho do print final. Perdeu no fim das
-duas rodadas → diga isso na cara, com o buraco que sobrou.
+A Task with a bar also carries: **who won each blind round** (and which letter was yours), the
+biggest hole named, what you fixed, and the final screenshot's path. Lost at the end of both
+rounds → say it plainly, with the hole that remains.
 
-Sem isso o revisor bloqueia a Task. Não é burocracia: é a única evidência que separa "o
-código compila" de "a tela funciona", e as duas coisas já se descolaram aqui.
+Without this the reviewer blocks the Task. It is not bureaucracy: it is the only evidence
+separating "the code compiles" from "the screen works", and the two have already come apart
+here.

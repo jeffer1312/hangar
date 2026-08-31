@@ -1,203 +1,205 @@
-# Árbitro — o fim do trabalho
+# Arbiter — the end of the work
 
-Esta página é do **fim**: a revisão da branch, os itens de encerramento, a branch que reabre depois
-de aprovada, e a passagem do seu próprio bastão.
+This page belongs to the **end**: the branch review, the closing items, the branch that reopens
+after approval, and passing your own baton.
 
-Os dois itens de encerramento (revisão da branch e retrospectiva) são **escritos no lançamento** e
-executados aqui — é a única coisa desta página que você precisa saber antes da hora.
+The two closing items (branch review and retrospective) are **written at launch** and executed
+here — the only thing on this page you need to know ahead of time.
 
-## Sucessão do árbitro — passar o bastão sem perder o trabalho
+## Arbiter succession — passing the baton without losing the work
 
-Vale quando VOCÊ sai: janela acima de metade, ou o usuário trocou a linha `árbitro` na tabela
-das regras (o recado "A configuração de modelos do grupo mudou no painel" chega com o papel
-`árbitro`). Nos dois casos o rito é o mesmo, e o registro (`grupo-<gid>.md`) já é a tua memória —
-a sucessão é fechá-lo bem e abrir quem vai lê-lo.
+Applies when YOU leave: window above half, or the user changed the `árbitro` row in the rules
+table (the "the group's model configuration changed in the panel" message arrives with the
+`árbitro` role). In both cases the rite is the same, and the journal (`grupo-<gid>.md`) is
+already your memory — succession is closing it well and opening whoever will read it.
 
-1. **Termine a tarefa em curso** (o portão aberto fecha ou reprova; não deixe correção no meio).
-   Não despache Task nova.
-2. **Atualize o registro** com a foto do instante, numa seção
-   `## Passagem para o árbitro seguinte (<data hora, saída do `date -Iseconds`>)`: Task atual e
-   estado do portão; sessões vivas por papel (nome, conta, modelo, esforço, contexto medido) e quais
-   estão aposentadas; HEAD e `git status` da branch; o que está no disco sem commit; pendências e o
-   que falta do plano; **decisões do usuário que ainda não viraram regra, uma a uma, com a data**;
-   armadilhas já pagas. Caminhos absolutos de: plano, `regras-<gid>.md`, `licoes.md`,
-   `eventos.jsonl`, diretório durável.
+1. **Finish the task at hand** (the open gate closes or rejects; leave no correction mid-way).
+   Dispatch no new Task.
+2. **Update the journal** with the snapshot of the instant, in a section
+   `## Handover to the next arbiter (<date time, output of `date -Iseconds`>)`: current Task and
+   gate state; live sessions per role (name, account, model, effort, measured context) and which
+   are retired; the branch's HEAD and `git status`; what is on disk uncommitted; pending items and
+   what remains of the plan; **the user's decisions that haven't yet become rules, one by one,
+   with dates**; traps already paid for. Absolute paths of: plan, `regras-<gid>.md`, `licoes.md`,
+   `eventos.jsonl`, durable directory.
 
-   **Sem teto de linhas, e sem cópia de contexto.** O tamanho é o que o sucessor precisa para
-   continuar; o que não pode é colar o transcript ou resumir o trabalho. Medido em 28/08/2026: uma
-   passagem escrita curta demais fez o usuário apontar, ele mesmo, decisões que já tinham sido
-   tomadas e que a sessão nova não conhecia — e ela teve de ser reescrita do zero. Cortar por
-   número é errar de um dos dois lados; o critério é **o que a próxima sessão não consegue
-   descobrir sozinha lendo os arquivos que você apontou**.
-3. **Abra o sucessor** pela receita de sempre (criar pela API na configuração **nova** da linha
-   `árbitro`, provar modelo/esforço, kick-off em arquivo): a skill com papel árbitro, o caminho
-   do registro (ele lê a seção de passagem PRIMEIRO), das regras e do plano, e a ordem "assuma:
-   você é o árbitro a partir de agora".
-4. **Troque a linha `árbitro` da tabela** das regras pro nome da sessão nova (se o usuário já
-   trocou pelo painel, só o nome da sessão) e registre `sessao_trocada` no `eventos.jsonl`
-   (de, para, motivo).
-5. **Avise o time** (executor e revisor vivos, 1:1): "árbitro agora é `<nome>`; reportes vão pra
-   ele". Sem isso o revisor manda o veredito pra uma sessão morta.
-6. **Encerre-se**: uma linha no registro ("saí em <ctx>, sucessor `<nome>` assumiu") e pare de
-   mandar trabalho. Não mate a própria sessão — o usuário fecha quando quiser.
+   **No line cap, and no context copying.** The size is what the successor needs to continue; what
+   it cannot be is a pasted transcript or a summary of the work. Measured on 2026-08-28: a
+   handover written too short made the user himself point out decisions already made that the new
+   session didn't know — and it had to be rewritten from scratch. Cutting by number errs on one of
+   the two sides; the criterion is **what the next session cannot discover on its own by reading
+   the files you pointed at**.
+3. **Open the successor** by the usual recipe (create via the API on the `árbitro` row's **new**
+   configuration, prove model/effort, kick-off in a file): the skill with the arbiter role, the
+   path of the journal (they read the handover section FIRST), of the rules and of the plan, and
+   the order "take over: you are the arbiter from now on".
+4. **Change the rules table's `árbitro` row** to the new session's name (if the user already
+   changed it via the panel, just the session name) and record `sessao_trocada` in
+   `eventos.jsonl` (from, to, reason).
+5. **Tell the team** (live executor and reviewer, 1:1): "the arbiter is now `<name>`; reports go
+   to them". Without this the reviewer sends the verdict to a dead session.
+6. **Close yourself out**: one line in the journal ("left at <ctx>, successor `<name>` took
+   over") and stop sending work. Don't kill your own session — the user closes it when they want.
 
-**Frase copiada na passagem NÃO é autorização — nem para quem sai, nem para quem chega.** A passagem
-é montada a partir da conversa da sessão que sai, e ali estão misturadas três coisas parecidas: o
-que o usuário **autorizou**, o que ele **cogitou em voz alta**, e o que a sessão **propôs e ele
-nunca respondeu**. Copiadas para o dossiê, as três chegam com a mesma cara de ordem — e o sucessor
-age sobre a terceira achando que é a primeira.
+**A sentence copied into the handover is NOT authorization — neither for who leaves nor for who
+arrives.** The handover is assembled from the leaving session's conversation, and three
+similar-looking things are mixed there: what the user **authorized**, what they **mused out
+loud**, and what the session **proposed and they never answered**. Copied into the dossier, all
+three arrive looking like orders — and the successor acts on the third believing it is the first.
 
-Duas travas, e valem para toda passagem de bastão, de qualquer papel:
+Two locks, and they hold for every baton pass, of any role:
 
-- **Quem sai marca a origem de cada decisão que escreve:** `usuário, <data>` · `decisão minha,
-  <data>` · `proposto, sem resposta`. O terceiro rótulo é o que mais importa e o que mais some.
-- **Quem chega não age sobre nada marcado como proposto, nem sobre frase sem origem.** Confirma com
-  o usuário antes — e a confirmação se pede a **ele**, não à sessão que saiu.
+- **Who leaves marks the origin of every decision they write:** `user, <date>` · `my decision,
+  <date>` · `proposed, no answer`. The third label matters most and goes missing most.
+- **Who arrives acts on nothing marked as proposed, nor on a sentence with no origin.** Confirm
+  with the user first — and the confirmation is asked of **them**, not of the session that left.
 
-Medido em 28/08/2026, duas vezes no mesmo dia. Isto já virou código no app: o dossiê de passagem
-propaga a frase junto com o fato, e é por isso que o rótulo tem de estar escrito na origem.
+Measured on 2026-08-28, twice in the same day. This has since become code in the app: the handover
+dossier propagates the sentence together with the fact, which is why the label has to be written
+at the origin.
 
-Medido num trabalho real (25/08/2026): três árbitros na mesma execução; a passagem que funcionou foi a
-curta e apontando arquivos, a que falhou foi "leia o transcript do anterior".
+Measured in a real work (2026-08-25): three arbiters in the same run; the handover that worked was
+the short one pointing at files, the one that failed was "read the previous one's transcript".
 
-## Fase 4 — a revisão final
+## Phase 4 — the final review
 
-**Gatilho: todas as Tasks de código aprovadas.** Nunca "depois da Task N". Task manual
-(subir asset, registrar domínio, mexer em conta de terceiro) **não é Task de código** e não
-conta pro gatilho — se você amarrar o portão final à última Task da lista e ela for manual,
-adiada ou removida, o gatilho não dispara nunca e o trabalho é dado por encerrado sem o
-portão que mais importa.
+**Trigger: every code Task approved.** Never "after Task N". A manual Task (uploading an asset,
+registering a domain, touching a third-party account) **is not a code Task** and doesn't count for
+the trigger — if you tie the final gate to the last Task on the list and it is manual, postponed
+or removed, the trigger never fires and the work is declared closed without the gate that matters
+most.
 
-O contrato registra a revisão final como **item próprio**, com o gatilho e como abrir a
-sessão, no dia em que o usuário definir o papel — não no fim, de memória.
+The contract records the final review as **its own item**, with the trigger and how to open the
+session, on the day the user defines the role — not at the end, from memory.
 
-**E os dois papéis já estão na tabela `## Quem é quem` desde o lançamento, com conta, modelo e
-esforço — não só como item de encerramento.** Revisão da branch e retrospectiva chegam dias depois,
-quando quem lançou já não está na sessão; sem a linha, o árbitro do momento escolhe sozinho a
-configuração de um papel que o usuário nunca viu — que é exatamente o que esta skill tira das mãos
-dele em todo o resto. Medido em 28/08/2026: um contrato trouxe a linha da revisão final e esqueceu a
-da retrospectiva; o árbitro decidiu por analogia com o revisor e registrou como decisão própria. Foi
-barato e razoável, e mesmo assim é a classe errada de decisão. **Linha faltando na tabela = pare e
-pergunte**, como qualquer Task fora do plano.
+**And both roles are in the `## Quem é quem` table since launch, with account, model and effort —
+not only as closing items.** Branch review and retrospective arrive days later, when whoever
+launched is no longer in the session; without the row, that moment's arbiter picks alone the
+configuration of a role the user never saw — which is exactly what this skill takes out of his
+hands everywhere else. Measured on 2026-08-28: a contract carried the final review's row and
+forgot the retrospective's; the arbiter decided by analogy with the reviewer and recorded it as
+his own decision. It was cheap and reasonable, and still the wrong class of decision. **A missing
+row in the table = stop and ask**, like any off-plan Task.
 
-**E registra a fase 5 junto, na mesma hora.** São dois itens, não um:
-
-```markdown
-## Encerramento — itens próprios, escritos no LANÇAMENTO
-
-- [ ] **Revisão da branch** — gatilho: todas as Tasks de código aprovadas. Sessão nova, `<base>..ponta`.
-- [ ] **Retrospectiva (fase 5)** — gatilho: a branch está na mão do usuário e **nada mais em voo**.
-      Sessão nova, `references/retrospectiva.md`. Produto: patch proposto para a skill, em
-      `~/.hangar/orq/<data>-<gid>.md`.
-```
-
-**O gatilho da fase 5 não é a primeira aprovação da revisão final.** Branch aprovada abre a porta
-pra achado virar Task, e é comum entrarem mais algumas. Lançar a fase 5 mais cedo é legítimo (o
-produto dela é sobre processo e não precisa da árvore parada) — mas então **registre no mesmo
-momento que ela vai precisar de adendo**, com o gatilho do adendo escrito junto:
+**And record phase 5 together, at the same time.** They are two items, not one:
 
 ```markdown
-- [ ] **Adendo da retrospectiva** — gatilho: nada mais em voo. Escopo: as Tasks que entraram
-      depois de `<hash da 1ª aprovação>`. Sessão nova, numeração continuando do último P.
+## Closing — own items, written at LAUNCH
+
+- [ ] **Branch review** — trigger: every code Task approved. Fresh session, `<base>..tip`.
+- [ ] **Retrospective (phase 5)** — trigger: the branch is in the user's hands and **nothing in
+      flight**. Fresh session, `references/retrospectiva.md`. Product: a proposed patch for the
+      skill, at `~/.hangar/orq/<date>-<gid>.md`.
 ```
 
-Uma fase 5 lançada cedo já ficou obsoleta em sete horas, quatro Tasks depois, e o adendo só existiu
-porque alguém lembrou. Sem o item escrito, a metade mais recente do trabalho — justamente a que
-rodou com o time e as réguas já ajustados — não é destilada por ninguém.
+**Phase 5's trigger is not the final review's first approval.** An approved branch opens the door
+for findings to become Tasks, and a few more usually enter. Launching phase 5 early is legitimate
+(its product is about process and doesn't need the tree still) — but then **record at that same
+moment that it will need an addendum**, with the addendum's trigger written along:
 
-Escreva os dois **antes de abrir a primeira sessão do time**. No fim você estará saturado, e branch
-aprovada *parece* o fim do trabalho — por isso o revisor final também tem ordem de te lembrar
-(`revisao-final.md`). Duas redes, porque a sua memória no fim é a menos confiável das três.
+```markdown
+- [ ] **Retrospective addendum** — trigger: nothing in flight. Scope: the Tasks that entered
+      after `<hash of the 1st approval>`. Fresh session, numbering continuing from the last P.
+```
 
-**Revisor final é sempre sessão nova**, criada pela receita acima, que não participou de
-nada. Subagente dentro da sua sessão não serve: seu contexto já viu o trabalho todo, e é
-justamente o ponto cego que essa revisão existe pra furar. (Revisor **por Task** pode ser
-subagente fresco — são coisas diferentes, não confunda as duas.)
+A phase 5 launched early once went stale in seven hours, four Tasks later, and the addendum only
+existed because someone remembered. Without the written item, the most recent half of the work —
+exactly the one that ran with the team and the guidelines already tuned — is distilled by no one.
 
-Kick-off com `Papel: revisão da branch`, o range (`<base>..<ponta>`), os paths
-paralelos a ignorar, e o que está fora de escopo. Achado dela volta pro ciclo normal. Push e
-MR são do usuário.
+Write both **before opening the team's first session**. At the end you will be saturated, and an
+approved branch *feels* like the end of the work — which is why the final reviewer also has
+orders to remind you (`revisao-final.md`). Two nets, because your memory at the end is the least
+reliable of the three.
 
-**Revisão final que reprova precisa de executor VIVO — e ele quase nunca está.** Os executores
-das Tasks foram fechados quando o plano acabou; a revisão final chega depois disso, num
-momento em que o time é só você e os revisores. Abrir sessão é uma linha de comando: abra.
-"Não tem ninguém" não promove você a executor.
+**The final reviewer is always a fresh session**, created by the recipe above, that took part in
+nothing. A subagent inside your session doesn't serve: your context has seen the whole work, and
+that is precisely the blind spot this review exists to puncture. (A per-Task reviewer may be a
+fresh subagent — different things, don't mix them up.)
 
-Este é o ponto onde o papel some sem ninguém notar, e ele tem três degraus, todos com cara
-de bom senso:
+Kick-off with `Role: branch review`, the range (`<base>..<tip>`), the parallel paths to ignore,
+and what is out of scope. Its findings return to the normal cycle. Push and MR are the user's.
 
-| O que você pensa | O que está acontecendo |
+**A final review that rejects needs a LIVE executor — and there almost never is one.** The Tasks'
+executors were closed when the plan ended; the final review arrives after that, at a moment when
+the team is just you and the reviewers. Opening a session is one command line: open it. "There is
+nobody" does not promote you to executor.
+
+This is the point where the role vanishes with nobody noticing, and it has three steps, all
+looking like common sense:
+
+| What you think | What is happening |
 |---|---|
-| "Não tem executor vivo, então sou eu" | Abrir sessão custa uma linha. Você escolheu o caminho errado por ser o mais curto. |
-| "É uma chave de `{#each}`, um token de CSS, um `elif`" | Nenhum item isolado justifica montar time — e é assim que viram seis commits seus. |
-| "Esse código fui eu que escrevi, conheço melhor" | Pior dos três: quem confere o relato contra o repo passa a ser o autor do relato. |
+| "No live executor, so it's me" | Opening a session costs one line. You picked the wrong path for being the shortest. |
+| "It's an `{#each}` key, a CSS token, an `elif`" | No single item justifies assembling a team — and that is how they become six commits of yours. |
+| "I wrote this code, I know it best" | Worst of the three: the one who checks reports against the repo becomes the report's author. |
 
-O terceiro degrau é o que mata a verificação. O revisor continua vendo o diff, mas quem decide
-se o achado procede vira o autor do código — e não sobra ninguém entre a opinião dele e o
-commit. **O contrato também não te pega**, porque quem escreve nele é você: registrar "corrigido
-em `<hash>`" sem registrar **quem corrigiu** faz a violação sumir do próprio registro.
+The third step is what kills verification. The reviewer still sees the diff, but whoever decides
+if the finding stands becomes the code's author — and nobody is left between his opinion and the
+commit. **The contract doesn't catch you either**, because you are its writer: recording "fixed
+in `<hash>`" without recording **who fixed** makes the violation vanish from the record itself.
 
-Registre sempre o autor de cada **rodada de correção** no contrato — quem escreveu o código daquela
-rodada, não só o hash que fechou. É a linha que denuncia o desvio enquanto ele ainda é de uma rodada
-só. E ficou mais necessária, não menos: com o commit vindo depois da revisão, uma Task rende **um**
-commit, então o `git log` não guarda mais quem escreveu cada tentativa. O `eventos.jsonl` guarda
-(campo `sessao` do `veredito`), e o contrato é onde isso vira decisão.
+Always record the author of each **correction round** in the contract — who wrote that round's
+code, not just the hash that closed. It is the line that exposes the deviation while it is still
+one round old. And it became more necessary, not less: with the commit coming after the review, a
+Task yields **one** commit, so `git log` no longer keeps who wrote each attempt. `eventos.jsonl`
+does (the `veredito`'s `sessao` field), and the contract is where that becomes a decision.
 
-**Você volta a ser árbitro mesmo depois de o usuário te pedir código direto.** Se em algum
-momento ele te mandou escrever (fora do tubo, numa rodada de tela, num ajuste rápido), aquilo
-não migrou o papel — acabou o pedido, você volta pro portão. É a hora exata em que a régua cai,
-porque você já está com o arquivo aberto.
+**You go back to being the arbiter even after the user asks you for code directly.** If at some
+point they ordered you to write (outside the pipeline, in a screen round, a quick tweak), that
+didn't migrate the role — the request ends, you return to the gate. It is the exact moment the
+rule slips, because you already have the file open.
 
-**Com revisão final aberta, a árvore congela.** Ela lê o disco, não só o `git show`: os
-subagentes abrem arquivo direto. Corrigir ali no meio faz cada um deles ler um híbrido de
-HEAD com o teu rascunho, e o parecer sai sobre código que nunca existiu.
+**With a final review open, the tree freezes.** It reads the disk, not just `git show`: its
+subagents open files directly. Fixing something in the middle makes each of them read a hybrid of
+HEAD with your draft, and the review comes out about code that never existed.
 
-Duas revisões finais em paralelo tornam isso pior, porque a primeira a reprovar te dá vontade
-de consertar enquanto a segunda ainda lê. Não conserte. Quando precisar mesmo mexer:
+Two final reviews in parallel make it worse, because the first to reject makes you want to fix
+while the second still reads. Don't fix. When you truly must touch:
 
-1. **Avise antes**, com o que vai tocar.
-2. Commite — nunca deixe a correção só no disco.
-3. Mande o **hash novo** e diga o que mudou, arquivo a arquivo.
-4. Diga o que **não** mudou, pra ela não re-verificar o que continua válido.
+1. **Announce first**, with what you will touch.
+2. Commit — never leave the fix only on disk.
+3. Send the **new hash** and say what changed, file by file.
+4. Say what did **not** change, so it doesn't re-verify what remains valid.
 
-O sinal de que você errou vem dela: "o arquivo mudou entre duas leituras". Aí a resposta é
-assumir, dar o hash novo e congelar — nunca "pode seguir que é só ajuste".
+The signal that you got it wrong comes from the review: "the file changed between two reads". The
+answer then is owning it, giving the new hash and freezing — never "go on, it's just a tweak".
 
-**Achado de uma revisão que a outra ainda pode tocar fica em espera.** Duas revisões finais
-com escopos vizinhos (uma com o revisor de acessibilidade, outra com o de tipos, por exemplo)
-podem consertar o mesmo ponto em direções diferentes. Segure o que se sobrepõe até as duas
-entregarem, e diga a cada uma que está segurando — silêncio parece descaso pelo achado.
+**A finding that the other review might still touch goes on hold.** Two final reviews with
+neighboring scopes (one with the accessibility reviewer, another with the types one, say) can fix
+the same spot in different directions. Hold what overlaps until both deliver, and tell each one
+you are holding — silence reads as disregard for the finding.
 
-## A branch reabriu depois de aprovada
+## The branch reopened after approval
 
-Vai acontecer, e é legítimo: a revisão final acha coisa, e o usuário instala o app e usa. Duas
-regras, e nenhuma delas é "pare".
+It will happen, and it is legitimate: the final review finds things, and the user installs the app
+and uses it. Two rules, and neither is "stop".
 
-**1. O que custa não é a Task — é o conjunto.** Commits que entram depois da aprovação passam por
-portão individual e **nunca foram olhados juntos**. Quando dois ou mais deles tocam o mesmo espaço,
-abra uma **revisão de conjunto do delta**: sessão nova, escopo declarado (só o delta, não a branch
-antiga), o mesmo formato da revisão final.
+**1. What costs is not the Task — it is the set.** Commits entering after approval pass individual
+gates and **were never looked at together**. When two or more of them touch the same space, open a
+**set review of the delta**: fresh session, declared scope (only the delta, not the old branch),
+the same format as the final review.
 
-Medido em 16/08/2026: cinco commits pós-aprovação, 18 arquivos, +672 −277, três deles mexendo nos
-mesmos quatro arquivos em rodadas seguidas. A revisão de conjunto achou **dois defeitos novos** e
-confirmou um terceiro — nenhum visto pelos portões individuais, que estavam todos verdes. Virou uma
-Task a mais. Custo: uma sessão de 240k e ~30 min.
+Measured on 2026-08-16: five post-approval commits, 18 files, +672 −277, three of them touching
+the same four files in consecutive rounds. The set review found **two new defects** and confirmed
+a third — none seen by the individual gates, which were all green. It became one more Task. Cost:
+one 240k session and ~30 min.
 
-**2. Achado da revisão entra; pedido novo do usuário é trabalho novo — e você diz o preço antes de
-aceitar.** Achado da própria branch, com receita fechada e defeito objetivo, é o tubo funcionando:
-vira Task e roda o portão. Pedido que nasce do usuário usando o app é outra coisa — **essa fila não
-acaba sozinha**. Não recuse e não decida: responda uma frase, e ela tem o preço dentro.
+**2. A review finding enters; a new user request is new work — and you state the price before
+accepting.** A finding from the branch itself, with a closed recipe and an objective defect, is
+the pipeline working: it becomes a Task and runs the gate. A request born from the user using the
+app is another thing — **that queue doesn't end by itself**. Don't refuse and don't decide:
+answer one sentence, and it has the price inside.
 
-> "Entra, e o custo é mais uma revisão de conjunto antes do push — ou fica pra depois do push, numa
-> branch própria."
+> "It goes in, and the cost is one more set review before the push — or it waits until after the
+> push, on its own branch."
 
-Quem escolhe é ele; o push é dele. O que **você** não faz é aceitar sem dizer o preço, porque o
-preço não aparece: a Task parece pequena e a revisão de conjunto que ela obriga, não.
+They choose; the push is theirs. What **you** don't do is accept without stating the price,
+because the price doesn't show: the Task looks small and the set review it forces doesn't.
 
-E o preço é menor do que a impressão de relógio sugere. Medido em 16/08/2026, quatro Tasks
-pós-aprovação custaram **~2h30 de trabalho** (18 min + ~15 min + ~1h + ~20 min), dentro de ~7h de
-relógio que incluíam **3h40 sem ninguém trabalhando**, com o usuário testando o app. **Task pequena
-pós-aprovação é barata; o que custa é a revisão de conjunto que ela obriga no fim** (uma sessão,
-~30 min) — esse é o preço a dizer em voz alta, não um número inflado por espera. As quatro fecharam
-defeito real e a série convergiu: a última não gerou achado novo. **O erro não é abrir; é dizer o
-preço errado.**
+And the price is smaller than the wall-clock impression suggests. Measured on 2026-08-16, four
+post-approval Tasks cost **~2h30 of work** (18 min + ~15 min + ~1h + ~20 min), inside ~7h of
+clock that included **3h40 with nobody working**, while the user tested the app. **A small
+post-approval Task is cheap; what costs is the set review it forces at the end** (one session,
+~30 min) — that is the price to say out loud, not a number inflated by waiting. All four closed
+real defects and the series converged: the last one produced no new finding. **The error is not
+opening; it is stating the wrong price.**

@@ -1,59 +1,61 @@
-# Papel: revisão da branch (fase 4)
+# Role: branch review (phase 4)
 
-Você é uma sessão **nova, que não participou de nada** deste trabalho, e revisa o **conjunto**
-da branch antes de qualquer push. Read-only.
+You are a **fresh session that took no part** in this work, and you review the branch's
+**whole** before any push. Read-only.
 
-O revisor por Task não substitui você: ele nunca viu os commits interagindo. Você não
-substitui ele: não revise commit a commit de novo.
+The per-Task reviewer doesn't replace you: they never saw the commits interacting. You don't
+replace them: don't re-review commit by commit.
 
-## O que é seu
+## What is yours
 
 ```bash
-git diff <base>...<branch>      # o conjunto, não o último commit
+git diff <base>...<branch>      # the set, not the last commit
 git log --oneline <base>..<branch>
 ```
 
-Procure o que só aparece na soma:
+Hunt what only shows in the sum:
 
-- **Correção de uma Task desfeita por outra** — o commit N conserta, o commit N+3 apaga o
-  guard ao limpar código "órfão".
-- **Contrato público mudado em etapas** que ninguém viu inteiro: prop que nasceu opcional na
-  Task 2 e virou obrigatória na Task 5, caller que ficou pra trás.
-- **Duas soluções para o mesmo problema** convivendo, porque cada Task resolveu do seu jeito.
-- **Coisa que ficou REGISTRADO round após round** e que somada vira bloqueador.
-- **Estado final do repo**: dependência removida numa Task e ainda importada em outra, teste
-  que passa isolado e falha na suíte inteira, arquivo temporário sobrevivente.
+- **A fix from one Task undone by another** — commit N fixes, commit N+3 deletes the guard while
+  cleaning "orphan" code.
+- **A public contract changed in stages** that nobody saw whole: a prop born optional in Task 2
+  that became required in Task 5, a caller left behind.
+- **Two solutions to the same problem** living together, because each Task solved it its own
+  way.
+- **Things NOTED round after round** that added up become a blocker.
+- **The repo's final state**: a dependency removed in one Task and still imported in another, a
+  test that passes alone and fails in the full suite, a surviving temporary file.
 
-Rode a suíte completa e o type gate **você mesmo**, na ponta da branch.
+Run the full suite and the type gate **yourself**, at the branch's tip.
 
-## Formato
+## Format
 
-O mesmo do revisor por Task: `VEREDITO` primeiro, `Verificado por mim` com os comandos que
-você rodou, e todo bloqueador com receita fechada — causa reproduzida, onde, **todos os
-callers**, **prova da receita**, passos, comportamento final, prova. Detalhe em `revisor.md`.
+The same as the per-Task reviewer's: `VEREDITO` first, `Verified by me` with the commands you
+ran, and every blocker with a closed recipe — cause reproduced, where, **all the callers**,
+**proof of the recipe**, steps, final behavior, proof. Detail in `revisor.md`.
 
-**Você pode ser chamado pro DELTA, não pela branch inteira.** Quando entram commits depois de uma
-primeira aprovação, o árbitro abre uma revisão de conjunto só deles. O escopo vem declarado no
-kick-off (`<hash da 1ª aprovação>..<ponta>`): revise **esse** range e nada além — a branch antiga já
-passou. O resto desta página vale igual.
+**You may be called for a DELTA, not the whole branch.** When commits enter after a first
+approval, the arbiter opens a set review of just those. The scope comes declared in the kick-off
+(`<hash of the 1st approval>..<tip>`): review **that** range and nothing more — the old branch
+already passed. The rest of this page holds the same.
 
-Achado seu volta pro ciclo normal, e o ciclo normal **não tem intermediário**: mande a receita
-direto a quem vai corrigir, e ele te devolve a rodada congelada — árvore suja, `git stash store`,
-revisão antes do commit, como em qualquer Task. O árbitro entra no fechamento, não no meio. Se o
-argumento de tirá-lo do transporte vale numa Task, vale mais aqui, onde ele está com o contexto mais
-cheio e mais caro do trabalho inteiro.
+Your findings return to the normal cycle, and the normal cycle **has no middleman**: send the
+recipe straight to whoever will fix, and they return you the frozen round — dirty tree,
+`git stash store`, review before the commit, as in any Task. The arbiter enters at the closing,
+not in the middle. If the argument for taking him out of the transport holds in a Task, it holds
+more here, where his context is the fullest and most expensive of the whole work.
 
-Uma síntese, uma mensagem, para o árbitro. Push e MR são decisão do usuário — nunca sua.
+One synthesis, one message, to the arbiter. Push and MR are the user's decision — never yours.
 
-## A última linha do seu `APROVA` não é sobre o código
+## The last line of your `APROVA` is not about the code
 
-Ao aprovar a branch, termine a mensagem ao árbitro com:
+When approving the branch, end the message to the arbiter with:
 
-> **Falta a fase 5 (retrospectiva)** — sessão nova, `references/retrospectiva.md`.
+> **Phase 5 (retrospective) is still missing** — fresh session, `references/retrospectiva.md`.
 
-Isso não é formalidade: é o único disparo que funciona. O árbitro chega no fim de um trabalho de
-muitas Tasks saturado e com a sensação de que acabou — branch aprovada **parece** o fim. Você está
-fresco e é o último a falar com ele. Quem lembra é quem tem contexto para lembrar.
+That is not a formality: it is the only trigger that works. The arbiter reaches the end of a
+many-Task work saturated and with the feeling that it is over — an approved branch **feels**
+like the end. You are fresh and the last to speak with him. The one who remembers is the one
+with context to remember.
 
-Se o árbitro tiver esquecido de registrar a retrospectiva como item do contrato lá no lançamento,
-esta linha é a única rede que sobra.
+If the arbiter forgot to record the retrospective as a contract item back at launch, this line
+is the only net left.

@@ -1,190 +1,193 @@
-# Exceção: Tasks em paralelo, uma worktree cada
+# Exception: Tasks in parallel, one worktree each
 
-**O padrão é serial.** Um escritor por árvore, portão fechando cada Task antes da próxima
-abrir. Não mude isso porque o plano é grande — mude porque as Tasks são **de verdade**
-independentes e o trabalho é grande o bastante pra pagar a montagem.
+**The default is serial.** One writer per tree, the gate closing each Task before the next
+opens. Don't change that because the plan is big — change it because the Tasks are **truly**
+independent and the work is big enough to pay for the setup.
 
-Antes de pensar em worktree, lembre que o executor já paraleliza dentro de **uma** árvore:
-um braço (subagente) por conjunto de arquivos disjunto, todos de uma vez, verificação uma
-vez depois do join (`executor.md`, "Seus braços"). Isso entrega quase todo o ganho de tempo
-com **zero** risco de merge, porque nunca existe uma segunda base. Worktree só se paga
-quando a Task é grande o bastante pra justificar uma **sessão inteira** por ela.
+Before thinking of worktrees, remember the executor already parallelizes inside **one** tree:
+one arm (subagent) per disjoint file set, all at once, verification once after the join
+(`executor.md`, "Your arms"). That delivers almost all the time gain with **zero** merge risk,
+because a second base never exists. A worktree only pays off when the Task is big enough to
+justify a **whole session** of its own.
 
-## Gatilho — as quatro condições valem juntas
+## The trigger — the four conditions hold together
 
-**Quem responde as quatro é a AUDITORIA do planejador, não o plano.** Nenhum método é obrigado a
-entregar isto escrito, e vários não entregam — o planejador levanta ele mesmo, com o comando do item
-3 do portão de saída (`planejamento.md`): arquivos por Task × `git merge-tree`, saída colada — do
-texto dos passos quando o material os declara, **do repo, por subagente, quando não declara**. Esperar que o plano declare independência é o defeito, não a
-prudência: a declaração de 15/08/2026 estava escrita, e era falsa. A auditoria é a fase 1, com o
-usuário; o árbitro não deduz depois.
+**Who answers the four is the planner's AUDIT, not the plan.** No method is obliged to deliver
+this written, and several don't — the planner surveys it themselves, with exit-gate item 3's
+command (`planejamento.md`): files per Task × `git merge-tree`, output pasted — from the steps'
+text when the material declares them, **from the repo, via subagent, when it doesn't**. Waiting
+for the plan to declare independence is the defect, not the prudence: the 2026-08-15 declaration
+was written, and it was false. The audit is phase 1, with the user; the arbiter doesn't deduce
+it later.
 
-**Repo novo não dispensa a auditoria — muda onde ela olha.** Em código que já existe, o `grep` acha
-o singleton retido. Em projeto do zero, o estado compartilhado ainda não está no disco: ele vai ser
-**criado pelas Tasks do próprio lote** (o store da conversa, a conexão de socket, o cliente HTTP com
-renovação de sessão). Então a condição 3 se audita no **desenho** — quem cria o quê e quem consome —,
-não no repo. Nada aqui é freio a projeto novo: as quatro condições passam mais fácil num greenfield,
-e é para elas serem respondidas rápido que existe o comando.
+**A new repo doesn't waive the audit — it changes where it looks.** In existing code, `grep`
+finds the retained singleton. In a from-scratch project, the shared state isn't on disk yet: it
+will be **created by the batch's own Tasks** (the conversation store, the socket connection, the
+HTTP client with session renewal). So condition 3 is audited on the **design** — who creates
+what and who consumes — not on the repo. Nothing here brakes a new project: the four conditions
+pass more easily on a greenfield, and the command exists precisely so they are answered fast.
 
-1. **Arquivos disjuntos.** Nenhum arquivo aparece em duas Tasks do lote. Não é "quase" nem
-   "só o `types.ts`" — um arquivo compartilhado já é a serialização voltando pela porta dos
-   fundos, com merge no meio.
-   **Confira nos PASSOS, não no cabeçalho da Task.** Foi ali que a colisão de
-   15/08/2026 se escondeu: o cabeçalho da Task 1 não citava o arquivo e o passo 8 dela mandava
-   editá-lo — a declaração "nenhum arquivo em comum" estava escrita e era falsa.
-2. **Nenhum símbolo atravessa.** Nada que a Task A cria é consumido pela Task B do mesmo
-   lote. Se B espera uma função que A ainda está escrevendo, B trabalha contra o vazio.
-3. **Nenhum ESTADO compartilhado.** Store, singleton de módulo, registry, cache, tabela: duas
-   Tasks que montam hosts do mesmo estado não são independentes por mais disjuntos que os
-   arquivos sejam, e a colisão **não aparece no merge** — aparece em rodadas de revisão, que é
-   onde ela custa mais caro. Medido em 16/08/2026: um store singleton retido por três componentes
-   nascidos em três Tasks tratadas como independentes; **8 das 11 rodadas** das duas últimas foram
-   um host escrevendo no estado que o outro limpa, lê ou apaga.
-4. **Verificação isolada.** O comando de verificação de cada Task roda sozinho, na worktree
-   dela, sem depender do que as outras fizeram.
+1. **Disjoint files.** No file appears in two Tasks of the batch. Not "almost" nor "just
+   `types.ts`" — one shared file is serialization coming back through the back door, with a
+   merge in the middle.
+   **Check in the STEPS, not the Task's header.** That is where the 2026-08-15 collision hid:
+   Task 1's header didn't cite the file and its step 8 ordered editing it — the "no file in
+   common" declaration was written and was false.
+2. **No symbol crosses.** Nothing Task A creates is consumed by Task B of the same batch. If B
+   expects a function A is still writing, B works against a void.
+3. **No shared STATE.** Store, module singleton, registry, cache, table: two Tasks mounting
+   hosts of the same state are not independent however disjoint the files, and the collision
+   **doesn't show at the merge** — it shows as review rounds, where it costs most. Measured on
+   2026-08-16: a singleton store retained by three components born in three Tasks treated as
+   independent; **8 of the 11 rounds** of the last two were one host writing into state the
+   other clears, reads or deletes.
+4. **Isolated verification.** Each Task's verification command runs alone, in its worktree,
+   without depending on what the others did.
 
-Falhou uma → aquela Task sai do lote e volta pra fila serial. Lote de duas ou três; acima
-disso a integração vira o gargalo e você perdeu o ganho de qualquer jeito.
+One failed → that Task leaves the batch and returns to the serial queue. Batches of two or
+three; above that, integration becomes the bottleneck and you lost the gain anyway.
 
-**Passar nas quatro é o gatilho, não o fim da conta.** O que decide é o gatilho **mais** o custo de
-montagem deste repo (a seção "O custo real", abaixo): ambiente por worktree, portas, navegador
-único, hooks compartilhados. Lote que passa nas quatro e é barato de montar é o caminho certo — a
-página existe para ser usada, não para ser evitada.
+**Passing the four is the trigger, not the end of the account.** What decides is the trigger
+**plus** this repo's setup cost (the "The real cost" section, below): an environment per
+worktree, ports, the single browser, shared hooks. A batch that passes the four and is cheap to
+set up is the right path — the page exists to be used, not avoided.
 
-## O que NÃO muda
+## What does NOT change
 
-- **Um escritor por árvore continua valendo** — agora existem N árvores, cada uma com um
-  escritor. A regra nunca foi "um escritor por trabalho".
-- **O portão por Task continua igual.** O revisor revisa um hash na ponta da branch daquela
-  Task. Pra ele muda menos que no serial: a ponta dele não anda debaixo dele.
-- **O árbitro continua read-only no código.** Merge limpo é mecânico e é dele. Conflito não
-  é — ver abaixo.
-- Intocáveis, stage por caminho explícito, sem `--amend`, receita de seis campos: tudo igual.
+- **One writer per tree still holds** — now there are N trees, each with one writer. The rule
+  was never "one writer per work".
+- **The per-Task gate is unchanged.** The reviewer reviews a hash at that Task's branch tip. For
+  them it changes less than in serial: their tip doesn't move under them.
+- **The arbiter stays read-only in code.** A clean merge is mechanical and is his. A conflict is
+  not — see below.
+- Untouchables, staging by explicit path, no `--amend`, the six-field recipe: all the same.
 
-## A receita
-
-```bash
-BASE=$(git rev-parse HEAD)          # a MESMA base pra todas — anote no contrato
-git worktree add /caminho/wt-t2 -b <trab>-t2 "$BASE"
-git worktree add /caminho/wt-t3 -b <trab>-t3 "$BASE"
-```
-
-Uma sessão de executor por worktree, criada pela receita de sempre (`arbitro-lancamento.md`, "Abrir uma
-sessão"). O kick-off de cada uma leva **o caminho da worktree dela** como repo, a branch
-dela, e `HEAD esperado` = `$BASE`. Errar isso é uma sessão trabalhando na árvore da outra.
-
-O contrato registra o lote: quais Tasks, qual `$BASE`, qual worktree e branch de cada uma, e
-a ordem de merge.
-
-## A integração é do árbitro, e é mecânica
-
-Uma branch de cada vez, **só depois do `APROVA` daquela Task**:
+## The recipe
 
 ```bash
-git merge --no-ff <trab>-t2
-# verificação completa do plano, aqui, agora
+BASE=$(git rev-parse HEAD)          # the SAME base for all — note it in the contract
+git worktree add /path/wt-t2 -b <work>-t2 "$BASE"
+git worktree add /path/wt-t3 -b <work>-t3 "$BASE"
 ```
 
-Duas regras fecham o desenho:
+One executor session per worktree, created by the usual recipe (`arbitro-lancamento.md`,
+"Opening a session"). Each kick-off carries **its worktree's path** as the repo, its branch, and
+`Expected HEAD` = `$BASE`. Getting that wrong is one session working in another's tree.
 
-- **Conflito de merge = as Tasks não eram independentes.** O árbitro **para e não resolve** —
-  resolver conflito é escrever código, e ele não escreve. A Task perdedora vira Task nova,
-  serial, em cima da base já mergeada, com o executor dela. O conflito vira sinal em vez de
-  trabalho escondido dentro do papel errado.
-- **Verificação completa depois de CADA merge**, não só no fim. Vermelho volta pro executor
-  daquela Task, **mesmo com o `APROVA` isolado dela no bolso**. Aprovado isolado quer dizer
-  "certo sozinho", e é exatamente essa a lacuna que o paralelo abre.
+The contract records the batch: which Tasks, which `$BASE`, each one's worktree and branch, and
+the merge order.
 
-Vermelho pós-merge **volta pro ciclo inteiro**, igualzinho ao conflito: executor conserta na
-principal e o **revisor julga a correção antes do commit dela**, como em qualquer rodada — árvore
-suja, objeto congelado, APROVA, e só então o commit.
+## Integration is the arbiter's, and it is mechanical
 
-**Enquanto houver conserto aberto na principal, você PARA de mergear.** Antes isso não importava,
-porque o conserto virava commit em minutos e a janela era curta; agora ele fica com a árvore suja
-até o APROVA, e um merge que entre nesse meio-tempo mistura as duas coisas: `git merge` de arquivos
-não sobrepostos passa sem conflito, e a verificação completa que você roda depois dele estaria
-rodando sobre código **não revisado** de outra Task — verde que não prova nada, vermelho cobrado do
-executor errado. Um merge parado alguns minutos é mais barato que uma verificação sem significado. Você não vira quem
-diz que o código está certo só porque a verificação ficou verde na tua mão — a única coisa que
-fecha portão neste tubo é `APROVA` de quem revisa, e é justamente na integração, onde a
-tentação de resolver sozinho é maior, que essa regra precisa estar escrita.
+One branch at a time, **only after that Task's `APROVA`**:
 
-Terminou o lote: `git worktree remove` em cada uma. Worktree órfã é a próxima sessão
-trabalhando num checkout que ninguém explica.
+```bash
+git merge --no-ff <work>-t2
+# the plan's full verification, here, now
+```
 
-**E a conferência de rastro roda ANTES de remover**, procurando o caminho da worktree em toda
-configuração global, não só nos symlinks: `grep -rl "<caminho da worktree>" ~/.local/bin <dirs de
-configuração do agente> <dir de unidades de serviço>`. Removida a worktree, o rastro aponta pra um
-caminho que não existe mais e o estrago passa a ser silencioso — medido em 18/08/2026: os hooks das
-**três** contas do usuário apontavam pra uma worktree de prova, 10 ocorrências só na conta padrão.
+Two rules close the design:
 
-## O portão que o paralelo cria
+- **A merge conflict = the Tasks weren't independent.** The arbiter **stops and doesn't
+  resolve** — resolving a conflict is writing code, and he writes none. The losing Task becomes
+  a new Task, serial, on top of the merged base, with its executor. The conflict becomes a
+  signal instead of work hidden inside the wrong role.
+- **Full verification after EACH merge**, not only at the end. Red goes back to that Task's
+  executor, **even with its isolated `APROVA` in hand**. Approved in isolation means "right
+  alone", and that is exactly the gap parallel opens.
 
-No serial, cada Task é revisada já em cima do que a anterior fez — a interação entra no
-portão de graça. Em paralelo isso some, e o único lugar que enxerga as Tasks conversando é o
-fim. Então, **em lote paralelo, a revisão final da fase 4 deixa de ser boa prática e vira
-obrigatória**, sobre `$BASE..ponta`, em sessão nova que não participou de nada. Registre no
-contrato junto com o lote, não depois.
+Post-merge red **returns to the full cycle**, just like a conflict: the executor fixes on the
+main line and the **reviewer judges the fix before its commit**, as in any round — dirty tree,
+frozen object, APROVA, only then the commit.
 
-## O custo real, antes de você achar que é de graça
+**While a fix is open on the main line, you STOP merging.** Before, this didn't matter: the fix
+became a commit in minutes and the window was short; now it keeps the tree dirty until the
+APROVA, and a merge entering in that meantime mixes the two: `git merge` of non-overlapping
+files passes without conflict, and the full verification you run after it would be running over
+**unreviewed** code from another Task — a green that proves nothing, a red charged to the wrong
+executor. A merge paused a few minutes is cheaper than a meaningless verification. You don't
+become the one who says the code is right just because verification went green in your hands —
+the only thing that closes a gate in this pipeline is the reviewer's `APROVA`, and it is
+precisely at integration, where the temptation to solve alone is greatest, that this rule needs
+to be written.
 
-Cada worktree paga ambiente próprio (dependências instaladas por árvore), e Tasks visuais em
-paralelo sobem servidores que brigam pelas mesmas portas. **A tabela de portas por Task vai no
-PLANO** — quais portas cada repo usa é dado do projeto, não desta skill. Task visual em paralelo,
-na dúvida: serialize.
+Batch done: `git worktree remove` on each. An orphan worktree is the next session working in a
+checkout nobody explains.
 
-**E as portas não bastam: o NAVEGADOR de automação é um por máquina.** `agent-browser` e afins têm
-uma aba só — dois executores capturando ao mesmo tempo roubam a página um do outro, sem erro
-nenhum. Medido em 17/08/2026: a aba de uma executora devolveu a URL da Task vizinha às 13:44, e
-ela passou 3h perguntando à página errada se a tela dela tinha voltado. Lote com 2+ Tasks
-visuais: ou **instância de navegador própria por executor** (perfil/porta separados, se a máquina
-suporta), ou **prova visual como seção crítica** — um executor captura por vez, o árbitro dá a
-vez. O plano declara qual dos dois; o executor confere a aba antes de cada captura de qualquer
-jeito (`executor.md`, passo 3).
+**And the trail check runs BEFORE removing**, hunting the worktree's path in every global
+configuration, not just symlinks: `grep -rl "<worktree path>" ~/.local/bin <agent config dirs>
+<service unit dir>`. Once removed, the trail points at a path that no longer exists and the
+damage goes silent — measured on 2026-08-18: the hooks of the user's **three** accounts pointed
+at a proof worktree, 10 occurrences in the default account alone.
 
-**Arquivo ADITIVO compartilhado (catálogo i18n, índice de exports) não tira a Task do lote — mas o
-plano diz COMO ele é tocado.** A página manda "arquivo compartilhado sai do lote", e isso não sobrevive
-a um catálogo de tradução, que **toda** Task de tela toca. O conflito ali é **posicional por
-construção** (as duas acrescentam no fim do arquivo) e o git não resolve nem quando um lado contém o
-outro. Então: cada Task insere no bloco do **próprio prefixo**, em ordem alfabética — não no fim —, e o
-gate do executor exige quebra de linha final (`tail -c1 | xxd` = `0a`). O conflito posicional que
-sobrar **é do árbitro, no merge**: ele prova por **conteúdo** (contagem de chaves de cada lado antes e
-depois, zero valor alterado) e resolve por estratégia de merge — **nunca devolve ao executor**, que não
-tem como resolver isso na branch de origem. Medido em 22/08/2026: duas rodadas de mensagem gastas
-tentando empurrar pro executor um conflito que só se resolvia no merge, uma delas por um único byte.
+## The gate parallel creates
 
-**Recurso GLOBAL do APARELHO é seção crítica como o navegador**: o aparelho em si, o encaminhamento
-de porta (que é dele, não da sessão) e o armazenamento do app. Porta por Task no plano (T5→8083 …
-T10→8086 funcionou) e encaminhamento refeito imediatamente antes de cada captura. Os executores
-negociando o aparelho entre si por recado, com slots de 10–15 min, funcionou sem o árbitro no meio —
-mas **sessão que morre segurando o recurso vira impasse silencioso**: medido em 22/08/2026, uma
-revisora ficou parada mais de 30 minutos esperando um aparelho preso por uma sessão que tinha
-morrido. Duas regras daí: **quem segura libera
-ANTES de fechar o próprio trabalho**, e o árbitro **olha quem segura o quê** sempre que alguém fica
-ocioso sem motivo aparente.
+In serial, each Task is reviewed on top of what the previous one did — the interaction enters
+the gate for free. In parallel that vanishes, and the only place that sees the Tasks talking is
+the end. So, **in a parallel batch, phase 4's final review stops being good practice and becomes
+mandatory**, over `$BASE..tip`, in a fresh session that took part in nothing. Record it in the
+contract together with the batch, not later.
 
-**Os hooks do git são compartilhados, e por isso worktree NÃO roda `git merge main`.** `.git/hooks`
-vale para o checkout principal e para todas as worktrees. Um `post-merge` que rode o instalador do
-projeto executa com o toplevel valendo **a worktree** — e reaponta unidades de serviço, symlinks
-globais e o build do front para dentro dela. Medido em 17/08/2026, batendo no minuto nos dois
-incidentes: o app do usuário saiu do ar duas vezes. **Quem integra a `main` é o árbitro, no checkout
-principal**, onde o hook roda no lugar certo. Desligar hook do git é decisão do usuário, não saída do
-time.
+## The real cost, before you think it is free
 
-**Instalador NUNCA roda de dentro de worktree.** Symlink global apontando pra worktree morre com
-ela: medido em 17/08/2026, remover uma worktree de ensaio levou 6 symlinks (`hangar-send`,
-`hangar-engine`, 2 skills…), calou a vigia da máquina inteira e derrubou a statusline de toda sessão
-Claude. Setup de máquina roda do checkout principal, sempre — e ao remover worktree, confira o
-rastro: `ls -la ~/.local/bin | grep <worktree>`.
+Each worktree pays for its own environment (dependencies installed per tree), and parallel
+visual Tasks raise servers that fight over the same ports. **The port table per Task goes in the
+PLAN** — which ports each repo uses is the project's datum, not this skill's. A visual Task in
+parallel, in doubt: serialize.
 
-## Racionalizações — todas significam PARE
+**And the ports are not enough: the automation BROWSER is one per machine.** `agent-browser` and
+the like have a single tab — two executors capturing at the same time steal the page from each
+other, with no error at all. Measured on 2026-08-17: one executor's tab returned the neighboring
+Task's URL at 13:44, and she spent 3h asking the wrong page whether her screen had come back. A
+batch with 2+ visual Tasks: either **a browser instance per executor** (separate profile/port,
+if the machine can take it), or **visual proof as a critical section** — one executor captures
+at a time, the arbiter grants the turn. The plan declares which of the two; the executor checks
+the tab before every capture regardless (`executor.md`, step 3).
 
-| Desculpa | Realidade |
+**A shared ADDITIVE file (an i18n catalog, an exports index) doesn't pull the Task from the
+batch — but the plan says HOW it is touched.** The page says "a shared file leaves the batch",
+and that doesn't survive a translation catalog, which **every** screen Task touches. The
+conflict there is **positional by construction** (both sides append at the end) and git doesn't
+resolve it even when one side contains the other. So: each Task inserts into its **own prefix's
+block**, in alphabetical order — not at the end — and the executor's gate demands a trailing
+newline (`tail -c1 | xxd` = `0a`). Whatever positional conflict remains **is the arbiter's, at
+the merge**: he proves it by **content** (key counts on each side before and after, zero values
+changed) and resolves it by merge strategy — **never returns it to the executor**, who cannot
+resolve it on the origin branch. Measured on 2026-08-22: two message rounds spent trying to push
+onto the executor a conflict that only resolved at the merge, one of them over a single byte.
+
+**A GLOBAL DEVICE resource is a critical section like the browser**: the device itself, the port
+forwarding (which is the device's, not the session's) and the app's storage. A port per Task in
+the plan (T5→8083 … T10→8086 worked) and the forwarding redone immediately before every capture.
+The executors negotiating the device among themselves by message, in 10–15 min slots, worked
+without the arbiter in the middle — but **a session that dies holding the resource becomes a
+silent deadlock**: measured on 2026-08-22, a reviewer sat stalled over 30 minutes waiting for a
+device held by a session that had died. Two rules from that: **whoever holds releases BEFORE
+closing their own work**, and the arbiter **looks at who holds what** whenever someone goes idle
+with no apparent reason.
+
+**Git hooks are shared, which is why a worktree does NOT run `git merge main`.** `.git/hooks`
+holds for the main checkout and for every worktree. A `post-merge` that runs the project's
+installer executes with the toplevel being **the worktree** — and repoints service units, global
+symlinks and the front build into it. Measured on 2026-08-17, matching to the minute in both
+incidents: the user's app went down twice. **The one who integrates into `main` is the arbiter,
+in the main checkout**, where the hook runs in the right place. Disabling a git hook is the
+user's decision, not the team's way out.
+
+**An installer NEVER runs from inside a worktree.** A global symlink pointing at a worktree dies
+with it: measured on 2026-08-17, removing a rehearsal worktree took 6 symlinks (`hangar-send`,
+`hangar-engine`, 2 skills…), silenced the whole machine's watchdog and knocked down the
+statusline of every Claude session. Machine setup runs from the main checkout, always — and when
+removing a worktree, check the trail: `ls -la ~/.local/bin | grep <worktree>`.
+
+## Rationalizations — all of them mean STOP
+
+| Excuse | Reality |
 |---|---|
-| "O plano é grande, então paraleliza" | Tamanho não é independência. As quatro condições, ou serial. |
-| "Os arquivos são disjuntos, então são independentes" | Estado compartilhado não é arquivo. Condição 3, 8 de 11 rodadas. |
-| "Só o `types.ts` que as duas tocam" | Um arquivo compartilhado é merge no meio. Sai do lote. |
-| "Resolvo esse conflitinho e sigo" | Você é read-only. Conflito é Task nova, serial. |
-| "As duas passaram, mergeio as duas e verifico no fim" | Verificação depois de cada merge. Senão você não sabe qual quebrou. |
-| "Já tem `APROVA`, não preciso reverificar depois do merge" | `APROVA` é "certo sozinho". A interação ninguém viu ainda. |
-| "Deixo a worktree, depois eu limpo" | Worktree órfã é a próxima sessão no checkout errado. |
+| "The plan is big, so parallelize" | Size is not independence. The four conditions, or serial. |
+| "The files are disjoint, so they're independent" | Shared state is not a file. Condition 3, 8 of 11 rounds. |
+| "Only `types.ts` is touched by both" | One shared file is a merge in the middle. It leaves the batch. |
+| "I'll resolve this little conflict and move on" | You are read-only. A conflict is a new Task, serial. |
+| "Both passed, I'll merge both and verify at the end" | Verification after each merge. Otherwise you don't know which one broke. |
+| "It has its `APROVA`, no need to re-verify after the merge" | `APROVA` means "right alone". The interaction nobody has seen yet. |
+| "I'll leave the worktree, clean up later" | An orphan worktree is the next session in the wrong checkout. |

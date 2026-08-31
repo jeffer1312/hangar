@@ -1,87 +1,87 @@
-# Revisor — o portão visual
+# Reviewer — the visual gate
 
-Esta página é da **Task que mexe em pixel**. Se o diff não desenha nada, ela não é sua: volte para
-`revisor.md` (procedimento) e `revisor-catalogo.md` (o que o parecer cobre).
+This page belongs to the **Task that touches pixels**. If the diff draws nothing, it isn't
+yours: go back to `revisor.md` (procedure) and `revisor-catalogo.md` (what the report covers).
 
-## Sem prova de visão, é BLOQUEADOR
+## Without proof of seeing, it is a BLOCKER
 
-Task que muda o que aparece na tela só passa com evidência de que alguém **viu**: os
-caminhos absolutos dos screenshots por estado, a pergunta visual feita a cada um, e o que
-voltou. DOM, CSS e árvore de acessibilidade **não** substituem — eles provam que o elemento
-existe, não que ele está legível, alinhado, ou que não virou um retângulo opaco sobre o
-papel de parede.
+A Task that changes what shows on screen only passes with evidence that someone **saw**: the
+absolute paths of the per-state screenshots, the visual question asked of each, and what came
+back. DOM, CSS and the accessibility tree do **not** substitute — they prove the element exists,
+not that it is legible, aligned, or that it hasn't become an opaque rectangle over the
+wallpaper.
 
-O protocolo do executor sem visão está em `executor-visual.md`. Print anterior à correção não vale:
-se ele consertou, tem que ter recapturado.
+The protocol for an executor without vision is in `executor-visual.md`. A screenshot from before
+the fix doesn't count: if they fixed it, they must have recaptured.
 
-**Task com barra: o veredito cego vem junto, ou é BLOQUEADOR.** O plano nomeia, pra toda Task
-que mexe em pixel, contra o que o resultado é comparado — uma tela que dá pra abrir, no mesmo
-estado e na mesma largura. O reporte do executor tem que trazer, por rodada: quem venceu,
-**qual letra era o trabalho dele**, o maior buraco apontado e o que ele consertou. Reporte que
-diz só "comparei e ficou bom" é o mesmo "está bom?" com outra roupa — bloqueia.
+**A Task with a bar: the blind verdict comes along, or it is a BLOCKER.** The plan names, for
+every pixel-touching Task, what the result is compared against — a screen that can be opened, in
+the same state and width. The executor's report must carry, per round: who won, **which letter
+was their work**, the biggest hole named and what they fixed. A report saying only "I compared
+and it looks good" is the same "does it look good?" in other clothes — it blocks.
 
-**Você NÃO refaz o protocolo cego do executor.** Ele já rodou, com subagente fresco e teto de
-rodadas; refazê-lo é pagar de novo a parte mais cara da sua janela por uma resposta que você já tem.
-O que é seu é **uma passada**, no fim, sobre o print final e a barra, procurando as duas coisas que
-a dele não pega:
+**You do NOT redo the executor's blind protocol.** They already ran it, with a fresh subagent
+and a round cap; redoing it is paying again the most expensive part of your window for an answer
+you already have. What is yours is **one pass**, at the end, over the final screenshot and the
+bar, hunting the two things theirs doesn't catch:
 
-- **Barra trocada no meio** — ele comparou com um estado diferente, outra largura, ou uma
-  versão da tela de referência que já mudou. Comparação contra a barra errada é evidência
-  falsa, não evidência fraca.
-- **Ele venceu e mesmo assim está errado** — a barra é o piso, não o teto. Vencer a
-  comparação cega não perdoa retângulo opaco sobre o papel de parede, texto cortado, nem
-  estado que ninguém capturou.
+- **The bar swapped midway** — they compared against a different state, another width, or a
+  version of the reference screen that already changed. A comparison against the wrong bar is
+  false evidence, not weak evidence.
+- **They won and it is still wrong** — the bar is the floor, not the ceiling. Winning the blind
+  comparison doesn't excuse an opaque rectangle over the wallpaper, cut-off text, or a state
+  nobody captured.
 
-Numa execução em que o revisor refez a comparação cega em seis rodadas, o resultado foram seis
-divergências e **zero** bloqueadores; os 24 bloqueadores daquele trabalho vieram todos do código.
+In a run where the reviewer redid the blind comparison across six rounds, the result was six
+divergences and **zero** blockers; that work's 24 blockers all came from the code.
 
-**Barra é "está fiel ao mock?"; defeito de tela é "está quebrado?".** É a pergunta que separa as
-duas coisas antes de você escrever o achado, e cada uma tem um fim diferente:
+**The bar is "is it faithful to the mock?"; a screen defect is "is it broken?".** That is the
+question separating the two before you write the finding, and each has a different ending:
 
-- **Cumprido o teto de rodadas, a barra ENCERRA** — e encerrada quer dizer que ninguém a refaz, nem
-  você. Divergência estética que sobrar vira `REGISTRADO`. Perdeu as duas rodadas e ele commitou
-  mesmo assim (é o que `executor-visual.md` manda fazer, com o risco declarado): **não** é bloqueador
-  automático — você julga o buraco que sobrou.
-- **Defeito de tela não tem teto**: sobreposição, texto ilegível, aviso que não aparece, alvo de
-  toque pequeno, largura errada, foco preso ou perdido pra fora do modal. Continuam bloqueador cheio
-  até fechar, e **não gastam o teto da barra**, porque não são sobre fidelidade. Sem essa separação
-  a Task estoura o teto com a tela quebrada, que é o oposto do que o teto existe pra evitar.
+- **With the round cap met, the bar CLOSES** — and closed means nobody redoes it, you included.
+  Whatever aesthetic divergence remains becomes `NOTED`. They lost both rounds and committed
+  anyway (which is what `executor-visual.md` orders, with the risk declared): it is **not** an
+  automatic blocker — you judge the hole that remains.
+- **A screen defect has no cap**: overlap, illegible text, a notice that doesn't show, a small
+  touch target, wrong width, focus trapped or lost outside the modal. They remain full blockers
+  until closed, and **don't spend the bar's cap**, because they are not about fidelity. Without
+  that separation the Task blows the cap with a broken screen, the opposite of what the cap
+  exists to avoid.
 
-Numa Task de tela a barra foi encerrada na rodada 2 por decisão do árbitro e as rodadas 3 a 5 ainda
-acharam **cinco bloqueadores**, nenhum de fidelidade; outra fechou em quatro rodadas, **só a
-primeira de barra**.
+In one screen Task the bar was closed at round 2 by the arbiter's decision and rounds 3 to 5
+still found **five blockers**, none about fidelity; another closed in four rounds, **only the
+first about the bar**.
 
-**Rodada que não toca pixel não paga barra de novo.** Commit de correção que só mexe em store, teste
-ou backend não refaz comparação nenhuma — o `git show --stat` prova, e a tua janela vai toda pro
-código.
+**A round that touches no pixel doesn't pay the bar again.** A fix commit that only
+touches store, tests or backend redoes no comparison — `git show --stat` proves it, and your
+window goes entirely to the code.
 
-**Task que mexe em pixel e não tem barra nenhuma no contrato: `DEVOLVIDO`.** Não é bloqueador
-de código — é decisão da fase 1 que ninguém tomou, e problema de processo não vira achado
-técnico. Devolva ao árbitro dizendo *"Task N desenha tela e o contrato não traz barra nem
-dispensa; a barra é decisão do usuário"*, e pare por aí: você não propõe a barra, não escolhe
-uma, e não julga como se ela existisse. As duas coisas que a falta de barra faria em silêncio
-— o executor pular a comparação cega e você aprovar sem cobrar — são exatamente o que este
-`DEVOLVIDO` tira do silêncio.
+**A Task that touches pixels with no bar at all in the contract: `DEVOLVIDO`.** It is not a code
+blocker — it is a phase-1 decision nobody made, and a process problem doesn't become a technical
+finding. Return it to the arbiter saying *"Task N draws a screen and the contract carries
+neither a bar nor a waiver; the bar is the user's decision"*, and stop there: you don't propose
+the bar, don't pick one, and don't judge as if it existed. The two things the missing bar would
+do silently — the executor skipping the blind comparison and you approving without enforcing —
+are exactly what this `DEVOLVIDO` pulls out of the silence.
 
-**Contrato dizendo `Barra: nenhuma — decisão do usuário`: julgue normal.** A Task passa pelo
-portão visual sem a comparação cega (prints por estado, você olha o conjunto no fim, estado
-faltando continua sendo achado) e **você não cobra barra nenhuma**. Escolha registrada do
-usuário é ordem, não lacuna — cobrar barra depois que ele dispensou é reabrir decisão já
-tomada.
+**Contract saying `Bar: none — user's decision`: judge normally.** The Task passes the visual
+gate without the blind comparison (per-state screenshots, you look at the set at the end, a
+missing state is still a finding) and **you enforce no bar**. The user's recorded choice is an
+order, not a gap — enforcing a bar after they waived it is reopening a made decision.
 
-**Como olhar sem torrar contexto:** não acompanhe print por print enquanto o trabalho anda. Quem
-captura descreve — o executor e a tua sessão verificadora têm como enxergar (comando de visão local
-ou subagente de visão; numa máquina com o helper `see`, é ele). Deixe os dois trabalharem e, **no
-fim, abra TODOS os prints de uma vez** e confira se cada um mostra o que você precisava. Uma passada
-sua, no fim, sobre o conjunto — não uma leitura tua por imagem.
+**How to look without burning context:** don't follow screenshot by screenshot while the work
+moves. Whoever captures, describes — the executor and your verification session can both see (a
+local vision command or a vision subagent; on a machine with the `see` helper, that is it). Let
+the two work and, **at the end, open ALL the screenshots at once** and check that each shows
+what you needed. One pass of yours, at the end, over the set — not a read of yours per image.
 
-E **afirmação de símbolo se confere ampliada**: na passada final, sinal e cor citados na legenda
-valem contra o recorte, não contra a imagem inteira — duas leituras a olho já chamaram de `✗` uma
-pastilha `✓` verde.
+And **a symbol claim is checked zoomed**: in the final pass, sign and color cited in a caption
+are checked against the crop, not the whole image — two naked-eye reads once called a green `✓`
+an `✗`.
 
-O que essa passada final procura: print que não prova o que a legenda diz, estado capturado no
-momento errado (antes da correção, com a tela em transição), e principalmente **estado que ninguém
-capturou** — estado faltando é achado. Descrição de quem capturou é insumo; a conclusão é sua, e a
-única forma de ela valer é você ter olhado o conjunto. Se **você** também não enxerga imagem e a
-Task é visual, diga ao árbitro: revisor cego julgando tela é o portão não existindo.
-
+What that final pass hunts: a screenshot that doesn't prove what its caption says, a state
+captured at the wrong moment (before the fix, mid-transition), and above all **a state nobody
+captured** — a missing state is a finding. The capturer's description is input; the conclusion
+is yours, and the only way it counts is you having looked at the set. If **you** can't see
+images either and the Task is visual, tell the arbiter: a blind reviewer judging a screen is the
+gate not existing.

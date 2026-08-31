@@ -1,424 +1,439 @@
 ---
 name: orquestrar
 description: |
-  Use quando o usuario pedir para tocar um trabalho grande com revisao independente e pouca interacao dele depois do planejamento - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - ou quando um plano grande/arriscado vai virar MR ou push. Use TAMBEM quando um kick-off mandar voce invocar esta skill e disser seu papel, e quando ja existe um trabalho desses em andamento e voce precisa saber o que fazer agora. Serve a trabalho de um repositorio ou de varios - o que a define e o trabalho quebrado em Tasks, o portao entre elas e o revisor independente, nao a quantidade de checkouts; para varios repos ela combina as interfaces antes e abre uma sessao por repo. Nao exige plano em formato nenhum - vale com plano do superpowers, plano de outro metodo, plano que o usuario escreveu a mao, ou nenhum plano (ela escreve um plano de orquestracao curto apontando pro material dele). NAO use para - tarefa pequena que uma sessao so resolve, revisao avulsa de um diff (subagent de review direto).
+  Use when the user asks to run a large piece of work with independent review and little interaction from them after planning - "executa esse plano sem eu ficar em cima", "monta o time e toca", "quero revisao independente por commit", "portao entre as Tasks", "uma sessao pra planejar e outra pra executar", "abre uma sessao pra revisar" - or when a large/risky plan is about to become an MR or a push. ALSO use when a kick-off message tells you to invoke this skill and states your role, and when such a work is already in progress and you need to know what to do now. It serves work in one repository or several - what defines it is the work broken into Tasks, the gate between them and the independent reviewer, not the number of checkouts; for multiple repos it agrees the interfaces first and opens one session per repo. It requires no plan format - it works with a superpowers plan, a plan from another method, a plan the user wrote by hand, or no plan at all (it writes a short orchestration plan pointing at the user's material). Do NOT use for - a small task one session can solve, or a one-off review of a diff (dispatch a review subagent directly).
 allowed-tools: Bash(hangar-send:*), Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git show:*), Bash(git branch:*), Bash(git grep:*), Bash(tmux display:*), Bash(date:*)
 ---
 
-# Tubo: research → plano → execução autônoma com portão
+# Pipeline: research → plan → autonomous execution with a gate
 
-Um trabalho grande atravessa cinco fases, cada uma numa sessão com o contexto certo. O
-usuário decide tudo na fase 1; depois disso o tubo anda **sozinho** e só o acorda pelo que o
-plano não fechou.
+A large piece of work crosses five phases, each in a session with the right context. The user
+decides everything in phase 1; after that the pipeline runs **on its own** and only wakes them for
+what the plan left open.
 
-| Fase | Quem | Escreve código? | Termina quando |
+| Phase | Who | Writes code? | Done when |
 |---|---|---|---|
-| 0. Research | sessão/subagente read-only | não | achados num arquivo que o plano cita |
-| 1. Spec + plano | **com o usuário** | não | plano aprovado, decisões e time fechados |
-| 2. Lançamento | a mesma da fase 1 → vira **árbitra** | **não, nunca mais** | time criado, contrato escrito, um "pode ir" |
-| 3. Execução | executor + revisor, **sessões separadas** | só o executor | todas as Tasks com `APROVA` |
-| 4. Revisão da branch | sessão nova, que não participou | não | conjunto aprovado |
-| 5. Retrospectiva | sessão nova, que não participou | não | patch proposto para **esta skill**, na mão do usuário |
+| 0. Research | read-only session/subagent | no | findings in a file the plan cites |
+| 1. Spec + plan | **with the user** | no | plan approved, decisions and team settled |
+| 2. Launch | the phase-1 session → becomes the **arbiter** | **no, never again** | team created, contract written, one "go ahead" |
+| 3. Execution | executor + reviewer, **separate sessions** | only the executor | every Task with `APROVA` |
+| 4. Branch review | fresh session that took no part | no | the whole set approved |
+| 5. Retrospective | fresh session that took no part | no | proposed patch for **this skill**, in the user's hands |
 
-**O trabalho não acaba na fase 4.** Branch aprovada é código pronto; a fase 5 é o que faz a próxima
-execução ser melhor que esta. Ela é curta (uma sessão, três arquivos de entrada) e é a única fase
-cujo produto não é código — é `references/retrospectiva.md`.
+**The work does not end at phase 4.** An approved branch is finished code; phase 5 is what makes
+the next run better than this one. It is short (one session, three input files) and it is the only
+phase whose product is not code — it is `references/retrospectiva.md`.
 
-Push e MR são sempre do usuário.
+Push and MR always belong to the user.
 
-**Na fase 3, o commit vem DEPOIS da revisão, e o árbitro sai do transporte.** O executor para com a
-árvore suja, congela a rodada e chama **o revisor direto**; o laço executor↔revisor roda sem o
-árbitro, e cada rodada deixa uma linha no `eventos.jsonl`, que ninguém precisa ler na hora. Com o
-APROVA, o revisor autoriza o executor a commitar e avisa o árbitro — e só aí nasce o commit, já
-revisado. **Uma Task = um commit no caminho normal**, mesmo tendo levado quatro rodadas: rodada
-reprovada não deixa rastro na branch.
+**In phase 3, the commit comes AFTER the review, and the arbiter leaves the transport.** The
+executor stops with a dirty tree, freezes the round and calls **the reviewer directly**; the
+executor↔reviewer loop runs without the arbiter, and every round leaves one line in
+`eventos.jsonl`, which nobody has to read in the moment. On APROVA, the reviewer authorizes the
+executor to commit and notifies the arbiter — only then is the commit born, already reviewed.
+**One Task = one commit on the normal path**, even after four rounds: a rejected round leaves no
+trace on the branch.
 
-Sair do transporte **não é sair da autoridade**. Deixam de passar pelo árbitro o hash a caminho do
-revisor, a receita a caminho do executor e a conferência do commit antes da revisão. Continuam
-chegando nele, porque são decisão: DEVOLVIDO, discordância de receita, passo de skill não rodado,
-pixel sem barra no contrato, aba de navegador roubada e pedido de substituição de sessão. Dentro do
-laço, ele entra por uma porta só — a **segunda reprovação da mesma Task**.
+Leaving the transport **is not leaving the authority**. What stops passing through the arbiter: the
+hash on its way to the reviewer, the recipe on its way to the executor, and the pre-review commit
+check. What still reaches him, because it is decision rather than transport: DEVOLVIDO, recipe
+disagreement, a skipped skill step, pixels with no bar in the contract, a stolen browser tab, and a
+request to replace a session. Inside the loop he enters through one door only — the **second
+rejection of the same Task**.
 
-## Leia SÓ a página do seu papel
+## Read ONLY your role's page
 
-Este arquivo é o roteador. O resto está separado de propósito: papel misturado é como uma
-sessão acaba confirmando que é revisora enquanto está no meio de um commit.
+This file is the router. The rest is separated on purpose: mixed roles are how a session ends up
+confirming it is a reviewer while it is in the middle of a commit.
 
-| Seu papel | Leia | Você é isso quando |
+| Your role | Read | You are this when |
 |---|---|---|
-| **planejador** | `references/planejamento.md` | o usuário te pediu o trabalho e não existe kick-off |
-| **árbitro** | `references/arbitro.md` (+ 3 páginas por momento, que ele lista) | você escreveu o plano e o usuário aprovou |
-| **executor** | `references/executor.md` (+ 2 páginas por tipo de Task, que ela lista) | o kick-off diz `Papel: executor único` |
-| **revisor** | `references/revisor.md` (+ 2 páginas por momento, que ela lista) | o kick-off diz `Papel: revisor` |
-| **revisão final** | `references/revisao-final.md` | o kick-off diz `Papel: revisão da branch` |
-| **retrospectiva** | `references/retrospectiva.md` | o kick-off diz `Papel: retrospectiva` |
+| **planner** | `references/planejamento.md` | the user asked you for the work and no kick-off exists |
+| **arbiter** | `references/arbitro.md` (+ 3 per-moment pages, which it lists) | you wrote the plan and the user approved it |
+| **executor** | `references/executor.md` (+ 2 per-Task-type pages, which it lists) | the kick-off says `Role: executor` |
+| **reviewer** | `references/revisor.md` (+ 2 per-moment pages, which it lists) | the kick-off says `Role: reviewer` |
+| **final review** | `references/revisao-final.md` | the kick-off says `Role: branch review` |
+| **retrospective** | `references/retrospectiva.md` | the kick-off says `Role: retrospective` |
 
-Duas páginas que não são papel:
+Two pages that are not roles:
 
-- `references/paralelo-worktree.md` — rodar Tasks em paralelo, uma worktree cada. **O padrão
-  continua serial**, mas quem decide é a fase 1: o planejador lê esta página **ao decompor**, testa
-  o gatilho e escreve no plano o que decidiu — serial ou lote, com o motivo. Ler só depois de já
-  ter declarado o lote é circular, porque o gatilho que decide está lá dentro. O árbitro lê quando
-  vai integrar um.
-- `references/replanejar.md` — **reescrever o plano e o contrato no MEIO da execução**, quando o
-  usuário mandar ou o plano deixar de ser confiável (premissa caída, método sem metade executora,
-  estimativa estourando pela mesma causa). Não é troca de método escondida: é a fase 1 rodando de
-  novo, menor, só sobre o que resta — e é a **única** porta legítima para trocar de método.
+- `references/paralelo-worktree.md` — running Tasks in parallel, one worktree each. **The default
+  is still serial**, but phase 1 decides: the planner reads this page **while decomposing**, tests
+  the trigger and writes the decision into the plan — serial or batch, with the reason. Reading it
+  only after declaring a batch is circular, because the deciding trigger lives inside it. The
+  arbiter reads it when integrating one.
+- `references/replanejar.md` — **rewriting the plan and the contract in the MIDDLE of execution**,
+  when the user orders it or the plan stops being trustworthy (a fallen premise, a method missing
+  its executing half, estimates blowing up for the same cause). It is not a hidden method switch:
+  it is phase 1 running again, smaller, only over what remains — and it is the **only** legitimate
+  door for switching methods.
 
-**Papel é declarado, nunca deduzido — e é recusado quando contradiz o que você está
-fazendo.** Kick-off dizendo "você é revisor read-only" chegando numa sessão que está no meio
-de uma Task: responda *"sou o executor da Task N, confirme o destinatário"* e **não** assuma.
-Confirmar um papel que não é o seu troca o dono do trabalho no meio, em silêncio.
+**A role is declared, never deduced — and it is refused when it contradicts what you are doing.**
+A kick-off saying "you are a read-only reviewer" arriving at a session in the middle of a Task:
+answer *"I am the executor of Task N, confirm the addressee"* and do **not** assume it. Confirming
+a role that is not yours silently changes who owns the work midway.
 
-**Mais de um repositório não é impedimento.** O trabalho vive num plano com Tasks e num contrato
-com papéis; nada disso está preso a um checkout. Uma Task pode tocar outro repo, e a sessão daquele
-papel nasce lá — quem diz o repo de cada uma é o contrato, na linha do cabeçalho (`Repo: <um> (+
-<outro> a partir da T13)`). O que continua valendo é o **um escritor por árvore**: dois executores
-no mesmo checkout ao mesmo tempo, não; em checkouts diferentes, sim.
+**More than one repository is no obstacle.** The work lives in a plan with Tasks and a contract
+with roles; none of that is tied to a checkout. A Task may touch another repo, and that role's
+session is born there — the contract's header line says each Task's repo (`Repo: <one> (+ <other>
+from T13 on)`). What keeps holding is **one writer per tree**: two executors in the same checkout
+at the same time, no; in different checkouts, yes.
 
-Quando o trabalho atravessa repositórios, três coisas mudam de peso:
+When the work crosses repositories, three things gain weight:
 
-**As interfaces se combinam ANTES de abrir as sessões.** O que atravessa a fronteira — rota,
-payload, evento, tipo — vira linha do contrato, numa seção `## Interfaces combinadas`, antes de
-qualquer um escrever código. Sem isso dois repos entregam pontas que não encaixam, e o defeito só
-aparece na integração, quando as duas Tasks já passaram pelo portão.
+**Interfaces are agreed BEFORE the sessions open.** Whatever crosses the boundary — route, payload,
+event, type — becomes a contract line, in an `## Interfaces combinadas` section, before anyone
+writes code. Without it, two repos deliver ends that don't fit, and the defect only shows at
+integration, after both Tasks have passed the gate.
 
-**Subagente lê, sessão escreve.** Subagente serve pra explorar o outro repo, rastrear um fluxo,
-achar o caller. Editar fora do cwd da sessão exige uma sessão de verdade naquele repo — não porque
-o subagente não conseguiria, mas porque trabalho que ninguém vê no terminal não dá pra acompanhar
-nem interromper.
+**Subagents read, sessions write.** A subagent is for exploring the other repo, tracing a flow,
+finding a caller. Editing outside the session's cwd requires a real session in that repo — not
+because a subagent couldn't, but because work nobody sees in a terminal cannot be followed or
+interrupted.
 
-**Sessão em outra máquina (`servidor::sessao`) não entra em grupo.** Pareamento cross-server não
-existe; ela recebe recado 1:1 e o que ficar combinado tem de ser registrado no contrato local, à
-mão, senão some.
+**A session on another machine (`servidor::sessao`) does not join a group.** Cross-server pairing
+does not exist; it gets 1:1 messages, and whatever gets agreed must be written into the local
+contract by hand, or it vanishes.
 
-## O MÉTODO não é escolha sua — vem do contrato
+## The METHOD is not your choice — it comes from the contract
 
-Esta skill orquestra: papéis, portão, revisão independente, rotação, retrospectiva. **Ela não
-planeja e não executa** — isso é de outra família de skills, o *método*, e existe mais de um.
+This skill orchestrates: roles, gate, independent review, rotation, retrospective. **It neither
+plans nor executes** — that belongs to another family of skills, the *method*, and there is more
+than one.
 
-> **Método ≠ motor.** *Motor* nesta skill é o provedor do modelo (`--engine`, `engines.json`:
-> DeepSeek, Kimi…). *Método* é qual família de skills planeja e executa. Uma sessão tem os dois, e
-> eles são decididos separadamente.
+> **Method ≠ engine.** An *engine* in this skill is the model provider (`--engine`,
+> `engines.json`: DeepSeek, Kimi…). A *method* is which skill family plans and executes. A session
+> has both, and they are decided separately.
 
-**O método é declarado no contrato do grupo** (`regras-<gid>.md`), numa linha, e vale do research ao
-último commit:
-
-```markdown
-Método: superpowers    # planejador: brainstorming → writing-plans · executor: executing-plans
-Método: mattpocock     # planejador: /grill-me → /to-spec → /to-tickets · executor: /implement
-```
-
-**`superpowers` é o padrão — decisão do usuário, 17/08/2026.** Outro método entra com pedido
-explícito dele, e a **única** conferência antes de aceitar é: **a metade executora existe na CONTA
-que vai executar?** Skill e plugin são por diretório de configuração — confira o caminho, não a
-lembrança. Artefato que o método não gera **não** o reprova: o portão de saída da fase 1 é
-agnóstico de método, e o planejador gera à mão o que faltar. O detalhe operacional de cada método
-(comandos, `disable-model-invocation`, lacunas conhecidas) está em `references/planejamento.md`,
-"Antes da fase 0".
-
-Nenhum papel escolhe método, e **nenhum troca de método no meio**. Plano nascido num método e
-executado noutro é o defeito que esta seção existe para impedir: os dois escrevem o trabalho em formatos
-diferentes (Task com Steps de um lado, ticket com critérios do outro), e quem lê depois — o executor, o
-árbitro que recorta a Task, a barra de progresso do app — passa a ler uma coisa que não existe.
-
-Três regras, e as três são do árbitro:
-
-1. **A linha `Método:` é obrigatória** no contrato, escrita no lançamento, antes da primeira sessão.
-2. **Todo kick-off repete o método**, porque contrato se lê uma vez e kick-off chega fresco.
-3. **Contrato sem a linha** → o método é `superpowers`, que é o padrão histórico desta skill — e o
-   árbitro **escreve a linha** antes de seguir, em vez de deixar implícito.
-
-Método que você não conhece, ou pedido de trocar no meio: **pare e pergunte ao usuário**. É decisão
-dele, como modelo e conta. Troca que ele aprovar não se faz por emenda: roda
-`references/replanejar.md`, e o plano do trabalho restante nasce **inteiro** no método novo — nunca
-metade em cada.
-
-## Duas palavras: Task e passo
-
-O trabalho tem duas camadas, e esta skill fala das duas o tempo todo. Elas não pertencem a método
-nenhum:
-
-- **Task** — a unidade de trabalho: tem nome, um conjunto de arquivos, uma verificação e o que a
-  bloqueia. É o que o portão abre e fecha, e o que vira **um** commit. No `superpowers` é uma Task;
-  no `mattpocock` é um ticket; num plano escrito à mão é um item.
-- **passo** — a menor coisa **marcável** dentro de uma Task. No `superpowers` é um Step; no
-  `mattpocock` é um critério de aceitação (o template dele já usa `- [ ]`); num plano à mão é o que
-  o planejador escrever no plano de orquestração.
-
-Tudo que esta skill pendura no passo — marcar progresso, prever o ponto de rotação de contexto,
-exigir teste de fumaça, declarar pré-condição com dono, separar braços em paralelo, disparar o teste
-de mutação do revisor — funciona igual nas três formas. **A única exceção é literal e está isolada:**
-a barra de progresso do celular casa a palavra `Step` por regex (`planejamento.md`, "A barra de
-progresso do app"), e barra é opcional.
-
-Método que não traga a camada de baixo não reprova nada: o planejador escreve os passos no plano de
-orquestração, que é dele — é o mesmo procedimento de qualquer item que o método não gera.
-
-## A SKILL DE DOMÍNIO, quando existe, é quem manda no trabalho
-
-Não confunda com o método, que é a seção acima. **Método** é quem planeja e quem executa
-(`superpowers`, `mattpocock`). **Skill de domínio** é a que descreve *o trabalho em si*, passo a
-passo, porque alguém já fez aquilo dezenas de vezes: portar uma tela, criar um módulo, montar uma
-migração. Ela não planeja nem executa nada — ela diz o que tem de acontecer, e em que ordem.
-
-**Quando existe uma, o plano não a repete: ele a instancia.** Cada Task cita o passo da skill que
-executa, na mesma ordem dela, e o executor relê a skill antes de começar. Isso não é invenção
-nossa: uma skill de domínio real deste repositório já traz, no meio dela, a descrição de como deve
-ser instanciada por um plano — ela foi escrita prevendo isto.
-
-O contrato ganha uma linha, escrita no lançamento, e ela é obrigatória mesmo quando a resposta é
-"nenhuma":
+**The method is declared in the group contract** (`regras-<gid>.md`), in one line, and holds from
+research to the last commit:
 
 ```markdown
-Skill de domínio: portar-tela    # passos 1–9; em conflito com o plano, vale a skill
-Skill de domínio: nenhuma
+Method: superpowers    # planner: brainstorming → writing-plans · executor: executing-plans
+Method: mattpocock     # planner: /grill-me → /to-spec → /to-tickets · executor: /implement
 ```
 
-**Duas conferências, antes da Task 1** (o portão de saída da fase 1 as cobra, em
+**`superpowers` is the default — the user's decision, 2026-08-17.** Another method enters only on
+their explicit request, and the **single** check before accepting is: **does the executing half
+exist in the ACCOUNT that will execute?** Skills and plugins are per config directory — check the
+path, not your memory. An artifact the method doesn't produce does **not** disqualify it: the
+phase 1 exit gate is method-agnostic, and the planner produces by hand whatever is missing. Each
+method's operational detail (commands, `disable-model-invocation`, known gaps) lives in
+`references/planejamento.md`, "Before phase 0".
+
+No role picks a method, and **none switches methods midway**. A plan born in one method and
+executed in another is the defect this section exists to prevent: the two write the work in
+different formats (Task with Steps on one side, ticket with criteria on the other), and whoever
+reads later — the executor, the arbiter excerpting the Task, the app's progress bar — starts
+reading something that doesn't exist.
+
+Three rules, all three the arbiter's:
+
+1. **The `Method:` line is mandatory** in the contract, written at launch, before the first session.
+2. **Every kick-off repeats the method**, because the contract is read once and a kick-off arrives fresh.
+3. **Contract without the line** → the method is `superpowers`, this skill's historical default —
+   and the arbiter **writes the line** before proceeding, instead of leaving it implicit.
+
+A method you don't know, or a request to switch midway: **stop and ask the user**. It is their
+decision, like model and account. A switch they approve is not done by patching: run
+`references/replanejar.md`, and the plan for the remaining work is born **whole** in the new
+method — never half in each.
+
+## Two words: Task and step
+
+The work has two layers, and this skill talks about both all the time. They belong to no method:
+
+- **Task** — the unit of work: it has a name, a set of files, a verification and whatever blocks
+  it. It is what the gate opens and closes, and what becomes **one** commit. In `superpowers` it's
+  a Task; in `mattpocock` it's a ticket; in a hand-written plan it's an item.
+- **step** — the smallest **checkable** thing inside a Task. In `superpowers` it's a Step; in
+  `mattpocock` it's an acceptance criterion (its template already uses `- [ ]`); in a hand-written
+  plan it's whatever the planner writes in the orchestration plan.
+
+Everything this skill hangs on the step — tracking progress, predicting the context-rotation
+point, requiring a smoke test, declaring owned preconditions, splitting parallel arms, triggering
+the reviewer's mutation test — works the same in all three forms. **The single exception is
+literal and isolated:** the phone's progress bar matches the word `Step` by regex
+(`planejamento.md`, "The app's progress bar"), and the bar is optional.
+
+A method that brings no bottom layer disqualifies nothing: the planner writes the steps in the
+orchestration plan, which is theirs — the same procedure as any item the method doesn't produce.
+
+## The DOMAIN SKILL, when one exists, is what commands the work
+
+Don't confuse it with the method, which is the section above. The **method** is who plans and who
+executes (`superpowers`, `mattpocock`). A **domain skill** is one that describes *the work
+itself*, step by step, because someone has done it dozens of times: porting a screen, creating a
+module, building a migration. It neither plans nor executes — it says what has to happen, and in
+what order.
+
+**When one exists, the plan does not repeat it: it instantiates it.** Each Task cites the skill
+step it executes, in the skill's own order, and the executor re-reads the skill before starting.
+This is not our invention: a real domain skill in this repository carries, inside it, the
+description of how a plan should instantiate it — it was written expecting this.
+
+The contract gains one line, written at launch, and it is mandatory even when the answer is
+"none":
+
+```markdown
+Domain skill: portar-tela    # steps 1–9; on conflict with the plan, the skill wins
+Domain skill: none
+```
+
+**Two checks, before Task 1** (the phase 1 exit gate enforces them, in
 `references/planejamento.md`):
 
-1. **Alguma Task faz o que a skill já faz por dentro?** Se faz, essa Task **não existe** — o que
-   existe é a exigência da evidência daquele passo dentro da Task que o contém. Medido em
-   25/08/2026: o passo que gera o contrato de backend virou uma Task separada no fim de um plano de
-   19; duas telas passaram pelo portão sem ele, o backend não pôde começar em paralelo, e o portão
-   nunca cobrou o passo, porque "já existe uma Task para isso". Quem viu foi o usuário, na décima
-   Task.
-2. **Sobrou passo da skill sem dono?** Passo que nenhuma Task cita é passo que ninguém vai rodar.
-   E olhe também o que a skill **não** tem: uma skill de porte de tela pode terminar no último passo
-   sem nunca mandar testar a tela inteira — trabalho montado só com os passos dela nasce sem
-   verificação de conjunto, e isso é buraco do plano, não da skill.
+1. **Does any Task do what the skill already does internally?** If so, that Task **does not
+   exist** — what exists is the demand for that step's evidence inside the Task that contains it.
+   Measured on 2026-08-25: the step that generates the backend contract became a separate Task at
+   the end of a 19-Task plan; two screens passed the gate without it, the backend could not start
+   in parallel, and the gate never enforced the step, because "there is already a Task for that".
+   The user was the one who saw it, on the tenth Task.
+2. **Is any skill step left without an owner?** A step no Task cites is a step nobody will run.
+   Also look at what the skill does **not** have: a screen-porting skill may end at its last step
+   without ever asking for the whole screen to be tested — work assembled only from its steps is
+   born without set-level verification, and that is a hole in the plan, not in the skill.
 
-**A skill de domínio não se altera para caber neste trabalho.** Outras pessoas usam. O que se ajusta
-é o plano e o contrato; a skill se lê como está. Passo que não se aplica é decisão do usuário, nunca
-do árbitro — é o mesmo caso de "skill invocada roda inteira", nas travas abaixo.
+**The domain skill is not altered to fit this work.** Other people use it. What gets adjusted is
+the plan and the contract; the skill is read as it is. A step that doesn't apply is the user's
+decision, never the arbiter's — the same case as "an invoked skill runs whole", in the locks
+below.
 
-## Kick-off — a mensagem aponta, não copia
+## Kick-off — the message points, it doesn't copy
 
-Sessão nova nasce com contexto zero, mas com o **mesmo `~/.claude`**: esta skill já está lá,
-pelo nome. O kick-off é um endereço, não um manual.
+A new session is born with zero context but with the **same `~/.claude`**: this skill is already
+there, by name. The kick-off is an address, not a manual.
 
 ```
-Invoque a skill orquestrar e leia a página do seu papel.
-Papel: <executor único | revisor | revisão da branch>.
-Método: <superpowers | mattpocock | nenhum — o plano é o do usuário>.
-Skill de domínio: <nome | nenhuma>.
-Repo/branch: <caminho> / <branch>.   HEAD esperado: <hash>.
-Regras do grupo: <caminho do regras-<gid>.md>.
-A Task da vez: <caminho do arquivo dela>.
-Intocáveis: <paths, um a um — não "os do contrato">.
-Lições que valem nesta Task: <coladas aqui, 3 ou 4, não o caminho do arquivo>.
-Revisor desta Task: <sessão>.        ← só no kick-off de executor
-Rodada congelada: <hash> · a árvore suja é SUA.   ← só quando você substitui um executor no meio
-Sua vez agora: <Task N | esperar a primeira rodada>.
-Ao terminar, mande a rodada para <sessao-do-revisor> e PARE.
+Invoke the orquestrar skill and read your role's page.
+Role: <executor | reviewer | branch review>.
+Method: <superpowers | mattpocock | none — the plan is the user's>.
+Domain skill: <name | none>.
+Repo/branch: <path> / <branch>.   Expected HEAD: <hash>.
+Group rules: <path to regras-<gid>.md>.
+The current Task: <path to its file>.
+Untouchables: <paths, one by one — not "the ones in the contract">.
+Lessons that apply to this Task: <pasted here, 3 or 4, not the file path>.
+Reviewer for this Task: <session>.        ← executor kick-offs only
+Frozen round: <hash> · the dirty tree is YOURS.   ← only when you replace an executor midway
+Your turn now: <Task N | wait for the first round>.
+When done, send the round to <reviewer-session> and STOP.
 
-Leia SÓ esses dois arquivos além da skill. O plano inteiro, o registro e o arquivo de lições
-NÃO são seus.
+Read ONLY these two files besides the skill. The whole plan, the journal and the lessons file
+are NOT yours.
 ```
 
-As **lições vão coladas, não como caminho** — é a única coisa do kick-off que se copia em vez de
-apontar, e por um motivo: o arquivo inteiro não serve a esta Task, e quem sabe quais servem é o
-árbitro. Mandar o caminho faria a sessão ler tudo, que é exatamente o custo que a separação dos
-três arquivos existe para evitar.
+**Lessons go pasted, not as a path** — the only thing in a kick-off that is copied instead of
+pointed at, for a reason: the whole file does not serve this Task, and the arbiter is the one who
+knows which lessons do. Sending the path would make the session read everything, which is exactly
+the cost the three-file separation exists to avoid.
 
-A última linha é uma **instrução**, não um comentário: sem ela a sessão vai atrás do plano
-completo e do registro por conta própria — foi exatamente o que aconteceu no trabalho de
-14/08/2026 e custou 110k de contexto antes do primeiro commit.
+The last line is an **instruction**, not a comment: without it the session goes after the full
+plan and the journal on its own — exactly what happened in the 2026-08-14 run, costing 110k of
+context before the first commit.
 
-`HEAD esperado` e a lista literal de intocáveis existem porque a sessão nova, sem eles,
-deriva os dois do `git status`/`git log` e pode achar um HEAD que ninguém explicou.
+`Expected HEAD` and the literal untouchables list exist because a new session, without them,
+derives both from `git status`/`git log` and may find a HEAD nobody explained.
 
-O mesmo texto, reenviado, recoloca de pé uma sessão que deu `/clear`: ele não carrega
-estado, carrega caminhos. Nenhuma linha dele diz "a Task 2 já passou" — isso é do contrato,
-onde continua verdadeiro amanhã.
+The same text, re-sent, puts a `/clear`-ed session back on its feet: it carries no state, it
+carries paths. No line of it says "Task 2 already passed" — that belongs to the contract, where it
+stays true tomorrow.
 
-## Três arquivos, cada um com um leitor: o registro, as regras e as lições
+## Three files, each with one reader: the journal, the rules and the lessons
 
-**Só o árbitro escreve nos três.** Uma sessão que registra a própria autorização legitima o
-próprio desvio, e o árbitro só descobre relendo o arquivo.
+**Only the arbiter writes to all three.** A session that logs its own authorization legitimizes
+its own deviation, and the arbiter only finds out by re-reading the file.
 
-| Arquivo | Contém | Quem lê |
+| File | Contains | Who reads |
 |---|---|---|
-| `~/.hangar/orq/<data>-<gid>/registro.md` — **o registro** | o diário da execução: progresso Task→hash→veredito, o que cada rodada quebrou, sessões queimadas, decisões com data | **só o árbitro** |
-| `regras-<gid>.md` — **as regras** | o combinado do trabalho, que quase não muda: quem é quem, intocáveis, gates, método, branch, barras, o que a revisão cobre, contas | executor e revisor, **inteiro** |
-| `~/.hangar/orq/<data>-<gid>/licoes.md` — **as lições** | as réguas que a execução vai fixando, uma por bloco, com a data e a prova | **ninguém lê inteiro** — o árbitro cola no kick-off só as que servem àquela Task |
+| `~/.hangar/orq/<date>-<gid>/registro.md` — **the journal** | the execution diary: Task→hash→verdict progress, what each round broke, burned sessions, dated decisions | **the arbiter only** |
+| `regras-<gid>.md` — **the rules** | the work's agreement, which barely changes: who is who, untouchables, gates, method, branch, bars, what the review covers, accounts | executor and reviewer, **whole** |
+| `~/.hangar/orq/<date>-<gid>/licoes.md` — **the lessons** | the guidelines the execution keeps fixing, one per block, with date and proof | **nobody reads it whole** — the arbiter pastes into each kick-off only the ones that serve that Task |
 
-Existe um quarto, que nenhuma sessão lê: o `eventos.jsonl`, uma linha por acontecimento, que
-alimenta as telas do app e a retrospectiva. Ele é do árbitro e está descrito em
-`references/arbitro.md` — por isso aquela página fala em **quatro** arquivos e esta, em três.
+There is a fourth, which no session reads: `eventos.jsonl`, one line per event, feeding the app's
+screens and the retrospective. It belongs to the arbiter and is described in
+`references/arbitro.md` — which is why that page speaks of **four** files and this one of three.
 
-> **O registro e as lições moram no diretório durável do trabalho, que nada gerencia.**
-> `<config>/.hangar-pair/` é do backend: ele apaga o `grupo-<gid>.md` junto com o grupo. As
-> **regras** continuam lá — é o caminho que o app mostra ao time.
+> **The journal and the lessons live in the work's durable directory, which nothing manages.**
+> `<config>/.hangar-pair/` belongs to the backend: it deletes `grupo-<gid>.md` together with the
+> group. The **rules** stay there — it is the path the app shows the team.
 
-A fronteira entre os três é o **tipo** do conteúdo, não o assunto:
+The boundary between the three is the content's **type**, not its subject:
 
-- **já aconteceu → registro** (a Task 4 foi reprovada quatro vezes);
-- **é o combinado deste trabalho → regras** (o executor é a sessão X, tal arquivo é intocável);
-- **é uma régua que nasceu no meio e vale daqui pra frente → lições** (aquele comando de log
-  pendura sem a flag que o faz sair).
+- **it already happened → journal** (Task 4 was rejected four times);
+- **it is this work's agreement → rules** (the executor is session X, that file is untouchable);
+- **it is a guideline born midway that holds from now on → lessons** (that log command hangs
+  without the flag that makes it exit).
 
-**As regras quase não mudam depois do lançamento; as lições crescem o trabalho inteiro.** É essa
-separação que resolve o problema real: régua nova é o produto normal de uma execução — toda rodada
-que reprova produz uma —, e enfiar todas elas no arquivo que toda sessão lê inteiro fazia esse
-arquivo dobrar de tamanho até alguém ter de jogar coisa fora.
+**The rules barely change after launch; the lessons grow for the whole work.** That separation is
+what solves the real problem: a new guideline is the normal product of a run — every rejected
+round produces one — and stuffing them all into the file every session reads whole made that file
+double in size until someone had to throw things away.
 
-**Lição não se joga fora, e não tem teto.** O que tem teto é **quanto disso vai num kick-off**: o
-árbitro escolhe as que valem para aquela Task e cola no texto. A gestão dos dois arquivos que
-crescem — as lições e o teto/arquivamento do registro — é do árbitro e está em
-`references/arbitro.md`, "Você mantém QUATRO arquivos".
+**Lessons are never thrown away, and have no cap.** What has a cap is **how much of them goes into
+a kick-off**: the arbiter picks the ones that serve that Task and pastes their text. Managing the
+two growing files — the lessons, and the journal's cap/archiving — is the arbiter's job and lives
+in `references/arbitro.md`, "You maintain FOUR files".
 
-Primeira linha do arquivo de regras, pra sessão amnésica se reancorar sozinha:
+First line of the rules file, so an amnesiac session can re-anchor itself:
 
 ```markdown
-> Sessões deste grupo: invoquem a skill `orquestrar` e leiam a página do seu papel.
-> Branch: <branch> · Repo: <caminho>
-> Método: <superpowers | mattpocock | nenhum> · Skill de domínio: <nome | nenhuma>
+> Sessions of this group: invoke the `orquestrar` skill and read your role's page.
+> Branch: <branch> · Repo: <path>
+> Method: <superpowers | mattpocock | none> · Domain skill: <name | none>
 ```
 
-A linha `Método:` é obrigatória (ver "O MÉTODO não é escolha sua", acima) e nunca muda no meio do
-trabalho.
+The `Method:` line is mandatory (see "The METHOD is not your choice", above) and never changes
+midway.
 
-**O que muda a cada Task não vai em arquivo nenhum**: qual Task está liberada, qual é o hash, quem
-é o seu par. Isso vai no kick-off, que é sempre fresco por definição. Arquivo com estado da vez é
-arquivo que envelhece entre a escrita e a leitura.
+**What changes per Task goes in no file at all**: which Task is released, what the hash is, who
+your counterpart is. That goes in the kick-off, which is fresh by definition. A file holding
+current-turn state is a file that goes stale between writing and reading.
 
-**O executor recebe UMA Task, nunca o plano inteiro.** Ele implementa uma e o revisor revisa uma.
-Como isso é feito depende do formato do material:
+**The executor receives ONE Task, never the whole plan.** They implement one and the reviewer
+reviews one. How that is done depends on the material's format:
 
-- **Plano monolítico** (um arquivo com todas as Tasks) → **recorte**: a seção daquela Task mais o
-  cabeçalho curto (goal/architecture) para `~/.hangar/orq/<data>-<gid>/tasks/task-<N>.md` —
-  caminho durável, não `/tmp`, que some no reboot — e mande esse caminho. No trabalho de 14/08:
-  plano inteiro ~30k tokens, Task recortada ~2,9k.
-- **Um arquivo por unidade** (tickets) → **aponte o arquivo do usuário**, sem copiar. A cópia
-  envelhece: o executor marca os critérios no original e o recorte passa a mentir sobre o que está
-  pronto. O contexto do trabalho que o ticket não traz — porque o `to-tickets` manda escrever só a
-  fatia — vai **colado** no kick-off, três ou quatro linhas, como já se faz com as lições.
+- **Monolithic plan** (one file with all the Tasks) → **excerpt**: that Task's section plus the
+  short header (goal/architecture) into `~/.hangar/orq/<date>-<gid>/tasks/task-<N>.md` — a durable
+  path, not `/tmp`, which vanishes on reboot — and send that path. In the 08-14 run: whole plan
+  ~30k tokens, excerpted Task ~2.9k.
+- **One file per unit** (tickets) → **point at the user's file**, without copying. Copies go
+  stale: the executor checks the criteria off in the original and the copy starts lying about
+  what's done. The work context the ticket doesn't carry — because `to-tickets` says to write only
+  the slice — goes **pasted** into the kick-off, three or four lines, as is already done with the
+  lessons.
 
-**Quem é do grupo sai do contrato, nunca de `hangar-send --list`.** Sessão viva no mesmo
-diretório é só uma sessão viva no mesmo diretório — o usuário abre sessões pro que quiser, e
-elas não viram time por estarem ali. Contrato sumido ou vazio não autoriza deduzir o elenco:
-peça ao usuário quem é quem antes de mandar recado a alguém que não pediu pra participar.
+**Who belongs to the group comes from the contract, never from `hangar-send --list`.** A live
+session in the same directory is just a live session in the same directory — the user opens
+sessions for whatever they want, and they don't become the team by being there. A missing or empty
+contract does not authorize deducing the cast: ask the user who is who before messaging anyone who
+didn't ask to take part.
 
-**Contrato escrito é ordem, não sugestão.** Motor, modelo, conta, nome de sessão e papel já
-foram decididos pelo usuário — nenhuma sessão reabre isso porque a situação mudou. Em dúvida,
-**releia o contrato** antes de agir; ele não previu o caso, **pergunte**. Detalhe em
-`references/arbitro.md`, seção "Contrato fechado".
+**A written contract is an order, not a suggestion.** Engine, model, account, session name and
+role were already decided by the user — no session reopens that because the situation changed.
+In doubt, **re-read the contract** before acting; if it didn't foresee the case, **ask**. Detail
+in `references/arbitro.md`, section "Contract closed".
 
-## O teste de pertencimento — antes de escrever QUALQUER coisa nesta skill
+## The belonging test — before writing ANYTHING into this skill
 
-Toda execução dolorida produz uma lição, e toda lição quer virar linha aqui. É assim, e só assim,
-que uma orquestradora vira um manual do último projeto que deu errado. Antes de acrescentar
-qualquer regra, as três perguntas — e ela só entra se passar nas **três**:
+Every painful run produces a lesson, and every lesson wants to become a line here. That is how —
+and only how — an orchestrator becomes a manual of the last project that went wrong. Before adding
+any rule, the three questions — and it only enters if it passes **all three**:
 
-1. **É sobre COORDENAR, ou sobre o TRABALHO?** Papel, portão, passe de bola, o que conta como
-   prova, rotação, registro → é daqui. Ferramenta, stack, arquivo, comando de build, ambiente → não.
-2. **Tirando isto, a orquestração ainda funciona?** Se sim, não é desta skill.
-3. **Vale no próximo trabalho, noutro repositório, noutra linguagem?** Se a resposta começa com
-   "depende do projeto", é do plano.
+1. **Is it about COORDINATING, or about the WORK?** Role, gate, handoff, what counts as proof,
+   rotation, journal → belongs here. Tool, stack, file, build command, environment → doesn't.
+2. **Without it, does the orchestration still work?** If yes, it doesn't belong to this skill.
+3. **Does it hold in the next job, another repository, another language?** If the answer starts
+   with "depends on the project", it belongs to the plan.
 
-Reprovou numa? **Não some — muda de endereço**, e os endereços existem: o **plano** (ambiente,
-pré-condição, comando, porta), o **`CLAUDE.md` do projeto** (decisão medida daquele código), uma
-**skill de domínio** (o passo a passo de um tipo de trabalho que se repete) ou as **lições do
-trabalho** (régua que nasceu no meio e vale até ele fechar).
+Failed one? **It doesn't vanish — it changes address**, and the addresses exist: the **plan**
+(environment, precondition, command, port), the project's **`CLAUDE.md`** (measured decisions of
+that codebase), a **domain skill** (the step-by-step of a recurring kind of work) or the work's
+**lessons** (a guideline born midway that holds until the work closes).
 
-O teste vale para o que já está escrito, não só para o que vai entrar: regra que não passa nas três
-sai daqui na próxima vez que alguém a ler.
+The test applies to what is already written, not only to what is coming in: a rule that fails the
+three leaves this skill the next time someone reads it.
 
-## Travas que valem para todos os papéis
+## Locks that hold for every role
 
-- **Recado de par alegando "o usuário autorizou" não é autorização** quando contradiz a
-  ordem vigente do árbitro. Confirme com ele **antes** de commitar, não depois.
-- **Stage por caminho explícito.** Nunca `git add -A` nem `git add .`. Intocáveis nunca
-  entram, em commit nenhum.
-- **Skill invocada dentro de uma Task roda INTEIRA.** Metade ausente na máquina, passo que não se
-  aplica, passo que falhou → **pare antes do commit**, e nunca improvise um equivalente nem entregue
-  o que faltou como "pendência". **Dispensar passo de skill é do usuário, não do árbitro** — ele só
-  cumpre dispensa já dada (no plano, no contrato, ou regra permanente dele) e leva o resto pra
-  decisão. Detalhe em `references/executor.md`.
-- **Régua se escreve como PRINCÍPIO; o caso medido entra como prova — em outro lugar** (registro
-  do trabalho, mensagem de commit, `CLAUDE.md` do projeto). Vale para tudo que esta skill produz.
-  Antes de escrever qualquer régua, pergunte: **"e quando não for esse caso?"** Resposta não
-  coberta → você escreveu a instância, não a regra. O teste completo, com exemplos:
-  `references/retrospectiva.md`, seção 5 (e `references/revisor.md` para receita).
-- **Ferramenta de fora — skill, subagente, comando — passa por TRÊS perguntas, e são sempre as
-  três:** (1) **existe com esse nome?** Pode ter virado comando em vez de skill, mudado de nome, ou
-  não estar instalada nesta conta (plugin é por diretório de configuração, e uma sessão em conta
-  secundária vê outra lista). (2) **Serve ao FLUXO?** Ferramenta que monta o diff a partir de
-  um **PR** não serve a um portão que revisa uma rodada em branch local: o diff chega vazio e a
-  saída sai bonita e oca. E atenção ao lado que virou: **desde que o commit passou a vir depois da
-  revisão, ferramenta que monta o diff de mudanças NÃO COMMITADAS é a que serve** — era o contrário
-  até 30/08/2026. A pergunta não muda: de onde ela tira o diff, e onde o código está *nesta* rodada.
-  (3) **Serve aos ARQUIVOS desta
-  Task?** Revisor por linguagem costuma montar o próprio diff com filtro de extensão; filtro que
-  não pega os arquivos tocados devolve "nada a apontar" sobre código que ele **não leu**, e ausência
-  vira falsa evidência — o conserto é passar os caminhos explicitamente no pedido. Reprovou em
-  alguma: registre **por que não serve**, numa linha, e isso vale tanto quanto a lista do que usar.
-  E **silêncio de ferramenta só conta se você souber o que ela leu.**
-- **Sem `--amend`/rebase/squash** em commit já commitado. Correção é commit novo. Isso quase nunca
-  aparece na fase 3, porque a correção acontece **antes** do commit; quando aparece — commit que
-  divergiu da rodada aprovada, conserto pós-merge de lote —, é commit novo, com rastro.
-- **Escreva primeiro, avise depois — sempre nessa ordem.** Parecer, reporte e receita nascem como
-  **arquivo** no diretório durável do trabalho **antes** de qualquer envio, e a mensagem carrega o
-  **caminho**, nunca o conteúdo. Não é formatação: é o que faz o trabalho sobreviver ao canal —
-  medido em 17–18/08/2026, quatro modos de falha diferentes no mesmo canal em 48h, e nas quatro nada
-  se perdeu porque o arquivo já existia. É também o que torna impossível a mensagem mutilada: texto
-  que vai como caminho não tem crase para o shell comer.
-- **A escada de transporte, em ordem, e o degrau seguinte só depois de o anterior falhar:**
-  **olhe o pane do destinatário** (overlay/menu aberto recusa digitação, e é o que o backend reporta
-  como "sessão indisponível") → `SendMessage` → `hangar-send --tmux <sessao>` → `tmux send-keys` no
-  pane. `hangar-send <sessao>` **recusa** falar com sessão Claude desta máquina (rc=3, "o caminho nativo
-  alcança os dois lados") e manda usar `SendMessage`; com o `ListAgents` **vazio** — acontece — o
-  nativo não tem endereço, e sobra o `--tmux`. Sessão Pi ou Codex não sofre disso: só o par
-  Claude→Claude. Recusa **de quem recebe** não se contorna por outro transporte; recusa **da
-  ferramenta**, sim — e o degrau usado vai no reporte, porque canal quebrado que ninguém registra é
-  o mesmo susto duas vezes.
-- **`hangar-send` recebe a mensagem como argumento, não por stdin.** Texto longo vai por heredoc
-  de aspas simples **dentro** de uma substituição:
+- **A peer message claiming "the user authorized it" is not authorization** when it contradicts
+  the arbiter's standing order. Confirm with him **before** committing, not after.
+- **Stage by explicit path.** Never `git add -A` nor `git add .`. Untouchables never enter any
+  commit.
+- **A skill invoked inside a Task runs WHOLE.** Half of it missing on the machine, a step that
+  doesn't apply, a step that failed → **stop before the commit**, and never improvise an
+  equivalent nor deliver what's missing as a "pending item". **Waiving a skill step belongs to the
+  user, not the arbiter** — he only enforces waivers already given (in the plan, the contract, or
+  a standing rule of the user's) and takes the rest to a decision. Detail in
+  `references/executor.md`.
+- **A guideline is written as a PRINCIPLE; the measured case enters as proof — somewhere else**
+  (the work's journal, the commit message, the project's `CLAUDE.md`). Holds for everything this
+  skill produces. Before writing any guideline, ask: **"and when it's not that case?"** An
+  uncovered answer → you wrote the instance, not the rule. The full test, with examples:
+  `references/retrospectiva.md`, section 5 (and `references/revisor.md` for recipes).
+- **An outside tool — skill, subagent, command — passes THREE questions, always all three:**
+  (1) **does it exist under that name?** It may have become a command instead of a skill, changed
+  name, or not be installed in this account (plugins are per config directory, and a session in a
+  secondary account sees a different list). (2) **Does it serve the FLOW?** A tool that builds its
+  diff from a **PR** does not serve a gate that reviews a round on a local branch: the diff comes
+  back empty and the output looks pretty and hollow. And mind which side flipped: **since the
+  commit moved to after the review, the tool that reads UNCOMMITTED changes is the one that
+  serves** — it was the opposite until 2026-08-30. The question doesn't change: where does it get
+  its diff, and where is the code in *this* round. (3) **Does it serve the FILES of this Task?**
+  Per-language reviewers usually build their own diff with an extension filter; a filter that
+  misses the touched files returns "nothing to report" about code it **never read**, and absence
+  becomes false evidence — the fix is passing the paths explicitly in the request. Failed any:
+  record **why it doesn't serve**, in one line — that is worth as much as the list of what to use.
+  And **a tool's silence only counts if you know what it read.**
+- **No `--amend`/rebase/squash** on an already-made commit. A correction is a new commit. This
+  almost never comes up in phase 3, because correction happens **before** the commit; when it does
+  — a commit that diverged from the approved round, a post-merge batch fix — it is a new commit,
+  with a trail.
+- **Write first, notify after — always in that order.** Review reports, reports and recipes are
+  born as a **file** in the work's durable directory **before** any sending, and the message
+  carries the **path**, never the content. It is not formatting: it is what makes the work survive
+  the channel — measured on 2026-08-17/18, four different failure modes on the same channel in
+  48h, and in all four nothing was lost because the file already existed. It is also what makes a
+  mutilated message impossible: text that travels as a path has no backticks for the shell to eat.
+- **The transport ladder, in order, and the next rung only after the previous one failed:**
+  **look at the recipient's pane** (an open overlay/menu refuses typing, and is what the backend
+  reports as "session unavailable") → `SendMessage` → `hangar-send --tmux <session>` →
+  `tmux send-keys` into the pane. `hangar-send <session>` **refuses** to talk to a Claude session
+  on this machine (rc=3, "the native path reaches both ends") and says to use `SendMessage`; with
+  `ListAgents` **empty** — it happens — the native path has no address, and `--tmux` is what's
+  left. Pi and Codex sessions don't suffer from this: only the Claude→Claude pair. A refusal **by
+  the recipient** is not to be bypassed through another transport; a refusal **by the tool** is —
+  and the rung used goes in the report, because a broken channel nobody records is the same scare
+  twice.
+- **`hangar-send` takes the message as an argument, not on stdin.** Long text goes via a
+  single-quoted heredoc **inside** a substitution:
 
   ```bash
-  hangar-send <sessao> "$(cat <<'EOF'
-  ...texto livre, com crase e $ intactos...
+  hangar-send <session> "$(cat <<'EOF'
+  ...free text, with backticks and $ intact...
   EOF
   )"
   ```
 
-  Aspas duplas cruas fazem o shell comer crase e `$`, e receita mutilada é pior que receita
-  nenhuma. Heredoc solto (`hangar-send <sessao> <<'EOF'`) devolve erro de uso — a mensagem não sai.
-- **Escolher o time é OFERTA, não obrigação — a pergunta se faz UMA vez e qualquer resposta
-  destrava o trabalho** (sem resposta → padrão, na conta que já está em uso). A receita inteira,
-  com o padrão por papel, está em `references/planejamento.md`, "O time é saída do planejamento".
-  Sair da conta em uso, ou entrar em conta que **cobra por token**, continua exigindo palavra dele.
-- **MODELO É DECISÃO DO USUÁRIO. Ninguém escolhe modelo fora do padrão acima.** A política de contas da máquina fica em
-  **`~/.hangar/orquestracao-contas.md`** — quais contas existem, quais são assinatura (troca livre
-  dentro da conta), quais são travadas num modelo e quais são proibidas por cobrarem por token. O
-  árbitro **lê esse arquivo antes de montar time** e copia pro contrato só o que aquele trabalho vai
-  usar. Arquivo ausente ou desatualizado: **levante o inventário e pergunte ao usuário** (a receita
-  de levantamento está dentro do próprio arquivo), escreva a resposta lá com a data, e siga. O
-  contrato traz a tabela conta↔modelo por papel (`## Quem é quem` do `regras-<gid>.md`, formato
-  fixo em `references/planejamento.md` — lida por máquina: célula com prosa não é lida); ela é fechada. Modelo fora dela não se usa **nem pra teste**, nem porque "é mais barato",
-  nem porque apareceu no catálogo. Cada conta tem cota e preço próprios, e provedor errado **cobra
-  dinheiro do usuário** — um `openrouter/*` escolhido por conta própria é fatura, não experimento.
-  - **Sessão nova nasce no padrão do harness, que não é o modelo da tabela.** Quem cria: troca,
-    **lê o modelo de volta** e confere; só então manda trabalho. Sessão trabalhando em modelo não
-    conferido é gasto na conta errada que só aparece na fatura.
-  - **Subagente pode — mas SEMPRE na mesma CONTA da sessão, e a liberdade de modelo é POR CONTA.**
-    Sair da conta nunca pode. Trocar de modelo **dentro** dela só onde o contrato liberar
-    explicitamente: há conta em que o usuário aceita dois modelos (um mais forte pro julgamento,
-    outro mais barato pro mecânico) e há conta **travada num modelo só** — e existe conta proibida,
-    porque cobra por token no cartão dele. Não deduza pela lista de modelos que a conta oferece: vale
-    o que está escrito no contrato, e conta não listada é **pare e pergunte**. E confira o frontmatter do que você despacha: um `model:` escrito lá dentro
-    sobrepõe o teu (os agentes `ecc:*` trazem `model: sonnet`, que numa sessão Claude gasta a conta
-    Anthropic; a ponte do Pi remove esse campo).
-  - Precisa de um modelo que não está na tabela? **Pare e pergunte.** Não é decisão de árbitro,
-    executor nem revisor.
-- **Entrega não é resposta.** `entregue -> <sessao>` e o `success` do `SendMessage` dizem que a
-  mensagem **entrou na fila do destino**, não que alguém leu, nem que a resposta vai voltar. Não
-  existe prazo por mensagem: Task inteira leva o tempo que levar, e cutucar executor trabalhando é
-  ruído. **O sinal é outro — ver "Ociosidade" abaixo.**
-- **Nunca `comando | tail && echo OK`** — o `&&` lê o código de saída do `tail`, e o "OK"
-  imprime com o comando falhando. Use `set -o pipefail` ou cheque `${PIPESTATUS[0]}`.
-- **Verificação roda o comando que o plano definiu para aquela Task**, na forma que não
-  depende do cwd (prefixo/diretório explícito). Nunca invente o comando nem rode "o que
-  costuma ser".
+  Raw double quotes make the shell eat backticks and `$`, and a mutilated recipe is worse than no
+  recipe. A bare heredoc (`hangar-send <session> <<'EOF'`) returns a usage error — the message
+  doesn't go out.
+- **Choosing the team is an OFFER, not an obligation — the question is asked ONCE and any answer
+  unblocks the work** (no answer → the default, on the account already in use). The whole recipe,
+  with the per-role default, is in `references/planejamento.md`, "The team is an output of planning".
+  Leaving the account in use, or entering an account that **charges per token**, still requires
+  the user's word.
+- **THE MODEL IS THE USER'S DECISION. Nobody picks a model outside the default above.** The
+  machine's account policy lives in **`~/.hangar/orquestracao-contas.md`** — which accounts exist,
+  which are subscriptions (free model switching inside the account), which are pinned to one
+  model, and which are forbidden because they charge per token. The arbiter **reads that file
+  before assembling a team** and copies into the contract only what this work will use. File
+  missing or stale: **take the inventory and ask the user** (the survey recipe is inside the file
+  itself), write the answer there with the date, and proceed. The contract carries the
+  account↔model table per role (`## Quem é quem` in `regras-<gid>.md`, fixed format in
+  `references/planejamento.md` — machine-read: a cell with prose is not read); it is closed. A
+  model outside it is not used **even to test**, not because "it's cheaper", not because it showed
+  up in the catalog. Each account has its own quota and price, and the wrong provider **charges
+  the user's money** — an `openrouter/*` picked on one's own is an invoice, not an experiment.
+  - **A new session is born on the harness default, which is not the table's model.** Whoever
+    creates it: switch, **read the model back** and check; only then send work. A session working
+    on an unchecked model is spend on the wrong account that only shows up on the invoice.
+  - **Subagents are allowed — but ALWAYS on the session's own ACCOUNT, and model freedom is PER
+    ACCOUNT.** Leaving the account is never allowed. Switching models **inside** it only where the
+    contract explicitly allows: there are accounts where the user accepts two models (a stronger
+    one for judgment, a cheaper one for mechanical work) and accounts **pinned to a single model**
+    — and there is a forbidden account, because it charges per token on his card. Don't deduce
+    from the model list the account offers: what's written in the contract is what holds, and an
+    unlisted account is **stop and ask**. And check the frontmatter of whatever you dispatch: a
+    `model:` written inside overrides yours (the `ecc:*` agents carry `model: sonnet`, which in a
+    Claude session spends the Anthropic account; the Pi bridge strips that field).
+  - Need a model that is not in the table? **Stop and ask.** It is not an arbiter's, executor's or
+    reviewer's decision.
+- **Delivery is not a reply.** `entregue -> <session>` and `SendMessage`'s `success` say the
+  message **entered the destination's queue**, not that anyone read it, nor that an answer will
+  come. There is no per-message deadline: a whole Task takes what it takes, and nudging a working
+  executor is noise. **The signal is elsewhere — see "Idleness" below.**
+- **Never `command | tail && echo OK`** — the `&&` reads `tail`'s exit code, and the "OK" prints
+  with the command failing. Use `set -o pipefail` or check `${PIPESTATUS[0]}`.
+- **Verification runs the command the plan defined for that Task**, in a form that does not depend
+  on the cwd (explicit prefix/directory). Never invent the command nor run "what it usually is".

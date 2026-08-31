@@ -1,104 +1,109 @@
-# Replanejar no meio: reescrever o plano e o contrato sem jogar fora o que já entrou
+# Replanning midway: rewriting the plan and the contract without discarding what already landed
 
-Não é papel fixo — é um procedimento, disparado no meio da fase 3, que roda a fase 1 **de novo,
-menor, só sobre o que resta**. Nasceu de uma necessidade real (17/08/2026): um plano escrito num
-método que o usuário abandonou, com duas Tasks presas e réguas novas que o plano não conhecia —
-remendar Task a Task era jogar rodada fora, e não havia forma prevista de trocar o plano inteiro.
+Not a fixed role — a procedure, triggered in the middle of phase 3, that runs phase 1 **again,
+smaller, only over what remains**. It was born from a real need (2026-08-17): a plan written in a
+method the user had abandoned, with two Tasks stuck and new guidelines the plan didn't know —
+patching Task by Task was throwing rounds away, and there was no provided way to swap the whole
+plan.
 
-## Gatilhos — quem dispara é o usuário ou o árbitro propõe
+## Triggers — the user fires it, or the arbiter proposes
 
-- **O usuário mandou.** ("não confio nesse plano pra terminar")
-- **Premissa central caiu**: uma decisão registrada do plano se provou falsa na execução, e mais
-  de uma Task futura depende dela.
-- **Método capenga**: o plano nasceu num método cuja metade executora não existe na máquina, ou o
-  usuário decidiu trocar de método — troca de método **só** acontece por aqui (`SKILL.md`), nunca
-  por emenda.
-- **Task presa ANTES do portão.** Duas Tasks seguidas passando de 2× a estimativa **pela mesma
-  causa** é um sinal — e é o sinal **tardio**, porque conta rodadas, e Task que trava antes do
-  primeiro commit não produz rodada nenhuma para contar. O gatilho que teria disparado a tempo é
-  mais simples: **Task com mais de 3 horas de relógio de executor e ZERO commits.** Medido em
-  16–17/08/2026: duas Tasks somaram ~13h de relógio, 958k de saída e **nenhum commit** — logo,
-  nenhuma rodada, nenhum veredito e nenhuma régua de espiral disparando. Depois do replanejamento,
-  as **mesmas duas Tasks** fecharam em 2h52, com 329k de saída e dois merges.
+- **The user ordered it.** ("I don't trust this plan to finish")
+- **A central premise fell**: a recorded decision of the plan proved false in execution, and more
+  than one future Task depends on it.
+- **A lame method**: the plan was born in a method whose executing half doesn't exist on the
+  machine, or the user decided to switch methods — a method switch happens **only** through here
+  (`SKILL.md`), never by patching.
+- **A Task stuck BEFORE the gate.** Two consecutive Tasks past 2× the estimate **for the same
+  cause** is a signal — and it is the **late** signal, because it counts rounds, and a Task stuck
+  before its first commit produces no round to count. The trigger that would have fired in time
+  is simpler: **a Task with over 3 hours of executor clock and ZERO commits.** Measured on
+  2026-08-16/17: two Tasks added up to ~13h of clock, 958k of output and **no commit** — hence no
+  round, no verdict and no spiral rule firing. After the replanning, the **same two Tasks**
+  closed in 2h52, with 329k of output and two merges.
 
-O árbitro **propõe** ("replaneja, ou seguimos remendando? custo até agora: X"), o usuário decide.
-Árbitro não replaneja por conta própria — e **não reescreve o próprio plano**: quem planejou de
-novo é uma sessão com contexto limpo do viés de quem conduziu.
+The arbiter **proposes** ("replan, or keep patching? cost so far: X"), the user decides. The
+arbiter doesn't replan on his own — and **doesn't rewrite his own plan**: whoever plans again is
+a session with context clean of the conductor's bias.
 
-## Quem reescreve: um REPLANEJADOR — sessão fresca, com o usuário
+## Who rewrites: a REPLANNER — a fresh session, with the user
 
-Como a fase 1: o replanejador trabalha **com o usuário**, e o produto só vale com o "pode ir"
-dele. A sessão é nova (ou o próprio usuário numa sessão de planejamento); o árbitro entrega os
-insumos e **congela o grupo** enquanto isso (nenhuma Task nova abre; Task em voo termina ou é
-suspensa com estado commitado).
+Like phase 1: the replanner works **with the user**, and the product only counts with their "go
+ahead". The session is new (or the user themselves in a planning session); the arbiter delivers
+the inputs and **freezes the group** meanwhile (no new Task opens; a Task in flight finishes or
+is suspended with its state committed).
 
-O replanejador lê, nesta ordem:
+The replanner reads, in this order:
 
-1. **O que já está na base** — `git log` da branch: Tasks mergeadas são fatos, não opções.
-2. **O que está em voo** — commit sem merge, worktree com diff sem commit: cada um vira decisão
-   explícita no plano novo (aproveitar, revisar, descartar), nunca limbo.
-3. **O contrato e as lições** (`regras-<gid>.md`, `licoes.md`, registro) — as réguas que a execução
-   fixou entram no plano novo como ponto de partida, não como descoberta a repetir.
-4. **Os pareceres** — a linha de desperdício de cada rodada é o mapa do que o plano velho errou.
-5. **O `eventos.jsonl`** — relógio e rodadas reais por Task, já contados; onde não houver, o que
-   `git log`/transcripts derem.
-6. O plano velho, por último — pra herdar o que ainda vale, não pra defender.
+1. **What is already on the base** — the branch's `git log`: merged Tasks are facts, not
+   options.
+2. **What is in flight** — a commit without a merge, a worktree with an uncommitted diff: each
+   becomes an explicit decision in the new plan (adopt, review, discard), never limbo.
+3. **The contract and the lessons** (`regras-<gid>.md`, `licoes.md`, the journal) — the
+   guidelines the run fixed enter the new plan as a starting point, not as a discovery to
+   repeat.
+4. **The review reports** — each round's waste line is the map of what the old plan got wrong.
+5. **The `eventos.jsonl`** — real clock and rounds per Task, already counted; where missing,
+   whatever `git log`/transcripts give.
+6. The old plan, last — to inherit what still holds, not to defend it.
 
-## O que o plano novo é
+## What the new plan is
 
-- **Cobre SÓ o trabalho restante.** Tasks mergeadas viram uma seção `## Base (fase anterior)` —
-  fatos, com hash — e **não são renumeradas**: a barra de progresso e os pareceres antigos citam
-  os números velhos.
-- **Nasce no método do contrato** (padrão `superpowers`) — inteiro. Se o replanejamento é troca de
-  método, o plano novo nasce 100% no método novo; formato misto é o defeito que a linha `Método:`
-  existe pra impedir. Contrato com `Método: nenhum` → o que nasce de novo é o **plano de
-  orquestração** (`planejamento.md`), apontando pro plano do usuário como sempre.
-- **Arquivo novo**, com o nome do trabalho + `fase-final` (ou `v2`), ao lado do plano velho — que
-  ganha, no topo, um aviso apontando pro novo e **nunca é apagado**: os pareceres o citam.
-- **Passa o MESMO portão de saída da fase 1** (`planejamento.md`, checklist de 13 itens) —
-  replanejamento não é atalho: estimativa a priori, não-colisão, barra/captura, fumaça, cota e
-  fallback, skill de domínio, tudo de novo, agora com os números REAIS da fase anterior como base
-  da estimativa.
-- **O time volta a ser pergunta.** Como Task fora do plano (`arbitro.md`): o trabalho restante
-  pode ser de outra natureza que o time original. Proponha com o histórico na mão; o usuário
-  escolhe.
-- **Branch volta a ser pergunta** (`planejamento.md`, fase 2) — inclusive "continuamos onde
-  estamos", que é resposta legítima e registrada.
+- **It covers ONLY the remaining work.** Merged Tasks become a `## Base (previous phase)`
+  section — facts, with hashes — and **are not renumbered**: the progress bar and the old
+  reports cite the old numbers.
+- **It is born in the contract's method** (default `superpowers`) — whole. If the replanning is a
+  method switch, the new plan is born 100% in the new method; a mixed format is the defect the
+  `Method:` line exists to prevent. Contract with `Method: none` → what is born anew is the
+  **orchestration plan** (`planejamento.md`), pointing at the user's plan as always.
+- **A new file**, named after the work + `fase-final` (or `v2`), next to the old plan — which
+  gains, at its top, a notice pointing at the new one and **is never deleted**: the reports cite
+  it.
+- **It passes the SAME phase 1 exit gate** (`planejamento.md`, the 13-item checklist) —
+  replanning is no shortcut: a-priori estimate, non-collision, bar/capture, smoke, quota and
+  fallback, domain skill, all again, now with the previous phase's REAL numbers as the
+  estimate's base.
+- **The team becomes a question again.** Like an off-plan Task (`arbitro.md`): the remaining work
+  may be of another nature than the original team. Propose with the history in hand; the user
+  chooses.
+- **The branch becomes a question again** (`planejamento.md`, phase 2) — including "we stay
+  where we are", a legitimate, recorded answer.
 
-## O contrato acompanha — reescrito, não emendado
+## The contract follows — rewritten, not patched
 
-Aprovado o plano novo:
+New plan approved:
 
-1. O árbitro (o da fase anterior, ou o replanejador assumindo — decisão do usuário, registrada)
-   **reescreve `regras-<gid>.md` do zero** a partir do esqueleto da fase 2, apontando pro plano
-   novo. Régua viva da fase anterior entra; régua de Task morta vira uma linha no registro.
-2. O **registro continua o mesmo arquivo** (`grupo-<gid>.md`): uma entrada com data marca o
-   replanejamento — motivo, o que morreu do plano velho, hash da base — e o diário segue.
-3. **Todo kick-off a partir daí aponta pro plano e pras regras novas.** Sessão viva da fase
-   anterior que for continuar recebe kick-off novo; a que não couber no time novo é aposentada
-   com o de sempre (transcript lido, trabalho recuperado).
+1. The arbiter (the previous phase's, or the replanner taking over — the user's decision,
+   recorded) **rewrites `regras-<gid>.md` from scratch** from the phase-2 skeleton, pointing at
+   the new plan. A live guideline of the previous phase enters; a dead Task's guideline becomes
+   one line in the journal.
+2. **The journal remains the same file** (`grupo-<gid>.md`): a dated entry marks the replanning
+   — reason, what died of the old plan, the base's hash — and the diary continues.
+3. **Every kick-off from then on points at the new plan and rules.** A live session of the
+   previous phase that continues receives a new kick-off; one that doesn't fit the new team is
+   retired with the usual rite (transcript read, work recovered).
 
-## Replanejamento PREVISTO no plano — a miniatura deste procedimento
+## Replanning FORESEEN in the plan — this procedure's miniature
 
-Plano pode declarar que a receita de uma Task só fecha no meio da execução ("a Task N depende do
-que a medição da Task N-1 provar"). Isso é legítimo — e é **planejamento, não condução**: quem
-fecha a receita é a sessão **planejadora** (ou uma sessão nova de planejamento, com a spec e o
-documento da medição anexados), nunca o árbitro por gravidade. O árbitro entrega os insumos,
-recebe a receita pronta e a recorta pro kick-off, como faria com qualquer Task. E a receita
-fechada no meio passa pelo formato de passo da fase 1 (os três desfechos de request, o gatilho de
-quem digita — `planejamento.md`), porque ela É plano.
+A plan may declare that a Task's recipe only closes mid-execution ("Task N depends on what Task
+N-1's measurement proves"). That is legitimate — and it is **planning, not conducting**: the one
+who closes the recipe is the **planner** session (or a fresh planning session, with the spec and
+the measurement document attached), never the arbiter by gravity. The arbiter delivers the
+inputs, receives the closed recipe and excerpts it into the kick-off, as with any Task. And the
+recipe closed midway passes the phase-1 step format (the three request outcomes, the
+who-types trigger — `planejamento.md`), because it IS plan.
 
-Medido em 19–20/08/2026: o plano dizia "o árbitro fecha a receita da T5 depois da T4"; o árbitro
-— sem o contexto do planejamento — fechou-a sem dizer QUANDO a chamada dispara, e dessa lacuna
-nasceu o bloqueador mais sério do trabalho (a sonda que digita rodando no mount de toda conversa
-aberta). A miniatura não exige o portão de 13 itens de novo: exige só o dono certo e o formato de
-passo.
+Measured on 2026-08-19/20: the plan said "the arbiter closes T5's recipe after T4"; the arbiter —
+without the planning context — closed it without saying WHEN the call fires, and from that gap
+was born the work's most serious blocker (the typing probe running on the mount of every open
+conversation). The miniature doesn't demand the 13-item gate again: it demands only the right
+owner and the step format.
 
-## O que o replanejamento NÃO é
+## What replanning is NOT
 
-- **Não é auditoria da execução** — isso é a retrospectiva (fase 5), que continua no fim.
-- **Não reabre Task aprovada.** Defeito em Task mergeada é achado de revisão (de conjunto ou
-  final), que vira Task nova no plano novo pelo ciclo normal.
-- **Não é licença pra decidir time, conta ou branch** — as três continuam do usuário.
-- **Não se repete como rotina.** Dois replanejamentos no mesmo trabalho = o problema não é o
-  plano; pare e discuta o trabalho em si com o usuário.
+- **Not an audit of the execution** — that is the retrospective (phase 5), still at the end.
+- **It doesn't reopen approved Tasks.** A defect in a merged Task is a review finding (set or
+  final), which becomes a new Task in the new plan through the normal cycle.
+- **Not a license to decide team, account or branch** — all three remain the user's.
+- **It doesn't repeat as routine.** Two replannings in the same work = the problem is not the
+  plan; stop and discuss the work itself with the user.

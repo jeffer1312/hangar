@@ -1,155 +1,162 @@
-# Árbitro — o lançamento (fase 2)
+# Arbiter — the launch (phase 2)
 
-Esta página é do **momento em que o time nasce**: escolher contas, conferir ferramental e abrir as
-sessões. Você a lê **uma vez**, antes da Task 1, e não volta a ela — salvo para abrir uma sessão
-nova no meio (rotação, substituição).
+This page belongs to the **moment the team is born**: picking accounts, checking tooling and
+opening the sessions. You read it **once**, before Task 1, and don't come back to it — except to
+open a new session midway (rotation, replacement).
 
-Volte para `arbitro.md` assim que o time estiver de pé.
+Return to `arbitro.md` as soon as the team is standing.
 
-## Antes do time: leia a política de contas da máquina
+## Before the team: read the machine's account policy
 
-**A política mora em `~/.hangar/orquestracao-contas.md`, não aqui.** Leia antes de abrir a primeira
-sessão e **copie pro contrato só o que este trabalho vai usar**, na tabela `## Quem é quem` das
-regras. Não repasse o arquivo inteiro: sessão escolhe pelo que está no contrato.
+**The policy lives in `~/.hangar/orquestracao-contas.md`, not here.** Read it before opening the
+first session and **copy into the contract only what this work will use**, in the rules'
+`## Quem é quem` table. Don't relay the whole file: sessions choose by what is in the contract.
 
-Três regras de leitura, e as três protegem a mesma coisa — a fatura de quem confiou em você:
+Three reading rules, all three protecting the same thing — the invoice of whoever trusted you:
 
-- **Vale a tabela, não a prosa.** O arquivo tem uma tabela de contas liberadas, gravada pelo painel
-  quando o usuário liga ou desliga uma conta pela tela. **Conta fora da tabela é proibida**, mesmo
-  que um parágrafo abaixo pareça permitir: prosa envelhece, a tabela é o que ele mexeu por último.
-- **Conta que cobra por token é proibida.** Você descobre que uma conta existe; só o usuário sabe
-  se ela debita. Discovery lista provider, modelo e endereço — nada disso diz de quem é a conta nem
-  se ele quer gastar ali. Provider novo que apareceu desde a última revisão **não entra por conta
-  própria**. Numa máquina real, 341 dos 390 modelos do catálogo eram de um provider pago por token.
-- **Arquivo ausente ou velho → monte o inventário e faça UMA pergunta** (quais podem, quais são
-  assinatura, quais cobram), escreva a resposta lá com a data, e **não abra sessão nenhuma** até
-  ela chegar — nem "só pra testar". A receita de levantamento está dentro do próprio arquivo.
+- **The table rules, not the prose.** The file has a table of enabled accounts, written by the
+  panel when the user turns an account on or off from the screen. **An account outside the table
+  is forbidden**, even if a paragraph below seems to allow it: prose ages, the table is what they
+  touched last.
+- **An account that charges per token is forbidden.** You discover that an account exists; only
+  the user knows whether it debits. Discovery lists provider, model and address — none of that
+  says whose account it is or whether they want to spend there. A new provider that appeared since
+  the last review **does not enter on its own**. On a real machine, 341 of the catalog's 390
+  models belonged to a per-token provider.
+- **File missing or stale → build the inventory and ask ONE question** (which are allowed, which
+  are subscriptions, which charge), write the answer there with the date, and **open no session**
+  until it arrives — not even "just to test". The survey recipe is inside the file itself.
 
-**Recado "a configuração de modelos do grupo mudou no painel"** vem da tela, não de uma sessão: a
-linha já está no `regras-<gid>.md`. Releia o arquivo e aplique — trocar conta ou modelo **é** fechar
-e abrir, o Claude não troca com a sessão aberta:
+**The message "the group's model configuration changed in the panel"** comes from the screen, not
+from a session: the row is already in `regras-<gid>.md`. Re-read the file and apply — switching
+account or model **is** closing and reopening; Claude doesn't switch with the session open:
 
-| A sessão daquele papel está… | O que fazer |
+| That role's session is… | What to do |
 |---|---|
-| parada | feche e abra outra já na configuração nova |
-| trabalhando | deixe terminar; a **próxima** nasce na nova. O contexto dela vale mais que o modelo |
-| é você (árbitro) | termine a tarefa e passe o bastão pelo rito de "Sucessão do árbitro" |
+| idle | close it and open another already on the new configuration |
+| working | let it finish; the **next** one is born on the new one. Its context is worth more than the model |
+| you (the arbiter) | finish the task at hand and pass the baton via the "Arbiter succession" rite |
 
-Responda o recado só se ele pedir.
+Answer the message only if it asks for an answer.
 
-## Levante o ferramental ANTES de abrir o time
+## Survey the tooling BEFORE opening the team
 
-Sessão nova não sabe o que a máquina tem. Se você não disser, cada uma revisa e constrói pelo
-método que inventar — foi o que aconteceu numa execução real: o revisor achou três bloqueadores de
-verdade **sem usar nenhum** dos subagentes de revisão instalados, porque o contrato tinha deixado
-essa parte em branco.
+A new session doesn't know what the machine has. If you don't say, each one reviews and builds by
+whatever method it invents — which is what happened in a real run: the reviewer found three real
+blockers **using none** of the installed review subagents, because the contract had left that part
+blank.
 
-Uma varredura, uma vez, no começo. Depois **escreva no contrato uma tabela por tipo de trabalho** —
-quais subagentes e skills o revisor despacha, e quais ajudam o executor a entregar. Cada sessão nova
-recebe isso pronto, em vez de descobrir sozinha (ou não descobrir).
+One sweep, once, at the start. Then **write into the contract a table per work type** — which
+subagents and skills the reviewer dispatches, and which help the executor deliver. Every new
+session receives it ready, instead of discovering alone (or not discovering).
 
-Olhe as três prateleiras: **subagentes** (revisores por linguagem e por dimensão — falha silenciosa,
-segurança, acessibilidade, cobertura de teste), **skills** (auditoria de caminho de clique, revisão de
-segurança, prontidão pra produção, QA de navegador, padrões da casa) e **comandos** do marketplace.
+Look at the three shelves: **subagents** (per-language and per-dimension reviewers — silent
+failure, security, accessibility, test coverage), **skills** (click-path audit, security review,
+production readiness, browser QA, house patterns) and marketplace **commands**.
 
-E passe cada uma pelas **três perguntas** do `SKILL.md` ("Ferramenta de fora — skill, subagente,
-comando"): existe com esse nome, serve ao fluxo, serve aos arquivos. As três já erraram aqui na
-mesma varredura — uma ferramenta anunciada como skill que era comando, a mesma montando o diff de
-mudanças não commitadas num portão que revisa commit feito, e um revisor por linguagem cujo filtro
-de extensão não enxergava o tipo de arquivo onde moravam os dois bloqueadores de tela do trabalho.
+And run each through the **three questions** of `SKILL.md` ("An outside tool — skill, subagent,
+command"): does it exist under that name, does it serve the flow, does it serve the files. All
+three have already failed here in the same sweep — a tool announced as a skill that was a command,
+the same one building a diff of uncommitted changes for a gate that reviewed made commits, and a
+per-language reviewer whose extension filter couldn't see the file type where the work's two
+screen blockers lived.
 
-Ferramenta que não passa nos três: registre no contrato **por que não serve**, com uma linha. Isso
-vale tanto quanto a lista do que usar — evita que a próxima sessão gaste turno tentando.
+A tool that fails the three: record in the contract **why it doesn't serve**, one line. That is
+worth as much as the list of what to use — it saves the next session a turn of trying.
 
-## Abrir uma sessão — receita, não decisão
+## Opening a session — a recipe, not a decision
 
-**Exceção:** a **sessão verificadora do revisor** não é sua. Ele abre, dirige e fecha sozinho, sem
-te pedir — é braço dele pra rodar app, clicar tela e capturar print, e o que chega em você continua
-sendo só o parecer. Não crie, não gerencie e não cobre relatório dela. **O modelo dela não é escolha
-dele**: sai do contrato, como o de todo mundo — mas quem cria e confere é ele, não você.
+**Exception:** the reviewer's **verification session** is not yours. The reviewer opens, drives
+and closes it alone, without asking you — it is their arm for running the app, clicking screens
+and capturing shots, and what reaches you is still only the review report. Don't create, manage or
+demand reports from it. **Its model is not the reviewer's choice**: it comes from the contract,
+like everyone's — but the reviewer creates and checks it, not you.
 
-### Papel com rodízio: qual linha da tabela vale para esta Task
+### A rotating role: which table row holds for this Task
 
-A tabela `## Quem é quem` ganha uma sétima coluna, `vez`, **só** quando algum papel reveza entre
-contas. Sem rodízio, ela não existe e nada aqui muda.
+The `## Quem é quem` table gains a seventh column, `vez`, **only** when some role rotates between
+accounts. Without rotation, it doesn't exist and nothing here changes.
 
-Papel com `vez` numérica tem mais de uma linha, uma por conta, e **a Task N cabe à linha de índice
-`(N-1) % total`** daquele papel, na ordem da tabela. Ninguém decide de quem é a vez — é aritmética
-sobre o número da Task, e é por isso que duas sessões que fazem a conta separadas chegam ao mesmo
-resultado sem combinar nada. Os dois erros fáceis: é `(N-1)`, não `N` (a Task 1 usa a **primeira**
-linha), e a volta reinicia — com 3 contas, a Task 4 é da primeira de novo, não a continuação da 3.
+A role with a numeric `vez` has more than one row, one per account, and **Task N belongs to that
+role's row of index `(N-1) % total`**, in table order. Nobody decides whose turn it is — it is
+arithmetic over the Task number, and that is why two sessions doing the math separately reach the
+same result without coordinating. The two easy mistakes: it is `(N-1)`, not `N` (Task 1 uses the
+**first** row), and the cycle restarts — with 3 accounts, Task 4 belongs to the first again, not
+to a continuation of 3.
 
-O rodízio **não** é paralelismo: numa Task existe **uma** sessão daquele papel, na conta da vez.
-Rodar Tasks ao mesmo tempo é outro mecanismo — worktree por Task, declarado no PLANO, em
-`paralelo-worktree.md` —, e a regra "uma rodada, UM revisor" vale inteira nos dois casos.
+Rotation is **not** parallelism: within a Task there is **one** session of that role, on the
+turn's account. Running Tasks at the same time is another mechanism — a worktree per Task,
+declared in the PLAN, in `paralelo-worktree.md` — and the "one round, ONE reviewer" rule holds
+whole in both cases.
 
-Vale para toda sessão que você cria. Os cinco passos são **uma unidade**: o turno não fecha
-no meio deles.
+This holds for every session you create. The five steps are **one unit**: the turn doesn't close
+in their middle.
 
-1. **Criar na conta padrão do agente:** `hangar-send --new <nome> <cwd>`, **sem** `--engine`.
-   Motor de provedor entra **só** quando o plano nomeou um: `--engine <motor>`.
-   *"Sessão de <agente>"* quer dizer a conta padrão dele. Modelo daquele fabricante
-   acessível por gateway, roteador ou API **não é** uma sessão dele — é outro provedor
-   servindo um modelo parecido, com outra conta e outro comportamento.
+1. **Create on the agent's default account:** `hangar-send --new <name> <cwd>`, **without**
+   `--engine`. A provider engine enters **only** when the plan named one: `--engine <engine>`.
+   *"An <agent> session"* means that agent's default account. That vendor's model reachable
+   through a gateway, router or API is **not** a session of that agent — it is another provider
+   serving a similar model, with another account and other behavior.
 
-   **Modelo, esforço e permissão vão NO PRÓPRIO `hangar-send --new`** (desde 25/08/2026):
-   `--model <id>`, `--effort <nivel>` e `--permissao <modo>`. O contrato que nomeia modelo e
-   thinking (o caso normal quando o time roda em Pi) cabe no comando — a sessão já nasce nele:
-
-   ```bash
-   hangar-send --new <nome> <repo> --provider pi --model <provider>/<id> --effort <nivel>
-   ```
-
-   No Pi o `--effort` vira `--thinking` (aceita também `off|minimal`); no Kimi só `--model`;
-   `--permissao` é só Claude. O backend valida **antes** de qualquer efeito em disco: modelo fora
-   da regex, nível fora da lista fechada ou provider desconhecido devolvem 400 e a sessão **não
-   nasce** — nunca uma sessão que parece estar no modelo certo e não está. O caminho alternativo
-   (criar sem os flags e trocar depois por `/cp-model` + `/cp-think`) funciona, mas deixa a sessão
-   viva um intervalo no modelo errado, e contradiz o passo 2 abaixo. (Instalação com `hangar-send`
-   antigo, sem os flags: o POST direto na API com `model`/`effort`/`permission_mode` no corpo
-   continua valendo como plano B.)
-
-2. **Provar o que nasceu**, lendo o motor/modelo **real** da sessão, nunca o que você pediu.
-   Divergiu do plano → apague e recrie. Sessão errada recebendo o pedido é trabalho inteiro no lugar
-   errado, e o dado que denuncia isso aparece antes de qualquer erro.
-
-   Duas provas, e você quer as duas — elas falham por motivos diferentes:
+   **Model, effort and permission go ON the `hangar-send --new` itself** (since 2026-08-25):
+   `--model <id>`, `--effort <level>` and `--permissao <mode>`. A contract that names model and
+   thinking (the normal case when the team runs on Pi) fits in the command — the session is
+   already born on it:
 
    ```bash
-   tmux display -p -t "=<nome>:" '#{pane_start_command}'   # o argv real com que o pane subiu
+   hangar-send --new <name> <repo> --provider pi --model <provider>/<id> --effort <level>
    ```
 
-   Isso mostra `exec pi --session-id … --model <provider>/<id> --thinking <nivel>` e prova que o
-   **pedido** virou comando. Não prova o que o agente **aceitou**: o Pi trunca o nível ao que o
-   modelo suporta, então peça também a prova **ao vivo** à própria sessão (statusline ou o retorno de
-   `/cp-think`) no primeiro turno dela, antes do primeiro `Edit`. Repetir o que o kick-off pediu não
-   é prova.
+   On Pi the `--effort` becomes `--thinking` (also accepts `off|minimal`); on Kimi only
+   `--model`; `--permissao` is Claude-only. The backend validates **before** any effect on disk: a
+   model outside the regex, a level outside the closed list or an unknown provider return 400 and
+   the session is **not born** — never a session that looks like it's on the right model and
+   isn't. The alternative path (create without the flags and switch later via `/cp-model` +
+   `/cp-think`) works, but leaves the session alive for an interval on the wrong model, and
+   contradicts step 2 below. (An install with an old `hangar-send`, without the flags: the direct
+   POST to the API with `model`/`effort`/`permission_mode` in the body remains plan B.)
 
-   Não leia `/proc/<pid>/cmdline` esperando as flags: o Pi reescreve o próprio argv e o cmdline
-   mostra só `pi`. Isso já pareceu, por um minuto, uma sessão criada sem modelo nenhum.
+2. **Prove what was born**, reading the session's **real** engine/model, never what you asked
+   for. Diverged from the plan → delete and recreate. The wrong session receiving the request is a
+   whole work in the wrong place, and the datum that exposes it appears before any error.
 
-   **E prova de modelo prova o modelo, não o HARNESS.** Uma sessão Claude Code com motor apontando
-   pro provedor X e uma sessão Pi rodando o modelo X mostram **a mesma linha de status**. Quem
-   distingue é o `pane_start_command` (`claude` × `pi`) e o `provider` que a API devolve — confira os
-   dois. Medido em 15/08/2026: três executores nasceram na forma errada e mesmo assim provaram
-   modelo e esforço corretamente antes do primeiro `Edit`; custo zero só porque as worktrees ainda
-   estavam limpas.
+   Two proofs, and you want both — they fail for different reasons:
 
-   Junto: **prova por sidecar de status tem que casar o `session-id` com o da sessão viva** — o
-   diretório guarda um arquivo por id e não os apaga quando a sessão morre. Dois daqueles três
-   leram o sidecar da sessão morta que ocupava o pane antes, e o valor saiu certo por coincidência.
-3. **Escrever o pedido num arquivo** e entregar com `hangar-send <nome> "$(cat <arquivo>)"`.
-   Pedido longo digitado direto na linha quebra: `|`, `$`, crase e `|` de "SIM | NÃO" viram
-   comando, e a mensagem sai mutilada ou não sai.
-4. **Conferir o retorno.** `entregue -> <nome>` é entrega. Qualquer outra coisa — `404`,
-   erro de uso, silêncio — é **não entregue**: reenvie, não siga em frente.
-   **E `entregue` prova entrega, não EXECUÇÃO.** Antes de registrar (ou reportar) que a sessão
-   está trabalhando, confira o engajamento: o ctx dela saiu do zero na statusline, ou o pane está
-   processando. Sessão que recebeu o kick-off e morreu no timeout do provedor fica `idle` com a
-   mesma cara de sessão parada — medido em 20/08/2026: ctx parado em 1k/1M com `Retry failed
-   after 3 attempts` no pane, e a Task reportada como "rodando"; quem viu foi o usuário. No
-   reenvio, aponte só o CAMINHO do kick-off (pegou: ctx foi de 1k a 109k em um minuto — essa é a
-   prova barata).
-5. Só então o turno fecha. **Sessão aberta com pedido não entregue é uma sessão que ninguém
-   vai usar** e que você vai achar que está trabalhando.
+   ```bash
+   tmux display -p -t "=<name>:" '#{pane_start_command}'   # the real argv the pane started with
+   ```
 
+   That shows `exec pi --session-id … --model <provider>/<id> --thinking <level>` and proves the
+   **request** became a command. It doesn't prove what the agent **accepted**: Pi truncates the
+   level to what the model supports, so also demand the **live** proof from the session itself
+   (statusline, or `/cp-think`'s return) on its first turn, before its first `Edit`. Repeating
+   what the kick-off asked is not proof.
+
+   Don't read `/proc/<pid>/cmdline` expecting the flags: Pi rewrites its own argv and the cmdline
+   shows only `pi`. That once looked, for a minute, like a session created with no model at all.
+
+   **And a model proof proves the model, not the HARNESS.** A Claude Code session with an engine
+   pointed at provider X and a Pi session running model X show **the same status line**. What
+   distinguishes them is the `pane_start_command` (`claude` × `pi`) and the `provider` the API
+   returns — check both. Measured on 2026-08-15: three executors were born in the wrong shape and
+   still proved model and effort correctly before the first `Edit`; zero cost only because the
+   worktrees were still clean.
+
+   Also: **proof via status sidecar must match the `session-id` of the live session** — the
+   directory keeps one file per id and doesn't delete them when a session dies. Two of those
+   three read the sidecar of the dead session that previously occupied the pane, and the value
+   came out right by coincidence.
+3. **Write the request into a file** and deliver with `hangar-send <name> "$(cat <file>)"`. A
+   long request typed straight on the line breaks: `|`, `$`, backticks and the `|` of "YES | NO"
+   become commands, and the message goes out mutilated or not at all.
+4. **Check the return.** `entregue -> <name>` is delivery. Anything else — `404`, a usage error,
+   silence — is **not delivered**: resend, don't move on.
+   **And `entregue` proves delivery, not EXECUTION.** Before recording (or reporting) that the
+   session is working, check engagement: its ctx left zero on the statusline, or the pane is
+   processing. A session that received the kick-off and died on a provider timeout sits `idle`
+   with the same face as an idle session — measured on 2026-08-20: ctx stuck at 1k/1M with
+   `Retry failed after 3 attempts` in the pane, and the Task reported as "running"; the user was
+   the one who saw it. On the resend, point only at the kick-off's PATH (it worked: ctx went from
+   1k to 109k in a minute — that is the cheap proof).
+5. Only then does the turn close. **A session opened with an undelivered request is a session
+   nobody will use** and that you will believe is working.

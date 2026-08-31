@@ -1,49 +1,52 @@
-# Executor — Task de fluxo
+# Executor — the flow Task
 
-Esta página é da **Task que cria ou muda orquestração** — tmux, CLI, processo, conta, rede. Vale
-mesmo que o plano não tenha o passo de fumaça: plano incompleto não é permissão pra pular. Se a sua
-Task não é dessas, ela não é sua; o ciclo está em `executor.md`.
+This page belongs to the **Task that creates or changes orchestration** — tmux, CLI, process,
+account, network. It holds even if the plan has no smoke step: an incomplete plan is not
+permission to skip. If your Task isn't one of these, it isn't yours; the cycle is in
+`executor.md`.
 
-## Você tem que RODAR o fluxo
+## You must RUN the flow
 
-**O duplo de uma primitiva devolve o que a PRIMITIVA devolve.** Fake que reproduz a sua suposição
-sobre o tmux prova a suposição, não o tmux. Uma Task já entregou com mais de três mil testes verdes
-e o fluxo inteiro morto — **405 linhas de teste novo passavam com o módulo inoperante**, porque os
-fakes assumiam que o nome pedido era o nome da sessão tmux (não era) e nenhum teste exigia o Enter.
-Dez bloqueadores, achados pela revisora rodando contra a fonte real.
+**A primitive's double returns what the PRIMITIVE returns.** A fake reproducing your assumption
+about tmux proves the assumption, not tmux. A Task once delivered with over three thousand green
+tests and the whole flow dead — **405 lines of new tests passed with the module inoperative**,
+because the fakes assumed the requested name was the tmux session's name (it wasn't) and no test
+demanded the Enter. Ten blockers, found by the reviewer running against the real source.
 
-- Antes do commit, **rode o fluxo de ponta a ponta contra a fonte real** — o tmux de verdade, a CLI
-  de verdade, a conta de teste de verdade — e cole no reporte o que aconteceu, não o que os testes
-  dizem que aconteceria.
-- **Contagem da suíte que CAI vira nota obrigatória no reporte.** Uma unidade a menos que a base é
-  meio relato: na mesma Task, sete testes de uma Task aprovada tinham sido apagados, calados.
+- Before the commit, **run the flow end to end against the real source** — the real tmux, the
+  real CLI, the real test account — and paste into the report what happened, not what the tests
+  say would happen.
+- **A suite count that DROPS becomes a mandatory note in the report.** One unit below the base
+  is half a report: in that same Task, seven tests of an approved Task had been deleted,
+  silently.
 
-A régua tem duas metades, e a segunda foi a mais cara desta skill até hoje:
+The rule has two halves, and the second was this skill's most expensive to date:
 
-1. **O duplo substitui a I/O, nunca a função sob correção.** Um rótulo de conta usado como caminho
-   de diretório já sobreviveu a **duas rodadas de suíte verde**, porque o duplo reproduzia a
-   suposição do código em vez de conferi-la.
-2. **Teste que troca a biblioteca inteira por um duplo prova que o botão chama a função — nunca
-   para onde a função vai.** Três arquivos de teste trocando as bibliotecas de rede por duplos já
-   fizeram os portões de **cinco Tasks** aprovarem uma tela que promete um servidor e age noutro —
-   apagando conta e conversas na máquina errada, e mandando a credencial de login para o host
-   errado. O teste que faltava tem três casos e nasceu em vinte minutos. E o gate de tipos **também
-   não pega**: mutar o corpo de uma função de volta para o cliente errado deixa o repositório
-   inteiro com zero erros.
+1. **The double replaces the I/O, never the function under correction.** An account label used
+   as a directory path once survived **two rounds of green suite**, because the double reproduced
+   the code's assumption instead of checking it.
+2. **A test that swaps the whole library for a double proves the button calls the function —
+   never where the function goes.** Three test files swapping the network libraries for doubles
+   once made the gates of **five Tasks** approve a screen that promises one server and acts on
+   another — deleting account and conversations on the wrong machine, and sending the login
+   credential to the wrong host. The missing test has three cases and was born in twenty
+   minutes. And the type gate **doesn't catch it either**: mutating a function's body back to
+   the wrong client leaves the whole repository at zero errors.
 
-Daí a régua de forma: **Task que muda destino, credencial ou alvo entrega um teste com as
-bibliotecas reais**, e o melhor formato é com **controle interno** — a tela vizinha que já acerta,
-medida no mesmo teste. Foi assim que a revisão de conjunto provou o bloqueador em vez de argumentá-lo.
+Hence the form rule: **a Task that changes destination, credential or target delivers a test
+with the real libraries**, and the best format has an **internal control** — the neighboring
+screen that already gets it right, measured in the same test. That is how the set review proved
+the blocker instead of arguing it.
 
-E duas réguas de desfecho, da mesma família:
+And two outcome rules of the same family:
 
-- **Prova de fluxo de duas pontas é o conteúdo dos dois lados** (os dois arquivos, os dois
-  identificadores), **nunca o selo que a própria tela pinta**. Um selo chumbado mostrou `✗` **verde**
-  dentro do print entregue como "desfecho ok", e o defeito real era a volta perguntando ao servidor
-  errado sobre ele mesmo. Dois `cat` de vinte segundos teriam poupado a rodada.
-- **A evidência tem de trazer o que distingue os dois caminhos.** Prova de "foi para o servidor
-  certo" traz **qual era o ativo naquele instante** — senão ela não separa "foi para o dono" de "o
-  ativo já era o dono". Logs do "depois" mostrando a chamada que só sai para o ativo, dezenas de
-  vezes num lado e nenhuma no outro, não provavam nada; quem separou foi um teste de componente com
-  os dois lados invertidos.
-
+- **Proof of a two-ended flow is the content of both ends** (the two files, the two
+  identifiers), **never the badge the screen itself paints**. A hard-coded badge once showed a
+  **green** `✗` inside the screenshot delivered as "outcome ok", and the real defect was the
+  return leg asking the wrong server about itself. Two twenty-second `cat`s would have spared
+  the round.
+- **The evidence must carry what distinguishes the two paths.** Proof of "it went to the right
+  server" carries **which one was active at that instant** — otherwise it doesn't separate "it
+  went to the owner" from "the active one already was the owner". "After" logs showing the call
+  that only goes to the active one, dozens of times on one side and none on the other, proved
+  nothing; what separated them was a component test with the two sides inverted.
