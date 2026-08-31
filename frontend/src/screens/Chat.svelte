@@ -1696,7 +1696,7 @@
         const e = events[i];
         if (e.kind === 'assistant_msg' && e.text) {
           seen++;
-          if (_norm(e.text).includes(p)) { previewText = ''; return; }
+          if (_norm(e.text).includes(p)) { cancelPreviewDrop(); previewText = ''; return; }
         }
       }
     }
