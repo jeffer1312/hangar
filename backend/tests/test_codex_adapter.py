@@ -816,7 +816,7 @@ def test_ensure_tmux_tui_creates_thread_with_matching_permissions():
     command = new_session.call_args.args[2]
     assert command == (
         "codex --remote ws://127.0.0.1:45123 --no-alt-screen -C /tmp/proj "
-        "--sandbox workspace-write --ask-for-approval never"
+        "--sandbox danger-full-access --ask-for-approval never"
     )
 
 

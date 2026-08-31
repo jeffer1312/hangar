@@ -14,8 +14,16 @@ sistema supoe, calada. Modulo so de stdlib, de proposito: o wrapper roda no `pyt
 
 # clientInfo do handshake initialize (ver docs/codex-app-server-contract.md).
 CLIENT_INFO = {"name": "hangar", "title": None, "version": "0.1.0"}
-# Codex pode EDITAR arquivos no cwd da sessao -> workspace-write (nao read-only do spike).
-SANDBOX = "workspace-write"
+# Acesso total, como as outras sessoes do app. Os outros tres agentes (Claude, Pi, Kimi) rodam sem
+# sandbox nenhum; o Codex era o unico presso, e nao por decisao de quem usa -- foi so o spike que
+# parou no meio do caminho (read-only -> workspace-write -> e ficou ali).
+# O que o `workspace-write` custava, medido em 30/08/2026: ele corta a REDE, loopback incluido, e
+# por isso `hangar-send` de dentro de uma sessao Codex morria em "backend inacessivel em
+# 127.0.0.1:8765" com o backend no ar -- o Codex era o unico agente que nao conseguia falar com as
+# sessoes irmas. `danger-full-access` e o par do `bypassPermissions` do Claude, e vale nas DUAS
+# pontas: e valor aceito pelo `--sandbox` do CLI e pelo campo `sandbox` do app-server (a flag
+# `--dangerously-bypass-approvals-and-sandbox` so existe no CLI, e deixaria as duas divergentes).
+SANDBOX = "danger-full-access"
 APPROVAL = "never"
 # Nome do lancador no PATH (symlink do install-claude-wrapper.sh).
 EXECUTAVEL = "hangar-codex-tui"

@@ -217,8 +217,20 @@ def test_lancador_retoma_a_conversa_pedida(tmp_path):
     assert "-C" not in argv
     # A politica de sandbox/aprovacao vale na conversa retomada tambem: sem ela a TUI pode parar
     # num pedido de aprovacao que ninguem responde, e o app fica olhando uma sessao muda.
-    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert argv[argv.index("--sandbox") + 1] == "danger-full-access"
     assert argv[argv.index("--ask-for-approval") + 1] == "never"
+
+
+def test_o_sandbox_nao_pode_voltar_a_prender_a_rede():
+    """Sessao Codex roda SEM sandbox, como Claude, Pi e Kimi — e nao e so simetria.
+
+    `workspace-write` corta a REDE, loopback incluido (medido em 30/08/2026): dentro dele o
+    `hangar-send` de uma sessao Codex morria em "backend inacessivel em 127.0.0.1:8765" com o
+    backend no ar, e o Codex era o unico agente incapaz de falar com as sessoes irmas. Quem trocar
+    este valor de volta reintroduz isso, e o sintoma nao parece sandbox nenhum."""
+    from app.adapters.codex.lancador import APPROVAL, SANDBOX
+    assert SANDBOX == "danger-full-access"
+    assert APPROVAL == "never"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
