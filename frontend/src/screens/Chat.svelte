@@ -299,7 +299,8 @@
     else localStorage.removeItem(draftKey);
   });
   // Preview AO VIVO do bloco de assistente em voo (lido do pane via SSE 'preview'). Texto-completo,
-  // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto, ou ao sair de working.
+  // full-replace; some quando o assistant_msg canonico (do .jsonl) cobre o texto — sair de working
+  // so agenda o drop (carencia abaixo), nunca apaga na hora.
   let previewText = $state('');
   // Texto da previa e markdown CRU (veio do agente: sidecar do Pi, deltas do Codex) e nao texto ja
   // pintado pela TUI. Decide se a bolha RENDERIZA -- ver AssistantBubble.
@@ -307,6 +308,20 @@
   // Previa INCREMENTAL (so cresce no fim): sidecar/deltas, ou a costura do pane do Kimi
   // (_costurar no backend). Libera a bolha sem o teto de 10 linhas do texto raspado.
   let previewFull = $state(false);
+  // Carencia entre o fim do turno e a bolha real: o Stop (hook) chega ANTES do tail do .jsonl
+  // entregar o assistant_msg, entao apagar a previa na hora abria um buraco de ~1-2s no meio da
+  // leitura e a bolha voltava re-animando. Sair de working AGENDA o drop; quem apaga de verdade
+  // e o swap atomico do assistant_msg. O timer so vence se o bloco nunca vier (turno so de
+  // ferramentas / interrompido) — a previa orfa nao pode ficar congelada pra sempre.
+  let previewDropTimer: ReturnType<typeof setTimeout> | undefined;
+  function dropPreviewSoon() {
+    if (previewDropTimer !== undefined || !previewText) return;
+    previewDropTimer = setTimeout(() => { previewDropTimer = undefined; previewText = ''; }, 5000);
+  }
+  function cancelPreviewDrop() {
+    clearTimeout(previewDropTimer);
+    previewDropTimer = undefined;
+  }
   let dockEl: HTMLElement | undefined = $state();
   // Altura real do dock (composer) -> vira padding da lista pra ultima msg sempre limpar o glass.
   let dockH = $state(150);
@@ -1214,6 +1229,7 @@
             // bolha re-animando e scroll pulando — o usuario perdia o ponto da leitura.)
             if (previewText) {
               swapIds.add(ev.id);
+              cancelPreviewDrop();
               previewText = '';
             }
           }
@@ -1227,9 +1243,11 @@
         stateEvent = JSON.parse(e.data) as StateEvent;
         // Turno acabou sem bloco de assistente (só ferramentas, ou interrompido): ninguém mais viria
         // apagar a prévia, porque o "" deixou de apagá-la enquanto working (ver o handler de
-        // preview). Sair de `working` é o outro dono — sem isto a última frase em voo ficaria
-        // congelada na tela depois do fim.
-        if (stateEvent?.state !== 'working' && previewText) previewText = '';
+        // preview). Sair de `working` é o outro dono — mas via CARÊNCIA (dropPreviewSoon), nunca
+        // na hora: o assistant_msg do .jsonl chega DEPOIS deste evento, e zerar aqui era o pisca
+        // (prévia some -> buraco -> bolha volta re-animando).
+        if (stateEvent?.state === 'working') cancelPreviewDrop();
+        else if (previewText) dropPreviewSoon();
         // Pergunta respondida em OUTRO aparelho (ou direto no terminal): o pane sai do
         // `awaiting_input` e ninguem mais fechava o stepper AQUI — ele ficava na tela pedindo
         // resposta de algo ja respondido. Pergunta de Pi/Kimi tem dono proprio (o $effect do
@@ -1282,7 +1300,13 @@
         // Não vira bolha fantasma porque quem apaga a prévia de verdade são os DOIS donos que já
         // existem: o `assistant_msg` real (swap atômico, ~30 linhas acima) e a saída de `working`
         // (logo abaixo, no handler de state). O "" só perdeu o papel de terceiro dono.
-        if (!t && stateEvent?.state === 'working') return;
+        if (!t) {
+          // "" do Stop com o estado já idle: mesma carência do handler de state — o bloco real
+          // ainda está a caminho pelo tail do .jsonl.
+          if (stateEvent?.state !== 'working') dropPreviewSoon();
+          return;
+        }
+        cancelPreviewDrop();
         previewText = t;
         previewMd = !!ev.md;
         previewFull = !!ev.full;
@@ -1305,6 +1329,7 @@
       events = [];
       idIndex.clear();
       reseedDerived();          // zera activity/asstCount junto (loadHistory re-semeia com o novo)
+      cancelPreviewDrop();
       previewText = '';
       stateEvent = null;
       statsEvent = null;      // transcript novo -> a faixa zera junto (o backend recomeça o fold)
@@ -1391,6 +1416,7 @@
     es?.close();
     clearTimeout(watchdog);
     clearTimeout(reconnectTimer);
+    cancelPreviewDrop();
     document.removeEventListener('visibilitychange', onVisible);
   });
 
@@ -1650,13 +1676,17 @@
     const committed = asstCount > _asstSeen;
     _asstSeen = asstCount;
     if (!pv) return;
-    // (a) bloco novo commitou OU (b) saiu de working -> dropa.
+    // (a) bloco novo commitou -> dropa na hora (o texto já está na tela como bolha).
+    if (committed) { cancelPreviewDrop(); previewText = ''; return; }
+    // (b) saiu de working -> CARÊNCIA, não drop imediato (o assistant_msg ainda vem pelo tail;
+    // zerar aqui era um dos três donos do pisca de fim de turno). Segue pro (c): se o texto já é
+    // bolha, o drop imediato de lá resolve a duplicata sem esperar o timer.
     // `stateEvent &&` porque "ainda não chegou estado nenhum" NÃO é "saiu de working": currentState
     // nasce 'idle' por default, e na abertura da conversa o preview chega ANTES do primeiro evento
     // `state` (o broker publica o texto do pane na inscrição; o state vem no tick seguinte). Sem o
     // guard, abrir a conversa no meio de um turno longo apagava a prévia na hora — e como o broker
     // só reemite em MUDANÇA do pane, um bloco parado (um painel de tarefas, p.ex.) não voltava mais.
-    if (committed || (stateEvent && currentState !== 'working')) { previewText = ''; return; }
+    if (stateEvent && currentState !== 'working') dropPreviewSoon();
     // (c) residual coberto por QUALQUER das últimas msgs commitadas (não só a última): entre turnos o
     // pane ainda mostra o bloco anterior como "● tail" e o broker reemite -> dropa se já é bolha.
     const p = _norm(pv);
