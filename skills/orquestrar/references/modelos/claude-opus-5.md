@@ -25,7 +25,7 @@ revisor (três sessões, rotacionadas por contexto e por cota).
 Lê o print direto, sem ferramenta externa. É o que o torna o revisor certo para **Task de tela**:
 a passada final sobre o print e a barra sai sem custo de tradução, e ele enxerga o conjunto de
 estados de uma vez. **Refazer o protocolo cego do executor não é mais trabalho do revisor**
-(`revisor.md`, "Você NÃO refaz o protocolo cego") — foi essa mudança que tirou a comparação cega da
+(`revisor-visual.md`, "Você NÃO refaz o protocolo cego") — foi essa mudança que tirou a comparação cega da
 conta dele.
 
 ## Onde ele é bom
@@ -40,7 +40,7 @@ conta dele.
 - **Prova por mutação sem ser mandado:** copiou o front pra fora do repo, tirou o guard e viu o
   teste novo cair sozinho (`PASS(6) FAIL(1)`); tirou o guard irmão e nada caiu — logo aquele ponto
   não tinha teste. É a técnica que separou teste que prova o cenário de teste decorativo, e virou
-  régua (`revisor.md`).
+  régua (`revisor-catalogo.md`).
 - **Carimba a instância do nó pra provar ciclo de vida** (`dataset.<marca>` antes da ação, conferir
   depois) — a única técnica que distingue "reapareceu" de "nunca saiu" (16/08/2026).
 - **Corrige a própria evidência e retira por escrito** conclusão que não se sustenta, sem ser

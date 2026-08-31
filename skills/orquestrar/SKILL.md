@@ -47,8 +47,8 @@ sessão acaba confirmando que é revisora enquanto está no meio de um commit.
 |---|---|---|
 | **planejador** | `references/planejamento.md` | o usuário te pediu o trabalho e não existe kick-off |
 | **árbitro** | `references/arbitro.md` (+ 3 páginas por momento, que ele lista) | você escreveu o plano e o usuário aprovou |
-| **executor** | `references/executor.md` | o kick-off diz `Papel: executor único` |
-| **revisor** | `references/revisor.md` | o kick-off diz `Papel: revisor` |
+| **executor** | `references/executor.md` (+ 2 páginas por tipo de Task, que ela lista) | o kick-off diz `Papel: executor único` |
+| **revisor** | `references/revisor.md` (+ 2 páginas por momento, que ela lista) | o kick-off diz `Papel: revisor` |
 | **revisão final** | `references/revisao-final.md` | o kick-off diz `Papel: revisão da branch` |
 | **retrospectiva** | `references/retrospectiva.md` | o kick-off diz `Papel: retrospectiva` |
 

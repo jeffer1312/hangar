@@ -101,6 +101,22 @@ for f in "${arquivos[@]}"; do
   done < <(grep -n 'stash create' "$f" 2>/dev/null | cut -d: -f1)
 done
 
+# 6. Ponteiro para pagina que nao existe. Fatiar uma pagina em varias e a operacao que quebra
+#    referencia cruzada em silencio: o texto continua legivel e o leitor abre o arquivo errado.
+#    Arquivos que a EXECUCAO cria (nao paginas da skill) nao sao ponteiro e nao entram na conta.
+for f in "${arquivos[@]}"; do
+  while IFS= read -r alvo; do
+    [ -z "$alvo" ] && continue
+    case "$alvo" in licoes.md|registro.md|regras.md) continue ;; esac
+    if [ ! -f "references/$alvo" ] && [ ! -f "$alvo" ] && [ ! -f "references/modelos/$alvo" ]; then
+      echo
+      echo "✗ $f aponta para \`$alvo\`, que nao existe."
+      falhou=1
+    fi
+  done < <(grep -oh '`\(references/\)\?[a-z][a-z0-9-]*\.md`' "$f" 2>/dev/null \
+             | tr -d '`' | sed 's|^references/||' | sort -u)
+done
+
 # 4. As paginas que descrevem o mesmo fluxo em outro contexto usam o fluxo novo.
 for f in references/revisao-final.md references/paralelo-worktree.md references/replanejar.md; do
   if ! grep -q 'rodada\|árvore suja\|stash' "$f"; then

@@ -22,7 +22,7 @@ fabricante e de reviews públicos, não de rodada nossa — a primeira execuçã
 - **Tratar como executor que aplica receita literal** (mesma postura da ficha do
   deepseek-v4-flash): investir no detalhe do passo; critério visual vira número.
 - ~~**Assumir que NÃO enxerga imagem** até prova em contrário → protocolo de visão do
-  `executor.md` (`see <caminho>`) obrigatório nas Tasks de tela.~~
+  `executor-visual.md` (`see <caminho>`) obrigatório nas Tasks de tela.~~
   **DERRUBADA em 19/08/2026 pelo usuário: o muse-spark TEM visão própria.** Ele lê o print com
   `Read` no caminho absoluto, direto. Chamar `see` aqui é um turno inteiro embrulhando uma
   capacidade que o modelo já tem — e foi o que aconteceu na rodada 1 da Task 1 do trabalho `enx`:

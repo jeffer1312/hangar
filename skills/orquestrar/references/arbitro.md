@@ -131,7 +131,7 @@ resto por alto, então régua enterrada na página 5 de um arquivo qualquer não
 depois dela — uma régua decidida de manhã foi violada no mesmo dia por duas das três sessões
 abertas depois. **Caso obrigatório dessa regra: os invalidadores de prova visual**
 (tamanho/viewport, idioma dos dois lados, borda da captura, print auto-suficiente — ver
-`executor.md`) **vão repetidos no kick-off de TODA Task visual**, mesmo já estando no contrato: são
+`executor-visual.md`) **vão repetidos no kick-off de TODA Task visual**, mesmo já estando no contrato: são
 a única classe de régua cuja violação não produz erro nenhum — a prova sai bonita e é lixo. Já
 custou uma rodada inteira por uma comparação cega com um lado em `pt` e outro em `en`, com a régua
 escrita no contrato e ausente do kick-off.

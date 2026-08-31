@@ -350,7 +350,7 @@ d) Sem barra nesta Task.
 
 **"Sem barra" é opção legítima e fica na lista.** Escolhida, ela entra no plano como
 `Barra: nenhuma — decisão do usuário, <data>`, e o portão visual daquela Task volta a ser o
-protocolo normal do `executor.md` (abrir, clicar, capturar, olhar), sem a comparação cega.
+protocolo normal do `executor-visual.md` (abrir, clicar, capturar, olhar), sem a comparação cega.
 Escolha registrada não é buraco; buraco é o campo em branco que ninguém decidiu.
 
 Se as três candidatas te parecerem fracas, diga isso e proponha outras — barra que você mesmo
@@ -416,7 +416,7 @@ Olhe as Tasks e responda:
 |---|---|
 | Cada Task é volume mecânico, raciocínio sutil ou julgamento visual? | quem escreve — pode ser **um escritor por Task** |
 | O erro típico dela aparece em quê: teste, tela, carga, estado em disco? | o que o revisor precisa **conseguir fazer** (ver print, rodar harness, ler concorrência) |
-| Tem Task visual? O executor escolhido enxerga imagem? | se não enxerga, o protocolo de visão do `executor.md` (`see`) é obrigatório e entra no contrato — não é motivo pra descartar o motor |
+| Tem Task visual? O executor escolhido enxerga imagem? | se não enxerga, o protocolo de visão do `executor-visual.md` (`see`) é obrigatório e entra no contrato — não é motivo pra descartar o motor |
 | Cada papel tem sessão própria, sem ninguém acumulando dois? | **não negociável** — ver as regras fixas abaixo |
 | Em qual conta, e a cota dela aguenta? | os motores, e o fallback |
 
