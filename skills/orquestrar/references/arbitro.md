@@ -52,7 +52,7 @@ Você é o único que escreve no contrato.
   outros três, que é impedir uma sessão de registrar a **própria autorização**: anotar o veredito
   que você acabou de dar é fato, não permissão. O contrato, o registro e as lições continuam só
   seus. **O contrato dos seis tipos e dos campos mora no validador** —
-  `$SKILL/scripts/orq-valida-eventos.py` (o docstring é a especificação; rode-o quando quiser, sai
+  `${CLAUDE_SKILL_DIR}/scripts/orq-valida-eventos.py` (o docstring é a especificação; rode-o quando quiser, sai
   0 se o contrato fecha). Campo extra pode; tipo novo não — o app agrega por esses seis. Prosa,
   contexto e julgamento continuam no registro.md; o jsonl alimenta as telas de orquestração e as
   fichas com número.

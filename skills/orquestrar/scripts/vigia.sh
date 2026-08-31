@@ -22,7 +22,7 @@
 # Rode como SERVIÇO, nunca como processo de fundo do turno (`setsid nohup … &` morre junto com o
 # turno que a lançou — some do ps, log vazio, sem erro; medido em 17/08/2026):
 #   systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
-#     "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 -d <registro.md>
+#     "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 -d <registro.md>
 # `Restart=always` é a outra metade: sem ele, a unidade que cair deixa o trabalho sem rede.
 #
 # Uso: vigia.sh <sessao> [sessao...] <arbitro> [-m <minutos>] [-d <diario.md>]

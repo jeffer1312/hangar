@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Valida um eventos.jsonl. ESTE arquivo é o contrato dos tipos e campos — a skill aponta pra cá.
 
-Uso: python3 $SKILL/scripts/orq-valida-eventos.py <arquivo> [...]
+Uso: python3 ${CLAUDE_SKILL_DIR}/scripts/orq-valida-eventos.py <arquivo> [...]
 Sai 0 se todos válidos; imprime linha e defeito de cada inválida.
 
 Os seis tipos e seus campos obrigatórios estão em TIPOS abaixo. Regras que o código cobra ou que

@@ -40,7 +40,7 @@ com a skill:
 
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
-  "$SKILL/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 \
+  "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" <sessao> [sessao...] <arbitro> -m 5 \
   -d ~/.hangar/orq/<data>-<gid>/registro.md
 ```
 
@@ -57,7 +57,7 @@ todos os escritores, porque ali todos têm — uma vigia só, com todos eles den
 
 ```bash
 systemd-run --user --unit=vigia-<gid> --property=Restart=always --property=RestartSec=20 \
-  "$SKILL/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
+  "${CLAUDE_SKILL_DIR}/scripts/vigia.sh" t1 t2 t3 review review2 arbitro -m 10 \
   -d ~/.hangar/orq/<data>-<gid>/registro.md
 ```
 
