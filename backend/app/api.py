@@ -60,6 +60,7 @@ from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import merged_events
 from app.state import corrige_ocioso_kimi
+from app.uploads import rename_sessao as uploads_rename_sessao
 from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
 from app.transcribe import transcribe, TranscribeError
@@ -1614,11 +1615,17 @@ def rename_session(name: str, body: RenameBody):
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
     if new == name:
         return {"ok": True, "name": name}
+    info_antes = _cached_info_sync(name)   # o cwd, pra mover a pasta de anexos depois do rename
     if tmux.has_session(new):
         raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
     if not tmux.rename_session(name, new):
         raise HTTPException(500, detail=erro("sessao_falha_renomear", "falha ao renomear"))
     registry.rename(name, new)  # migra o cache name->jsonl (senao serve transcript errado pos-rename)
+    if info_antes is not None and info_antes.cwd:   # anexos: a pasta do cofre e por sessao
+        try:
+            uploads_rename_sessao(info_antes.cwd, name, new)
+        except OSError:
+            _log.warning("rename: anexos de %s ficaram no nome antigo", name, exc_info=True)
     from app.pqueue import PromptQueue
     try:
         oq, nq = PromptQueue(name).path, PromptQueue(new).path

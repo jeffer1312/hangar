@@ -24,7 +24,7 @@ def cofre(tmp_path, monkeypatch):
 
 
 def _pasta(cofre, tmp_path, sessao=SESSAO):
-    return cofre / tmp_path.name / sessao
+    return cofre / uploads._projeto(str(tmp_path)) / sessao
 
 
 def test_save_upload_writes_into_cofre_por_projeto_e_sessao(tmp_path, cofre):
@@ -57,7 +57,41 @@ def test_acento_no_nome_do_projeto_vira_letra_base(tmp_path, cofre, monkeypatch)
     projeto = tmp_path / "Área de trabalho"
     projeto.mkdir()
     p = Path(save_upload(str(projeto), SESSAO, PNG, "x.png"))
-    assert p.parent == cofre / "Area-de-trabalho" / SESSAO
+    assert p.parent.parent.name.startswith("Area-de-trabalho-")
+
+
+def test_projetos_de_mesmo_nome_em_lugares_diferentes_nao_se_misturam(tmp_path, cofre):
+    # Dois checkouts chamados "api": com o basename sozinho caiam no mesmo balde, a galeria de um
+    # mostrava o anexo do outro e o prune apagava os dois.
+    a, b = tmp_path / "work" / "api", tmp_path / "side" / "api"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    pa = Path(save_upload(str(a), SESSAO, PNG, "a.png"))
+    pb = Path(save_upload(str(b), SESSAO, PNG, "b.png"))
+    assert pa.parent != pb.parent
+    assert len(list_uploads(str(a), SESSAO, 30)) == 1
+    _envelhecer(str(pb), 40)
+    assert prune_old(str(a), 30) == 0      # varrer um nao alcanca o outro
+    assert pb.exists()
+
+
+def test_renomear_sessao_leva_os_anexos_junto(tmp_path):
+    # registry.rename move fila, then, pareamento e o shell escondido; sem isto os anexos ficavam
+    # no nome antigo e a galeria voltava vazia — indistinguivel de "sem anexos".
+    p = Path(save_upload(str(tmp_path), "nome-velho", PNG, "x.png"))
+    uploads.rename_sessao(str(tmp_path), "nome-velho", "nome-novo")
+    assert not p.exists()
+    achados = list_uploads(str(tmp_path), "nome-novo", 30)
+    assert [f["filename"] for f in achados] == [p.name]
+    assert list_uploads(str(tmp_path), "nome-velho", 30) == []
+
+
+def test_rename_nao_sobrescreve_pasta_existente(tmp_path):
+    save_upload(str(tmp_path), "a", PNG, "x.png")
+    alvo = save_upload(str(tmp_path), "b", PNG, "y.png")
+    uploads.rename_sessao(str(tmp_path), "a", "b")   # destino ocupado -> nao mexe
+    assert Path(alvo).exists()
+    assert len(list_uploads(str(tmp_path), "a", 30)) == 1
 
 
 def test_save_upload_accepts_any_type(tmp_path):

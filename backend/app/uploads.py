@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 import secrets
@@ -25,10 +26,28 @@ def _slug(txt: str) -> str:
     return "_" if s in (".", "..") else s[:64]
 
 
+def _projeto(cwd: str) -> str:
+    """Nome da pasta do projeto + 6 hex do caminho inteiro. O nome sozinho colide: dois checkouts
+    de mesmo basename cairiam no mesmo balde, e o `prune_old` apagaria anexo de um varrendo o outro."""
+    real = os.path.realpath(cwd)
+    digest = hashlib.sha256(real.encode("utf-8", "surrogateescape")).hexdigest()[:6]
+    return f"{_slug(Path(real).name)}-{digest}"
+
+
+def rename_sessao(cwd: str, antigo: str, novo: str) -> None:
+    """Move a pasta de anexos quando a sessão é renomeada. Sem isto o rename os orfaniza: a galeria
+    volta vazia (indistinguível de "sem anexos") e o link antigo do transcript vira 404."""
+    de, para = _base(cwd, antigo), _base(cwd, novo)
+    if not de.is_dir() or de == para or para.exists():
+        return
+    para.parent.mkdir(parents=True, exist_ok=True)
+    de.rename(para)
+
+
 def _base(cwd: str, sessao: str) -> Path:
     """`~/.hangar/uploads/<projeto>/<sessão>/`. Fora do cwd porque o `.gitignore` que esconde a
     pasta é o DESTE repo — em qualquer outro ela aparece untracked. Sem migração do que já existe."""
-    return _raiz() / _slug(Path(os.path.realpath(cwd)).name) / _slug(sessao)
+    return _raiz() / _projeto(cwd) / _slug(sessao)
 
 
 class UploadError(Exception):
