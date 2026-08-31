@@ -441,7 +441,7 @@ O time vai pro `regras-<gid>.md` como **tabela de cabeçalho fixo**, na seção 
 — seis colunas, uma linha por papel, **valor cru em cada célula** (sem negrito, sem parêntese,
 sem prosa; `-` = vazio). Existe uma sétima coluna opcional, `vez`, para quando o time reveza
 entre contas dentro do mesmo papel (uma linha por conta, a vez decidida pelo número da Task) — só
-entra na tabela quando algum papel de fato reveza; formato e regra em `arbitro.md`, "Abrir uma
+entra na tabela quando algum papel de fato reveza; formato e regra em `arbitro-lancamento.md`, "Abrir uma
 sessão". **Ponto de partida:** se existir `<pair_dir>/regras-padrao.md` (o "time
 padrão", que o usuário configura no modal Orquestração do hangar antes de qualquer grupo), copie a
 tabela de lá e só ajuste os nomes de sessão — ela é a escolha dele, não a tua:
@@ -472,7 +472,7 @@ mão dele lá.
 - `sessão` terminando em `*` = papel com uma sessão por Task (`<trab>-t*`).
 - Um papel pode ocupar **mais de uma linha**, revezando entre contas: acrescente a coluna `vez`
   (`| papel | vez | sessão | …`) e numere 1, 2, 3. A Task N cabe à linha `(N-1) % total`. Regra
-  completa em `arbitro.md`, "Papel com rodízio". Sem rodízio, a coluna não existe.
+  completa em `arbitro-lancamento.md`, "Papel com rodízio". Sem rodízio, a coluna não existe.
 
 **Trabalho em mais de um repositório**: acrescente ao contrato, ANTES de abrir as sessões, uma
 seção com o que atravessa a fronteira. É o que impede dois repos de entregarem pontas que não

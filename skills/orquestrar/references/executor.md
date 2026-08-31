@@ -465,7 +465,7 @@ Isso não é velocidade, é outro tipo de olho: eles leem o código sem o seu co
 o que você já explicou pra si mesmo. Medido em 28/08/2026, num trabalho que tinha passado por
 revisão independente a cada Task: quatro revisores rodados juntos antes do push acharam **12 erros
 de tipo** que o portão por Task tinha deixado passar. Quais existem nesta máquina está no contrato
-(`arbitro.md`, "Levante o ferramental"); passe a eles os **caminhos explícitos** dos arquivos da
+(`arbitro-lancamento.md`, "Levante o ferramental"); passe a eles os **caminhos explícitos** dos arquivos da
 Task, porque revisor por linguagem monta o próprio diff com filtro de extensão e devolve "nada a
 apontar" sobre código que não leu.
 

@@ -69,7 +69,7 @@ git worktree add /caminho/wt-t2 -b <trab>-t2 "$BASE"
 git worktree add /caminho/wt-t3 -b <trab>-t3 "$BASE"
 ```
 
-Uma sessão de executor por worktree, criada pela receita de sempre (`arbitro.md`, "Abrir uma
+Uma sessão de executor por worktree, criada pela receita de sempre (`arbitro-lancamento.md`, "Abrir uma
 sessão"). O kick-off de cada uma leva **o caminho da worktree dela** como repo, a branch
 dela, e `HEAD esperado` = `$BASE`. Errar isso é uma sessão trabalhando na árvore da outra.
 

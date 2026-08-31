@@ -46,7 +46,7 @@ sessão acaba confirmando que é revisora enquanto está no meio de um commit.
 | Seu papel | Leia | Você é isso quando |
 |---|---|---|
 | **planejador** | `references/planejamento.md` | o usuário te pediu o trabalho e não existe kick-off |
-| **árbitro** | `references/arbitro.md` | você escreveu o plano e o usuário aprovou |
+| **árbitro** | `references/arbitro.md` (+ 3 páginas por momento, que ele lista) | você escreveu o plano e o usuário aprovou |
 | **executor** | `references/executor.md` | o kick-off diz `Papel: executor único` |
 | **revisor** | `references/revisor.md` | o kick-off diz `Papel: revisor` |
 | **revisão final** | `references/revisao-final.md` | o kick-off diz `Papel: revisão da branch` |
@@ -448,7 +448,7 @@ sai daqui na próxima vez que alguém a ler.
   de levantamento está dentro do próprio arquivo), escreva a resposta lá com a data, e siga. O
   contrato traz a tabela conta↔modelo por papel (`## Quem é quem` do `regras-<gid>.md`,
   cabeçalho fixo `| papel | sessão | provider | conta | modelo | esforço |` — ou de 7 colunas com
-  `vez`, quando o papel reveza entre contas por Task (`references/arbitro.md`, "Abrir uma sessão")
+  `vez`, quando o papel reveza entre contas por Task (`references/arbitro-lancamento.md`)
   — lida e gravada pelo modal Orquestração do app, então célula com prosa não é lida); ela é fechada. Modelo fora dela não se usa **nem pra teste**, nem porque "é mais barato",
   nem porque apareceu no catálogo. Cada conta tem cota e preço próprios, e provedor errado **cobra
   dinheiro do usuário** — um `openrouter/*` escolhido por conta própria é fatura, não experimento.
