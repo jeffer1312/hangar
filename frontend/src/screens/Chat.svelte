@@ -666,6 +666,8 @@
   // "claude" e o caso comum e some do header; os demais ganham badge (providerBadge abaixo) e o
   // "codex" alem disso esconde controles Claude-only.
   const sessionProvider = $derived(allSessions.find((s) => s.name === sessionName)?.provider);
+  // Motor da sessão (null = conta Anthropic) — o Composer usa no placeholder ("Mensagem para …").
+  const sessionEngine = $derived(allSessions.find((s) => s.name === sessionName)?.engine ?? null);
   const isCodex = $derived(sessionProvider === 'codex');
   const sessionTracked = $derived(allSessions.find((s) => s.name === sessionName)?.tracked);
   // Kimi "sem id" e o estado NORMAL pre-1o-prompt: o Kimi so cria a sessao (id + wire.jsonl) no
@@ -2048,6 +2050,7 @@
         onOpenGit={() => (gitOpen = true)}
         onOpenPreview={() => (previewOpen = true)}
         provider={sessionProvider}
+        engine={sessionEngine}
         {pairPeers}
         {pairedState}
         onOpenPair={() => (pairOpen = true)}

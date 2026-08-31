@@ -82,6 +82,9 @@
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
     // o Codex nao tem nem um nem outro); "kimi" nao tem sheet de modelo neste MVP (pill so leitura).
     provider?: 'claude' | 'codex' | 'pi' | 'kimi';
+    // Motor da sessao (SessionInfo.engine). Numa sessao de motor quem responde nao e o Claude,
+    // entao o placeholder usa o modelo real (pill/statusline) em vez de "Claude".
+    engine?: string | null;
     // Shells de fundo rodando nesta sessão (lib/activity). 0 = chip nem aparece. O terminal já
     // dizia "N shells still running" e o app não dizia nada; o chip é o atalho, o detalhe (qual
     // comando, há quanto tempo) fica no painel de Atividade, que o toque abre.
@@ -95,6 +98,7 @@
     shellsRodando = 0, onOpenActivity,
     inputText = $bindable(''),
     provider = 'claude',
+    engine = null,
     filaCount = 0,
     stats = null,
   }: Props = $props();
@@ -457,6 +461,10 @@
   let claudeEffortPillEl = $state<HTMLElement | null>(null);
   let chosenModel = $state<string | null>(null);   // rotulo otimista: 'Opus' | 'Sonnet' | ...
   let chosenEffort = $state<string | null>(null);   // low | medium | high | xhigh | max | ultracode
+  // O Composer é UMA instância reaproveitada entre sessões: sem este reset, a escolha otimista da
+  // sessão anterior fica presa (a reconciliação só solta quando a statusline NOVA contém o texto
+  // antigo, o que pode nunca acontecer) e vazava pro pill e pro placeholder da sessão errada.
+  $effect(() => { void sessionName; chosenModel = null; chosenEffort = null; });
   // A caixa do Claude fecha ANTES do backend responder (pra nao tapar o picker no terminal), entao
   // a falha que chega depois nao tem onde aparecer la dentro: sai aqui, na linha de erro do envio.
   let modelError = $state<string | null>(null);
@@ -678,6 +686,12 @@
 
   const pillModel = $derived(chosenModel ?? status?.model ?? null);
   const pillEffort = $derived(chosenEffort ?? status?.effort ?? null);
+  // Quem responde nesta sessao, pro placeholder. Sessao de motor e Claude Code por fora mas outro
+  // modelo por dentro — "Claude" ali era mentira; usa o modelo real (pill/statusline), caindo no
+  // nome do motor enquanto a statusline nao chegou.
+  const nomePlaceholder = $derived(
+    isCodex ? 'Codex' : isKimi ? 'Kimi' : isPi ? 'Pi'
+      : engine ? (pillModel ?? engine) : 'Claude');
   // Haiku nao usa esforco de raciocinio (o picker responde "Effort not supported").
   const semEsforcoClaude = $derived((pillModel ?? '').toLowerCase().includes('haiku'));
   // Reconciliacao do modelo: quando o statusline confirma a escolha (substring match),
@@ -1580,7 +1594,7 @@
       bind:this={textareaEl}
       bind:value={inputText}
       class="composer-textarea"
-      placeholder={isCodex ? m.composer_mensagem_para({ nome: 'Codex' }) : isKimi ? m.composer_mensagem_para({ nome: 'Kimi' }) : m.composer_mensagem_para({ nome: 'Claude' })}
+      placeholder={m.composer_mensagem_para({ nome: nomePlaceholder })}
       rows={1}
       oninput={handleInput}
       onkeydown={handleKeydown}
