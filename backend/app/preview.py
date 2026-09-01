@@ -385,11 +385,19 @@ def read_sidecar(stem: Optional[str]) -> Optional[str]:
         if not isinstance(text, str):
             continue
         if isinstance(ts, (int, float)) and time.time() - ts > _PREVIEW_MAX_AGE:
-            # Este e o descarte que importa operacionalmente: "a extensao morreu no meio do turno".
-            # Sem o log, quem for entender por que a previa ficou parada ate cair no pane nao tem o
-            # que procurar — os outros dois descartes desta funcao ja logam.
-            _log.debug("preview: sidecar velho descartado path=%s idade=%.0fs", f, time.time() - ts)
-            continue
+            if text:
+                # Este e o descarte que importa operacionalmente: "a extensao morreu no meio do
+                # turno". Sem o log, quem for entender por que a previa ficou parada ate cair no
+                # pane nao tem o que procurar — os outros dois descartes desta funcao ja logam.
+                _log.debug("preview: sidecar velho descartado path=%s idade=%.0fs",
+                           f, time.time() - ts)
+                continue
+            # "" NAO envelhece: e a resposta "nada em voo" do fim do turno, e descarta-la mandava o
+            # broker raspar o pane de uma sessao PARADA — o ultimo bloco commitado voltava como
+            # bolha fantasma ao reabrir o app. Preco aceito: extensao que morreu logo APOS o Stop
+            # deixa a sessao sem previa (nem pane) ate voltar a publicar; dai o log.
+            _log.debug("preview: sidecar vazio e velho, honrado mesmo assim path=%s idade=%.0fs",
+                       f, time.time() - ts)
         return text
     return None
 

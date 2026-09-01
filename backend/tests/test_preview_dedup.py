@@ -390,6 +390,10 @@ def test_sidecar_ausente_ou_velho_cai_no_pane(tmp_path, monkeypatch):
     assert read_sidecar(_sidecar(tmp_path, monkeypatch,
                                  {"text": "antigo", "ts": _t.time() - 10_000})) is None
     assert read_sidecar(None) is None                                           # sessao sem stem
+    # "" velho NAO envelhece: e a resposta "nada em voo" do fim do turno. Descarta-lo mandava o
+    # broker raspar o pane parado e o ultimo bloco commitado virava bolha fantasma ao reabrir o app.
+    assert read_sidecar(_sidecar(tmp_path, monkeypatch,
+                                 {"text": "", "ts": _t.time() - 10_000})) == ""
 
 
 def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):
