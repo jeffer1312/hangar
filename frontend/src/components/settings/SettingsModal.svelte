@@ -15,6 +15,8 @@
   import ConfigIcone from './ConfigIcone.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
+  import { fly, fade } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import OrquestracaoContas from '../OrquestracaoContas.svelte';
   import * as m from '../../paraglide/messages';
   import { listServers, onServersChanged, type Server } from '../../lib/auth';
@@ -119,6 +121,22 @@
     { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: 'sliders', servidor: true },
   ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; servidor: boolean }[];
   const SECOES = ['app', 'servidor'] as const;
+
+  // Troca de tela do modal: fly curto na direção da navegação (180ms ease-out, uso ocasional).
+  // Entrar numa sub-tela vem da direita; voltar pra raiz vem da esquerda. Com reduced-motion
+  // vira só fade (opacidade não é movimento — regra de acessibilidade da Emil). Com LISTENER,
+  // não snapshot: quem alterna a preferência do SO com o modal aberto não fica com fly vivo.
+  let semMovimento = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const on = () => (semMovimento = mq.matches); on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  });
+  function animarTela(node: HTMLElement, { x }: { x: number }) {
+    if (semMovimento) return fade(node, { duration: 120 });
+    return fly(node, { x, duration: 180, easing: cubicOut });
+  }
 
   let tituloEl = $state<HTMLElement | null>(null);
   // Fallback de foco das confirmações da tela Servidores: o botão FECHAR do modal é o controle que
@@ -273,7 +291,9 @@
         {/each}
       </aside>
       <section class="st-conteudo">
-        {@render corpo()}
+        <!-- #key por tela: a troca remonta o conteúdo, e o wrapper novo entra voando (a saída do
+             antigo é instantânea de propósito — transição de saída aqui brigaria com a nova). -->
+        {#key telaAtual}<div class="st-anim" in:animarTela={{ x: 18 }}>{@render corpo()}</div>{/key}
       </section>
     </div>
   {:else}
@@ -297,7 +317,7 @@
         </p>
       {/if}
     </header>
-    {@render corpo()}
+    {#key telaAtual}<div class="st-anim" in:animarTela={{ x: telaAtual === 'root' ? -18 : 18 }}>{@render corpo()}</div>{/key}
   {/if}
 </BottomSheet>
 {/if}
@@ -388,6 +408,26 @@
     overflow: hidden;
   }
   .st-cartao > :global(button + button) { border-top: 1px solid var(--border-subtle); }
+
+  /* Wrapper da transição entre telas: herda a altura pra não cortar o fly na horizontal. */
+  .st-anim { height: 100%; }
+
+  /* Raiz no celular: linhas entrando em cascata ao abrir o modal (30ms entre elas, entrada só,
+     nunca loop — a regra global de reduced-motion do app.css já cobre o resto). */
+  @media (prefers-reduced-motion: no-preference) {
+    .st-cartao > :global(button) { animation: st-row-in 240ms var(--ease-out) both; }
+    .st-cartao > :global(button:nth-child(2)) { animation-delay: 30ms; }
+    .st-cartao > :global(button:nth-child(3)) { animation-delay: 60ms; }
+    .st-cartao > :global(button:nth-child(4)) { animation-delay: 90ms; }
+    .st-cartao > :global(button:nth-child(5)) { animation-delay: 120ms; }
+    .st-cartao > :global(button:nth-child(6)) { animation-delay: 150ms; }
+    .st-cartao > :global(button:nth-child(7)) { animation-delay: 180ms; }
+    .st-cartao > :global(button:nth-child(8)) { animation-delay: 210ms; }
+  }
+  @keyframes st-row-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 
   /* ── Ao vivo: caixinha flutuante no canto direito ───────────────────────────────────────────
      Nao e um dialogo modal: sem backdrop, sem trap de foco, e o app atras continua clicavel. E o
