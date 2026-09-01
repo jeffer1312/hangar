@@ -35,7 +35,9 @@
     // Devolve false quando o servidor nao existe mais, pra UI poder dizer isso em vez de fingir.
     onUpdateServerToken: (id: string, token: string) => boolean;
     onRemoveServer: (id: string) => void;
-    onAddServer: () => void;
+    // Só o popover (não-embedded) mostra o ServerManager com "Adicionar servidor"; o drawer do
+    // celular não tem o gesto (gestão em Configurações → Servidores), então o pai embedded não passa.
+    onAddServer?: () => void;
     onReconnect: () => void;
     onLogout: () => void;
   }
@@ -69,7 +71,7 @@
 
   // Ações que disparam UI/fluxo do pai fecham o menu antes (o pai abre seu sheet/confirm/reload).
   // O modal vive FORA do menu (o menu fecha ao abrir): renderizado no fim do componente, sobrevive.
-  function addServer() { onClose(); onAddServer(); }
+  function addServer() { onClose(); onAddServer?.(); }
   function reconnect() { onClose(); onReconnect(); }
   function logout() { onClose(); onLogout(); }
   function switchServer(id: string) {

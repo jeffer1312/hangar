@@ -11,9 +11,7 @@ import { intlLocale } from '../lib/locale';
   import HangarMark from '../components/icons/HangarMark.svelte';
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
-  import QrScanner from '../components/QrScanner.svelte';
   import BottomSheet from '../components/BottomSheet.svelte';
-  import ModalDialog from '../components/ModalDialog.svelte';
   import ConfirmSheet from '../components/ConfirmSheet.svelte';
   import Git from '../components/Git.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
@@ -21,8 +19,7 @@ import { intlLocale } from '../lib/locale';
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
   import { getSessions, createSession, deleteSession, renameSession, resumeSession, broadcast } from '../lib/api';
-  import { focusFirstInvalid } from '../lib/focusCycle';
-  import { listServers, getActiveId, selectServer, removeServer, addServerWithRollback, renameServer, updateServer, serverColor, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
+  import { listServers, getActiveId, selectServer, removeServer, renameServer, updateServer, serverColor, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, ResumeCandidate, Provider } from '../lib/types';
   import type { RemovalSnapshot } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
@@ -70,7 +67,6 @@ import { intlLocale } from '../lib/locale';
   // Lista de servidores (gerenciada no menu de conta: adicionar/remover). Sem "ativo" fixo — a lista é
   // agregada; o servidor-alvo de uma sessão é o dela, escolhido ao abrir/criar. Vem do store (derived).
   const servers = $derived(sessionsStore.servers);
-  let scanning = $state(false);
 
   // 1 SSE por servidor via store, refcount pareado EXATAMENTE 1x (retain no mount, release no cleanup).
   onMount(() => {
@@ -115,21 +111,6 @@ import { intlLocale } from '../lib/locale';
   const accountInitials = $derived(initials(accountName));
 
   // Toggle do modo seleção/broadcast (feature #9), agora no botão do header (antes vivia no menu "…").
-
-  // Adicionar servidor manual (no PC: digitar URL+token em vez de escanear QR).
-  let showAddServer = $state(false);
-  let addUrl = $state('');
-  let addToken = $state('');
-  let addError = $state('');
-  let addBusy = $state(false);
-  // Erro de VALIDAÇÃO marca os campos (aria-invalid) e foca o primeiro; erro de REDE (probe) é
-  // visível mas não marca campo indevidamente.
-  let addValidacao = $state(false);
-  let addFormEl = $state<HTMLFormElement | null>(null);
-
-  // Foca o primeiro campo inválido DEPOIS do render: o aria-invalid só existe no DOM após o flush,
-  // e focusFirstInvalid o procura no DOM — chamar no mesmo handler síncrono não acharia nada.
-  $effect(() => { if (addValidacao) focusFirstInvalid(addFormEl); });
 
   // Aguardando primeiro, depois alfabetico por nome (sortSessions compartilhado com a Sidebar — as
   // duas listas ja divergiram na ordenacao no passado). Estavel: so pula quando o ESTADO muda. Antes
@@ -504,76 +485,6 @@ import { intlLocale } from '../lib/locale';
     if (listServers().length === 0) { handleLogout(); return; }
   }
 
-  // Abre o sheet de adicionar servidor manual (URL + token), limpando o estado anterior.
-  function openAddServer() {
-    addUrl = '';
-    addToken = '';
-    addError = '';
-    drawerOpen = false;
-    showAddServer = true;
-  }
-
-  // Adiciona um servidor digitado à mão. Validação ESTRITA ANTES de tocar storage (o form tem URL
-  // e token em campos separados; monta o texto de pareamento e passa pelo MESMO validarPareamento
-  // do QR/manual). Depois valida com getSessions (api.ts lê o ativo) e faz rollback em falha —
-  // igual ao Login — pra um servidor ruim não sujar a lista nem trocar o server bom.
-  async function submitAddServer(e: SubmitEvent) {
-    e.preventDefault();
-    addBusy = true;
-    addError = '';
-    const cru = `${addUrl.trim()}${addUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(addToken.trim())}`;
-    const pareamento = validarPareamento(cru);
-    if (!pareamento) {
-      addValidacao = true;
-      addError = m.url_invalida();
-      addBusy = false;
-      return;
-    }
-    addValidacao = false;
-    // Add TRANSACIONAL: o helper valida, adiciona, roda o probe (getSessions) e reverte SÓ a
-    // entrada tocada em falha (rollback escopado) — servidor existente volta com o token antigo
-    // se nada mudou, novo não permanece; mutações concorrentes vencem. O form segue aberto pra
-    // retry, e o erro tardio reabre o modal (round 2).
-    try {
-      const r = await addServerWithRollback(pareamento.base, pareamento.token, () => getSessions());
-      if (!r.succeeded) { addValidacao = true; addError = m.url_invalida(); addBusy = false; return; }
-      showAddServer = false;
-      window.location.reload();
-    } catch (err) {
-      addValidacao = false;   // erro de REDE: visível, não marca campo
-      // Erro TARDIO não some: o usuário pode ter fechado o modal enquanto a transação rodava —
-      // reabre com a mensagem visível (mesmo caminho do QR e do desktop, round 2).
-      showAddServer = true;
-      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
-    } finally {
-      addBusy = false;
-    }
-  }
-
-  // Adiciona um servidor pelo QR (parecido com o Login): MESMO validarPareamento estrito do
-  // manual; QR inválido NÃO fecha silencioso — erro visível com retry. Add transacional: probe
-  // rejeitado não recarrega — volta pro diálogo com o erro (rollback já foi feito no helper).
-  async function handleScanServer(text: string) {
-    const cru = text.trim();
-    const parsed = validarPareamento(cru);
-    if (!parsed) {
-      scanning = false;
-      showAddServer = true;
-      addValidacao = true;
-      addError = m.lista_qr_invalido();
-      return;
-    }
-    addValidacao = false;
-    scanning = false;
-    try {
-      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
-      window.location.reload();
-    } catch (err) {
-      showAddServer = true;
-      addValidacao = false;
-      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
-    }
-  }
 </script>
 
 <div class="session-list-screen">
@@ -862,7 +773,6 @@ import { intlLocale } from '../lib/locale';
         {onRenameServer}
         {onUpdateServerToken}
         onRemoveServer={dropServer}
-        onAddServer={openAddServer}
         onReconnect={reconnectStreams}
         onLogout={() => (confirmLogout = true)}
       />
@@ -917,59 +827,6 @@ import { intlLocale } from '../lib/locale';
       </div>
     {/if}
   </BottomSheet>
-
-  {#if showAddServer}
-    <ModalDialog open={showAddServer} ariaLabel={m.sessao_adicionar_servidor()} onClose={() => (showAddServer = false)} className="add-server-dialog">
-      <div class="add-sheet">
-        <h2 class="add-title">{m.sessao_adicionar_servidor()}</h2>
-        <form onsubmit={submitAddServer} class="add-form" bind:this={addFormEl}>
-          <div class="field">
-            <label class="field-label" for="add-url">{m.sessao_url_servidor()}</label>
-            <input
-              id="add-url"
-              type="url"
-              class="field-input"
-              bind:value={addUrl}
-              placeholder="https://meu-pc.ts.net"
-              autocomplete="url"
-              autocorrect="off"
-              autocapitalize="off"
-              spellcheck={false}
-              inputmode="url"
-              aria-invalid={addValidacao || undefined}
-              aria-describedby={addValidacao ? 'sl-add-err' : undefined}
-            />
-          </div>
-          <div class="field">
-            <label class="field-label" for="add-token">{m.sessao_token()}</label>
-            <input
-              id="add-token"
-              type="password"
-              class="field-input"
-              bind:value={addToken}
-              placeholder="••••••••••••••••"
-              autocomplete="current-password"
-              aria-invalid={addValidacao || undefined}
-              aria-describedby={addValidacao ? 'sl-add-err' : undefined}
-            />
-          </div>
-          {#if addError}
-            <p id="sl-add-err" class="error-msg" role="alert">{addError}</p>
-          {/if}
-          <button type="submit" class="add-primary" disabled={addBusy || !addUrl.trim() || !addToken.trim()}>
-            {addBusy ? m.login_conectando() : m.config_servidores_adicionar()}
-          </button>
-          <button type="button" class="add-secondary" onclick={() => { showAddServer = false; scanning = true; }}>
-            {m.sessao_escanear_qr()}
-          </button>
-        </form>
-      </div>
-    </ModalDialog>
-  {/if}
-
-  {#if scanning}
-    <QrScanner onScan={handleScanServer} onClose={() => (scanning = false)} />
-  {/if}
 
   <ConfirmSheet
     open={confirmDel !== null}
@@ -1463,52 +1320,7 @@ import { intlLocale } from '../lib/locale';
     animation: spin 0.8s linear infinite;
   }
 
-  /* Sheet de adicionar servidor manual */
-  :global(.add-server-dialog) { width: min(400px, 100%); }
-  .add-sheet {
-    width: 100%;
-    max-width: 400px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-lg);
-    padding: var(--space-5);
-  }
-  .add-title {
-    font-size: var(--text-base);
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: var(--space-4);
-  }
-  .add-form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-  }
-  .field { display: flex; flex-direction: column; gap: var(--space-2); }
-  .field-label { font-size: var(--text-sm); color: var(--text-secondary); font-weight: 500; }
-  .field-input {
-    height: 48px;
-    background: var(--bg-base);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-family: var(--font-ui);
-    font-size: 16px;
-    padding: 0 var(--space-4);
-    outline: none;
-    transition: border-color 180ms ease-out;
-  }
-  .field-input::placeholder { color: var(--text-muted); }
-  .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
-  .error-msg {
-    font-size: var(--text-sm);
-    color: var(--error);
-    background: rgba(255, 69, 58, 0.08);
-    border: 1px solid rgba(255, 69, 58, 0.2);
-    border-radius: var(--radius-sm);
-    padding: var(--space-3);
-  }
-  /* Aviso de falha de ação acima da lista: mesmas cores do .error-msg (uma linguagem só de erro),
+  /* Aviso de falha de ação acima da lista: mesmas cores de erro do app (uma linguagem só),
      margem lateral pra não colar nas bordas do celular.
      sticky e não estático: o elemento vive DENTRO do container que rola, então rolado pra baixo ele
      apareceria fora da tela e a falha passaria batido — o toast do desktop é fixed e sempre aparece.
@@ -1526,32 +1338,6 @@ import { intlLocale } from '../lib/locale';
     border-radius: var(--radius-sm);
     padding: var(--space-2) var(--space-3);
   }
-  .add-primary {
-    height: 52px;
-    background: var(--accent);
-    border-radius: var(--radius-md);
-    color: #fff;
-    font-size: var(--text-base);
-    font-weight: 600;
-    width: 100%;
-    transition: background 180ms ease-out;
-  }
-  .add-primary:active:not(:disabled) { background: var(--accent-press); }
-  /* Disabled inerte (bg neutro + texto muted), nao indigo cheio a 50% que parece meio-clicavel. */
-  .add-primary:disabled { background: var(--bg-hover); color: var(--text-muted); cursor: default; }
-  .add-secondary {
-    height: 48px;
-    background: transparent;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    color: var(--text-secondary);
-    font-size: var(--text-base);
-    font-weight: 500;
-    width: 100%;
-    transition: background 180ms ease-out;
-  }
-  .add-secondary:active { background: var(--bg-hover); }
-
   /* Sheet de resume (caso ambíguo): lista de transcripts candidatos pra escolher. */
   .resume-sheet {
     padding: var(--space-4) var(--space-4) var(--space-6);
