@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { SessionInfo } from '../lib/types';
 import * as m from '../paraglide/messages';
   import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerTag, relativeTime, fmtWhen } from '../lib/format';
@@ -130,6 +131,7 @@ import * as m from '../paraglide/messages';
     clearTimeout(pressTimer);
     pressTimer = undefined;
   }
+  onDestroy(cancelPress);
   function saveRename() {
     const nv = editValue.trim();
     editing = false;
@@ -183,6 +185,9 @@ import * as m from '../paraglide/messages';
     dragging = false;
     axis = null;
     suppressClick = false;
+    // pointercancel não gera click, então o reset de onRowClick nunca roda — a flag presa
+    // engolia o toque seguinte no card, calada.
+    longPressed = false;
   }
 
   // Tap na linha: toque longo (renomeou) nao navega; se aberto ou acabou de arrastar, fecha o swipe.
