@@ -956,7 +956,7 @@
   "config_server_guardar_ajuda": "Anexo mais velho que isso é apagado no próximo upload. 0 = nunca apagar.",
   "config_server_automacoes": "Automações",
   "config_server_automacoes_ajuda": "Chave mestra do que roda sem você olhar: encadeamento de sessão e auto-resume.",
-  "config_server_pensamento": "Resumo do pensamento",
+  "config_server_pensamento": "Mostrar o raciocínio do agente",
   "config_server_pensamento_ajuda": "Pede à API o resumo do raciocínio e mostra recolhido acima da resposta. Vale só para sessões novas.",
   "pensamento_rotulo": "pensou",
   "pensamento_uma_busca": "pensou · 1 busca",
@@ -973,7 +973,7 @@
   "config_server_marcar_travada_ajuda": "Sessão \"trabalhando\" e calada por mais que isso ganha o aviso de travada.",
   "config_server_editor": "Editor",
   "config_server_editor_ajuda": "Binário que abre a pasta da sessão no desktop (ex: code, subl).",
-  "config_server_endpoint_llm": "Endpoint do LLM",
+  "config_server_endpoint_llm": "Servidor do LLM",
   "config_server_endpoint_llm_ajuda": "Serviço compatível com a API da OpenAI que trata o texto do ditado e da leitura em voz. Vazio = Groq (https://api.groq.com/openai/v1). Ex.: https://opencode.ai/zen/v1.",
   "config_server_chave_llm": "Chave do LLM",
   "config_server_chave_llm_ajuda": "Chave do serviço acima. Obrigatória quando o endpoint não é o padrão.",
@@ -2207,5 +2207,8 @@
   "erro_bastao_sem_cwd": "a sessão de origem não tem diretório conhecido; escolha o cwd da sessão nova",
   "erro_bastao_sem_dossie": "o dossiê desta passagem não está mais no disco",
   "erro_bastao_gravar": "não consegui gravar o dossiê: {motivo}",
-  "erro_bastao_fila": "a sessão {nome} nasceu, mas o kick-off não entrou na fila dela — mande você mesmo o pedido apontando pra {dossie}"
+  "erro_bastao_fila": "a sessão {nome} nasceu, mas o kick-off não entrou na fila dela — mande você mesmo o pedido apontando pra {dossie}",
+  "config_avancado_grupo_ditado_voz": "Ditado e voz",
+  "config_avancado_grupo_ditado_voz_ajuda": "O serviço que arruma o texto do seu ditado, monta o briefing e lê respostas em voz alta. Todos os campos abaixo são dele — vazio = Groq, o padrão.",
+  "config_server_raciocinio_padrao": "Padrão do provedor"
 }

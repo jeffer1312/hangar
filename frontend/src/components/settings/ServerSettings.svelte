@@ -32,10 +32,18 @@ import { intlLocale } from '../../lib/locale';
     chave: string;
     rotulo: string;
     ajuda: string;
-    tipo: 'texto' | 'segredo' | 'numero' | 'liga';
+    tipo: 'texto' | 'segredo' | 'numero' | 'liga' | 'escolha';
     sufixo?: string;
     secao: Props['secao'];
+    /** Bloco temático com título próprio (o quinteto do LLM era ilegível solto: nada dizia que
+        era tudo do ditado). Campos sem grupo seguem soltos, como sempre foram. */
+    grupo?: 'ditado_voz';
+    opcoes?: { value: string; label: string }[];
   }
+
+  const GRUPOS = {
+    ditado_voz: { titulo: m.config_avancado_grupo_ditado_voz(), ajuda: m.config_avancado_grupo_ditado_voz_ajuda() },
+  } as const;
 
   const CAMPOS: Campo[] = [
     { chave: 'groq_api_key', rotulo: m.config_server_groq(), tipo: 'segredo', secao: 'anexos',
@@ -60,27 +68,34 @@ import { intlLocale } from '../../lib/locale';
       ajuda: m.config_server_marcar_travada_ajuda() },
     { chave: 'editor', rotulo: m.config_server_editor(), tipo: 'texto', secao: 'avancado',
       ajuda: m.config_server_editor_ajuda() },
-    { chave: 'llm_base_url', rotulo: m.config_server_endpoint_llm(), tipo: 'texto', secao: 'avancado',
+    { chave: 'llm_base_url', rotulo: m.config_server_endpoint_llm(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
       ajuda: m.config_server_endpoint_llm_ajuda() },
-    { chave: 'llm_api_key', rotulo: m.config_server_chave_llm(), tipo: 'segredo', secao: 'avancado',
+    { chave: 'llm_api_key', rotulo: m.config_server_chave_llm(), tipo: 'segredo', secao: 'avancado', grupo: 'ditado_voz',
       ajuda: m.config_server_chave_llm_ajuda() },
-    { chave: 'llm_model', rotulo: m.config_server_modelo_llm(), tipo: 'texto', secao: 'avancado',
+    { chave: 'llm_model', rotulo: m.config_server_modelo_llm(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
       ajuda: m.config_server_modelo_llm_ajuda() },
-    { chave: 'llm_reasoning_effort', rotulo: m.config_server_raciocinio_llm(), tipo: 'texto', secao: 'avancado',
+    // Raciocínio vira SELETOR: texto livre obrigava a adivinhar os valores válidos (none, low...).
+    // Vazio = a chave some do payload — provedor que não a conhece não leva 400 (regra do narrar.py).
+    { chave: 'llm_reasoning_effort', rotulo: m.config_server_raciocinio_llm(), tipo: 'escolha', secao: 'avancado', grupo: 'ditado_voz',
+      opcoes: [{ value: '', label: m.config_server_raciocinio_padrao() },
+               { value: 'none', label: 'none' }, { value: 'low', label: 'low' },
+               { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }],
       ajuda: m.config_server_raciocinio_llm_ajuda() },
-    { chave: 'llm_briefing_base_url', rotulo: m.config_server_endpoint_llm_briefing(), tipo: 'texto', secao: 'avancado',
+    { chave: 'llm_briefing_base_url', rotulo: m.config_server_endpoint_llm_briefing(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
       ajuda: m.config_server_endpoint_llm_briefing_ajuda() },
-    { chave: 'llm_briefing_api_key', rotulo: m.config_server_chave_llm_briefing(), tipo: 'segredo', secao: 'avancado',
+    { chave: 'llm_briefing_api_key', rotulo: m.config_server_chave_llm_briefing(), tipo: 'segredo', secao: 'avancado', grupo: 'ditado_voz',
       ajuda: m.config_server_chave_llm_briefing_ajuda() },
-    { chave: 'llm_briefing_model', rotulo: m.config_server_modelo_llm_briefing(), tipo: 'texto', secao: 'avancado',
+    { chave: 'llm_briefing_model', rotulo: m.config_server_modelo_llm_briefing(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
       ajuda: m.config_server_modelo_llm_briefing_ajuda() },
     { chave: 'elevenlabs_api_key', rotulo: m.config_server_elevenlabs(), tipo: 'segredo', secao: 'anexos',
       ajuda: m.config_server_elevenlabs_ajuda() },
     { chave: 'tts_max_chars', rotulo: m.config_server_confirmar_leitura(), tipo: 'numero', sufixo: m.config_server_car(), secao: 'anexos',
       ajuda: m.config_server_confirmar_leitura_ajuda() },
-    { chave: 'tts_local_cmd', rotulo: m.config_server_comando_voz(), tipo: 'texto', secao: 'avancado',
+    { chave: 'tts_local_cmd', rotulo: m.config_server_comando_voz(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
       ajuda: m.config_server_comando_voz_ajuda() },
   ];
+
+  const visiveis = $derived(CAMPOS.filter((c) => c.secao === secao));
 
   const ROTULO_LEITURA: Record<string, string> = {
     port: m.config_server_porta(), lan_bind_ip: m.config_server_ip_bind(), server_id: m.config_server_id(),
@@ -207,8 +222,12 @@ import { intlLocale } from '../../lib/locale';
     <button class="btn" onclick={() => void store.carregar()}>{m.config_server_tentar_de_novo()}</button>
   {:else}
     <div class="lista">
-      {#each CAMPOS.filter((c) => c.secao === secao) as c (c.chave)}
+      {#each visiveis as c, i (c.chave)}
         {@const estado = store.campos[c.chave]}
+        {#if c.grupo && (i === 0 || visiveis[i - 1].grupo !== c.grupo)}
+          <h3 class="grupo-titulo">{GRUPOS[c.grupo].titulo}</h3>
+          <p class="grupo-ajuda">{GRUPOS[c.grupo].ajuda}</p>
+        {/if}
         <div class="linha" class:liga={c.tipo === 'liga'}>
           <div class="txt">
             <label class="rot" for={`cfg-${c.chave}`}>
@@ -226,6 +245,11 @@ import { intlLocale } from '../../lib/locale';
               checked={store.valorAtual(c.chave) === true}
               onchange={(e) => store.setRascunho(c.chave, e.currentTarget.checked)}
             />
+          {:else if c.tipo === 'escolha'}
+            <Select id={`cfg-${c.chave}`} class="campo-select" ariaLabel={c.rotulo}
+              value={String(store.valorAtual(c.chave) ?? '')}
+              opcoes={c.opcoes ?? []}
+              onchange={(v) => store.setRascunho(c.chave, v)} />
           {:else if c.tipo === 'numero'}
             <span class="campo-num">
               <input
@@ -420,6 +444,11 @@ import { intlLocale } from '../../lib/locale';
   .cfg-head .sub { margin: 2px 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted); }
 
   .lista { display: flex; flex-direction: column; }
+  /* Bloco temático (ex.: Ditado e voz): título + linha de explicação — o que esses campos mudam, antes de pedir valor. */
+  .grupo-titulo {
+    margin: var(--space-4) 0 0; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
+  }
+  .grupo-ajuda { margin: 2px 0 0; font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; }
   .linha {
     display: flex;
     flex-direction: column;
@@ -558,13 +587,19 @@ import { intlLocale } from '../../lib/locale';
     background: var(--bg-surface);
     border-top: 1px solid var(--border-subtle);
   }
-  .ok { font-size: var(--text-xs); color: var(--success); }
+  .ok { font-size: var(--text-xs); color: var(--success); animation: st-row-in-ok 200ms var(--ease-out); }
+  @keyframes st-row-in-ok {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
   .btn {
     height: 40px; padding: 0 var(--space-4);
     border-radius: var(--radius-md);
     background: var(--bg-elevated); color: var(--text-primary);
     font-size: var(--text-sm); font-weight: 600;
+    transition: transform 160ms ease-out;
   }
+  .btn:not(:disabled):active { transform: scale(0.97); }
   .btn.primario { background: var(--accent); color: #fff; }
   .btn:disabled { opacity: 0.45; }
 </style>

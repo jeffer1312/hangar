@@ -956,7 +956,7 @@
   "config_server_guardar_ajuda": "An attachment older than this is deleted on the next upload. 0 = never delete.",
   "config_server_automacoes": "Automations",
   "config_server_automacoes_ajuda": "Master switch for what runs without you watching: session chaining and auto-resume.",
-  "config_server_pensamento": "Thinking summary",
+  "config_server_pensamento": "Show agent thinking",
   "config_server_pensamento_ajuda": "Asks the API for a summary of the reasoning and shows it collapsed above the answer. New sessions only.",
   "pensamento_rotulo": "thought",
   "pensamento_uma_busca": "thought · 1 search",
@@ -973,7 +973,7 @@
   "config_server_marcar_travada_ajuda": "A \"working\" session silent for longer than this gets the stuck warning.",
   "config_server_editor": "Editor",
   "config_server_editor_ajuda": "Binary that opens the session folder on the desktop (e.g. code, subl).",
-  "config_server_endpoint_llm": "LLM endpoint",
+  "config_server_endpoint_llm": "LLM server",
   "config_server_endpoint_llm_ajuda": "OpenAI-API-compatible service that handles dictation and read-aloud text. Empty = Groq (https://api.groq.com/openai/v1). E.g. https://opencode.ai/zen/v1.",
   "config_server_chave_llm": "LLM key",
   "config_server_chave_llm_ajuda": "Key of the service above. Required when the endpoint is not the default.",
@@ -2207,5 +2207,8 @@
   "erro_bastao_sem_cwd": "the origin session has no known directory; pick the new session's cwd",
   "erro_bastao_sem_dossie": "this handover's dossier is no longer on disk",
   "erro_bastao_gravar": "couldn't write the dossier: {motivo}",
-  "erro_bastao_fila": "session {nome} was created, but the kick-off never made it into its queue — send the request yourself, pointing at {dossie}"
+  "erro_bastao_fila": "session {nome} was created, but the kick-off never made it into its queue — send the request yourself, pointing at {dossie}",
+  "config_avancado_grupo_ditado_voz": "Dictation and voice",
+  "config_avancado_grupo_ditado_voz_ajuda": "The service that cleans up your dictation, builds the briefing and reads answers aloud. Every field below belongs to it — empty = Groq, the default.",
+  "config_server_raciocinio_padrao": "Provider default"
 }
