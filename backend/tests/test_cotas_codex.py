@@ -39,7 +39,9 @@ def _cache_limpo():
 
 def _home(monkeypatch, alvo):
     """Quem resolve a pasta do Codex é o `codex_appserver`, não o `cotas` — patchar ali é o que diz
-    a verdade sobre o caminho testado (`cotas.Path` é a mesma classe e funcionaria por acidente)."""
+    a verdade sobre o caminho testado (`cotas.Path` é a mesma classe e funcionaria por acidente).
+    O delenv anda junto: `CODEX_HOME` exportado na máquina de quem roda furaria o home falso."""
+    monkeypatch.delenv("CODEX_HOME", raising=False)
     monkeypatch.setattr(codex_appserver.Path, "home", staticmethod(lambda: alvo))
 
 
@@ -53,7 +55,16 @@ def _auth(home, tokens=True):
     return d
 
 
-def test_le_as_duas_janelas(monkeypatch):
+@pytest.fixture
+def com_credencial(monkeypatch, tmp_path):
+    """`_ler_codex` checa a credencial ANTES de perguntar: sem apontar o HOME pra um auth.json
+    fabricado, estes testes liam o ~/.codex REAL da máquina — passavam onde há login do Codex e
+    quebravam no CI (sem credencial, `sem_credencial` sai antes do mock de `perguntar`)."""
+    _auth(tmp_path)
+    _home(monkeypatch, tmp_path)
+
+
+def test_le_as_duas_janelas(monkeypatch, com_credencial):
     monkeypatch.setattr(cotas.codex_appserver, "perguntar", lambda m, **kw:_RATE_LIMITS)
     estado, janelas, motivo = cotas._ler_codex()
     assert (estado, motivo) == ("lida", None)
@@ -62,7 +73,7 @@ def test_le_as_duas_janelas(monkeypatch):
     assert janelas[0].reset_ts == 1788107727
 
 
-def test_pergunta_o_metodo_de_cota(monkeypatch):
+def test_pergunta_o_metodo_de_cota(monkeypatch, com_credencial):
     vistos = []
     monkeypatch.setattr(cotas.codex_appserver, "perguntar",
                         lambda m, **kw:(vistos.append(m), _RATE_LIMITS)[1])
@@ -70,7 +81,7 @@ def test_pergunta_o_metodo_de_cota(monkeypatch):
     assert vistos == ["account/rateLimits/read"]
 
 
-def test_janela_ausente_some_em_vez_de_zerar(monkeypatch):
+def test_janela_ausente_some_em_vez_de_zerar(monkeypatch, com_credencial):
     """Conta sem a janela semanal não pode desenhar 0% — 0% é uma afirmação, e falsa."""
     monkeypatch.setattr(cotas.codex_appserver, "perguntar", lambda m, **kw:{
         "rateLimits": {"primary": _RATE_LIMITS["rateLimits"]["primary"], "secondary": None}})
@@ -78,12 +89,12 @@ def test_janela_ausente_some_em_vez_de_zerar(monkeypatch):
     assert (estado, [j.rotulo for j in janelas]) == ("lida", ["5h"])
 
 
-def test_resposta_sem_janela_nenhuma_nao_e_lida(monkeypatch):
+def test_resposta_sem_janela_nenhuma_nao_e_lida(monkeypatch, com_credencial):
     monkeypatch.setattr(cotas.codex_appserver, "perguntar", lambda m, **kw:{"rateLimits": {}})
     assert cotas._ler_codex() == ("indisponivel", [], "formato-desconhecido")
 
 
-def test_binario_ausente_tem_motivo_proprio(monkeypatch):
+def test_binario_ausente_tem_motivo_proprio(monkeypatch, com_credencial):
     """"não achei o codex" não é "o codex falhou" — e nenhum dos dois pode derrubar a lista das
     outras contas."""
     def some(m, **kw):
@@ -93,7 +104,7 @@ def test_binario_ausente_tem_motivo_proprio(monkeypatch):
 
 
 @pytest.mark.parametrize("erro", [RuntimeError("nao respondeu"), OSError("boom")])
-def test_falha_de_leitura_nao_levanta(monkeypatch, erro):
+def test_falha_de_leitura_nao_levanta(monkeypatch, erro, com_credencial):
     def quebra(m, **kw):
         raise erro
     monkeypatch.setattr(cotas.codex_appserver, "perguntar", quebra)
@@ -112,7 +123,7 @@ def test_credencial_nova_no_disco_e_notada(monkeypatch, tmp_path):
     assert cotas.id_conta_codex() is not None
 
 
-def test_o_teto_de_tempo_e_o_das_outras_fontes(monkeypatch):
+def test_o_teto_de_tempo_e_o_das_outras_fontes(monkeypatch, com_credencial):
     """`_atualizar` espera TODAS as leituras juntas: uma fonte com teto maior que as outras vira o
     tempo de resposta do `/api/cotas` inteiro. O padrão do módulo (30s) é do catálogo, que é tela
     aberta por gente."""

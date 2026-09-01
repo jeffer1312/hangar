@@ -48,13 +48,26 @@ def _active_jsonls(config_dir: Path) -> list:
     return [json.loads(f.read_text())["jsonl"] for f in d.glob("*.json")] if d.is_dir() else []
 
 
+def _run_sob_claude(payload: dict, config_dir: Path) -> None:
+    """Roda o hook como FILHO de um processo com "claude" no cmdline — o ancestral que o marcador
+    de ativo exige. Rodar a suite dentro de um claude de verdade satisfazia isso por acidente do
+    ambiente; no CI não há claude nenhum na árvore e o hook (corretamente) não grava nada. O
+    argumento extra "claude" no wrapper é o que a subida de árvore encontra."""
+    wrapper = ("import subprocess, sys; "
+               "sys.exit(subprocess.run([sys.executable, sys.argv[1]], "
+               "input=sys.stdin.buffer.read(), timeout=5).returncode)")
+    env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config_dir)}
+    subprocess.run([sys.executable, "-c", wrapper, HOOK, "claude"],
+                   input=json.dumps(payload).encode(), env=env, check=True, timeout=10)
+
+
 def test_active_marker_written_with_transcript_path(tmp_path):
-    _run({"hook_event_name": "UserPromptSubmit", "session_id": "Y", "transcript_path": "/p/Y.jsonl"}, tmp_path)
+    _run_sob_claude({"hook_event_name": "UserPromptSubmit", "session_id": "Y", "transcript_path": "/p/Y.jsonl"}, tmp_path)
     assert "/p/Y.jsonl" in _active_jsonls(tmp_path)
 
 
 def test_session_start_writes_active_marker(tmp_path):
-    _run({"hook_event_name": "SessionStart", "session_id": "Y", "transcript_path": "/p/Y.jsonl", "source": "resume"}, tmp_path)
+    _run_sob_claude({"hook_event_name": "SessionStart", "session_id": "Y", "transcript_path": "/p/Y.jsonl", "source": "resume"}, tmp_path)
     assert "/p/Y.jsonl" in _active_jsonls(tmp_path)
 
 

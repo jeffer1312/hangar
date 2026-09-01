@@ -11,6 +11,14 @@ import * as api from '../lib/api';
 
 function stubDe() { return { default: createRawSnippet(() => ({ render: () => '<div />' })) }; }
 
+// O AccountMenu embedded não mostra mais o "Adicionar servidor" (a gestão foi pra Configurações →
+// Servidores, commit d1fa33eb) — o gatilho que sobrou pro modal deste teste é o prop onAddServer.
+// O mock captura os props (componente Svelte 5 é função (anchor, props)) pra o teste invocá-lo.
+const capturado = vi.hoisted(() => ({ props: undefined as { onAddServer?: () => void } | undefined }));
+vi.mock('../components/AccountMenu.svelte', () => ({
+  default: (_anchor: unknown, props: { onAddServer?: () => void }) => { capturado.props = props; },
+}));
+
 vi.mock('../lib/api', () => ({
   getPermissionModes: vi.fn().mockResolvedValue({ current: 'plan', modes: ['plan', 'auto', 'manual', 'acceptEdits'] }),
   setPermissionMode: vi.fn().mockResolvedValue({ mode: 'plan', current: 'plan' }),
@@ -81,6 +89,7 @@ function montar() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  capturado.props = undefined;    // sem reset, um teste novo herdaria os props do anterior
   document.body.innerHTML = '';   // modais portam pro <body>
 });
 
@@ -93,10 +102,9 @@ describe('SessionList — erro tardio do add não some (round 2)', () => {
     );
     const t = montar();
     await tick();
-    // Caminho real: hamburger -> drawer -> "Adicionar servidor"
-    t.el.querySelector<HTMLButtonElement>('.sl-ham')!.click();
-    await tick();
-    t.el.querySelector<HTMLButtonElement>('.sm-item')!.click();
+    // O drawer do celular não tem mais o item "Adicionar servidor" (gestão em Configurações →
+    // Servidores); quem ainda abre este modal é o onAddServer entregue ao AccountMenu (e o QR).
+    capturado.props!.onAddServer!();
     await tick(); await tick();
     const modal = document.querySelector<HTMLElement>('.modal-dialog');
     expect(modal).not.toBeNull();

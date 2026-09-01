@@ -2,7 +2,7 @@
 // A Sidebar monta uma árvore pesada; os componentes de trabalho (sheets, menus, git, loop) viram
 // stubs. Cobertura do fluxo de adicionar servidor (que vivia aqui desde a round 5) migrou pra
 // ServidoresSettings na Task 4b/4c — ela mora em ServidoresSettings.test.ts.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick, createRawSnippet } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import * as auth from '../lib/auth';
@@ -117,6 +117,11 @@ import { ctxPanel } from '../lib/ctxPanel.svelte';
 import * as api from '../lib/api';
 import * as m from '../paraglide/messages';
 import type { AggSession } from '../lib/types';
+
+// O body-scroll-lock do bits-ui agenda um cleanup de 24ms ao desmontar um dialog/sheet; sem
+// esperar, o timer dispara DEPOIS do teardown do happy-dom ("document is not defined" — erro
+// não tratado que faz a suite inteira sair com exit 1 mesmo com todos os testes verdes).
+afterEach(() => new Promise((r) => setTimeout(r, 30)));
 
 beforeEach(() => {
   overwriteGetLocale(() => 'pt');   // textos dos menus e dialogs sao mensagens agora
