@@ -87,7 +87,9 @@
     <!-- A lista de servidores NÃO vai pro drawer do mobile: lá nenhuma linha faz nada (sem
          onSwitchActive nem alvo de config) e 10 linhas inertes empurravam o Configurações pra
          fora da tela. A gestão mora em Configurações → Servidores. No popover do desktop ela
-         fica: ali a linha TROCA o servidor ativo. -->
+         fica: ali a linha TROCA o servidor ativo. Push/horas silenciosas e Reconectar seguem a
+         mesma régua: no drawer eram um formulário dentro de um menu de navegação, e os dois já
+         vivem em Configurações (Notificações / Servidores). -->
     {#if !embedded}
       <ServerManager
         {servers}
@@ -100,19 +102,17 @@
         onAdd={addServer}
       />
     {/if}
-    {#if pushSupported()}
-      {#if !embedded}<div class="am-sep"></div>{/if}
-      <!-- PushQuiet com o alvo certo por view: desktop popover e GLOBAL (o enablePush assina em
-           todos); drawer mobile mira o servidor resolvido, ou 'unavailable' quando sumiu — nunca
-           cai nas funções globais, que leriam a janela de outra máquina como se fosse desta. O
-           `open` so decide o LOAD (o componente fica montado sempre — fechar/reabrir o menu nao
-           pode perder busy/resultado/Janela carregada). -->
-      <PushQuiet {open} menuitem={!embedded} target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
+    {#if !embedded && pushSupported()}
+      <div class="am-sep"></div>
+      <!-- PushQuiet só no popover (desktop), e GLOBAL (o enablePush assina em todos). O `open`
+           só decide o LOAD (o componente fica montado sempre — fechar/reabrir o menu não pode
+           perder busy/resultado/Janela carregada). -->
+      <PushQuiet {open} menuitem target={{ mode: 'global' }} />
     {/if}
 
-    <!-- Sep antes de Configurações: só quando algo veio antes (servidores no desktop, ou o
-         bloco de push) — senão o conteúdo embedded nascia com uma linha de 1px no topo. -->
-    {#if !embedded || pushSupported()}
+    <!-- Sep antes de Configurações: só no popover, onde algo veio antes — no drawer o
+         Configurações é a primeira linha do corpo. -->
+    {#if !embedded}
       <div class="am-sep"></div>
     {/if}
     <!-- Porta única de configuração: Aparência (do aparelho) + config do servidor + Motores, cada
@@ -139,11 +139,13 @@
       {m.config_modal_titulo()}
     </button>
 
-    <div class="am-sep"></div>
-    <button class="am-item" role={embedded ? undefined : 'menuitem'} onclick={reconnect}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-      {m.config_servidores_reconectar()}
-    </button>
+    {#if !embedded}
+      <div class="am-sep"></div>
+      <button class="am-item" role="menuitem" onclick={reconnect}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+        {m.config_servidores_reconectar()}
+      </button>
+    {/if}
 
     <div class="am-sep"></div>
     <button class="am-item am-danger" role={embedded ? undefined : 'menuitem'} onclick={logout}>
