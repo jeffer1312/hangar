@@ -653,6 +653,31 @@ export function summarizeToolInput(
   if (name === 'WebFetch') {
     return one('url') ? summarizeText(one('url'), TOOL_MAX) : summarizeValues(strList(input['urls']), MULTI_KEYS.urls);
   }
+  if (name === 'ToolSearch') {
+    // O argumento cru é `select:WebSearch,WebFetch` ou uma busca por palavra — nos dois casos o
+    // fallback genérico mostrava o prefixo `select:` colado nos nomes, que não diz nada a quem lê.
+    // A linha útil é QUAIS ferramentas foram carregadas.
+    // `typeof === 'string'`, não `one()`: aquele faz `String(v)`, então um `query` que venha como
+    // objeto (outro provedor, outra versão) sairia "[object Object]" no chip — a mesma armadilha
+    // que o ramo do AskUserQuestion guarda logo acima. Forma inesperada vira linha vazia.
+    const cru = input['query'];
+    if (typeof cru !== 'string') return '';
+    // `trim` antes do prefixo: `"select: WebSearch,WebFetch"` (com espaço) falharia o startsWith e
+    // cairia no ramo de texto livre, mostrando o `select:` cru — justamente o que este ramo existe
+    // pra tirar da tela.
+    const q = cru.trim();
+    if (q.startsWith('select:')) {
+      // Junta os nomes enquanto CABEM: com dois ou três, "WebSearch, WebFetch" diz tudo, e o
+      // "(+1 itens)" do summarizeValues esconderia justamente o segundo nome. Passando da linha,
+      // porém, o corte cru perde o último nome no meio e não conta quantos ficaram de fora —
+      // então aí vale a forma dos vizinhos (WebSearch/WebFetch), que ao menos diz o número.
+      const nomes = q.slice('select:'.length).split(',').map((s) => s.trim()).filter(Boolean);
+      if (!nomes.length) return '';
+      const junto = nomes.join(', ');
+      return junto.length <= TOOL_MAX ? junto : summarizeValues(nomes, 'ferramentas');
+    }
+    return summarizeText(q, TOOL_MAX);
+  }
 
   const keys = Object.keys(input);
   const key = PREFERRED_KEYS.find((k) => keys.includes(k) && (one(k) || strList(input[k]).length)) ?? keys[0];

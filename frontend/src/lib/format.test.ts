@@ -683,6 +683,28 @@ describe('summarizeToolInput', () => {
     expect(summarizeToolInput('WebFetch', { url: 'https://x.dev' })).toBe('https://x.dev');
   });
 
+  it('ToolSearch mostra as ferramentas carregadas, nao o "select:" cru', () => {
+    // A linha util e QUAIS ferramentas entraram; o prefixo `select:` colado nos nomes (o que o
+    // fallback generico produzia) nao diz nada a quem le o chat.
+    expect(summarizeToolInput('ToolSearch', { query: 'select:WebSearch,WebFetch' }))
+      .toBe('WebSearch, WebFetch');
+    // Busca por palavra: passa reto, como qualquer texto.
+    expect(summarizeToolInput('ToolSearch', { query: 'notebook jupyter' })).toBe('notebook jupyter');
+    // Lista longa: nao pode cortar o ultimo nome no meio SEM dizer quantos ficaram de fora — aqui
+    // vale a forma dos vizinhos (WebSearch/WebFetch com varias queries).
+    const muitos = summarizeToolInput('ToolSearch', {
+      query: 'select:WebSearch,WebFetch,Read,Write,Edit,Bash,Grep,Glob,Task,NotebookEdit',
+    });
+    expect(muitos).toContain('ferramentas');
+    // Vazio de verdade continua vazio (o cartao fica sem resumo, nunca com lixo).
+    expect(summarizeToolInput('ToolSearch', { query: 'select:,,' })).toBe('');
+    // Espaco depois dos dois-pontos NAO pode devolver o `select:` cru pra tela.
+    expect(summarizeToolInput('ToolSearch', { query: ' select: WebSearch, WebFetch' }))
+      .toBe('WebSearch, WebFetch');
+    // `query` de outro tipo (outro provedor, outra versao) vira linha VAZIA, nunca "[object Object]".
+    expect(summarizeToolInput('ToolSearch', { query: { select: ['WebSearch'] } })).toBe('');
+  });
+
   it('Read anexa o recorte lido entre parenteses', () => {
     expect(summarizeToolInput('Read', { file_path: '/a.ts', limit: 500 })).toBe('/a.ts (limit=500)');
     expect(summarizeToolInput('Read', { file_path: '/a.ts', offset: 10, limit: 20 })).toBe('/a.ts (offset=10, limit=20)');
