@@ -562,6 +562,10 @@ import * as m from '../paraglide/messages';
     background: var(--bg-base);
     cursor: pointer;
     touch-action: pan-y;
+    /* O toque longo aqui abre o menu de acoes; no iOS ele tambem inicia selecao de texto, e o
+       realce azul + as alcas ficam por cima da folha. */
+    -webkit-touch-callout: none;
+    user-select: none;
     transition: transform 200ms var(--ease-out), background 160ms ease-out;
   }
   /* Enquanto arrasta, sem transicao no transform (segue o dedo). */
@@ -680,6 +684,7 @@ import * as m from '../paraglide/messages';
   .name-edit {
     flex: 1;
     min-width: 0;
+    user-select: text;   /* o none da .session-row impediria selecionar no campo de renomear */
     height: 32px;
     background: var(--bg-base);
     border: 1px solid var(--accent);
