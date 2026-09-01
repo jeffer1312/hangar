@@ -12,6 +12,7 @@
   import AcessoSettings from './AcessoSettings.svelte';
   import ContasSettings from './ContasSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
+  import ConfigIcone from './ConfigIcone.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
   import { TELAS_DE_SERVIDOR, type TelaConfig } from '../../lib/configRoute';
   import OrquestracaoContas from '../OrquestracaoContas.svelte';
@@ -103,33 +104,20 @@
   // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
   // existir (valor de funcao nao e literal), mas o `satisfies` fica — e ele que checa a forma.
   const LINHAS = [
-    { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: '🌐',
-      descricao: m.config_geral_descricao(), servidor: false },
-    { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: '🎨',
-      descricao: m.config_modal_desc_aparencia(), servidor: false },
-    { id: 'ditado', secao: 'app', rotulo: m.config_modal_ditado(), icone: '🎤',
-      descricao: m.config_modal_desc_ditado(), servidor: false },
-    { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: '🧾',
-      descricao: m.config_diag_linha_desc(), servidor: false },
-    { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'ℹ️',
-      descricao: m.config_modal_desc_sobre(), servidor: false },
-    { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: '📶',
-      descricao: m.acesso_descricao(), servidor: true },
-    { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: '👤',
-      descricao: m.contas_descricao(), servidor: true },
-    { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: '🖥️',
-      descricao: m.config_modal_desc_servidores(), servidor: false },
-    { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: '🔔',
-      descricao: m.config_modal_desc_notificacoes(), servidor: true },
-    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos(), icone: '📎',
-      descricao: m.config_modal_desc_anexos(), servidor: true },
-    { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: '🛠️',
-      descricao: m.config_modal_desc_avancado(), servidor: true },
-    { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: '🔌',
-      descricao: m.config_modal_desc_motores(), servidor: true },
-    { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: '🎛',
-      descricao: m.config_modal_desc_orquestracao(), servidor: true },
-  ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; descricao: string; servidor: boolean }[];
+    { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: 'globo', servidor: false },
+    { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: 'pincel', servidor: false },
+    { id: 'ditado', secao: 'app', rotulo: m.config_modal_ditado(), icone: 'mic', servidor: false },
+    { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
+    { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
+    { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: 'sinal', servidor: true },
+    { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: 'pessoa', servidor: true },
+    { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: 'tela', servidor: false },
+    { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
+    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos(), icone: 'clipe', servidor: true },
+    { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: 'chave', servidor: true },
+    { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: 'plug', servidor: true },
+    { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: 'sliders', servidor: true },
+  ] satisfies readonly { id: TelaConfig; secao: string; rotulo: string; icone: string; servidor: boolean }[];
   const SECOES = ['app', 'servidor'] as const;
 
   let tituloEl = $state<HTMLElement | null>(null);
@@ -279,7 +267,7 @@
                     aria-current={telaAtual === l.id ? 'page' : undefined}
                     disabled={l.servidor && semServidor}
                     onclick={() => onIrPara(l.id)}>
-              <span class="st-nav-icone" aria-hidden="true">{l.icone}</span>{l.rotulo}
+              <span class="st-nav-icone" aria-hidden="true"><ConfigIcone nome={l.icone} size={16} /></span>{l.rotulo}
             </button>
           {/each}
         {/each}
@@ -327,7 +315,7 @@
       {/if}
       <div class="st-cartao">
         {#each LINHAS.filter((l) => l.secao === secao) as l (l.id)}
-          <SettingsRow icone={l.icone} rotulo={l.rotulo} descricao={l.descricao}
+          <SettingsRow icone={l.icone} rotulo={l.rotulo}
             desabilitada={l.servidor && semServidor}
             motivo={m.config_modal_escolha_servidor()}
             onPick={() => onIrPara(l.id)} />
@@ -497,5 +485,6 @@
   @media (hover: hover) { .st-nav-item:not(:disabled):hover { background: var(--bg-hover); } }
   .st-nav-item.sel { background: var(--bg-elevated); }   /* realce de estado: --bg-* cru e o certo */
   .st-nav-item:disabled { color: var(--text-muted); cursor: default; }
-  .st-nav-icone { flex-shrink: 0; width: 1.4em; text-align: center; }
+  .st-nav-icone { flex-shrink: 0; width: 1.4em; display: grid; place-items: center;
+                  color: var(--text-secondary); }
 </style>
