@@ -6,6 +6,7 @@ import * as m from '../paraglide/messages';
   import { planBadge } from '../lib/plan';
   import PlanBar from './PlanBar.svelte';
   import StateChip from './StateChip.svelte';
+  import BottomSheet from './BottomSheet.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
 
@@ -94,23 +95,36 @@ import * as m from '../paraglide/messages';
   let capturedTarget: HTMLElement | null = null;
   let capturedPointerId: number | null = null;
 
-  // ── Renomear por TOQUE LONGO (500ms parado, sem swipe) -> edita o nome inline (espelha o Sidebar) ──
+  // ── TOQUE LONGO (500ms parado, sem swipe) -> menu de ações da sessão. Renomear direto era
+  // invisível: quem segurava esperando opções caía num campo de edição sem pedir. O swipe segue
+  // existindo como atalho pras mesmas ações.
   let editing = $state(false);
   let editValue = $state('');
   let longPressed = $state(false);
+  let menuOpen = $state(false);
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
   function startPress() {
     longPressed = false;
     clearTimeout(pressTimer);
     pressTimer = undefined;
-    if (untracked) return;                       // sessao sem id confiavel nao renomeia
     pressTimer = setTimeout(() => {
       pressTimer = undefined;
       if (!dragging || axis !== null) return;
       longPressed = true;
+      menuOpen = true;
+    }, 500);
+  }
+  function menuPick(fn: () => void) {
+    menuOpen = false;
+    fn();
+  }
+  function startRename() {
+    // Depois do restoreFocus do BottomSheet: no mesmo flush, a devolução de foco do sheet
+    // roubava o autofocus do campo e o blur salvava/fechava a edição antes de ela aparecer.
+    setTimeout(() => {
       editValue = session.name;
       editing = true;
-    }, 500);
+    }, 0);
   }
   function cancelPress() {
     clearTimeout(pressTimer);
@@ -174,7 +188,7 @@ import * as m from '../paraglide/messages';
   // Tap na linha: toque longo (renomeou) nao navega; se aberto ou acabou de arrastar, fecha o swipe.
   function onRowClick() {
     if (selectMode) { if (!untracked) onToggleSelect?.(); return; }  // sem id -> nao entra no broadcast
-    if (longPressed) { longPressed = false; return; }   // foi toque longo (renomear) -> nao abre o chat
+    if (longPressed) { longPressed = false; return; }   // foi toque longo (menu) -> nao abre o chat
     if (suppressClick || offset !== 0) { offset = 0; return; }
     if (abreChat) onClick();
   }
@@ -442,6 +456,58 @@ import * as m from '../paraglide/messages';
     </div>
   </div>
 </div>
+
+<!-- Menu de ações por toque longo: as mesmas ações do swipe (+ renomear), agora descobríveis.
+     Fechar cai na mesma confirmação do onDelete de sempre. -->
+<BottomSheet open={menuOpen} onClose={() => (menuOpen = false)} ariaLabel={m.sessao_aria_acoes({ n: session.name })}>
+  <div class="card-menu">
+    <h2 class="card-menu-title">{session.name}</h2>
+    {#if !untracked}
+      <button class="card-menu-item" onclick={() => menuPick(startRename)}>
+        <span class="card-menu-ico" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+          </svg>
+        </span>
+        <span class="card-menu-label">{m.ctx_renomear()}</span>
+      </button>
+    {/if}
+    {#if session.cwd}
+      <button class="card-menu-item" onclick={() => menuPick(() => onGit?.())}>
+        <span class="card-menu-ico" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="3" x2="6" y2="15"/>
+            <circle cx="18" cy="6" r="3"/>
+            <circle cx="6" cy="18" r="3"/>
+            <path d="M18 9a9 9 0 0 1-9 9"/>
+          </svg>
+        </span>
+        <span class="card-menu-label">{m.sessao_git()}</span>
+      </button>
+      <button class="card-menu-item" onclick={() => menuPick(() => onLoop?.())}>
+        <span class="card-menu-ico" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m17 2 4 4-4 4"/>
+            <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
+            <path d="m7 22-4-4 4-4"/>
+            <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
+          </svg>
+        </span>
+        <span class="card-menu-label">{m.sessao_loop_runner()}</span>
+      </button>
+    {/if}
+    <button class="card-menu-item danger" onclick={() => menuPick(onDelete)}>
+      <span class="card-menu-ico" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          <path d="M10 11v6M14 11v6"/>
+        </svg>
+      </span>
+      <span class="card-menu-label">{m.sessao_excluir_curto()}</span>
+    </button>
+  </div>
+</BottomSheet>
 
 <style>
   /* Wrapper do swipe: esconde o "Excluir" que fica atras da linha. */
@@ -844,4 +910,49 @@ import * as m from '../paraglide/messages';
     border-radius: var(--radius-sm);
   }
   .chev:active { color: var(--text-secondary); background: var(--bg-hover); }
+
+  /* Menu do toque longo: mesma família visual do MoreSheet (item de 56px, ícone em caixa). */
+  .card-menu {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-4) var(--space-5);
+  }
+  .card-menu-title {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-base);
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .card-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 52px;
+    padding: var(--space-2);
+    background: transparent;
+    border-radius: var(--radius-md);
+    text-align: left;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .card-menu-item:active { background: var(--bg-hover); }
+  .card-menu-ico {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+  .card-menu-label { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+  .card-menu-item.danger .card-menu-ico { color: var(--error); background: rgba(255,69,58,0.12); }
+  .card-menu-item.danger .card-menu-label { color: var(--error); }
 </style>
