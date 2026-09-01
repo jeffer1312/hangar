@@ -3,7 +3,10 @@
   // conforme a plataforma (o 🎤 do iOS não é o do Android) e destoava do resto do app, que é todo
   // SVG stroke 1.8. Traçados no estilo Feather, mesma família dos ícones do drawer.
   interface Props {
-    nome: string;
+    // keyof do mapa, não string solta: um typo ('mci') falha no typecheck em vez de renderizar
+    // um SVG vazio em silêncio. O {@html} abaixo só recebe o CONTEÚDO deste mapa estático —
+    // `nome` seleciona a chave, nunca vira HTML. Manter assim (fronteira de segurança).
+    nome: keyof typeof TRACADOS;
     size?: number;
   }
   let { nome, size = 18 }: Props = $props();
@@ -26,4 +29,4 @@
 </script>
 
 <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html TRACADOS[nome] ?? ''}</svg>
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html TRACADOS[nome]}</svg>
