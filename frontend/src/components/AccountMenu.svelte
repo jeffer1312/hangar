@@ -92,7 +92,7 @@
       <ServerManager
         {servers}
         {activeId}
-        menuitem={!embedded}
+        menuitem
         onSwitchActive={onSwitchServer ? (id) => { onClose(); onSwitchServer(id); } : undefined}
         onRename={onRenameServer}
         onUpdateToken={onUpdateServerToken}
