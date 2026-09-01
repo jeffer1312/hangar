@@ -293,7 +293,7 @@
       <section class="st-conteudo">
         <!-- #key por tela: a troca remonta o conteúdo, e o wrapper novo entra voando (a saída do
              antigo é instantânea de propósito — transição de saída aqui brigaria com a nova). -->
-        {#key telaAtual}<div class="st-anim" in:animarTela={{ x: 18 }}>{@render corpo()}</div>{/key}
+        {#key telaAtual}<div in:animarTela={{ x: 18 }}>{@render corpo()}</div>{/key}
       </section>
     </div>
   {:else}
@@ -317,7 +317,7 @@
         </p>
       {/if}
     </header>
-    {#key telaAtual}<div class="st-anim" in:animarTela={{ x: telaAtual === 'root' ? -18 : 18 }}>{@render corpo()}</div>{/key}
+    {#key telaAtual}<div in:animarTela={{ x: telaAtual === 'root' ? -18 : 18 }}>{@render corpo()}</div>{/key}
   {/if}
 </BottomSheet>
 {/if}
@@ -408,9 +408,6 @@
     overflow: hidden;
   }
   .st-cartao > :global(button + button) { border-top: 1px solid var(--border-subtle); }
-
-  /* Wrapper da transição entre telas: herda a altura pra não cortar o fly na horizontal. */
-  .st-anim { height: 100%; }
 
   /* Raiz no celular: linhas entrando em cascata ao abrir o modal (30ms entre elas, entrada só,
      nunca loop — a regra global de reduced-motion do app.css já cobre o resto). */
