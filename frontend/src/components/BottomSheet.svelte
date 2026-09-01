@@ -389,7 +389,8 @@
   /* Chromium (data-liquid): o vidro vai no ELEMENTO, não no ::before — inset:0 dentro do scroller
      cobre só um quadro de conteúdo e rola junto, e panel-no-::before + transparente-no-elemento
      dava DOIS fundos com fronteira que se movia com a rolagem (medido: folha de 812px, conteúdo
-     de 2620px). Panel aqui cobre a folha inteira, uniforme, e segue o slider Transparência. */
+     de 2620px). Panel no elemento cobre a folha inteira, uniforme, e segue o slider Transparência.
+     (Só folha/modal: o ::before do DOCK segue com tinta — ele não rola, não tem o problema.) */
   :global(html[data-liquid]) .sheet:not(.naomodal)::before {
     background: transparent;
   }
@@ -406,14 +407,15 @@
      alpha: no tema claro, branco a ~0.70 sobre texto ESCURO deixa a conversa legivel atraves do
      painel. Com o filtro aqui o que esta atras vira borrao, que e o que o modal centrado ja tinha
      de graca pelo scrim. */
-  :global(html[data-liquid]) .sheet {
+  :global(html[data-liquid]) .sheet:not(.naomodal) {
     backdrop-filter: blur(20px) saturate(170%);
     /* Fundo AQUI como no WebKit: o ::before perdeu a tinta (regra acima), entao quem pinta a folha
        inteira e o elemento — uniforme, sem fronteira movel. O backdrop-filter segue no elemento
-       (nele o backdrop e o que esta atras de verdade). */
+       (nele o backdrop e o que esta atras de verdade). O DOCK (naomodal) fica de fora: ele nao
+       rola, o ::before dele ja pinta --glass-panel, e as duas camadas somariam (slider inerte). */
     background: var(--glass-panel);
   }
-  :global(html[data-liquid]) .sheet:is(.centered, .split) {
+  :global(html[data-liquid]) .sheet:is(.centered, .split):not(.naomodal) {
     background: var(--glass-modal);
   }
 
