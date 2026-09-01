@@ -863,6 +863,12 @@ import { criarConta, apagarConta, putEngine, putEngineForServer, deleteEngine, d
      (o flex encolhe o texto antes de quebrar a linha). A cota que não coube desce inteira pra
      segunda linha, que é melhor que um nome ilegível. */
   .compacta .ct-top { align-items: center; flex-wrap: wrap; row-gap: 2px; }
+  /* Quem embrulha primeiro é a COTA, nunca o kebab: medido no celular, o kebab sozinho caía pra
+     uma linha de 44px no pé do card e a linha lia quebrada. Ordem explícita: ações ficam na 1ª
+     linha (canto direito), a mini-cota desce inteira quando não cabe. */
+  .compacta .ct-acoes { order: 2; }
+  .compacta .ct-tag { order: 3; }
+  .compacta .ct-mini-cotas { order: 4; }
   /* Piso de largura pro nome: com `overflow-wrap: anywhere` o min-content do texto é UM
      caractere, então o flex não disparava o wrap e o nome virava uma coluna vertical. Com piso,
      quem desce pra linha de baixo é a cota/etiqueta que não coube. */

@@ -84,18 +84,24 @@
 {#snippet menuBody()}
     <!-- menuitem só no POPOVER (que tem role="menu"); o drawer embedded (mobile) é div comum sem
          ancestral de menu — menuitem lá seria papel inválido, mesmo problema do Settings (round 7). -->
-    <ServerManager
-      {servers}
-      {activeId}
-      menuitem={!embedded}
-      onSwitchActive={onSwitchServer ? (id) => { onClose(); onSwitchServer(id); } : undefined}
-      onRename={onRenameServer}
-      onUpdateToken={onUpdateServerToken}
-      onRemove={onRemoveServer}
-      onAdd={addServer}
-    />
+    <!-- A lista de servidores NÃO vai pro drawer do mobile: lá nenhuma linha faz nada (sem
+         onSwitchActive nem alvo de config) e 10 linhas inertes empurravam o Configurações pra
+         fora da tela. A gestão mora em Configurações → Servidores. No popover do desktop ela
+         fica: ali a linha TROCA o servidor ativo. -->
+    {#if !embedded}
+      <ServerManager
+        {servers}
+        {activeId}
+        menuitem={!embedded}
+        onSwitchActive={onSwitchServer ? (id) => { onClose(); onSwitchServer(id); } : undefined}
+        onRename={onRenameServer}
+        onUpdateToken={onUpdateServerToken}
+        onRemove={onRemoveServer}
+        onAdd={addServer}
+      />
+    {/if}
     {#if pushSupported()}
-      <div class="am-sep"></div>
+      {#if !embedded}<div class="am-sep"></div>{/if}
       <!-- PushQuiet com o alvo certo por view: desktop popover e GLOBAL (o enablePush assina em
            todos); drawer mobile mira o servidor resolvido, ou 'unavailable' quando sumiu — nunca
            cai nas funções globais, que leriam a janela de outra máquina como se fosse desta. O
@@ -104,7 +110,11 @@
       <PushQuiet {open} menuitem={!embedded} target={embedded ? (activeServer ? { mode: 'server', server: activeServer } : { mode: 'unavailable' }) : { mode: 'global' }} />
     {/if}
 
-    <div class="am-sep"></div>
+    <!-- Sep antes de Configurações: só quando algo veio antes (servidores no desktop, ou o
+         bloco de push) — senão o conteúdo embedded nascia com uma linha de 1px no topo. -->
+    {#if !embedded || pushSupported()}
+      <div class="am-sep"></div>
+    {/if}
     <!-- Porta única de configuração: Aparência (do aparelho) + config do servidor + Motores, cada
          uma numa sub-tela do mesmo modal. Fica aqui junto do resto de conta/servidor, que é onde o
          usuário já procura ajuste. -->
