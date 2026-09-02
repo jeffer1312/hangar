@@ -160,8 +160,8 @@ describe('colapso de grupo', () => {
   });
 });
 
-import { broadcast } from './api';
-import { selectServer } from './auth';
+import { broadcast, deleteSession, renameSession, resumeSession } from './api';
+import { getActiveId, selectServer } from './auth';
 import * as m from '../paraglide/messages';
 
 describe('seleção, broadcast e comparar (divergência #6 e #15)', () => {
@@ -248,5 +248,116 @@ describe('seleção, broadcast e comparar (divergência #6 e #15)', () => {
     const oc = opts('mobile'); const c = createSessionListModel(oc);
     c.toggleSelectMode(); c.toggleSelected('srv-a:a1'); c.toggleSelected('srv-b:b1'); c.openCompare();
     expect(oc.onCompare).toHaveBeenCalledWith([{ serverId: 'srv-b', name: 'b1' }, { serverId: 'srv-a', name: 'a1' }]);
+  });
+});
+
+describe('abrir sessão (divergência #18)', () => {
+  beforeEach(() => comServidores([{ id: 'srv-a', label: 'A', sessions: [] }]));
+  it('rastreada abre; "sem id" bloqueia, exceto Kimi', () => {
+    const o = opts('desktop'); const m1 = createSessionListModel(o);
+    expect(m1.open({ name: 'x', serverId: 'srv-a', tracked: true })).toBe(true);
+    expect(selectServer).toHaveBeenCalledWith('srv-a');
+    expect(o.onOpen).toHaveBeenCalledWith('x');
+    expect(m1.open({ name: 'y', serverId: 'srv-a', tracked: false, provider: 'claude' })).toBe(false);
+    expect(o.onOpen).toHaveBeenCalledTimes(1);
+    expect(m1.open({ name: 'k', serverId: 'srv-a', tracked: false, provider: 'kimi' })).toBe(true);
+  });
+});
+
+describe('excluir (divergências #7 e #8)', () => {
+  beforeEach(() => {
+    comServidores([{ id: 'srv-b', label: 'B', sessions: [sess('s', 'srv-b')] }]);
+    vi.mocked(getActiveId).mockReturnValue('srv-a');
+  });
+  it('otimista: marca, chama a API e devolve ok; desktop restaura o ativo, celular não', async () => {
+    vi.mocked(deleteSession).mockResolvedValue(undefined as any);
+    const d = createSessionListModel(opts('desktop'));
+    d.requestDelete('s', 'srv-b', 'idle');
+    expect(d.confirmDel).toEqual({ name: 's', serverId: 'srv-b', state: 'idle' });
+    expect(await d.doDelete()).toEqual({ ok: true, erro: '' });
+    expect(d.confirmDel).toBeNull();
+    expect(store.markDeleting).toHaveBeenCalledWith('srv-b', 's');
+    expect(vi.mocked(selectServer).mock.calls.map((c) => c[0])).toEqual(['srv-b', 'srv-a']);
+    vi.mocked(selectServer).mockClear();
+    const c = createSessionListModel(opts('mobile'));
+    c.requestDelete('s', 'srv-b');
+    await c.doDelete();
+    expect(vi.mocked(selectServer).mock.calls.map((x) => x[0])).toEqual(['srv-b']);
+  });
+  it('falha: desmarca (a linha reaparece) e devolve o erro em vez de lançar', async () => {
+    vi.mocked(deleteSession).mockRejectedValue(new Error('psmux não matou'));
+    const d = createSessionListModel(opts('desktop'));
+    d.requestDelete('s', 'srv-b');
+    expect(await d.doDelete()).toEqual({ ok: false, erro: 'psmux não matou' });
+    expect(store.unmarkDeleting).toHaveBeenCalledWith('srv-b', 's');
+  });
+  it('doDelete sem confirmação pendente é no-op', async () => {
+    expect(await createSessionListModel(opts('desktop')).doDelete()).toEqual({ ok: false, erro: '' });
+    expect(deleteSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('renomear (divergências #9 e #10)', () => {
+  beforeEach(() => { comServidores([{ id: 'srv-b', label: 'B', sessions: [] }]); vi.mocked(getActiveId).mockReturnValue('srv-a'); });
+  it('sucesso: devolve o nome; a sessão ABERTA renomeada troca a rota (só desktop)', async () => {
+    vi.mocked(renameSession).mockResolvedValue({ ok: true, name: 'novo' } as any);
+    const o = { ...opts('desktop'), currentSession: () => 'velho' };
+    const d = createSessionListModel(o);
+    expect(await d.rename('novo', 'velho', 'srv-b')).toEqual({ ok: true, name: 'novo', erro: '' });
+    expect(o.onOpen).toHaveBeenCalledWith('novo');
+    expect(vi.mocked(selectServer).mock.calls.map((c) => c[0])).toEqual(['srv-b', 'srv-a']);
+    const oc = opts('mobile'); const c = createSessionListModel(oc);
+    await c.rename('novo2', 'velho', 'srv-b');
+    expect(oc.onOpen).not.toHaveBeenCalled();
+  });
+  it('falha: devolve {ok:false, erro} com o nome antigo', async () => {
+    vi.mocked(renameSession).mockRejectedValue(new Error('já existe'));
+    const d = createSessionListModel(opts('desktop'));
+    expect(await d.rename('x', 'velho', 'srv-b')).toEqual({ ok: false, name: 'velho', erro: 'já existe' });
+  });
+});
+
+describe('retomar (divergências #11 e #12)', () => {
+  beforeEach(() => { comServidores([{ id: 'srv-b', label: 'B', sessions: [] }]); vi.mocked(getActiveId).mockReturnValue('srv-a'); });
+  it('caso seguro: religa e limpa candidatos; desktop restaura o ativo, celular não', async () => {
+    vi.mocked(resumeSession).mockResolvedValue({ ok: true } as any);
+    const d = createSessionListModel(opts('desktop'));
+    expect(await d.resume('s', 'srv-b')).toEqual({ ok: true, ambiguous: false, erro: '' });
+    expect(d.resumeCandidates).toBeNull();
+    expect(d.resumeBusy).toBe('');
+    expect(vi.mocked(selectServer).mock.calls.map((c) => c[0])).toEqual(['srv-b', 'srv-a']);
+    vi.mocked(selectServer).mockClear();
+    await createSessionListModel(opts('mobile')).resume('s', 'srv-b');
+    expect(vi.mocked(selectServer).mock.calls.map((c) => c[0])).toEqual(['srv-b']);
+  });
+  it('ambíguo: guarda os candidatos com nome e servidor', async () => {
+    const cands = [{ session_id: '1', preview: 'p', mtime: 1, in_use: false }];
+    vi.mocked(resumeSession).mockResolvedValue({ ambiguous: true, candidates: cands } as any);
+    const d = createSessionListModel(opts('desktop'));
+    expect(await d.resume('s', 'srv-b')).toEqual({ ok: true, ambiguous: true, erro: '' });
+    expect(d.resumeCandidates).toEqual({ name: 's', serverId: 'srv-b', candidates: cands });
+  });
+  it('falha: resumeError preenchido e devolvido; busy volta a vazio', async () => {
+    vi.mocked(resumeSession).mockRejectedValue(new Error('pane morto'));
+    const d = createSessionListModel(opts('desktop'));
+    expect(await d.resume('s', 'srv-b')).toEqual({ ok: false, ambiguous: false, erro: 'pane morto' });
+    expect(d.resumeError).toBe('pane morto');
+    expect(d.resumeBusy).toBe('');
+  });
+});
+
+describe('Git mira o servidor dono e restaura ao fechar (nas duas)', () => {
+  it('openGit/closeGit', () => {
+    comServidores([{ id: 'srv-b', label: 'B', sessions: [] }]);
+    vi.mocked(getActiveId).mockReturnValue('srv-a');
+    for (const v of ['desktop', 'mobile'] as const) {
+      vi.mocked(selectServer).mockClear();
+      const m1 = createSessionListModel(opts(v));
+      m1.openGit('s', 'srv-b');
+      expect(m1.gitSheet).toEqual({ name: 's' });
+      m1.closeGit();
+      expect(m1.gitSheet).toBeNull();
+      expect(vi.mocked(selectServer).mock.calls.map((c) => c[0])).toEqual(['srv-b', 'srv-a']);
+    }
   });
 });

@@ -2,15 +2,17 @@
 // Lógica da lista de sessões compartilhada pelas duas views (Sidebar desktop, SessionList
 // celular). Só lógica: template e CSS continuam em cada view. Formato do sessionsStore — fábrica
 // com getters, sem destructuring (perderia a reatividade).
-import { broadcast } from './api';
+import { broadcast, deleteSession, renameSession, resumeSession } from './api';
 import { getActiveId, selectServer, serverColor } from './auth';
 import { sessionsStore } from './sessionsStore.svelte';
 import {
   countAwaiting, effectiveGroupBy, groupSelectedByServer, projectKey, projectLabel, providerName,
   sortSessions, type GroupBy,
 } from './format';
-import type { AggSession } from './types';
+import type { AggSession, ResumeCandidate, State } from './types';
 import * as m from '../paraglide/messages';
+
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export type ListVariant = 'desktop' | 'mobile';
 
@@ -212,6 +214,87 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     }
   }
 
+  // ── Ações sobre uma sessão ──
+  // Restaurar o servidor ativo depois da ação é regra por view (C1 no desktop: o chat aberto tem
+  // que continuar no servidor dele; o celular nunca restaurou).
+  function restore(prev: string | null, serverId: string) {
+    if (rules.restoreServerAfterAction && prev && prev !== serverId) selectServer(prev);
+  }
+
+  // Sem id confiável não abre. Exceção Kimi: "sem id" é o normal antes do 1º prompt, e o /input
+  // não depende de jsonl — bloquear impedia a sessão de nascer.
+  function open(s: { name: string; serverId: string; tracked?: boolean; provider?: AggSession['provider'] }): boolean {
+    if (s.tracked === false && s.provider !== 'kimi') return false;
+    selectServer(s.serverId);   // o Chat usa o servidor ativo
+    opts.onOpen(s.name);
+    return true;
+  }
+
+  let confirmDel = $state<{ name: string; serverId: string; state: State | null } | null>(null);
+  function requestDelete(name: string, serverId: string, state: State | null = null) {
+    confirmDel = { name, serverId, state };
+  }
+  async function doDelete(): Promise<{ ok: boolean; erro: string }> {
+    if (!confirmDel) return { ok: false, erro: '' };
+    const { name, serverId } = confirmDel;
+    confirmDel = null;
+    const prev = getActiveId();
+    selectServer(serverId);
+    // Otimista: some na hora; falhou, desmarca (reaparece) e a view mostra o erro.
+    sessionsStore.markDeleting(serverId, name);
+    let result = { ok: true, erro: '' };
+    try { await deleteSession(name); }
+    catch (e) { sessionsStore.unmarkDeleting(serverId, name); result = { ok: false, erro: errMsg(e) }; }
+    restore(prev, serverId);
+    return result;
+  }
+
+  async function rename(nv: string, old: string, serverId: string): Promise<{ ok: boolean; name: string; erro: string }> {
+    const prev = getActiveId();
+    selectServer(serverId);
+    try {
+      const r = await renameSession(old, nv);
+      if (old === opts.currentSession?.()) opts.onOpen(r.name);
+      return { ok: true, name: r.name, erro: '' };
+    } catch (e) {
+      return { ok: false, name: old, erro: e instanceof Error ? e.message : m.sessao_falha_renomear() };
+    } finally {
+      restore(prev, serverId);   // o SSE re-emite a sessão renomeada
+    }
+  }
+
+  let resumeCandidates = $state<{ name: string; serverId: string; candidates: ResumeCandidate[] } | null>(null);
+  let resumeBusy = $state('');
+  let resumeError = $state('');
+  async function resume(name: string, serverId: string, sessionId?: string): Promise<{ ok: boolean; ambiguous: boolean; erro: string }> {
+    resumeError = '';
+    resumeBusy = name;
+    const prev = getActiveId();
+    selectServer(serverId);
+    try {
+      const r = await resumeSession(name, sessionId);
+      if (r && 'ambiguous' in r && r.ambiguous) {
+        resumeCandidates = { name, serverId, candidates: r.candidates };
+        return { ok: true, ambiguous: true, erro: '' };
+      }
+      resumeCandidates = null;   // religada; o SSE atualiza a linha
+      return { ok: true, ambiguous: false, erro: '' };
+    } catch (err) {
+      resumeError = err instanceof Error ? err.message : m.sessao_falha_retomar();
+      return { ok: false, ambiguous: false, erro: resumeError };
+    } finally {
+      resumeBusy = '';
+      restore(prev, serverId);
+    }
+  }
+
+  // Git/Loop miram o servidor ATIVO (api.ts): aponta pro dono enquanto a folha está aberta e
+  // restaura no fechar — nas duas views, sem regra.
+  let gitSheet = $state<{ name: string } | null>(null);
+  let gitPrev: string | null = null;
+  function openGit(name: string, serverId: string) { gitPrev = getActiveId(); selectServer(serverId); gitSheet = { name }; }
+  function closeGit() { gitSheet = null; if (gitPrev) { selectServer(gitPrev); gitPrev = null; } }
+
   return {
     mount() { sessionsStore.retain(); return () => sessionsStore.release(); },
     get rows() { return rows; },
@@ -241,5 +324,13 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     get broadcastDisabled() { return broadcastDisabled; },
     get compareDisabled() { return compareDisabled; },
     toggleSelectMode, openSelectMode, toggleSelected, selectGroupForBroadcast, openCompare, sendBroadcast,
+    open, requestDelete, doDelete, rename, resume, openGit, closeGit,
+    get confirmDel() { return confirmDel; },
+    set confirmDel(v: { name: string; serverId: string; state: State | null } | null) { confirmDel = v; },
+    get resumeCandidates() { return resumeCandidates; },
+    set resumeCandidates(v: { name: string; serverId: string; candidates: ResumeCandidate[] } | null) { resumeCandidates = v; },
+    get resumeBusy() { return resumeBusy; },
+    get resumeError() { return resumeError; },
+    get gitSheet() { return gitSheet; },
   };
 }
