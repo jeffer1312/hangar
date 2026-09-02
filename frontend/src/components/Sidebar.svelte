@@ -3,8 +3,8 @@
 import * as m from '../paraglide/messages';
   import HangarMark from './icons/HangarMark.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
-  import { createSession, deleteSession, renameSession, gitAction, checkoutBranch, resumeSession, broadcast, getHistoryTailForServer } from '../lib/api';
-  import { getActiveId, selectServer, serverColor, withServer } from '../lib/auth';
+  import { createSession, gitAction, checkoutBranch, getHistoryTailForServer } from '../lib/api';
+  import { getActiveId, serverColor, withServer } from '../lib/auth';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { abrirConfig } from '../lib/configNav';
   import CreateSessionSheet from './CreateSessionSheet.svelte';
@@ -15,8 +15,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import StateChip from './StateChip.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
-  import type { SessionInfo, State, ResumeCandidate, Provider } from '../lib/types';
-  import { cwdParts, rotuloEstado, stateColors, countAwaiting, groupSelectedByServer, initials, projectKey, projectLabel, effectiveGroupBy, fmtWhen, sortSessions, latestAssistantEvent, clusterByPair, untrackedReason, providerName, providerTag, type GroupBy } from '../lib/format';
+  import type { SessionInfo, State, AggSession, Provider } from '../lib/types';
+  import { cwdParts, rotuloEstado, stateColors, countAwaiting, initials, fmtWhen, latestAssistantEvent, clusterByPair, untrackedReason, providerTag } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
@@ -37,7 +37,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
   // Linha secundária da sidebar: só o sinal acionável. O detalhe longo do spinner (modelo,
   // tokens, tempo) continua no tooltip, mas não vira texto permanente na lista.
-  function sidebarStatus(s: SessRow): string | null {
+  function sidebarStatus(s: AggSession): string | null {
     if (s.state === 'awaiting_input') return s.question ?? null;
     if (s.state !== 'working') return null;
     const label = (s.label ?? '').trim();
@@ -80,16 +80,19 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     ctxDisponivel = true, overlaySession,
   }: Props = $props();
 
-  // Grupo generico: por SERVIDOR (hoje) ou por PROJETO (cwd) — mesmo shape nos dois modos. Cada
-  // sessao carrega o serverId dela (no modo projeto um grupo pode juntar sessoes de servidores
-  // diferentes; no modo servidor e sempre o mesmo serverId do grupo, mas mantem uniforme pro
-  // template nao precisar saber em qual modo esta).
-  interface SessRow extends SessionInfo { serverId: string }
-  interface Group { id: string; label: string; color: string | null; error: string | null; sessions: SessRow[] }
+  import { createSessionListModel } from '../lib/sessionListModel.svelte';
+  // Toda a lógica compartilhada com o celular mora no modelo; aqui fica só o chrome do desktop
+  // (rail, pin, kebab, espiada, menu de contexto, rename inline) e os embrulhos de uma linha.
+  const model = createSessionListModel({
+    variant: 'desktop',
+    onOpen: onSelect,
+    onCompare,
+    currentSession: () => currentSession,
+  });
+
   // Pin do trilho mora na store compartilhada (sidebarPin): a PREFERENCIA persistida (o que o
   // usuario clicou) fica separada do override TEMPORARIO do Board/Canvas — o auto-recolher nao pode
-  // virar preferencia gravada. `filterText` continua local (filtro da lista).
-  let filterText = $state('');     // filtro por nome/cwd/servidor (aparece quando a lista fica longa)
+  // virar preferencia gravada.
 
   // Quadro OU canvas aberto -> força o recolhido (as colunas/canvas querem a largura); sair restaura
   // o pin como estava ANTES de entrar. O override mexe so no `forced` da store, nunca na preferencia:
@@ -103,36 +106,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Publica o ESTADO EFETIVO pro pai (DesktopShell) a cada mudanca do pin ou do override do
   // board/canvas — o pai so precisa saber se a sidebar esta visivel agora, nao de onde veio o valor.
   $effect(() => { onCollapsedChange?.(sidebarPin.collapsed); });
-
-  // Grupos colapsados por id (servidor ou projeto), persistido — MESMA chave do mobile (SessionList)
-  // pra o estado ser compartilhado onde faz sentido. Diferente do pin da sidebar (sidebarPin,
-  // que agora vive na store compartilhada com as abas).
-  const COLLAPSE_KEY = 'cp_collapsed_servers';
-  function loadCollapsedGroups(): Set<string> {
-    try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '[]')); } catch { return new Set(); }
-  }
-  let collapsedGroups = $state<Set<string>>(loadCollapsedGroups());
-  function toggleGroup(id: string) {
-    const next = new Set(collapsedGroups);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    collapsedGroups = next;
-    // Persiste só o colapso de servidor/projeto; o de CLUSTER de pareamento (chave 'pair:<gid>') é
-    // efêmero — o gid é regenerado a cada pareamento, então salvar acumularia lixo morto pra sempre.
-    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* quota/priv mode */ }
-  }
-
-  // Toggle "Servidor | Projeto" (feature #3), persistido — mesmo padrao de cp_sidebar_w. Guarda a
-  // PREFERENCIA crua; o modo efetivo (effectiveGroupBy) força "projeto" quando ha <2 servidores.
-  const GROUP_BY_KEY = 'cp_group_by';
-  let groupBy = $state<GroupBy>((() => {
-    const v = localStorage.getItem(GROUP_BY_KEY);
-    return v === 'project' || v === 'none' || v === 'server' ? v : 'server';
-  })());
-  function setGroupBy(mode: GroupBy) {
-    groupBy = mode;
-    try { localStorage.setItem(GROUP_BY_KEY, mode); } catch { /* storage cheio/off */ }
-    // `groups` é derived — reage sozinho à mudança de groupBy, sem recompute manual.
-  }
 
   // Densidade compacta (1 linha por sessao: so lead+nome+chips), persistida — mesmo padrao do
   // groupBy acima. Puramente visual: nao muda a lista, so esconde as linhas secundarias via CSS.
@@ -162,13 +135,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     try { localStorage.setItem('cp_sidebar_w', String(width)); } catch { /* storage cheio/off */ }
   }
   const servers = $derived(sessionsStore.servers);
-  const groupMode = $derived(effectiveGroupBy(groupBy, servers.length));
   // Agrupando por projeto, o cwd já está no header do grupo; mostrar o caminho em cada row é
   // redundância. Ele volta a aparecer quando o agrupamento é por servidor.
-  const showCwd = $derived(groupMode === 'server');
-  // Chip de provider é exceção, não identidade default: se tudo na lista é Pi/Claude, o chip vira
-  // ruído repetido. Ele só entra quando há providers diferentes convivendo na mesma lista.
-  const showProviderTags = $derived(new Set(sessionsStore.rows.map((s) => providerName(s.provider))).size > 1);
+  const showCwd = $derived(model.groupMode === 'server');
   let activeId = $state(getActiveId());
   let showCreate = $state(false);
   // Passagem de bastão: mesma folha de criar, aberta pra CONTINUAR a sessão apontada. Fica ao lado
@@ -199,7 +168,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     typeof window !== 'undefined' && window.matchMedia('(min-width: 1280px)').matches,
   );
   onMount(() => {
-    sessionsStore.retain();
+    const off = model.mount();
     const mqLargo = window.matchMedia('(min-width: 1280px)');
     const onLargo = () => (isDesktopLargo = mqLargo.matches);
     mqLargo.addEventListener('change', onLargo);
@@ -213,44 +182,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     return () => {
       unregisterBridge();
       mqLargo.removeEventListener('change', onLargo);
-      sessionsStore.release();
+      off();
       clearTimeout(hpTimer);   // espiada pendente nao sobrevive ao unmount (fetch orfao + setState)
     };
-  });
-
-  // Agrupamento é POLÍTICA do Sidebar (servidor|projeto); o dado agregado/deduplicado vem do store.
-  const groups = $derived.by<Group[]>(() => {
-    if (servers.length === 0) return [];
-    // Modo efetivo: "por servidor" com 1 servidor so cai pra lista lisa (1 grupo gigante nao separa nada).
-    const mode = effectiveGroupBy(groupBy, servers.length);
-    if (mode === 'none') {
-      // Lista lisa: um grupo unico e SEM cabecalho (o template pula o header quando o label e vazio).
-      // Ordena tudo junto, entao a sessao que pede atencao sobe, venha de que projeto vier.
-      return [{ id: '*', label: '', color: null, error: null, sessions: sortSessions([...sessionsStore.rows]) }];
-    }
-    if (mode === 'project') {
-      // Modo projeto: junta sessoes de TODOS os servidores pela chave do cwd. Servidor offline so
-      // perde as sessoes dele (sem banner por grupo — nao ha "1 servidor" pra apontar o erro).
-      const byKey = new Map<string, SessRow[]>();
-      for (const s of sessionsStore.rows) {
-        const pk = projectKey(s.cwd);
-        const arr = byKey.get(pk);
-        if (arr) arr.push(s); else byKey.set(pk, [s]);
-      }
-      return [...byKey.entries()]
-        .map(([key, rowsOf]) => ({ id: key, label: projectLabel(rowsOf[0]?.cwd), color: null, error: null, sessions: sortSessions(rowsOf) }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-    }
-    // Modo servidor (comportamento de sempre): 1 grupo por servidor, sempre presente (mesmo vazio
-    // ou offline), na ORDEM de `servers`. Semântica de erro preservada: "offline" só aparece quando
-    // NÃO há lista (com lista stale o grupo mostra as sessões e não o banner).
-    return sessionsStore.byServer.map((b) => ({
-      id: b.server.id,
-      label: b.server.label,
-      color: serverColor(b.server.id),
-      error: b.loaded ? null : b.error,
-      sessions: sortSessions(b.sessions),
-    }));
   });
 
   // Web push + horas silenciosas vivem na tela Servidores da Configuração (ServidoresSettings,
@@ -260,26 +194,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // `claude --resume <uuid>` -> passa a rastrear. Caso seguro resolve direto; caso ambiguo o backend
   // devolve candidatos e abrimos o modal pra confirmar QUAL conversa retomar. Reusa o MESMO
   // resumeSession. withServer mira o dono e restaura (igual ao resto das ops). ──────────────────────
-  let resumeModal = $state<{ name: string; serverId: string; candidates: ResumeCandidate[] } | null>(null);
-  let resumeBusy = $state('');   // nome da sessao em processamento (desabilita o botao/itens)
-  let resumeError = $state('');
   async function handleResume(name: string, serverId: string, sessionId?: string, e?: MouseEvent) {
     e?.stopPropagation();
-    resumeError = '';
-    resumeBusy = name;
-    try {
-      const r = await withServer(serverId, () => resumeSession(name, sessionId));
-      if (r && 'ambiguous' in r && r.ambiguous) {
-        resumeModal = { name, serverId, candidates: r.candidates };   // ambiguo: escolher no modal
-      } else {
-        resumeModal = null;   // religada (caso seguro ou escolha confirmada); o SSE atualiza a linha
-      }
-    } catch (err) {
-      resumeError = err instanceof Error ? err.message : m.sessao_falha_retomar();
-      if (!resumeModal) flash(m.sessao_flash_retomar({ n: resumeError }));   // erro do botao da linha -> toast
-    } finally {
-      resumeBusy = '';
-    }
+    const r = await model.resume(name, serverId, sessionId);
+    if (!r.ok && !model.resumeCandidates) flash(m.sessao_flash_retomar({ n: r.erro }));   // erro do botão da linha -> toast
   }
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
@@ -305,23 +223,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   // Excluir sessao pede confirmacao (com o nome) — clique unico no × era facil de errar. O delete real
   // so acontece no doDelete.
-  let confirmDel = $state<{ name: string; serverId: string } | null>(null);
-  function handleDelete(name: string, serverId: string, e: MouseEvent) {
-    e.stopPropagation();
-    confirmDel = { name, serverId };
-  }
   async function doDelete() {
-    if (!confirmDel) return;
-    const { name, serverId } = confirmDel;
-    confirmDel = null;
-    const prev = getActiveId(); // C1: save before pointing at target server
-    selectServer(serverId); // api.ts mira o server ativo -> aponta pro dono da sessão
-    // Exclusão otimista via store: some na hora; falhou -> desmarca (reaparece) + toast.
-    sessionsStore.markDeleting(serverId, name);
-    try { await deleteSession(name); }
-    catch (e) { sessionsStore.unmarkDeleting(serverId, name); flash(m.sessao_flash_excluir({ n: errMsg(e) })); }
-    if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
-    // No sucesso o SSE re-emite a lista sem a sessão e a faxina do store limpa a marca.
+    const r = await model.doDelete();
+    if (!r.ok) flash(m.sessao_flash_excluir({ n: r.erro }));
   }
 
   // ── Renomear sessão do tmux: TOQUE LONGO no nome -> edita inline ──────────────
@@ -340,12 +244,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   function onMainClick(name: string, serverId: string, tracked: boolean | undefined, provider?: SessionInfo['provider']) {
     if (longPressed) { longPressed = false; return; } // foi toque longo (renomear)
-    // Sem id confiável -> não abre. EXCEÇÃO kimi: "sem id" é o normal pré-1º-prompt e o /input não
-    // depende de jsonl — bloquear aqui impedia a sessão de nascer (sem chat, sem 1º prompt, sem id).
-    if (tracked === false && provider !== 'kimi') return;
-    selectServer(serverId); // o Chat usa o server ativo
-    activeId = serverId; // I2: keep local badge in sync immediately
-    onSelect(name);
+    if (model.open({ name, serverId, tracked, provider })) activeId = serverId; // I2: badge local em dia
   }
 
   // ── Espiada no hover (desktop): ultima resposta da sessao sob o mouse, sem trocar de chat ───────
@@ -410,34 +309,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (!el?.closest?.('.sess-row')) hpLeave();
   }
 
-  // Núcleo do rename (inline E diálogo da sidebar recolhida): mira o servidor dono, renomeia e
-  // restaura. `old` é o nome ANTIGO (chave tmux); `nv` já validado/trimado pelo chamador.
-  // Retorno tipado: falha NÃO é engolida — o chamador decide onde expor (diálogo aberto com
-  // role=alert, flash no inline); nada de reportar sucesso calado (round 2).
-  async function doRename(
-    nv: string,
-    old: string,
-    serverId: string,
-  ): Promise<{ ok: boolean; name: string; erro: string }> {
-    const prev = getActiveId(); // C1: save before pointing at target server
-    selectServer(serverId);
-    try {
-      const r = await renameSession(old, nv);
-      if (old === currentSession) onSelect(r.name);
-      return { ok: true, name: r.name, erro: '' };
-    } catch (e) {
-      return { ok: false, name: old, erro: e instanceof Error ? e.message : m.sessao_falha_renomear() };
-    } finally {
-      if (prev && prev !== serverId) selectServer(prev); // C1: restore so open chat stays on its server
-      // SSE stream emitirá a sessão renomeada automaticamente
-    }
-  }
   function saveEdit(old: string, serverId: string) {
     const nv = editValue.trim();
     editing = null;
     if (!nv || nv === old) return;
     // Inline preserva o comportamento (fecha o input no blur); falha aparece no toast, não some.
-    void doRename(nv, old, serverId).then((r) => {
+    void model.rename(nv, old, serverId).then((r) => {
       if (!r.ok) flash(m.sessao_flash_renomear({ n: r.erro }));
     });
   }
@@ -477,15 +354,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Confirmacao de troca com working tree suja (switch carrega mudancas nao-conflitantes pra outra branch).
   let confirmBranch = $state<{ name: string; serverId: string; branch: string } | null>(null);
   // Gerenciador git (GitSheet) aberto pelo menu de contexto, no repo da sessao, SEM abrir o chat.
-  // A GitSheet mira o server ATIVO -> aponto pro dono da sessao enquanto aberta e restauro no fechar.
-  let gitSheet = $state<{ name: string } | null>(null);
-  let gitSheetPrevServer: string | null = null;
   function menuGit() {
     if (!menu) return;
-    const { name, serverId } = menu;
-    gitSheetPrevServer = getActiveId();
-    selectServer(serverId);
-    gitSheet = { name };
+    model.openGit(menu.name, menu.serverId);
     closeMenu();
   }
   // filesInContext de VERDADE (Task 14, achado do revisor na Task 12; Task 15, item 1): o Git
@@ -497,15 +368,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // overlaySession, boardActive zerava a expressao inteira e o overlay nao era reconhecido como
   // host — o mesmo defeito que a Task 14 impediu, entrando pelo Quadro.
   const filesInContext = $derived(
-    isDesktopLargo && ctxDisponivel && !ctxPanel.recolhido && gitSheet !== null
-      && ((overlaySession !== null && overlaySession.name === gitSheet.name)
-        || (!boardActive && !canvasActive && !orqActive && gitSheet.name === currentSession)),
+    isDesktopLargo && ctxDisponivel && !ctxPanel.recolhido && model.gitSheet !== null
+      && ((overlaySession !== null && overlaySession.name === model.gitSheet.name)
+        || (!boardActive && !canvasActive && !orqActive && model.gitSheet.name === currentSession)),
   );
 
-  function closeGitSheet() {
-    gitSheet = null;
-    if (gitSheetPrevServer) { selectServer(gitSheetPrevServer); gitSheetPrevServer = null; }
-  }
   // Passar o bastão: abre a folha de criar já sabendo quem é a origem. Ao contrário do Git/Loop, o
   // servidor NÃO é apontado aqui — quem faz isso é a própria folha (o `pickTarget` da abertura), e
   // travado no da origem: o dossiê é arquivo no disco daquela máquina.
@@ -549,7 +416,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // dessa sessao — nao ha como encadear pra uma sessao de OUTRO servidor), exceto ela mesma. Passado
   // como prop pro SessionContextMenu (que precisa de `groups`, so o Sidebar tem).
   function chainCandidates(serverId: string, exclude: string) {
-    return groups.flatMap((g) => g.sessions).filter((s) => s.serverId === serverId && s.name !== exclude);
+    return model.allGroups.flatMap((g) => g.sessions).filter((s) => s.serverId === serverId && s.name !== exclude);
   }
 
   const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -583,7 +450,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     if (!nv || nv === old) return;
     renameBusy = true;
     renameError = '';
-    void doRename(nv, old, serverId).then((r) => {
+    void model.rename(nv, old, serverId).then((r) => {
       renameBusy = false;
       if (r.ok) {
         renameDialog = null;
@@ -597,7 +464,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   function menuDelete() {
     if (!menu) return;
-    confirmDel = { name: menu.name, serverId: menu.serverId };
+    model.requestDelete(menu.name, menu.serverId);
     closeMenu();
   }
 
@@ -611,32 +478,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // no canto do botão — é o que diz "estou conectado NESTA máquina" sem gastar linha de texto.
   const accountColor = $derived(activeServer ? serverColor(activeServer.id) : 'var(--text-muted)');
 
-  // Badge do ícone do app (feature #13): mesmo agregado do mobile (SessionList), so que a partir de
-  // `groups` (por servidor) — flatten pra contar aguardando em TODOS os servidores.
-  const awaitingTotal = $derived(groups.reduce((n, g) => n + countAwaiting(g.sessions), 0));
-  $effect(() => { updateBadge(awaitingTotal); });
-
-  // Filtro (paridade com o mobile): so aparece quando ha muitas sessoes; casa nome/cwd/rotulo do
-  // grupo. Aplicado sobre `groups` num derived (reativo ao texto) — nao mexe no fluxo do SSE. Grupo
-  // que zera apos o filtro some; sem filtro, `groups` passa intacto (mantem grupo offline/vazio).
-  const totalSessions = $derived(groups.reduce((n, g) => n + g.sessions.length, 0));
-  const showFilter = $derived(totalSessions > 6);
-  const filteredGroups = $derived.by(() => {
-    const q = filterText.trim().toLowerCase();
-    if (!q) return groups;
-    return groups
-      .map((g) => ({
-        ...g,
-        sessions: g.sessions.filter(
-          (s) =>
-            s.name.toLowerCase().includes(q) ||
-            (s.cwd ?? '').toLowerCase().includes(q) ||
-            g.label.toLowerCase().includes(q),
-        ),
-      }))
-      .filter((g) => g.sessions.length > 0);
-  });
-  const filterEmpty = $derived(filterText.trim() !== '' && filteredGroups.length === 0);
+  // Badge do ícone do app (feature #13): mesmo agregado do mobile (SessionList).
+  $effect(() => { updateBadge(model.awaitingTotal); });
 
   // Servidores offline SAEM da lista (pedido do usuário: 4 headers "offline" só enchiam) e viram
   // UMA linha-resumo no fim, expansível — sumir total esconderia a queda e a chance de reconectar.
@@ -645,58 +488,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // pra dizer que não há nada. Não esconde nada acionável — o "+ Nova" recebe a lista COMPLETA de
   // servidores (`servers`, não `renderGroups`) e deixa escolher o alvo, então dá pra criar sessão
   // num servidor que não aparece aqui.
-  const onlineGroups = $derived(filteredGroups.filter((g) => !g.error && g.sessions.length > 0));
-  const offlineGroups = $derived(filteredGroups.filter((g) => g.error));
+  const onlineGroups = $derived(model.groups.filter((g) => !g.error && g.sessions.length > 0));
+  const offlineGroups = $derived(model.groups.filter((g) => g.error));
   const renderGroups = $derived(showOffline ? [...onlineGroups, ...offlineGroups] : onlineGroups);
 
 
-
-  // ── Broadcast (feature #9): selecionar N sessoes e mandar 1 prompt pra todas ──────────────────
-  // Mesmo padrao do mobile (SessionList): selecao = "<serverId>:<name>", groupSelectedByServer
-  // particiona por servidor-dono -> 1 chamada a broadcast() por servidor (withServer restaura o ativo).
-  let selectMode = $state(false);
-  let selected = $state<Set<string>>(new Set());
-  let broadcastText = $state('');
-  let broadcastBusy = $state(false);
-  let broadcastMsg = $state('');
-
-  function toggleSelectMode() {
-    selectMode = !selectMode;
-    selected = new Set();
-    broadcastText = '';
-    broadcastMsg = '';
-  }
-  function openSelectMode() {
-    if (!selectMode) toggleSelectMode();
-  }
-  function toggleSelected(key: string) {
-    const next = new Set(selected);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    selected = next;
-  }
-  // "enviar p/ todas" no header do grupo: entra em selecao com o grupo inteiro marcado (exceto "sem id").
-  function selectGroupForBroadcast(g: Group) {
-    selectMode = true;
-    selected = new Set(
-      g.sessions.filter((s) => s.tracked !== false).map((s) => `${s.serverId}:${s.name}`),
-    );
-  }
-  // Slash-command manda por sessao (correcao de rota) -> desabilita o broadcast em vez de replicar
-  // "/comando" pra N sessoes de uma vez (ex: /clear em todas sem querer).
-  const broadcastIsSlash = $derived(broadcastText.trim().startsWith('/'));
-  const broadcastDisabled = $derived(broadcastBusy || selected.size === 0 || !broadcastText.trim() || broadcastIsSlash);
-
-  // "Comparar" (feature #11): reusa a MESMA seleção multipla do broadcast pra abrir a grade lado a
-  // lado. Precisa de 2+ (comparar 1 sessão não tem propósito).
-  const compareDisabled = $derived(selected.size < 2);
-  function openCompare() {
-    const allSessions = groups.flatMap((g) => g.sessions);
-    const ids = allSessions
-      .filter((s) => selected.has(`${s.serverId}:${s.name}`))
-      .map((s) => ({ serverId: s.serverId, name: s.name }));
-    onCompare(ids);
-  }
 
   $effect(() => {
     const publish = onWorkspaceActionsChange;
@@ -740,7 +536,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         detail: m.lista_selecione_2(),
         keywords: ['comparar', m.lista_sessoes_plural(), 'lado a lado'],
         group: m.lista_colaboracao(),
-        run: openSelectMode,
+        run: model.openSelectMode,
       },
       {
         id: 'broadcast',
@@ -748,40 +544,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         detail: m.lista_selecione_enviar(),
         keywords: ['broadcast', m.lista_enviar(), 'mensagem', m.lista_sessoes_plural()],
         group: m.lista_colaboracao(),
-        run: openSelectMode,
+        run: model.openSelectMode,
       },
     ]);
     return () => publish([]);
   });
-
-  async function sendBroadcast() {
-    const text = broadcastText.trim();
-    if (broadcastDisabled) return;
-    broadcastBusy = true;
-    broadcastMsg = '';
-    const allSessions = groups.flatMap((g) => g.sessions);
-    const byServer = groupSelectedByServer(allSessions, selected);
-    const prev = getActiveId();
-    const failed: string[] = [];
-    for (const [serverId, names] of byServer) {
-      selectServer(serverId);
-      try {
-        const results = await broadcast(names, text);
-        for (const [n, r] of Object.entries(results)) if (!r.ok) failed.push(n);
-      } catch {
-        failed.push(...names); // servidor offline/erro de rede -> conta todo o lote dele como falho
-      }
-    }
-    if (prev) selectServer(prev);
-    broadcastBusy = false;
-    if (failed.length) {
-      broadcastMsg = m.lista_broadcast_falha({ nomes: failed.join(', ') });
-    } else {
-      broadcastText = '';
-      selected = new Set();
-      selectMode = false;
-    }
-  }
 </script>
 
 <!-- `floating` segue a escolha de altura em Aparencia ('content' = dock flutuante permanente).
@@ -803,10 +570,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     <!-- Broadcast (feature #9): entra/sai do modo seleção multipla. -->
     <button
       class="select-toggle-btn"
-      class:active={selectMode}
-      onclick={toggleSelectMode}
-      aria-label={selectMode ? m.lista_cancelar_selecao() : m.sessao_selecionar()}
-      title={selectMode ? m.lista_cancelar_selecao() : m.lista_selecionar_broadcast()}
+      class:active={model.selectMode}
+      onclick={model.toggleSelectMode}
+      aria-label={model.selectMode ? m.lista_cancelar_selecao() : m.sessao_selecionar()}
+      title={model.selectMode ? m.lista_cancelar_selecao() : m.lista_selecionar_broadcast()}
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -829,11 +596,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
     {#if expanded}
     <!-- Filtro (paridade com o mobile): so aparece quando a lista fica longa. -->
-    {#if showFilter}
+    {#if model.showFilter}
       <input
         type="text"
         class="filter-input"
-        bind:value={filterText}
+        bind:value={model.filterText}
         placeholder={m.lista_filtrar()}
         autocomplete="off"
         autocorrect="off"
@@ -842,13 +609,13 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         aria-label={m.lista_filtrar()}
       />
     {/if}
-    {#if filterEmpty}
+    {#if model.filterEmpty}
       <p class="filter-empty">{m.lista_vazia_filtro()}</p>
     {/if}
     {/if}
     <!-- Servidor online e vazio nao aparece mais; com TODOS vazios a lista ficaria em branco, sem
          dizer o porque. (Nao vale quando o filtro esta ativo — ai quem fala e o filter-empty.) -->
-    {#if expanded && !filterText.trim() && renderGroups.length === 0 && offlineGroups.length === 0}
+    {#if expanded && !model.filterText.trim() && renderGroups.length === 0 && offlineGroups.length === 0}
       <p class="filter-empty">{m.lista_vazia_aberta()} <strong>+ {m.lista_nova_curto()}</strong>.</p>
     {/if}
     {#each renderGroups as g (g.id)}
@@ -859,11 +626,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           <!-- Header colapsavel (paridade com o mobile): chevron + label + contagem + aguardando. -->
           <button
             class="grp-head"
-            onclick={() => toggleGroup(g.id)}
-            aria-expanded={!collapsedGroups.has(g.id)}
+            onclick={() => model.toggleGroup(g.id)}
+            aria-expanded={!model.collapsed.has(g.id)}
             title={g.error ? `${g.label}: ${g.error}` : g.label}
           >
-            <span class="grp-chevron" class:collapsed={collapsedGroups.has(g.id)} aria-hidden="true">▾</span>
+            <span class="grp-chevron" class:collapsed={model.collapsed.has(g.id)} aria-hidden="true">▾</span>
             {#if g.color}<span class="grp-dot" style="background: {g.color};" aria-hidden="true"></span>{/if}
             <span class="grp-label">{g.label}</span>
             {#if g.sessions.length > 0}<span class="grp-count">{g.sessions.length}</span>{/if}
@@ -873,7 +640,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           <!-- "enviar p/ todas" (feature #9): entra em modo seleção com o grupo inteiro marcado. -->
           <button
             class="grp-broadcast"
-            onclick={() => selectGroupForBroadcast(g)}
+            onclick={() => model.selectGroupForBroadcast(g)}
             aria-label={`${m.lista_enviar_msg_todas()} ${g.label}`}
             title={m.lista_enviar_todas()}
           >
@@ -884,23 +651,23 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           </button>
         </div>
       {/if}
-      {#if !expanded || !collapsedGroups.has(g.id)}
+      {#if !expanded || !model.collapsed.has(g.id)}
       {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}::${item.session.name}`)}
         {#if item.kind === 'header'}
           {#if expanded}
           <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo, dentro do servidor. -->
-          <button class="pair-head" onclick={() => toggleGroup(`pair:${item.gid}`)}
-                  aria-expanded={!collapsedGroups.has(`pair:${item.gid}`)} title={m.sessao_grupo_pareado({ label: item.label })}>
-            <span class="grp-chevron" class:collapsed={collapsedGroups.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
+          <button class="pair-head" onclick={() => model.toggleGroup(`pair:${item.gid}`)}
+                  aria-expanded={!model.collapsed.has(`pair:${item.gid}`)} title={m.sessao_grupo_pareado({ label: item.label })}>
+            <span class="grp-chevron" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
             <span class="pair-head-label">🤝&nbsp;{item.label}</span>
             <span class="grp-count">{item.count}</span>
           </button>
           {/if}
-        {:else if !item.gid || !collapsedGroups.has(`pair:${item.gid}`)}
+        {:else if !item.gid || !model.collapsed.has(`pair:${item.gid}`)}
         {@const s = item.session}
         {@const rowKey = `${s.serverId}::${s.name}`}
         {@const selKey = `${s.serverId}:${s.name}`}
-        {@const provTag = showProviderTags ? providerTag(s.provider) : null}
+        {@const provTag = model.showProviderTags ? providerTag(s.provider) : null}
         {@const sub = sidebarStatus(s)}
         {@const srvLabel = servers.find((sv) => sv.id === s.serverId)?.label ?? s.serverId}
         {@const estadoTxt = s.stalled ? m.sessao_pode_travada() : rotuloEstado(s.state)}
@@ -926,25 +693,25 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               class="sess-main"
               class:untracked={s.tracked === false}
               class:untracked-open={s.tracked === false && s.provider === 'kimi'}
-              aria-pressed={selectMode ? selected.has(selKey) : undefined}
+              aria-pressed={model.selectMode ? model.selected.has(selKey) : undefined}
               aria-label={!expanded ? `${s.name} · ${srvLabel} · ${estadoTxt}` : undefined}
               title={!expanded
                 ? `${s.name} · ${srvLabel} · ${estadoTxt}${provTag ? ` · ${m.sessao_singular()} ${provTag}` : ''}`
                 : (s.tracked === false ? untrackedReason(s.provider) : m.sessao_toque_renomear())}
-              onpointerdown={() => { if (!selectMode && !sidebarPin.collapsed) pressStart(rowKey); }}
+              onpointerdown={() => { if (!model.selectMode && !sidebarPin.collapsed) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
               onpointercancel={pressEnd}
-              oncontextmenu={(e) => { if (!selectMode) openMenu(e, s, s.serverId); }}
+              oncontextmenu={(e) => { if (!model.selectMode) openMenu(e, s, s.serverId); }}
               onclick={() => {
                 hpLeave();   // clique nao move o mouse -> sem mouseleave; fecha a espiada na mao
-                if (selectMode) { if (s.tracked !== false) toggleSelected(selKey); return; }
+                if (model.selectMode) { if (s.tracked !== false) model.toggleSelected(selKey); return; }
                 onMainClick(s.name, s.serverId, s.tracked, s.provider);
               }}
             >
               <span class="lead" aria-hidden="true">
-                {#if selectMode}
-                  <input type="checkbox" class="select-check" checked={selected.has(selKey)} tabindex="-1" aria-hidden="true" />
+                {#if model.selectMode}
+                  <input type="checkbox" class="select-check" checked={model.selected.has(selKey)} tabindex="-1" aria-hidden="true" />
                 {:else if !expanded}
                   <!-- Rail recolhido: SEMPRE iniciais, tingidas pelo estado — é o único texto que
                        identifica a sessão sem o nome. Trabalhando trocava as iniciais pelo spinner,
@@ -966,14 +733,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 {:else}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarMark size={18} /></span>
                 {/if}
-                {#if !expanded && !selectMode && provTag}
+                {#if !expanded && !model.selectMode && provTag}
                   <!-- Rail recolhido: não cabe chip na linha (não há linha), então o rótulo vira uma
                        etiqueta colada na base do avatar/spinner. Absoluta, pra não mudar a altura da
                        row nem empurrar as iniciais. -->
                   <span class="prov-rail">{provTag}</span>
                 {/if}
               </span>
-              {#if !expanded && !selectMode && !provTag}
+              {#if !expanded && !model.selectMode && !provTag}
                 <!-- Rail recolhido: barra única na base da row, irmã de .lead (não dentro dele —
                      .lead é a coluna das iniciais, gated em provTag). .sess-main precisa de
                      position:relative pra ancorar o position:absolute do compact (ver CSS).
@@ -1018,11 +785,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   {#if s.git_added || s.git_removed}
                     <span class="diff-stats" aria-hidden="true">{#if s.git_added}<span class="diff-add">+{s.git_added}</span>{/if}{#if s.git_removed}<span class="diff-del">−{s.git_removed}</span>{/if}</span>
                   {/if}
-                  {#if showProviderTags || provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
+                  {#if model.showProviderTags || provTag || s.limited || s.then_target || s.pair_peers?.length || s.loop_status || s.engine || s.plan_name}
                     <!-- Chips informativos (⏳/🔗/🤝/↻/⚙) na COLUNA DE TEXTO, nao ao lado do state-chip:
                          inline eles cobriam o cwd em sidebar estreita (mesmo fix do SessionCard mobile). -->
                     <span class="badges-line">
-                      {#if showProviderTags}
+                      {#if model.showProviderTags}
                         <!-- Glifo pra TODOS quando a lista mistura providers (pedido do usuário);
                              o TEXTO continua só nas não-Claude — o default se reconhece pela marca.
                              provider ausente = Claude (o campo só viaja quando não é Claude). -->
@@ -1074,7 +841,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 </span>
               {/if}
             </button>
-            {#if expanded && !selectMode}
+            {#if expanded && !model.selectMode}
               <!-- Retomar (paridade com o SessionCard do mobile): unica acao possivel numa linha "sem
                    id" -> visivel sempre (nao escondida no hover), tingida de accent. Reusa resumeSession.
                    Fora do Pi/Kimi: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS
@@ -1084,7 +851,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 <button
                   class="sess-resume"
                   onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}
-                  disabled={resumeBusy === s.name}
+                  disabled={model.resumeBusy === s.name}
                   aria-label={`${m.sessao_retomar()} ${s.name}`}
                   title={m.sessao_retomar()}
                 >
@@ -1113,28 +880,28 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     {/if}
   </nav>
 
-  {#if expanded && selectMode}
+  {#if expanded && model.selectMode}
     <!-- Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI (isso
          fica no Composer normal, por sessão). Slash-command desabilita o envio (rota por sessão). -->
     <div class="broadcast-bar">
       <div class="broadcast-row">
-        <span class="broadcast-count">{selected.size === 1 ? m.lista_selecionada_1() : m.lista_selecionadas({ n: selected.size })}</span>
-        <button class="broadcast-compare" onclick={openCompare} disabled={compareDisabled} aria-label={m.lista_comparar_selecionadas()} title={m.lista_comparar()}>{m.lista_comparar()}</button>
-        <button class="broadcast-cancel" onclick={toggleSelectMode} aria-label={m.lista_cancelar_selecao()}>×</button>
+        <span class="broadcast-count">{model.selected.size === 1 ? m.lista_selecionada_1() : m.lista_selecionadas({ n: model.selected.size })}</span>
+        <button class="broadcast-compare" onclick={model.openCompare} disabled={model.compareDisabled} aria-label={m.lista_comparar_selecionadas()} title={m.lista_comparar()}>{m.lista_comparar()}</button>
+        <button class="broadcast-cancel" onclick={model.toggleSelectMode} aria-label={m.lista_cancelar_selecao()}>×</button>
       </div>
-      {#if broadcastMsg}<p class="broadcast-msg">{broadcastMsg}</p>{/if}
+      {#if model.broadcastMsg}<p class="broadcast-msg">{model.broadcastMsg}</p>{/if}
       <div class="broadcast-input-row">
         <input
           type="text"
           class="broadcast-input"
-          bind:value={broadcastText}
+          bind:value={model.broadcastText}
           placeholder={m.lista_msg_selecionadas()}
-          disabled={broadcastBusy}
-          onkeydown={(e) => { if (e.key === 'Enter' && !broadcastDisabled) sendBroadcast(); }}
+          disabled={model.broadcastBusy}
+          onkeydown={(e) => { if (e.key === 'Enter' && !model.broadcastDisabled) model.sendBroadcast(); }}
           aria-label={m.lista_broadcast_msg()}
         />
-        <button class="broadcast-send" onclick={sendBroadcast} disabled={broadcastDisabled} aria-label={m.lista_enviar()}>
-          {#if broadcastBusy}
+        <button class="broadcast-send" onclick={model.sendBroadcast} disabled={model.broadcastDisabled} aria-label={m.lista_enviar()}>
+          {#if model.broadcastBusy}
             …
           {:else}
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1144,7 +911,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
           {/if}
         </button>
       </div>
-      {#if broadcastIsSlash}
+      {#if model.broadcastIsSlash}
         <p class="broadcast-hint">{m.lista_broadcast_aviso()}</p>
       {/if}
     </div>
@@ -1233,16 +1000,16 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     <!-- Sempre visivel: agrupar era imposto ("projeto" fixo com 1 servidor) e nao havia como pedir a
          lista lisa. "Servidor" so entra com 2+ servidores, onde separa alguma coisa. -->
     <div class="group-toggle" role="radiogroup" aria-label={m.lista_agrupar()}>
-      <button type="button" class:active={groupBy === 'none'} role="radio" aria-checked={groupBy === 'none'} onclick={() => setGroupBy('none')}>{m.lista_agrupar_nenhum()}</button>
+      <button type="button" class:active={model.groupBy === 'none'} role="radio" aria-checked={model.groupBy === 'none'} onclick={() => model.setGroupBy('none')}>{m.lista_agrupar_nenhum()}</button>
       {#if servers.length >= 2}
-        <button type="button" class:active={groupBy === 'server'} role="radio" aria-checked={groupBy === 'server'} onclick={() => setGroupBy('server')}>{m.lista_agrupar_servidor()}</button>
+        <button type="button" class:active={model.groupBy === 'server'} role="radio" aria-checked={model.groupBy === 'server'} onclick={() => model.setGroupBy('server')}>{m.lista_agrupar_servidor()}</button>
       {/if}
-      <button type="button" class:active={groupBy === 'project'} role="radio" aria-checked={groupBy === 'project'} onclick={() => setGroupBy('project')}>{m.lista_agrupar_projeto()}</button>
+      <button type="button" class:active={model.groupBy === 'project'} role="radio" aria-checked={model.groupBy === 'project'} onclick={() => model.setGroupBy('project')}>{m.lista_agrupar_projeto()}</button>
     </div>
   </div>
 {/if}
 
-<svelte:window onpointermove={hpGuard} onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (resumeModal) resumeModal = null; else if (confirmDel) confirmDel = null; else if (confirmBranch) confirmBranch = null; } }} />
+<svelte:window onpointermove={hpGuard} onkeydown={(e) => { if (e.key === 'Escape') { if (kebabOpen) closeKebab(); else if (menu) closeMenu(); else if (model.resumeCandidates) model.resumeCandidates = null; else if (model.confirmDel) model.confirmDel = null; else if (confirmBranch) confirmBranch = null; } }} />
 
 <!-- Menu de contexto (botao direito na sessao). Backdrop + itens vivem no componente; o Sidebar so
      guarda posicao/alvo em `menu` e decide o que dirty->confirm / checkout / GitSheet fazem. -->
@@ -1296,24 +1063,24 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 {/if}
 
 <!-- Gerenciador git aberto pelo menu de contexto (repo da sessao, sem abrir o chat). -->
-{#if gitSheet}
-  <Git open={true} sessionName={gitSheet.name} desktop={true} {filesInContext} onClose={closeGitSheet} />
+{#if model.gitSheet}
+  <Git open={true} sessionName={model.gitSheet.name} desktop={true} {filesInContext} onClose={model.closeGit} />
 {/if}
 
 
 <!-- Confirmar exclusao (com o nome) — modal centrado, so desktop (sidebar e desktop-only). -->
-{#if confirmDel}
+{#if model.confirmDel}
   <ConfirmDialog title={m.sessao_excluir()} aria={m.sessao_excluir()}
     fallbackFocus={acctBtnEl}
-    onClose={() => (confirmDel = null)}
+    onClose={() => (model.confirmDel = null)}
     actions={[
-      { label: m.comum_cancelar(), onClick: () => (confirmDel = null) },
+      { label: m.comum_cancelar(), onClick: () => (model.confirmDel = null) },
       { label: m.sessao_excluir_curto(), kind: 'danger', onClick: doDelete },
     ]}>
-    <p class="confirm-name">{confirmDel.name}</p>
+    <p class="confirm-name">{model.confirmDel.name}</p>
     <!-- Um mesmo nome pode existir em varios servidores: mostra o dono pra a exclusao nao ser ambigua. -->
     {#if servers.length > 1}
-      {@const srv = servers.find((s) => s.id === confirmDel?.serverId)}
+      {@const srv = servers.find((s) => s.id === model.confirmDel?.serverId)}
       {#if srv}
         <p class="confirm-srv"><span class="confirm-srv-dot" style="background: {serverColor(srv.id)};" aria-hidden="true"></span>{srv.label}</p>
       {/if}
@@ -1338,21 +1105,21 @@ import ConfirmDialog from './ConfirmDialog.svelte';
 
 <!-- Retomar conversa — caso AMBIGUO (varias sessoes no mesmo cwd): escolher qual transcript retomar.
      Paridade com o BottomSheet de resume do mobile (SessionList), no estilo dos modais do desktop. -->
-{#if resumeModal}
-  {@const rm = resumeModal}
+{#if model.resumeCandidates}
+  {@const rm = model.resumeCandidates}
   <ConfirmDialog title={m.sessao_retomar_qual()} aria={m.sessao_retomar()} role="dialog" wide
     fallbackFocus={acctBtnEl}
-    onClose={() => (resumeModal = null)}
-    actions={[{ label: m.sessao_fechar(), onClick: () => (resumeModal = null) }]}>
+    onClose={() => (model.resumeCandidates = null)}
+    actions={[{ label: m.sessao_fechar(), onClick: () => (model.resumeCandidates = null) }]}>
     <p class="confirm-hint">{m.sessao_multiplas_pasta()} <strong>{rm.name}</strong>.</p>
-    {#if resumeError}<p class="resume-err">{resumeError}</p>{/if}
+    {#if model.resumeError}<p class="resume-err">{model.resumeError}</p>{/if}
     <ul class="resume-list">
       {#each rm.candidates as c (c.session_id)}
         <li>
           <button
             type="button"
             class="resume-item"
-            disabled={c.in_use || resumeBusy === rm.name}
+            disabled={c.in_use || model.resumeBusy === rm.name}
             onclick={() => handleResume(rm.name, rm.serverId, c.session_id)}
           >
             <span class="resume-item-preview">{c.preview || m.sessao_sem_previa()}</span>
