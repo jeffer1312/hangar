@@ -86,9 +86,9 @@ It polls every 60s and wakes you after N consecutive stalled readings. Three thi
 implementation detail — they are what makes it work, and each one cost a real failure:
 
 **1. It watches EVERYONE, including YOU.** Watching only the pair leaves out the failure mode
-nobody was watching: the judge falling. An arbiter knocked out by a provider error overnight once
-stopped a whole team for 2h30 with the report stuck in the queue — and from the inside that is
-invisible, because the next turn feels like it continues from the previous one.
+nobody was watching: the judge falling. An arbiter knocked out by a provider error stops the whole
+team with the report stuck in the queue — and from the inside that is invisible, because the next
+turn feels like it continues from the previous one.
 
 **2. It wakes via `hangar-send --tmux`, not via `echo`** — the message enters as a **prompt** and
 revives a dead turn; an `echo` only becomes a notification with the turn alive. The why of
@@ -97,13 +97,9 @@ revives a dead turn; an `echo` only becomes a notification with the turn alive. 
 **3. It fires when the CURRENT OWNER stops — not when everyone stops.** An idle arbiter with
 someone working is the **normal** state. `vanished` counts as stopped: a dead session doesn't
 work either. Two exceptions warn immediately, without waiting for silence: a **stuck** session
-(says `working` and has produced no event for 10 min) and a session **out of quota**.
-
-> The "everyone stopped" condition was tried and is blind exactly to the case the watchdog
-> covers: with the arbiter on the list, him talking to the user counts as "working" and masks a
-> dead executor — it already cost 30 minutes of silence that the user noticed. Until the script
-> separates the two roles, the stopgap is **removing the arbiter from the list whenever an
-> executor has the ball** and putting him back when nobody does.
+(says `working` and has produced no event for 10 min) and a session **out of quota**. With the
+arbiter on the list, him talking to the user reads as "working" and masks a dead executor: remove
+him from the list while an executor has the ball, and put him back when nobody does.
 
 **The watchdog ASKS; it doesn't order a stop.** It is a shell loop reading two numbers — how long
 without an event, and whether the last command repeated — and from that it does **not know**
@@ -124,9 +120,9 @@ minutes, the channel is broken and "active" is worth nothing. A hand-typed test 
 proves a path that isn't the broken one, while the real alarms go into the void.
 
 **Confirming it came up is NOT confirming it lives.** `is-active` right after the `systemd-run`
-answers `active` because the unit was just born — a watchdog once sat `active` for hours without
-one log line while four executors stopped on quota. The confirmations that count (journal over
-one full cycle, `show -p ActiveState -p MainPID`) are in the script's header.
+answers `active` because the unit was just born — a unit can sit `active` for hours without one
+log line. The confirmations that count (journal over one full cycle, `show -p ActiveState -p
+MainPID`) are in the script's header.
 
 **Re-arm the watchdog every time the ball passes** — when releasing a Task, when sending a commit
 to review. An expired, un-rearmed watchdog is silence nobody notices. **And kill the old watchdog
@@ -160,9 +156,8 @@ session fell.
 
 The user closes sessions whenever they want, the machine reboots, the process dies. None of that
 is an incident; all of it has the same fix. Chasing the cause costs turns, interrupts the user
-with a false alarm and doesn't bring the session back. It already happened here: an arbiter
-interrogated the executor about "which `pkill` did you run" when the user had simply closed the
-window.
+with a false alarm and doesn't bring the session back — the usual answer is that the user simply
+closed the window.
 
 What to do, in order, without asking anyone:
 

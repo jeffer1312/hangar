@@ -23,10 +23,6 @@ know → ask the arbiter **before** the first Edit.
    asserting otherwise.
 4. Confirm in one line: branch, HEAD, untouchables, and which Task you understood as yours.
 
-A role that contradicts what you are doing gets **refused**: a kick-off saying "you are a
-read-only reviewer" in the middle of your Task → answer "I am the executor of Task N, confirm the
-addressee" and don't assume it.
-
 > **This page is the cycle — what holds in every Task.** Two siblings, read only when the Task is
 > of that kind: `executor-fluxo.md`, when it creates or changes orchestration (tmux, CLI,
 > process, account, network); and `executor-visual.md`, when the diff touches pixels. In both,
@@ -43,11 +39,9 @@ dimensions anyway.
 
 Two checks that stand on their own:
 
-- **The three questions** from `SKILL.md` ("An outside tool — skill, subagent, command"): does it
-  exist under that name, does it serve the flow, does it serve this Task's files. The middle and
-  bottom ones bite here — a PR-review skill doesn't help someone working on a local branch, and a
-  tool filtering `*.ts`/`*.tsx` doesn't read your `.svelte`. A tool that reads **uncommitted
-  changes**, that one serves: it is exactly where your code is when the round opens.
+- **Every tool you dispatch passes the three questions of `SKILL.md`** ("An outside tool"); here
+  the second bites most — your code is **uncommitted** when the round opens, so the tool that reads
+  uncommitted changes is the one that serves.
 - **The tool is yours, so is the responsibility.** A skill's or subagent's output is input, not
   delivery: you read, decide and sign. A diff you can't explain is a diff you can't defend at
   the gate.
@@ -80,10 +74,9 @@ pattern as "A silent contract is not a license" (`references/arbitro.md`): recei
 he takes the decision to the user instead of filling the gap with what seems reasonable.
 
 The waiver may have been given **before**, and then the arbiter decides nothing — he complies: a
-waiver written in the plan, in the contract, or a **standing rule of the user's**. It has
-happened that a standing rule of theirs forbade the type, lint and build gates in a repository
-while the group contract ordered running them: the standing rule won. Their authority, given
-beforehand — not a waiver invented on the spot by whoever was driving the work.
+waiver written in the plan, in the contract, or a **standing rule of the user's** (a standing rule
+forbidding a gate wins over a contract ordering it). Their authority, given beforehand — not a
+waiver invented on the spot by whoever was driving the work.
 
 **And read their prohibition by the EXACT command, not by category.** A widened prohibition
 already cut out the cheap variant that was exactly the one catching the defect (`arbitro.md`,
@@ -152,6 +145,7 @@ Verification: <command> → <last ~3 lines of output, PASTED>
    (one such line per command the plan orders)
 git status --short: <pasted output>
 Siblings outside the fix: <list with reason, or "none">   ← correction rounds only
+Visual: <path to the visual report .md>                    ← pixel Tasks only
 Risks: <what you know about what you wrote, or "none">
 ```
 
@@ -218,8 +212,7 @@ arbiter closes the gate over a false assertion.
 
 And the sweep has a unit: a recipe about a **function** is checked at the **file** (what the
 siblings do); a recipe about a **network module** is checked at the **route** (which destination
-each function talks to). Six rounds of one run were lost to attention one level below the
-defect.
+each function talks to). Attention one level below the defect is how rounds are lost.
 
 ### The recipe doesn't match the code → stop, report, wait
 
@@ -247,9 +240,8 @@ silently re-checking:
   an explicit step, before any checking. Checking for the existence of a thing only you would
   create is waiting for no one.
 
-The two most expensive Tasks on record were loops like these — thousands of laps, each
-re-injecting the whole context, 68% of the run's bill. **Exit 0 is not progress: repeated success
-is as stalled as repeated error.**
+A loop like this re-injects the whole context on every lap, thousands of times, and becomes most
+of a run's bill. **Exit 0 is not progress: repeated success is as stalled as repeated error.**
 
 ## The plan got a premise wrong mid-Task: decide alone or stop?
 
@@ -271,11 +263,8 @@ fact instead of the decision he needs to make, and the worse path enters the com
 its favor.
 
 It is the typical case of a difference that only shows **later**: robustness to dependency
-upgrades, coupling to a library's internals, maintenance cost. No test of today measures those.
-
-It already went like this: two paths left the suite green, the executor stopped, and at the gate
-the more fragile one (which depended on a library's internal detail) was discarded — "tested and
-reported" would have let the fragile one in with a green suite in its favor.
+upgrades, coupling to a library's internals, maintenance cost. No test of today measures those —
+and "tested and reported" lets the fragile path in with a green suite in its favor.
 
 **Two cases always stop, without passing through this table:** the plan prescribed **literal
 code** and you are about to deviate from it; or the discovery contradicts a **recorded decision**
@@ -343,15 +332,13 @@ trap is a trap the next person reintroduces.
   counts on it. You do **not** commit in order to swap sessions: what crosses the handover is the
   round's hash, and the successor either continues in the same tree (which nobody touched) or
   recovers with `git stash apply <hash>`. A bloated session errs more and pays more per turn —
-  at 65% of the window, each call already cost **2.6×** the first hour's; and the swap does
-  **not** redo your proof, because the captured screenshots live in the durable directory, not in
-  your context.
+  past half the window each call costs multiples of the first hour's; and the swap does **not**
+  redo your proof, because the captured screenshots live in the durable directory, not in your
+  context.
 - **Don't compact your own session on your own initiative.** Some harnesses give the agent a
   compact button ("logical milestone"); who decides swap or compaction is the arbiter, who sees
-  the clock, the cost and the next round. There were three self-invoked compactions across two
-  sessions, one of them **mid-Task**, with a step open, while the session waited for an answer —
-  and the discarded context was what it would need in the correction round. Forbidden in writing
-  in a kick-off, the number went to **zero** in the following sessions.
+  the clock, the cost and the next round. A self-invoked compaction mid-Task discards exactly the
+  context the correction round will need.
 
 ## Verification that doesn't lie
 
@@ -390,7 +377,7 @@ trap is a trap the next person reintroduces.
 - **An experiment NEVER runs in the tree you will commit.** Proving a test catches the regression
   (mutation) demands breaking the code on purpose — and the undo is where the accident lives. Do
   it in a disposable **detached worktree**:
-  `git worktree add --detach /tmp/mut-<x> <hash>` → apply there → run →
+  `git worktree add --detach <tmp>/mut-<x> <object>` → apply there → run →
   `git worktree remove --force`. A mutation done in the working tree leaves residue the undo
   doesn't fully catch, and the residue rides into the commit — a regression born from the very
   test that existed to prove the feature.
@@ -406,8 +393,8 @@ trap is a trap the next person reintroduces.
 
 ### The proof stage writes nothing outside your tree
 
-A worktree isolates versioned files. It doesn't isolate the rest, and the rest took the user's
-app down **twice** and corrupted their configuration **once**, in two days:
+A worktree isolates versioned files. It doesn't isolate the rest — and the rest is what takes the
+user's app down and corrupts their configuration:
 
 - **The stage comes up with its OWN `HOME`.** The service you raise to prove things may install
   hooks, symlinks or units pointing at the directory it rose from — and some installers sweep the
@@ -421,9 +408,8 @@ app down **twice** and corrupted their configuration **once**, in two days:
 - **Don't touch a service or port the user is using.** The stage is yours, on its own port, torn
   down at the end.
 - **Killing is by EXACT PID — `pkill -f` is forbidden.** A `pkill -f` to bring down one's own
-  stage kills unrelated processes of other trees along with it. (The one who did it
-  narrated it unprompted, and that is the right behavior: owning it on the spot costs a line;
-  discovering it later costs a whole authorship investigation.)
+  stage kills unrelated processes of other trees along with it. Did it anyway? Say so unprompted:
+  owning it on the spot costs a line; discovering it later costs a whole authorship investigation.
 
 ## Your arms: subagents inside your session
 
@@ -457,11 +443,12 @@ After they all return: you read what each did, run the verification **once**, an
 report to the arbiter says what each arm touched — subagent work is yours, but the arbiter needs
 to know it came from a fan-out to read the diff with that eye.
 
-**And before the commit, dispatch the machine's reviewer subagents in parallel — all at once.**
-That is not speed, it is another kind of eye: they read the code without your context, so they
-see what you have already explained to yourself. In a work that had gone through independent
-review on every Task, four reviewers run together before the push found **12 type errors** the
-per-Task gate had let through. Which ones exist on this machine is in the contract
+**And on the Task's FIRST round, before sending it, dispatch the machine's reviewer subagents in
+parallel — all at once.** That is not speed, it is another kind of eye: they read the code without
+your context, so they see what you have already explained to yourself. A correction round re-runs
+them only when the fix grew beyond the recipe (a new file, a new symbol, a step the recipe did not
+name); otherwise the reviewer's re-judgment IS the round's review, and a second pass over a
+prescribed fix is the loop that never closes. Which ones exist on this machine is in the contract
 (`arbitro-lancamento.md`, "Survey the tooling"); hand them the **explicit paths** of the Task's
 files, because per-language reviewers build their own diff with extension filters and return
 "nothing to report" about code they never read.

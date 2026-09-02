@@ -10,8 +10,8 @@ here — the only thing on this page you need to know ahead of time.
 
 Applies when YOU leave: window above half, or the user changed the `árbitro` row in the rules
 table (the "the group's model configuration changed in the panel" message arrives with the
-`árbitro` role). In both cases the rite is the same, and the journal (`grupo-<gid>.md`) is
-already your memory — succession is closing it well and opening whoever will read it.
+`árbitro` role). In both cases the rite is the same, and the journal (`registro.md`, in the durable
+directory) is already your memory — succession is closing it well and opening whoever will read it.
 
 1. **Finish the task at hand** (the open gate closes or rejects; leave no correction mid-way).
    Dispatch no new Task.
@@ -86,9 +86,12 @@ off-plan Task.
 ## Closing — own items, written at LAUNCH
 
 - [ ] **Branch review** — trigger: every code Task approved. Fresh session, `<base>..tip`.
+      Kick-off adds `Executor for findings: <session | none yet — ask the arbiter for one>`.
 - [ ] **Retrospective (phase 5)** — trigger: the branch is in the user's hands and **nothing in
       flight**. Fresh session, `references/retrospectiva.md`. Product: a proposed patch for the
-      skill, at `~/.hangar/orq/<date>-<gid>.md`.
+      skill, at `~/.hangar/orq/<date>-<gid>.md`. Kick-off carries its four inputs:
+      `Durable dir: <path>` · `Branch range: <base>..<tip>` · `Skill repo: <path> (commit before
+      the work: <hash>)` · `Cards: ~/.hangar/orq/modelos/`.
 ```
 
 **Phase 5's trigger is not the final review's first approval.** An approved branch opens the door
@@ -101,9 +104,8 @@ moment that it will need an addendum**, with the addendum's trigger written alon
       after `<hash of the 1st approval>`. Fresh session, numbering continuing from the last P.
 ```
 
-A phase 5 launched early once went stale in seven hours, four Tasks later, and the addendum only
-existed because someone remembered. Without the written item, the most recent half of the work —
-exactly the one that ran with the team and the guidelines already tuned — is distilled by no one.
+Without the written item, the most recent half of the work — exactly the one that ran with the
+team and the guidelines already tuned — is distilled by no one.
 
 Write both **before opening the team's first session**. At the end you will be saturated, and an
 approved branch *feels* like the end of the work — which is why the final reviewer also has

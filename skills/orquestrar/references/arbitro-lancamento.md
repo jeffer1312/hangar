@@ -6,6 +6,15 @@ open a new session midway (rotation, replacement).
 
 Return to `arbitro.md` as soon as the team is standing.
 
+## The `Method:` and `Domain skill:` lines are yours to write
+
+Both are mandatory in `regras-<gid>.md`, written at launch, before the first session — and **every
+kick-off repeats them**, because the contract is read once and a kick-off arrives fresh. A contract
+without the `Method:` line means `superpowers`, this skill's default: write the line before
+proceeding instead of leaving it implicit. A plan born in one method and executed in another reads
+the work in a format it doesn't have (Task with steps on one side, ticket with criteria on the
+other), so nobody switches midway — a switch the user asks for is `replanejar.md`.
+
 ## Before the team: read the machine's account policy
 
 **The policy lives in `~/.hangar/orquestracao-contas.md`, not here.** Read it before opening the
@@ -21,8 +30,8 @@ Three reading rules, all three protecting the same thing — the invoice of whoe
 - **An account that charges per token is forbidden.** You discover that an account exists; only
   the user knows whether it debits. Discovery lists provider, model and address — none of that
   says whose account it is or whether they want to spend there. A new provider that appeared since
-  the last review **does not enter on its own**. On a real machine, 341 of the catalog's 390
-  models belonged to a per-token provider.
+  the last review **does not enter on its own** — most of a catalog can belong to a per-token
+  provider.
 - **File missing or stale → build the inventory and ask ONE question** (which are allowed, which
   are subscriptions, which charge), write the answer there with the date, and **open no session**
   until it arrives — not even "just to test". The survey recipe is inside the file itself.
@@ -53,15 +62,9 @@ Look at the three shelves: **subagents** (per-language and per-dimension reviewe
 failure, security, accessibility, test coverage), **skills** (click-path audit, security review,
 production readiness, browser QA, house patterns) and marketplace **commands**.
 
-And run each through the **three questions** of `SKILL.md` ("An outside tool — skill, subagent,
-command"): does it exist under that name, does it serve the flow, does it serve the files. All
-three have already failed here in the same sweep — a tool announced as a skill that was a command,
-the same one building a diff of uncommitted changes for a gate that reviewed made commits, and a
-per-language reviewer whose extension filter couldn't see the file type where the work's two
-screen blockers lived.
-
-A tool that fails the three: record in the contract **why it doesn't serve**, one line. That is
-worth as much as the list of what to use — it saves the next session a turn of trying.
+Every tool passes the **three questions** of `SKILL.md` ("An outside tool"); a tool that fails
+them is recorded in the contract with **why it doesn't serve**, one line — worth as much as the
+list of what to use, because it saves the next session a turn of trying.
 
 ## Opening a session — a recipe, not a decision
 

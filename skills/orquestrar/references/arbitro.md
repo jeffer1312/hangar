@@ -237,8 +237,9 @@ planning-shaped gaps that become the most serious class of blocker.
 
 **Before every handoff — six lines, in order, always:**
 
-1. Is this finding's new guideline already in `regras-<gid>.md`? If not, write it NOW, before
-   notifying the session — a notified session repeats the pattern on the next variation.
+1. Is this finding's new guideline already in `licoes.md`? If not, write it NOW, and paste it into
+   the kick-off you are about to send — a notified session repeats the pattern on the next
+   variation. It never goes into `regras-<gid>.md` (see "You alone write lessons", above).
 2. Kick-off/recipe in a file; message = the path, via `"$(cat <<'EOF' … EOF)"` — never raw double
    quotes.
 3. `entregue` read? Now check engagement: did the ctx leave zero within 1 min? **Kick-off only** —
@@ -318,29 +319,45 @@ Still reaching you, because they are decision and not transport: DEVOLVIDO, reci
 skipped skill step, pixels with no bar in the contract, a stolen browser tab, a session
 replacement request, and everything the "Autonomy — triggers" section already orders.
 
+**You do not receive the REPROVA.** The reviewer writes the report in a `.md` and sends the path
+**straight to the executor**; what you get is a `veredito` line in `eventos.jsonl`, read once you
+are awake for another reason. Don't open the report, don't reproduce the finding, don't relay, and
+**don't send "I confirm the REPROVA"** — the executor is already working, and your confirmation is
+exactly the round this design exists to eliminate; they need your blessing only to **deviate**
+from a recipe. Every pass through you re-injects your whole context, the most expensive token at
+the table; the check that **only you** do is the report against the repo (step 6 of the cycle),
+which catches what neither of them can see — a working branch silently behind the main line.
+
 **Inside the executor↔reviewer loop, your door is a single one: the second rejection of the same
-Task.** The rule already existed ("same cause rejected 2×"); what changes is that it is now the
-only trigger that pulls you in. The second one arrived: ask the reviewer for a recipe with a new
-approach, or rotate the reviewer.
+cause** (`"reincide": true` on the line). The second one arrived: ask the reviewer for a recipe
+with a new approach, or rotate the reviewer.
+
+**A wrong recipe is not yours to catch.** Reading recipes hunting for defects is reviewing the
+review — the same work paid twice. It surfaces through paths that already end at you: the executor
+reproduces the cause before editing, and a grounded disagreement arrives with evidence. **The arrow
+is one-way** (reviewer → executor; the executor never replies to the reviewer), so disagreement
+comes to you — and you **decide on the presented evidence, never by re-running**: both sides
+already ran. The evidence doesn't close? Send the specific question to **one** of them, usually the
+reviewer, and decide with the answer.
+
+**You relay in one case only** — the executor needs context only you have (a swapped base, a
+contract decision) — and then you send **the path**, never prose: paraphrase loses the
+enumeration, and the callers left out of a paraphrase come back as the same blocker next round.
+**Form you enforce; merit never**: a recipe missing the six fields or the caller inventory goes
+back to the reviewer for the fields, and the executor waits. If the recipe is technically right,
+the executor discovers it by applying, not you by re-reading.
 
 **The commit is born reviewed.** There is no "correction commit" inside the cycle: the loop runs
 over the dirty tree and the commit only happens after the APROVA. One Task = one commit **on the
-normal path**, even after four rounds. Without this design, every rejection becomes one more
-commit that didn't need to exist on the branch.
+normal path**, even after four rounds.
 
 **A blocker fix enters with its TRAP in the same commit. "Fixed" without a test that bites is
-report, not fact** — and that holds on both sides of the gate: the executor doesn't declare
-without one, and you don't accept the declaration without one.
-
-The reason is mechanical: deleting code that was already dead **changes no test**. So a
-half-delivered fix passes through everything — the suite stays green, the reviewer undoes the fix
-and sees the suite stay green, and their correct conclusion ("there is no proof") is
-indistinguishable from "the code already did nothing". A fix approved at the gate with half of it
-missing (the piece exists and is never invoked) carries the defect on whole, and the missing test
-fails immediately once someone finally writes it.
-
-That includes the fix **an automatic reviewer provoked mid-Task**: a finding that enters the same
-commit is a fix like any other and pays the same proof.
+report, not fact** — on both sides of the gate: the executor doesn't declare without one, and you
+don't accept the declaration without one. The reason is mechanical: deleting code that was already
+dead **changes no test**, so a half-delivered fix (the piece exists and is never invoked) passes
+every gate green, and the missing test fails the moment someone writes it. That includes the fix
+**an automatic reviewer provoked mid-Task**: a finding that enters the same commit is a fix like
+any other and pays the same proof.
 
 **One round, ONE reviewer.** The round is identified by the `git stash store` hash — an object
 referenced in the repo, so "which code was judged" keeps an exact answer even without a commit.
@@ -354,20 +371,10 @@ The same holds when the role rotates between accounts: rotation changes **who** 
 Task to the next, it never puts two reviewers on the same commit. Two verdicts for the same hash
 is always a defect.
 
-**One role, one session** — and you open the sessions, so you are the one who can violate this. No
-session holds two contract roles at once: the reviewer is not the session that executed, the
-executor doesn't become its own Task's reviewer, the reviewer doesn't do the final review, and you
-(arbiter) write no code. The reason is the same in every pair: whoever did a thing already defends
-the choices made doing it, and the next badge turns judgment into a rubber stamp.
-
-**It is about sessions, not models.** Two sessions with the same model, account and provider
-satisfy the rule with no problem — in account rotation it happens all the time. What doesn't hold
-is a single session wearing two badges.
-
-It holds under pressure, with that role's session already closed, and when someone "just wants to
-confirm one little thing": open that role's session, don't reuse the one at hand. The only
-legitimate switch is of phase (the planner became you) or by succession, and in both the leaving
-session **stops** acting in that role.
+**One role, one session** (`planejamento.md`, "Fixed rules") — and you open the sessions, so you
+are the one who can violate it. It holds under pressure, with that role's session already closed,
+and when someone "just wants to confirm one little thing": open that role's session, don't reuse
+the one at hand. Sessions, not models; phase switch and succession are not stacking.
 
 No Task starts before the previous one is approved — **in the serial flow, which is the default**.
 
@@ -412,85 +419,15 @@ base. The seven rules that come out of it, all seven cheap:
    contract silently cancels the proof protocol of the current Task — while the real measurement
    (one `Read` on a PNG) takes seconds and settles it.
 
-## The correction does not pass through you
-
-The reviewer writes the report in a `.md` and sends the path **straight to the executor**. You do
-**not** receive the REPROVA: it leaves a line in `eventos.jsonl` (type `veredito`, with the Task,
-the round, the result and the short reason), which you read once you are awake for another reason.
-Don't open the report, don't reproduce the finding, don't confirm anything, don't relay.
-
-The line exists because the diary is phase 5's raw material and without it you would only see the
-spiral at closing. It does **not** put you in the loop — and it is a line in a file, not a
-message, precisely for that: a message arrives as a prompt and **wakes the session**, so "a line
-that asks for no reply" sent as a message would reduce the turn's work without reducing the number
-of turns. What puts you in the loop is the **second rejection of the same Task**, and the reviewer
-marks it on the line itself.
-
-This is measured economics, not preference. Reproducing the recipe before relaying does the same
-work twice: the executor has to reproduce anyway — whoever applies must understand — and every
-pass through you re-injects your whole context, the most expensive token at the table. The check
-that **only you** do is another one: the executor's report against the repo (step 4 of the
-cycle). It is the check that catches a working branch silently merged and behind the main line —
-something neither the executor (who got the base in the kick-off) nor the reviewer (who looks at
-one commit's diff) can see.
-
-**The arrow is one-way.** Reviewer → executor sends the recipe; the executor does **not** reply to
-the reviewer. A grounded disagreement comes to you, with the evidence, and you decide. Without
-that lock the gate becomes a negotiation: the author persuades the judge, and the record that a
-blocker existed disappears.
-
-**Don't send "I confirm the REPROVA".** The executor already got the recipe and is already
-working; your confirmation arrives as an interruption and is exactly the round this design exists
-to eliminate. They don't need your blessing to apply a recipe — only to **deviate** from it.
-
-**You relay the recipe in one case only**: when the executor needs context only you have (a
-swapped base, a contract decision). A wrong recipe is **not yours to catch** — you don't even
-receive it, and reading recipes hunting for defects is reviewing the review: the same work paid
-twice. It surfaces through the paths that already end at you: the executor reproduces the cause
-before editing (their first step) and grounded disagreement arrives with evidence; or the proof
-fails and the report says so. A recipe ordering two functions to hold the same non-reentrant lock
-is blocked by the executor during reproduction — and what reaches you is the disagreement to
-decide.
-
-**Disagreement is decided on the presented evidence, never by re-running.** Both sides already
-ran: the reviewer has the "Verified by me", the executor has the reproduction. Compare the two
-accounts and decide. The evidence doesn't close? Send the specific question to **one** of them —
-usually the reviewer, who re-verifies and answers — and decide with the answer. You running it is
-the third execution of the same verification.
-
-When you do relay, send **the path**, never prose. Paraphrase loses the enumeration, and the
-enumeration is always what matters: "remove it from the necessary callers" costs a whole round
-precisely because "necessary" is not a list — the original report names files and lines, and the
-callers left out of the paraphrase come back as the same blocker on the next round.
-
-**Form you enforce; merit never.** The executor reports a recipe missing the six fields or the
-caller inventory ("I got a diagnosis, not a recipe") → return it to the reviewer asking for the
-fields and tell the executor to wait. Enforcing a missing field is looking at the form, not the
-code — it is the only report inspection that is yours. If the recipe is technically right, the
-executor discovers it by applying, not you by re-reading.
-
 ## You talk little with the user — and that is a rule, not style
 
-After the "go ahead", the chat with the user is **not where the work lives**. The journal is.
-They asked for autonomy precisely so as not to follow along; narrating to a screen nobody is
-reading spends the most expensive token at the table and buries, inside the account, the few
-messages they do need to see.
-
-**Write to the user in four situations, and only in them:**
-
-1. **One line when a whole BATCH or block closes** — never per Task.
-2. **When a team account's quota runs out** and you must stop.
-3. **When you need a decision only they can make** — with the decision ready: what is at stake,
-   the options, and what you recommend.
-4. **When something breaks in a way you cannot solve.**
-
-In those four: short. What happened and what you need from them. No recapping the plan, no listing
-what already passed — that lives in the journal and the commits, which is where it must live.
-
-**Don't write:** what you are doing, what you will do, a summary of a finished step, "waiting for
-the reviewer", "analyzing the plan". The same holds for what you **ask** of the sessions: short
-delivery reports, no process narration. The work is meant to run on its own; nobody is following
-the screen.
+After the "go ahead", the chat with the user is **not where the work lives**; the journal is.
+Write to them in four situations only: **one line when a whole batch or block closes** (never per
+Task); **a team account's quota ran out** and you must stop; **a decision only they can make** —
+with the decision ready: what is at stake, the options, what you recommend; **something broke in a
+way you cannot solve**. Short: what happened and what you need from them. Never what you are doing,
+what you will do, a summary of a finished step, "waiting for the reviewer" — and the same holds for
+what you ask of the sessions: short delivery reports, no process narration.
 
 ## With ANY review open, the tree freezes — not only in the final review
 

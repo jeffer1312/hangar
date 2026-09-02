@@ -109,18 +109,17 @@ afterwards? **Recapture.** An old screenshot proves the bug, never the fix.
 comes out pretty and is garbage. Check all four BEFORE the first capture:** (1) **a
 size/viewport different from what the contract fixed** — a desktop reference judged against a
 phone capture decides nothing; (2) **different languages on the two sides** — the judge compares
-`Save/Discard` with `Salvar/Descartar` and judges translation, not parity, and that already cost
-a whole round; (3) **an element ending at the PNG's edge is scrolling, not drawing** — it
+`Save/Discard` with `Salvar/Descartar` and judges translation, not parity; (3) **an element ending at the PNG's edge is scrolling, not drawing** — it
 decides no comparison; recapture scrolled or declare that point not compared; (4) **the
 screenshot frames the STATE's proof together with the effect** — a screenshot that only means
 something next to a command outside it becomes a word dispute in the next review. These four are
 repeated in the kick-off of every visual Task (a guideline buried in a contract doesn't reach a
-session born after it — that is exactly how #2 cost the round).
+session born after it).
 
 **Every claim about color, sign or state (`✓` / `✗` / `·`, enabled, disabled) is written with
 the detail ZOOMED, never by eye on the whole image** — and the caption cites the color together
-with the sign. In a 38-screenshot Task, every finding that survived review came from zooming a
-detail that looked legible. Cost: one 300–400% crop per claim.
+with the sign. The findings that survive review come from zooming a detail that looked legible.
+Cost: one 300–400% crop per claim.
 
 **Each caption line is written looking at that file; "idem" is forbidden.** Two screenshots of
 the same state at different widths or languages get two descriptions. The "idem / idem en / idem
@@ -129,8 +128,8 @@ while every screenshot is fine.
 
 **The proof of a behavior Task ends at the outcome the user asked for** — "connected", "saved",
 "opened" — not at the state right before it. A screenshot of the enabled button is no proof the
-click works. Evidence that stopped at the disabled button forced the gate to run the flow's end
-to discover the outcome worked — a review round spent on what the proof should have shown.
+click works, and the gate will run the flow's end to find out — a review round spent on what the
+proof should have shown.
 
 ### 4. Look at the screenshot. Delegate only if you can't
 
@@ -155,14 +154,9 @@ you can, by delegation. Both exits are closed: either you look, or someone looks
 ### Size is not eyeballed: it is measured in the DOM
 
 A screenshot answers **what exists, where, in what order**. It does **not** answer size, spacing
-or alignment — and that is where whoever judges by image errs with confidence.
-
-In a screen Task the executor compared the result with the mock by screenshot, got back "the
-density looks different", decided by argument that the real app ruled, and committed. The
-reviewer measured the box: mock and the same panel's sibling tab around 24px, the delivery at
-44px, across **seven** elements. It wasn't the real app winning: it was a global min-height
-eating the component's CSS, with nobody overriding it. The screenshot showed the difference;
-only the number said whose fault it was.
+or alignment — and that is where whoever judges by image errs with confidence: "the density looks
+different" argued away as "the real app rules" turns out, measured, to be a global style eating the
+component's CSS. The screenshot shows the difference; only the number says whose fault it is.
 
 Before deciding any layout divergence:
 
@@ -201,8 +195,8 @@ Three things that make this worth anything:
 - **A binary choice, not a score.** "Which is better" has an answer; "from 0 to 10, how good"
   returns 7 every time.
 
-Lost → fix **the biggest hole**, recapture, run it again. **Cap of 2 rounds**, then you commit
-with the result in the report, even losing. The cap is not laziness: a loop with no spending
+Lost → fix **the biggest hole**, recapture, run it again. **Cap of 2 rounds**, then you send the
+round with the result in the report, even losing. The cap is not laziness: a loop with no spending
 boundary is this technique's measured failure mode out there — people burning hundreds of
 dollars and throwing away 95% of what came out. Lost both rounds → it goes in the report as a
 known risk, and the arbiter decides.
@@ -210,23 +204,21 @@ known risk, and the arbiter decides.
 **The cap counts BAR rounds. Code defects don't count.** A round rejected because the screen is
 broken — wrong width, trapped focus, a touch target under 44px — is not about fidelity and
 doesn't spend the cap. Without that separation the Task blows the cap with a broken screen,
-which is the opposite of what the cap exists to avoid. One Task closed in four rounds, **only
-the first about the bar**; another round rejected over a side inset pushing the display a few
-hundred pixels, which is a real width bug, not finish.
+which is the opposite of what the cap exists to avoid.
 
-**And a round that touches no pixel doesn't pay the bar again.** A fix commit that only
-touches store, tests or backend redoes no comparison — `git show --stat` proves it.
+**And a round that touches no pixel doesn't pay the bar again.** A correction round that only
+touches store, tests or backend redoes no comparison — `git stash show --stat <object>` proves it.
 
 You can't see images? The step is still yours — same protocol as step 4: the vision subagent
 (or `see`) looks, you command and read the answer.
 
-**Contract saying `Bar: none — user's decision`: skip this whole step** and commit with steps 1
-to 4. Don't invent a bar on your own — the reference is the user's choice, and one picked by you
-measures your own guess, not the work.
+**Contract saying `Bar: none — user's decision`: skip this whole step** and send the round with
+steps 1 to 4. Don't invent a bar on your own — the reference is the user's choice, and one picked
+by you measures your own guess, not the work.
 
 **Your diff touches pixels and the contract has neither a bar nor a waiver? Stop and report to
-the arbiter before committing.** It is a phase-1 decision left blank; he asks the user and
-brings you the answer. Committing anyway costs the whole Task, because the reviewer returns it.
+the arbiter before sending the round.** It is a phase-1 decision left blank; he asks the user and
+brings you the answer. Sending anyway costs the whole round, because the reviewer returns it.
 
 ### What goes in the report
 

@@ -15,10 +15,9 @@ throws rounds away.
   (`SKILL.md`), never by patching.
 - **A Task stuck BEFORE the gate.** Two consecutive Tasks past 2× the estimate **for the same
   cause** is a signal — and it is the **late** signal, because it counts rounds, and a Task stuck
-  before its first commit produces no round to count. The trigger that would have fired in time
-  is simpler: **a Task with over 3 hours of executor clock and ZERO commits.** A Task stuck
-  before its first commit produces no round, no verdict and no spiral rule to fire — and the same
-  Tasks, replanned, tend to close in a fraction of the clock.
+  before its first round produces no round to count. The trigger that fires in time is simpler:
+  **a Task with over 3 hours since its `task_inicio` and no `entrega` line in `eventos.jsonl`.** A
+  Task stuck before its first round produces no verdict and no spiral rule to fire.
 
 The arbiter **proposes** ("replan, or keep patching? cost so far: X"), the user decides. The
 arbiter doesn't replan on his own — and **doesn't rewrite his own plan**: whoever plans again is
@@ -57,10 +56,8 @@ The replanner reads, in this order:
 - **A new file**, named after the work + `fase-final` (or `v2`), next to the old plan — which
   gains, at its top, a notice pointing at the new one and **is never deleted**: the reports cite
   it.
-- **It passes the SAME phase 1 exit gate** (`planejamento.md`, the 13-item checklist) —
-  replanning is no shortcut: a-priori estimate, non-collision, bar/capture, smoke, quota and
-  fallback, domain skill, all again, now with the previous phase's REAL numbers as the
-  estimate's base.
+- **It passes the SAME phase 1 exit gate** (`planejamento.md`, the checklist) — replanning is no
+  shortcut: every item again, now with the previous phase's REAL numbers as the estimate's base.
 - **The team becomes a question again.** Like an off-plan Task (`arbitro.md`): the remaining work
   may be of another nature than the original team. Propose with the history in hand; the user
   chooses.
@@ -72,10 +69,11 @@ The replanner reads, in this order:
 New plan approved:
 
 1. The arbiter (the previous phase's, or the replanner taking over — the user's decision,
-   recorded) **rewrites `regras-<gid>.md` from scratch** from the phase-2 skeleton, pointing at
+   recorded; taking over is an arbiter succession and runs its rite, `arbitro-encerramento.md`)
+   **rewrites `regras-<gid>.md` from scratch** from the phase-2 skeleton, pointing at
    the new plan. A live guideline of the previous phase enters; a dead Task's guideline becomes
    one line in the journal.
-2. **The journal remains the same file** (`grupo-<gid>.md`): a dated entry marks the replanning
+2. **The journal remains the same file** (`~/.hangar/orq/<date>-<gid>/registro.md`): a dated entry marks the replanning
    — reason, what died of the old plan, the base's hash — and the diary continues.
 3. **Every kick-off from then on points at the new plan and rules.** A live session of the
    previous phase that continues receives a new kick-off; one that doesn't fit the new team is

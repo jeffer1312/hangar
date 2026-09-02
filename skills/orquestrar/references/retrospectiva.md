@@ -9,21 +9,19 @@ Read-only in everything. You don't commit, don't fix, don't opine on the product
 review's first approval. An approved branch opens the door for findings to become Tasks, and a
 few more usually enter. Called before that, your report ages within hours, with more Tasks and
 set reviews entering after it. If that is the case, tell the arbiter an **addendum** will be
-missing — fresh session, scope only of what entered later, numbering continuing from the last P.
+missing — fresh session, scope only of what entered later, numbering continuing from the last P
+(proposals are numbered P1, P2… — section 5).
 
 ## Why a fresh session
 
-Whoever executed carries the executor's bias, and at the end is the most saturated. Twice in a
-real work the spiral was only seen from outside: the arbiter wrote nine guidelines
-while Task 4 lapped the same defect family nine times, and none of those guidelines noticed the
-problem was the design. Whoever reads the journal **afterwards**, without having lived it, sees
-it in ten minutes.
+Whoever executed carries the executor's bias, and at the end is the most saturated: an arbiter
+inside a spiral writes guideline after guideline without seeing that the problem is the design.
+Whoever reads the journal **afterwards**, without having lived it, sees it in ten minutes.
 
-## The five inputs
+## The inputs
 
 ```bash
 # 1. the arbiter's journal — the diary: Task → hash → verdict, rounds, dated decisions
-#    (lives in the durable directory; the backend's `grupo-<gid>.md` is deleted with the group)
 cat ~/.hangar/orq/<date>-<gid>/registro.md
 
 # 1b. the review reports — each round's WASTE line is the analysis's raw material
@@ -48,7 +46,7 @@ cat ~/.hangar/orq/<date>-<gid>/eventos.jsonl
 
 The fifth gives numbers without recounting by hand: rounds, verdicts and time per Task come
 counted from there, and the retro **checks the prose against it** instead of rebuilding from git
-and mtime. An old run lacks the file — then the usual four hold, and the report says so.
+and mtime. An old run lacks the file — the others hold, and the report says so.
 
 The second and the fourth are the ones nobody thinks to look at, and the ones that pay most:
 **every guideline the arbiter had to write mid-work is something the skill didn't have.** If he
@@ -57,14 +55,11 @@ list ready-made, with date and proof next to each — the cheapest input you hav
 
 ## What the report holds — five sections, in this order
 
-**There is no time-analysis section, and that is the user's decision.** Block by
-block, estimated against actual, doesn't change what the next run does: calendar clock is made of
-waiting on their decisions, of the database being down and of the VPN dropping, and separating
-that from the work costs more than it yields. What **really** costs a run is repeated rounds, and
-that is section 1 below. A Task blowing its clock is already handled when it happens, by the
-arbiter, not in hindsight. If any time number does enter here, it comes from `date -Iseconds` or
-from git's stamp — never from memory: measured in this very work, the times written from memory
-in the journal drifted up to **+6h13**.
+**There is no time-analysis section, and that is the user's decision.** Calendar clock is made of
+waiting, and separating that from the work costs more than it yields; what **really** costs a run
+is repeated rounds — section 1. A Task blowing its clock is handled when it happens, by the
+arbiter. Any time number that does enter here comes from `date -Iseconds` or from git's stamp —
+never from memory, which drifts by hours.
 
 ### 1. Waste, grouped
 
@@ -88,17 +83,18 @@ The other two look at how the work was conducted. This one looks at what was **p
 is where the biggest gain is: a plan defect costs execution rounds, and costs them in every Task
 that depended on it.
 
-Sweep the executors' "declared deviation" reports in the journal — each is a place where reality
-didn't match the plan — and classify:
+Sweep the journal for the executors' reports of a premise the plan got wrong (`executor.md`, "The
+plan got a premise wrong mid-Task") and the WASTE lines of the reports — each is a place where
+reality didn't match the plan — and classify:
 
-| Plan error type | How to detect | Measured example |
-|---|---|---|
-| **Code nobody ran** | executor reports `TypeError`, a missing attribute, a failed import | a fixture with `__import__("app.main").app`; `erro(code, msg, msg=msg)` raising `TypeError` |
-| **A command that doesn't do what it says** | executor reports "selected nothing" / a "nothing to run" exit code | a name-filtered test command matching no test |
-| **An invented count** | "expected 6 PASS", 8 came | two consecutive steps with the wrong number |
-| **A batch declared disjoint that wasn't** | a merge conflict | one file in Task 3 by design **and** in Task 1 through a step |
-| **A defect the plan carried forward** | a finding in a late Task originating in an early one | a `motivo` in Portuguese since Task 3, seen at 11, became an extra Task |
-| **A bar demanding what the reused code doesn't do** | mock × existing-component divergence | a line-number column the `DiffView` doesn't have |
+| Plan error type | How to detect |
+|---|---|
+| **Code nobody ran** | executor reports `TypeError`, a missing attribute, a failed import |
+| **A command that doesn't do what it says** | executor reports "selected nothing" / a "nothing to run" exit code |
+| **An invented count** | "expected N PASS", N+2 came |
+| **A batch declared disjoint that wasn't** | a merge conflict; one file in a Task's header **and** in another Task's step |
+| **A defect the plan carried forward** | a finding in a late Task originating in an early one |
+| **A bar demanding what the reused code doesn't do** | mock × existing-component divergence |
 
 **The six share a single cause: the plan describes code its author never executed.** If that line
 shows up again, the patch is no longer an execution guideline — it is a `planejamento.md`
@@ -106,7 +102,10 @@ guideline.
 
 ### 4. The model cards
 
-`~/.hangar/orq/modelos/<provider>-<id>.md`, one per team model. For each one that worked:
+`~/.hangar/orq/modelos/<provider>-<id>.md` — provider as `--engine`/`--provider` names it, id as
+`--model` receives it — one per team model. The cards live in the vault, not in this skill: they
+are dated records of the user's machine, and the orchestration works whole without them. For each
+model that worked:
 
 - **New numbers:** context per Task type, time, cost. It is what makes the next plan predict
   rotation instead of discovering it midway.
@@ -114,9 +113,21 @@ guideline.
   enters marked `(seen once, on <date>)`.
 - **What the kick-off had to say because of it**, which next time can be born in the plan.
 
-A model without a card gains its first. The format rules are in `references/modelos/README.md`:
-measured facts only, dated, and every line answers *what do I write differently because of
-this*.
+A model without a card gains its first. The rules of the file, whoever writes it:
+
+1. **Measured facts only, dated.** "Seems better at X" doesn't enter.
+2. **What changes in the PLAN, not praise.** Every line answers *what do I write differently
+   because of this?* If it changes nothing, it is trivia.
+3. **Short — about 40 lines per role section** (a model that executes and reviews has two). What
+   aged leaves; the date gives it away.
+4. **Not an accounts table.** Price, quota and permission live in the machine's account policy.
+   Here is behavior.
+5. **What was read somewhere stays apart from what was measured here** — a `## What they say`
+   section marked as hypothesis, never mixed into the same paragraph; when they diverge, the
+   measured wins and the divergence stays written, because it is the card's most valuable line.
+
+The card answers, in order: window and practical ceiling · does it see images · how it fails ·
+what the kick-off must say because of it · where it is good.
 
 ### 5. The proposed skill change (the "patch")
 
@@ -127,28 +138,14 @@ impressions.
 
 **The fourth field is what keeps the skill from only swelling, and it is the one forgotten.**
 Either the proposal names the guideline that died — stopped holding, became code, was absorbed by
-the new one, was an arbitrary number that became a principle — or it says, in one line, **why
-nothing left**. Without one of the two, it isn't ready. In a report that skips the field, some
-proposals turn out to delete something, some are already written in the skill and need no
-proposing, and several land in the same section of one file, doubling it — none of that is
-visible without the field.
+the new one — or it says, in one line, **why nothing left**. A departing guideline goes into the
+report, with the date and the reason: history lives in the report; what still holds lives in the
+skill. And say, at the end, **where the proposals concentrate** — a section receiving three or more
+becomes a short checklist or its own file, never fatter.
 
-A departing guideline doesn't vanish traceless: it goes into the report, with the date and the
-reason. History lives in the report; what still holds lives in the skill.
-
-And say, at the end, **where the proposals concentrate** — how many land in each file, and
-whether any section receives three or more. A section receiving many at once should not be
-fattened: either the new ones become a short checklist at its end, or the section becomes its own
-file. Whoever reads the skill reads the whole file; a hundred-line section isn't read, it is
-skimmed.
-
-**And a guideline is phrased as a PRINCIPLE; the measured case enters as its PROOF.** The two
-demands hold together, not one in place of the other: without a number the guideline doesn't
-enter, and phrased as a case it doesn't serve. It is `SKILL.md`'s general lock ("A guideline is
-written as a PRINCIPLE"), and here is where it weighs most — phase 5 is who manufactures the
-next runs' guidelines, and you arrive at a work's end with that work's cases in hand.
-
-The test, before proposing any guideline: **where the CONDITION should be, did you write the name
+**A guideline is phrased as a PRINCIPLE; the measured case enters as its PROOF** — `SKILL.md`'s
+general lock, and here is where it weighs most: phase 5 manufactures the next runs' guidelines, and
+you arrive at a work's end with that work's cases in hand. The test, before proposing any guideline: **where the CONDITION should be, did you write the name
 of a skill, a tool, a file or a date?** Then it is the instance. Rewrite the condition and move
 the name to the proof line.
 
@@ -186,17 +183,5 @@ is the whole point: a skill that rewrites itself at each run's end accumulates t
 whoever just executed, which is exactly who didn't see the problem while it happened.
 
 Deliver to the arbiter: the file's path and **the three most important lines**, not the whole
-report. He relays it to the user.
-
-## How this phase is remembered with nobody remembering
-
-Three layers, because the only one that works is the one **someone else** fires:
-
-1. **At launch**, the arbiter writes the retrospective into the journal as its own item, with a
-   trigger — next to the final review, before opening the first session. Never "at the end, from
-   memory".
-2. **The final reviewer reminds.** Their kick-off orders: when delivering the branch's `APROVA`,
-   tell the arbiter **phase 5 is missing**. Whoever is fresh remembers; whoever is at the end of
-   a twelve-Task work is not.
-3. **The definition of done**, in the phase table: the work ends when the patch is in the user's
-   hands, not when the branch is approved.
+report. He relays it to the user. (How this phase gets triggered with nobody remembering is the
+arbiter's page: `arbitro-encerramento.md`, "Closing".)

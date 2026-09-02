@@ -9,7 +9,8 @@ completam o contrato:
   - `ts` sempre presente, ISO-8601 com offset (saída de `date -Iseconds`).
   - `task` e `rodada` são números; `rodada` começa em 1 — rodada desconhecida é OMITIDA, nunca 0.
   - `veredito.resultado` ∈ aprova|reprova|devolvido (o MESMO vocabulário do parecer); leva `sessao`
-    e motivo curto quando houver. `entrega` leva o hash da rodada (stash) no campo `commit`.
+    e, opcionais, `motivo` (str, a razão curta) e `reincide` (bool: segunda reprovação da mesma
+    causa — a porta do árbitro no laço). `entrega` leva o hash da rodada (stash) no campo `commit`.
   - Campo extra pode; tipo novo NÃO — o app agrega por esses seis.
 
 Exemplo, no fecho de uma rodada:
@@ -66,6 +67,8 @@ def _valida_linhas(path: str, linhas) -> int:
                 print(f"{path}:{i}: {campo} nao e numero ({ev[campo]!r})"); erros += 1
         if tipo == "veredito" and ev.get("resultado") not in RESULTADOS:
             print(f"{path}:{i}: resultado {ev.get('resultado')!r} fora de {sorted(RESULTADOS)}"); erros += 1
+        if "reincide" in ev and not isinstance(ev["reincide"], bool):
+            print(f"{path}:{i}: reincide nao e bool ({ev['reincide']!r})"); erros += 1
     return erros
 
 

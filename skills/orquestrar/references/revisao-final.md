@@ -25,7 +25,7 @@ Hunt what only shows in the sum:
 - **The repo's final state**: a dependency removed in one Task and still imported in another, a
   test that passes alone and fails in the full suite, a surviving temporary file.
 
-Run the full suite and the type gate **yourself**, at the branch's tip.
+Run every verification command the plan defines **yourself**, at the branch's tip.
 
 ## Format
 
@@ -39,10 +39,10 @@ approval, the arbiter opens a set review of just those. The scope comes declared
 already passed. The rest of this page holds the same.
 
 Your findings return to the normal cycle, and the normal cycle **has no middleman**: send the
-recipe straight to whoever will fix, and they return you the frozen round — dirty tree,
-`git stash store`, review before the commit, as in any Task. The arbiter enters at the closing,
-not in the middle. If the argument for taking him out of the transport holds in a Task, it holds
-more here, where his context is the fullest and most expensive of the whole work.
+recipe straight to the executor your kick-off names (`Executor for findings:`; none named → ask
+the arbiter to open one, never fix it yourself), and they return you the frozen round — dirty
+tree, `git stash store`, review before the commit, as in any Task. The arbiter enters at the
+closing, not in the middle.
 
 One synthesis, one message, to the arbiter. Push and MR are the user's decision — never yours.
 
@@ -52,10 +52,6 @@ When approving the branch, end the message to the arbiter with:
 
 > **Phase 5 (retrospective) is still missing** — fresh session, `references/retrospectiva.md`.
 
-That is not a formality: it is the only trigger that works. The arbiter reaches the end of a
-many-Task work saturated and with the feeling that it is over — an approved branch **feels**
-like the end. You are fresh and the last to speak with him. The one who remembers is the one
-with context to remember.
-
-If the arbiter forgot to record the retrospective as a contract item back at launch, this line
-is the only net left.
+It is not a formality: the arbiter reaches the end saturated, and an approved branch **feels** like
+the end. You are fresh and the last to speak with him — and if the retrospective was never
+recorded as a contract item at launch, this line is the only net left.

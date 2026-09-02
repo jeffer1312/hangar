@@ -32,7 +32,38 @@ This skill orchestrates; the *method* is what plans and executes, and there is m
 
 The plan and the execution, when they come from a method, come from the **same one**: Task/ticket
 formats differ, and whoever reads later — executor, arbiter — reads the wrong format with no error
-at all. Switching methods midway is `references/replanejar.md`, never a patch.
+at all. Switching methods midway is `references/replanejar.md`, never a patch. An artifact the
+method doesn't produce does **not** disqualify it: the phase 1 exit gate is method-agnostic, and
+you produce by hand whatever is missing.
+
+## The DOMAIN SKILL, when one exists, is what commands the work
+
+Don't confuse it with the method. The **method** is who plans and who executes; a **domain skill**
+describes *the work itself*, step by step, because someone has done it dozens of times: porting a
+screen, creating a module, building a migration. It neither plans nor executes — it says what has
+to happen, and in what order.
+
+**When one exists, the plan does not repeat it: it instantiates it.** Each Task cites the skill
+step it executes, in the skill's own order, and the executor re-reads the skill before starting. A
+real domain skill in this repository carries, inside it, the description of how a plan should
+instantiate it — it was written expecting this.
+
+The contract's `Domain skill:` line is mandatory even when the answer is `none`. Two checks before
+Task 1 — item 13 of the exit gate:
+
+1. **Does any Task do what the skill already does internally?** If so, that Task **does not
+   exist** — what exists is the demand for that step's evidence inside the Task that contains it.
+   A skill step promoted to its own Task at the end of the plan makes the gate stop enforcing it
+   ("there is already a Task for that"): everything before it passes unchecked, whatever depended
+   on the step cannot start, and the one who notices is the user, many Tasks later.
+2. **Is any skill step left without an owner?** A step no Task cites is a step nobody will run.
+   Also look at what the skill does **not** have: a screen-porting skill may end at its last step
+   without ever asking for the whole screen to be tested — work assembled only from its steps is
+   born without set-level verification, and that is a hole in the plan, not in the skill.
+
+**The domain skill is not altered to fit this work.** Other people use it. What gets adjusted is
+the plan and the contract; the skill is read as it is. A step that doesn't apply is the user's
+decision, never the arbiter's — the same case as "an invoked skill runs whole", in `SKILL.md`.
 
 ## The plan is the user's. You write the ORCHESTRATION PLAN next to it
 
@@ -109,10 +140,10 @@ An ordering that looks like detail and isn't. Who will execute changes **what th
 say** — and the plan is the only document the executor reads whole.
 
 Ask about the team right after the spec closes, and **before** the first Task. Then read each
-model's card in `~/.hangar/orq/modelos/` (one per model, measured facts only; format rules in
-`references/modelos/README.md`) and write the plan with that in mind. No card for the chosen
-model? Write the plan conservatively and **create the card at the end**, in the retrospective —
-that is how cards are born.
+model's card in `~/.hangar/orq/modelos/` (one per model, measured facts only; the card's rules are
+in `retrospectiva.md`, "The model cards") and write the plan with that in mind. No card for the
+chosen model? Write the plan conservatively and **create the card at the end**, in the
+retrospective — that is how cards are born.
 
 What the card changes: a **MEASURED** capability becomes protocol in the Tasks (vision, visual
 criteria as numbers, a short window planning rotation, how much detail each step needs); a
@@ -131,9 +162,12 @@ the undeclared outcome is the unimplemented outcome. And if the plan declares th
 closes AFTER another one (planned replanning), it names WHO closes it — and that who is a planner,
 never the arbiter by gravity (`replanejar.md`, "the miniature").
 
-**A team model with no card yet:** the sweep (vendor + community, via `last30days`) and the initial
-card format are in `references/modelos/README.md`, "A new model on the team". What the sweep does
-**not** do is become a kick-off rule: nothing untested becomes a rule until a run confirms it.
+**A team model with no card yet:** do **one** short sweep before writing the plan and record it in
+a `## What they say` section marked as hypothesis — the vendor (prompting guide, limits) and the
+community (a recent-discussion search skill, if the machine has one: where it breaks, which
+workaround became standard), and the community usually pays more because it reports limitation and
+workaround together. What the sweep does **not** do is become a kick-off rule: nothing untested
+becomes a rule until a run confirms it.
 
 Beyond what `writing-plans` already asks, the plan carries:
 
@@ -600,7 +634,7 @@ file paths.
 12. **AUDIT** — Adversarial pass offered, baseline green, every cited piece of code ran.
 13. **AUDIT** — **Domain skill declared** (name or `none`), and its two checks done: no Task
     duplicates a step the skill already does internally, and no skill step was left without an
-    owner (`SKILL.md`, "The DOMAIN SKILL").
+    owner ("The DOMAIN SKILL", above).
 
 And a prudence rule that is not an item but a posture: **one debut at a time.** A new planning
 method, a freshly edited skill and a new provider don't enter the same run together — a run where
@@ -677,7 +711,7 @@ rewrites.
 The `--pair` string is **neutral and points at the contract**, never asserts a role:
 
 ```bash
-hangar-send --pair <session> "<work> — each session's role is in the grupo-<gid>.md contract"
+hangar-send --pair <session> "<work> — each session's role is in the regras-<gid>.md contract"
 ```
 
 Roles are declared **in the kick-off and in the contract's table**, and the contract says
@@ -697,8 +731,9 @@ A nonexistent engine returns `400` and the session is not born. List engines: `c
 - **`regras-<gid>.md`** — **this work's agreement**, which executor and reviewer read whole. Who
   is who, untouchables, gates, method, domain skill, branch, bars, accounts. Written now and
   nearly immutable after. Two pages.
-- **`grupo-<gid>.md`** — the journal, which only the arbiter reads. Progress, history, dated
-  decisions.
+- **`~/.hangar/orq/<date>-<gid>/registro.md`** — the journal, which only the arbiter reads.
+  Progress, history, dated decisions. Never `grupo-<gid>.md`: the backend deletes that one with the
+  group.
 - **`licoes.md`** (in the durable directory) — the guidelines the run keeps fixing, with date and
   proof. **It grows freely and nothing leaves it.** Nobody reads it whole: the arbiter pastes into
   each kick-off the three or four that serve that Task. Born empty, header only.

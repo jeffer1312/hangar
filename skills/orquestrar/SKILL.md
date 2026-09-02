@@ -21,8 +21,8 @@ what the plan left open.
 | 5. Retrospective | fresh session that took no part | no | proposed patch for **this skill**, in the user's hands |
 
 **The work does not end at phase 4.** An approved branch is finished code; phase 5 is what makes
-the next run better than this one. It is short (one session, three input files) and it is the only
-phase whose product is not code — it is `references/retrospectiva.md`.
+the next run better than this one. It is short (one session, the work's durable directory and the
+branch) and it is the only phase whose product is not code — it is `references/retrospectiva.md`.
 
 Push and MR always belong to the user.
 
@@ -95,49 +95,30 @@ interrupted.
 does not exist; it gets 1:1 messages, and whatever gets agreed must be written into the local
 contract by hand, or it vanishes.
 
-## The METHOD is not your choice — it comes from the contract
+## Method and domain skill come from the contract, never from you
 
 This skill orchestrates: roles, gate, independent review, rotation, retrospective. **It neither
-plans nor executes** — that belongs to another family of skills, the *method*, and there is more
-than one.
-
-> **Method ≠ engine.** An *engine* in this skill is the model provider (`--engine`,
-> `engines.json`: DeepSeek, Kimi…). A *method* is which skill family plans and executes. A session
-> has both, and they are decided separately.
-
-**The method is declared in the group contract** (`regras-<gid>.md`), in one line, and holds from
-research to the last commit:
+plans nor executes.** Two other things do, and both are declared in `regras-<gid>.md`, one line
+each, written at launch and repeated in every kick-off:
 
 ```markdown
-Method: superpowers    # planner: brainstorming → writing-plans · executor: executing-plans
-Method: mattpocock     # planner: /grill-me → /to-spec → /to-tickets · executor: /implement
+Method: superpowers          # which skill family plans and executes (superpowers | mattpocock | none)
+Domain skill: portar-tela    # the step-by-step of this kind of work, when one exists (name | none)
 ```
 
-**`superpowers` is the default — the user's decision.** Another method enters only on
-their explicit request, and the **single** check before accepting is: **does the executing half
-exist in the ACCOUNT that will execute?** Skills and plugins are per config directory — check the
-path, not your memory. An artifact the method doesn't produce does **not** disqualify it: the
-phase 1 exit gate is method-agnostic, and the planner produces by hand whatever is missing. Each
-method's operational detail (commands, `disable-model-invocation`, known gaps) lives in
-`references/planejamento.md`, "Before phase 0".
+- The **method** is who plans and who executes — `superpowers` (the default, the user's decision),
+  `mattpocock`, or `none` when the plan is the user's own. A *method* is not an *engine*: the engine
+  is the model provider (`--engine`, `engines.json`); a session has both, decided separately.
+- The **domain skill** describes *the work itself*, step by step, because someone has done it dozens
+  of times (porting a screen, creating a module). When one exists, the plan does not repeat it: it
+  **instantiates** it, each Task citing the skill step it executes, and the executor re-reads the
+  skill before starting. A Task that invokes one runs it **whole** (locks below).
 
-No role picks a method, and **none switches methods midway**. A plan born in one method and
-executed in another is the defect this section exists to prevent: the two write the work in
-different formats (Task with Steps on one side, ticket with criteria on the other), and whoever
-reads later — the executor, the arbiter excerpting the Task, the app's progress bar — starts
-reading something that doesn't exist.
-
-Three rules, all three the arbiter's:
-
-1. **The `Method:` line is mandatory** in the contract, written at launch, before the first session.
-2. **Every kick-off repeats the method**, because the contract is read once and a kick-off arrives fresh.
-3. **Contract without the line** → the method is `superpowers`, this skill's historical default —
-   and the arbiter **writes the line** before proceeding, instead of leaving it implicit.
-
-A method you don't know, or a request to switch midway: **stop and ask the user**. It is their
-decision, like model and account. A switch they approve is not done by patching: run
-`references/replanejar.md`, and the plan for the remaining work is born **whole** in the new
-method — never half in each.
+**Nobody picks either, and nobody switches midway.** A method you don't know, a contract without
+the lines, or a request to switch: stop and ask — a switch the user approves runs through
+`references/replanejar.md`, never by patching. How the planner checks the method's executing half,
+the two domain-skill checks before Task 1, and what the arbiter writes at launch: `planejamento.md`
+("Before phase 0", "The DOMAIN SKILL") and `arbitro-lancamento.md`.
 
 ## Two words: Task and step
 
@@ -159,45 +140,6 @@ literal and isolated:** the phone's progress bar matches the word `Step` by rege
 A method that brings no bottom layer disqualifies nothing: the planner writes the steps in the
 orchestration plan, which is theirs — the same procedure as any item the method doesn't produce.
 
-## The DOMAIN SKILL, when one exists, is what commands the work
-
-Don't confuse it with the method, which is the section above. The **method** is who plans and who
-executes (`superpowers`, `mattpocock`). A **domain skill** is one that describes *the work
-itself*, step by step, because someone has done it dozens of times: porting a screen, creating a
-module, building a migration. It neither plans nor executes — it says what has to happen, and in
-what order.
-
-**When one exists, the plan does not repeat it: it instantiates it.** Each Task cites the skill
-step it executes, in the skill's own order, and the executor re-reads the skill before starting.
-This is not our invention: a real domain skill in this repository carries, inside it, the
-description of how a plan should instantiate it — it was written expecting this.
-
-The contract gains one line, written at launch, and it is mandatory even when the answer is
-"none":
-
-```markdown
-Domain skill: portar-tela    # steps 1–9; on conflict with the plan, the skill wins
-Domain skill: none
-```
-
-**Two checks, before Task 1** (the phase 1 exit gate enforces them, in
-`references/planejamento.md`):
-
-1. **Does any Task do what the skill already does internally?** If so, that Task **does not
-   exist** — what exists is the demand for that step's evidence inside the Task that contains it.
-   A skill step promoted to its own Task at the end of the plan makes the gate stop enforcing it
-   ("there is already a Task for that"): everything before it passes unchecked, whatever depended
-   on the step cannot start, and the one who notices is the user, many Tasks later.
-2. **Is any skill step left without an owner?** A step no Task cites is a step nobody will run.
-   Also look at what the skill does **not** have: a screen-porting skill may end at its last step
-   without ever asking for the whole screen to be tested — work assembled only from its steps is
-   born without set-level verification, and that is a hole in the plan, not in the skill.
-
-**The domain skill is not altered to fit this work.** Other people use it. What gets adjusted is
-the plan and the contract; the skill is read as it is. A step that doesn't apply is the user's
-decision, never the arbiter's — the same case as "an invoked skill runs whole", in the locks
-below.
-
 ## Kick-off — the message points, it doesn't copy
 
 A new session is born with zero context but with the **same `~/.claude`**: this skill is already
@@ -210,6 +152,7 @@ Method: <superpowers | mattpocock | none — the plan is the user's>.
 Domain skill: <name | none>.
 Repo/branch: <path> / <branch>.   Expected HEAD: <hash>.
 Group rules: <path to regras-<gid>.md>.
+Durable dir: <~/.hangar/orq/<date>-<gid>/ — reports, diffs and screenshots go here, never /tmp>.
 The current Task: <path to its file>.
 Untouchables: <paths, one by one — not "the ones in the contract">.
 Lessons that apply to this Task: <pasted here, 3 or 4, not the file path>.
@@ -282,8 +225,8 @@ First line of the rules file, so an amnesiac session can re-anchor itself:
 > Method: <superpowers | mattpocock | none> · Domain skill: <name | none>
 ```
 
-The `Method:` line is mandatory (see "The METHOD is not your choice", above) and never changes
-midway.
+The `Method:` and `Domain skill:` lines are mandatory (see "Method and domain skill come from the
+contract", above) and never change midway.
 
 **What changes per Task goes in no file at all**: which Task is released, what the hash is, who
 your counterpart is. That goes in the kick-off, which is fresh by definition. A file holding
@@ -294,8 +237,8 @@ reviews one. How that is done depends on the material's format:
 
 - **Monolithic plan** (one file with all the Tasks) → **excerpt**: that Task's section plus the
   short header (goal/architecture) into `~/.hangar/orq/<date>-<gid>/tasks/task-<N>.md` — a durable
-  path, not `/tmp`, which vanishes on reboot — and send that path. In one run: whole plan
-  ~30k tokens, excerpted Task ~2.9k.
+  path, not `/tmp`, which vanishes on reboot — and send that path. An excerpt is roughly a tenth
+  of a whole plan.
 - **One file per unit** (tickets) → **point at the user's file**, without copying. Copies go
   stale: the executor checks the criteria off in the original and the copy starts lying about
   what's done. The work context the ticket doesn't carry — because `to-tickets` says to write only

@@ -17,10 +17,9 @@ blockers are found by whoever runs against the real source.
   real CLI, the real test account — and paste into the report what happened, not what the tests
   say would happen.
 - **A suite count that DROPS becomes a mandatory note in the report.** One unit below the base
-  is half a report: in that same Task, seven tests of an approved Task had been deleted,
-  silently.
+  is half a report: a silent drop is a deleted test of an approved Task.
 
-The rule has two halves, and the second was this skill's most expensive to date:
+The rule has two halves:
 
 1. **The double replaces the I/O, never the function under correction.** An account label used
    as a directory path survives rounds of green suite when the double reproduces the code's
