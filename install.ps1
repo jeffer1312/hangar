@@ -1694,8 +1694,9 @@ if ($registrou) {
     # identifica o processo dele e o caminho do checkout. Mesmo `.Replace("'","''")` do de cima,
     # pelo mesmo motivo — o caminho entra CRU dentro de um literal de aspas simples, e um perfil
     # com apostrofo (C:\Users\O'Brien\...) fecharia a aspa cedo e quebraria a vigia inteira.
-    $vigiaPadraoFront = $tarefas[1].Padrao.Replace("'", "''")
-    $vigiaExeFront = $tarefas[1].ExeProc       # 'node|npm|vite'
+    # Guarda de $temTarefaFront: sem tarefa do front, $tarefas[1] e $null e ler .Padrao/.ExeProc dele quebra em "expressao de valor nulo" — instalacao nova nao registra mais a tarefa do front, entao $tarefas[1] nao existe.
+    $vigiaPadraoFront = if ($temTarefaFront) { $tarefas[1].Padrao.Replace("'", "''") } else { '' }
+    $vigiaExeFront = if ($temTarefaFront) { $tarefas[1].ExeProc } else { '' }        # 'node|npm|vite'
     $vigiaLog = (Join-Path $env:LOCALAPPDATA "hangar\hangar-vigia.log").Replace("'", "''")   # mesmo lugar dos outros .log
     # Here-string de aspas SIMPLES (@'...'@): zero interpolacao, entao `$_`/`$candidatos`/etc
     # sobrevivem literais sem precisar de crase nenhuma - o script so vira real quando o
