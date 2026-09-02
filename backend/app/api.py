@@ -4895,13 +4895,20 @@ def answer(name: str, body: AnswerBody):
         # nao tinha as duas quedas de 28/08/2026), e sem o MOTIVO nao da pra separar "picker preso"
         # de "nav drift" quando o relato chega dias depois.
         diag.registrar("pergunta.fallback_texto", "erro", sessao=name, detalhe=str(e))
+        if not text:
+            # Sem texto de fallback (resposta `chat`, ou rotulos vazios) nao ha o que entregar. Nao
+            # manda o Escape e nao limpa o sidecar: o picker segue aberto pra quem responder no
+            # terminal. Ate 01/09/2026 este ramo caia em `fallback = True` e apagava o sidecar como
+            # se tivesse respondido, sem uma tecla ter saido — os ramos Pi e Kimi ja barravam.
+            raise HTTPException(409, detail=erro(
+                "erro_drive_sem_fallback",
+                f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
         terminal.interrupt(name)  # Escape unico: fecha o picker (sem clear — input vazio)
-        if text:
-            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
-            res = _send_one(name, text)
-            if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
-            _recusa_se_so_enfileirou(name, res)
+        _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
+        res = _send_one(name, text)
+        if not res["ok"]:
+            raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
+        _recusa_se_so_enfileirou(name, res)
         fallback = True
     # Respondido: limpa o sidecar do hook pra um stale nao reabrir o stepper depois. Resolve o jsonl
     # igual aos outros endpoints; se nao resolver, pula a limpeza sem falhar a request.

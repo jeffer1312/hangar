@@ -99,7 +99,10 @@ def _respondida_depois(jsonl: str, desde: float) -> bool:
     # li ja e posterior ao sidecar, minha janela nem alcanca o instante da pergunta — nao vi a
     # resposta porque nao cheguei la, e nao porque ela nao existe. Sem esta saida a pergunta ficava
     # "aberta" para sempre (achado da review).
-    if inicio > 0 and mais_antigo is not None and mais_antigo > desde:
+    # `mais_antigo is None` conta junto: a janela so trouxe linha de metadado (`mode`,
+    # `permission-mode`, `ai-title`… nao levam timestamp), e sem nenhuma referencia de tempo eu
+    # tambem nao tenho como provar nada.
+    if inicio > 0 and (mais_antigo is None or mais_antigo > desde):
         _log.debug("askq: janela do transcript nao alcanca a pergunta path=%s — trata como "
                    "respondida", jsonl)
         return True

@@ -1527,6 +1527,27 @@ def test_answer_drive_error_falls_back_to_text(api_client):
     clear.assert_called_once()
 
 
+def test_answer_sem_texto_de_fallback_nao_apaga_a_pergunta(api_client):
+    # Drive falhou e a resposta nao vira texto (kind `chat`, rotulos vazios): nao ha o que entregar.
+    # Ate 01/09/2026 este ramo mandava o Escape, marcava fallback e LIMPAVA o sidecar — a pergunta
+    # sumia da lista como respondida sem uma tecla ter saido. Pi e Kimi ja barravam; o Claude nao.
+    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
+    with patch.object(ti_mod, "answer_questions", side_effect=ti_mod.DriveError("picker preso")), \
+         patch("app.api.registry.list", return_value=[info]), \
+         patch.object(api_mod, "read_pending_askq", return_value=None), \
+         patch.object(api_mod, "_askq_fallback_text", return_value=""), \
+         patch.object(api_mod.terminal, "interrupt") as intr, \
+         patch.object(api_mod, "_send_one") as send, \
+         patch.object(api_mod, "clear_pending_askq") as clear:
+        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
+                            json={"answers": [{"kind": "chat"}]})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_drive_sem_fallback"
+    send.assert_not_called()
+    intr.assert_not_called()      # picker segue aberto pra quem for responder no terminal
+    clear.assert_not_called()
+
+
 def test_answer_fallback_que_so_enfileirou_nao_diz_que_respondeu(api_client):
     # Drive falhou E o texto do plano B ficou na FILA (delivered=False: o gate recusou digitar com o
     # picker aberto). Ate 01/09/2026 isto devolvia 200 — o app pintava a bolha como enviada e a

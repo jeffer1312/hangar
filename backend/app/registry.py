@@ -1290,7 +1290,7 @@ class SessionRegistry:
                 *[asyncio.to_thread(pergunta_aberta, _sid(i.jsonl)) for i in sem_menu],
                 return_exceptions=True)
             for info, q in zip(sem_menu, pends):
-                if isinstance(q, BaseException):
+                if isinstance(q, Exception):   # nao BaseException: CancelledError nao vira warning
                     _log.warning("askq: leitura da pergunta pendente falhou sessao=%s",
                                  info.name, exc_info=q)
                     continue
