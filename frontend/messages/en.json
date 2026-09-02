@@ -382,6 +382,7 @@
   "sessao_flash_retomar": "resume: {n}",
   "sessao_flash_excluir": "close: {n}",
   "sessao_flash_renomear": "rename: {n}",
+  "sessao_flash_avisos_conta": "account: {n}",
   "sessao_flash_branch": "branch: {n} — changes stashed (use \"pop\" in the Git tab to recover)",
   "sessao_flash_checkout": "checkout: {n}",
   "ctx_sem_painel": "No context panel open",

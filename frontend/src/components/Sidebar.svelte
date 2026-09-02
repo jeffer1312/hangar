@@ -286,8 +286,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                               engine?: string | null, model?: string | null, effort?: string | null,
                               permissionMode?: string | null) {
     // O CreateSessionSheet já posicionou o servidor-alvo como ativo (selectServer).
-    await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode);
+    const info = await createSession(name, cwd, configDir, provider, engine, model, effort, permissionMode);
     abrirSessaoDoSheet(name);
+    // Aviso da reconciliação da conta (plugin ligado sem instalação etc): antes só ia pro log do
+    // backend e a sessão abria "normal" sem o plugin. Texto vem pronto do backend.
+    if (info?.avisos?.length) flash(m.sessao_flash_avisos_conta({ n: info.avisos.join(' · ') }));
     // SSE stream emitirá a sessão nova automaticamente
   }
   // TODA saída do CreateSessionSheet passa por aqui — o create normal, o "continuar conversa" e a

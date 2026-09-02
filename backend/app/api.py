@@ -1565,7 +1565,8 @@ async def create_session(body: CreateBody):
                                    effort=body.effort, context_window=janela)
                         if body.permission_mode is not None:
                             _kw["permission_mode"] = body.permission_mode
-                        return await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
+                        info = await asyncio.to_thread(registry.create, body.name, body.cwd, body.config_dir, **_kw)
+                        return info.model_copy(update={"avisos": list(avisos)})
                     except ValueError as e:
                         raise HTTPException(409, str(e))
                 finally:

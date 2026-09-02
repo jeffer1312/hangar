@@ -57,6 +57,9 @@ export interface SessionInfo {
   // traduzido aqui (regra de i18n). Hoje só 'codex_hooks_nao_aprovados': sessão Codex com turno
   // andando no rollout e nenhum marcador de estado — sem isto ela apareceria ociosa trabalhando.
   problema?: string | null;
+  // Só na resposta do POST /api/sessions: avisos da reconciliação da conta (plugin ligado sem
+  // instalação, /model desfeito pelo principal). Texto já pronto do backend; a Sidebar mostra em flash.
+  avisos?: string[];
   // Feature #8 (rate-limit radar): banner de limite de uso detectado no pane (best-effort). limit_reset
   // = horario cru do reset ("3pm"/"15:30"), pro chip "limitado · HH:MM".
   limited?: boolean;

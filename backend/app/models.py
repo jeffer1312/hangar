@@ -103,6 +103,10 @@ class SessionInfo(BaseModel):
     # repo sem commits -> None (sem badge).
     git_added: Optional[int] = None
     git_removed: Optional[int] = None
+    # Só na resposta do POST /api/sessions: avisos da reconciliação da conta (plugin ligado sem
+    # instalação, /model desfeito pelo principal). Antes iam só pro log do backend e quem abria
+    # sessão pelo app nunca via.
+    avisos: list[str] = []
     # Estado vivo detalhado, pra a linha da lista ser acionável sem abrir a sessão (feature #1):
     label: Optional[str] = None          # working: texto do spinner ("Elucidating…")
     question: Optional[str] = None       # awaiting_input: a pergunta

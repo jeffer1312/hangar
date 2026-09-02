@@ -382,6 +382,7 @@
   "sessao_flash_retomar": "retomar: {n}",
   "sessao_flash_excluir": "fechar: {n}",
   "sessao_flash_renomear": "renomear: {n}",
+  "sessao_flash_avisos_conta": "conta: {n}",
   "sessao_flash_branch": "branch: {n} — mudanças guardadas (use \"pop\" na aba Git pra recuperar)",
   "sessao_flash_checkout": "checkout: {n}",
   "ctx_sem_painel": "Sem painel de contexto aberto",
