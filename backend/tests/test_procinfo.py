@@ -269,3 +269,17 @@ def test_pid_vivo_de_outro_dono_e_vivo(monkeypatch):
         raise PermissionError(1, "Operation not permitted")
     monkeypatch.setattr(os, "kill", _sem_permissao)
     assert procinfo.pid_vivo(os.getpid()) is True
+
+
+def test_descendant_pids_mapa_com_anel_termina():
+    """ppid reciclado no Windows fecha anel no mapa ppid->filhos: sem visitados o `while stack` nunca terminava e o `out` crescia sem fim.
+
+    Medido numa maquina Windows (2026-09-02): o psutil reporta ppid apontando pra PID ja reaproveitado e o grafo deixa de ser
+    arvore — cada `list()` recomeçava a varredura, 5 threads segurando o GIL e o backend sem atender HTTP.
+    """
+    anel = {1: [2], 2: [3], 3: [1]}          # 1 -> 2 -> 3 -> 1
+    assert sorted(procinfo._descendant_pids(1, anel)) == [1, 2, 3]
+    assert sorted(procinfo._descendant_pids(2, anel)) == [1, 2, 3]
+
+    auto_loop = {0: [0, 4], 4: [9]}          # System Idle e pai dele mesmo no Windows
+    assert sorted(procinfo._descendant_pids(0, auto_loop)) == [0, 4, 9]

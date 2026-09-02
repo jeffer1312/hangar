@@ -79,9 +79,13 @@ def _descendant_pids(root: int, children: Optional[dict[int, list[int]]] = None)
     # None, constroi sob demanda (caminho single-session do SSE).
     if children is None:
         children = _proc_children_map()
-    out, stack = [], [root]
+    out, vistos, stack = [], set(), [root]
     while stack:
         p = stack.pop()
+        if p in vistos:
+            # ppid reciclado no Windows fecha anel no mapa (ppid aponta pra PID reaproveitado e o grafo deixa de ser arvore; /proc no Linux nunca fecha anel
+            continue
+        vistos.add(p)
         out.append(p)
         stack.extend(children.get(p, []))
     return out

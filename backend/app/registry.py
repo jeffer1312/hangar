@@ -336,7 +336,8 @@ def provider_of_pane(pid, children: Optional[dict[int, list[int]]] = None) -> st
     Default "claude" preserva o comportamento anterior a esta funcao existir: pane nao reconhecido
     segue tratado como Claude, em vez de sumir da lista.
     """
-    if pid is None:
+    if not pid:
+        # pid 0 (System Idle no Windows) e pai dele mesmo no mapa do psutil e tem a arvore da maquina inteira embaixo — visitar ele custa um _cmdline por processo da maquina, a cada poll
         return "claude"
     for p in _descendant_pids(pid, children):
         cmd = _cmdline(p)
