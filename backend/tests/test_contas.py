@@ -158,6 +158,13 @@ def test_plugin_instalado_de_dentro_da_conta_sobrevive_ao_espelho(casa):
     assert [a for a in avisos if "enabledPlugins" in a], avisos   # desfez o humanizer: avisa
     # Segunda passada: nada a espelhar (os "plugin X ligado sem instalação" são de outra checagem).
     assert not [a for a in contas.reconciliar("conta2") if "enabledPlugins" in a]
+    # Plugin só ADICIONADO pelo principal não desfaz nada: sem aviso.
+    (casa / ".claude" / "settings.json").write_text(
+        '{"enabledPlugins":{"ecc@x":true,"humanizer@x":false,"outro@x":true}}', encoding="utf-8")
+    avisos = contas.reconciliar("conta2")
+    assert not [a for a in avisos if "enabledPlugins" in a], avisos
+    d = json.loads((p / "settings.json").read_text(encoding="utf-8"))
+    assert d["enabledPlugins"]["outro@x"] is True and d["enabledPlugins"]["novo@x"] is True
 
 
 def test_mcp_do_principal_chega_na_conta_antiga(casa):

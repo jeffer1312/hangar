@@ -373,7 +373,15 @@ def _espelhar_do_principal(alvo: Path, destino: Path) -> str | None:
             novo[k] = v
     if novo == para:
         return None
-    desfeitas = sorted(k for k in de if k in para and para[k] != novo[k])
+    def _desfez(k: str) -> bool:
+        if k not in para or para[k] == novo[k]:
+            return False
+        if k == "enabledPlugins" and isinstance(para[k], dict) and isinstance(de[k], dict):
+            # Plugin só adicionado pelo principal não desfaz nada; só conta o que mudou de valor.
+            return any(n in para[k] and para[k][n] != v for n, v in de[k].items())
+        return True
+
+    desfeitas = sorted(k for k in de if _desfez(k))
     para = novo
     # tmp+rename com pid+uuid, como o _ligar: um CLI vivo da conta lendo o arquivo no meio da
     # escrita receberia JSON truncado.
@@ -438,8 +446,12 @@ def _conferir_plugins(dir_conta: Path) -> list[str]:
     try:
         ligados = json.loads((dir_conta / "settings.json").read_text(encoding="utf-8")).get(
             "enabledPlugins") or {}
-    except (OSError, ValueError):
-        return []   # settings.json ausente ou inválido já foi tratado (ou vai ser) pelo espelho
+    except FileNotFoundError:
+        return []   # máquina nova: o principal não tinha settings.json pra semear
+    except (OSError, ValueError) as e:
+        # Cópia recém-semeada de um principal corrompido passa direto pelo copyfile sem parse;
+        # engolir aqui deixaria a conta abrir com settings quebrado e sem sinal nenhum.
+        raise ContaError(500, f"não consegui ler o settings.json da conta: {e}") from e
     if not isinstance(ligados, dict):
         return []
     registro = compartilhado() / "plugins" / "installed_plugins.json"
