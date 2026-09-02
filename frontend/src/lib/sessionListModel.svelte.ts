@@ -2,13 +2,15 @@
 // Lógica da lista de sessões compartilhada pelas duas views (Sidebar desktop, SessionList
 // celular). Só lógica: template e CSS continuam em cada view. Formato do sessionsStore — fábrica
 // com getters, sem destructuring (perderia a reatividade).
-import { serverColor } from './auth';
+import { broadcast } from './api';
+import { getActiveId, selectServer, serverColor } from './auth';
 import { sessionsStore } from './sessionsStore.svelte';
 import {
-  countAwaiting, effectiveGroupBy, projectKey, projectLabel, providerName,
+  countAwaiting, effectiveGroupBy, groupSelectedByServer, projectKey, projectLabel, providerName,
   sortSessions, type GroupBy,
 } from './format';
 import type { AggSession } from './types';
+import * as m from '../paraglide/messages';
 
 export type ListVariant = 'desktop' | 'mobile';
 
@@ -151,6 +153,65 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next].filter((k) => !k.startsWith('pair:')))); } catch { /* idem */ }
   }
 
+  // ── Seleção múltipla: broadcast (1 prompt pra N sessões) e comparar (grade lado a lado) ──
+  let selectMode = $state(false);
+  let selected = $state<Set<string>>(new Set());
+  let broadcastText = $state('');
+  let broadcastBusy = $state(false);
+  let broadcastMsg = $state('');
+  // Slash-command é roteado por sessão: replicar "/clear" pra N sessões de uma vez seria perigoso.
+  const broadcastIsSlash = $derived(broadcastText.trim().startsWith('/'));
+  const broadcastDisabled = $derived(broadcastBusy || selected.size === 0 || !broadcastText.trim() || broadcastIsSlash);
+  const compareDisabled = $derived(selected.size < 2);
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    selected = new Set();
+    broadcastText = '';
+    broadcastMsg = '';
+  }
+  function openSelectMode() { if (!selectMode) toggleSelectMode(); }
+  function toggleSelected(key: string) {
+    const next = new Set(selected);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    selected = next;
+  }
+  function selectGroupForBroadcast(g: Group) {
+    selectMode = true;
+    selected = new Set(g.sessions.filter((s) => s.tracked !== false).map(selectionKey));
+  }
+  function openCompare() {
+    const order = rules.compareOrder === 'groups' ? allSessions : rows;
+    opts.onCompare(order.filter((s) => selected.has(selectionKey(s))).map((s) => ({ serverId: s.serverId, name: s.name })));
+  }
+  async function sendBroadcast() {
+    const text = broadcastText.trim();
+    if (broadcastDisabled) return;
+    broadcastBusy = true;
+    broadcastMsg = '';
+    const byServer = groupSelectedByServer(allSessions, selected);
+    const prev = getActiveId();
+    const failed: string[] = [];
+    for (const [serverId, names] of byServer) {
+      selectServer(serverId);
+      try {
+        const results = await broadcast(names, text);
+        for (const [n, r] of Object.entries(results)) if (!r.ok) failed.push(n);
+      } catch {
+        failed.push(...names);   // servidor offline/erro de rede: o lote inteiro dele falhou
+      }
+    }
+    if (prev) selectServer(prev);
+    broadcastBusy = false;
+    if (failed.length) {
+      broadcastMsg = m.lista_broadcast_falha({ nomes: failed.join(', ') });
+    } else {
+      broadcastText = '';
+      selected = new Set();
+      selectMode = false;
+    }
+  }
+
   return {
     mount() { sessionsStore.retain(); return () => sessionsStore.release(); },
     get rows() { return rows; },
@@ -170,5 +231,15 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     get awaitingTotal() { return awaitingTotal; },
     setGroupBy,
     toggleGroup,
+    get selectMode() { return selectMode; },
+    get selected() { return selected; },
+    get broadcastText() { return broadcastText; },
+    set broadcastText(v: string) { broadcastText = v; },
+    get broadcastBusy() { return broadcastBusy; },
+    get broadcastMsg() { return broadcastMsg; },
+    get broadcastIsSlash() { return broadcastIsSlash; },
+    get broadcastDisabled() { return broadcastDisabled; },
+    get compareDisabled() { return compareDisabled; },
+    toggleSelectMode, openSelectMode, toggleSelected, selectGroupForBroadcast, openCompare, sendBroadcast,
   };
 }

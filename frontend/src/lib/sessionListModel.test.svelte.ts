@@ -159,3 +159,94 @@ describe('colapso de grupo', () => {
     expect(store.release).toHaveBeenCalledTimes(1);
   });
 });
+
+import { broadcast } from './api';
+import { selectServer } from './auth';
+import * as m from '../paraglide/messages';
+
+describe('seleção, broadcast e comparar (divergência #6 e #15)', () => {
+  beforeEach(() => {
+    localStorage.setItem('cp_group_by', 'server');
+    comServidores([
+      { id: 'srv-b', label: 'Beta', sessions: [sess('b1', 'srv-b')] },
+      { id: 'srv-a', label: 'Alfa', sessions: [sess('a1', 'srv-a'), sess('semid', 'srv-a', { tracked: false })] },
+    ]);
+  });
+  it('toggleSelectMode limpa seleção e texto; toggleSelected alterna a chave', () => {
+    const m1 = createSessionListModel(opts('desktop'));
+    m1.toggleSelectMode();
+    m1.toggleSelected('srv-a:a1'); m1.broadcastText = 'oi';
+    expect(m1.selected.has('srv-a:a1')).toBe(true);
+    m1.toggleSelectMode();
+    expect(m1.selectMode).toBe(false);
+    expect(m1.selected.size).toBe(0);
+    expect(m1.broadcastText).toBe('');
+    m1.openSelectMode(); m1.openSelectMode();
+    expect(m1.selectMode).toBe(true);
+  });
+  it('selectGroupForBroadcast marca o grupo inteiro menos "sem id"', () => {
+    const m1 = createSessionListModel(opts('mobile'));
+    m1.selectGroupForBroadcast(m1.groups.find((g) => g.label === 'Alfa')!);
+    expect([...m1.selected]).toEqual(['srv-a:a1']);
+    expect(m1.selectMode).toBe(true);
+  });
+  it('slash-command e seleção vazia desabilitam o envio; comparar pede 2+', () => {
+    const m1 = createSessionListModel(opts('desktop'));
+    m1.toggleSelectMode();
+    m1.broadcastText = '/clear';
+    expect(m1.broadcastDisabled).toBe(true);
+    m1.toggleSelected('srv-a:a1'); m1.broadcastText = 'oi';
+    expect(m1.broadcastDisabled).toBe(false);
+    expect(m1.compareDisabled).toBe(true);
+    m1.toggleSelected('srv-b:b1');
+    expect(m1.compareDisabled).toBe(false);
+  });
+  it('openCompare: por servidor as duas ordens coincidem (Beta antes de Alfa no store e nos grupos)', () => {
+    const od = opts('desktop'); const d = createSessionListModel(od);
+    d.toggleSelectMode(); d.toggleSelected('srv-a:a1'); d.toggleSelected('srv-b:b1');
+    d.openCompare();
+    expect(od.onCompare).toHaveBeenCalledWith([{ serverId: 'srv-b', name: 'b1' }, { serverId: 'srv-a', name: 'a1' }]);
+    const oc = opts('mobile'); const c = createSessionListModel(oc);
+    c.toggleSelectMode(); c.toggleSelected('srv-a:a1'); c.toggleSelected('srv-b:b1');
+    c.openCompare();
+    expect(oc.onCompare).toHaveBeenCalledWith([{ serverId: 'srv-b', name: 'b1' }, { serverId: 'srv-a', name: 'a1' }]);
+  });
+  it('sendBroadcast: uma chamada por servidor, restaura o ativo, agrega falhas por nome', async () => {
+    vi.mocked(broadcast).mockImplementation(async (names: string[]) =>
+      Object.fromEntries(names.map((n) => [n, { ok: n !== 'b1' }])) as any);
+    const m1 = createSessionListModel(opts('desktop'));
+    m1.toggleSelectMode(); m1.toggleSelected('srv-a:a1'); m1.toggleSelected('srv-b:b1');
+    m1.broadcastText = 'oi';
+    await m1.sendBroadcast();
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(selectServer).toHaveBeenLastCalledWith('srv-a');           // getActiveId mockado = 'srv-a'
+    expect(m1.broadcastMsg).toBe(m.lista_broadcast_falha({ nomes: 'b1' }));
+    expect(m1.selectMode).toBe(true);                                  // falhou: continua selecionando
+  });
+  it('sendBroadcast sem falha: limpa texto, seleção e sai do modo', async () => {
+    vi.mocked(broadcast).mockResolvedValue({ a1: { ok: true } } as any);
+    const m1 = createSessionListModel(opts('mobile'));
+    m1.toggleSelectMode(); m1.toggleSelected('srv-a:a1'); m1.broadcastText = 'oi';
+    await m1.sendBroadcast();
+    expect(m1.selectMode).toBe(false);
+    expect(m1.broadcastText).toBe('');
+  });
+  it('servidor offline (broadcast rejeita): o lote inteiro dele conta como falho', async () => {
+    vi.mocked(broadcast).mockRejectedValue(new Error('offline'));
+    const m1 = createSessionListModel(opts('desktop'));
+    m1.toggleSelectMode(); m1.toggleSelected('srv-a:a1'); m1.broadcastText = 'oi';
+    await m1.sendBroadcast();
+    expect(m1.broadcastMsg).toBe(m.lista_broadcast_falha({ nomes: 'a1' }));
+  });
+  // A diferença de regra só aparece quando o agrupamento reordena: por projeto.
+  it('compareOrder por projeto: desktop segue a ordem alfabética dos grupos, celular a das rows', () => {
+    localStorage.setItem('cp_group_by', 'project');
+    store.byServer[0].sessions[0].cwd = '/w/zz'; store.byServer[1].sessions[0].cwd = '/w/aa';
+    const od = opts('desktop'); const d = createSessionListModel(od);
+    d.toggleSelectMode(); d.toggleSelected('srv-a:a1'); d.toggleSelected('srv-b:b1'); d.openCompare();
+    expect(od.onCompare).toHaveBeenCalledWith([{ serverId: 'srv-a', name: 'a1' }, { serverId: 'srv-b', name: 'b1' }]);
+    const oc = opts('mobile'); const c = createSessionListModel(oc);
+    c.toggleSelectMode(); c.toggleSelected('srv-a:a1'); c.toggleSelected('srv-b:b1'); c.openCompare();
+    expect(oc.onCompare).toHaveBeenCalledWith([{ serverId: 'srv-b', name: 'b1' }, { serverId: 'srv-a', name: 'a1' }]);
+  });
+});
