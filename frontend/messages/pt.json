@@ -1791,6 +1791,7 @@
   "erro_sem_resposta": "sem resposta",
   "erro_drive_sem_fallback": "drive falhou ({erro}) e não há texto de fallback — responda no terminal",
   "erro_drive_fallback_falhou": "drive falhou e fallback por texto também: {erro}",
+  "erro_resposta_nao_entregue": "não consegui responder por aqui — a pergunta segue aberta, responda no terminal",
   "erro_sem_confirmacao_resposta": "resposta enviada, mas não deu pra confirmar a tempo — confira na sessão antes de responder de novo",
   "erro_motor_ausente": "motor '{nome}' não está mais no engines.json",
   "erro_provedor_offline": "o provedor do motor '{nome}' não respondeu: {erro}",

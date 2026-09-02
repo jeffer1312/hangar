@@ -7,6 +7,7 @@ import time
 from typing import AsyncIterator, Callable, Optional
 
 from app import tmux
+from app.askquestion import pergunta_aberta
 from app.hook_state import hook_state
 from app.models import StateEvent
 from app.statusline import read as _sidecar_status
@@ -615,6 +616,18 @@ class StateMonitor:
                 aprov = await asyncio.to_thread(aprovacao_kimi, self.transcript_get(), lambda: pane)
                 if aprov is not None:
                     state, label, question, options = "awaiting_input", None, aprov[0], aprov[1]
+
+            # AskUserQuestion que ROLOU PRA FORA da area visivel: a TUI imprimiu texto longo (um
+            # recado de outra sessao) sem levar a viewport pro fim, o menu ficou abaixo do que o
+            # pane mostra e a sessao aparecia `idle` — pergunta feita, ninguem avisado. O sidecar do
+            # hook nao depende do que coube na tela. So quando o pane nao tem menu NENHUM: com menu
+            # visivel quem manda e ele, que e a leitura de sempre.
+            if state != "awaiting_input" and not options and self.sid_get is not None:
+                pend = await asyncio.to_thread(pergunta_aberta, self.sid_get())
+                if pend is not None:
+                    q = pend.questions[0]
+                    state, label = "awaiting_input", None
+                    question, options = q.question, [o.label for o in q.options]
 
             if state == "awaiting_input":
                 # Menu real (AskUserQuestion/permissão) -> estado autoritativo, sem debounce.

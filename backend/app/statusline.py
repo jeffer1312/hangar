@@ -35,7 +35,9 @@ _dirs_cache: tuple[float, list[Path]] = (0.0, [])
 _DIRS_TTL = 60.0
 
 
-def _dirs() -> list[Path]:
+def dirs_de_config() -> list[Path]:
+    """Config dirs onde um sidecar de sessao pode estar. Publica porque o askquestion tambem
+    procura por stem, e refazer o glob la sairia sem este cache."""
     global _dirs_cache
     now = time.monotonic()
     if now - _dirs_cache[0] < _DIRS_TTL and _dirs_cache[1]:
@@ -52,7 +54,7 @@ def read(stem: Optional[str]) -> Optional[str]:
     """Linha inteira publicada pela sessao `stem`, ou None (o caller cai no pane)."""
     if not stem:
         return None
-    for base in _dirs():
+    for base in dirs_de_config():
         f = base / _SUBDIR / f"{stem}.json"
         try:
             o = json.loads(f.read_text(encoding="utf-8"))

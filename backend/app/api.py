@@ -4883,6 +4883,17 @@ def answer(name: str, body: AnswerBody):
             res = _send_one(name, text)
             if not res["ok"]:
                 raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
+            if not res.get("delivered"):
+                # Texto ACEITO pela fila mas NAO digitado (o gate recusou: picker ainda aberto). Ate
+                # 01/09/2026 isto devolvia ok=true e o app pintava a bolha como enviada — a pessoa
+                # ficava esperando uma resposta que nunca sairia da fila, porque a fila so drena
+                # quando a sessao deixa de estar aguardando, e quem a segurava era esta pergunta.
+                # Nem limpa o sidecar: a pergunta continua aberta, e apaga-lo devolveria a sessao
+                # pra `idle` na lista (ver askquestion.pergunta_aberta).
+                _log.warning("ASKQ fallback name=%s: texto ficou na fila, nao digitado", name)
+                raise HTTPException(409, detail=erro(
+                    "erro_resposta_nao_entregue",
+                    "nao consegui responder por aqui — a pergunta segue aberta, responda no terminal"))
         fallback = True
     # Respondido: limpa o sidecar do hook pra um stale nao reabrir o stepper depois. Resolve o jsonl
     # igual aos outros endpoints; se nao resolver, pula a limpeza sem falhar a request.

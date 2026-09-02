@@ -1516,7 +1516,8 @@ def test_answer_drive_error_falls_back_to_text(api_client):
          patch("app.api.registry.list", return_value=[info]), \
          patch.object(api_mod, "read_pending_askq", return_value=None), \
          patch.object(api_mod.terminal, "interrupt") as intr, \
-         patch.object(api_mod, "_send_one", return_value={"ok": True, "error": None}) as send, \
+         patch.object(api_mod, "_send_one",
+                      return_value={"ok": True, "error": None, "delivered": True}) as send, \
          patch.object(api_mod, "clear_pending_askq") as clear:
         r = api_client.post("/api/sessions/s1/answer", headers=_h(),
                             json={"answers": [{"kind": "option", "indices": [1], "labels": ["Sim"]}]})
@@ -1524,6 +1525,27 @@ def test_answer_drive_error_falls_back_to_text(api_client):
     intr.assert_called_once_with("s1")
     assert "Sim" in send.call_args[0][1]
     clear.assert_called_once()
+
+
+def test_answer_fallback_que_so_enfileirou_nao_diz_que_respondeu(api_client):
+    # Drive falhou E o texto do plano B ficou na FILA (delivered=False: o gate recusou digitar com o
+    # picker aberto). Ate 01/09/2026 isto devolvia 200 — o app pintava a bolha como enviada e a
+    # pessoa esperava por uma resposta que nunca sairia da fila, ja que quem segurava a fila era a
+    # propria pergunta. Agora e 409, e o sidecar NAO e limpo: a pergunta continua aberta, e apaga-lo
+    # devolveria a sessao pra `idle` na lista.
+    info = SessionInfo(name="s1", cwd="/x", jsonl="/x/u.jsonl")
+    with patch.object(ti_mod, "answer_questions", side_effect=ti_mod.DriveError("picker preso")), \
+         patch("app.api.registry.list", return_value=[info]), \
+         patch.object(api_mod, "read_pending_askq", return_value=None), \
+         patch.object(api_mod.terminal, "interrupt"), \
+         patch.object(api_mod, "_send_one",
+                      return_value={"ok": True, "error": None, "delivered": False}), \
+         patch.object(api_mod, "clear_pending_askq") as clear:
+        r = api_client.post("/api/sessions/s1/answer", headers=_h(),
+                            json={"answers": [{"kind": "option", "indices": [1], "labels": ["Sim"]}]})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_resposta_nao_entregue"
+    clear.assert_not_called()
 
 
 def test_answer_validation_error_still_409(api_client):

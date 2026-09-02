@@ -20,7 +20,7 @@ from app.pqueue import PromptQueue
 from app.chain import ThenLink
 from app.pair import PairLink, rename_pair, leave as pair_leave
 from app.adapters.codex import sessions as codex_sessions
-from app.askquestion import clear_pending_askq
+from app.askquestion import clear_pending_askq, pergunta_aberta
 from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
                        aprovacao_kimi, codex_turno_aberto, status_line as _pane_status)
 from app.statusline import read as _sidecar_status
@@ -1276,6 +1276,23 @@ class SessionRegistry:
                 # Statusline + label de graca: o frame ja foi capturado pra classificar.
                 self._status_cache[info.name] = (time.monotonic(), _pane_status(frame))
                 self._label_cache[info.name] = c[1]
+        # Pergunta que o pane nao mostra (o menu rolou pra fora — ver askquestion.pergunta_aberta).
+        # FORA dos dois ramos acima de proposito: com marcador de hook a sessao nem raspa o pane, e
+        # era justamente ali que a pergunta sumia. So pras que ficaram SEM menu — com menu visivel
+        # quem manda e o pane. Em thread e em lote, como as capturas: le disco, e isto e awaitado
+        # direto no event loop (mesma regra do git status em _decorate_git).
+        sem_menu = [i for i in infos
+                    if i.state != "awaiting_input" and not getattr(i, "options", None) and i.jsonl]
+        if sem_menu:
+            pends = await asyncio.gather(
+                *[asyncio.to_thread(pergunta_aberta, _sid(i.jsonl)) for i in sem_menu])
+            for info, q in zip(sem_menu, pends):
+                if q is None:
+                    continue
+                info.state = "awaiting_input"
+                info.label = None
+                info.question = q.questions[0].question
+                info.options = [o.label for o in q.questions[0].options]
         # Statusline pros cards (modelo/contexto/⚡5h/📅7d): cache com TTL — capturar o pane de TODAS
         # por tick seria a tempestade de forks que o fast-path de marcador evita. No maximo
         # _STATUS_BUDGET capturas por chamada, das entradas mais VELHAS do cache; quem foi raspada

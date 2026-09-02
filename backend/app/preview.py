@@ -10,7 +10,7 @@ from app.state import _RULE_RE, _is_boundary, _live_spinner
 # _dirs: MESMO cache de diretorios de config que a statusline usa, e pelo mesmo motivo (roda por
 # sessao, a cada poll). Reusado em vez de copiado — sao os mesmos diretorios e a mesma chave (o stem
 # do .jsonl); duas copias so dariam a chance de uma envelhecer.
-from app.statusline import _dirs as _config_dirs
+from app.statusline import dirs_de_config as _config_dirs
 
 _log = logging.getLogger("hangar.preview")
 

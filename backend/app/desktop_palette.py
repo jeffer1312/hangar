@@ -24,7 +24,7 @@ _log = logging.getLogger(__name__)
 
 def _caminho() -> Path:
     # Funcao, e nao constante, porque o teste troca o caminho por monkeypatch — mesma costura de
-    # `statusline._dirs`.
+    # `statusline.dirs_de_config`.
     return Path.home() / ".local/state/quickshell/user/generated/material_colors.scss"
 
 

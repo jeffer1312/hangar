@@ -4,8 +4,11 @@ import re
 import threading
 import time
 
+from pathlib import Path
+
 from app import agentpane
 from app import kimi_models
+from app.askquestion import pergunta_aberta
 from app import model_picker as mp
 from app import pi_inbox
 from app import tmux
@@ -635,6 +638,12 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     # ECC: cheap-check SEM subprocess primeiro — a maioria das reconexoes nao tem pendencia; sem isto,
     # todo (re)connect dispararia um capture-pane atoa (pressao no threadpool em rajada de mobile).
     if not any(e.get("delivered") is False for e in q.load()):
+        return 0
+    # Pergunta aberta que o pane nao mostra (o menu rolou pra fora — ver askquestion.pergunta_aberta):
+    # o gate do send_prompt le o pane e deixaria passar, e as teclas do recado navegariam o picker.
+    # Fica na fila; o drain volta quando a pergunta for respondida.
+    if pergunta_aberta(Path(jsonl).stem) is not None:
+        _log.debug("drain name=%s: pergunta pendente fora da tela, fila segura", name)
         return 0
     # Poda por DUAS idades, vale a mais nova: (a) inicio do transcript (pre-/clear cria transcript
     # novo); (b) nascimento do tmux atual — sem ele, um resume (`pi -c`) reusa transcript VELHO e

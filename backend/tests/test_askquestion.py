@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
-from app.askquestion import read_pending_askq, clear_pending_askq
+from app import askquestion
+from app.askquestion import read_pending_askq, clear_pending_askq, pergunta_aberta
 from app.models import StateEvent
 from app.sse import _ask_question_event
 
@@ -196,3 +197,73 @@ def test_ask_question_event_preview_loga_quando_reprova(tmp_path, caplog):
             _state_json("awaiting_input", options=["Sim", "Nao"]), jsonl) is None
     assert "sidecar com preview nao casa o menu" in caplog.text
     assert "Sim" in caplog.text and "System no topo" in caplog.text
+
+
+# ── pergunta_aberta: a pergunta que o pane NAO mostra ──────────────────────────────────────────
+# Cenario medido em 01/09/2026: a TUI imprimiu um recado longo de outra sessao sem levar a viewport
+# pro fim, o menu do AskUserQuestion ficou abaixo da area visivel, o classify nao viu menu nenhum e
+# a sessao ficou `idle` — pergunta feita, celular sem stepper e sem badge. Aqui a fonte e o sidecar
+# do hook, e quem diz se ela ja foi respondida e o transcript, nunca a tela.
+
+def _transcript(jsonl: str, linhas: list[dict]) -> None:
+    Path(jsonl).write_text(
+        "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in linhas), encoding="utf-8")
+
+
+def _resposta(quando: str, tool_id: str = "toolu_1") -> list[dict]:
+    """As duas entradas que RESPONDER grava: o tool_use do AskUserQuestion e o tool_result dele."""
+    return [
+        {"type": "assistant", "timestamp": quando,
+         "message": {"content": [{"type": "tool_use", "id": tool_id, "name": "AskUserQuestion"}]}},
+        {"type": "user", "timestamp": quando,
+         "message": {"content": [{"type": "tool_result", "tool_use_id": tool_id}]}},
+    ]
+
+
+def _aponta(monkeypatch, tmp_path) -> None:
+    from app import statusline
+    monkeypatch.setattr(statusline, "dirs_de_config", lambda: [tmp_path])
+
+
+def test_pergunta_aberta_quando_transcript_nao_tem_resposta(tmp_path, monkeypatch):
+    jsonl, _ = _layout(tmp_path)
+    _transcript(jsonl, [{"type": "assistant", "timestamp": "2026-09-01T17:27:13.000Z",
+                         "message": {"content": [{"type": "text", "text": "oi"}]}}])
+    _aponta(monkeypatch, tmp_path)
+    out = pergunta_aberta("sess-123")
+    assert out is not None
+    assert out.questions[0].question == "Escolha"
+
+
+def test_pergunta_respondida_pela_tui_nao_reabre(tmp_path, monkeypatch):
+    # O sidecar NAO e apagado quando a resposta vem pelo terminal (so no /answer). Sem olhar o
+    # transcript, toda sessao que ja respondeu uma pergunta ficaria presa em awaiting_input.
+    jsonl, _ = _layout(tmp_path)
+    _transcript(jsonl, _resposta("2036-01-01T00:00:00.000Z"))   # bem depois do mtime do sidecar
+    _aponta(monkeypatch, tmp_path)
+    assert pergunta_aberta("sess-123") is None
+
+
+def test_resposta_anterior_ao_sidecar_nao_esconde_a_pergunta_nova(tmp_path, monkeypatch):
+    # Pergunta velha respondida + pergunta nova pendente: o tool_result esta no transcript, mas e de
+    # antes do sidecar. Comparar por presenca, e nao por tempo, engoliria a pergunta atual.
+    jsonl, _ = _layout(tmp_path)
+    _transcript(jsonl, _resposta("2020-01-01T00:00:00.000Z"))
+    _aponta(monkeypatch, tmp_path)
+    assert pergunta_aberta("sess-123") is not None
+
+
+def test_sem_sidecar_e_sem_stem_nao_ha_pergunta(tmp_path, monkeypatch):
+    _layout(tmp_path, write_sidecar=False)
+    _aponta(monkeypatch, tmp_path)
+    assert pergunta_aberta("sess-123") is None
+    assert pergunta_aberta(None) is None
+
+
+def test_transcript_ilegivel_nao_inventa_pergunta(tmp_path, monkeypatch):
+    # Sidecar aponta pra transcript que sumiu: sem como provar que segue aberta, cala — mostrar
+    # pergunta ja respondida e pior que nao mostrar (que e o comportamento de sempre).
+    jsonl, _ = _layout(tmp_path)
+    Path(jsonl).unlink(missing_ok=True)
+    _aponta(monkeypatch, tmp_path)
+    assert pergunta_aberta("sess-123") is None

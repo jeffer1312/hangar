@@ -1791,6 +1791,7 @@
   "erro_sem_resposta": "no answer",
   "erro_drive_sem_fallback": "drive failed ({erro}) and there's no fallback text — answer in the terminal",
   "erro_drive_fallback_falhou": "drive failed and text fallback too: {erro}",
+  "erro_resposta_nao_entregue": "couldn't answer from here — the question is still open, answer in the terminal",
   "erro_sem_confirmacao_resposta": "answer sent, but couldn't confirm in time — check the session before answering again",
   "erro_motor_ausente": "engine '{nome}' is no longer in engines.json",
   "erro_provedor_offline": "the engine's provider '{nome}' didn't respond: {erro}",
