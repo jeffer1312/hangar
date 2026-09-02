@@ -25,11 +25,32 @@ $ErrorActionPreference = 'Stop'
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pendencias = @()
 
-function Titulo($m) { Write-Host "`n$m" -ForegroundColor Cyan }
+function Titulo($m) {
+    # Título numerado ("3/8 ...", "5d/8 ...") ganha a barra de progresso; os demais seguem sem.
+    if ($m -match '^(\d+)[a-z]?/8\s') {
+        $barra = ('#' * [int]$Matches[1]).PadRight(8, '-')
+        Write-Host ("`n  [{0}] {1}" -f $barra, $m) -ForegroundColor Cyan
+    } else {
+        Write-Host "`n$m" -ForegroundColor Cyan
+    }
+}
 function Ok($m)     { Write-Host "  ok  $m" -ForegroundColor Green }
 function Nota($m)   { Write-Host "      $m" -ForegroundColor DarkGray }
 function Falta($m)  { Write-Host "  --  $m" -ForegroundColor Yellow }
 function Erro($m)   { Write-Host "  X   $m" -ForegroundColor Red }
+
+function Pare($mensagem, $dicas) {
+    # Parada de passo ESSENCIAL: os passos seguintes dependem deste, e seguir adiante só
+    # enterrava a causa. Extra opcional que falhou NÃO passa por aqui — vai pro `$pendencias`
+    # e o portão do fim diz "NAO terminou".
+    Erro $mensagem
+    foreach ($d in $dicas) { Nota $d }
+    Nota 'instalacao interrompida neste passo. Re-rodar continua de onde parou.'
+    # Sem a pausa, a janela aberta por duplo clique FECHA e ninguém lê o motivo — o mesmo
+    # cuidado do Read-Host do fim.
+    if ($script:Interativo -and -not $Update) { Read-Host '  Enter pra fechar' | Out-Null }
+    exit 1
+}
 
 # Da pra PERGUNTAR alguma coisa nesta execucao? Medido em 21/08/2026 nesta VM: com o stdin vindo
 # de um pipe — que e o caso de `irm ... | iex` chamado por outro processo, e de qualquer execucao
@@ -276,6 +297,15 @@ if (-not (Tem 'winget')) {
     exit 1
 }
 
+if (-not $Update) {
+    Write-Host ''
+    Write-Host '  +--------------------------------------------------+'
+    Write-Host '  |  hangar - instalacao                             |'
+    Write-Host '  |  cada etapa prova o que fez antes da proxima;    |'
+    Write-Host '  |  se algo falhar, eu paro ali e digo o conserto   |'
+    Write-Host '  +--------------------------------------------------+'
+}
+
 # -- 1/8 Dependencias obrigatorias -------------------------------------------
 Titulo '1/8 Dependencias'
 Instale 'psmux (multiplexador)' 'psmux'  'marlocarlo.psmux'     'sem ele nao existe sessao' | Out-Null
@@ -331,7 +361,8 @@ if ($pendencias.Count -gt 0) { Erro "faltam: $($pendencias -join ', ')"; exit 1 
 # -- 2/8 Backend -------------------------------------------------------------
 Titulo '2/8 Backend'
 Push-Location "$raiz\backend"
-uv sync --quiet
+$rcSync = Nativo uv sync --quiet
+if ($rcSync -ne 0) { Pop-Location; Pare 'uv sync falhou - o backend ficou sem as dependencias' @('rodar na mao:  cd backend ; uv sync') }
 Ok 'dependencias instaladas'
 Nota 'psutil entra aqui: no Windows nao ha /proc pra ler informacao de processo'
 Pop-Location
@@ -453,6 +484,8 @@ if ($temToken) {
     Set-EnvKey -Chave 'CP_AUTH_TOKEN' -Valor $token
     Ok 'CP_AUTH_TOKEN gravado em backend\.env'
 }
+# Prova, não ausência de erro: o passo inteiro vale zero se o token não estiver de fato no arquivo.
+if (-not (Token-Do-Env)) { Pare 'o token nao foi gravado em backend\.env - sem ele o celular nao entra' @() }
 Nota 'E esse token que voce digita no celular na primeira conexao.'
 
 # -- 4/8 Frontend ------------------------------------------------------------
@@ -1110,6 +1143,25 @@ $portaBack = Porta-Do-Env 'CP_PORT' 8765
 # Em FUNCAO, nao inline: o passo 6 chama de novo depois de instalar/logar o Tailscale, pra que
 # quem instalou por aqui nao termine com o QR em 127.0.0.1 e precise lembrar de re-rodar tudo.
 # Le $portaBack/$envFile do escopo do script e grava $script:cpPublicUrl - mesmo contrato de antes.
+function Get-Proxy443 {
+    # O proxy que a raiz do :443 aponta, ou $null. FILTRA por :443 de propósito: o `Web` do serve
+    # status e um mapa "host:porta" -> Handlers, e esta maquina pode ter OUTRO slot publicado — o
+    # preview de projeto usa o 10000 (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo
+    # `/` faria o proxy do 10000 passar por "ja publica o backend", e o 443 nunca ser configurado.
+    # O mesmo filtro existe em tunnel.py:71-73, e e por isso que ele existe la.
+    try {
+        $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
+        if ($sv -and $sv.Web) {
+            foreach ($p in $sv.Web.PSObject.Properties) {
+                if ($p.Name -notmatch ':443$') { continue }
+                foreach ($h in $p.Value.Handlers.PSObject.Properties) {
+                    if ($h.Name -eq '/') { return $h.Value.Proxy }
+                }
+            }
+        }
+    } catch { }
+    return $null
+}
 function Publica-Tailscale {
     if (-not (Tem 'tailscale')) {
         Nota 'tailscale nao instalado - pulando (o acesso de fora fica por sua conta)'
@@ -1134,23 +1186,7 @@ function Publica-Tailscale {
             if (-not $dns) {
                 Nota 'tailscale sem nome de no (nao logado?) - rode `tailscale up` e re-rode este instalador'
             } else {
-                # FILTRA por :443. O `Web` do serve status e um mapa "host:porta" -> Handlers, e esta
-                # maquina pode ter OUTRO slot publicado — o preview de projeto usa o 10000
-                # (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo `/` faria o proxy do 10000
-                # passar por "ja publica o backend", e o 443 nunca ser configurado. O mesmo filtro existe
-                # em tunnel.py:71-73, e e por isso que ele existe la.
-                $proxy443 = $null
-                try {
-                    $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
-                    if ($sv -and $sv.Web) {
-                        foreach ($p in $sv.Web.PSObject.Properties) {
-                            if ($p.Name -notmatch ':443$') { continue }
-                            foreach ($h in $p.Value.Handlers.PSObject.Properties) {
-                                if ($h.Name -eq '/') { $proxy443 = $h.Value.Proxy }
-                            }
-                        }
-                    }
-                } catch { }
+                $proxy443 = Get-Proxy443
                 # Compara PORTA, nao string: o tailscale normaliza o alvo, entao "localhost:8765" e
                 # "http://127.0.0.1:8765" descrevem a mesma coisa e uma comparacao literal diria que
                 # precisa reconfigurar a cada rodada. Mesmo criterio do tunnel._port_from_proxy.
@@ -1165,15 +1201,43 @@ function Publica-Tailscale {
                     Falta "tailscale ja publica '$proxy443' na raiz - NAO vou sobrescrever; ajuste na mao se quiser o backend ali"
                 } else {
                     $saida = (& tailscale serve --bg --https=443 "localhost:$portaBack" 2>&1 | Out-String)
-                    if ($LASTEXITCODE -eq 0) {
-                        Ok "tailscale publicando o backend (localhost:$portaBack)"
-                        $script:cpPublicUrl = "https://$dns"
+                    $falha = $null
+                    if ($LASTEXITCODE -ne 0) {
+                        $falha = $saida.Trim()
                     } else {
+                        # EVIDENCIA POSITIVA, como no build do front: exit 0 e necessario mas nao
+                        # basta. A prova e o status relido mostrando a raiz do :443 na nossa porta.
+                        $proxyProva = Get-Proxy443
+                        $portaProva = $null
+                        if ($proxyProva -match ':(\d+)/?$') { $portaProva = [int]$Matches[1] }
+                        if ($portaProva -eq $portaBack) {
+                            Ok "tailscale publicando o backend (localhost:$portaBack)"
+                            $script:cpPublicUrl = "https://$dns"
+                        } else {
+                            $falha = "o serve aceitou o comando, mas o status nao mostra a raiz do :443 apontando pra porta $portaBack"
+                        }
+                    }
+                    if ($falha) {
                         # A saida diz a causa real (permissao, HTTPS nao habilitado no tailnet); sem ela
                         # sobraria chutar numa lista de tres. Se for permissao, o caminho e o mesmo que o
                         # bloco de firewall ja ensina: abrir um PowerShell como Administrador.
-                        Falta "tailscale serve falhou: $($saida.Trim())"
-                        Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                        Falta "tailscale serve falhou: $falha"
+                        if ($falha -match '(?i)https') {
+                            Nota 'HTTPS nao esta habilitado no tailnet: entre em https://login.tailscale.com/admin/dns,'
+                            Nota 'ligue o MagicDNS, habilite o HTTPS e rode este instalador de novo.'
+                        } else {
+                            Nota 'Se falou em permissao/acesso negado: abra um PowerShell como Administrador e rode este instalador de novo.'
+                        }
+                        # A falha ENTRA no $pendencias, e o portao do fim responde "NAO terminou":
+                        # instalacoes inteiras sairam "Pronto" com o serve quebrado porque isto so
+                        # imprimia amarelo no meio da tela. No -Update nao: falhar ali derrubaria a
+                        # atualizacao do app por causa de um extra; a marca ##HANGAR-AVISO## leva o
+                        # aviso pra tela do Atualizar.
+                        if ($Update) {
+                            Write-Host '##HANGAR-AVISO## o backend nao foi publicado no Tailscale (serve falhou)'
+                        } else {
+                            $script:pendencias += 'tailscale serve'
+                        }
                     }
                 }
                 if ($script:cpPublicUrl) {
@@ -2113,6 +2177,9 @@ if ($pendencias.Count -gt 0) {
 
   Resolva o que esta na lista e rode de novo:  .\install.ps1 -Update
 "@
+    # A mesma pausa do fim feliz: sem ela, a janela aberta por duplo clique fecha no exit e
+    # ninguem le o que faltou.
+    if ($script:Interativo -and -not $Update) { Read-Host '  Enter pra fechar' | Out-Null }
     exit 1
 }
 Titulo 'Pronto'

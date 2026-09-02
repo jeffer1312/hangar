@@ -35,12 +35,50 @@ for arg in "$@"; do
   esac
 done
 
-say()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+say() {
+  # Título numerado ("3/8 ...") ganha a barra de progresso; os demais seguem só em negrito.
+  local t="$*"
+  if [[ $t =~ ^([0-9]+)/8\  ]]; then
+    local n=${BASH_REMATCH[1]}
+    printf '\n  \033[1;36m[%s%s] %s\033[0m\n' \
+      "$(printf '%*s' "$n" '' | tr ' ' '#')" "$(printf '%*s' "$((8-n))" '' | tr ' ' '-')" "$t"
+  else
+    printf '\n\033[1m%s\033[0m\n' "$t"
+  fi
+}
 ok()   { printf '  \033[32mok\033[0m  %s\n' "$*"; }
 nota() { printf '      \033[2m%s\033[0m\n' "$*"; }
 falta(){ printf '  \033[33m--\033[0m  %s\n' "$*"; }
 erro() { printf '  \033[31mX\033[0m   %s\n' "$*"; }
 fail() { erro "$*"; exit 1; }
+
+# Duas gravidades, e a diferença é o que acontece com os passos seguintes:
+#  - ESSENCIAL falhou -> para na hora (fail): backend, token e frontend sustentam todos os
+#    passos seguintes, e seguir adiante só enterrava a causa;
+#  - EXTRA que a pessoa PEDIU falhou -> anota_problema: o app funciona sem ele, mas a falha
+#    entra na lista do fim, que diz "terminou com pendências" em vez de "Pronto". Falha que só
+#    imprime amarelo e some foi como instalações inteiras saíram com o Tailscale sem publicar
+#    e ninguém soube na hora.
+PROBLEMAS=()
+anota_problema() { erro "$1"; PROBLEMAS+=("$1"); }
+
+gira() { # gira <rótulo> <comando...>: spinner enquanto roda; sem TTY (ou --update), saída direta
+  local rotulo=$1; shift
+  if [ "$TEM_TTY" = 0 ] || [ "$UPDATE" = 1 ]; then "$@"; return $?; fi
+  local tmp; tmp=$(mktemp)
+  "$@" >"$tmp" 2>&1 &
+  local pid=$! quadros='-\|/' i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r  %s %s ' "${quadros:$i:1}" "$rotulo"
+    i=$(( (i+1) % 4 ))
+    sleep 0.2
+  done
+  local rc=0; wait "$pid" || rc=$?
+  printf '\r\033[K'
+  if [ "$rc" != 0 ]; then cat "$tmp"; fi   # falhou: devolve a saída que o spinner escondeu
+  rm -f "$tmp"
+  return "$rc"
+}
 
 # Toda pergunta lê do TERMINAL, nunca do stdin do script. Sob `curl … | bash` (e sob o
 # bootstrap.sh) o stdin é o cano do curl: um `read` normal recebia EOF na hora, devolvia string
@@ -78,6 +116,15 @@ detecta_pkg() {
   done
 }
 PKG=$(detecta_pkg)
+
+if [ "$UPDATE" = 0 ] && [ "$CHECK" = 0 ]; then
+  echo
+  echo "  +--------------------------------------------------+"
+  echo "  |  hangar — instalacao                             |"
+  echo "  |  cada etapa prova o que fez antes da proxima;    |"
+  echo "  |  se algo falhar, eu paro ali e digo o conserto   |"
+  echo "  +--------------------------------------------------+"
+fi
 
 # Instala o que cai no $HOME sem root. Separado de propósito do tier que precisa de sudo:
 # um instalador que pede senha sem avisar é como se perde a confiança de quem está rodando.
@@ -149,7 +196,7 @@ fi
 
 # ── 2/8 Backend ──────────────────────────────────────────────────────────────
 say "2/8 Backend"
-(cd backend && uv sync --quiet)
+(cd backend && uv sync --quiet) || fail "uv sync falhou — o backend ficou sem as dependências"
 ok "dependências instaladas"
 nota "psutil NÃO entra aqui: no Linux existe /proc e ele é mais rápido (ver app/procinfo.py)"
 
@@ -190,6 +237,9 @@ else
   printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
   ok "CP_AUTH_TOKEN gravado em backend/.env"
 fi
+# Prova, não ausência de erro: o passo inteiro vale zero se o token não estiver de fato no arquivo.
+grep -q '^CP_AUTH_TOKEN=.\{8,\}' backend/.env 2>/dev/null \
+  || fail "o token não foi gravado em backend/.env — sem ele o celular não entra"
 nota "É esse token que você digita no celular na primeira conexão."
 
 # ── 4/8 Frontend ─────────────────────────────────────────────────────────────
@@ -241,8 +291,10 @@ else
   QUIETO=--silent; [ "$UPDATE" = 1 ] && QUIETO=
   # A flag vai ANTES do nome do script: no npm 11 `npm run build --silent` não é mais consumida
   # pelo npm, ela é repassada ao script e chega no `vite build`, que morre com CACError.
-  (cd frontend && npm ci $QUIETO && npm run $QUIETO build)
-  ok "buildado em frontend/dist/"
+  build_front() { (cd frontend && npm ci $QUIETO && npm run $QUIETO build); }
+  gira "npm ci + build do frontend" build_front \
+    && [ -f "$DIST" ] && ok "buildado em frontend/dist/" \
+    || fail "o build do frontend falhou — corrige o erro acima e re-roda (ele continua de onde parou)"
 fi
 fi
 
@@ -261,7 +313,8 @@ if [ -d shell ] && [ -f shell/package.json ]; then
   if [ ! -f "$MARCA_SHELL" ] || [ shell/package-lock.json -nt "$MARCA_SHELL" ]; then
     say "Janela nativa (Electron)"
     QUIETO_SHELL=--silent; [ "$UPDATE" = 1 ] && QUIETO_SHELL=
-    if (cd shell && npm ci $QUIETO_SHELL); then
+    build_shell() { (cd shell && npm ci $QUIETO_SHELL); }
+    if gira "npm ci da janela nativa" build_shell; then
       ok "dependências da janela instaladas"
     else
       # Não derruba a atualização: o app funciona no navegador sem a janela nativa.
@@ -288,11 +341,11 @@ say "5/8 Wrappers do claude e do codex"
 # que um `git pull` sozinho não atualiza. Eles são idempotentes, então re-rodar é barato; o que
 # não pode voltar é perguntar S/n pro que já está de pé.
 if [ -e "$HOME/.local/bin/hangar-engine" ]; then
-  ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados" || erro "wrappers do claude/codex falharam ao atualizar"
+  ./scripts/install-claude-wrapper.sh >/dev/null && ok "wrappers atualizados" || anota_problema "wrappers do claude/codex falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$WRAPPER" = 1 ] && ask "Instalar (recomendado)?"; then
-  ./scripts/install-claude-wrapper.sh
+  ./scripts/install-claude-wrapper.sh || anota_problema "wrappers do claude/codex não instalaram"
 else
   nota "pulado — sessão aberta no terminal não vai aparecer no app"
   nota "depois: ./scripts/install-claude-wrapper.sh"
@@ -335,7 +388,7 @@ if command -v ufw >/dev/null || command -v firewall-cmd >/dev/null; then
     if ask "Liberar a(s) porta(s) $LISTA agora (vai pedir a senha)?"; then
       OK_FW=1
       for p in "${PORTAS[@]}"; do sudo ./scripts/lan-setup.sh "$p" || OK_FW=0; done
-      [ "$OK_FW" = 1 ] && ok "portas liberadas" || erro "liberar portas no firewall falhou"
+      [ "$OK_FW" = 1 ] && ok "portas liberadas" || anota_problema "liberar portas no firewall falhou"
     fi
   fi
 else
@@ -358,7 +411,11 @@ else
   nota "Prefere fazer por fora? Rode isto e depois chame o install.sh de novo:"
   nota "    curl -fsSL https://tailscale.com/install.sh | sh"
   if ask "Instalar agora (vai pedir a senha)?"; then
-    curl -fsSL https://tailscale.com/install.sh | sh && ok "Tailscale instalado" || erro "instalação do Tailscale falhou"
+    if curl -fsSL https://tailscale.com/install.sh | sh && command -v tailscale >/dev/null; then
+      ok "Tailscale instalado"
+    else
+      anota_problema "instalação do Tailscale falhou"
+    fi
     nota "Falta logar: rode 'sudo tailscale up' e instale o Tailscale também no celular."
   else
     nota "pulado — o app segue funcionando na LAN (mesmo Wi-Fi)"
@@ -376,14 +433,22 @@ elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
   # O caminho do node e o WorkingDirectory ficam CRAVADOS dentro da unit — git pull não os
   # muda. O próprio services-setup.sh só reinicia o que mudou de verdade, então re-rodar aqui
   # não derruba a conexão SSE do celular à toa.
-  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null
-  else ./scripts/services-setup.sh >/dev/null; fi
-  ok "serviços atualizados ($(systemctl --user is-active hangar-backend.service 2>/dev/null))"
+  # O `|| true` é pra chegar na prova: quem decide é o is-active logo abaixo, e sem ele o
+  # set -e abortaria aqui com a saída do setup mas sem a mensagem.
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null || true
+  else ./scripts/services-setup.sh >/dev/null || true; fi
+  # A prova é o serviço ACTIVE, não o exit 0 do setup — unit reescrita e serviço morto é o
+  # par que um "ok" sem checagem esconderia.
+  [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
+    && ok "serviços atualizados (active)" \
+    || anota_problema "serviços atualizados mas o hangar-backend não está active"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
-  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only
-  else ./scripts/services-setup.sh; fi
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only || true
+  else ./scripts/services-setup.sh || true; fi
+  [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
+    || anota_problema "serviços instalados mas o hangar-backend não está active"
   nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
 else
   nota "pulado — rodando na mão, fechar o terminal derruba o backend"
@@ -392,11 +457,11 @@ fi
 if [ -e "$HOME/.local/bin/hangar-send" ]; then
   # O binário é symlink (atualiza sozinho), mas o bloco "Sessões-irmãs" do ~/.claude/CLAUDE.md
   # sai de um heredoc deste script: sem re-rodar, as sessões novas leem o protocolo VELHO.
-  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || erro "hangar-send + skills falharam ao atualizar"
+  ./scripts/install-hangar-send.sh >/dev/null && ok "hangar-send + skills atualizados" || anota_problema "hangar-send + skills falharam ao atualizar"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$CPSEND" = 1 ] && ask "Instalar hangar-send + skills (sessões conversam entre si e se pareiam)?"; then
-  ./scripts/install-hangar-send.sh
+  ./scripts/install-hangar-send.sh || anota_problema "hangar-send + skills não instalaram"
 else
   nota "pulado — depois: ./scripts/install-hangar-send.sh"
 fi
@@ -418,7 +483,7 @@ elif [ "$UPDATE" = 1 ]; then
 else
   nota "Opcional: fazer as sessões voltarem depois de um reboot/OOM, com a conversa junto."
   nota "Clona 3 plugins de tmux de terceiros (tpm, resurrect, continuum) no teu ~/.tmux."
-  ask "Instalar a persistência de sessões?" && ./scripts/tmux-persist-setup.sh
+  ask "Instalar a persistência de sessões?" && { ./scripts/tmux-persist-setup.sh || anota_problema "persistência de sessões não instalou"; }
 fi
 
 # Painel flutuante + tray. Só Hyprland com Quickshell (testado no rice end-4/dots-hyprland).
@@ -437,7 +502,7 @@ elif [ -e "$HOME/.local/bin/hangar-panel-open" ]; then
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$PANEL" = 1 ] && ask "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
-  ./scripts/install-hangar-panel.sh
+  ./scripts/install-hangar-panel.sh || anota_problema "painel do desktop não instalou"
 fi
 
 # ── Passos de atualização: marcar como já feitos ─────────────────────────────
@@ -511,7 +576,34 @@ else
   fail "o tmux não criou uma sessão de teste — o app não vai abrir sessão"
 fi
 
+# ── Portão final: extra que a pessoa pediu e falhou NÃO passa em branco ────────────────────
+if [ ${#PROBLEMAS[@]} -gt 0 ]; then
+  say "Terminou com pendências"
+  for p in "${PROBLEMAS[@]}"; do falta "$p"; done
+  echo "  O que já estava no ar continua no ar — e é por isso que isto precisa ser dito alto:"
+  echo "  a tela pode seguir funcionando e a instalação PARECER boa. Resolve a lista e re-roda;"
+  echo "  o instalador é idempotente e continua de onde parou."
+  # No --update (hook do pull / botão do app) sai 0 mesmo assim: derrubar a atualização inteira
+  # por causa de um extra opcional seria pior — e o ##HANGAR-AVISO## já carrega o aviso pra tela.
+  [ "$UPDATE" = 1 ] || exit 1
+fi
+
 say "Pronto"
+PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+PORTA_FIM=${PORTA_FIM:-8765}
+URL_FIM=$(grep '^CP_PUBLIC_URL=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+# O valor do token só aparece com terminal: sem TTY isto roda em provisionamento e o stdout
+# vira log — mesma regra do passo 3/8.
+TOKEN_FIM="(está em backend/.env)"
+[ "$TEM_TTY" = 1 ] && TOKEN_FIM=$(grep '^CP_AUTH_TOKEN=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+echo
+echo "  +---------------------------------------------------------------"
+echo "   RESUMO"
+echo "   token   : $TOKEN_FIM"
+echo "   local   : http://127.0.0.1:$PORTA_FIM"
+if [ -n "$URL_FIM" ]; then echo "   celular : $URL_FIM"
+else echo "   celular : não publicado no Tailscale"; fi
+echo "  +---------------------------------------------------------------"
 cat <<EOF
   Rodar na mão (se você pulou os serviços):
       cd backend  && CP_LAN_BIND_IP=auto uv run python -m app.main

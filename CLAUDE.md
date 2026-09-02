@@ -866,6 +866,21 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     por linhagem já existia e não bastou; hoje há exclusão explícita de quem tem `app.atualizar` na
     linha de comando. No Linux quem cobre isso é o escopo transiente do systemd, que lá não existe.
 
+- **Instalador com portão de prova por etapa** (`install.sh` / `install.ps1`, 02/09/2026). Duas
+  gravidades: **essencial falhou → para na hora** com causa e conserto (`fail` / `Pare`): deps,
+  backend (`uv sync`), token (releitura do `.env`), frontend (rc + `dist/index.html` existe).
+  **Extra opcional que a pessoa pediu falhou → entra na lista** (`PROBLEMAS` / `$pendencias`) e o
+  fim diz "terminou com pendências"/"NAO terminou", nunca "Pronto". Motivo: instalações saíram
+  "Pronto" com o `tailscale serve` quebrado (HTTPS não habilitado no tailnet) porque a falha só
+  imprimia amarelo no meio da tela — o `serve` agora tem **prova** (relê o `serve status` e exige
+  a raiz do `:443` na porta do backend; `Get-Proxy443`, reusada da detecção). Parar no meio por um
+  extra trancaria a instalação de quem nem consegue habilitar HTTPS no tailnet, então o extra vai
+  pro portão do fim, não pro stop. No `--update`/`-Update` os extras seguem moles
+  (`##HANGAR-AVISO##`): falhar ali derrubaria a atualização inteira do app por causa de um extra.
+  Cara nova: banner, barra `[###-----] N/8` nos títulos numerados (dentro de `say`/`Titulo`, sem
+  mexer nas chamadas), spinner nos comandos longos do sh (`gira` — sem TTY ou `--update`, passa
+  direto com saída ao vivo), caixa RESUMO no fim (token só com TTY, mesma regra do passo 3/8).
+
 - **Plan progress** (`app/planprog.py` + `registry._decorate_plan` + `PlanBar`/`PlanPanel.svelte`):
   the source of truth is the plan's own `.md` under `docs/superpowers/plans/` — no separate state
   file, `parse_plan` re-reads it and re-counts `- [x] **Step …**` on every discovery. Fenced blocks
