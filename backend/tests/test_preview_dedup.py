@@ -46,6 +46,19 @@ def test_nao_suprime_trecho_curto():
     assert not preview_is_committed("ok", _norm(PROSE))
 
 
+def test_suprime_lista_pintada_com_bullet_pela_tui():
+    # A TUI (medido no Kimi) desenha `- item` como `• item` e hard-wrapa: ao abrir a sessão, o pane
+    # mostra o último bloco já commitado e a comparação falhava no primeiro marcador de lista.
+    commitado = ("Sim, tem — e está em dois lugares:\n\n"
+                 "- `docs/polish-backlog.md:669` — o item pendente em si, na seção de dívida\n"
+                 "- `CLAUDE.md:221-235` — o aviso operacional que aponta pra lá")
+    pane = ("Sim, tem — e está em dois lugares:\n\n"
+            "   • docs/polish-backlog.md:669 — o item pendente em si, na seção de\n"
+            "     dívida\n"
+            "   • CLAUDE.md:221-235 — o aviso operacional que aponta pra lá")
+    assert preview_is_committed(pane, _norm(commitado))
+
+
 # --- Pi: o chrome que fecha o bloco em voo e a CAIXA do composer, nao a regua do Claude ---------
 # pane_pi_working.txt e um `tmux capture-pane -p` REAL, tirado DURANTE um turno (Pi 0.82.1 +
 # kimi-for-coding): o `● Tem sim, algumas formas:` esta a meio caminho de ser escrito. Sem a parada
