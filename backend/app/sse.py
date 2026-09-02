@@ -609,6 +609,8 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             await queue.put(("__error__", exc))
 
     ask_q_emitted = False          # impede reemissao enquanto o mesmo prompt permanece na tela
+    ultimo_estado = None           # ultimo `state` emitido; None ate o primeiro tick
+    _fantasma_logado = {"v": False}
     prev_deliverable = False     # init False -> 1o estado entregavel pos-(re)connect tambem dispara 1
                                  # drain (recovery de restart/reconexao com pendencia)
     drain_tasks: set = set()     # drains fire-and-forget; NAO entram em `tasks` (nao cancelar no disconnect)
@@ -712,6 +714,15 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 # Le o ULTIMO texto do slot na hora do envio (frames antigos ja foram sobrescritos).
                 # SEM id: pra reconexao do EventSource nao replayar preview velho via Last-Event-ID.
                 preview_slot["pending"] = False
+                _sent["preview"] += 1
+                if preview_slot["text"] and ultimo_estado not in (None, "working"):
+                    # Assinatura da bolha fantasma: texto em voo numa sessao que nao esta
+                    # trabalhando. Um por stream basta pra apontar a fonte (md/full) e o trecho.
+                    if not _fantasma_logado["v"]:
+                        _fantasma_logado["v"] = True
+                        _log.info("sse: previa com texto em sessao %s name=%s md=%s full=%s "
+                                  "trecho=%r", ultimo_estado, name, preview_slot["md"],
+                                  preview_slot["full"], preview_slot["text"][:80])
                 yield {"event": "preview",
                        "data": PreviewEvent(session=name, text=preview_slot["text"],
                                             md=bool(preview_slot["md"]),
@@ -722,6 +733,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 # Quando awaiting_input + overlay (rodape de abas = AskUserQuestion estruturado),
                 # emite ask_question UMA VEZ por prompt; reseta ao sair do estado.
                 parsed_state = json.loads(data)
+                ultimo_estado = parsed_state.get("state")
                 # Diagnostico do "medição indisponível": loga o statusline CRU quando o segmento 💬
                 # nao tem os 2 pares. Uma vez por statusline DISTINTO (nao a cada tick) pra nao virar
                 # firehose — um StateEvent sai a cada 0.75s.

@@ -1658,7 +1658,9 @@
   // Tira crase E marcadores de markdown (* _ ~ # >): o preview vem do pane JÁ RENDERIZADO (sem
   // markdown), o .jsonl tem o markdown cru -> sem tirar, "**Confirma**" != "Confirma" e o preview
   // duplicado de uma msg com formatação NÃO casava com a commitada (ficava como bolha fantasma).
-  const _norm = (s: string) => s.replace(/[`*_~#>]/g, '').replace(/\s+/g, ' ').trim();
+  // Marcador de lista no início da linha sai junto: a TUI pinta `- item` como `• item` (mesma
+  // regra do _norm do backend, em app/preview.py).
+  const _norm = (s: string) => s.replace(/^\s*[-•◦▪]\s+/gm, '').replace(/[`*_~#>]/g, '').replace(/\s+/g, ' ').trim();
   // Contador INCREMENTAL de assistant_msg (mantido no handler do SSE + reseedDerived): o effect
   // abaixo rodava um loop no `events` inteiro A CADA frame de preview (~150ms em streaming) só pra
   // detectar um commit novo — O(n) por frame em sessão longa.
