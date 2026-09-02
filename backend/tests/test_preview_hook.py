@@ -58,6 +58,16 @@ def test_index_zero_atrasado_nao_apaga_o_que_ja_chegou(tmp_path):
     assert _sidecar(tmp_path, "abc")["text"] == "# Titulo\n\nPrimeiro paragrafo."
 
 
+def test_delta_sem_message_id_depois_do_stop_nao_ressuscita_previa(tmp_path):
+    # Stop grava sem message_id; um delta retardatario tambem sem id casava por None == None.
+    _run({"hook_event_name": "Stop", "session_id": "s",
+          "transcript_path": "/x/projects/p/abc.jsonl"}, tmp_path)
+    o = _md("rabo", 2)
+    del o["message_id"]
+    _run(o, tmp_path)
+    assert _sidecar(tmp_path, "abc")["text"] == ""
+
+
 def test_mensagem_nova_substitui_a_anterior_nao_soma(tmp_path):
     # Contrato do preview: publica o ULTIMO bloco, nao a soma do turno — a soma faria o
     # preview_is_committed engolir tudo como prefixo do commitado.
@@ -102,10 +112,22 @@ def test_session_id_hostil_nao_escapa_do_diretorio(tmp_path):
 def test_delta_retardatario_depois_do_stop_nao_ressuscita_previa(tmp_path):
     # Stop fechou o turno ("" no sidecar); um MessageDisplay atrasado (index > 0, outra msg)
     # nao pode republicar um rabo de texto como se estivesse em voo
+    _run(_md("corpo", 0, mid="m-velha"), tmp_path)
     _run({"hook_event_name": "Stop", "session_id": "s",
           "transcript_path": "/x/projects/p/abc.jsonl"}, tmp_path)
     _run(_md("rabo atrasado", 3, mid="m-velha"), tmp_path)
     assert _sidecar(tmp_path, "abc")["text"] == ""
+
+
+def test_mensagem_nova_com_index_1_antes_do_0_depois_do_stop_nao_perde_paragrafo(tmp_path):
+    # O descarte do retardatario vale so pra mensagem que o Stop FECHOU; outra mensagem cujo
+    # index 1 venceu o 0 na corrida entra normal, senao o paragrafo sumia ate o commit.
+    _run(_md("corpo", 0, mid="m-velha"), tmp_path)
+    _run({"hook_event_name": "Stop", "session_id": "s",
+          "transcript_path": "/x/projects/p/abc.jsonl"}, tmp_path)
+    _run(_md("segundo", 1, mid="m-nova"), tmp_path)
+    _run(_md("primeiro ", 0, mid="m-nova"), tmp_path)
+    assert _sidecar(tmp_path, "abc")["text"] == "primeiro segundo"
 
 
 def test_evento_desconhecido_nao_escreve_nada(tmp_path):

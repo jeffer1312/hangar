@@ -75,7 +75,15 @@ try:
     base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
     if stem and event == "Stop":
         _lock = _trava(base, stem)
-        _publicar(base, stem, {"text": "", "ts": time.time()})
+        # Leva junto o id da mensagem que fechou: e o que deixa o MessageDisplay distinguir um
+        # rabo retardatario dela (descarta) de uma mensagem NOVA cujo index 1 chegou antes do 0.
+        try:
+            with open(os.path.join(base, _SUBDIR, stem + ".json"), encoding="utf-8") as fh:
+                ant = json.load(fh)
+        except (OSError, ValueError):
+            ant = None
+        closed = ant.get("message_id") if isinstance(ant, dict) else None
+        _publicar(base, stem, {"text": "", "ts": time.time(), "closed": closed})
     elif stem and event == "MessageDisplay" and not o.get("agent_id"):
         _lock = _trava(base, stem)  # cobre o le-cola-grava inteiro; solta na saida do processo
         # agent_id presente = texto de SUBAGENTE — nunca vira a previa da conversa principal.
@@ -95,14 +103,14 @@ try:
             # message_id DIFERENTE recomeca do zero — vale pro arquivo rotacionado E pro sidecar
             # de outra mensagem (mudou o mid no meio).
             parts = {}
-            if isinstance(ant, dict) and ant.get("message_id") == mid:
+            if mid is not None and isinstance(ant, dict) and ant.get("message_id") == mid:
                 parts = ant.get("parts") if isinstance(ant.get("parts"), dict) else {}
-            elif idx and isinstance(ant, dict) and ant.get("text") == "":
+            elif idx and isinstance(ant, dict) and ant.get("text") == "" \
+                    and ant.get("closed") == mid:
                 # O "" e a marca do Stop: turno JA fechou. Um processo de MessageDisplay
-                # retardatario (fork+import lentos) chegando DEPOIS do Stop republicaria um
-                # rabo de mensagem como se estivesse em voo — melhor descartar o delta
-                # (achado da review). Mensagem nova de verdade comeca com index 0 e nao
-                # passa por aqui.
+                # retardatario (fork+import lentos) da MESMA mensagem chegando DEPOIS do Stop
+                # republicaria um rabo de texto como se estivesse em voo — descarta. Outro id
+                # e mensagem nova cujo index 1 venceu o 0 na corrida: entra normal.
                 raise SystemExit(0)
             parts[str(idx)] = delta
             texto = "".join(parts[k] for k in sorted(parts, key=int))
