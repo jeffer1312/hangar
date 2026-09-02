@@ -13,7 +13,7 @@ from app.hook_installer import (
     ensure_subagent_hook_installed,
     ensure_state_hooks_installed,
 )
-from app import migracao_sidecars
+from app import migracao_sidecars, orq_politica
 from app.hook_state import hook_state
 from app.pi_inbox import escrever_endpoint
 
@@ -119,6 +119,7 @@ def main():
     # que lê ou escreve sidecar: os hooks, o endpoint do Pi e o hook_state logo abaixo já são
     # clientes dessas pastas — migrar depois deles seria migrar por cima de arquivo recém-escrito.
     migracao_sidecars.migrar(_state_dirs)
+    orq_politica.migrar()
     _passos_pendentes_da_versao()
     # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
     ensure_askq_hook_installed()

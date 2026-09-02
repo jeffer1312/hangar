@@ -36,7 +36,8 @@ def maquina(tmp_path, monkeypatch):
     (home / ".claude-claude-200-2").mkdir()
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.setattr(pol.contas, "compartilhado", lambda: home / ".claude")
-    (home / ".claude" / "orquestracao-contas.md").write_text(ARQUIVO_VIVO, encoding="utf-8")
+    (home / ".hangar").mkdir()
+    (home / ".hangar" / "orquestracao-contas.md").write_text(ARQUIVO_VIVO, encoding="utf-8")
     # inventário determinístico
     monkeypatch.setattr(pol.config, "list_config_dirs", lambda: [
         ConfigDirInfo(path=str(home / ".claude"), label="Felizardo", active=True),
@@ -112,6 +113,23 @@ def test_gravar_com_mtime_velho_e_conflito(maquina):
     os.utime(pol.caminho(), (1, 1))
     with pytest.raises(orq_md.Conflito):
         pol.gravar_conta(pol.ContaPolitica("x", "codex"), mt)
+
+
+def test_migrar_leva_o_arquivo_do_config_dir_pro_cofre(maquina):
+    pol.caminho().unlink()
+    antigo = Path.home() / ".claude" / "orquestracao-contas.md"
+    antigo.write_text(ARQUIVO_VIVO, encoding="utf-8")
+    assert pol.migrar() is True
+    assert not antigo.exists() and pol.caminho().read_text(encoding="utf-8") == ARQUIVO_VIVO
+    assert pol.migrar() is False          # roda de novo sem efeito
+
+
+def test_migrar_nao_funde_quando_os_dois_existem(maquina):
+    antigo = Path.home() / ".claude" / "orquestracao-contas.md"
+    antigo.write_text("antigo", encoding="utf-8")
+    assert pol.migrar() is False
+    assert antigo.read_text(encoding="utf-8") == "antigo"
+    assert pol.caminho().read_text(encoding="utf-8") == ARQUIVO_VIVO
 
 
 def test_arquivo_ausente_nasce_com_as_duas_secoes(maquina):

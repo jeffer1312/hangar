@@ -1,17 +1,24 @@
-"""Política de contas da máquina (`~/.claude/orquestracao-contas.md`): quais contas um executor
+"""Política de contas da máquina (`~/.hangar/orquestracao-contas.md`): quais contas um executor
 ou revisor pode usar, com quais modelos, e se pode trocar de modelo dentro dela.
 
 O arquivo é do usuário e o árbitro o lê como texto; o app é dono de DUAS seções — a tabela em
 `## O que pode` e a lista gerada em `## O que NÃO pode` — e nunca toca no resto (orq_md).
 Conta fora da tabela é proibida: o painel não a oferece, e a lista gerada diz isso em texto pra
 quem lê o arquivo.
+
+Mora no cofre `~/.hangar/`, não no config dir de uma conta: a política é da máquina, e um
+executor Pi/Kimi/Codex não tem `~/.claude` nenhum. `migrar()` leva o arquivo do lugar antigo.
 """
 from __future__ import annotations
 
+import logging
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import apelidos, config, contas, cotas, kimi_models, model_args, orq_md, pi_catalog
+
+_log = logging.getLogger("hangar.orq_politica")
 
 CABECALHO = ("conta", "provider", "apelido", "modelos", "trocar?")
 SECAO_PODE = "O que pode"
@@ -22,7 +29,30 @@ CONTA_CODEX = "openai-codex"
 
 
 def caminho() -> Path:
+    return Path.home() / ".hangar" / "orquestracao-contas.md"
+
+
+def _caminho_antigo() -> Path:
     return contas.compartilhado() / "orquestracao-contas.md"
+
+
+def migrar() -> bool:
+    """Move a política do `~/.claude` pro cofre, uma vez. Nunca funde: os dois existindo, avisa e
+    deixa como está — o app passa a ler o do cofre, e o antigo fica pra a pessoa decidir."""
+    antigo, novo = _caminho_antigo(), caminho()
+    if not antigo.is_file() or antigo.is_symlink():
+        return False
+    if novo.exists():
+        _log.warning("politica de contas em dois lugares; lendo %s e ignorando %s", novo, antigo)
+        return False
+    try:
+        novo.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(antigo), str(novo))
+    except OSError as e:
+        _log.warning("nao consegui mover %s -> %s: %s", antigo, novo, e)
+        return False
+    _log.info("politica de contas movida: %s -> %s", antigo, novo)
+    return True
 
 
 @dataclass(frozen=True)

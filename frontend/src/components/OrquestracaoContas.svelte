@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Aba "Contas liberadas": a política da máquina (`~/.claude/orquestracao-contas.md`), editada por
+  // Aba "Contas liberadas": a política da máquina (`~/.hangar/orquestracao-contas.md`), editada por
   // conta. Esquerda: tudo que a máquina conhece, por provider, com interruptor; direita: a conta
   // escolhida (pode usar, pode trocar, modelos liberados). Vive fora do OrquestracaoSheet porque
   // Configurações → Orquestração mostra a mesma tela sem precisar de grupo.

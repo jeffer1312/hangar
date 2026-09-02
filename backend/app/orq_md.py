@@ -1,6 +1,6 @@
 """Tabela markdown de cabeçalho fixo dentro de um arquivo que é, no resto, prosa de outra pessoa.
 
-É o que a política de contas (`~/.claude/orquestracao-contas.md`) e o contrato do grupo
+É o que a política de contas (`~/.hangar/orquestracao-contas.md`) e o contrato do grupo
 (`regras-<gid>.md`) têm em comum: o app é dono de UMA tabela (e de uma seção gerada), o árbitro
 e o usuário são donos de todo o resto. Daí só três verbos — ler a tabela, trocar uma linha dela
 no lugar, trocar uma seção inteira — e nunca "reescrever o arquivo".
