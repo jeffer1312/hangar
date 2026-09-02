@@ -275,6 +275,35 @@ import * as m from '../paraglide/messages';
        cor. O detalhe e o chip do loop subiram pro header, que ja era o lugar do estado. -->
 
   <div class="ctx-scroll">
+  <!-- SAUDE: Contexto + Limites num bloco so (eram duas secoes irmaos com a mesma cara).
+       Vem primeiro: responde "esta tudo bem?" antes de qualquer detalhe. -->
+  <section class="sec-metric">
+    <span class="section-label">{m.ctx_saude()}</span>
+    {#if status?.ctxPct != null}
+      <div class="metric-row">
+        <span>
+          {m.ctx_contexto()} · {#if status.ctxUsed != null && status.ctxTotal}{m.ctx_usado_de_total({ usado: ctxWindow(status.ctxUsed), total: ctxWindow(status.ctxTotal) })}{:else}{status.ctxTotal ? `${ctxWindow(status.ctxTotal)} ${m.ctx_tokens()}` : m.ctx_janela()}{/if}
+        </span>
+        <strong>{Math.round(status.ctxPct)}%</strong>
+      </div>
+      <div class="progress tone-{ctxTone}" aria-label={m.ctx_pct_usado({ n: Math.round(status.ctxPct) })}>
+        <span style:width={`${status.ctxPct}%`}></span>
+      </div>
+      {#if status.turnIn != null || status.turnOut != null}
+        <p class="turn-tokens">
+          {m.ctx_ultimo_turno()} {ctxWindow(status.turnIn ?? 0)} {m.ctx_entrada()} · {status.turnOut != null ? tokenShort(status.turnOut) : '—'} {m.ctx_saida()}
+        </p>
+      {/if}
+    {:else}
+      <p>{m.ctx_medicao_indisponivel()}</p>
+    {/if}
+    {#if hasRate}
+      <div class="saude-limites">
+        <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant="bars" />
+      </div>
+    {/if}
+  </section>
+
   {#if session?.plan_name || session?.plan_hidden}
     <!-- Só quando ha plano ativo nesta sessao (Task 5b) — sem gate a secao apareceria vazia pra
          toda sessao sem superpowers rodando. plan_hidden entra junto: com "nenhum plano" escolhido
@@ -291,42 +320,30 @@ import * as m from '../paraglide/messages';
     </section>
   {/if}
 
-  <section class="sec-metric">
-    <span class="section-label">{m.ctx_contexto()}</span>
-    {#if status?.ctxPct != null}
-      <!-- Mesma forma das barras de Limites: qualificador a esquerda, leitura a direita. Antes o
-           Contexto punha o numero a esquerda e os Limites a direita — dois medidores irmaos com a
-           coluna de leitura em lados opostos. -->
-      <div class="metric-row">
-        <span>
-          {#if status.ctxUsed != null && status.ctxTotal}{m.ctx_usado_de_total({ usado: ctxWindow(status.ctxUsed), total: ctxWindow(status.ctxTotal) })}{:else}{status.ctxTotal ? `${ctxWindow(status.ctxTotal)} ${m.ctx_tokens()}` : m.ctx_janela()}{/if}
+  {#if status?.repo}
+  <section class="sec-break">
+    <span class="section-label">{m.ctx_repositorio()}</span>
+    {#if onOpenGit}
+      <button type="button" class="sec-open" onclick={onOpenGit} aria-label={m.ctx_abrir_git({ n: status.repo })}>
+        <span class="sec-open-body">
+          <strong class="mono">{status.repo} · {status.branch ?? m.ctx_sem_branch()}</strong>
+          {#if status.dirty}<p class="mono">{m.ctx_alteracoes_locais()}</p>{/if}
         </span>
-        <strong>{Math.round(status.ctxPct)}%</strong>
-      </div>
-      <div class="progress tone-{ctxTone}" aria-label={m.ctx_pct_usado({ n: Math.round(status.ctxPct) })}>
-        <span style:width={`${status.ctxPct}%`}></span>
-      </div>
-      {#if status.turnIn != null || status.turnOut != null}
-        <!-- Tokens do ULTIMO turno: o dado ja vinha na statusline crua (💬 271k/590) e so a barra
-             de percentual chegava aqui. E o que responde "por que o contexto pulou". -->
-        <p class="turn-tokens">
-          {m.ctx_ultimo_turno()} {ctxWindow(status.turnIn ?? 0)} {m.ctx_entrada()} · {status.turnOut != null ? tokenShort(status.turnOut) : '—'} {m.ctx_saida()}
-        </p>
-      {/if}
+        <span class="sec-open-arrow" aria-hidden="true">›</span>
+      </button>
     {:else}
-      <p>{m.ctx_medicao_indisponivel()}</p>
+      <strong class="mono">{status.repo} · {status.branch ?? m.ctx_sem_branch()}</strong>
+      {#if status.dirty}<p class="mono">{m.ctx_alteracoes_locais()}</p>{/if}
     {/if}
   </section>
-
-  {#if hasRate}
-    <section class="sec-metric">
-      <span class="section-label">{m.ctx_limites()}</span>
-      <RateChips {status} onExpand={onExpandUsage} {limited} {limitReset} variant="bars" />
-    </section>
   {/if}
 
+  <!-- EQUIPE: Grupo + Orquestração fundidos. Sem par e sem porta de orquestração a seção nem
+       existe — era um bloco morto pra quem raramente pareia. A linha de orquestração fica sempre
+       que há onOpenOrq: é a única porta pro time padrão sem grupo. -->
+  {#if pairPeers?.length || onOpenPair || onOpenOrq}
   <section class="sec-break">
-    <span class="section-label">{m.ctx_grupo()}</span>
+    <span class="section-label">{m.ctx_equipe()}</span>
     {#if pairPeers?.length}
       {#if openGroup}
         <button type="button" class="sec-open" onclick={openGroup}
@@ -349,64 +366,36 @@ import * as m from '../paraglide/messages';
         <p>{pairPeers.length + 1} {m.ctx_sessoes_pareadas()}</p>
       {/if}
     {:else if onOpenPair}
-      <!-- Sem par, a secao era so a frase "sessao independente" — e justamente aqui que se pensa em
-           parear. Mesmo alvo clicavel das outras secoes, abrindo a PairSheet no modo "Parear com
-           sessao". -->
       <button type="button" class="sec-open" onclick={onOpenPair} aria-label={m.ctx_parear_outra()}>
         <span class="sec-open-body">
-          <strong>{m.ctx_sessao_independente()}</strong>
-          <p>{m.ctx_parear_outra()}</p>
+          <strong>{m.ctx_parear_outra()}</strong>
         </span>
         <span class="sec-open-arrow" aria-hidden="true">›</span>
       </button>
-    {:else}
-      <p>{m.ctx_sessao_independente()}</p>
     {/if}
-  </section>
-
-  {#if onOpenOrq}
-  <!-- Sempre visível, com ou sem grupo: sem grupo o modal edita o time padrão. -->
-  <section class="sec-break">
-    <span class="section-label">{m.ctx_orquestracao()}</span>
-    <button type="button" class="sec-open" onclick={onOpenOrq} aria-label={m.ctx_orquestracao()}>
-      <span class="sec-open-body">
-        <strong>{m.ctx_orquestracao_titulo()}</strong>
-        <p>{m.ctx_orquestracao_desc()}</p>
-      </span>
-      <span class="sec-open-arrow" aria-hidden="true">›</span>
-    </button>
-  </section>
-  {/if}
-
-  {#if status?.repo}
-  <section class="sec-break">
-    <span class="section-label">{m.ctx_repositorio()}</span>
-    {#if onOpenGit}
-      <button type="button" class="sec-open" onclick={onOpenGit} aria-label={m.ctx_abrir_git({ n: status.repo })}>
+    {#if onOpenOrq}
+      <button type="button" class="sec-open" onclick={onOpenOrq} aria-label={m.ctx_orquestracao()}>
         <span class="sec-open-body">
-          <strong class="mono">{status.repo}</strong>
-          <p class="mono">{status.branch ?? m.ctx_sem_branch()}{status.dirty ? ` · ${m.ctx_alteracoes_locais()}` : ''}</p>
+          <strong>{m.ctx_orquestracao_titulo()}</strong>
+          <p>{m.ctx_orquestracao_desc()}</p>
         </span>
         <span class="sec-open-arrow" aria-hidden="true">›</span>
       </button>
-    {:else}
-      <strong class="mono">{status.repo}</strong>
-      <p class="mono">{status.branch ?? m.ctx_sem_branch()}{status.dirty ? ` · ${m.ctx_alteracoes_locais()}` : ''}</p>
     {/if}
   </section>
   {/if}
 
+  <!-- EXECUÇÃO sem modelo/esforço: isso já está nas pills do composer (onde se troca). Aqui fica
+       o que não está em mais nenhum lugar — provider e máquina. -->
   <section class="sec-break">
     <span class="section-label">{m.ctx_execucao()}</span>
     {#if onProviderTap}
       <button type="button" class="provider-tap" onclick={onProviderTap} aria-label={m.ctx_limites_provider()}>
-        {providerName(provider)}
+        {providerName(provider)}{serverLabel ? ` · ${serverLabel}` : ''}
       </button>
     {:else}
-      <strong>{providerName(provider)}</strong>
+      <strong>{providerName(provider)}{serverLabel ? ` · ${serverLabel}` : ''}</strong>
     {/if}
-    {#if status?.model}<p>{status.model}{status.effort ? ` · ${status.effort}` : ''}</p>{/if}
-    {#if serverLabel}<p>{serverLabel}</p>{/if}
   </section>
   </div>
   </div>
@@ -721,6 +710,9 @@ import * as m from '../paraglide/messages';
   }
 
   .sec-metric + .sec-metric { padding-top: var(--space-3); }
+  /* Limites dentro da seção Saúde: respiro entre a barra de contexto e as de cota, sem régua
+     (continuam sendo o mesmo assunto). */
+  .saude-limites { margin-top: var(--space-3); }
   .sec-break {
     padding-top: var(--space-4);
     border-top: 1px solid var(--border-subtle);
