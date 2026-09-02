@@ -59,6 +59,14 @@ def test_suprime_lista_pintada_com_bullet_pela_tui():
     assert preview_is_committed(pane, _norm(commitado))
 
 
+def test_hifen_de_prosa_continua_distinguindo_texto():
+    # Só o marcador no início da linha sai: um bloco novo que difere do commitado por um hífen
+    # dentro da palavra não pode ser engolido como "já commitado".
+    commitado = "O envio por e-mail falhou porque o servidor recusou a conexão hoje."
+    novo = "O envio por email falhou porque o servidor recusou a conexão hoje."
+    assert not preview_is_committed(novo, _norm(commitado))
+
+
 # --- Pi: o chrome que fecha o bloco em voo e a CAIXA do composer, nao a regua do Claude ---------
 # pane_pi_working.txt e um `tmux capture-pane -p` REAL, tirado DURANTE um turno (Pi 0.82.1 +
 # kimi-for-coding): o `● Tem sim, algumas formas:` esta a meio caminho de ser escrito. Sem a parada
