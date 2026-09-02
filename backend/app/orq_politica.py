@@ -40,12 +40,15 @@ def migrar() -> bool:
     """Move a política do `~/.claude` pro cofre, uma vez. Nunca funde: os dois existindo, avisa e
     deixa como está — o app passa a ler o do cofre, e o antigo fica pra a pessoa decidir."""
     antigo, novo = _caminho_antigo(), caminho()
-    if not antigo.is_file() or antigo.is_symlink():
-        return False
-    if novo.exists():
-        _log.warning("politica de contas em dois lugares; lendo %s e ignorando %s", novo, antigo)
-        return False
     try:
+        if antigo.is_symlink():
+            _log.info("politica de contas em %s e um link; deixo como esta", antigo)
+            return False
+        if not antigo.is_file():
+            return False
+        if novo.exists() or novo.is_symlink():
+            _log.warning("politica de contas em dois lugares; lendo %s e ignorando %s", novo, antigo)
+            return False
         novo.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(antigo), str(novo))
     except OSError as e:

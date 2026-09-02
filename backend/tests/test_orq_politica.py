@@ -132,6 +132,20 @@ def test_migrar_nao_funde_quando_os_dois_existem(maquina):
     assert pol.caminho().read_text(encoding="utf-8") == ARQUIVO_VIVO
 
 
+def test_migrar_nao_move_link_nem_derruba_a_subida(maquina, monkeypatch):
+    pol.caminho().unlink()
+    antigo = Path.home() / ".claude" / "orquestracao-contas.md"
+    alvo = Path.home() / "fora.md"
+    alvo.write_text("x", encoding="utf-8")
+    antigo.symlink_to(alvo)
+    assert pol.migrar() is False and antigo.is_symlink()
+    antigo.unlink()
+    antigo.write_text(ARQUIVO_VIVO, encoding="utf-8")
+    monkeypatch.setattr(pol.shutil, "move", lambda *a: (_ for _ in ()).throw(PermissionError("nope")))
+    assert pol.migrar() is False          # fail-soft: avisa no log, nao levanta
+    assert antigo.exists() and not pol.caminho().exists()
+
+
 def test_arquivo_ausente_nasce_com_as_duas_secoes(maquina):
     pol.caminho().unlink()
     pol.gravar_conta(pol.ContaPolitica("padrao", "claude", "F", ("*",), True))
