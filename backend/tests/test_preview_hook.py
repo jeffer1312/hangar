@@ -43,6 +43,21 @@ def test_deltas_incrementais_acumulam_na_mesma_mensagem(tmp_path):
     assert _sidecar(tmp_path, "abc")["text"] == "# Titulo\n\nPrimeiro paragrafo. Segundo."
 
 
+def test_delta_fora_de_ordem_entra_no_lugar_certo(tmp_path):
+    # Um processo por evento: o do index 2 pode gravar antes do index 1. O texto e remontado
+    # por index, nao colado no fim.
+    _run(_md("# Titulo\n\n", 0), tmp_path)
+    _run(_md(" Segundo.", 2), tmp_path)
+    _run(_md("Primeiro paragrafo.", 1), tmp_path)
+    assert _sidecar(tmp_path, "abc")["text"] == "# Titulo\n\nPrimeiro paragrafo. Segundo."
+
+
+def test_index_zero_atrasado_nao_apaga_o_que_ja_chegou(tmp_path):
+    _run(_md("Primeiro paragrafo.", 1), tmp_path)
+    _run(_md("# Titulo\n\n", 0), tmp_path)
+    assert _sidecar(tmp_path, "abc")["text"] == "# Titulo\n\nPrimeiro paragrafo."
+
+
 def test_mensagem_nova_substitui_a_anterior_nao_soma(tmp_path):
     # Contrato do preview: publica o ULTIMO bloco, nao a soma do turno — a soma faria o
     # preview_is_committed engolir tudo como prefixo do commitado.

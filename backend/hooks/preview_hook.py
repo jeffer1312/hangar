@@ -14,9 +14,10 @@
 #  - "" e RESPOSTA ("nao ha texto em voo", gravada no Stop), None/ausente e o que cai no pane;
 #  - tmp com PID no nome antes do rename — o hook roda um processo por evento e dois eventos
 #    proximos nao podem entrelacar bytes (a mesma armadilha ja medida na statusline).
-# O acumulo entre eventos vive no PROPRIO sidecar (message_id gravado junto): cada processo le o
-# arquivo, cola o delta se a mensagem e a mesma, ou recomeca se e outra. Perder um delta numa
-# corrida read-modify-write so encurta a previa ate o proximo evento — best-effort, como o pane.
+# O acumulo entre eventos vive no PROPRIO sidecar (message_id + parts por index gravados junto):
+# cada processo le o arquivo, encaixa o delta no index dele se a mensagem e a mesma, ou recomeca
+# se e outra. Sem trava (Windows) um delta perdido so encurta a previa ate o proximo evento —
+# best-effort, como o pane.
 import json
 import os
 import sys
@@ -81,27 +82,32 @@ try:
         delta = o.get("delta")
         if isinstance(delta, str) and delta:
             mid = o.get("message_id")
-            texto = delta
-            if o.get("index"):  # index > 0 -> continuacao: cola no que ja foi publicado
-                try:
-                    with open(os.path.join(base, _SUBDIR, stem + ".json"),
-                              encoding="utf-8") as fh:
-                        ant = json.load(fh)
-                except (OSError, ValueError):
-                    ant = None  # sem anterior legivel -> publica so o delta (melhor curto que nada)
-                # message_id DIFERENTE cai no "publica so o delta" — vale pro arquivo rotacionado
-                # E pro sidecar de outra mensagem (mudou o mid no meio): nos dois casos o delta
-                # sozinho e o melhor que este processo tem.
-                if isinstance(ant, dict) and ant.get("message_id") == mid:
-                    texto = str(ant.get("text", "")) + delta
-                elif isinstance(ant, dict) and ant.get("text") == "":
-                    # O "" e a marca do Stop: turno JA fechou. Um processo de MessageDisplay
-                    # retardatario (fork+import lentos) chegando DEPOIS do Stop republicaria um
-                    # rabo de mensagem como se estivesse em voo — melhor descartar o delta
-                    # (achado da review). Mensagem nova de verdade comeca com index 0 e nao
-                    # passa por aqui.
-                    raise SystemExit(0)
-            _publicar(base, stem, {"text": texto, "ts": time.time(), "message_id": mid})
+            idx = o.get("index") or 0
+            try:
+                with open(os.path.join(base, _SUBDIR, stem + ".json"), encoding="utf-8") as fh:
+                    ant = json.load(fh)
+            except (OSError, ValueError):
+                ant = None  # sem anterior legivel -> publica so o delta (melhor curto que nada)
+            # Os deltas ficam guardados POR INDEX e o texto e remontado em ordem a cada evento: a
+            # trava impede perder delta, mas nao impede o processo do index 2 gravar antes do 1
+            # (um processo por evento, ~47ms de arranque cada) — colando no fim, a previa saia
+            # com paragrafo fora de lugar ate o commit.
+            # message_id DIFERENTE recomeca do zero — vale pro arquivo rotacionado E pro sidecar
+            # de outra mensagem (mudou o mid no meio).
+            parts = {}
+            if isinstance(ant, dict) and ant.get("message_id") == mid:
+                parts = ant.get("parts") if isinstance(ant.get("parts"), dict) else {}
+            elif idx and isinstance(ant, dict) and ant.get("text") == "":
+                # O "" e a marca do Stop: turno JA fechou. Um processo de MessageDisplay
+                # retardatario (fork+import lentos) chegando DEPOIS do Stop republicaria um
+                # rabo de mensagem como se estivesse em voo — melhor descartar o delta
+                # (achado da review). Mensagem nova de verdade comeca com index 0 e nao
+                # passa por aqui.
+                raise SystemExit(0)
+            parts[str(idx)] = delta
+            texto = "".join(parts[k] for k in sorted(parts, key=int))
+            _publicar(base, stem, {"text": texto, "ts": time.time(), "message_id": mid,
+                                   "parts": parts})
 except Exception:
     pass
 sys.exit(0)
