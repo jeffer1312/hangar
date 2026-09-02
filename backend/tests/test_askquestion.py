@@ -221,8 +221,9 @@ def _resposta(quando: str, tool_id: str = "toolu_1") -> list[dict]:
 
 
 def _aponta(monkeypatch, tmp_path) -> None:
-    from app import statusline
-    monkeypatch.setattr(statusline, "dirs_de_config", lambda: [tmp_path])
+    # No proprio askquestion: ele importa `dirs_de_config` no TOPO, entao trocar so em
+    # app.statusline nao alcanca a referencia que a funcao usa.
+    monkeypatch.setattr(askquestion, "dirs_de_config", lambda: [tmp_path])
 
 
 def test_pergunta_aberta_quando_transcript_nao_tem_resposta(tmp_path, monkeypatch):
@@ -258,6 +259,20 @@ def test_sem_sidecar_e_sem_stem_nao_ha_pergunta(tmp_path, monkeypatch):
     _aponta(monkeypatch, tmp_path)
     assert pergunta_aberta("sess-123") is None
     assert pergunta_aberta(None) is None
+
+
+def test_janela_que_nao_alcanca_a_pergunta_nao_prende_a_sessao(tmp_path, monkeypatch):
+    # A janela e contada do FIM do arquivo, entao ela envelhece: a sessao segue trabalhando, o
+    # transcript cresce e o par tool_use/tool_result da resposta sai por cima. "Nao achei" ali NAO e
+    # "nao existe" — e a pergunta ficava aberta pra sempre, prendendo a sessao em awaiting_input, e
+    # com ela a fila (o drain so dispara na borda de subida de "entregavel", que nunca mais subiria).
+    jsonl, _ = _layout(tmp_path)
+    enche = [{"type": "assistant", "timestamp": "2036-01-01T00:00:00.000Z",
+              "message": {"content": [{"type": "text", "text": "x" * 400}]}} for _ in range(900)]
+    _transcript(jsonl, enche)                       # tudo POSTERIOR ao sidecar, e > 256KB
+    assert Path(jsonl).stat().st_size > 256 * 1024  # a janela nao alcanca o inicio
+    _aponta(monkeypatch, tmp_path)
+    assert pergunta_aberta("sess-123") is None
 
 
 def test_transcript_ilegivel_nao_inventa_pergunta(tmp_path, monkeypatch):

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from app.models import AskQuestion
+from app.statusline import dirs_de_config
 
 _log = logging.getLogger("hangar.askquestion")
 
@@ -51,13 +52,18 @@ def _quando(obj: dict) -> float:
 
 
 def _respondida_depois(jsonl: str, desde: float) -> bool:
-    """A ultima pergunta ja foi respondida DEPOIS de `desde` (mtime do sidecar)?
+    """A pergunta ja foi respondida DEPOIS de `desde` (mtime do sidecar)?
 
     O sidecar nao e apagado quando a resposta vem pela TUI (so no /answer), entao ele sozinho nao
     prova que a pergunta segue aberta. Quem prova e o transcript: responder grava o `tool_use` do
-    AskUserQuestion e o `tool_result` dele. Sem transcript legivel devolve True — nao mostrar e o
-    comportamento de sempre, mostrar pergunta ja respondida seria pior."""
+    AskUserQuestion e o `tool_result` dele.
+
+    Duas respostas sao "sim" e as duas escondem a pergunta, de proposito: achei a resposta, ou nao
+    tenho como provar que ela nao existe. Ficar do outro lado prenderia a sessao em
+    `awaiting_input` para SEMPRE — e dai a fila nunca mais drena, porque o gatilho do drain e a
+    borda de subida de "entregavel" (sse.py) e ela nunca mais sobe."""
     ids: set[str] = set()
+    mais_antigo = None
     try:
         with open(jsonl, "rb") as fh:
             tam = fh.seek(0, os.SEEK_END)
@@ -65,6 +71,7 @@ def _respondida_depois(jsonl: str, desde: float) -> bool:
             fh.seek(inicio)
             linhas = fh.read().split(b"\n")
     except OSError:
+        _log.debug("askq: transcript ilegivel path=%s — trata como respondida", jsonl, exc_info=True)
         return True
     if inicio > 0:
         linhas = linhas[1:]        # o seek caiu no meio de uma linha
@@ -77,6 +84,8 @@ def _respondida_depois(jsonl: str, desde: float) -> bool:
             continue
         if not isinstance(obj, dict):
             continue
+        if (t := _quando(obj)) and (mais_antigo is None or t < mais_antigo):
+            mais_antigo = t
         for b in ((obj.get("message") or {}).get("content") or []):
             if not isinstance(b, dict):
                 continue
@@ -85,6 +94,15 @@ def _respondida_depois(jsonl: str, desde: float) -> bool:
             elif b.get("type") == "tool_result" and b.get("tool_use_id") in ids \
                     and _quando(obj) > desde:
                 return True
+    # A janela e contada do FIM do arquivo, entao ela envelhece: a sessao segue trabalhando, o
+    # transcript cresce e a resposta que eu procuro sai por cima. Quando a linha MAIS ANTIGA que eu
+    # li ja e posterior ao sidecar, minha janela nem alcanca o instante da pergunta — nao vi a
+    # resposta porque nao cheguei la, e nao porque ela nao existe. Sem esta saida a pergunta ficava
+    # "aberta" para sempre (achado da review).
+    if inicio > 0 and mais_antigo is not None and mais_antigo > desde:
+        _log.debug("askq: janela do transcript nao alcanca a pergunta path=%s — trata como "
+                   "respondida", jsonl)
+        return True
     return False
 
 
@@ -98,14 +116,18 @@ def pergunta_aberta(stem: Optional[str]) -> Optional[AskQuestion]:
     tela; o transcript diz se ela ja foi respondida."""
     if not stem:
         return None
-    from app.statusline import dirs_de_config
     for base in dirs_de_config():
         f = base / ".hangar-askq" / f"{stem}.json"
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             quando = f.stat().st_mtime
-        except OSError:
+        except FileNotFoundError:
             continue                 # ausente e o caso NORMAL: nao ha pergunta pendente
+        except OSError:
+            # Existe e nao da pra ler (permissao, disco). Calar aqui faria TODA sessao daquela conta
+            # reportar "sem pergunta" pra sempre, indistinguivel do caso normal acima.
+            _log.warning("askq: sidecar ilegivel path=%s", f, exc_info=True)
+            continue
         except ValueError:
             _log.debug("askq: sidecar ilegivel path=%s", f, exc_info=True)
             continue

@@ -3233,6 +3233,22 @@ def _select_aprovacao_kimi(name: str, info, option: int) -> dict:
     return {"ok": True, "feedback_pendente": escolhas[option - 1]["requires_feedback"]}
 
 
+def _recusa_se_so_enfileirou(name: str, res: dict) -> None:
+    """Plano B do /answer: o texto foi ACEITO pela fila mas NAO digitado (o gate recusou, porque o
+    picker segue aberto). Ate 01/09/2026 os tres provedores devolviam ok=true aqui e o app pintava a
+    bolha como enviada — a pessoa esperava por uma resposta que nunca sairia da fila, ja que a fila
+    so drena quando a sessao deixa de aguardar e quem a segurava era a propria pergunta.
+
+    Levanta 409 e NAO limpa o sidecar do hook: a pergunta continua aberta, e apaga-lo devolveria a
+    sessao pra `idle` na lista (ver askquestion.pergunta_aberta)."""
+    if res.get("delivered"):
+        return
+    _log.warning("resposta name=%s: texto do plano B ficou na fila, nao digitado", name)
+    raise HTTPException(409, detail=erro(
+        "erro_resposta_nao_entregue",
+        "nao consegui responder por aqui — a pergunta segue aberta, responda no terminal"))
+
+
 def _recusa_se_painel_aberto(name: str) -> None:
     # Com o painel anexado, a janela do tmux esta no tamanho DELE (~120x20). Quem conta linha no
     # pane — o seletor de opcao, o stepper do AskUserQuestion (terminal_input.answer_questions /
@@ -4814,6 +4830,7 @@ def answer(name: str, body: AnswerBody):
             res = _send_one(name, text)
             if not res["ok"]:
                 raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
+            _recusa_se_so_enfileirou(name, res)
             fallback = True
         return {"ok": True, "fallback": fallback}
 
@@ -4864,6 +4881,7 @@ def answer(name: str, body: AnswerBody):
             res = _send_one(name, text)
             if not res["ok"]:
                 raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
+            _recusa_se_so_enfileirou(name, res)
             return {"ok": True, "fallback": True}
         return {"ok": True, "fallback": False}
     try:
@@ -4883,17 +4901,7 @@ def answer(name: str, body: AnswerBody):
             res = _send_one(name, text)
             if not res["ok"]:
                 raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
-            if not res.get("delivered"):
-                # Texto ACEITO pela fila mas NAO digitado (o gate recusou: picker ainda aberto). Ate
-                # 01/09/2026 isto devolvia ok=true e o app pintava a bolha como enviada — a pessoa
-                # ficava esperando uma resposta que nunca sairia da fila, porque a fila so drena
-                # quando a sessao deixa de estar aguardando, e quem a segurava era esta pergunta.
-                # Nem limpa o sidecar: a pergunta continua aberta, e apaga-lo devolveria a sessao
-                # pra `idle` na lista (ver askquestion.pergunta_aberta).
-                _log.warning("ASKQ fallback name=%s: texto ficou na fila, nao digitado", name)
-                raise HTTPException(409, detail=erro(
-                    "erro_resposta_nao_entregue",
-                    "nao consegui responder por aqui — a pergunta segue aberta, responda no terminal"))
+            _recusa_se_so_enfileirou(name, res)
         fallback = True
     # Respondido: limpa o sidecar do hook pra um stale nao reabrir o stepper depois. Resolve o jsonl
     # igual aos outros endpoints; se nao resolver, pula a limpeza sem falhar a request.

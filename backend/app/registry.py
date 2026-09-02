@@ -1284,9 +1284,16 @@ class SessionRegistry:
         sem_menu = [i for i in infos
                     if i.state != "awaiting_input" and not getattr(i, "options", None) and i.jsonl]
         if sem_menu:
+            # return_exceptions: sidecar e conveniencia e nao pode derrubar a lista INTEIRA de
+            # sessoes — mesma regra do git status em _decorate_git (incidente de 2026-07-23).
             pends = await asyncio.gather(
-                *[asyncio.to_thread(pergunta_aberta, _sid(i.jsonl)) for i in sem_menu])
+                *[asyncio.to_thread(pergunta_aberta, _sid(i.jsonl)) for i in sem_menu],
+                return_exceptions=True)
             for info, q in zip(sem_menu, pends):
+                if isinstance(q, BaseException):
+                    _log.warning("askq: leitura da pergunta pendente falhou sessao=%s",
+                                 info.name, exc_info=q)
+                    continue
                 if q is None:
                     continue
                 info.state = "awaiting_input"
