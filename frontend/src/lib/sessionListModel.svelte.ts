@@ -136,6 +136,8 @@ export function createSessionListModel(opts: SessionListModelOptions) {
   const flatRows = $derived(groups.flatMap((g) => g.sessions));
   // Contagens e broadcast saem dos GRUPOS (pré-filtro), como o desktop já fazia: no store real
   // é o mesmo conjunto das rows, mas o Sidebar.test só preenche byServer.
+  // No celular isso também significa visitar os servidores na ordem dos grupos (alfabética), não
+  // na ordem crua das rows — mesmo conjunto, mensagem de falha pode listar os nomes fora de ordem.
   const allSessions = $derived(allGroups.flatMap((g) => g.sessions));
   const showFilter = $derived(allSessions.length > FILTER_FROM);
   const filterEmpty = $derived(filterText.trim() !== '' && groups.length === 0);

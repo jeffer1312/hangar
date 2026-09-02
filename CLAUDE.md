@@ -235,13 +235,14 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     unifying the two list views is the remaining "bigger fish", deliberately not done yet.
   - **A LÓGICA da lista também mora num lugar só** — `lib/sessionListModel.svelte.ts`
     (`createSessionListModel({ variant })`): agrupar/colapsar/filtrar, seleção+broadcast+comparar,
-    abrir/excluir/renomear/retomar/Git/Loop. `Sidebar` e `SessionList` instanciam o modelo com a
+    abrir/excluir/renomear/retomar/Git. `Sidebar` e `SessionList` instanciam o modelo com a
     sua variante e só mantêm o chrome próprio (rail/pin/kebab/hover/menu no desktop; drawer/feed/
     scroll no celular). O que diverge entre as views está na tabela `RULES` no topo do arquivo, uma
     regra por linha (como a preferência gravada é lida, modo efetivo de agrupamento, ordem dos
     grupos por servidor, rótulo que o filtro casa, ordem no Comparar, restaurar o servidor ativo
     depois da ação) — convergir é trocar um valor ali, de propósito. Lógica nova da lista entra no modelo, com teste nas DUAS variantes;
     template e CSS continuam por view, e o aviso de "mudar e verificar nas DUAS" vale para eles.
+    Loop segue no `SessionList` — só o celular abre pela lista; dar Loop ao desktop seria feature.
 
 - **i18n: todo texto de interface vem de `m.<chave>()`** (Paraglide, `frontend/src/paraglide/` gerado;
   `pt.json` + `en.json` em `frontend/messages/`). A trava em `src/lib/i18nGuard.test.ts` falha o teste

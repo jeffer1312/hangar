@@ -17,7 +17,7 @@ import * as m from '../paraglide/messages';
   import AttentionFeed from '../components/AttentionFeed.svelte';
   import AccountMenu from '../components/AccountMenu.svelte';
   import SessionSwitcherSheet from '../components/SessionSwitcherSheet.svelte';
-  import { getSessions, createSession } from '../lib/api';
+  import { createSession } from '../lib/api';
   import { listServers, getActiveId, selectServer, removeServer, renameServer, updateServer, onServersChanged, snapshotRemocao, removalStillMatches } from '../lib/auth';
   import type { AggSession, Provider } from '../lib/types';
   import type { RemovalSnapshot } from '../lib/auth';

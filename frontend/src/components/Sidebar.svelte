@@ -15,7 +15,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import StateChip from './StateChip.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
-  import type { SessionInfo, State, AggSession, Provider } from '../lib/types';
+  import type { SessionInfo, AggSession, Provider } from '../lib/types';
   import { cwdParts, rotuloEstado, stateColors, countAwaiting, initials, fmtWhen, latestAssistantEvent, clusterByPair, untrackedReason, providerTag } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -28,6 +28,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { navMode } from '../lib/navMode.svelte';
   import { ctxPanel } from '../lib/ctxPanel.svelte';
+  import { createSessionListModel } from '../lib/sessionListModel.svelte';
 
   const DEFAULT_BRANCHES = new Set(['main', 'master']);
 
@@ -80,13 +81,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     ctxDisponivel = true, overlaySession,
   }: Props = $props();
 
-  import { createSessionListModel } from '../lib/sessionListModel.svelte';
   // Toda a lógica compartilhada com o celular mora no modelo; aqui fica só o chrome do desktop
   // (rail, pin, kebab, espiada, menu de contexto, rename inline) e os embrulhos de uma linha.
   const model = createSessionListModel({
     variant: 'desktop',
-    onOpen: onSelect,
-    onCompare,
+    onOpen: (n) => onSelect(n),
+    onCompare: (ids) => onCompare(ids),
     currentSession: () => currentSession,
   });
 
