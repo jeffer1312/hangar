@@ -23,7 +23,10 @@ _log = logging.getLogger("hangar.orq_politica")
 CABECALHO = ("conta", "provider", "apelido", "modelos", "trocar?")
 SECAO_PODE = "O que pode"
 SECAO_NAO_PODE = "O que NÃO pode"
-PROVIDERS = ("claude", "kimi", "pi", "omp", "codex")
+# Sem `omp`: ele é aceito como provider de PAPEL (executor/revisor), mas a política dele é a do Pi
+# — `permitido()` normaliza omp→pi antes de procurar a regra, então uma linha `omp` na tabela nunca
+# seria consultada. Ver `_provider_inventario`.
+PROVIDERS = ("claude", "kimi", "pi", "codex")
 CONTA_PADRAO = "padrao"      # o ~/.claude
 CONTA_CODEX = "openai-codex"
 
@@ -180,6 +183,9 @@ def _secao_nao_pode(texto: str) -> str:
 
 
 def gravar_conta(c: ContaPolitica, mtime_lido: float | None = None) -> float:
+    if c.provider == "omp":
+        raise ValueError("a política do omp é a do Pi — libere a conta no provider `pi`, "
+                         "que vale pros dois; a tabela não tem linha `omp`")
     texto, _ = orq_md.ler_arquivo(caminho())
     texto = orq_md.trocar_linha(texto, CABECALHO, c.conta, _para_linha(c), SECAO_PODE)
     texto = orq_md.trocar_secao(texto, SECAO_NAO_PODE, _secao_nao_pode(texto))

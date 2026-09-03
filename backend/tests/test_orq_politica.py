@@ -159,6 +159,15 @@ def test_politica_vazia_nao_proibe_nada():
     assert pol.permitido("claude", "qualquer", "sonnet", "turbo", politica=[]) == "erro_orq_esforco_invalido"
 
 
+def test_tabela_recusa_linha_omp(maquina):
+    # `permitido()` normaliza omp->pi antes de procurar: uma linha `omp` gravada aqui nunca seria
+    # consultada, e a tela mostraria uma liberacao que nao vale nada.
+    with pytest.raises(ValueError, match="política do omp é a do Pi"):
+        pol.gravar_conta(pol.ContaPolitica("opencode-go", "omp"))
+    texto = ARQUIVO_VIVO.replace("| opencode-go | pi |", "| opencode-go | omp |")
+    assert [c.provider for c in pol.ler(texto)] == ["claude", "kimi"], "linha omp e ignorada na leitura"
+
+
 def test_permitido_omp_reusa_a_linha_do_pi(maquina):
     # omp e o MESMO credencial do pi (sem linha propria na tabela) — uma conta liberada pra "pi"
     # libera "omp" tambem, e uma conta pi nao liberada tambem barra o omp.
