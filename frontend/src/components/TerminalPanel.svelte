@@ -194,8 +194,8 @@
         alturaArrastada = secEl.style.height;
         secEl.style.height = '';
       } else {
-        // Volta do maximizado: repoe a altura arrastada -- sem isto, desmaximizar sempre caia nos
-        // 320px do CSS, perdendo o ajuste manual do usuario.
+        // Volta do maximizado: repoe a altura arrastada -- sem isto, desmaximizar sempre caia na
+        // altura-base do CSS, perdendo o ajuste manual do usuario.
         secEl.style.height = alturaArrastada;
       }
     }
@@ -589,9 +589,9 @@
   .tp-screens { flex: 1; min-height: 0; position: relative; }
   /* `--glass-panel` (o veu do slider TRANSPARENCIA) e nao `--surface-inset` (o slider "Solidez das
      caixas"), divergindo de proposito da regra "area de texto usa --surface-inset": o que muda a
-     leitura aqui e o TAMANHO. 87% numa caixinha de campo de texto se le como caixa; numa faixa de
-     320px de largura inteira se le como PAREDE -- com papel de parede ligado, a foto atravessa o
-     chat todo e para no terminal. O fundo do xterm e rgba(0,0,0,0) de proposito (ver CLAUDE.md), e
+     leitura aqui e o TAMANHO. 87% numa caixinha de campo de texto se le como caixa; numa faixa da
+     altura do painel, de largura inteira, se le como PAREDE -- com papel de parede ligado, a foto
+     atravessa o chat todo e para no terminal. O fundo do xterm e rgba(0,0,0,0) de proposito (ver
      quem pinta e este bloco: seguindo o painel, o terminal entra no mesmo vidro do resto. */
   /* Maximizado usa o MESMO veu: o chat esta escondido atras (onMaximizar -> DesktopShell esconde
      .desktop-main com visibility:hidden), entao nao ha texto pra vazar e nao existe motivo pra um

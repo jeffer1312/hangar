@@ -94,6 +94,66 @@ def test_nunca_toca_em_o_que_nao_e_gerenciado(tmp_path, monkeypatch):
     assert real.is_dir() and not real.is_symlink()
     assert os.readlink(link_estranho) == str(tmp_path / "outro-lugar")
 
+def test_link_quebrado_com_skill_viva_noutra_fonte_recria_no_mesmo_run(tmp_path, monkeypatch):
+    """Regressão: sweep removia e o laço de criação pulava (snapshot velho) — a skill ficava
+    fora das pontes até o rebuild seguinte."""
+    home = _home(tmp_path, monkeypatch)
+    viva = _skill(home, ".claude", "skills", "s")
+    ponte = home / ".pi" / "agent" / "skills-bridge"
+    ponte.mkdir(parents=True)
+    # link gerenciado pendurado pro cache (plugin removido), mas a skill vive em ~/.claude/skills
+    (ponte / "s").symlink_to(home / ".claude" / "plugins" / "cache" / "ecc" / "ecc" /
+                             "1.0.0" / "skills" / "s")
+
+    st = skill_bridge.rebuild(home, log=lambda *a: None)["pi"]
+
+    assert st["removidos"] == 1 and st["criados"] == 1
+    assert Path(os.readlink(ponte / "s")) == viva
+
+
+def test_marcador_como_substring_fora_das_fontes_nao_e_gerenciado(tmp_path, monkeypatch):
+    """Regra dura: /mnt/backup/<home>/.claude/skills/foo CONTÉM o marcador como substring mas
+    resolve fora das fontes — nunca pode ser apagado."""
+    home = _home(tmp_path, monkeypatch)
+    _skill(home, ".claude", "skills", "s")
+    backup = tmp_path / "mnt" / "backup" / str(home).lstrip("/") / ".claude" / "skills" / "foo"
+    backup.mkdir(parents=True)
+    (backup / "SKILL.md").write_text("x", encoding="utf-8")
+    ponte = home / ".codex" / "skills"
+    ponte.mkdir(parents=True)
+    link = ponte / "backup-do-usuario"
+    link.symlink_to(backup)
+
+    skill_bridge.rebuild(home, log=lambda *a: None)
+
+    assert link.is_symlink() and Path(os.readlink(link)) == backup
+
+
+def test_link_relativo_pra_dentro_de_fonte_e_gerenciado(tmp_path, monkeypatch):
+    """Link relativo (o jeito natural de fazer à mão de dentro da ponte) resolve pra fonte:
+    é gerenciado — apontando certo, vira 'mantido', não bloqueio silencioso."""
+    home = _home(tmp_path, monkeypatch)
+    origem = _skill(home, ".claude", "skills", "s")
+    ponte = home / ".kimi-code" / "skills-bridge"
+    ponte.mkdir(parents=True)
+    (ponte / "s").symlink_to(os.path.relpath(origem, ponte))
+
+    st = skill_bridge.rebuild(home, log=lambda *a: None)["kimi"]
+
+    assert st["mantidos"] == 1 and st["criados"] == 0 and st["removidos"] == 0
+
+
+def test_zero_skills_nas_fontes_recusa_o_sweep(tmp_path, monkeypatch):
+    """Update do Claude reorganizando o layout não pode derrubar as três pontes de uma vez."""
+    home = _home(tmp_path, monkeypatch)
+    ponte = home / ".pi" / "agent" / "skills-bridge"
+    ponte.mkdir(parents=True)
+    link = ponte / "s"
+    link.symlink_to(home / ".claude" / "skills" / "s")  # pendurado, fonte não existe
+
+    assert skill_bridge.rebuild(home, log=lambda *a: None) == {}
+    assert link.is_symlink()  # intacto
+
 
 def test_avisa_quando_config_do_harness_nao_aponta_pra_ponte(tmp_path, monkeypatch, caplog):
     home = _home(tmp_path, monkeypatch)
