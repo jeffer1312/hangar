@@ -18,7 +18,7 @@
   }
   let { desktop, papeis = [], onSalvo = undefined }: Props = $props();
 
-  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
+  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
 
   let dados = $state<OrqPolitica | null>(null);
   let carregando = $state(false);

@@ -21,6 +21,7 @@
   "estado_aguardando": "Awaiting input",
   "estado_encerrado": "Ended",
   "formato_sem_transcript_pi": "Pi session without transcript: appears after the 1st turn — if it doesn't, close the pane and reopen it with `pi`",
+  "formato_sem_transcript_omp": "OMP session without transcript: appears after the 1st turn — if it doesn't, close the pane and reopen it with `omp` (/reload does not reload the extension)",
   "formato_sem_transcript_kimi": "Kimi session without transcript: appears after the 1st turn — if it doesn't, close the pane and reopen it with `kimi`",
   "formato_sem_transcript_claude": "claude opened without --session-id: can't reliably trace the transcript",
   "formato_sem_projeto": "no project",

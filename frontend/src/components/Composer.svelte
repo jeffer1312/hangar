@@ -145,7 +145,8 @@
   });
 
   const isCodex = $derived(provider === 'codex');
-  const isPi = $derived(provider === 'pi');
+  // OMP é o fork do Pi (mesma TUI, mesmo popover de modelo/esforço) — trata igual aqui.
+  const isPi = $derived(provider === 'pi' || provider === 'omp');
   const isKimi = $derived(provider === 'kimi');
 
   // ── Slash commands: busca uma vez por sessao (com cache) ────────────────────
@@ -690,7 +691,7 @@
   // modelo por dentro — "Claude" ali era mentira; usa o modelo real (pill/statusline), caindo no
   // nome do motor enquanto a statusline nao chegou.
   const nomePlaceholder = $derived(
-    isCodex ? 'Codex' : isKimi ? 'Kimi' : isPi ? 'Pi'
+    isCodex ? 'Codex' : isKimi ? 'Kimi' : isPi ? (provider === 'omp' ? 'OMP' : 'Pi')
       : engine ? (pillModel ?? engine) : 'Claude');
   // Haiku nao usa esforco de raciocinio (o picker responde "Effort not supported").
   const semEsforcoClaude = $derived((pillModel ?? '').toLowerCase().includes('haiku'));
@@ -1978,6 +1979,7 @@
     open={piPopOpen}
     anchor={piPillEl}
     {sessionName}
+    provider={provider === 'omp' ? 'omp' : 'pi'}
     onApplied={handlePiModelApplied}
     onClose={() => (piPopOpen = false)}
   />

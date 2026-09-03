@@ -21,6 +21,7 @@
   "estado_aguardando": "aguardando",
   "estado_encerrado": "encerrado",
   "formato_sem_transcript_pi": "sessão Pi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `pi`",
+  "formato_sem_transcript_omp": "sessão OMP sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `omp` (o /reload não recarrega a extensão)",
   "formato_sem_transcript_kimi": "sessão Kimi sem transcript: aparece depois do 1º turno — se não aparecer, feche o pane e abra de novo pelo `kimi`",
   "formato_sem_transcript_claude": "claude aberto sem --session-id: não dá pra rastrear o transcript com segurança",
   "formato_sem_projeto": "sem projeto",

@@ -370,9 +370,9 @@ import * as m from '../paraglide/messages';
         </span>
       <PlanBar {session} />
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
-           `claude --resume`): numa sessao Pi/Kimi o botao so poderia errar, entao mostramos a razao
-           no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
-      {#if untracked && (session.provider === 'pi' || session.provider === 'kimi')}
+           `claude --resume`): numa sessao Pi/Kimi/OMP o botao so poderia errar, entao mostramos a
+           razao no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
+      {#if untracked && (session.provider === 'pi' || session.provider === 'kimi' || session.provider === 'omp')}
         <span class="untracked-hint">{untrackedReason(session.provider)}</span>
       {:else if untracked}
         <button

@@ -32,7 +32,7 @@ import * as m from '../paraglide/messages';
 // (`provider === 'codex' ? 'Codex' : 'Claude'`) e, quando o Pi entrou como terceiro provider, toda
 // sessão Pi aparecia rotulada como "Claude". Um lugar só -> um provider novo não volta a mentir.
 // Ausente/desconhecido -> "Claude", que é o default do backend (SessionInfo.provider).
-const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi' };
+const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', pi: 'Pi', kimi: 'Kimi', omp: 'OMP' };
 
 export function providerName(p: SessionInfo['provider'] | null | undefined): string {
   return PROVIDER_NAMES[p ?? 'claude'] ?? 'Claude';
@@ -54,6 +54,7 @@ export function providerTag(p: SessionInfo['provider'] | null | undefined): stri
 // arquivo então), definitivo se a extensão de estado não carregou naquele pane.
 export function untrackedReason(p: SessionInfo['provider'] | null | undefined): string {
   if (p === 'pi') return m.formato_sem_transcript_pi();
+  if (p === 'omp') return m.formato_sem_transcript_omp();
   if (p === 'kimi') return m.formato_sem_transcript_kimi();
   return m.formato_sem_transcript_claude();
 }

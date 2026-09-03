@@ -31,11 +31,13 @@
   }
   let { open, onClose, sessionName, sessoes, abaInicial = 'papeis' }: Props = $props();
 
-  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
+  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
   const NIVEIS: Record<string, string[]> = {
     claude: ['low', 'medium', 'high', 'xhigh', 'max'],
     pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   };
+  // OMP é o fork do Pi — mesmos níveis de esforço.
+  NIVEIS.omp = NIVEIS.pi;
 
   let isDesktop = $state(typeof window !== 'undefined' && window.matchMedia('(min-width: 820px)').matches);
   $effect(() => {

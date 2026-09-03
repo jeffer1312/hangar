@@ -734,10 +734,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarMark size={18} /></span>
                 {/if}
                 {#if !expanded && !model.selectMode && provTag}
-                  <!-- Rail recolhido: não cabe chip na linha (não há linha), então o rótulo vira uma
-                       etiqueta colada na base do avatar/spinner. Absoluta, pra não mudar a altura da
-                       row nem empurrar as iniciais. -->
-                  <span class="prov-rail">{provTag}</span>
+                  <!-- Rail recolhido: nao cabe chip na linha; o glifo do harness vai colado na base
+                       do avatar. Absoluto, pra nao mudar a altura da row nem empurrar as iniciais. -->
+                  <span class="prov-rail" title={provTag}><ProviderGlyph provider={s.provider} size={10} /></span>
                 {/if}
               </span>
               {#if !expanded && !model.selectMode && !provTag}
@@ -844,10 +843,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
             {#if expanded && !model.selectMode}
               <!-- Retomar (paridade com o SessionCard do mobile): unica acao possivel numa linha "sem
                    id" -> visivel sempre (nao escondida no hover), tingida de accent. Reusa resumeSession.
-                   Fora do Pi/Kimi: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS
-                   de matar o pane -> num pane Pi/Kimi ofereceria a conversa do agente errado e mataria
+                   Fora do Pi/Kimi/OMP: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS
+                   de matar o pane -> num pane Pi/Kimi/OMP ofereceria a conversa do agente errado e mataria
                    a sessao viva. Ali o title da linha ja diz o que fazer (untrackedReason). -->
-              {#if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi'}
+              {#if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi' && s.provider !== 'omp'}
                 <button
                   class="sess-resume"
                   onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}
@@ -1621,10 +1620,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      preenche — a -7px a etiqueta passava da row e encostava no avatar de baixo. */
   .prov-rail {
     position: absolute; left: 50%; bottom: -3px; transform: translateX(-50%);
-    font-size: 9px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.3;
     color: var(--text-secondary); background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
-    padding: 0 4px; border-radius: var(--radius-full); white-space: nowrap;
+    padding: 1px 3px; border-radius: var(--radius-full); white-space: nowrap;
+    display: inline-flex; align-items: center;
   }
   .engine-chip {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;

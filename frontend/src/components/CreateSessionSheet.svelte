@@ -34,10 +34,10 @@
   }
   let { open, servers, onClose, onCreate, onOpenSession, bastao = null }: Props = $props();
 
-  // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi ou
-  // Kimi (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor fora do
-  // Claude com 400, entao os dois pickers abaixo seguem Claude-only).
-  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi'];
+  // Provider da sessao nova: Claude (padrao, tmux), Codex (app-server, sem tmux/config_dir), Pi,
+  // Kimi ou OMP (pane tmux como o Claude, mas sem config_dir e sem motor — o backend recusa motor
+  // fora do Claude com 400, entao os pickers abaixo seguem Claude-only).
+  const PROVIDERS: Provider[] = ['claude', 'codex', 'pi', 'kimi', 'omp'];
   let provider = $state<Provider>('claude');
   let providers = $state<Record<string, { disponivel: boolean; motivo: string | null }>>({});
   let providersCarregando = $state(true);
