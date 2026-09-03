@@ -9,7 +9,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from app import registry
+from app import pair, registry
 from app import procinfo
 from app.registry import SessionRegistry
 from app.adapters.codex import sessions as codex_sessions
@@ -18,10 +18,15 @@ from app.adapters.codex.adapter import CodexAdapter
 
 
 @pytest.fixture(autouse=True)
-def _isolate(tmp_path):
+def _isolate(tmp_path, monkeypatch):
     # Cache de classe compartilhado -> zera entre testes. Sidecars redirecionados pra tmp.
+    # pair.settings.projects_dir tambem: reg.list() varre pareamento (Task 8) a cada chamada, e
+    # sem isto varria o .hangar-pair REAL de quem roda (achado do review).
     SessionRegistry._jsonl_cache.clear()
     SessionRegistry._fd_locked.clear()
+    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", {})
+    monkeypatch.setattr(registry, "apos_saida_por_morte", None)
     sdir = tmp_path / "codex-sessions"
     with patch.object(codex_sessions, "_dir", lambda: sdir), \
          patch.object(registry.tmux, "new_session", return_value=True), \

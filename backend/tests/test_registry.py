@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 import pytest
 from unittest.mock import patch
-from app import registry
+from app import pair, registry
 from app.registry import (
     SessionRegistry,
     sanitize_cwd,
@@ -25,6 +25,18 @@ def _clear_jsonl_cache():
     SessionRegistry._fd_locked.clear()
     SessionRegistry._status_cache.clear()
     SessionRegistry._label_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _pair_dir_isolado(tmp_path, monkeypatch):
+    # list() varre pareamento (Task 8) e le pair.settings.projects_dir SEMPRE — mesmo quando o
+    # teste isola o SessionRegistry com projects_dir=tmp_path proprio. Sem isto a suite varria o
+    # .hangar-pair REAL de quem roda (achado do review de Task 8).
+    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", {})
+    # sem isto, um sweep que ache um ausente de verdade dispara uma thread real (_drain_session)
+    # que chama registry.list() de novo, fora da janela desta fixture (achado do review de Task 8).
+    monkeypatch.setattr(registry, "apos_saida_por_morte", None)
 
 
 def test_sanitize_cwd_matches_claude_scheme():

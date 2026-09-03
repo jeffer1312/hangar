@@ -39,6 +39,48 @@ def test_ausente_por_tempo_e_dois_polls_sai_do_grupo_e_avisa_pela_fila():
         assert c.args[0].startswith("[de: hangar] 'a' encerrou fora do app e saiu do grupo de trabalho.")
         assert c.kwargs.get("delivered") is False
     assert sorted(drenados) == ["b", "c"]
+    # 2a varredura do mesmo nome ja limpo (ex: outra instancia do registry rodando o mesmo tick):
+    # 'a' nao tem mais sidecar, entao nao volta a ser candidato -- mas isto so nao estoura porque a
+    # remocao do dict usa pop(n, None), nunca del (achado do review de Task 8).
+    with patch("app.registry.PromptQueue"):
+        r._varrer_pares_mortos({"b", "c"}, agora=200.0)
+
+
+class _DictRemoveNoSnapshot(dict):
+    """Simula OUTRA instância removendo a MESMA chave entre o snapshot desta varredura (o `for x in
+    cls._pair_ausencias` do loop de limpeza) e a remoção dela própria — a janela que só um
+    `pop(n, None)` tolera (achado do review de Task 8: `del` estourava KeyError aqui)."""
+
+    def __iter__(self):
+        for k in list(dict.keys(self)):
+            dict.pop(self, k, None)
+            yield k
+
+
+class _DictRemoveNoSetdefault(dict):
+    """Mesma ideia, pro segundo ponto de remoção (pós-portão de tempo): simula a outra instância
+    tendo lido o MESMO `primeira` (`setdefault` não sobrescreve) e já removido a chave um instante
+    depois — antes desta instância chegar no seu próprio `pop`/`del`."""
+
+    def setdefault(self, key, default):
+        val = dict.setdefault(self, key, default)
+        dict.pop(self, key, None)
+        return val
+
+
+def test_limpeza_de_ausencia_obsoleta_tolera_remocao_concorrente(monkeypatch):
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", _DictRemoveNoSnapshot({"fantasma": 0.0}))
+    r = _reg()
+    r._varrer_pares_mortos({"b"}, agora=1000.0)   # nao pode estourar KeyError
+    assert "fantasma" not in SessionRegistry._pair_ausencias
+
+
+def test_pos_portao_tolera_remocao_concorrente(monkeypatch):
+    pair.join("a", "b")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", _DictRemoveNoSetdefault({"a": 0.0}))
+    r = _reg()
+    with patch("app.registry.PromptQueue"):
+        r._varrer_pares_mortos({"b"}, agora=SessionRegistry._PAIR_AUSENCIA_MIN_S)   # nao pode estourar KeyError
 
 
 def test_volta_a_aparecer_zera_a_contagem():

@@ -5,7 +5,9 @@ from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 from app.auth import require_auth
 from app.config import settings
-from app import tmux
+from app import pair, tmux
+from app import registry as registry_mod
+from app.registry import SessionRegistry
 import app.api as api_mod
 
 
@@ -15,6 +17,16 @@ def _models_cache_isolado(models_cache_em_tmp):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _pair_dir_isolado(tmp_path, monkeypatch):
+    # registry.list() varre pareamento (Task 8) a cada chamada, inclusive dentro de rotas exercitadas
+    # via TestClient — sem isto a suite varria o .hangar-pair REAL de quem roda (achado do review).
+    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", {})
+    # api.py registra este gancho no import (dispara thread real de _drain_session, que chama
+    # registry.list() de novo) — sem neutraliza-lo aqui, um sweep achando ausente de verdade nesta
+    # suite dispararia essa thread fora da janela isolada (achado do review de Task 8).
+    monkeypatch.setattr(registry_mod, "apos_saida_por_morte", None)
 
 
 @pytest.fixture

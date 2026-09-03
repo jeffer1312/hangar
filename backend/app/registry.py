@@ -1726,12 +1726,12 @@ class SessionRegistry:
         candidatos = pair.referenciados_locais() - vivos
         cls = type(self)
         for n in [x for x in cls._pair_ausencias if x not in candidatos]:
-            del cls._pair_ausencias[n]
+            cls._pair_ausencias.pop(n, None)  # varredura concorrente (2 registries) pode já ter tirado
         for n in candidatos:
             primeira = cls._pair_ausencias.setdefault(n, agora)
             if agora - primeira < cls._PAIR_AUSENCIA_MIN_S:
                 continue
-            del cls._pair_ausencias[n]
+            cls._pair_ausencias.pop(n, None)  # idem: 2 threads podem passar o portão de tempo juntas
             try:
                 ex = pair_leave(n)
             except Exception as e:
