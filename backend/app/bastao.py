@@ -28,6 +28,7 @@ import logging
 import os
 import re
 import threading
+import time
 import unicodedata
 from pathlib import Path
 
@@ -202,7 +203,7 @@ def _de_onde_veio(jsonl: str, cwd: str | None, provider: str, nome: str) -> list
     return out
 
 
-def _onde_esta_o_trabalho(cwd: str | None) -> list[str]:
+def _onde_esta_o_trabalho(cwd: str | None, desde: float | None) -> list[str]:
     from app import git_ops
 
     if not cwd:
@@ -213,13 +214,24 @@ def _onde_esta_o_trabalho(cwd: str | None) -> list[str]:
     out = [f"- Branch: `{branch or 'HEAD destacado'}`" + (" (worktree ligada)" if worktree else "")]
     resumo = git_ops.git_summary(cwd)
     stat = git_ops.git_diffstat(cwd)
+    commits = git_ops.git_log_since(cwd, desde) if desde else []
     if resumo:
         pedacos = [f"{resumo['dirty']} arquivo(s) não commitado(s)"]
         if stat:
             pedacos.append(f"+{stat['added']} -{stat['removed']} linhas vs HEAD")
         if resumo.get("ahead") is not None:
-            pedacos.append(f"{resumo['ahead']} commit(s) à frente, {resumo['behind']} atrás")
+            # Com a lista de commits, "N à frente" é redundante — mas "N atrás" não tem substituto.
+            atras = f"{resumo['behind']} atrás" if resumo.get("behind") else ""
+            pedacos.append(atras if commits else
+                           f"{resumo['ahead']} commit(s) à frente, {resumo['behind']} atrás")
+            pedacos = [p for p in pedacos if p]
         out.append("- " + " · ".join(pedacos))
+    if commits:
+        # `--since` pega commit de OUTRA sessão no mesmo período também — por isso "desde HH:MM",
+        # não "desta sessão"; separar por autor não é confiável (mesmo user.name).
+        hora = time.strftime("%d/%m %H:%M", time.localtime(desde))
+        out.append(f"- Commits desde {hora} (início do transcript):")
+        out += [f"  - `{c['short']}` {_uma_linha(c['subject'], 120)}" for c in commits]
     try:
         mudados = git_ops.changed_files(cwd)
     except git_ops.GitError as e:
@@ -597,6 +609,14 @@ def _eventos(nome: str, jsonl: str, provider: str) -> list:
         return []
 
 
+def _inicio(jsonl: str) -> float | None:
+    from app.pqueue import _transcript_start_ts
+    try:
+        return _transcript_start_ts(jsonl) or None
+    except Exception:
+        return None
+
+
 def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = "") -> str:
     """Dossiê em markdown de UMA sessão, pronto pra outra ler com um `Read`.
 
@@ -605,6 +625,7 @@ def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = ""
     falha vira uma linha dizendo isso."""
     eventos = _eventos(nome, jsonl, provider)
     plano = _plano_citado(jsonl)
+    desde = _inicio(jsonl)
     linhas: list[str] = [
         f"# Passagem de bastão — sessão `{nome or '?'}`",
         "",
@@ -622,7 +643,7 @@ def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = ""
     ]
     linhas += _tentar("De onde veio", lambda: _de_onde_veio(jsonl, cwd, provider, nome))
     linhas += _tentar("O que falta", lambda: _o_que_falta(jsonl, cwd, nome, eventos, plano))
-    linhas += _tentar("Onde está o trabalho", lambda: _onde_esta_o_trabalho(cwd))
+    linhas += _tentar("Onde está o trabalho", lambda: _onde_esta_o_trabalho(cwd, desde))
     linhas += _tentar("Arquivos e comandos", lambda: _arquivos_e_comandos(eventos, cwd))
     linhas += _tentar("Grupo e par", lambda: _grupo_e_par(nome))
     # Daqui pra baixo é citação. O rótulo vai no TÍTULO, e não só no aviso do topo, porque quem lê

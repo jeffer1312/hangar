@@ -614,4 +614,51 @@ def test_sem_plano_nem_loop_lista_os_pedidos_sem_resposta(tmp_path):
     assert "AINDA SEM resposta" in bloco
     for t in ("então commita", "commit do README", "avisa o par"):
         assert t in bloco
+
+
+# ---------------------------------------------------------------------------
+# Onde está o trabalho: commits da sessão (bastão v2, item 2)
+# ---------------------------------------------------------------------------
+
+def test_onde_esta_o_trabalho_lista_os_commits_da_sessao(tmp_path, monkeypatch):
+    from app import git_ops, pqueue
+    monkeypatch.setattr(git_ops, "head_info", lambda cwd: ("main", False))
+    monkeypatch.setattr(git_ops, "git_summary", lambda cwd: {"dirty": 0, "ahead": 14, "behind": 0})
+    monkeypatch.setattr(git_ops, "git_diffstat", lambda cwd: None)
+    monkeypatch.setattr(git_ops, "changed_files", lambda cwd: [])
+    monkeypatch.setattr(git_ops, "git_log_since",
+                        lambda cwd, desde, n=14: [{"short": "3c6db932", "subject": "refactor(pair): textos"},
+                                                  {"short": "1e52643f", "subject": "fix(pair): varredura"}])
+    monkeypatch.setattr(pqueue, "_transcript_start_ts", lambda jsonl: 1.0)
+    md = bastao.montar(str(FIX / "jsonl_samples.jsonl"), str(tmp_path), "claude", "s")
+    bloco = _bloco(md, "Onde está o trabalho")
+    assert "Commits desde" in bloco
+    assert "`3c6db932` refactor(pair): textos" in bloco and "`1e52643f` fix(pair): varredura" in bloco
+    assert "à frente" not in bloco            # a contagem só fica quando o log vem vazio
+
+
+def test_commits_listados_preservam_o_atras(tmp_path, monkeypatch):
+    from app import git_ops, pqueue
+    monkeypatch.setattr(git_ops, "head_info", lambda cwd: ("main", False))
+    monkeypatch.setattr(git_ops, "git_summary", lambda cwd: {"dirty": 0, "ahead": 1, "behind": 3})
+    monkeypatch.setattr(git_ops, "git_diffstat", lambda cwd: None)
+    monkeypatch.setattr(git_ops, "changed_files", lambda cwd: [])
+    monkeypatch.setattr(git_ops, "git_log_since", lambda cwd, desde, n=14: [{"short": "abc1234", "subject": "x"}])
+    monkeypatch.setattr(pqueue, "_transcript_start_ts", lambda jsonl: 1.0)
+    bloco = _bloco(bastao.montar(str(FIX / "jsonl_samples.jsonl"), str(tmp_path), "claude", "s"),
+                   "Onde está o trabalho")
+    assert "3 atrás" in bloco and "à frente" not in bloco
+
+
+def test_sem_commit_na_sessao_mantem_a_contagem(tmp_path, monkeypatch):
+    from app import git_ops, pqueue
+    monkeypatch.setattr(git_ops, "head_info", lambda cwd: ("main", False))
+    monkeypatch.setattr(git_ops, "git_summary", lambda cwd: {"dirty": 0, "ahead": 2, "behind": 0})
+    monkeypatch.setattr(git_ops, "git_diffstat", lambda cwd: None)
+    monkeypatch.setattr(git_ops, "changed_files", lambda cwd: [])
+    monkeypatch.setattr(git_ops, "git_log_since", lambda cwd, desde, n=30: [])
+    monkeypatch.setattr(pqueue, "_transcript_start_ts", lambda jsonl: 1.0)
+    bloco = _bloco(bastao.montar(str(FIX / "jsonl_samples.jsonl"), str(tmp_path), "claude", "s"),
+                   "Onde está o trabalho")
+    assert "2 commit(s) à frente" in bloco
     assert "agora roda os testes" not in bloco

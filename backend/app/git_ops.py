@@ -334,6 +334,25 @@ def git_log(cwd: str, n: int = 50, grep: str | None = None) -> list[dict]:
     return out
 
 
+def git_log_since(cwd: str, desde: float, n: int = 14) -> list[dict]:
+    """Commits da branch atual com committer date >= `desde` (epoch), mais velhos primeiro.
+    Repo sem commit, fora de repo, git ausente ou timeout -> []. Só leitura; nunca levanta."""
+    try:
+        p = _run(cwd, "log", f"--since=@{int(desde)}", "-n", str(n), "--reverse",
+                 "--pretty=format:%h\x1f%s")
+    except GitError:
+        return []
+    if p.returncode != 0:
+        return []
+    out = []
+    for rec in p.stdout.splitlines():
+        if "\x1f" not in rec:
+            continue
+        short, subject = rec.split("\x1f", 1)
+        out.append({"short": short, "subject": subject.strip()})
+    return out
+
+
 def assign_lanes(commits: list[dict]) -> list[dict]:
     """Atribui uma coluna (lane) a cada commit pro grafo, a partir da saida de git_log (topo-order,
     child antes de parent). Mantem 'lanes' ativas (cada slot = hash esperado naquela coluna). O 1o

@@ -1,5 +1,8 @@
 """Cobertura do git_ops: list/switch/action contra um repo temporario + rejeicoes e erro de binario."""
 import os
+import subprocess
+import time
+
 import pytest
 
 from app import git_ops
@@ -907,3 +910,33 @@ def test_head_info_worktree(tmp_path):
     assert git_ops.head_info(wt) == ("feature", True)
     assert git_ops.head_info(d) == ("main", False)
     assert git_ops.head_info(str(tmp_path / "nao-repo")) == (None, False)
+
+
+def _git(cwd, *args, env=None):
+    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True,
+                   env={**os.environ, **(env or {})})
+
+
+def test_git_log_since_lista_so_os_commits_depois_do_instante(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@t"); _git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "a").write_text("1"); _git(tmp_path, "add", "a")
+    velho = {"GIT_COMMITTER_DATE": "2020-01-01T00:00:00", "GIT_AUTHOR_DATE": "2020-01-01T00:00:00"}
+    _git(tmp_path, "commit", "-q", "-m", "antigo: nao entra", env=velho)
+    desde = time.time() - 60
+    (tmp_path / "b").write_text("2"); _git(tmp_path, "add", "b")
+    _git(tmp_path, "commit", "-q", "-m", "feat(x): novo entra")
+    got = git_ops.git_log_since(str(tmp_path), desde)
+    assert [c["subject"] for c in got] == ["feat(x): novo entra"]
+    assert len(got[0]["short"]) >= 7
+
+
+def test_git_log_since_fora_de_repo_devolve_vazio(tmp_path):
+    assert git_ops.git_log_since(str(tmp_path), 0.0) == []
+
+
+def test_git_log_since_engole_giterror(tmp_path, monkeypatch):
+    def explode(cwd, *a, **k):
+        raise git_ops.GitError(504, "git timeout")
+    monkeypatch.setattr(git_ops, "_run", explode)
+    assert git_ops.git_log_since(str(tmp_path), 0.0) == []
