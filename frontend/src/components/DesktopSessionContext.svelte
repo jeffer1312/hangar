@@ -41,6 +41,9 @@ import * as m from '../paraglide/messages';
     // opcionais: sem handler, sem botao (mesma regra da NavBar).
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
+    // Navegador embutido: o botão na fileira de ações ATIVA a aba (criando o navegador da sessão
+    // se não tem). A aba Navegador na tab bar só EXISTE quando a sessão tem navegador aberto.
+    onOpenNavegador?: () => void;
     onOpenRun?: () => void;
     runRunning?: boolean;
     onOpenAttachments?: () => void;
@@ -86,6 +89,7 @@ import * as m from '../paraglide/messages';
     events = null, histGap = '', cwd = null,
     serverLabel = '', provider = 'claude', sessionName = '', serverId = '',
     onOpenTerminal = undefined, terminalAlert = false,
+    onOpenNavegador = undefined,
     onOpenRun = undefined, runRunning = false,
     onOpenAttachments = undefined,
     onOpenActivity = undefined, activityBadge = 0, activityRunning = false,
@@ -98,7 +102,11 @@ import * as m from '../paraglide/messages';
     toggleExterno = false,
   }: Props = $props();
 
-  const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
+  const hasActions = $derived(onOpenTerminal || onOpenNavegador || onOpenRun || onOpenAttachments || onOpenActivity);
+  const navChave = $derived(workspaceSessionKey({ serverId, name: sessionName }));
+  // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
+  // botão da fileira ou o agente via hangar-preview open).
+  const temNav = $derived(navChave in navegadorPanel.abertos);
   // Atalho da secao Grupo: com UM par, tocar abre a sessao dele direto no modal. Com 2+ membros a
   // secao continua abrindo a PairSheet — la existe o botao por membro, e escolher por quem clicou
   // seria adivinhacao.
@@ -228,6 +236,16 @@ import * as m from '../paraglide/messages';
           <span>{m.ctx_terminal()}</span>
         </button>
       {/if}
+      {#if onOpenNavegador}
+        <button class="ctx-action" onclick={onOpenNavegador} aria-label={m.ctx_navegador()}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M3 12h18"/>
+            <path d="M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9s1.4-6.4 3.9-9z"/>
+          </svg>
+          <span>{m.ctx_navegador()}</span>
+        </button>
+      {/if}
       {#if onOpenRun}
         <button class="ctx-action run-btn" class:running={runRunning} onclick={onOpenRun}
                 aria-label={runRunning ? m.ctx_rodando_abrir() : m.ctx_rodar_projeto()}>
@@ -276,18 +294,20 @@ import * as m from '../paraglide/messages';
             onclick={() => (ctxPanel.aba = 'arquivos')}>
       {m.arq_aba()}
     </button>
+    {#if temNav}
     <button type="button" id="aba-ctx-navegador" class="aba" class:sel={ctxPanel.aba === 'navegador'}
             role="tab" aria-selected={ctxPanel.aba === 'navegador'} aria-controls="painel-ctx-navegador"
             onclick={() => (ctxPanel.aba = 'navegador')}>
       {m.ctx_navegador()}
     </button>
+    {/if}
   </div>
 
-  {#if ctxPanel.aba === 'navegador'}
+  {#if ctxPanel.aba === 'navegador' && temNav}
   <!-- O navegador é uma ABA da coluna: trocar pra Contexto/Arquivos esconde o view (desmonta o
        painel -> nav-hide; o agente segue usando via CDP), nunca fecha. O × dele é quem fecha. -->
   <div id="painel-ctx-navegador" role="tabpanel" aria-labelledby="aba-ctx-navegador" class="ctx-tab ctx-tab-nav">
-    <NavegadorPane navKey={workspaceSessionKey({ serverId, name: sessionName })} />
+    <NavegadorPane navKey={navChave} />
   </div>
   {/if}
 

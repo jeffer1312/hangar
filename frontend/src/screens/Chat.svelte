@@ -837,6 +837,7 @@
   // de verdade é o × do painel. A sidebar colapsa com a aba ativa (efeito no ctxPanel).
   function alternarNavegador() {
     if (ctxPanel.aba === 'navegador' && !ctxPanel.recolhido) { ctxPanel.aba = 'contexto'; return; }
+    marcarNavAberto(navKey);   // a sessão ganha navegador — e a aba nasce na tab bar
     ctxPanel.recolhido = false;
     ctxPanel.aba = 'navegador';
   }
@@ -1900,6 +1901,7 @@
       {sessionName}
       {events} {histGap} cwd={planSession?.cwd ?? null}
       onOpenTerminal={abrirTerminalReal}
+      onOpenNavegador={alternarNavegador}
       terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}

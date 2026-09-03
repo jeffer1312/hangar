@@ -88,15 +88,25 @@ describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
     unmount(t.comp);
   });
 
-  it('a barra de abas tem Contexto, Arquivos e Navegador, com a primeira ativa', async () => {
+  it('a barra de abas tem Contexto e Arquivos por padrão — Navegador só aparece quando a sessão TEM navegador aberto', async () => {
+    const t = montar(false);
+    await tick();
+    const abas = [...document.querySelectorAll('.aba')];
+    expect(abas.map((a) => a.textContent?.trim())).toEqual(['Contexto', 'Arquivos']);
+    expect(abas[0].getAttribute('aria-selected')).toBe('true');
+    expect(abas[1].getAttribute('aria-selected')).toBe('false');
+    unmount(t.comp);
+  });
+
+  it('com navegador aberto na sessão, a aba Navegador nasce na barra', async () => {
+    const { marcarNavAberto, fecharNav } = await import('../lib/navegadorPanel.svelte');
+    marcarNavAberto('srv-test::sess-1');
     const t = montar(false);
     await tick();
     const abas = [...document.querySelectorAll('.aba')];
     expect(abas.map((a) => a.textContent?.trim())).toEqual(['Contexto', 'Arquivos', 'Navegador']);
-    expect(abas[0].getAttribute('aria-selected')).toBe('true');
-    expect(abas[1].getAttribute('aria-selected')).toBe('false');
-    expect(abas[2].getAttribute('aria-selected')).toBe('false');
     unmount(t.comp);
+    fecharNav('srv-test::sess-1');
   });
 
   it('aba Arquivos monta o FilesPanel e lista a sessao', async () => {

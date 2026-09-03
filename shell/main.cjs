@@ -348,6 +348,13 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
   if (!win || !chave) return { ok: false };
   const views = viewsDa(win);
   let view = views.get(chave);
+  // O webContents pode ter morrido por fora (fechado via CDP Target.closeTarget, crash do
+  // renderer): sem esta checagem o view volta invisível e nunca mais pinta — a área fica preta.
+  if (view && view.webContents.isDestroyed()) {
+    views.delete(chave);
+    try { win.contentView.removeChildView(view); } catch { /* já saiu */ }
+    view = undefined;
+  }
   const antes = await idsDeTargets();
   if (!view) {
     // View novo SÓ nasce com URL; o reexibir (troca de sessão, reload do front) chama open sem
