@@ -15,6 +15,8 @@ REPO="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$REPO/scripts/hangar-send" "$HOME/.local/bin/hangar-send"
 echo "ok: ~/.local/bin/hangar-send -> $REPO/scripts/hangar-send"
+ln -sf "$REPO/scripts/hangar-preview" "$HOME/.local/bin/hangar-preview"
+echo "ok: ~/.local/bin/hangar-preview -> $REPO/scripts/hangar-preview"
 
 mkdir -p "$HOME/.claude/skills"
 for skill in "$REPO"/skills/*/; do
@@ -64,6 +66,7 @@ BLOCK=$(cat <<'EOF'
 - Pareamento NÃO é carta branca: cada sessão mexe só no próprio repo; commit/push/risco seguem as regras normais com o usuário; decisão de rumo/escopo → perguntar ao usuário, não ao par. Pareamento acaba quando o usuário disser ou a tarefa fechar.
 - Ao entrar em pareamento/grupo de um ticket: verificar `git branch --show-current` no próprio repo e alinhar pra branch da PM (fetch+checkout) ANTES de trabalhar; re-verificar após restart/resume. Exceção única: usuário pedir explicitamente outra branch. Repo com checkout DUPLICADO na máquina → alertar o usuário e perguntar qual é o canônico (sessão ressuscitada em checkout errado já perdeu rastreabilidade de commits de PM).
 - Recado de pareamento recebido → confirmar de volta via hangar-send e avisar o usuário no próprio terminal.
+- **Navegador embutido da sessão (só com o app desktop aberto)**: cada sessão pode ter um navegador próprio no Hangar. Pra ABRIR o seu: `hangar-preview open <url>` (o painel monta sozinho na tela do usuário — AVISE-o no texto da resposta, a janela dele muda na hora; se a sessão estiver fora da tela, abre quando ele abrir ela). Pra dirigir: `hangar-preview` sem args mostra os verbos (`list`, `url`, `shot [arq.png]` — leia o PNG com a ferramenta de imagem, `eval '<js>'` inclusive `document.querySelector('...').click()`). A sessão é resolvida pelo tmux automaticamente; `--sessao <nome>` opera o navegador de OUTRA sessão — nunca sem o usuário saber. CDP cru em http://127.0.0.1:9223 (cada navegador é um target).
 <!-- claude-pocket:sessoes-irmas:end -->
 EOF
 )

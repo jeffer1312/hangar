@@ -195,6 +195,17 @@ _list_snap: dict = {"t": 0.0, "infos": None}
 _list_lock = asyncio.Lock()
 
 
+# "Abrir o navegador embutido" vindo do AGENTE (POST /api/sessions/<nome>/nav, via CLI
+# hangar-preview open). One-shot por sessão, em MEMÓRIA: o stream SSE da sessão só existe com o
+# Chat dela montado; se o agente manda com a sessão fora da tela, o pendente espera aqui e sai
+# quando o usuário abrir a sessão. Backend reiniciou = perde (o agente re-tenta).
+_NAV_PENDENTES: dict[str, list[str]] = {}
+
+
+def nav_pendente(name: str, url: str) -> None:
+    _NAV_PENDENTES.setdefault(name, []).append(url)
+
+
 async def _cached_list():
     now = time.monotonic()
     if _list_snap["infos"] is not None and now - _list_snap["t"] < _LIST_TTL:
@@ -492,6 +503,15 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
             await asyncio.sleep(10)
             await queue.put(("ping", "{}"))
 
+    async def nav_pump():
+        # Drena os "abrir navegador" pendentes DESTA sessao (agente via POST /nav). Poll de 1s
+        # basta: e evento raro e humano, nao canal quente.
+        while True:
+            await asyncio.sleep(1.0)
+            urls = _NAV_PENDENTES.pop(name, [])
+            for url in urls:
+                await queue.put(("nav", json.dumps({"url": url})))
+
     def _enqueue_preview(text: str, md: bool = False, full: bool = False):
         # Atualiza o slot e enfileira UM marcador 'preview' por vez (drop-old). Sem await entre as
         # escritas -> consistente no loop single-thread.
@@ -640,6 +660,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         asyncio.create_task(pump("message", pqueue.follow(min_ts=start_ts))),
         state_task,
         asyncio.create_task(ping_loop()),
+        asyncio.create_task(nav_pump()),
         preview_task,
         asyncio.create_task(jsonl_watcher()),
     ]

@@ -75,14 +75,14 @@ export const ctxPanel = $state({
   // do Svelte confunde o rune `$state` com subscricao de store (store_rune_conflict). O
   // objeto do store e deep-reactive, entao a classe acompanha do mesmo jeito.
   resizing: false,
-  // Aba ativa do painel (Contexto | Arquivos). Vive aqui por fora dos componentes porque o App
+  // Aba ativa do painel (Contexto | Arquivos | Navegador). Vive aqui por fora dos componentes porque o App
   // remonta o Chat (e o painel) por key a cada troca de sessao — um $state local devolveria
   // o usuario pra Contexto com a aba Arquivos aberta, e a regua "a aba sobrevive a troca de
   // sessao" morre sem erro nenhum. Nao persiste em localStorage: reabrir a tela volta pra
   // Contexto, que e o estado inicial do produto.
   // (Cuidado: a chave literal de bloco no comentario quebraria a varredura de string crua,
   // que trata arquivo .ts como markup.)
-  aba: 'contexto' as 'contexto' | 'arquivos',
+  aba: 'contexto' as 'contexto' | 'arquivos' | 'navegador',
 });
 
 export function alternarCtxPanel(): void {
@@ -93,6 +93,27 @@ export function alternarCtxPanel(): void {
     /* sem storage: vale só nesta sessão */
   }
 }
+
+// ── Sidebar com a aba Navegador ativa ──────────────────────────────────────
+// Aba Navegador visível → a sidebar colapsa pro trilho (a coluna fica larga); trocou de aba,
+// volta como estava. SEM override forçado: o fold continua vivo e a sidebar expandida se comporta
+// como sempre (o NavegadorPane re-mede e o view acompanha). Se o usuário mexeu no fold no meio, a
+// escolha dele fica.
+import { sidebarPin } from './sidebarPin.svelte';
+
+let sidebarAntesAba: boolean | null = null;
+$effect.root(() => {
+  $effect(() => {
+    const navAtiva = ctxPanel.aba === 'navegador' && !ctxPanel.recolhido;
+    if (navAtiva && sidebarAntesAba === null) {
+      sidebarAntesAba = sidebarPin.preferred;
+      sidebarPin.setUser(true);
+    } else if (!navAtiva && sidebarAntesAba !== null) {
+      if (sidebarPin.preferred === true) sidebarPin.setUser(sidebarAntesAba);
+      sidebarAntesAba = null;
+    }
+  });
+});
 
 // Largura aplicada durante o arrasto da divisória (mesma régua da Sidebar, espelhada: lá o painel
 // cola na esquerda e `largura = clientX`; aqui cola na direita e `largura = janela - clientX`).
