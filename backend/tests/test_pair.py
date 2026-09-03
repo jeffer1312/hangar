@@ -212,3 +212,10 @@ def test_join_tarefa_igual_ou_vazia_nao_conflita():
     pair.join_group("c", ["a"], "PM-1")
     pair.join_group("d", ["a"], "")
     assert pair.PairLink("d").get()["task"] == "PM-1"
+
+
+def test_referenciados_locais_inclui_donos_e_peers_locais():
+    pair.join("a", "b")
+    pair.join("c", "srv::x")
+    # 'c' é dona de sidecar cross-server: morrendo fora do app, é ela que vira fantasma.
+    assert pair.referenciados_locais() == {"a", "b", "c"}

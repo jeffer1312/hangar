@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from app import atomico, tmux
 from app import agentpane
 from app.config import settings
@@ -18,6 +18,7 @@ from app.git_ops import git_summary, git_diffstat, head_info
 from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue
 from app.chain import ThenLink
+from app import pair, pair_texto
 from app.pair import PairLink, rename_pair, leave as pair_leave
 from app.adapters.codex import sessions as codex_sessions
 from app.askquestion import clear_pending_askq, pergunta_aberta
@@ -648,6 +649,10 @@ def kimi_session_file(pane_id: str, pid: Optional[int] = None,
 _STATUS_TTL = 20.0
 _STATUS_BUDGET = 2
 
+# Gancho que o api.py registra: drena a fila do peer avisado (PromptQueue só drena em transição
+# de hook; peer já ocioso nunca receberia o aviso). Módulo, não instância — há 4 registries.
+apos_saida_por_morte: Optional[Callable[[str], None]] = None
+
 
 class KillFailed(Exception):
     """A sessao continuou de pe depois do kill. Existe pra a rota DELETE reportar em vez de responder
@@ -665,6 +670,10 @@ class SessionRegistry:
     # spawna claude por turno) -> sem isto a resolucao oscilava pro mtime e o watcher do SSE limpava o
     # chat. Atualizado quando um sinal confiavel reaparece (ex: /clear -> session-id novo).
     _jsonl_cache: dict[str, str] = {}
+    # DE CLASSE, como os outros caches: api, sse (2) e prune têm instâncias próprias e todas
+    # chamam list(); contador por instância fecharia "2 polls" em milissegundos.
+    _pair_ausencias: dict[str, float] = {}
+    _PAIR_AUSENCIA_MIN_S = 5.0
     # nomes cujo cache veio do fd ABERTO (verdade do FS, nao chute). Mantido entre polls sem fd p/ nao
     # oscilar pro --session-id da cmdline (resume: o id da cmdline nunca vira arquivo). De classe.
     _fd_locked: set[str] = set()
@@ -1118,6 +1127,10 @@ class SessionRegistry:
                 pair_gid=(PairLink(meta["name"]).get() or {}).get("gid"),
                 pair_task=(PairLink(meta["name"]).get() or {}).get("task"),
             ))
+        try:
+            self._varrer_pares_mortos({i.name for i in out})
+        except Exception as e:
+            _log.warning("varredura de pares falhou (lista segue): %r", e)
         return out
 
     async def list_with_state(self, infos: Optional[list[SessionInfo]] = None) -> list[SessionInfo]:
@@ -1700,6 +1713,44 @@ class SessionRegistry:
             # Sem "kill(...)" no texto: o create() também chama isto (nome reusado de sessão morta
             # fora do kill), e a falha aparecia no log como se fosse de um encerramento.
             _log.warning("_clear_pair(%s): falha ao sair do grupo de pareamento: %r", name, e)
+
+    def _varrer_pares_mortos(self, vivos: set[str], agora: float | None = None) -> None:
+        """Membro de grupo cuja sessão morreu FORA do app (Ctrl-C, crash, reboot): ninguém chamou
+        leave, o sidecar apontava pra um fantasma pra sempre. Morto = ausente da lista viva numa
+        varredura anterior E há pelo menos _PAIR_AUSENCIA_MIN_S — kill() e rename() chamam list()
+        numa janela em que o nome está ausente de propósito, e só o tempo separa isso de morte.
+        O aviso vai pela fila durável, nunca send-keys: isto roda dentro do list(), no tick do SSE."""
+        if not vivos:
+            return   # tmux fora = lista vazia; varrer aqui dissolveria todos os grupos
+        agora = time.monotonic() if agora is None else agora
+        candidatos = pair.referenciados_locais() - vivos
+        cls = type(self)
+        for n in [x for x in cls._pair_ausencias if x not in candidatos]:
+            del cls._pair_ausencias[n]
+        for n in candidatos:
+            primeira = cls._pair_ausencias.setdefault(n, agora)
+            if agora - primeira < cls._PAIR_AUSENCIA_MIN_S:
+                continue
+            del cls._pair_ausencias[n]
+            try:
+                ex = pair_leave(n)
+            except Exception as e:
+                _log.warning("varredura de pares: '%s' morto fora do app, leave falhou: %r", n, e)
+                continue
+            _log.info("varredura de pares: '%s' morreu fora do app; saiu do grupo (%s)", n, ex)
+            resto = [p for p in ex if "::" not in p]
+            if len(resto) != len(ex):
+                _log.warning("varredura de pares: '%s' tinha par remoto; sidecar de lá fica órfão", n)
+            for p in resto:
+                try:
+                    PromptQueue(p).append(
+                        pair_texto.texto_saida(n, "encerrou fora do app e saiu do grupo de trabalho",
+                                               [x for x in resto if x != p]),
+                        delivered=False)
+                    if apos_saida_por_morte:
+                        apos_saida_por_morte(p)
+                except Exception as e:
+                    _log.warning("varredura de pares: aviso a '%s' não enfileirado: %r", p, e)
 
     # ── Resume de sessao "sem id" ────────────────────────────────────────────────
     # Uma sessao aberta com `claude` cru (sem --session-id) JA tem um transcript <uuid>.jsonl; so nao da

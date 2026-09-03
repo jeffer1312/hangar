@@ -44,6 +44,7 @@ from app import cli_probe
 from app import pi_models
 from app import pi_inbox
 from app.pi_inbox import INBOX
+from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry, sanitize_cwd
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody, RunInfo,
@@ -355,6 +356,10 @@ app.include_router(cotas.cotas_router)
 app.include_router(credenciais.credenciais_router)
 app.include_router(peers_api.peers_router)
 registry = SessionRegistry()
+# Peer avisado pela varredura de morte já pode estar ocioso: sem este drain a fila só esvazia no
+# próximo hook dele, que pode nunca vir.
+registry_mod.apos_saida_por_morte = lambda p: threading.Thread(
+    target=_drain_session, args=(p,), daemon=True).start()
 terminal = TerminalInput()
 
 # Teto de mensagem: o _BodySizeLimitMiddleware ignora scope != http de propósito (api.py:83), então

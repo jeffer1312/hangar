@@ -252,6 +252,20 @@ def rename_pair(old: str, new: str) -> None:
                                 st.get("task", ""), st.get("gid", ""))
 
 
+def referenciados_locais() -> set[str]:
+    """Nomes LOCAIS que têm sidecar ou aparecem como peer em algum — os candidatos a fantasma
+    quando a sessão morre fora do app. O dono entra porque num par cross-server ele é o único
+    local (o peer é 'srv::x', que não se vê daqui e fica de fora)."""
+    with _LOCK:
+        out: set[str] = set()
+        for f in _pair_dir().glob("*.json"):
+            st = PairLink(f.stem).get()
+            if st:
+                out.add(f.stem)
+                out.update(p for p in st["peers"] if "::" not in p)
+        return out
+
+
 def contract_path_for(name: str) -> Path | None:
     """Arquivo de CONTRATO do grupo de `name` (markdown, keyed pelo gid — estável quando membro
     entra/sai). Todos os membros derivam o mesmo path; editam via fs; o app exibe no PairSheet.
