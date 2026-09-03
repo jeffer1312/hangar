@@ -1876,8 +1876,31 @@ async def history(name: str, limit: int | None = None):
     return evs
 
 
+async def _bastao_alvo(name: str, project: str | None, session_id: str | None,
+                       config_dir: str | None, provider: str) -> SessionInfo:
+    """Origem VIVA pelo registry; morta pelo archive (project + session_id, como o resume do
+    Arquivo). O gatilho automático pode chegar depois de o 429 derrubar o pane — sem isto o
+    bastão só existia enquanto a origem respirava."""
+    info = await _cached_info(name)
+    if info and info.jsonl:
+        return info
+    if not (project and session_id):
+        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
+    # Mesma guarda de archive_history/resume_archived: sem ela, qualquer pasta da máquina vira
+    # "conta" e o GET lê <pasta>/projects/<proj>/<uuid>.jsonl.
+    if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
+        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
+    try:
+        p = await asyncio.to_thread(archive_jsonl, project, session_id, config_dir, provider)
+        cwd = await asyncio.to_thread(archive_cwd, project, session_id, config_dir, provider)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(404, detail=erro("erro_transcript_nao_encontrado", "transcript not found"))
+    return SessionInfo(name=name, cwd=cwd, jsonl=str(p), provider=provider)
+
+
 @app.get("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth)])
-async def bastao(name: str):
+async def bastao(name: str, project: str | None = None, session_id: str | None = None,
+                 config_dir: str | None = None, provider: str = "claude"):
     """Dossiê de continuidade da sessão, em markdown. SÓ leitura — não cria nada e não grava nada.
 
     to_thread não é detalhe: `montar` roda `git status`/`git diff` (subprocess) e parseia a cauda de
@@ -1885,9 +1908,7 @@ async def bastao(name: str):
     SSE de TODAS as sessões — é o incidente de 2026-07-23, quando um `git status` no tick da lista
     derrubou a conexão inteira.
     """
-    info = await _cached_info(name)
-    if not info or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
+    info = await _bastao_alvo(name, project, session_id, config_dir, provider)
     texto = await asyncio.to_thread(bastao_montar, info.jsonl, info.cwd, info.provider, name)
     return Response(content=texto, media_type="text/markdown; charset=utf-8")
 
@@ -1925,6 +1946,10 @@ class BastaoBody(_StrictBody):
     model: str | None = None
     effort: str | None = None
     permission_mode: str | None = None
+    # Endereço da origem MORTA no archive (project + session_id); ignorados quando ela está viva.
+    project: str | None = None
+    session_id: str | None = None
+    origem_config_dir: str | None = None
 
 
 def _nome_ocupado(nome: str) -> bool:
@@ -1961,9 +1986,7 @@ async def bastao_passar(name: str, body: BastaoBody):
     `to_thread` no preparo pelo mesmo motivo do GET: `montar` roda `git status` (subprocess) e
     parseia a cauda do transcript; no loop isso derruba o SSE de todas as sessões (2026-07-23).
     """
-    info = await _cached_info(name)
-    if not info or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
+    info = await _bastao_alvo(name, body.project, body.session_id, body.origem_config_dir, body.provider)
     # UM nome só, sanitizado pelo MESMO lugar que a criação usa (`registry.create` chama isto), e
     # daqui pra frente é ele quem nomeia o arquivo e a sessão. Sanitizar duas vezes por dois
     # caminhos diferentes era o bug: `api.v2` gravava `api.v2.md` mas nascia como `api-v2`, e aí o

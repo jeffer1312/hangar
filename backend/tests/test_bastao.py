@@ -589,6 +589,84 @@ def test_post_404_sem_transcript(api_client_bastao):
     assert r.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Origem morta resolvida pelo archive (bastão v2, item 5)
+# ---------------------------------------------------------------------------
+
+def _arquivo_morto(tmp_path):
+    """Config dir com um transcript arquivado no layout `<config>/projects/<proj>/<uuid>.jsonl`."""
+    import shutil
+    cfg = tmp_path / "conta"
+    proj = cfg / "projects" / "-repo"
+    proj.mkdir(parents=True)
+    sid = "45ce9c2d-48d4-491e-8ff3-672bb10a69b6"
+    shutil.copy(FIX / "jsonl_samples.jsonl", proj / f"{sid}.jsonl")
+    return str(cfg), "-repo", sid
+
+
+def _conta_conhecida(monkeypatch, cfg):
+    """`config_dir` só é aceito se estiver em list_config_dirs() — a guarda dos endpoints de archive."""
+    import app.api as api_mod
+    from app.config import ConfigDirInfo
+    monkeypatch.setattr(api_mod, "list_config_dirs", lambda: [ConfigDirInfo(path=cfg, label="t", active=False)])
+
+
+def test_get_bastao_de_sessao_morta_pelo_archive(api_client_bastao, tmp_path, monkeypatch):
+    from unittest.mock import patch
+    cfg, proj, sid = _arquivo_morto(tmp_path)
+    _conta_conhecida(monkeypatch, cfg)
+    with patch("app.api.registry.list", return_value=[]):
+        r = api_client_bastao.get("/api/sessions/morta/bastao",
+                                  params={"project": proj, "session_id": sid, "config_dir": cfg},
+                                  headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("# Passagem de bastão — sessão `morta`")
+
+
+def test_get_bastao_recusa_config_dir_desconhecido(api_client_bastao, tmp_path):
+    from unittest.mock import patch
+    cfg, proj, sid = _arquivo_morto(tmp_path)          # existe no disco, mas não é conta do app
+    with patch("app.api.registry.list", return_value=[]):
+        r = api_client_bastao.get("/api/sessions/morta/bastao",
+                                  params={"project": proj, "session_id": sid, "config_dir": cfg},
+                                  headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_config_dir_invalido"
+
+
+def test_get_bastao_404_quando_nem_viva_nem_arquivada(api_client_bastao):
+    from unittest.mock import patch
+    with patch("app.api.registry.list", return_value=[]):
+        r = api_client_bastao.get("/api/sessions/morta/bastao",
+                                  params={"project": "-x", "session_id": "45ce9c2d-48d4-491e-8ff3-672bb10a69b6"},
+                                  headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 404
+
+
+def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, monkeypatch, tmp_path):
+    from unittest.mock import patch
+    from app.models import SessionInfo
+    import app.api as api_mod
+    cfg, proj, sid = _arquivo_morto(tmp_path)
+    _conta_conhecida(monkeypatch, cfg)
+    criadas = []
+
+    async def fake_create(body):
+        criadas.append(body)
+        return SessionInfo(name=body.name, cwd=body.cwd, jsonl=None)
+
+    monkeypatch.setattr(api_mod, "create_session", fake_create)
+    monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
+    monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
+    monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: "/cwd/da/origem")
+    with patch("app.api.registry.list", return_value=[]):
+        r = api_client_bastao.post("/api/sessions/morta/bastao", headers={"Authorization": "Bearer secret"},
+                                   json={"name": "morta-cont", "project": proj, "session_id": sid,
+                                         "origem_config_dir": cfg})
+    assert r.status_code == 200, r.text
+    assert criadas[0].cwd == "/cwd/da/origem"
+
+
 @pytest.fixture
 def api_client_bastao(monkeypatch, models_cache_em_tmp):
     from fastapi.testclient import TestClient
