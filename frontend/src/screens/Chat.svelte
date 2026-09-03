@@ -33,7 +33,6 @@
   import { filesStores } from '../lib/filesStore.svelte';
   import { navegadorPanel, marcarNavAberto, fecharNav } from '../lib/navegadorPanel.svelte';
   import { navegadorNativo } from '../lib/navegadorNativo';
-  import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
     getHistory,
@@ -840,13 +839,9 @@
     if (navOpen) { fecharNav(navKey); navegadorNativo()?.close(navKey); }
     else marcarNavAberto(navKey);
   }
-  // Com o navegador aberto, a sidebar colapsa pro trilho — override TEMPORÁRIO do sidebarPin
-  // (o mesmo do Board/Canvas): mexe só no `forced`, nunca na preferência gravada, então fechar
-  // o navegador devolve a sidebar como estava.
-  $effect(() => {
-    sidebarPin.setForced(desktop && navOpen ? true : null);
-    return () => sidebarPin.setForced(null);
-  });
+  // Com o navegador aberto, a sidebar colapsa pro trilho SEM matar o fold — a lógica mora no
+  // store navegadorPanel (syncSidebar): o usuário pode expandir, e aí ela flutua por cima como
+  // gaveta em vez de empurrar o navegador.
   // Campos de loop vêm do SSE DA PRÓPRIA SESSÃO (stateEvent), não do sessionsStore: reter o
   // store aqui abria 1 stream de lista POR SERVIDOR no celular (com offline = retry eterno) e
   // derrubava a conexão do pocket — regressão real vista no iPhone, revertida.

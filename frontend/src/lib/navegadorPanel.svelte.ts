@@ -1,6 +1,7 @@
 // Largura do navegador embutido: arrastável pela divisória esquerda e guardada (cp_nav_w).
 // Mesma forma do ctxPanel — o Chat reserva a faixa no conteúdo (--cp-nav-w) e o NavegadorPane
 // se posiciona nela, então os dois leem daqui e nunca divergem.
+import { sidebarPin } from './sidebarPin.svelte';
 
 const CHAVE = 'cp_nav_w';
 
@@ -75,6 +76,7 @@ export function marcarNavAberto(chave: string): void {
   if (!(chave in navegadorPanel.abertos)) {
     navegadorPanel.abertos[chave] = '';
     salvarAbertos();
+    syncSidebar();
   }
 }
 
@@ -88,7 +90,36 @@ export function atualizarNavUrl(chave: string, url: string): void {
 export function fecharNav(chave: string): void {
   delete navegadorPanel.abertos[chave];
   salvarAbertos();
+  syncSidebar();
 }
+
+// ── Sidebar com navegador aberto ───────────────────────────────────────────
+// Quando o PRIMEIRO navegador abre, a sidebar colapsa pro trilho; quando o ÚLTIMO fecha, volta
+// como estava. SEM override forçado (diferente do Board/Canvas): o fold continua vivo — o usuário
+// expande quando quiser, e a sidebar expandida flutua por cima como gaveta (Sidebar.svelte,
+// .nav-gaveta) em vez de empurrar o navegador. Se ele mexeu no fold no meio, a escolha dele fica.
+let sidebarAntes: boolean | null = null;
+
+function syncSidebar(): void {
+  const algum = Object.keys(navegadorPanel.abertos).length > 0;
+  if (algum && sidebarAntes === null) {
+    sidebarAntes = sidebarPin.preferred;
+    sidebarPin.setUser(true);
+  } else if (!algum && sidebarAntes !== null) {
+    if (sidebarPin.preferred === true) sidebarPin.setUser(sidebarAntes);
+    sidebarAntes = null;
+  }
+}
+
+// O colapso é EFEITO do conjunto de abertos, não das chamadas de abrir/fechar: o remount após
+// um reload da página não passa por marcarNavAberto e sem isto a sidebar acordava expandida com
+// o navegador aberto. $effect.root porque store de módulo não tem componente pra ancorar o efeito.
+$effect.root(() => {
+  $effect(() => {
+    void Object.keys(navegadorPanel.abertos).length;   // reage ao CONJUNTO, não às urls
+    syncSidebar();
+  });
+});
 
 // O painel cola na direita: largura = janela - clientX (espelho do arrastarLargura do ctxPanel).
 export function arrastarNav(clientX: number): void {
