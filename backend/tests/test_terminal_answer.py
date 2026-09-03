@@ -78,6 +78,13 @@ def test_wait_input_ready_pi_pronto_retorna_na_primeira_leitura():
         assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is True
 
 
+def test_wait_input_ready_omp_pronto_retorna_na_primeira_leitura():
+    # omp e o fork do Pi: mesmo desenho de composer, mesmo caminho de leitura.
+    with patch.object(ti, "_capture", lambda name: _PI_IDLE), \
+         patch.object(ti.time, "sleep", lambda *_: None):
+        assert ti._wait_input_ready("s", timeout=0.0, provider="omp") is True
+
+
 def test_wait_input_ready_pi_composer_de_reguas_e_pronto():
     # Regressao do bug dos 12s: a UI atual do Pi desenha reguas, nao caixa. Se um dia mudar de novo,
     # e ESTE teste que quebra — em vez de o app so ficar lento e calado.
@@ -103,6 +110,10 @@ def test_wait_input_ready_timeout_do_pi_e_menor_que_o_do_claude():
     # A espera so compra seguranca no boot (~4.3s medidos ate o composer); no estouro a gente envia
     # mesmo assim, entao teto menor = pior caso menor no dia em que o marcador desandar de novo.
     assert ti._TIMEOUTS_BY_PROVIDER["pi"] < ti._DEFAULT_TIMEOUT
+
+
+def test_wait_input_ready_timeout_do_omp_e_menor_que_o_do_claude():
+    assert ti._TIMEOUTS_BY_PROVIDER["omp"] < ti._DEFAULT_TIMEOUT
 
 
 def test_wait_input_ready_pi_bootando_nao_diz_pronto():

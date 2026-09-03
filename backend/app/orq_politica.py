@@ -23,7 +23,7 @@ _log = logging.getLogger("hangar.orq_politica")
 CABECALHO = ("conta", "provider", "apelido", "modelos", "trocar?")
 SECAO_PODE = "O que pode"
 SECAO_NAO_PODE = "O que NÃO pode"
-PROVIDERS = ("claude", "kimi", "pi", "codex")
+PROVIDERS = ("claude", "kimi", "pi", "omp", "codex")
 CONTA_PADRAO = "padrao"      # o ~/.claude
 CONTA_CODEX = "openai-codex"
 
@@ -199,7 +199,8 @@ def _niveis(provider: str, modelo: str) -> tuple[str, ...] | None:
     """None = aceita qualquer (Kimi sem catálogo, Codex)."""
     if provider == "claude":
         return model_args.EFFORT_CLAUDE
-    if provider == "pi":
+    if provider in ("pi", "omp"):
+        # omp usa o MESMO inventario de niveis do Pi — nao pede liberacao a parte na politica.
         return model_args.EFFORT_PI
     if provider == "kimi":
         cat = kimi_models.read_catalog()

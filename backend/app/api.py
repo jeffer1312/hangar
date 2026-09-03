@@ -1489,7 +1489,7 @@ async def create_session(body: CreateBody):
     # muda la dentro e so o transcript, que nao e pre-semeado (layout proprio, arquivo so no 1o turno).
     # Validar provider, config_dir e engine ANTES de qualquer efeito no disco: um pedido que vai
     # ser rejeitado aqui não pode ter reconciliado a conta (deriva movida, memória criada) à toa.
-    if body.provider not in ("claude", "codex", "pi", "kimi"):
+    if body.provider not in ("claude", "codex", "pi", "kimi", "omp"):
         raise HTTPException(400, detail=erro("erro_provider_sessao_invalido", "provider invalido"))
     if body.config_dir is not None and body.config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
@@ -1551,7 +1551,7 @@ async def create_session(body: CreateBody):
     # config dir (Claude/Pi — o Codex tem conta propria e nao le config dir do Claude). Sem o ciclo, um DELETE da
     # conta no meio via a lista de sessões ainda vazia e apagaria a pasta embaixo da sessão que
     # está subindo (a criação roda em thread).
-    if body.config_dir is not None and body.provider in ("claude", "pi"):
+    if body.config_dir is not None and body.provider in ("claude", "pi", "omp"):
         alvo = Path(body.config_dir)
         if contas.e_conta(alvo):
             nome_conta = alvo.name.removeprefix(".claude-")
@@ -2244,7 +2244,7 @@ def _send_one(name: str, text: str) -> dict:
     # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
     # `pi_inbox.linha_de` (nome primeiro, pane depois), nunca o pane cru: no psmux o pane e `%1`
     # em toda sessao Pi e a busca por pane achava a linha da OUTRA — ver pi_inbox.
-    is_pi = (provider == "pi" and pi_inbox.linha_de(name, pane_id) is not None
+    is_pi = (provider in ("pi", "omp") and pi_inbox.linha_de(name, pane_id) is not None
              and not stripped.startswith("/"))
     if is_pi:
         try:
@@ -5395,10 +5395,10 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
     reduzidos em vez de fingirem ser a lista completa (ver o comentário acima sobre a lista
     chumbada que não soube do Fable).
     """
-    if provider == "pi":
+    if provider in ("pi", "omp"):
         try:
-            return {"kind": "pi", "reduced": False,
-                    "models": await asyncio.to_thread(pi_catalog.listar)}
+            return {"kind": provider, "reduced": False,
+                    "models": await asyncio.to_thread(pi_catalog.listar, provider)}
         except pi_catalog.PiAusente as e:
             # Codigo proprio: "nao achei o pi" nao e "o pi falhou". Antes isso chegava como
             # `[WinError 2] O sistema nao pode encontrar o arquivo especificado` dentro da mensagem
@@ -5406,7 +5406,7 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
             # nem estava instalado ali.
             raise HTTPException(502, detail=erro("erro_pi_ausente", str(e), erro=str(e)))
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
+            raise HTTPException(502, detail=erro("erro_pi_list_models", f"{provider} models falhou: {e}", erro=str(e)))
     if provider == "kimi":
         # Sem subprocess aqui (não existe `kimi --list-models`): o catálogo é o config.toml.
         cat = kimi_models.read_catalog()
@@ -5431,7 +5431,7 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
             # RuntimeError) — capturar a outra seria um ramo que o codigo nunca produz.
             raise HTTPException(502, detail=erro("erro_codex_model_list", f"codex app-server model/list falhou: {e}", erro=str(e)))
     if provider != "claude":
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi', 'kimi' ou 'codex'"))
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi', 'omp', 'kimi' ou 'codex'"))
     if engine:
         modelos = await _engine_models(engine)
         return {"kind": "engine", "reduced": False,
@@ -5561,16 +5561,18 @@ async def _pi_catalog(name: str) -> tuple[dict, str]:
     info = await _cached_info(name)
     if not info or not info.jsonl:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao ou transcript nao encontrado"))
-    if info.provider != "pi":
+    if info.provider not in ("pi", "omp"):
         raise HTTPException(400, detail=erro("erro_rota_so_pi", "esta rota so existe pra sessoes Pi"))
     cat = await asyncio.to_thread(pi_models.read_catalog, info.jsonl, _session_config_dir(name))
     if cat is None:
         # Falha ALTA: sem o sidecar nao ha catalogo real, e inventar um faria o app oferecer
         # modelos que o `/cp-model` nao encontraria. Instrucao junto porque a causa e sempre a
-        # mesma (extensao velha/ausente) e o conserto e um comando.
-        raise HTTPException(409, detail=erro("erro_catalogo_pi_indisponivel",
-                                             "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh "
-                                             "e reinicie a sessao (extensao hangar-state.ts desatualizada)"))
+        # mesma (extensao velha/ausente) — mas o conserto muda por provider: o omp nao recarrega
+        # a extensao no /reload dele, entao so fechar e reabrir a sessao resolve.
+        dica = ("feche e reabra a sessao — o /reload do omp nao recarrega a extensao"
+                if info.provider == "omp" else
+                "rode ./scripts/install-claude-wrapper.sh e reinicie a sessao (extensao hangar-state.ts desatualizada)")
+        raise HTTPException(409, detail=erro("erro_catalogo_pi_indisponivel", f"catalogo do Pi indisponivel — {dica}"))
     return cat, info.jsonl
 
 

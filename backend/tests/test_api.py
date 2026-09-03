@@ -935,6 +935,28 @@ def test_create_pi_with_engine_is_refused(api_client):
     cr.assert_not_called()
 
 
+def test_create_omp_provider_routes_to_claude_create_with_provider(api_client):
+    # omp e o fork do Pi: MESMO registry.create, so o provider muda o comando do pane.
+    with patch("app.api.registry.create",
+              return_value=SessionInfo(name="o", cwd="/tmp", provider="omp", jsonl=None)) as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "o", "cwd": "/tmp", "provider": "omp"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "omp"
+    assert r.json()["jsonl"] is None
+    cr.assert_called_once_with("o", "/tmp", None, provider="omp", engine=None,
+                               model=None, effort=None, context_window=None)
+
+
+def test_create_omp_with_engine_is_refused(api_client):
+    # Motor so faz sentido no Claude: o env do hangar-engine e Anthropic-only.
+    with patch("app.api.registry.create") as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "o", "cwd": "/tmp", "provider": "omp", "engine": "x"})
+    assert r.status_code == 400
+    cr.assert_not_called()
+
+
 def test_create_rejects_unknown_provider(api_client):
     with patch("app.api.registry.create") as cr:
         r = api_client.post("/api/sessions", headers=_h(),
