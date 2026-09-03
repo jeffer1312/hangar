@@ -2776,6 +2776,54 @@ def test_group_message_remetente_sem_socket_nao_pula_ninguem(api_client):
     sp.assert_called_once()
 
 
+def test_kill_avisa_companheiros_que_ficaram(api_client):
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.api.registry.kill") as kill, \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 200 and r.json() == {"ok": True, "warning": None}
+    kill.assert_called_once_with("a")
+    assert entregues["b"] == "[de: hangar] 'a' encerrou a sessão e saiu do grupo de trabalho. O grupo continua entre você e 'c'."
+    assert entregues["c"].endswith("O grupo continua entre você e 'b'.")
+    assert "a" not in entregues
+
+
+def test_kill_sem_grupo_nao_avisa(api_client):
+    with patch("app.api.PairLink.get", return_value=None), \
+         patch("app.api.registry.kill"), \
+         patch("app.api._deliver") as dl:
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 200
+    dl.assert_not_called()
+
+
+def test_kill_que_falha_nao_avisa_ninguem(api_client):
+    from app.registry import KillFailed
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g1"}), \
+         patch("app.api.registry.kill", side_effect=KillFailed("a")), \
+         patch("app.api._deliver") as dl:
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 500
+    dl.assert_not_called()
+
+
+def test_kill_com_par_remoto_chama_unpair_remote(api_client, monkeypatch):
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod.settings, "server_id", "srv-a")
+    with patch("app.api.PairLink.get", return_value={"peers": ["srv-b::x"], "task": "", "gid": "g1"}), \
+         patch("app.api.registry.kill"), \
+         patch("app.api.peers.call") as call, \
+         patch("app.api._deliver") as dl:
+        r = api_client.delete("/api/sessions/a", headers=_h())
+    assert r.status_code == 200
+    call.assert_called_once_with("srv-b", "POST", "/api/sessions/x/unpair-remote", {"peer": "srv-a::a"})
+    dl.assert_not_called()
+
+
 def test_unpair_warning_estruturado_sem_server_id(api_client, monkeypatch):
     # B2: peer remoto com CP_SERVER_ID vazio -> item {sessao, erro} (antes era string solta e o
     # x['sessao'] seguinte virava TypeError -> 500). O sair do grupo continua 200 com warning.

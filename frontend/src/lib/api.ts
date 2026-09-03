@@ -631,8 +631,8 @@ export function setQuietHoursForServer(s: Server, start: string | null, end: str
   return apiFetchForServer(s, '/api/push/quiet-hours', { method: 'POST', body: JSON.stringify({ start, end }) });
 }
 
-export async function deleteSession(name: string): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(name)}`, {
+export async function deleteSession(name: string): Promise<{ ok: boolean; warning: unknown | null }> {
+  return apiFetch<{ ok: boolean; warning: unknown | null }>(`/api/sessions/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
 }

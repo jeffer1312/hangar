@@ -225,7 +225,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // so acontece no doDelete.
   async function doDelete() {
     const r = await model.doDelete();
-    if (!r.ok) flash(m.sessao_flash_excluir({ n: r.erro }));
+    if (r.erro !== '') flash(m.sessao_flash_excluir({ n: r.erro }));
   }
 
   // ── Renomear sessão do tmux: TOQUE LONGO no nome -> edita inline ──────────────

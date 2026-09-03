@@ -208,7 +208,7 @@ import * as m from '../paraglide/messages';
   async function doDelete() {
     const alvo = model.confirmDel;
     const r = await model.doDelete();
-    if (!r.ok && alvo) showActionMsg(m.lista_flash_excluir({ nome: alvo.name, erro: r.erro }));
+    if (r.erro !== '' && alvo) showActionMsg(m.lista_flash_excluir({ nome: alvo.name, erro: r.erro }));
   }
 
   // Renomear sessao (toque longo no card): renomeia o pane tmux no servidor dela. O stream SSE re-emite

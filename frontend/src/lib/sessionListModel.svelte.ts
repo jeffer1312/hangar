@@ -4,6 +4,7 @@
 // com getters, sem destructuring (perderia a reatividade).
 import { broadcast, deleteSession, renameSession, resumeSession } from './api';
 import { getActiveId, selectServer, serverColor } from './auth';
+import { formataErro } from './errosApi';
 import { sessionsStore } from './sessionsStore.svelte';
 import {
   countAwaiting, effectiveGroupBy, groupSelectedByServer, projectKey, projectLabel, providerName,
@@ -245,7 +246,12 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     // Otimista: some na hora; falhou, desmarca (reaparece) e a view mostra o erro.
     sessionsStore.markDeleting(serverId, name);
     let result = { ok: true, erro: '' };
-    try { await deleteSession(name); }
+    try {
+      const res = await deleteSession(name);
+      // Sessão morreu, mas um companheiro do grupo não foi avisado: a view mostra o motivo em vez
+      // de fechar mudo (mesmo tratamento do PairSheet com res.warning).
+      if (res.warning) result = { ok: true, erro: formataErro(res.warning) ?? String(res.warning) };
+    }
     catch (e) { sessionsStore.unmarkDeleting(serverId, name); result = { ok: false, erro: errMsg(e) }; }
     restore(prev, serverId);
     return result;

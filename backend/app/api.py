@@ -1601,15 +1601,26 @@ async def create_session(body: CreateBody):
 
 
 @app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth)])
-def kill_session(name: str):
+async def kill_session(name: str):
     # 500 quando a sessao SOBREVIVE ao kill — mesmo padrao do /rename logo abaixo, que ja confere e
     # responde 404/500. Antes era {"ok": true} incondicional: o card sumia da UI e a sessao reaparecia
     # na varredura seguinte, sem fila e sem pareamento (ver SessionRegistry.kill).
+    # Os peers são lidos ANTES do kill: registry.kill -> _clear_pair já limpa o sidecar, e depois
+    # dele ninguém sabe quem ficou.
+    link = await asyncio.to_thread(lambda: PairLink(name).get())
     try:
-        registry.kill(name)
+        await asyncio.to_thread(registry.kill, name)
     except KillFailed as e:
         raise HTTPException(500, str(e))
-    return {"ok": True}
+    warn = None
+    if link:
+        errs = await _avisar_saida(name, link["peers"], "encerrou a sessão e saiu do grupo de trabalho")
+        if errs:
+            warn = erro("erro_pareamento_saida_falhou",
+                        "aviso de saída falhou: " + "; ".join(
+                            f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs),
+                        avisos=errs)
+    return {"ok": True, "warning": warn}
 
 
 class RenameBody(_StrictBody):
@@ -3095,6 +3106,38 @@ def pair_contract(name: str):
     return {"peers": link.get("peers", []), "path": str(p), "content": content}
 
 
+async def _avisar_saida(name: str, expeers: list[str], motivo: str) -> list[dict]:
+    """Avisa quem FICOU depois de `name` sair do grupo (o sidecar dele já foi limpo): remoto via
+    /unpair-remote do backend dele, local via _deliver. Uma esteira só pra unpair e kill — o kill
+    não avisava ninguém e os pares seguiam mandando recado pra um nome morto (ou pra sessão nova
+    que reusasse o nome)."""
+    errs: list[dict] = []
+    for p in expeers:
+        if not peers.is_remote(p):
+            continue
+        if not settings.server_id:
+            errs.append({"sessao": p,
+                         "erro": erro("erro_pareamento_server_id_ausente",
+                                      "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
+                                      "pareamento cross-server (é o endereço de resposta srv::sessao)")})
+            continue
+        srv, sess = peers.split_addr(p)
+        try:
+            await asyncio.to_thread(peers.call, srv, "POST",
+                                    f"/api/sessions/{sess}/unpair-remote",
+                                    {"peer": f"{settings.server_id}::{name}"})
+        except peers.PeerError as ex:
+            # Sidecar remoto fica órfão até alguém desparear lá. ponytail: sem fila de retry — single-user.
+            _log.warning("saida do grupo: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
+            errs.append({"sessao": p, "erro": str(ex)})
+    resto = [p for p in expeers if not peers.is_remote(p)]
+    for p in resto:
+        e = await _deliver(p, pair_texto.texto_saida(name, motivo, [x for x in resto if x != p]))
+        if e:
+            errs.append({"sessao": p, "erro": e})
+    return errs
+
+
 @app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
 async def unpair_session(name: str):
     """`name` SAI do grupo (os demais membros continuam entre si; grupo restante de 1 dissolve).
@@ -3103,44 +3146,12 @@ async def unpair_session(name: str):
     expeers = await asyncio.to_thread(pair.leave, name)   # nome próprio: 'peers' é o módulo importado
     if not expeers:
         return {"ok": True, "warning": None}
-    errs = []
-    # Pares REMOTOS (srv::sessao): avisa o backend deles pra limpar o reverso — não dá pra _deliver
-    # local numa sessão de outra máquina. Os locais são avisados no loop abaixo.
-    for p in expeers:
-        if not peers.is_remote(p):
-            continue
-        if not settings.server_id:
-            errs.append({"sessao": p,
-                        "erro": erro("erro_pareamento_server_id_ausente",
-                                     "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
-                                     "pareamento cross-server (é o endereço de resposta srv::sessao)")})
-            continue
-        srv, sess = peers.split_addr(p)
-        try:
-            await asyncio.to_thread(peers.call, srv, "POST",
-                                    f"/api/sessions/{sess}/unpair-remote",
-                                    {"peer": f"{settings.server_id}::{name}"})
-        except peers.PeerError as ex:
-            # `name` já saiu localmente (pair.leave acima); o peer não pôde ser avisado -> sidecar
-            # remoto fica órfão até alguém desparear lá. Loga pra rastreabilidade (journalctl) além
-            # do warning no result. ponytail: sem fila de retry durável — single-user, recuperável na
-            # mão; se virar comum, enfileirar via pqueue como o /input faz.
-            _log.warning("unpair: peer remoto '%s' não avisado (sidecar de lá fica órfão): %s", p, ex)
-            errs.append({"sessao": p, "erro": str(ex)})
+    errs = await _avisar_saida(name, expeers, "saiu do grupo de trabalho")
     e = await _deliver(name, "[de: hangar] Você saiu do grupo de trabalho "
                              f"({', '.join(expeers)}). Volte a operar independente; use hangar-send só "
                              "quando o usuário pedir.")
     if e:
         errs.append({"sessao": name, "erro": e})
-    resto = [p for p in expeers if not peers.is_remote(p)]
-    for p in resto:
-        ainda = [x for x in resto if x != p]
-        msg = (f"[de: hangar] '{name}' saiu do grupo de trabalho. "
-               + (f"O grupo continua entre você e {', '.join(ainda)}."
-                  if ainda else "O grupo foi dissolvido (só restava você); volte a operar independente."))
-        e = await _deliver(p, msg)
-        if e:
-            errs.append({"sessao": p, "erro": e})
     return {"ok": True, "warning": erro("erro_pareamento_saida_falhou",
             "aviso de saída falhou: " + "; ".join(
                 f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs),

@@ -270,7 +270,7 @@ describe('excluir (divergências #7 e #8)', () => {
     vi.mocked(getActiveId).mockReturnValue('srv-a');
   });
   it('otimista: marca, chama a API e devolve ok; desktop restaura o ativo, celular não', async () => {
-    vi.mocked(deleteSession).mockResolvedValue(undefined as any);
+    vi.mocked(deleteSession).mockResolvedValue({ ok: true, warning: null });
     const d = createSessionListModel(opts('desktop'));
     d.requestDelete('s', 'srv-b', 'idle');
     expect(d.confirmDel).toEqual({ name: 's', serverId: 'srv-b', state: 'idle' });
@@ -294,6 +294,17 @@ describe('excluir (divergências #7 e #8)', () => {
   it('doDelete sem confirmação pendente é no-op', async () => {
     expect(await createSessionListModel(opts('desktop')).doDelete()).toEqual({ ok: false, erro: '' });
     expect(deleteSession).not.toHaveBeenCalled();
+  });
+  it('kill com aviso de saída falho: sessão morta (ok) mas mostra o motivo', async () => {
+    vi.mocked(deleteSession).mockResolvedValue({
+      ok: true,
+      warning: { code: 'erro_pareamento_saida_falhou', params: { avisos: [] }, msg: 'aviso de saída falhou' },
+    });
+    const d = createSessionListModel(opts('desktop'));
+    d.requestDelete('s', 'srv-b');
+    const r = await d.doDelete();
+    expect(r.ok).toBe(true);
+    expect(r.erro).not.toBe('');
   });
 });
 
