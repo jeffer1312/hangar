@@ -157,6 +157,12 @@ def test_preview_pi_pula_bloco_de_tool_sem_parenteses():
     assert out == "Fechei o wire e subi o commit; o back valida na sequência."
 
 
+def test_preview_omp_pula_bloco_de_tool_sem_parenteses():
+    # omp e fork do Pi, mesma TUI -- o mesmo pane, com provider="omp", tem que dar o mesmo resultado.
+    out = extract_assistant_text(PANE_PI_TOOL_DEPOIS_DA_PROSA, "omp")
+    assert out == "Fechei o wire e subi o commit; o back valida na sequência."
+
+
 def test_prosa_pi_que_termina_em_arvore_continua_sendo_prosa():
     # Guarda contra o falso positivo: `└` DENTRO do proprio bloco (arvore desenhada na prosa) nao
     # pode descartar o bloco -- previa vazia e pior que previa suja.

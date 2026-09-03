@@ -320,7 +320,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
                 and not _painel_de_subagente(lines, i, corpo)
                 and not (provider == "kimi" and _KIMI_USED_RE.match(corpo))
                 and not (provider == "kimi" and _kimi_linha_de_todo(lines, i))
-                and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
+                and not (provider in ("pi", "omp") and _pi_bloco_de_tool(lines, i, corpo))):
             start = i
     if start < 0:
         return ""
