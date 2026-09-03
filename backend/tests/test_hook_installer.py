@@ -203,3 +203,18 @@ def test_capture_script_ignores_non_askq(tmp_path):
     )
     assert r.returncode == 0
     assert not (tmp_path / ".hangar-askq").exists()  # nada escrito
+
+
+def test_pair_hook_entra_no_session_start_com_matcher(tmp_path, monkeypatch):
+    import json
+    from app import hook_installer as hi
+    monkeypatch.setattr(hi, "_pair_command", lambda: f'"py" "{hi.PAIR_HOOK}" "/x/.hangar-pair" || exit 0')
+    monkeypatch.setattr(hi, "list_config_dirs", lambda: [])
+    monkeypatch.setattr(hi, "_backend_config_base", lambda: tmp_path)
+    (tmp_path / "settings.json").write_text("{}")
+    assert hi.ensure_pair_hook_installed() == [str(tmp_path)]
+    data = json.loads((tmp_path / "settings.json").read_text())
+    bloco = data["hooks"]["SessionStart"][0]
+    assert bloco["matcher"] == "startup|resume|clear|compact"
+    assert "pair_hook.py" in bloco["hooks"][0]["command"]
+    assert hi.ensure_pair_hook_installed() == []   # idempotente
