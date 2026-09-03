@@ -1,7 +1,14 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
-const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, dialog, ipcMain, screen, shell } = require('electron');
 const path = require('path');
 const { ler, gravar } = require('./settings.cjs');
+const { uaDeChrome, normalizaBounds, urlNavegavel } = require('./navegador.cjs');
+
+// O navegador embutido (WebContentsView, handlers hangar:nav-*) é dirigível por CDP na 9223 — o
+// agent-browser conecta nela como conecta no Chrome do usuário (9222), sem backend no meio. A
+// porta expõe TODOS os webContents, inclusive o cockpit (com o token no localStorage), a qualquer
+// processo local — mesmo risco do Chrome com remote-debugging, assumido de propósito.
+app.commandLine.appendSwitch('remote-debugging-port', '9223');
 
 // MEDIDO 05/08/2026 (Hyprland/Wayland, Electron 43.3.0): o switch `enable-transparent-visuals`
 // do spike NAO e necessario — a janela continua transparente sem ele. Linha removida.
@@ -151,6 +158,7 @@ async function criarJanela() {
   // (backend fora, usuário fechou em vez de responder), gravar essa URL faria a próxima abertura
   // tentar carregar a própria tela de erro. Nesse caso mantém a URL que já estava salva.
   win.on('close', () => {
+    fecharNavegador(win);   // tira o view do Map antes da janela virar objeto morto
     const u = win.webContents.getURL();
     // Na tela de recuperacao (data:) nao ha endereco de cockpit pra salvar — usa o ULTIMO que
     // carregou de verdade (urlBoa), nao o `cfg.url` do boot, que fica pra tras assim que o
@@ -260,6 +268,54 @@ function abrirJanela(origem) {
     dialog.showErrorBox('Hangar', `Não consegui abrir a janela.\n\n${err && err.message ? err.message : err}`);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Navegador embutido. Um WebContentsView por janela, pendurado no contentView — navegação
+// top-level, então X-Frame-Options não se aplica (diferente de iframe). A POSIÇÃO é medida pelo
+// front (div âncora no NavegadorPane.svelte) e chega por IPC: o view não é DOM, flutua POR CIMA
+// da página — o layout do Chat reserva o espaço, e modal/sheet que abrir naquela área fica
+// "atrás" dele (limitação conhecida de overlay nativo; o front fecha o painel ao desmontar).
+const navegadores = new Map();   // BrowserWindow -> WebContentsView
+
+function fecharNavegador(win) {
+  const view = win && navegadores.get(win);
+  if (!view) return;
+  navegadores.delete(win);
+  try { win.contentView.removeChildView(view); } catch { /* janela já destruída */ }
+  try { view.webContents.close(); } catch { /* idem */ }
+}
+
+ipcMain.handle('hangar:nav-open', (ev, { url, bounds } = {}) => {
+  const win = BrowserWindow.fromWebContents(ev.sender);
+  const destino = urlNavegavel(url);
+  if (!win || !destino) return { ok: false };
+  fecharNavegador(win);   // um por janela: abrir de novo troca a URL
+  // persist: cookies/localStorage no disco — o login (Google) sobrevive a reabrir o painel.
+  const view = new WebContentsView({ webPreferences: { partition: 'persist:nav' } });
+  view.webContents.setUserAgent(uaDeChrome(view.webContents.getUserAgent()));
+  // target=_blank vai pro navegador do sistema, mesmo padrão do cockpit.
+  view.webContents.setWindowOpenHandler(({ url: alvo }) => {
+    if (/^https?:/i.test(alvo)) shell.openExternal(alvo);
+    return { action: 'deny' };
+  });
+  win.contentView.addChildView(view);
+  view.setBounds(normalizaBounds(bounds));
+  navegadores.set(win, view);
+  view.webContents.loadURL(destino);
+  return { ok: true };
+});
+
+ipcMain.on('hangar:nav-bounds', (ev, bounds) => {
+  const view = navegadores.get(BrowserWindow.fromWebContents(ev.sender));
+  if (view) view.setBounds(normalizaBounds(bounds));
+});
+
+ipcMain.on('hangar:nav-reload', (ev) => {
+  const view = navegadores.get(BrowserWindow.fromWebContents(ev.sender));
+  if (view) view.webContents.reload();
+});
+
+ipcMain.on('hangar:nav-close', (ev) => fecharNavegador(BrowserWindow.fromWebContents(ev.sender)));
 
 // Seletor nativo de pasta (window.hangar.pickFolder, via preload.cjs). Registrado UMA vez, fora
 // do criarJanela — handler duplicado por janela é erro do ipcMain. O diálogo ancora na janela que

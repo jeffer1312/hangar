@@ -28,6 +28,7 @@
   import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
+  import NavegadorPane from '../components/NavegadorPane.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
@@ -825,6 +826,9 @@
   // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
   // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
   let loopSheetOpen = $state(false);
+  // Navegador embutido ao lado do chat (WebContentsView no shell; iframe fora dele). Só desktop:
+  // no celular quem cobre o caso é o PreviewSheet (túnel da porta pra URL alcançável).
+  let navOpen = $state(false);
   // Campos de loop vêm do SSE DA PRÓPRIA SESSÃO (stateEvent), não do sessionsStore: reter o
   // store aqui abria 1 stream de lista POR SERVIDOR no celular (com offline = retry eterno) e
   // derrubava a conexão do pocket — regressão real vista no iPhone, revertida.
@@ -862,6 +866,11 @@
         keywords: ['terminal', 'espelho', 'tui', 'pane'],
         group: m.lista_ferramentas(),
       },
+      navegador: {
+        detail: m.chat_acao_navegador_detalhe(),
+        keywords: ['navegador', 'browser', 'localhost', 'site'],
+        group: m.lista_ferramentas(),
+      },
     };
     return {
       id,
@@ -881,6 +890,7 @@
       action('pair', m.chat_parear_sessao(), () => (pairOpen = true)),
       action('run', m.chat_executar_workflow(), () => (runOpen = true)),
       action('terminal', m.ctx_terminal(), abrirTerminalReal),
+      action('navegador', m.ctx_navegador(), () => (navOpen = true)),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
     return () => publish([]);
@@ -1820,6 +1830,7 @@
   class:desktop
   class:split-pane={splitTab}
   class:with-context={desktop && showContextPanel}
+  class:with-nav={desktop && navOpen}
   style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.largura}px`}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
@@ -1841,7 +1852,7 @@
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? () => (navOpen = !navOpen) : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -1888,6 +1899,10 @@
       {planLoading}
       {planError}
     />
+  {/if}
+
+  {#if desktop && navOpen}
+    <NavegadorPane onClose={() => (navOpen = false)} />
   {/if}
 
   {#if visorAberto && arquivoAberto}
@@ -2431,6 +2446,18 @@
   @media (min-width: 1900px) {
     .chat-screen.with-context :global(.messages-inner),
     .chat-screen.with-context .bottom-dock :global(.composer-card) { max-width: min(calc(min(1440px, 100%) * var(--cp-width-scale, 1)), 100%); }
+  }
+
+  /* Navegador embutido: o recuo dele SOMA no do painel de contexto (--ctx-w), e vale em TODA a
+     largura de desktop — as regras de --recuo-dir acima só existem em 1280+ porque só o contexto
+     as usava; com o navegador aberto o conteúdo precisa recuar em qualquer largura, senão o view
+     nativo (que flutua POR CIMA do DOM) cobriria o texto e o composer. O NavegadorPane se posiciona
+     pela mesma var (--cp-nav-w), então bounds do view e faixa reservada nunca divergem. */
+  @media (min-width: 820px) {
+    .chat-screen.desktop.with-nav { --cp-nav-w: clamp(420px, 44vw, 920px); }
+    .chat-screen.desktop.with-nav { --recuo-dir: calc(var(--ctx-w, 0px) + var(--cp-nav-w, 0px)); }
+    .chat-screen.desktop.with-nav :global(.message-list) { box-sizing: border-box; padding-right: var(--recuo-dir); }
+    .chat-screen.desktop.with-nav .bottom-dock { right: var(--recuo-dir); }
   }
 
   /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).
