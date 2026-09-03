@@ -27,6 +27,27 @@ describe('segredos', () => {
     expect(segredos.temChave('elevenlabs_api_key')).toBe(false);
   });
 
+  it('podeLer: chave da ElevenLabs sozinha já basta', async () => {
+    getConfig.mockResolvedValue({ campos: { elevenlabs_api_key: { definido: true }, tts_local_cmd: { valor: '' } }, somente_leitura: {} });
+    const { segredos } = await import('./segredos.svelte');
+    await segredos.carregar();
+    expect(segredos.podeLer()).toBe(true);
+  });
+
+  it('podeLer: sem chave, comando local não-vazio também basta', async () => {
+    getConfig.mockResolvedValue({ campos: { elevenlabs_api_key: { definido: false }, tts_local_cmd: { valor: 'echo oi' } }, somente_leitura: {} });
+    const { segredos } = await import('./segredos.svelte');
+    await segredos.carregar();
+    expect(segredos.podeLer()).toBe(true);
+  });
+
+  it('podeLer: sem chave e comando local vazio ou só espaço, não dá pra ler', async () => {
+    getConfig.mockResolvedValue({ campos: { elevenlabs_api_key: { definido: false }, tts_local_cmd: { valor: '   ' } }, somente_leitura: {} });
+    const { segredos } = await import('./segredos.svelte');
+    await segredos.carregar();
+    expect(segredos.podeLer()).toBe(false);
+  });
+
   it('resposta em voo de uma troca velha não sobrescreve a troca mais nova', async () => {
     // Servidor A (chave ausente) demora a responder; servidor B (chave presente) responde na hora.
     // A troca rápida A -> B não pode deixar a resposta atrasada de A vencer por chegar depois.

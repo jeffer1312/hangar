@@ -8,6 +8,7 @@
   import { listarVozesTts, saldoTts, type TtsVoz } from '../../lib/api';
   import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
   import { ouvirAmostra } from '../../lib/ouvir';
+  import { podeLerCriterio } from '../../lib/segredos.svelte';
   import { cortarAmostra } from '../../lib/ttsFormat';
   import { intlLocale } from '../../lib/locale';
   import * as m from '../../paraglide/messages';
@@ -57,6 +58,7 @@
   // DOM de verdade quando fechado — o próprio elemento nativo mantém os filhos montados mesmo
   // colapsado, e isso deixaria a tela "dizendo" o endpoint do LLM mesmo com o acordeão fechado.
   let avancadoAberto = $state(false);
+  let avancadoDecidido = $state(false);
   const CAMPOS_LLM = [
     { chave: 'llm_base_url', tipo: 'texto' as const, rotulo: m.config_server_endpoint_llm(), ajuda: m.config_server_endpoint_llm_ajuda() },
     { chave: 'llm_api_key', tipo: 'segredo' as const, rotulo: m.config_server_chave_llm(), ajuda: m.config_server_chave_llm_ajuda() },
@@ -70,8 +72,22 @@
     { chave: 'llm_briefing_model', tipo: 'texto' as const, rotulo: m.config_server_modelo_llm_briefing(), ajuda: m.config_server_modelo_llm_briefing_ajuda() },
   ];
 
+  // Nasce ABERTO quando quem já configurou um provedor próprio chega na tela — fechado por padrão
+  // parecia configuração perdida. Decide UMA vez, quando os campos terminam de carregar: sem o
+  // `avancadoDecidido`, um Salvar qualquer (que troca a referência de `store.campos`) reabriria o
+  // acordeão por cima de um fechamento manual do usuário.
+  $effect(() => {
+    if (avancadoDecidido || store.carregando || !Object.keys(store.campos).length) return;
+    avancadoDecidido = true;
+    if (CAMPOS_LLM.some((c) => String(store.valorAtual(c.chave) ?? '').trim())) avancadoAberto = true;
+  });
+
   // --- Ler em voz alta -----------------------------------------------------------------------
   const lerOk = $derived(store.campos['elevenlabs_api_key']?.definido === true);
+  // `lerOk` só decide a UI extra da ElevenLabs (voz/naturalidade/amostra — não existe pro comando
+  // local). `podeLerAgora` é a pergunta de verdade "já dá pra ouvir alguma coisa" — mesmo critério
+  // de segredos.podeLer(), aqui contra o valor AO VIVO do rascunho, sem esperar o Salvar.
+  const podeLerAgora = $derived(podeLerCriterio(lerOk, store.valorAtual('tts_local_cmd')));
   const CAMPO_ELEVEN = {
     chave: 'elevenlabs_api_key', tipo: 'segredo' as const,
     rotulo: m.config_server_elevenlabs(), ajuda: m.config_server_elevenlabs_ajuda(),
@@ -150,6 +166,11 @@
 </script>
 
 <div class="voz">
+  <header class="cfg-head">
+    <h2>{m.voz_titulo()}</h2>
+    <p class="sub">{m.config_server_valem()}</p>
+  </header>
+
   {#if store.carregando}
     <p class="aviso">{m.comum_carregando()}</p>
   {:else if store.erro && !Object.keys(store.campos).length}
@@ -216,7 +237,7 @@
       <h3>{m.voz_ler()}</h3>
       <LinhaConfig campo={CAMPO_ELEVEN} {store} />
       {#if !lerOk}
-        <p class="aviso">{m.voz_ler_sem_chave()}</p>
+        <p class="aviso">{podeLerAgora ? m.voz_ler_via_comando_local() : m.voz_ler_sem_chave()}</p>
       {:else}
         <div class="tts-extra">
           {#if vozErro}
@@ -294,6 +315,10 @@
 <style>
   /* Container query, nunca media query: quem aperta a linha e a largura do PAINEL. */
   .voz { container-type: inline-size; padding: var(--space-2) var(--space-4) var(--space-4); display: flex; flex-direction: column; gap: var(--space-5); }
+
+  /* Mesmo par h2+sub das telas irmãs (ServerSettings.svelte) — a Voz também é config de servidor. */
+  .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
+  .cfg-head .sub { margin: 2px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
 
   .secao h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
 

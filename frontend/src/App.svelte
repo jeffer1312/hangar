@@ -516,7 +516,7 @@
        do Chat o audio morreria em toda troca, e o proprio elemento perderia o destravamento do
        gesto do iOS. -->
   <TtsBar />
-  {#if segredos.temChave('elevenlabs_api_key')}
+  {#if segredos.podeLer()}
     <TtsSelectionPill />
   {/if}
   <CodeOverlay />

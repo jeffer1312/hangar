@@ -68,6 +68,7 @@
   import * as m from '../paraglide/messages';
   import { ouvirTexto } from '../lib/ouvir';
   import { textoFalavelComCodigo } from '../lib/speakable';
+  import { segredos } from '../lib/segredos.svelte';
 
   interface Props {
     sessionName: string;
@@ -609,7 +610,7 @@
     // evento) e dois ouvirTexto() disparavam juntos. O primeiro Chat montado vence; e
     // deterministico, embora no split o atalho sempre aja no painel principal.
     if (mod && e.shiftKey && e.code === 'Space') {
-      if (e.repeat) return;
+      if (e.repeat || !segredos.podeLer()) return;   // sem chave/comando de voz: atalho nem existe
       e.preventDefault();
       e.stopImmediatePropagation();
       ouvirUltimaRespostaVisivel();
