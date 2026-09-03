@@ -47,8 +47,10 @@ def test_porta_do_front_cai_no_backend_quando_nao_ha_servico_de_front():
     # Sem serviço de front instalado (o padrão desde que o backend passou a servir o dist), o QR
     # e o painel de alcance têm de apontar pra porta do BACKEND. Com 5173 cravado como default,
     # os dois mandavam a pessoa pra uma porta onde ninguém escuta.
-    assert porta_do_front(Settings(port=8765)) == 8765
-    assert porta_do_front(Settings(port=9000)) == 9000
+    # front_port=0 explícito: hermético contra um backend/.env local com CP_FRONT_PORT=5173
+    # (quem mantém o preview tem isso gravado, e o teste passava só no CI, que não tem .env).
+    assert porta_do_front(Settings(port=8765, front_port=0)) == 8765
+    assert porta_do_front(Settings(port=9000, front_port=0)) == 9000
     assert porta_do_front(Settings(port=8765, front_port=5173)) == 5173
 
 
@@ -60,5 +62,5 @@ def test_front_port_vazio_nao_derruba_o_backend():
 
 
 def test_pairing_url_usa_a_porta_do_backend_sem_front_port():
-    s = Settings(lan_bind_ip="192.168.1.50", auth_token="tok", public_url="", port=8765)
+    s = Settings(lan_bind_ip="192.168.1.50", auth_token="tok", public_url="", port=8765, front_port=0)
     assert pairing_url(s) == "http://192.168.1.50:8765/?token=tok"
