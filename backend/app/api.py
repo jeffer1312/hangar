@@ -2720,6 +2720,21 @@ async def unpair_remote(name: str, body: UnpairRemoteBody):
     return {"ok": True, "warning": warn}
 
 
+# Anti-tempestade: o prompt manda nunca responder [grupo:] com --group, mas prompt é disciplina,
+# não trava. 5 avisos/min por grupo cobre "terminei" + "contrato atualizado" de N membros; um loop
+# N×N passa disso em segundos. ponytail: dict em memória, zera no restart — é o que basta.
+_GROUP_MAX_NA_JANELA = 5
+_GROUP_JANELA_S = 60
+_group_envios: dict[str, list[float]] = {}
+
+
+def _group_estourou(gid: str, agora: float) -> bool:
+    ts = [t for t in _group_envios.get(gid, []) if agora - t < _GROUP_JANELA_S]
+    ts.append(agora)
+    _group_envios[gid] = ts
+    return len(ts) > _GROUP_MAX_NA_JANELA
+
+
 class GroupMsgBody(_StrictBody):
     text: str
 
@@ -2732,13 +2747,22 @@ async def group_message(name: str, body: GroupMsgBody):
     Slash-command fora (mesmo racional do /broadcast)."""
     if body.text.lstrip().startswith("/"):
         raise HTTPException(400, detail=erro("erro_group_message_slash", "group-message não suporta slash-commands"))
+    txt = body.text.lstrip()
+    if txt.startswith("[grupo:") or txt.startswith("[de:"):
+        raise HTTPException(400, detail=erro("erro_group_message_resposta",
+                                             "aviso de grupo não pode reencaminhar um [grupo:]/[de:] — responda 1:1"))
     link = await asyncio.to_thread(lambda: PairLink(name).get())
-    peers = link.get("peers") if link else None
-    if not peers:
+    membros = link.get("peers") if link else None
+    if not membros:
         raise HTTPException(404, detail=erro("erro_sessao_sem_grupo", "sessão não está num grupo"))
+    if _group_estourou(link.get("gid") or name, time.time()):
+        raise HTTPException(429, detail=erro("erro_group_message_tempestade",
+                                             f"mais de {_GROUP_MAX_NA_JANELA} avisos de grupo em "
+                                             f"{_GROUP_JANELA_S}s — parece loop; espere ou responda 1:1",
+                                             max=_GROUP_MAX_NA_JANELA, janela=_GROUP_JANELA_S))
     text = f"[grupo: {name}] {body.text}"
     results: dict[str, dict] = {}
-    for p in peers:
+    for p in membros:
         if not await _send_thread(_session_exists, p):
             results[p] = {"ok": False, "error": erro("erro_sessao_inexistente", "sessão não encontrada"), "delivered": False}
             continue
@@ -2747,7 +2771,7 @@ async def group_message(name: str, body: GroupMsgBody):
         else:
             results[p] = await _send_thread(_send_one, p, text)
     failed = [{"sessao": n, "erro": r.get("error")} for n, r in results.items() if not r.get("ok")]
-    return {"ok": True, "peers": peers,
+    return {"ok": True, "peers": membros,
             "warning": erro("erro_pareamento_grupo_falha",
                             "falha em: " + "; ".join(
                                 f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in failed),

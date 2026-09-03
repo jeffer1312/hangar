@@ -1752,6 +1752,8 @@
   "erro_initiator_invalido": "initiator must be qualified (srv::nome)",
   "erro_pareamento_aviso_falhou": "pairing undone: failed to notify '{nome}': {erro}",
   "erro_group_message_slash": "group-message doesn't support slash commands",
+  "erro_group_message_resposta": "a group notice cannot forward a [grupo:]/[de:] — reply 1:1",
+  "erro_group_message_tempestade": "more than {max} group notices in {janela}s — looks like a loop; wait or reply 1:1",
   "erro_sessao_sem_grupo": "session is not in a group",
   "erro_sessao_nao_pareada": "session is not paired",
   "erro_terminal_aberto": "Terminal open in this session. Close the panel to reply here.",

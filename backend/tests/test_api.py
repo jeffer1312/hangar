@@ -2704,6 +2704,40 @@ def test_group_message_warning_carrega_avisos(api_client):
     ]
 
 
+# ---------------------------------------------------------------------------
+# Task 5: guardas do --group (prefixo e limite por gid)
+# ---------------------------------------------------------------------------
+
+def test_group_message_recusa_reencaminhar_grupo_ou_de(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g1"}), \
+         patch("app.api.terminal.send_prompt") as sp:
+        for txt in ("[grupo: b] terminei", "  [de: b] ok"):
+            r = api_client.post("/api/sessions/a/group-message", json={"text": txt}, headers=_h())
+            assert r.status_code == 400
+            assert r.json()["detail"]["code"] == "erro_group_message_resposta"
+    sp.assert_not_called()
+
+
+def test_group_message_429_acima_de_5_por_minuto_no_mesmo_gid(api_client, monkeypatch):
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod, "_group_envios", {})
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g9"}), \
+         patch("app.api.terminal.send_prompt", return_value="sent"), \
+         patch("app.pqueue.PromptQueue.append"):
+        codes = [api_client.post("/api/sessions/a/group-message", json={"text": f"m{i}"}, headers=_h()).status_code
+                 for i in range(6)]
+    assert codes == [200] * 5 + [429]
+
+
+def test_group_estourou_esquece_fora_da_janela(monkeypatch):
+    from app import api as api_mod
+    monkeypatch.setattr(api_mod, "_group_envios", {})
+    for i in range(5):
+        assert api_mod._group_estourou("g", 1000.0 + i) is False
+    assert api_mod._group_estourou("g", 1005.0) is True
+    assert api_mod._group_estourou("g", 1000.0 + api_mod._GROUP_JANELA_S + 6) is False
+
+
 def test_unpair_warning_estruturado_sem_server_id(api_client, monkeypatch):
     # B2: peer remoto com CP_SERVER_ID vazio -> item {sessao, erro} (antes era string solta e o
     # x['sessao'] seguinte virava TypeError -> 500). O sair do grupo continua 200 com warning.

@@ -1752,6 +1752,8 @@
   "erro_initiator_invalido": "initiator precisa ser qualificado (srv::nome)",
   "erro_pareamento_aviso_falhou": "pareamento desfeito: falha ao avisar '{nome}': {erro}",
   "erro_group_message_slash": "group-message não suporta slash-commands",
+  "erro_group_message_resposta": "aviso de grupo não pode reencaminhar um [grupo:]/[de:] — responda 1:1",
+  "erro_group_message_tempestade": "mais de {max} avisos de grupo em {janela}s — parece loop; espere ou responda 1:1",
   "erro_sessao_sem_grupo": "sessão não está num grupo",
   "erro_sessao_nao_pareada": "sessão não está pareada",
   "erro_terminal_aberto": "Terminal aberto nesta sessão. Feche o painel pra responder por aqui.",
