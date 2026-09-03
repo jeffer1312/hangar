@@ -28,7 +28,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { navMode } from '../lib/navMode.svelte';
   import { ctxPanel } from '../lib/ctxPanel.svelte';
-  import { navegadorPanel } from '../lib/navegadorPanel.svelte';
   import { createSessionListModel } from '../lib/sessionListModel.svelte';
 
   const DEFAULT_BRANCHES = new Set(['main', 'master']);
@@ -341,9 +340,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   // Trilho quando o pin está recolhido. SEM os termos de hover/menu/editing do original: a
   // hover-expansion foi removida de propósito na Task 5 e não volta.
   const expanded = $derived(!sidebarPin.collapsed);
-  // Com navegador embutido aberto em algum chat, a sidebar expandida vira GAVETA (flutua por cima
-  // do conteúdo, .nav-gaveta): empurrar o layout redimensionaria o navegador a cada abertura.
-  const navGaveta = $derived(expanded && Object.keys(navegadorPanel.abertos).length > 0);
 
   function openMenu(e: MouseEvent, s: SessionInfo, serverId: string) {
     e.preventDefault();
@@ -561,7 +557,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      padrão) a aside vira o trilho vertical de iniciais (classe .collapsed, desenho original);
      no modo 'tabs' ela sai do DOM e a SessionTabs assume (Task 6). -->
 {#if !sidebarPin.collapsed || navMode.mode === 'rail'}
-<aside class="sidebar" class:collapsed={!expanded} class:floating class:resizing class:nav-gaveta={navGaveta} style:width={sidebarPin.collapsed ? undefined : width + 'px'}>
+<aside class="sidebar" class:collapsed={!expanded} class:floating class:resizing style:width={sidebarPin.collapsed ? undefined : width + 'px'}>
   <div class="side-top">
     <!-- Este botao E o liga/desliga da barra: alterna entre trilho de iniciais e aberta. Chegou a
          existir uma preferencia "manter aberta" em Aparencia que fazia a mesma coisa e deixava este
@@ -1167,19 +1163,6 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   /* Enquanto arrasta: sem transicao (segue o ponteiro sem lag). */
   .sidebar.resizing { transition: none; }
-  /* Gaveta: com navegador embutido aberto, a sidebar expandida sai do fluxo e cobre o conteúdo
-     (o wrap é display:contents, então o espaço dela recua sozinho). z 45: acima de todo o
-     conteúdo (dock ~20, trilho, atenção 39-42), abaixo de sheet/modal (100+). */
-  .sidebar.nav-gaveta {
-    position: fixed;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    height: auto;
-    max-height: none;
-    z-index: 45;
-    box-shadow: var(--elev-3);
-  }
   .resize-handle {
     position: absolute; top: 0; right: 0; width: 6px; height: 100%;
     cursor: col-resize; z-index: 6; touch-action: none;

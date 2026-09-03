@@ -95,9 +95,9 @@ export function fecharNav(chave: string): void {
 
 // ── Sidebar com navegador aberto ───────────────────────────────────────────
 // Quando o PRIMEIRO navegador abre, a sidebar colapsa pro trilho; quando o ÚLTIMO fecha, volta
-// como estava. SEM override forçado (diferente do Board/Canvas): o fold continua vivo — o usuário
-// expande quando quiser, e a sidebar expandida flutua por cima como gaveta (Sidebar.svelte,
-// .nav-gaveta) em vez de empurrar o navegador. Se ele mexeu no fold no meio, a escolha dele fica.
+// como estava. SEM override forçado (diferente do Board/Canvas): o fold continua vivo e a sidebar
+// expandida se comporta como sempre — empurra o conteúdo normal, o ResizeObserver do NavegadorPane
+// re-mede e o view acompanha. Se ele mexeu no fold no meio, a escolha dele fica.
 let sidebarAntes: boolean | null = null;
 
 function syncSidebar(): void {
