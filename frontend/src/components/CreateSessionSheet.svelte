@@ -121,6 +121,8 @@
     claude: ['low', 'medium', 'high', 'xhigh', 'max'],
     pi: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
   };
+  // OMP é o fork do Pi — mesmos níveis de esforço.
+  NIVEIS.omp = NIVEIS.pi;
 
   // O Codex é o terceiro caso: os níveis dele são POR MODELO e vêm do provedor (`model/list` —
   // medido em 30/08/2026, `gpt-5.6-sol` aceita `ultra` e `gpt-5.5` não aceita nem `max`). Sem
@@ -1022,8 +1024,8 @@
              (o CLI não tem flag; mora no [thinking] do config.toml, global), e o Codex só tem
              níveis depois de o modelo estar escolhido (eles vêm dele). Quem decide é `niveis`. -->
         <div class="field">
-          <label class="field-label" for="effort-pick">{provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()}</label>
-          <Select id="effort-pick" class="field-input" ariaLabel={provider === 'pi' ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
+          <label class="field-label" for="effort-pick">{(provider === 'pi' || provider === 'omp') ? m.criar_raciocinio() : m.composer_esforco()}</label>
+          <Select id="effort-pick" class="field-input" ariaLabel={(provider === 'pi' || provider === 'omp') ? m.criar_raciocinio() : m.composer_esforco()} value={esforco}
             opcoes={[{ value: '', label: m.criar_padrao() },
                      ...niveis.map((n) => ({ value: n, label: n }))]}
             onchange={(v) => (esforco = v)} />
