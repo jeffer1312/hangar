@@ -16,21 +16,20 @@ from app import terminal_input as ti
 from app import agentpane
 
 
-def _send_prompt_pi(name: str, text: str) -> str:
-    """Roda em thread (mesma regra do resto do adapter): resolve o pane NA HORA, igual ao drain
-    (terminal_input.drain) -- sem pane_id, `send_prompt` nunca acha a linha do Pi (pi_inbox) e
-    cai direto pra tecla, o bug que a Task 4 desta branch existe pra matar. Hoje este metodo e
-    codigo morto (o unico `adapter.send_prompt` vivo e o do Codex, api.py:1235) -- mas se algo
-    passar a rotear Pi por aqui, tem que sair correto, nao repetir o silencio.
-
-    Pelo pane do AGENTE (`agentpane.pane_info`), nao pelo ATIVO: com um split manual o ativo pode
-    ser o do shell, e o bilhete da extensao do Pi e POR PANE (I1 da revisao final)."""
-    return ti.TerminalInput().send_prompt(name, text, "pi",
-                                          pane_id=agentpane.pane_info(name)[1])
-
-
 class PiAdapter:
     provider = "pi"
+
+    def _send_prompt_sync(self, name: str, text: str) -> str:
+        """Roda em thread (mesma regra do resto do adapter): resolve o pane NA HORA, igual ao drain
+        (terminal_input.drain) -- sem pane_id, `send_prompt` nunca acha a linha do Pi (pi_inbox) e
+        cai direto pra tecla, o bug que a Task 4 desta branch existe pra matar. Hoje este metodo e
+        codigo morto (o unico `adapter.send_prompt` vivo e o do Codex, api.py:1235) -- mas se algo
+        passar a rotear Pi por aqui, tem que sair correto, nao repetir o silencio.
+
+        Pelo pane do AGENTE (`agentpane.pane_info`), nao pelo ATIVO: com um split manual o ativo pode
+        ser o do shell, e o bilhete da extensao e POR PANE (I1 da revisao final)."""
+        return ti.TerminalInput().send_prompt(name, text, self.provider,
+                                              pane_id=agentpane.pane_info(name)[1])
 
     def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
         # kwarg e `parse_line=` (transcript.py:313), nao `parse=`. Mesma forma do
@@ -49,14 +48,14 @@ class PiAdapter:
         # A lista ja trata o marcador assim (registry.py:719, sem grace).
         return StateMonitor(name, sid_get=sid_get, hook_grace=None).stream()
 
-    # provider="pi" nos dois: o gate de "TUI pronta" (_wait_input_ready) casa marcas do RODAPE do
-    # Claude, que o pane do Pi nunca imprime -> sem o argumento, cada envio esperava os 12s inteiros
-    # de timeout (segurando o _send_lock) antes de digitar.
+    # self.provider nos dois: o gate de "TUI pronta" (_wait_input_ready) casa marcas do RODAPE do
+    # Claude, que o pane do Pi/omp nunca imprime -> sem o argumento, cada envio esperava os 12s
+    # inteiros de timeout (segurando o _send_lock) antes de digitar.
     async def drain(self, name: str, path: str) -> int:
-        return await asyncio.to_thread(ti.drain, name, path, "pi")
+        return await asyncio.to_thread(ti.drain, name, path, self.provider)
 
     async def send_prompt(self, name: str, text: str) -> str:
-        return await asyncio.to_thread(_send_prompt_pi, name, text)
+        return await asyncio.to_thread(self._send_prompt_sync, name, text)
 
     async def deliverable(self, name: str) -> bool:
         return await asyncio.to_thread(ti.deliverable, name)

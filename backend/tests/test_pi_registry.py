@@ -412,6 +412,36 @@ def test_create_pi_skips_the_claude_trust_list(tmp_path, monkeypatch):
     pt.assert_not_called()
 
 
+def _create_omp(tmp_path, monkeypatch, **kw):
+    from unittest.mock import patch
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "omp"))
+    reg = registry.SessionRegistry(projects_dir=tmp_path)
+    with patch.object(registry.tmux, "has_session", return_value=False), \
+         patch.object(registry.tmux, "new_session", return_value=True) as ns, \
+         patch.object(registry, "_pretrust_cwd") as pt:
+        info = reg.create("s-omp", "/home/u/p", provider="omp", **kw)
+    return info, ns, pt
+
+
+def test_create_omp_lanca_session_por_caminho_sem_cache_de_jsonl(tmp_path, monkeypatch):
+    info, ns, pt = _create_omp(tmp_path, monkeypatch)
+    cmd = ns.call_args[0][2]
+    assert info.provider == "omp" and info.jsonl is None
+    assert "omp --session " in cmd and "--session-id" not in cmd and "CP_PI_SESSION=" in cmd
+    assert "s-omp" not in registry.SessionRegistry._jsonl_cache
+    pt.assert_not_called()
+
+
+def test_resume_omp_usa_r_com_caminho(tmp_path, monkeypatch):
+    from app.adapters.pi import sessions as s
+    sid = "01a067f7-6120-700b-b71d-6a6092e0c720"
+    d = tmp_path / "omp" / "sessions" / s.cwd_slug("/home/u/p"); d.mkdir(parents=True)
+    f = d / f"2026-09-03T15-51-00-640Z_{sid}.jsonl"; f.write_text("")
+    _, ns, _ = _create_omp(tmp_path, monkeypatch, resume_session_id=sid)
+    cmd = ns.call_args[0][2]
+    assert "omp -r " in cmd and str(f) in cmd
+
+
 def test_create_claude_still_seeds_the_same_path(tmp_path, monkeypatch):
     # Nao-regressao do caminho de TODO usuario de hoje: byte a byte o mesmo jsonl no cache.
     from unittest.mock import patch

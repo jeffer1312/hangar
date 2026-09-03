@@ -200,6 +200,8 @@ def _pane_tail(pane: str, lines: int = _READY_TAIL_LINES) -> str:
 # 0.1–0.25s, o primeiro caractere de moldura aparece em 4.2s / 4.5s, junto com o composer.
 # ponytail: o conjunto de glifos é calibration knob, igual ao _LOGIN_RE do state.py.
 _READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│"),
+                              # omp: fork do Pi, mesma TUI/composer.
+                              "omp": ("─", "━", "═", "╰", "│"),
                               # Kimi: composer = mesma caixa arredondada do Pi (╭─╮ ╰─╯ com "> "
                               # dentro) — medido num pane real do Kimi 0.34.0. O conjunto do Pi vale
                               # inteiro: qualquer moldura em tela prova que a TUI ja aceita tecla.
@@ -208,7 +210,7 @@ _READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│"),
 # Timeout por provider. O Pi ficou mais curto de propósito: o boot medido até o composer é ~4.3s,
 # então 8s é ~2× de folga, e no estouro a gente ENVIA mesmo assim — ou seja, a espera só compra
 # segurança durante o boot e todo o resto é latência pura no dia em que o marcador desandar de novo.
-_TIMEOUTS_BY_PROVIDER = {"pi": 8.0, "kimi": 8.0}
+_TIMEOUTS_BY_PROVIDER = {"pi": 8.0, "omp": 8.0, "kimi": 8.0}
 _DEFAULT_TIMEOUT = 12.0
 
 # Um aviso por (sessão, provider): marcador que para de casar não pode ser silencioso — foi assim
@@ -1481,7 +1483,7 @@ class TerminalInput:
             # `linha_de` (nome primeiro, pane depois) e nao o pane cru: no psmux TODA sessao Pi se
             # declara `%1`, entao procurar por pane entregava a mensagem na conversa da OUTRA
             # sessao — medido 22/08/2026, com `delivered: true` na resposta. Ver pi_inbox.
-            chave = provider == "pi" and pi_inbox.linha_de(name, pane_id)
+            chave = provider in ("pi", "omp") and pi_inbox.linha_de(name, pane_id)
             if chave:
                 r = pi_inbox.INBOX.entregar_sync(chave, text, msg_id)
                 if r != "sem-linha":
@@ -1516,7 +1518,7 @@ class TerminalInput:
             # raspar a tela — ver _composer_ocupado_pi. Este caminho so e alcancado quando a linha
             # NAO entregou (o bloco acima retorna antes), entao aqui ele quase sempre e o plano B
             # mesmo; passar o pane custa nada e cobre o caso de a linha ter voltado no meio.
-            if provider == "pi" and _composer_ocupado_pi(name, pane_id):
+            if provider in ("pi", "omp") and _composer_ocupado_pi(name, pane_id):
                 _avisa_deferred(name, "composer do pi ja tem texto", _OCUPADO_WARNED,
                                 _OCUPADO_DEFER_COUNT, _diag_composer(_capture(name), text, name, None))
                 return "deferred"

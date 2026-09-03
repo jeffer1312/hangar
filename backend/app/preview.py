@@ -102,6 +102,8 @@ _KIMI_SPINNER_RE = re.compile(r"^\s*[⠀-⣿\U0001f311-\U0001f318]")
 _KIMI_TODO_HEAD_RE = re.compile(r"^\s*Todo\s*$")
 
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,),
+                      # omp: fork do Pi, mesma moldura de composer.
+                      "omp": (_PI_BOX_RE,),
                       # Kimi desenha o composer com a MESMA caixa arredondada do Pi (medido num
                       # pane real, 0.34.0) -> a ancora de corte e a mesma. Mas a caixa e o rodape
                       # MAIS BAIXO: entre ela e a resposta ainda cabem o eco do prompt e a dica, e

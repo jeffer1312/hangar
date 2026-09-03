@@ -301,7 +301,7 @@ def committed_user_lines(jsonl: str, provider: str = "claude") -> set[str] | Non
     pi_parse = None
     kimi_parse = None
     codex_parse = None
-    if provider == "pi":
+    if provider in ("pi", "omp"):
         from app.adapters.pi.transcript import parse_obj as pi_parse
     elif provider == "codex":
         # Codex: o texto do usuario vive em `response_item`/`message` com role "user", e o parser
@@ -728,7 +728,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     _pi_stream = None
     if provider == "codex":
         from app.adapters.codex.rollout import parse_rollout_obj as _parse
-    elif provider == "pi":
+    elif provider in ("pi", "omp"):
         # Stream (com memoria de uma linha) e nao parse_obj solto: e o que tira o contexto de hook
         # colado no inicio da mensagem do usuario. Uma instancia por _parse_from — a janela do
         # tail-read cresce e re-parseia, e um estado carregado da tentativa anterior soltaria

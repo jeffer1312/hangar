@@ -3,10 +3,11 @@ instanciar TranscriptTailer/StateMonitor/terminal_input direto."""
 from app.adapters.claude import ClaudeAdapter
 from app.adapters.codex.adapter import CodexAdapter
 from app.adapters.kimi.adapter import KimiAdapter
+from app.adapters.omp.adapter import OmpAdapter
 from app.adapters.pi.adapter import PiAdapter
 
 PROVIDERS = {"claude": ClaudeAdapter(), "codex": CodexAdapter(), "pi": PiAdapter(),
-             "kimi": KimiAdapter()}
+             "kimi": KimiAdapter(), "omp": OmpAdapter()}
 
 
 def get_adapter(provider: str):
