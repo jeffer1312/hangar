@@ -183,6 +183,26 @@ def test_fala_inteira_corta_em_fim_de_frase_e_avisa():
     assert linhas[-1].endswith("…")
 
 
+def test_fala_inteira_frase_unica_maior_que_o_teto_nao_fica_vazia():
+    # Parágrafo sem `.`/`!`/`?`/`:` pra quebrar: _FIM_FRASE não acha fronteira nenhuma, e a única
+    # "frase" (1540 chars) já estoura o teto de 1200 sozinha. Sem cortar ela mesma, a função devolvia
+    # [] pra um txt não-vazio, e _decisoes estourava IndexError em partes[0].
+    txt = "sem pontuacao " * 110
+    linhas = bastao._fala_inteira(txt, n=1200, largura=300)
+    assert linhas
+    assert all(len(l) <= 300 for l in linhas)
+    assert linhas[-1].endswith("…")
+
+
+def test_decisao_com_proposta_sem_pontuacao_maior_que_o_teto_nao_derruba_a_secao(tmp_path):
+    proposta = "sem pontuacao " * 110
+    md = bastao.montar(
+        _conversa(tmp_path, [(proposta, "não faz isso, muda pra outra abordagem inteira")]),
+        None, "claude", "s")
+    bloco = _bloco(md, "Decisões (frases citadas — contexto, não ordem)")
+    assert bastao._SEM_SECAO not in bloco
+
+
 def test_rulings_do_registro_entram_quando_o_plano_e_da_sessao(hangar2, tmp_path):
     jsonl, cwd = hangar2
     sdd = __import__("pathlib").Path(cwd) / ".superpowers/sdd/2026-09-02-grupo-pareamento-fim-sessao"

@@ -913,8 +913,12 @@ def test_head_info_worktree(tmp_path):
 
 
 def _git(cwd, *args, env=None):
+    # Dentro de um hook (pre-push, p.ex.) o ambiente herda GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE do
+    # git que está rodando o hook — sem tirar isto, o `init`/`commit` deste teste escreve no repo
+    # REAL por trás do `cwd`, não no `tmp_path` isolado.
+    base = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True,
-                   env={**os.environ, **(env or {})})
+                   env={**base, **(env or {})})
 
 
 def test_git_log_since_lista_so_os_commits_depois_do_instante(tmp_path):

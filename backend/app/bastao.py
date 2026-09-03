@@ -104,6 +104,11 @@ def _fala_inteira(txt: str, n: int = 1200, largura: int = 300) -> list[str]:
     for f in frases:
         if total + len(f) + 1 > n:
             cortou = True
+            if not atual:
+                # 1ª frase já maior que o teto (parágrafo/lista sem `.`/`!`/`?`/`:` pra quebrar) —
+                # corta ela mesma. Sem isto a fala inteira virava lista vazia e `_decisoes` estourava
+                # IndexError em `partes[0]`, derrubando a seção inteira calada.
+                atual = f[:n]
             break
         if atual and len(atual) + 1 + len(f) > largura:
             linhas.append(atual)
@@ -627,8 +632,9 @@ def _decisoes(eventos: list, cwd: str | None, plano: str | None) -> list[str]:
         out.append(f"- **você:** {_uma_linha(resp, 260)}")
         if prop:
             partes = _fala_inteira(prop)
-            out.append(f"  - _antes disso, o agente:_ {partes[0]}")
-            out += [f"    {p}" for p in partes[1:]]
+            if partes:      # prop só espaço em branco -> _fala_inteira devolve [], nada a citar
+                out.append(f"  - _antes disso, o agente:_ {partes[0]}")
+                out += [f"    {p}" for p in partes[1:]]
 
     rulings = _rulings_do_registro(cwd, plano)
     if rulings:
