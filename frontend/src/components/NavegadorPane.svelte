@@ -13,11 +13,16 @@
   import { navegadorNativo } from '../lib/navegadorNativo';
   import { navegadorPanel, atualizarNavUrl, fecharNav } from '../lib/navegadorPanel.svelte';
   import { ctxPanel } from '../lib/ctxPanel.svelte';
+  import { sidebarPin } from '../lib/sidebarPin.svelte';
 
   // navKey = workspaceSessionKey da sessão dona deste painel.
   let { navKey }: { navKey: string } = $props();
 
   const nativo = navegadorNativo();
+  // Overlays DOM (sheet/modal/visor de mídia) abrem POR BAIXO do view nativo — com um aberto, o
+  // view se esconde (bounds zero). O seletor é o canônico do app (Composer/DesktopShell usam o
+  // mesmo) + .bp-wrap do visor; os dois teleportam pro body.
+  const SELETOR_OVERLAY = '[role="dialog"]:not(.board-overlay), .bp-wrap';
   let ancora = $state<HTMLDivElement | null>(null);
   // O painel é remontado por sessão (o Chat tem key por sessão), então o valor INICIAL do navKey
   // é o certo aqui — untrack declara isso sem warning.
@@ -56,14 +61,25 @@
     }
   });
 
+  // O ResizeObserver só dispara em mudança de TAMANHO — mas a coluna também se MOVE (a sidebar
+  // anima `width 160ms` ao colapsar quando a aba abre, e o painel de contexto anima ao
+  // recolher): o âncora desloca em x com o tamanho intacto e o view ficaria desalinhado. Quando
+  // um dos dois muda, re-sincroniza DEPOIS da animação (200ms cobre os 160ms com folga).
+  $effect(() => {
+    void sidebarPin.collapsed;
+    void ctxPanel.recolhido;
+    if (!nativo) return;
+    const t = setTimeout(() => {
+      if (document.querySelector(SELETOR_OVERLAY)) nativo.bounds(navKey, { x: 0, y: 0, width: 0, height: 0 });
+      else nativo.bounds(navKey, rectDaAncora());
+    }, 200);
+    return () => clearTimeout(t);
+  });
+
   onMount(() => {
     if (!nativo) return;
     // Reenvia o retângulo a cada mudança de layout (resize da janela, drag da coluna, sidebar) —
-    // o view nativo não acompanha o DOM sozinho. Com overlay DOM aberto o view se esconde: ele
-    // flutua POR CIMA de tudo e cobriria o overlay. O seletor é o canônico do app (Composer/
-    // DesktopShell detectam modal com o mesmo) + .bp-wrap do visor de mídia; os dois teleportam
-    // pro body, então um MutationObserver raso (childList) já cobre.
-    const SELETOR_OVERLAY = '[role="dialog"]:not(.board-overlay), .bp-wrap';
+    // o view nativo não acompanha o DOM sozinho.
     const sync = () => {
       if (document.querySelector(SELETOR_OVERLAY)) nativo.bounds(navKey, { x: 0, y: 0, width: 0, height: 0 });
       else nativo.bounds(navKey, rectDaAncora());
@@ -123,7 +139,9 @@
     </div>
   {:else if aberta}
     {#key aberta + recarregos}
-      <iframe class="nav-body nav-frame" src={aberta} title={m.ctx_navegador()}></iframe>
+      <!-- Fallback fora do shell (PWA/navegador): sandbox corta popup/download, mantém o uso. -->
+      <iframe class="nav-body nav-frame" src={aberta} title={m.ctx_navegador()}
+              sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
     {/key}
   {:else}
     <div class="nav-body"><p class="nav-hint">{m.nav_vazio()}</p></div>

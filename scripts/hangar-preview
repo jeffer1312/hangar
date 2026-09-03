@@ -90,10 +90,16 @@ async function targets() {
 
 async function acharTarget(sc) {
   const todos = await targets();
-  const vivo = sc.targetId
-    ? todos.find((t) => t.id === sc.targetId)
-    : todos.filter((t) => t.type === 'page' && t.url === sc.url);
-  const alvo = Array.isArray(vivo) ? vivo[0] : vivo;
+  if (sc.targetId) {
+    const alvo = todos.find((t) => t.id === sc.targetId);
+    if (alvo) return alvo;
+    erro(`o navegador de ${sc.chave} não está mais aberto (o shell reiniciou?). Abra de novo pelo painel.`);
+  }
+  // Sem targetId (o shell não conseguiu o diff): casa por URL — mas só se for ÚNICA, senão o CLI
+  // dirigia o navegador de OUTRA sessão com a mesma página aberta, calado.
+  const porUrl = todos.filter((t) => t.type === 'page' && t.url === sc.url);
+  if (porUrl.length > 1) erro(`mais de um navegador com ${sc.url} aberto e o sidecar não tem targetId — feche e reabra o painel da sessão pra regravar.`);
+  const alvo = porUrl[0];
   if (!alvo) erro(`o navegador de ${sc.chave} não está mais aberto (o shell reiniciou?). Abra de novo pelo painel.`);
   return alvo;
 }

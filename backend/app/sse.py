@@ -203,7 +203,9 @@ _NAV_PENDENTES: dict[str, list[str]] = {}
 
 
 def nav_pendente(name: str, url: str) -> None:
-    _NAV_PENDENTES.setdefault(name, []).append(url)
+    # Só a ÚLTIMA url por sessão: é o que a UI abre, e o agente empurrando N urls com a sessão fora
+    # da tela não infla a memória pra sempre.
+    _NAV_PENDENTES[name] = [url]
 
 
 async def _cached_list():
@@ -509,8 +511,10 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         while True:
             await asyncio.sleep(1.0)
             urls = _NAV_PENDENTES.pop(name, [])
+            # put_nowait, NÃO await put: sem suspensão entre o pop e a entrega, um cancel no meio
+            # não perde o evento calado.
             for url in urls:
-                await queue.put(("nav", json.dumps({"url": url})))
+                queue.put_nowait(("nav", json.dumps({"url": url})))
 
     def _enqueue_preview(text: str, md: bool = False, full: bool = False):
         # Atualiza o slot e enfileira UM marcador 'preview' por vez (drop-old). Sem await entre as

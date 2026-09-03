@@ -1311,7 +1311,10 @@
         // o agente abriu -> a aba Navegador já aparece aberta (e o painel, se estava recolhido)
         ctxPanel.recolhido = false;
         ctxPanel.aba = 'navegador';
-      } catch {}
+      } catch (err) {
+        // Mesmo motivo dos handlers ao lado: engolir calado esconderia um evento 'nav' malformado.
+        if (import.meta.env.DEV) console.debug('nav: evento ilegivel', err);
+      }
     });
 
     // Preview ao vivo (best-effort) do bloco de assistente em voo. Full-replace; tambem e prova de
