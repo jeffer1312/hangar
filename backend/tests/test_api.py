@@ -2575,7 +2575,7 @@ def test_pair_warning_parcial_carrega_avisos_estruturados(api_client):
         return None
     with patch("app.api.registry.list",
               return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
-         patch("app.api.pair.join_group", return_value=(["me", "voce"], "snap")), \
+         patch("app.api.pair.join_group", return_value=(["me", "voce"], {"me": None, "voce": None})), \
          patch("app.api.PairLink.get", return_value={"peers": ["voce"], "task": "", "gid": "g1"}), \
          patch("app.api._deliver", side_effect=fake_deliver):
         r = api_client.post("/api/sessions/me/pair", headers=_h(),
@@ -2594,13 +2594,77 @@ def test_pair_warning_none_quando_todos_avisados(api_client):
     # B1: sem falha -> warning None (array vazio nunca chega ao formatador do front).
     with patch("app.api.registry.list",
               return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
-         patch("app.api.pair.join_group", return_value=(["me", "voce"], "snap")), \
+         patch("app.api.pair.join_group", return_value=(["me", "voce"], {"me": None, "voce": None})), \
          patch("app.api.PairLink.get", return_value={"peers": ["voce"], "task": "", "gid": "g1"}), \
          patch("app.api._deliver", return_value=None):
         r = api_client.post("/api/sessions/me/pair", headers=_h(),
                             json={"peers": ["voce"], "task": "t"})
     assert r.status_code == 200
     assert r.json()["warning"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: protocolo completo só pro recém-chegado
+# ---------------------------------------------------------------------------
+
+def test_pair_protocolo_completo_so_pro_novato(api_client):
+    # 'd' entra num grupo (a,b): d recebe o protocolo; a e b recebem UMA linha "d entrou".
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    snap = {"a": {"peers": ["b"], "task": "t", "gid": "g1"},
+            "b": {"peers": ["a"], "task": "t", "gid": "g1"},
+            "d": None}
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name=n, cwd="/p") for n in ("a", "b", "d")]), \
+         patch("app.api.pair.join_group", return_value=(["a", "b", "d"], snap)), \
+         patch("app.api.PairLink.get", return_value={"peers": ["a", "b"], "task": "t", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/d/pair", headers=_h(), json={"peers": ["a"], "task": ""})
+    assert r.status_code == 200
+    assert entregues["d"].startswith("[de: hangar] GRUPO DE TRABALHO ATIVO")
+    assert entregues["a"].startswith("[de: hangar] 'd' entrou no seu grupo")
+    assert entregues["b"].startswith("[de: hangar] 'd' entrou no seu grupo")
+    assert "Membros agora: 'a', 'b', 'd'" in entregues["a"]
+
+
+def test_pair_repetido_sem_mudanca_nao_avisa_ninguem(api_client):
+    entregues = []
+    async def fake_deliver(name, text):
+        entregues.append(name)
+        return None
+    snap = {"a": {"peers": ["b"], "task": "t", "gid": "g1"},
+            "b": {"peers": ["a"], "task": "t", "gid": "g1"}}
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name=n, cwd="/p") for n in ("a", "b")]), \
+         patch("app.api.pair.join_group", return_value=(["a", "b"], snap)), \
+         patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "t", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/a/pair", headers=_h(), json={"peers": ["b"], "task": ""})
+    assert r.status_code == 200
+    assert entregues == []
+    assert r.json()["warning"] is None
+
+
+def test_pair_merge_de_dois_grupos_avisa_entrada_dos_dois_lados(api_client):
+    entregues = {}
+    async def fake_deliver(name, text):
+        entregues[name] = text
+        return None
+    snap = {"a": {"peers": ["b"], "task": "t", "gid": "g1"},
+            "b": {"peers": ["a"], "task": "t", "gid": "g1"},
+            "c": {"peers": ["d"], "task": "", "gid": "g2"},
+            "d": {"peers": ["c"], "task": "", "gid": "g2"}}
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name=n, cwd="/p") for n in "abcd"]), \
+         patch("app.api.pair.join_group", return_value=(["a", "b", "c", "d"], snap)), \
+         patch("app.api.PairLink.get", return_value={"peers": ["b", "c", "d"], "task": "t", "gid": "g1"}), \
+         patch("app.api._deliver", side_effect=fake_deliver):
+        r = api_client.post("/api/sessions/a/pair", headers=_h(), json={"peers": ["c"], "task": ""})
+    assert r.status_code == 200
+    assert "'c', 'd' entrou" in entregues["a"] and "'c', 'd' entrou" in entregues["b"]
+    assert "'a', 'b' entrou" in entregues["c"] and "'a', 'b' entrou" in entregues["d"]
 
 
 def test_group_message_warning_carrega_avisos(api_client):

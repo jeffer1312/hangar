@@ -2573,20 +2573,32 @@ async def pair_session(name: str, body: PairBody):
         raise HTTPException(400, str(e))
     link = await asyncio.to_thread(lambda: PairLink(name).get() or {})
     task = link.get("task", body.task)
-    errs = []
+    # Protocolo completo só pra quem estava SOLTO; veterano ganha uma linha com quem entrou. Quem
+    # não teve mudança de peers nem de tarefa não recebe nada — o protocolo pós-/clear é do hook.
+    avisos: list[tuple[str, str]] = []
     for m in members:
-        e = await _deliver(m, _group_text(m, [x for x in members if x != m], task))
+        antes = snap.get(m)
+        outros = [x for x in members if x != m]
+        if antes is None:
+            avisos.append((m, _group_text(m, outros, task)))
+            continue
+        entraram = [x for x in outros if x not in antes["peers"]]
+        if entraram:
+            avisos.append((m, pair_texto.texto_entrada(entraram, members, task)))
+        elif antes.get("task", "") != task:
+            avisos.append((m, pair_texto.texto_tarefa_atualizada(task)))
+    errs = []
+    for m, texto in avisos:
+        e = await _deliver(m, texto)
         if e:
             errs.append({"sessao": m, "erro": e})
-    if len(errs) == len(members):
+    if avisos and len(errs) == len(avisos):
         # NINGUÉM foi avisado -> grupo fantasma; restaura o estado anterior e reporta.
         await asyncio.to_thread(pair.restore, snap)
         raise HTTPException(502, detail=erro("erro_pareamento_desfeito",
                             f"pareamento desfeito: falha ao avisar as sessões "
                             f"({'; '.join(f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in errs)})",
                             avisos=errs))
-    # Falha parcial: grupo vale (AO MENOS 1 membro sabe), e o warning nomeia quem ficou sem aviso
-    # — o front mostra em vez de fingir sucesso total.
     return {"ok": True, "members": members,
             "warning": erro("erro_pareamento_aviso_parcial",
                             "aviso falhou em: " + "; ".join(
