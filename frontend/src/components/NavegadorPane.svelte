@@ -41,6 +41,8 @@
   // Drag na divisória ESQUERDA (o painel cola na direita): pointer capture no handle, largura
   // clampada no store, salva no soltar. Mesma pegada do ctxPanel — sem transição de width, o
   // arrasto segue o ponteiro sem lag (a classe resizing é a trava contra transição futura).
+  // O handle vive FORA do âncora, de propósito: o view nativo cobre o âncora e engoliria o
+  // clique — era por isso que "depois de abrir uma página não redimensionava mais".
   function resizeStart(e: PointerEvent) {
     navegadorPanel.resizing = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -62,28 +64,28 @@
     if (!nativo) return;
     // Reenvia o retângulo a cada mudança de layout (resize da janela, arrasto da divisória,
     // sidebar) — o view nativo não acompanha o DOM sozinho.
-    const sync = () => { nativo.bounds(rectDaAncora()); };
+    // Com overlay DOM aberto (sheet, modal, visor de mídia) o view se esconde: ele flutua POR
+    // CIMA de tudo e cobriria o overlay — era o "não sai da frente da imagem". O seletor é o
+    // canônico do app (Composer/DesktopShell detectam modal com o mesmo) + .bp-wrap do visor.
+    // Os dois teleportam pro body, então um MutationObserver raso (childList) já cobre.
+    const SELETOR_OVERLAY = '[role="dialog"]:not(.board-overlay), .bp-wrap';
+    const sync = () => {
+      if (document.querySelector(SELETOR_OVERLAY)) nativo.bounds({ x: 0, y: 0, width: 0, height: 0 });
+      else nativo.bounds(rectDaAncora());
+    };
     const ro = new ResizeObserver(sync);
     if (ancora) ro.observe(ancora);
+    const mo = new MutationObserver(sync);
+    mo.observe(document.body, { childList: true });
     return () => {
       ro.disconnect();
+      mo.disconnect();
       nativo.close();
     };
   });
 </script>
 
 <section class="nav-panel" class:resizing={navegadorPanel.resizing} aria-label={m.ctx_navegador()}>
-  <!-- Divisória esquerda: arrasta pra redimensionar (a largura mora no store navegadorPanel). -->
-  <div
-    class="nav-resize-handle"
-    role="separator"
-    aria-orientation="vertical"
-    aria-label={m.ctx_navegador()}
-    onpointerdown={resizeStart}
-    onpointermove={resizeMove}
-    onpointerup={resizeEnd}
-    onpointercancel={resizeEnd}
-  ></div>
   <header class="nav-bar">
     <form class="nav-form" onsubmit={(e) => { e.preventDefault(); ir(); }}>
       <input
@@ -106,18 +108,32 @@
     <button class="nav-btn" onclick={onClose} aria-label={m.shell_fechar_painel()} title={m.shell_fechar_painel()}>×</button>
   </header>
 
-  {#if nativo}
-    <!-- O âncora precisa existir MESMO vazio: é ele que o ResizeObserver mede pro shell. -->
-    <div class="nav-body" bind:this={ancora}>
-      {#if !aberta}<p class="nav-hint">{m.nav_vazio()}</p>{/if}
-    </div>
-  {:else if aberta}
-    {#key aberta + recarregos}
-      <iframe class="nav-body nav-frame" src={aberta} title={m.ctx_navegador()}></iframe>
-    {/key}
-  {:else}
-    <div class="nav-body"><p class="nav-hint">{m.nav_vazio()}</p></div>
-  {/if}
+  <div class="nav-main">
+    <!-- Divisória esquerda FORA do âncora: o view nativo cobre o âncora, então um handle dentro
+         da área dele morre sem clique assim que uma página abre. -->
+    <div
+      class="nav-resize-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={m.ctx_navegador()}
+      onpointerdown={resizeStart}
+      onpointermove={resizeMove}
+      onpointerup={resizeEnd}
+      onpointercancel={resizeEnd}
+    ></div>
+    {#if nativo}
+      <!-- O âncora precisa existir MESMO vazio: é ele que o ResizeObserver mede pro shell. -->
+      <div class="nav-body" bind:this={ancora}>
+        {#if !aberta}<p class="nav-hint">{m.nav_vazio()}</p>{/if}
+      </div>
+    {:else if aberta}
+      {#key aberta + recarregos}
+        <iframe class="nav-body nav-frame" src={aberta} title={m.ctx_navegador()}></iframe>
+      {/key}
+    {:else}
+      <div class="nav-body"><p class="nav-hint">{m.nav_vazio()}</p></div>
+    {/if}
+  </div>
 </section>
 
 <style>
@@ -138,16 +154,14 @@
     overflow: hidden;
     z-index: 19;
   }
+  .nav-main { flex: 1; min-height: 0; display: flex; }
   .nav-resize-handle {
-    position: absolute;
-    left: -5px;
-    top: 0;
-    bottom: 0;
-    width: 10px;
+    flex: 0 0 12px;
     cursor: col-resize;
-    z-index: 2;
     touch-action: none;
+    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
   }
+  .nav-resize-handle:hover { background: var(--surface-raised); }
   .nav-bar {
     display: flex;
     align-items: center;
