@@ -533,6 +533,20 @@ def test_omp_ask_picker_is_awaiting_input():
     assert options == ["Azul", "Verde", "Other (type your own)"]
 
 
+def test_omp_ask_picker_tela_viva():
+    """Captura REAL do pane com o picker aberto (`tmux capture-pane -p`, 160 colunas).
+
+    Duas armadilhas que a tela medida a mao nao tinha e que quebraram o drive ao vivo: o omp deixa
+    NA TELA um cartao-resumo do toolCall com as mesmas marcas de opcao (as opcoes vinham duplicadas
+    e o alvo do drive saia deslocado), e o modelo pode pendurar uma DESCRICAO embaixo de cada opcao
+    (linha dentro da moldura, sem a marca) — que nao e opcao."""
+    pane = (Path(__file__).parent / "fixtures" / "pane_omp_ask_picker.txt").read_text(encoding="utf-8")
+    state, _, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert question == "Qual cor você prefere?"
+    assert options == ["Azul", "Verde (Recommended)", "Other (type your own)"]
+
+
 def test_omp_ask_picker_citado_sem_rodape_no_fundo_nao_e_menu():
     # Mesma trava do Pi: o picker do omp so vale com o rodape de navegacao no FUNDO do pane.
     pane = (

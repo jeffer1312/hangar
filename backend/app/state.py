@@ -38,7 +38,8 @@ _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
 # NAO sao numeradas e vivem dentro da moldura (`│`) do box.
 _OMP_SEL = chr(0xF054)
 _OMP_OPT = chr(0xF10C)
-_PI_CURSOR_RE = re.compile(rf"^\s*>\s*\d+\.\s|^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s", re.M)
+_OMP_CURSOR_RE = re.compile(rf"^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s")
+_PI_CURSOR_RE = re.compile(rf"^\s*>\s*\d+\.\s|{_OMP_CURSOR_RE.pattern}", re.M)
 _OMP_OPTION_RE = re.compile(rf"^\s*│\s*(?:{_OMP_SEL}\s+)?{_OMP_OPT}\s+(.*\S)\s*$")
 # Linha so de moldura (o `├───` que separa pergunta das opcoes no box do omp): nunca e pergunta nem
 # opcao. O _RULE_RE nao alcanca — ele exige a regua RETA do Claude, sem canto na ponta.
@@ -96,9 +97,9 @@ def _question(lines: list[str]) -> Optional[str]:
     for line in lines:
         if _option(line):
             break
-        # lstrip da moldura: no omp a pergunta vem dentro do box (`│ Qual cor...`) e sem isso o `│`
-        # entraria no texto que o app mostra.
-        s = line.strip().lstrip("│").strip()
+        # Tirar a moldura dos DOIS lados: no omp a pergunta vem dentro do box
+        # (`│ Qual cor...?      │`) e sem isso as bordas entrariam no texto que o app mostra.
+        s = line.strip().strip("│").strip()
         if not s or _RULE_RE.match(line) or _SO_MOLDURA_RE.match(line) or s[:1] in "☐☑":
             continue
         found = s
@@ -169,6 +170,20 @@ def _is_boundary(line: str) -> bool:
     return bool(s) and s[0] in _BOUNDARY_GLYPHS
 
 
+def omp_box(lines: list[str]) -> Optional[tuple[int, int]]:
+    """Bounds [top, bot) do ULTIMO box do omp: do titulo (`╭`) mais baixo ate o rodape.
+
+    Ancora obrigatoria porque o omp deixa NA TELA um cartao-resumo do toolCall com as MESMAS marcas
+    de opcao do picker vivo. Varrendo o pane inteiro, as opcoes do resumo entravam na lista (visto ao
+    vivo: `['Azul', 'Verde', 'Azul', 'Verde (Recommended)', ...]`) e o alvo do drive saia deslocado —
+    a resposta ia pra opcao errada e caia no fallback por texto. Sem rodape ou sem titulo -> None."""
+    bot = next((i for i in range(len(lines) - 1, -1, -1) if _FOOTER_RE.search(lines[i])), None)
+    if bot is None:
+        return None
+    top = next((i for i in range(bot - 1, -1, -1) if lines[i].lstrip()[:1] == "╭"), None)
+    return None if top is None else (top + 1, bot)
+
+
 def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     """Bounds [top, bot) do menu de selecao contiguo que contem o cursor ❯, ou None.
 
@@ -189,6 +204,10 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     # rodape dela subiu junto — sem a trava ela travava o app num menu fantasma.
     if pi_cursor and not _FOOTER_RE.search("\n".join(lines[-8:])):
         return None
+    # No omp o bloco e o proprio box, delimitado — nao ha o que adivinhar subindo linha a linha (ver
+    # omp_box: o cartao-resumo que fica na tela tem as mesmas marcas de opcao).
+    if _OMP_CURSOR_RE.match(lines[cursor]):
+        return omp_box(lines)
     # Um menu VIVO substitui o composer de input. Se ABAIXO do cursor renderiza o composer vivo (linha
     # de prompt "❯ " vazia ou com rascunho — comeca com ❯ mas NAO e "❯ N." de opcao), entao este "❯ N."
     # e PROSA citada no scrollback (ex: o assistente citando o menu nativo "❯ 1. Yes, switch...") e nao

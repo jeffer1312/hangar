@@ -1385,6 +1385,15 @@ def test_omp_cursor_row_e_a_posicao_entre_as_linhas_de_opcao():
     assert terminal_input._pi_cursor_row(_omp_picker(3), "omp") == 3
 
 
+def test_omp_cursor_row_na_tela_viva_ignora_o_cartao_resumo():
+    # Captura REAL: o cartao-resumo do toolCall fica na tela com as MESMAS marcas de opcao. Contando
+    # o pane inteiro dava 4 (resumo Azul/Verde + picker Azul/Verde) e o drive respondia a opcao
+    # errada — ao vivo isso virou DriveError + fallback por texto ("Ask tool was cancelled").
+    from pathlib import Path
+    pane = (Path(__file__).parent / "fixtures" / "pane_omp_ask_picker.txt").read_text(encoding="utf-8")
+    assert terminal_input._pi_cursor_row(pane, "omp") == 2
+
+
 def test_omp_cursor_row_sem_marcador_e_none():
     sem_marca = _omp_picker(0)
     assert _OMP_SEL not in sem_marca

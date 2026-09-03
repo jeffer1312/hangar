@@ -14,7 +14,7 @@ from app import pi_inbox
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
-from app.state import _live_spinner, classify, is_overlay, aprovacao_kimi_no_pane
+from app.state import _live_spinner, classify, is_overlay, omp_box, aprovacao_kimi_no_pane
 from app.tmux import send_keys
 
 _log = logging.getLogger("hangar.terminal_input")
@@ -1045,10 +1045,15 @@ _OMP_CURSOR_ROW = re.compile(rf"^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s")
 
 def _pi_cursor_row(screen: str, provider: str = "pi") -> int | None:
     if provider == "omp":
-        # Posicao (1-based) da linha marcada entre as linhas de opcao do picker. Sem marcador
-        # visivel -> None, igual ao Pi: o drive nao navega as cegas.
+        # Posicao (1-based) da linha marcada entre as linhas de opcao do picker. So dentro do ULTIMO
+        # box (omp_box) — o cartao-resumo do toolCall fica na tela com as mesmas marcas e somava
+        # opcao a mais. Sem marcador visivel -> None, igual ao Pi: o drive nao navega as cegas.
+        linhas = screen.splitlines()
+        faixa = omp_box(linhas)
+        if faixa is None:
+            return None
         pos = 0
-        for ln in screen.splitlines():
+        for ln in linhas[faixa[0]:faixa[1]]:
             if _OMP_OPTION_ROW.match(ln):
                 pos += 1
                 if _OMP_CURSOR_ROW.match(ln):
@@ -1072,7 +1077,7 @@ def answer_question_pi(name: str, answer: dict, question: dict, provider: str = 
     if kind == "option":
         indices = answer.get("indices") or []
         if len(indices) > 1:
-            raise ValueError("multi-seleção do Pi ainda não é dirigida pelo app — responda no terminal")
+            raise ValueError(f"multi-seleção do {provider} ainda não é dirigida pelo app — responda no terminal")
         if not indices:
             raise ValueError("sem opcao escolhida")
         # labels alimentam o fallback por texto se o drive falhar — sem eles o fallback entregaria
@@ -1091,11 +1096,11 @@ def answer_question_pi(name: str, answer: dict, question: dict, provider: str = 
             raise ValueError("texto com caractere de controle")
         target = len(options) + 1        # "Type something." e sempre a ultima linha do picker
     else:
-        raise ValueError(f"kind nao suportado no picker do Pi: {kind!r}")
+        raise ValueError(f"kind nao suportado no picker do {provider}: {kind!r}")
 
     screen = _capture(name)
     if not is_overlay(screen) or _pi_cursor_row(screen, provider) is None:
-        raise DriveError("picker do Pi nao esta aberto no pane")
+        raise DriveError(f"picker do {provider} nao esta aberto no pane")
 
     def key(k: str) -> None:
         send_keys(name, k)
@@ -1107,13 +1112,13 @@ def answer_question_pi(name: str, answer: dict, question: dict, provider: str = 
     for _ in range(3):
         row = _pi_cursor_row(_capture(name), provider)
         if row is None:
-            raise DriveError("cursor do picker do Pi ficou ilegivel no meio do drive; nao submetido")
+            raise DriveError(f"cursor do picker do {provider} ficou ilegivel no meio do drive; nao submetido")
         if row == target:
             break
         for _ in range(abs(target - row)):
             key("Down" if target > row else "Up")
     else:
-        raise DriveError(f"nav drift no picker do Pi — nao convergiu pra linha {target}; nao submetido")
+        raise DriveError(f"nav drift no picker do {provider} — nao convergiu pra linha {target}; nao submetido")
     key("Enter")
     if kind == "text":
         time.sleep(_SETTLE)
@@ -1128,7 +1133,7 @@ def answer_question_pi(name: str, answer: dict, question: dict, provider: str = 
     if not after.strip():
         raise DriveError("capture vazio apos o Enter — nao da pra confirmar a submissao")
     if is_overlay(after) and _pi_cursor_row(after, provider) is not None:
-        raise DriveError("picker do Pi ainda aberto apos o Enter — nada foi submetido")
+        raise DriveError(f"picker do {provider} ainda aberto apos o Enter — nada foi submetido")
 
 
 # Rodape do picker do Kimi. Ele muda conforme o MODO e e o que distingue os tres desenhos medidos
