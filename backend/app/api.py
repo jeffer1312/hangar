@@ -88,6 +88,7 @@ from app.archive import (ArchiveEntry, ArchiveFolder, archive_cwd, archive_jsonl
 from app.search import SearchHit, search, extract_terms, search_terms, build_ask_prompt
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import pair
+from app import pair_texto
 from app import peers
 from app import alcance, conta_estado, cotas, credenciais, peers_api
 from app.pair import PairLink, contract_path_for
@@ -2516,35 +2517,11 @@ class PairBody(_StrictBody):
 
 
 def _group_text(me: str, others: list[str], task: str) -> str:
-    t = f" na tarefa: {task.strip()}" if task.strip() else ""
-    quem = ", ".join(f"'{o}'" for o in others)
-    exemplo = others[0]
-    # Par remoto (srv::sessao): contrato compartilhado não sincroniza cross-server no MVP — some a
-    # linha do arquivo (cada máquina teria o seu, com gid diferente). hangar-send já roteia srv::sessao.
+    # Par remoto (srv::sessao): o contrato não sincroniza cross-server, então a linha dele some.
+    # contract_path_for devolve None em sidecar legado sem gid — str(None) viraria "None" no prompt.
     cross = any(peers.is_remote(o) for o in others)
-    contrato = "" if cross else (
-        f"Contrato/decisões que o grupo precisa consultar: registrar no arquivo compartilhado "
-        f"{contract_path_for(me)} (markdown; criar se não existir, manter curto e atual). ")
-    return (
-        f"[de: hangar] GRUPO DE TRABALHO ATIVO: você ('{me}') trabalha junto com {quem}{t}. "
-        f"Cada sessão mexe SÓ no próprio repo; quando precisar de algo de outro membro (contrato, "
-        f"endpoint, tipo, dúvida), mande 1:1 por iniciativa própria. COMO mandar, nesta ordem: "
-        f"se você TEM a ferramenta SendMessage e o membro aparece no seu ListAgents (sessão Claude "
-        f"desta máquina), use SendMessage — a entrega é por socket, sem digitar no terminal, então "
-        f"nada de texto cortado ou colado pela metade. Não tem a ferramenta, ou o membro não está "
-        f"na lista (sessão de outra máquina 'servidor::sessao', Codex, Pi)? Aí é o Bash: "
-        f'hangar-send {exemplo} "sua mensagem". Os dois chegam do mesmo jeito, como [de: <membro>]. '
-        f'AVISO pro grupo TODO (marco: "terminei minha parte", "contrato atualizado"): '
-        f'hangar-send --group "sua mensagem" (uma vez, chega como [grupo: <membro>]). '
-        f"REGRA ANTI-LOOP: NUNCA responda um [grupo: ...] com --group (vira tempestade). Aviso de "
-        f"grupo é unidirecional; se precisar responder, faça 1:1 (hangar-send <membro>) e só se necessário. "
-        f"{contrato}"
-        f"BRANCH: antes de trabalhar, rode git branch --show-current no SEU repo e alinhe pra "
-        f"branch do ticket da tarefa (fetch+checkout) — re-verifique após restart/resume da sessão. "
-        f"Exceção única: o usuário pedir explicitamente outra branch. Checkout DUPLICADO do repo "
-        f"na máquina → alerte o usuário e pergunte qual é o canônico antes de mexer. "
-        f"Commit/push e decisões de rumo continuam com o usuário. Confirme em uma linha."
-    )
+    caminho = None if cross else contract_path_for(me)
+    return pair_texto.texto_grupo(me, others, task, str(caminho) if caminho else None)
 
 
 async def _deliver(name: str, text: str) -> dict | None:
