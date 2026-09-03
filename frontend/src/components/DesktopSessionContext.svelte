@@ -107,6 +107,13 @@ import * as m from '../paraglide/messages';
   // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
   // botão da fileira ou o agente via hangar-preview open).
   const temNav = $derived(navChave in navegadorPanel.abertos);
+  // A aba é global (ctxPanel, por desenho) mas o navegador é POR SESSÃO: trocou pra uma sessão sem
+  // navegador com a aba ativa, volta pra Contexto — senão a coluna fica em branco (os três painéis
+  // têm guard, e header/fileira somem pelo mesmo motivo). Medido no app dele: troca de sessão com
+  // a aba ativa deixava a coluna vazia.
+  $effect(() => {
+    if (ctxPanel.aba === 'navegador' && !temNav) ctxPanel.aba = 'contexto';
+  });
   // Atalho da secao Grupo: com UM par, tocar abre a sessao dele direto no modal. Com 2+ membros a
   // secao continua abrindo a PairSheet — la existe o botao por membro, e escolher por quem clicou
   // seria adivinhacao.
@@ -546,6 +553,10 @@ import * as m from '../paraglide/messages';
     display: flex;
     flex-direction: column;
   }
+  /* A aba Navegador deixa 8px à esquerda: o handle de redimensionar da coluna (absolute, left:0,
+     6px) precisa ficar FORA do view nativo, senão o view cobre a divisória e o clique morre —
+     era o "depois que abre uma página não dá pra redimensionar". */
+  .ctx-tab-nav { margin-left: 8px; }
   .ctx-scroll {
     flex: 1;
     min-height: 0;

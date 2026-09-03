@@ -166,6 +166,10 @@ async function criarJanela() {
     if (views) {
       navegadores.delete(win);
       for (const v of views.values()) { try { v.webContents.close(); } catch { /* já morreu */ } }
+      // ...e os sidecars das chaves dela, senão o CLI lista "MORTO" acumulando lixo a cada quit.
+      for (const chave of views.keys()) {
+        try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
+      }
     }
     const u = win.webContents.getURL();
     // Na tela de recuperacao (data:) nao ha endereco de cockpit pra salvar — usa o ULTIMO que
@@ -316,7 +320,12 @@ async function gravarSidecarNav(chave, urlInicial, idsAntes) {
     try {
       const r = await fetch('http://127.0.0.1:9223/json/list');
       const targets = await r.json();
-      const novo = targets.find((x) => x.type === 'page' && !idsAntes.has(x.id) && x.url.startsWith('http'));
+      // O diff por idsAntes só vale se a leitura de ANTES do view nascer foi confiável; com ela
+      // falha (null), casar por "target novo" pode pegar o app do hangar (com o token no
+      // localStorage) — então sem diff não grava targetId e o CLI casa por URL.
+      const novo = idsAntes
+        ? targets.find((x) => x.type === 'page' && !idsAntes.has(x.id) && x.url.startsWith('http'))
+        : null;
       if (novo || t === 5) {
         fs.mkdirSync(NAV_SIDECARS, { recursive: true });
         const arq = path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`);
@@ -330,12 +339,14 @@ async function gravarSidecarNav(chave, urlInicial, idsAntes) {
   }
 }
 
+// null em falha (NÃO Set vazio): um conjunto vazio por erro de leitura faria o diff achar que
+// qualquer target é "novo" — inclusive o app principal do hangar.
 async function idsDeTargets() {
   try {
     const r = await fetch('http://127.0.0.1:9223/json/list');
     return new Set((await r.json()).map((x) => x.id));
   } catch {
-    return new Set();
+    return null;
   }
 }
 
@@ -355,7 +366,6 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     try { win.contentView.removeChildView(view); } catch { /* já saiu */ }
     view = undefined;
   }
-  const antes = await idsDeTargets();
   if (!view) {
     // View novo SÓ nasce com URL; o reexibir (troca de sessão, reload do front) chama open sem
     // url e recebe ok:false se o shell já não tiver o view — aí o front repete com a url salva.
@@ -374,7 +384,11 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     });
     win.contentView.addChildView(view);
     views.set(chave, view);
-    view.webContents.loadURL(destino);
+    // idsDeTargets ANTES de criar o view: o targetId sai por diff do /json/list. Se o fetch ao
+    // CDP falha (Set vazio), o diff pegaria o PRIMEIRO target page — que pode ser o COCKPIT (com
+    // o token no localStorage). Sem diff confiável, grava sem targetId e o CLI casa por URL.
+    const antes = await idsDeTargets();
+    view.webContents.loadURL(destino).catch((err) => console.error('[nav] loadURL falhou:', err?.message || err));
     gravarSidecarNav(chave, destino, antes);   // async, não bloqueia o IPC
   } else {
     // Reexibir NUNCA recarrega: a URL atual do view pode ter mudado por navegação interna (o
