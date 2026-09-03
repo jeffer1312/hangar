@@ -281,7 +281,7 @@ def _pi_agents_dir(jsonl: str) -> Path | None:
     if p.suffix != ".jsonl":
         return None
     try:
-        if not p.is_relative_to(sessions_root()):
+        if not p.is_relative_to(sessions_root("pi")):
             return None
     except (OSError, ValueError):
         return None

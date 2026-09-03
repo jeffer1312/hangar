@@ -69,4 +69,4 @@ class PiAdapter:
         return ["pi", "--session-id", session_id] + model_args.args_de("pi", model, effort)
 
     def transcript_path(self, cwd: str, session_id: str) -> str:
-        return pi_sessions.transcript_path(cwd, session_id)
+        return pi_sessions.transcript_path(cwd, session_id, self.provider)

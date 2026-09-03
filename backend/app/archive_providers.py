@@ -74,9 +74,9 @@ def _cwd_do_cabecalho(p: Path, campo: Callable[[dict], Optional[str]], max_linha
 
 
 # ── Pi ────────────────────────────────────────────────────────────────────────
-def _pi_conversas() -> list[Conversa]:
+def _pi_conversas(provider: str = "pi") -> list[Conversa]:
     from app.adapters.pi import sessions as pi_sessions
-    raiz = pi_sessions.sessions_root()
+    raiz = pi_sessions.sessions_root(provider)
     out: list[Conversa] = []
     try:
         pastas = [d for d in raiz.iterdir() if d.is_dir()]
@@ -90,16 +90,16 @@ def _pi_conversas() -> list[Conversa]:
             if not UUID_RE.match(sid):
                 continue
             cwd = _cwd_do_cabecalho(f, lambda o: o.get("cwd") if o.get("type") == "session" else None)
-            out.append(Conversa("pi", cwd, sid, f, _mtime(f)))
+            out.append(Conversa(provider, cwd, sid, f, _mtime(f)))
     return out
 
 
-def _pi_jsonl(session_id: str) -> Optional[Path]:
+def _pi_jsonl(session_id: str, provider: str = "pi") -> Optional[Path]:
     from app.adapters.pi import sessions as pi_sessions
     if not UUID_RE.match(session_id):
         raise ValueError("session_id invalido")
     try:
-        achados = sorted(pi_sessions.sessions_root().glob(f"*/*_{session_id}.jsonl"),
+        achados = sorted(pi_sessions.sessions_root(provider).glob(f"*/*_{session_id}.jsonl"),
                          key=_mtime, reverse=True)
     except OSError:
         return None

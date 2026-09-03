@@ -175,7 +175,7 @@ def linhas_codex() -> list[UsageRow]:
 
 
 def raiz_pi() -> Path:
-    return pi_sessions.sessions_root()
+    return pi_sessions.sessions_root("pi")
 
 
 def linhas_pi() -> list[UsageRow]:

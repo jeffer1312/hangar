@@ -10,6 +10,7 @@ exige glob pelo sufixo.
 """
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Copia de getDefaultSessionDirPath (pi-coding-agent 0.82.1, dist/core/session-manager.js:245):
@@ -23,13 +24,16 @@ _SEP_RE = re.compile(r"[/\\:]")
 _LEADING_SEP_RE = re.compile(r"^[/\\]")
 
 
-def sessions_root() -> Path:
-    # `--session-dir` do CLI sobrescreve o env; aqui so o env importa, porque as sessoes que o app
-    # cria sao spawnadas por nos, sem esse flag.
-    env = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
-    if env:
-        return Path(env)
-    return Path.home() / ".pi" / "agent" / "sessions"
+def sessions_root(provider: str) -> Path:
+    # Raiz por provider, sem default: cada chamador declara de quem e a pasta. O omp so tem a var
+    # do diretorio do agente (PI_CODING_AGENT_DIR) e as sessoes ficam em <dir>/sessions.
+    if provider == "pi":
+        env = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
+        return Path(env) if env else Path.home() / ".pi" / "agent" / "sessions"
+    if provider == "omp":
+        env = os.environ.get("PI_CODING_AGENT_DIR")
+        return (Path(env) if env else Path.home() / ".omp" / "agent") / "sessions"
+    raise ValueError(f"provider sem raiz de sessoes: {provider!r}")
 
 
 def cwd_slug(cwd: str) -> str:
@@ -46,13 +50,19 @@ def cwd_slug(cwd: str) -> str:
 # largar o `run-<n>`, o nome fixo `session.jsonl` ainda denuncia. Nenhum transcript de sessao cai
 # em qualquer um dos dois — o dele leva timestamp+uuid no nome e mora direto no slug do cwd.
 # ponytail: calibration knob — se o layout do Pi mudar, e AQUI que ajusta.
+#
+# Nome de transcript de sessao: <ts>_<uuid>. Um DIRETORIO com esse nome so existe pra guardar
+# subagentes daquela sessao (omp: <stem>/<Nome>.jsonl; Pi: <stem>/<taskId>/run-N/session.jsonl).
+_STEM_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-fA-F-]{36}$")
 _RUN_DIR_RE = re.compile(r"^run-\d+$")
 
 
 def is_subagent_transcript(path: str) -> bool:
-    """O JSONL e de um subagente (Task tool do Pi), nao da conversa da sessao?"""
+    """O JSONL e de um subagente (Task tool do Pi / agente do omp), nao da conversa da sessao?"""
     p = Path(path)
-    return p.name == "session.jsonl" or any(_RUN_DIR_RE.match(d) for d in p.parts[:-1])
+    if p.name == "session.jsonl" or any(_RUN_DIR_RE.match(d) for d in p.parts[:-1]):
+        return True
+    return any(_STEM_RE.match(d) for d in p.parts[:-1])
 
 
 def root_transcript(path: str) -> str:
@@ -70,14 +80,19 @@ def root_transcript(path: str) -> str:
     return ""
 
 
-def transcript_path(cwd: str, session_id: str) -> str:
-    """Caminho do JSONL da sessao, ou "" se ela ainda nao escreveu nada.
-
-    "" e nao excecao: o registry chama isto logo depois do spawn, e a TUI so cria o arquivo no
-    primeiro turno. Levantar aqui transformaria "sessao novinha" em erro.
-    """
-    d = sessions_root() / cwd_slug(cwd)
+def transcript_path(cwd: str, session_id: str, provider: str) -> str:
+    """Caminho do JSONL da sessao, ou "" se ela ainda nao escreveu nada ("" e nao excecao: o
+    registry chama isto logo depois do spawn, e a TUI so cria o arquivo no primeiro turno)."""
+    d = sessions_root(provider) / cwd_slug(cwd)
     if not d.is_dir():
         return ""
     cands = sorted(d.glob(f"*_{session_id}.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
     return str(cands[0]) if cands else ""
+
+
+def transcript_alvo(cwd: str, session_id: str, provider: str) -> str:
+    """Onde o transcript de uma sessao NOVA deve nascer (o omp aceita o caminho por `--session`).
+    Mesmo layout que o agente usaria sozinho, pra sessao continuar no picker dele."""
+    agora = datetime.now(timezone.utc)
+    ts = agora.strftime("%Y-%m-%dT%H-%M-%S-") + f"{agora.microsecond // 1000:03d}Z"
+    return str(sessions_root(provider) / cwd_slug(cwd) / f"{ts}_{session_id}.jsonl")

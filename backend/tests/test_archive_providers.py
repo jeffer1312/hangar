@@ -32,7 +32,7 @@ def pi_home(tmp_path, monkeypatch):
     sub = d / f"2026-08-05T09-09-13-040Z_{PI_SID}" / "44bad0fb" / "run-2"
     sub.mkdir(parents=True)
     (sub / "session.jsonl").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(pi_sessions, "sessions_root", lambda: raiz)
+    monkeypatch.setattr(pi_sessions, "sessions_root", lambda provider="pi": raiz)
     return j
 
 

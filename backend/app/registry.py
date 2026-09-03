@@ -245,7 +245,7 @@ def _kimi_corrige_ocioso(info, marker):
 # sobem juntos pelo lancador, e ate a thread abrir nao ha sidecar nenhum. Sem esta linha o pane cai
 # no default "claude" e e casado com o transcript do CLAUDE do mesmo diretorio — a mesma regressao
 # que ja custou caro no Pi.
-_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
+_EXEC_PROVIDER = {"pi": "pi", "omp": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
                   "codex": "codex"}
 
 # Windows: o argv0 vem com extensao (`claude.exe`), que nao casa em _EXEC_PROVIDER; e um CLI
@@ -467,12 +467,12 @@ def _pi_sid_of(pid: int) -> Optional[str]:
     return None
 
 
-def _pi_transcript_of_id(cwd: str, sid: str) -> Optional[str]:
+def _pi_transcript_of_id(cwd: str, sid: str, provider: str = "pi") -> Optional[str]:
     # Indireção pro adapter (Task 1), que sabe o slug e o glob <timestamp>_<uuid>.jsonl. Import local
     # pelo mesmo motivo do get_adapter em create(): evita qualquer ciclo se um adapter futuro vier a
     # importar daqui.
     from app.adapters import get_adapter
-    return get_adapter("pi").transcript_path(cwd, sid) or None
+    return get_adapter(provider).transcript_path(cwd, sid) or None
 
 
 def _pi_is_subagent(path: str) -> bool:
@@ -521,7 +521,7 @@ def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
 
 
 def pi_session_file(pane_id: str, pid: Optional[int] = None,
-                    cwd: str = "") -> Optional[str]:
+                    cwd: str = "", provider: str = "pi") -> Optional[str]:
     """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
 
     Nenhum dos dois presente -> None, e a sessao entra na lista SEM transcript. Chutar o arquivo
@@ -585,7 +585,7 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
             return f
     except (OSError, ValueError):
         pass
-    return _pi_transcript_of_id(cwd, sid) if sid else None
+    return _pi_transcript_of_id(cwd, sid, provider) if sid else None
 
 
 _KIMI_TICKET_WARNED: set[tuple[str, str]] = set()

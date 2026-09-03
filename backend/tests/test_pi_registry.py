@@ -178,7 +178,7 @@ def test_session_file_rejects_a_sidecar_older_than_the_pane_process(monkeypatch,
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_600.0)     # pane nasceu 10min DEPOIS
     _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "bbb"})
-    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s, provider="pi": f"/s/2026_{s}.jsonl")
 
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == "/s/2026_bbb.jsonl"
 
@@ -196,7 +196,7 @@ def test_session_file_trusts_a_fresh_sidecar_even_with_another_id(monkeypatch, t
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_proc_start(monkeypatch, tmp_path, 1_700_000_000.0)     # pane nasceu ANTES do bilhete
     _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "aaa"})
-    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s, provider="pi": f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(alvo)
 
 
@@ -220,7 +220,7 @@ def test_session_file_refuses_a_sidecar_pointing_at_a_subagent_run(monkeypatch, 
     _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "18e48e08"})
     # Este fallback NAO pode ser o que salva: com cwd cheio de espaco/acento ele ja falhou de
     # verdade. Quem devolve a conversa e o proprio caminho do subagente, que carrega a raiz.
-    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: "")
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s, provider="pi": "")
 
     # Volta pra sessao RAIZ (a conversa que o usuario ve no terminal), nunca None.
     assert registry.pi_session_file("%9", pid=7, cwd="/w") == str(raiz)
@@ -237,7 +237,7 @@ def _bilhete_e_env(monkeypatch, tmp_path, dados: dict):
     (cfg / ".hangar-pi" / "9.json").write_text(json.dumps({"file": str(velho), **dados}))
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     _fake_env(monkeypatch, tmp_path, {"CP_PI_SESSION": "bbb"})
-    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s, provider="pi": f"/s/2026_{s}.jsonl")
     return velho
 
 
@@ -278,7 +278,7 @@ def test_session_file_falls_back_to_the_wrapper_env(monkeypatch, tmp_path):
     monkeypatch.setattr(registry, "_config_dir_of", lambda pid: cfg)
     sid = "019fa3d5-f074-707b-92a8-1ca7f1d99ec9"
     _fake_env(monkeypatch, tmp_path, {"PATH": "/bin", "CP_PI_SESSION": sid})
-    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s: f"/s/2026_{s}.jsonl")
+    monkeypatch.setattr(registry, "_pi_transcript_of_id", lambda cwd, s, provider="pi": f"/s/2026_{s}.jsonl")
     assert registry.pi_session_file("%123", pid=7, cwd="/w") == f"/s/2026_{sid}.jsonl"
 
 

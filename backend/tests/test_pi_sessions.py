@@ -68,7 +68,7 @@ def test_transcript_path_globs_past_the_timestamp_prefix(tmp_path, monkeypatch):
     target.write_text("")
     (d / "2026-07-27T10-00-00-000Z_00000000-0000-0000-0000-000000000000.jsonl").write_text("")
 
-    got = pi_sessions.transcript_path("/w", "019fa3d5-f074-707b-92a8-1ca7f1d99ec9")
+    got = pi_sessions.transcript_path("/w", "019fa3d5-f074-707b-92a8-1ca7f1d99ec9", "pi")
     assert got == str(target)
 
 
@@ -76,7 +76,7 @@ def test_transcript_path_empty_when_session_not_created_yet(tmp_path, monkeypatc
     # Sessao recem-spawnada: o arquivo so nasce no primeiro turno. "" (nao excecao) porque o
     # registry chama isto ANTES de a TUI escrever qualquer coisa.
     monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(tmp_path))
-    assert pi_sessions.transcript_path("/w", "nao-existe") == ""
+    assert pi_sessions.transcript_path("/w", "nao-existe", "pi") == ""
 
 
 def test_is_subagent_transcript_separates_the_task_runs_from_the_conversation():
@@ -107,4 +107,45 @@ def test_transcript_path_picks_newest_on_duplicate_id(tmp_path, monkeypatch):
     import os
     os.utime(old, (1, 1))
     os.utime(new, (time.time(), time.time()))
-    assert pi_sessions.transcript_path("/w", "abc") == str(new)
+    assert pi_sessions.transcript_path("/w", "abc", "pi") == str(new)
+
+
+def test_sessions_root_por_provider(monkeypatch, tmp_path):
+    monkeypatch.delenv("PI_CODING_AGENT_SESSION_DIR", raising=False)
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
+    assert pi_sessions.sessions_root("pi") == Path.home() / ".pi" / "agent" / "sessions"
+    assert pi_sessions.sessions_root("omp") == Path.home() / ".omp" / "agent" / "sessions"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "omp-agent"))
+    assert pi_sessions.sessions_root("omp") == tmp_path / "omp-agent" / "sessions"
+    with pytest.raises(ValueError):
+        pi_sessions.sessions_root("kimi")
+
+
+def test_transcript_path_le_a_raiz_do_provider_pedido(monkeypatch, tmp_path):
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "omp"))
+    d = tmp_path / "omp" / "sessions" / pi_sessions.cwd_slug("/w")
+    d.mkdir(parents=True)
+    f = d / "2026-09-03T15-51-00-640Z_01a067f7-6120-700b-b71d-6a6092e0c720.jsonl"
+    f.write_text("")
+    assert pi_sessions.transcript_path("/w", "01a067f7-6120-700b-b71d-6a6092e0c720", "omp") == str(f)
+    monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(tmp_path / "pi"))
+    assert pi_sessions.transcript_path("/w", "01a067f7-6120-700b-b71d-6a6092e0c720", "pi") == ""
+
+
+def test_transcript_alvo_fica_no_layout_normal(monkeypatch, tmp_path):
+    import re
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "omp"))
+    alvo = Path(pi_sessions.transcript_alvo("/w", "abc-uuid", "omp"))
+    assert alvo.parent == tmp_path / "omp" / "sessions" / pi_sessions.cwd_slug("/w")
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_abc-uuid\.jsonl", alvo.name)
+    alvo.parent.mkdir(parents=True)
+    alvo.write_text("")
+    assert pi_sessions.transcript_path("/w", "abc-uuid", "omp") == str(alvo)
+
+
+def test_subagente_do_omp_mora_direto_sob_o_stem():
+    stem = "2026-09-03T16-17-19-304Z_01a0680f-77c8-7397-805f-c8651e6051f1"
+    assert pi_sessions.is_subagent_transcript(f"/r/--w--/{stem}/ContarLinhas.jsonl")
+    assert pi_sessions.is_subagent_transcript(f"/r/--w--/{stem}/44bad0fb/run-2/session.jsonl")
+    assert not pi_sessions.is_subagent_transcript(f"/r/--w--/{stem}.jsonl")
+    assert not pi_sessions.is_subagent_transcript("/r/--w--/notas/qualquer.jsonl")
