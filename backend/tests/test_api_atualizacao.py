@@ -187,6 +187,7 @@ def _auto_gate(checar=None, estado=None, sha_dist="abc123", sha_alvo="abc123"):
 
     with patch("app.api.atualizar.checar", return_value=pre), \
          patch("app.api.atualizar.estado", return_value=estado or {}), \
+         patch("app.api.atualizar.estado_para_tela", return_value=estado or {}), \
          patch("app.api.urllib.request.urlopen", return_value=_Sha()), \
          patch("app.api.atualizar._git",
                return_value=subprocess.CompletedProcess([], 0, stdout=sha_alvo, stderr="")):
@@ -215,3 +216,20 @@ def test_auto_update_nao_repete_falha_recente():
     assert _auto_gate(estado=falha) == "ultima atualizacao falhou"
     velha = {"ok": False, "fase": "pronto", "ts": (datetime.now().astimezone() - timedelta(days=2)).isoformat()}
     assert _auto_gate(estado=velha) is None
+
+
+def test_auto_update_ts_invalido_abre_com_log(caplog):
+    """ts corrompido: o gate abre (não trava a máquina pra sempre), mas registra warning em vez de ficar mudo."""
+    falha = {"ok": False, "fase": "pronto", "ts": "nao-e-data"}
+    with caplog.at_level("WARNING"):
+        assert _auto_gate(estado=falha) is None
+    assert any("ts invalido" in r.message for r in caplog.records)
+
+
+def test_auto_update_divergiu_vem_antes_de_ahead():
+    """divergiu = ahead>0 AND behind>0: o motivo logado tem que ser o mais preciso."""
+    assert _auto_gate(checar={"ahead": 2, "behind": 2, "divergiu": True}) == "checkout divergiu de origin/main"
+
+
+def test_auto_update_rev_parse_falhou():
+    assert _auto_gate(sha_alvo="") == "rev-parse origin/main falhou"

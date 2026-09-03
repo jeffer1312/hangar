@@ -3558,40 +3558,52 @@ def _auto_update_motivo() -> Optional[str]:
     Diferenças pro botão, de propósito: árvore suja ou commits locais adiante BLOQUEIAM aqui (o
     botão resguarda e pergunta; o automático não pode decidir sobre trabalho de ninguém), e sem o
     dist do CI deste commit exato NÃO cai no build local — espera o próximo tick (sha publicado =
-    CI verde + build pronto, que é condição, não aceleração).
+    CI verde + build pronto, que é condição, não aceleração). Sobrava uma corrida de segundos — push entre o gate e o fetch do motor, ou release `dist-latest` móvel —
+    em que o build local de fallback podia ainda acontecer: consequencia e lentidao, nao tela errada, entao ficou aceita e registrada aqui.
     """
     pre = atualizar.checar()
     if not pre.get("pode"):
         return "dependencias faltando"
     if pre.get("branch_de_trabalho"):
         return f"checkout na branch {pre.get('branch')}"
+    # divergiu ANTES de ahead: divergiu = ahead>0 AND behind>0, e o motivo mais preciso e o dela.
+    if pre.get("divergiu"):
+        return "checkout divergiu de origin/main"
     if pre.get("ahead"):
         return "checkout adiante de origin/main (commits locais nao pushados)"
     if not pre.get("behind"):
         return "em dia"
-    if pre.get("divergiu"):
-        return "checkout divergiu de origin/main"
     if pre.get("sujo"):
         return "arvore suja (trabalho nao commitado)"
-    est = atualizar.estado()
+    # estado_para_tela, NAO estado: o cru congela em "rodando" se o motor morrer sem gravar o
+    # desfecho (kill, queda de energia), e cada tick devolveria "ja rodando" pra sempre — o auto-update
+    # morria em silencio ate alguem abrir a tela. A conversao de dono-morto ja existe aqui.
+    est = atualizar.estado_para_tela()
     if est.get("fase") == "rodando":
         return "atualizacao ja rodando"
     if est.get("ok") is False:
         try:
             idade = (datetime.now().astimezone() - datetime.fromisoformat(est.get("ts"))).total_seconds()
         except (TypeError, ValueError):
+            # ts corrompido: abre, mas com log — senao a maquina re-tenta a cada hora com zero linha de log
+            # explicando por que a janela de repeticao nao segurou.
+            _log.warning("auto-update: ts invalido no estado da atualizacao (%r)", est.get("ts"))
             idade = _AUTO_UPDATE_FALHA_JANELA_S
         if idade < _AUTO_UPDATE_FALHA_JANELA_S:
             return "ultima atualizacao falhou"
     try:
         with urllib.request.urlopen(_DIST_SHA_URL, timeout=15) as r:
             sha_dist = r.read().decode().strip()
-    except (OSError, ValueError):
+    except Exception:                                  # noqa: BLE001 — qualquer falha aqui = dist ilegivel
         return "sem acesso ao dist do CI"
-    sha_alvo = atualizar._git("rev-parse", "origin/main", timeout=30).stdout.strip()
+    p = atualizar._git("rev-parse", "origin/main", timeout=30)
+    sha_alvo = p.stdout.strip()
+    if p.returncode != 0 or not sha_alvo:
+        return "rev-parse origin/main falhou"
     if sha_dist != sha_alvo:
         return "dist do CI ainda nao e deste commit"
     return None
+
 
 
 async def _auto_update_loop():
@@ -3601,7 +3613,10 @@ async def _auto_update_loop():
     while True:
         try:
             if automations_enabled():
-                await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
+                # rc checado, NAO so o lance de excecao: fetch falho por rc (rede fora, auth quebrada) nao lanca nada — a origin/main fica velha, o gate reporta "em dia" e a máquina NUNCA se atualiza com zero log. rc checado, loga warning com a cauda: "sem rede" deixa de parecer "sem novidade".
+                p = await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
+                if p.returncode != 0:
+                    _log.warning("auto-update: fetch falhou (rc=%s): %s", p.returncode, atualizar._cauda(p))
                 motivo = await asyncio.to_thread(_auto_update_motivo)
                 if motivo is None:
                     # Sessão trabalhando é gate async (classify captura os panes), não cabe no helper.
