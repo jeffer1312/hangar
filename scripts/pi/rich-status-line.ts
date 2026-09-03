@@ -547,7 +547,10 @@ export default function (pi: ExtensionAPI) {
 	function montarLinha(ctx: any, theme: any): string {
 		// Model + thinking level
 		const model = ctx.model;
-		const thinking = ctx.thinkingLevel ?? "off";
+		// No omp o `ctx.thinkingLevel` nunca e populado — quem sabe o nivel e o proprio agente
+		// (`getThinkingLevel`, o mesmo que faz o /cp-think funcionar). Sem isto a linha dizia "(off)"
+		// sempre, e o orquestrar marcava o papel como divergente do contrato pra sempre.
+		const thinking = pi.getThinkingLevel?.() ?? ctx.thinkingLevel ?? "off";
 		const modelStr = model ? `${model.id ?? model.name} (${thinking})` : "no-model";
 		const modelPart = theme.fg("accent", "🤖 " + modelStr);
 
