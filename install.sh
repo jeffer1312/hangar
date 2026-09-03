@@ -237,8 +237,11 @@ else
   printf 'CP_AUTH_TOKEN=%s\n' "$TOKEN" >> backend/.env
   ok "CP_AUTH_TOKEN gravado em backend/.env"
 fi
-# Prova, não ausência de erro: o passo inteiro vale zero se o token não estiver de fato no arquivo.
-grep -q '^CP_AUTH_TOKEN=.\{8,\}' backend/.env 2>/dev/null \
+# Prova = o que o backend exige: valor presente e diferente do literal 'change-me'. O piso de
+# 8 caracteres é da PERGUNTA interativa, não da prova — um .env antigo com token curto é válido
+# pro backend e não pode derrubar uma reinstalação boa.
+grep -q '^CP_AUTH_TOKEN=.\+' backend/.env 2>/dev/null \
+  && ! grep -q '^CP_AUTH_TOKEN=change-me[[:space:]]*$' backend/.env \
   || fail "o token não foi gravado em backend/.env — sem ele o celular não entra"
 nota "É esse token que você digita no celular na primeira conexão."
 
@@ -433,20 +436,22 @@ elif systemctl --user list-unit-files hangar-backend.service >/dev/null 2>&1 &&
   # O caminho do node e o WorkingDirectory ficam CRAVADOS dentro da unit — git pull não os
   # muda. O próprio services-setup.sh só reinicia o que mudou de verdade, então re-rodar aqui
   # não derruba a conexão SSE do celular à toa.
-  # O `|| true` é pra chegar na prova: quem decide é o is-active logo abaixo, e sem ele o
-  # set -e abortaria aqui com a saída do setup mas sem a mensagem.
-  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null || true
-  else ./scripts/services-setup.sh >/dev/null || true; fi
-  # A prova é o serviço ACTIVE, não o exit 0 do setup — unit reescrita e serviço morto é o
-  # par que um "ok" sem checagem esconderia.
+  # O rc do setup e o is-active cobrem furos diferentes: o rc pega "setup falhou com o serviço
+  # velho ainda de pé" (pareceria ok), e o is-active pega "setup saiu 0 mas o serviço não subiu".
+  SETUP_RC=0
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only >/dev/null || SETUP_RC=$?
+  else ./scripts/services-setup.sh >/dev/null || SETUP_RC=$?; fi
+  [ "$SETUP_RC" != 0 ] && anota_problema "services-setup.sh falhou (exit $SETUP_RC)"
   [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
     && ok "serviços atualizados (active)" \
     || anota_problema "serviços atualizados mas o hangar-backend não está active"
 elif [ "$UPDATE" = 1 ]; then
   :   # não instala coisa nova num --update; isso é decisão, não atualização
 elif [ "$SERVICES" = 1 ] && ask "Rodar backend+frontend como serviços de usuário (sobrevivem a fechar o terminal)?"; then
-  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only || true
-  else ./scripts/services-setup.sh || true; fi
+  SETUP_RC=0
+  if [ "$FRONTEND" = 0 ]; then ./scripts/services-setup.sh --backend-only || SETUP_RC=$?
+  else ./scripts/services-setup.sh || SETUP_RC=$?; fi
+  [ "$SETUP_RC" != 0 ] && anota_problema "services-setup.sh falhou (exit $SETUP_RC)"
   [ "$(systemctl --user is-active hangar-backend.service 2>/dev/null)" = active ] \
     || anota_problema "serviços instalados mas o hangar-backend não está active"
   nota "Pra sobreviver a logout/reboot também: loginctl enable-linger \$USER"
@@ -583,12 +588,17 @@ if [ ${#PROBLEMAS[@]} -gt 0 ]; then
   echo "  O que já estava no ar continua no ar — e é por isso que isto precisa ser dito alto:"
   echo "  a tela pode seguir funcionando e a instalação PARECER boa. Resolve a lista e re-roda;"
   echo "  o instalador é idempotente e continua de onde parou."
-  # No --update (hook do pull / botão do app) sai 0 mesmo assim: derrubar a atualização inteira
-  # por causa de um extra opcional seria pior — e o ##HANGAR-AVISO## já carrega o aviso pra tela.
-  [ "$UPDATE" = 1 ] || exit 1
+  if [ "$UPDATE" = 1 ]; then
+    # Sai 0 (derrubar a atualização inteira por um extra opcional seria pior), mas a tela do
+    # Atualizar só enxerga o ##HANGAR-AVISO## — sem a marca, o app mostraria "Atualizado" com
+    # extra quebrado. E NÃO cai no "Pronto": a última palavra não pode ser sucesso.
+    echo "##HANGAR-AVISO## terminou com pendencias: ${PROBLEMAS[*]}"
+  else
+    exit 1
+  fi
+else
+  say "Pronto"
 fi
-
-say "Pronto"
 PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
 PORTA_FIM=${PORTA_FIM:-8765}
 URL_FIM=$(grep '^CP_PUBLIC_URL=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)

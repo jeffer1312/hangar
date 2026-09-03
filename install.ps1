@@ -1213,8 +1213,13 @@ function Publica-Tailscale {
                         if ($portaProva -eq $portaBack) {
                             Ok "tailscale publicando o backend (localhost:$portaBack)"
                             $script:cpPublicUrl = "https://$dns"
+                        } elseif ($null -eq $proxyProva) {
+                            # Get-Proxy443 engole excecao (catch vazio): nulo aqui pode ser leitura
+                            # transitoria, nao serve errado — a mensagem nao pode afirmar o que
+                            # nao foi medido, senao um serve BOM vira "falha" por causa do parse.
+                            $falha = 'o serve aceitou o comando, mas nao consegui reler o status pra provar; confira com: tailscale serve status'
                         } else {
-                            $falha = "o serve aceitou o comando, mas o status nao mostra a raiz do :443 apontando pra porta $portaBack"
+                            $falha = "o serve aceitou o comando, mas o status mostra a raiz do :443 em '$proxyProva', nao na porta $portaBack"
                         }
                     }
                     if ($falha) {
