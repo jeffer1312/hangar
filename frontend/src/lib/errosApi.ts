@@ -83,6 +83,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
 
   // /api/model-options e POST /api/sessions — catalogo do Pi falhou ou provider fora de escopo
   erro_pi_list_models: (p) => m.erro_pi_list_models({ erro: String(p.erro) }),
+  // omp e o fork do Pi mas tem catalogo e binario proprios — codigo separado do erro_pi_list_models
+  // pra sessao omp nao mostrar a instrucao/comando do Pi (ver erro_catalogo_omp_indisponivel).
+  erro_omp_list_models: (p) => m.erro_omp_list_models({ erro: String(p.erro) }),
   // Sem `{erro}` de proposito: o texto do backend aqui e a instrucao ("instale o Pi / ajuste o
   // PATH"), nao um errno pra repassar — o que a pessoa precisa ler ja esta na frase traduzida.
   erro_pi_ausente: () => m.erro_pi_ausente(),
@@ -284,6 +287,9 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   erro_drive_fallback_falhou: (p) => m.erro_drive_fallback_falhou({ erro: fmtParam(p.erro) }),
   erro_resposta_nao_entregue: () => m.erro_resposta_nao_entregue(),
   erro_catalogo_pi_indisponivel: () => m.erro_catalogo_pi_indisponivel(),
+  // Mesmo motivo do erro_omp_list_models: codigo proprio pra sessao omp mostrar "feche e reabra"
+  // em vez da instrucao do Pi ("reinicie a sessao").
+  erro_catalogo_omp_indisponivel: () => m.erro_catalogo_omp_indisponivel(),
   erro_pi_recusou_troca: (p) => m.erro_pi_recusou_troca({ provider: String(p.provider), id: String(p.id), thinking: String(p.thinking) }),
   erro_reinicio_indisponivel: () => m.erro_reinicio_indisponivel(),
   erro_atualizacao_branch: () => m.erro_atualizacao_branch(),

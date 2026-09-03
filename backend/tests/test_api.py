@@ -1980,6 +1980,18 @@ def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
     assert r.json()["detail"]["code"] == "erro_catalogo_pi_indisponivel"
 
 
+def test_omp_models_missing_sidecar_is_409_com_codigo_proprio(api_client):
+    # Codigo SEPARADO do erro_catalogo_pi_indisponivel: o front traduz por `code`, entao reusar o
+    # do Pi mostraria "reinicie a sessao" numa sessao omp, onde o /reload nao recarrega a extensao.
+    info_omp = SessionInfo(name="oo", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="omp")
+    with patch("app.api._cached_info", AsyncMock(return_value=info_omp)), \
+         patch("app.api.pi_models.read_catalog", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None):
+        r = api_client.get("/api/sessions/oo/pi/models", headers=_h())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_catalogo_omp_indisponivel"
+
+
 def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
     # `xhigh` FORA dos levels do modelo novo: e o caso real do clamp (o Pi aterrissa em high).
     after = {**_PI_CAT, "current": {"provider": "clinepass", "id": "cline-pass/glm-5.2"},

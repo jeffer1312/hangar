@@ -5406,7 +5406,12 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
             # nem estava instalado ali.
             raise HTTPException(502, detail=erro("erro_pi_ausente", str(e), erro=str(e)))
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            raise HTTPException(502, detail=erro("erro_pi_list_models", f"{provider} models falhou: {e}", erro=str(e)))
+            # Codigo proprio por provider: o front traduz por `code` (a `msg` do backend so aparece
+            # pra codigo DESCONHECIDO), entao um so codigo pros dois faria a falha do omp renderizar
+            # o texto fixo "pi --list-models falhou" na tela.
+            if provider == "omp":
+                raise HTTPException(502, detail=erro("erro_omp_list_models", f"omp models --json falhou: {e}", erro=str(e)))
+            raise HTTPException(502, detail=erro("erro_pi_list_models", f"pi --list-models falhou: {e}", erro=str(e)))
     if provider == "kimi":
         # Sem subprocess aqui (não existe `kimi --list-models`): o catálogo é o config.toml.
         cat = kimi_models.read_catalog()
@@ -5567,12 +5572,18 @@ async def _pi_catalog(name: str) -> tuple[dict, str]:
     if cat is None:
         # Falha ALTA: sem o sidecar nao ha catalogo real, e inventar um faria o app oferecer
         # modelos que o `/cp-model` nao encontraria. Instrucao junto porque a causa e sempre a
-        # mesma (extensao velha/ausente) — mas o conserto muda por provider: o omp nao recarrega
-        # a extensao no /reload dele, entao so fechar e reabrir a sessao resolve.
-        dica = ("feche e reabra a sessao — o /reload do omp nao recarrega a extensao"
-                if info.provider == "omp" else
-                "rode ./scripts/install-claude-wrapper.sh e reinicie a sessao (extensao hangar-state.ts desatualizada)")
-        raise HTTPException(409, detail=erro("erro_catalogo_pi_indisponivel", f"catalogo do Pi indisponivel — {dica}"))
+        # mesma (extensao velha/ausente) — mas o conserto E o CODIGO mudam por provider: o front
+        # traduz pelo `code` (a `msg` do backend so aparece pra codigo DESCONHECIDO), entao um so
+        # codigo pros dois faria uma sessao omp mostrar a instrucao do Pi.
+        if info.provider == "omp":
+            raise HTTPException(409, detail=erro(
+                "erro_catalogo_omp_indisponivel",
+                "catalogo do omp indisponivel — rode ./scripts/install-claude-wrapper.sh e feche "
+                "e reabra a sessao (o /reload do omp nao recarrega a extensao)"))
+        raise HTTPException(409, detail=erro(
+            "erro_catalogo_pi_indisponivel",
+            "catalogo do Pi indisponivel — rode ./scripts/install-claude-wrapper.sh e reinicie a "
+            "sessao (extensao hangar-state.ts desatualizada)"))
     return cat, info.jsonl
 
 
