@@ -5,6 +5,7 @@
   import { vaultPush } from './lib/vaultPush.svelte';
   import { ttsPlayer } from './lib/ttsPlayer.svelte';
   import { ttsSelection } from './lib/ttsSelection.svelte';
+  import { segredos } from './lib/segredos.svelte';
   import { encodeCompareIds, type CompareId } from './lib/format';
   import { peekStep, initialPeek } from './lib/peek';
   import { parseHash, type Route } from './lib/route';
@@ -161,6 +162,21 @@
   // o servidor ATIVO muda o destino das funcoes globais enquanto targetConfig continua null.
   let versaoServidores = $state(0);
   $effect(() => onServersChanged(() => versaoServidores++));
+
+  // Quais segredos (chave da ElevenLabs etc) o servidor ativo tem — pro chip "Ouvir" saber se some.
+  // `getActiveId()` não é reativo (mesma ressalva de `ultimoServidorConsultado` no DesktopShell);
+  // `route` é o que muda a cada troca de rota, e por ela já ter passado pelo `selectServer` síncrono
+  // em `applyRouteServer`, o id lido aqui já é o do servidor novo. Guarda por id pra não recarregar
+  // à toa ao trocar de sessão dentro do MESMO servidor.
+  let ultimoServidorSegredos: string | null = null;
+  $effect(() => {
+    void route;
+    const id = getActiveId();
+    if (id === ultimoServidorSegredos) return;
+    ultimoServidorSegredos = id;
+    segredos.esquecer();
+    if (id) segredos.carregar();
+  });
 
   // SEMPRE `listServers().find`. NUNCA o caminho de activeServer(): auth.ts:151-155 faz `?? list[0]`,
   // entao um id desconhecido devolveria O PRIMEIRO SERVIDOR DA LISTA, silenciosamente.
@@ -500,7 +516,9 @@
        do Chat o audio morreria em toda troca, e o proprio elemento perderia o destravamento do
        gesto do iOS. -->
   <TtsBar />
-  <TtsSelectionPill />
+  {#if segredos.temChave('elevenlabs_api_key')}
+    <TtsSelectionPill />
+  {/if}
   <CodeOverlay />
 
   {#if cfg && telaEfetiva && route.name !== 'login' && route.name !== 'loading'}
