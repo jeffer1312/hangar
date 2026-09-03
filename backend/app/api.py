@@ -1890,6 +1890,8 @@ async def _bastao_alvo(name: str, project: str | None, session_id: str | None,
     # "conta" e o GET lê <pasta>/projects/<proj>/<uuid>.jsonl.
     if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
         raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
+    if provider != "claude" and provider not in archive_providers.PROVIDERS:
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
     try:
         p = await asyncio.to_thread(archive_jsonl, project, session_id, config_dir, provider)
         cwd = await asyncio.to_thread(archive_cwd, project, session_id, config_dir, provider)
@@ -1936,7 +1938,7 @@ class BastaoBody(_StrictBody):
     padrão é o cwd da ORIGEM (a passagem continua o mesmo trabalho, na mesma árvore). Os campos
     que sobrepõem o `CreateBody` são repassados pra ele tal e qual, então a validação de
     provider/conta/motor/modelo/esforço/permissão continua num lugar só (`model_args` + o handler
-    de criação).
+    de criação) — `provider` aqui é sempre o da SUCESSORA, nunca o da origem.
     """
     name: str = Field(min_length=1)          # nome da sessão nova (o destino)
     cwd: str | None = None                   # None = o cwd da origem
@@ -1946,10 +1948,12 @@ class BastaoBody(_StrictBody):
     model: str | None = None
     effort: str | None = None
     permission_mode: str | None = None
-    # Endereço da origem MORTA no archive (project + session_id); ignorados quando ela está viva.
+    # Endereçam a origem MORTA no archive (project + session_id); nunca a sucessora, e são
+    # ignorados quando a origem está viva.
     project: str | None = None
     session_id: str | None = None
     origem_config_dir: str | None = None
+    origem_provider: str | None = None       # None = mesmo provider da sucessora (`provider`)
 
 
 def _nome_ocupado(nome: str) -> bool:
@@ -1986,7 +1990,8 @@ async def bastao_passar(name: str, body: BastaoBody):
     `to_thread` no preparo pelo mesmo motivo do GET: `montar` roda `git status` (subprocess) e
     parseia a cauda do transcript; no loop isso derruba o SSE de todas as sessões (2026-07-23).
     """
-    info = await _bastao_alvo(name, body.project, body.session_id, body.origem_config_dir, body.provider)
+    info = await _bastao_alvo(name, body.project, body.session_id, body.origem_config_dir,
+                              body.origem_provider or body.provider)
     # UM nome só, sanitizado pelo MESMO lugar que a criação usa (`registry.create` chama isto), e
     # daqui pra frente é ele quem nomeia o arquivo e a sessão. Sanitizar duas vezes por dois
     # caminhos diferentes era o bug: `api.v2` gravava `api.v2.md` mas nascia como `api-v2`, e aí o

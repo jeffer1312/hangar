@@ -667,6 +667,53 @@ def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, 
     assert criadas[0].cwd == "/cwd/da/origem"
 
 
+def test_post_bastao_origem_morta_usa_origem_provider_pra_achar_o_transcript(api_client_bastao, monkeypatch, tmp_path):
+    """origem_provider endereça só a origem MORTA no archive — o provider da sucessora (`provider`)
+    não pode ser arrastado junto, senão passar o bastão de um Pi morto força a sucessora pro Pi."""
+    from unittest.mock import patch
+    from app.models import SessionInfo
+    import app.api as api_mod
+    cfg, proj, sid = _arquivo_morto(tmp_path)
+    _conta_conhecida(monkeypatch, cfg)
+    criadas = []
+    vistos = []
+
+    async def fake_create(body):
+        criadas.append(body)
+        return SessionInfo(name=body.name, cwd=body.cwd, jsonl=None)
+
+    def fake_jsonl(project, session_id, config_dir, provider):
+        vistos.append(provider)
+        return FIX / "jsonl_samples.jsonl"
+
+    monkeypatch.setattr(api_mod, "create_session", fake_create)
+    monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
+    monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
+    monkeypatch.setattr(api_mod, "archive_jsonl", fake_jsonl)
+    monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: "/cwd/da/origem-pi")
+    with patch("app.api.registry.list", return_value=[]):
+        r = api_client_bastao.post("/api/sessions/morta/bastao", headers={"Authorization": "Bearer secret"},
+                                   json={"name": "morta-cont", "project": proj, "session_id": sid,
+                                         "origem_config_dir": cfg, "origem_provider": "pi",
+                                         "provider": "claude"})
+    assert r.status_code == 200, r.text
+    assert vistos == ["pi"]                      # archive_jsonl recebeu o provider da ORIGEM
+    assert criadas[0].provider == "claude"       # a sucessora fica no provider PEDIDO, não no da origem
+
+
+def test_get_bastao_recusa_provider_desconhecido(api_client_bastao, tmp_path, monkeypatch):
+    from unittest.mock import patch
+    cfg, proj, sid = _arquivo_morto(tmp_path)
+    _conta_conhecida(monkeypatch, cfg)
+    with patch("app.api.registry.list", return_value=[]):
+        r = api_client_bastao.get("/api/sessions/morta/bastao",
+                                  params={"project": proj, "session_id": sid, "config_dir": cfg,
+                                          "provider": "nao-existe"},
+                                  headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "erro_provider_invalido"
+
+
 @pytest.fixture
 def api_client_bastao(monkeypatch, models_cache_em_tmp):
     from fastapi.testclient import TestClient
