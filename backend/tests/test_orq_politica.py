@@ -159,6 +159,13 @@ def test_politica_vazia_nao_proibe_nada():
     assert pol.permitido("claude", "qualquer", "sonnet", "turbo", politica=[]) == "erro_orq_esforco_invalido"
 
 
+def test_permitido_omp_reusa_a_linha_do_pi(maquina):
+    # omp e o MESMO credencial do pi (sem linha propria na tabela) — uma conta liberada pra "pi"
+    # libera "omp" tambem, e uma conta pi nao liberada tambem barra o omp.
+    assert pol.permitido("omp", "opencode-go", "deepseek-v4-flash", "max") is None
+    assert pol.permitido("omp", "openrouter", "x/y", "high") == "erro_orq_conta_nao_liberada"
+
+
 def test_permitido(maquina):
     assert pol.permitido("claude", "200-01", "opus[1m]", "medium") is None
     assert pol.permitido("claude", "padrao", "opus", "high") == "erro_orq_conta_nao_liberada"

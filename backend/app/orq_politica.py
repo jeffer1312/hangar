@@ -195,6 +195,12 @@ def desligar(conta: str, mtime_lido: float | None = None) -> float:
 
 # ------------------------------------------------------------------ regra
 
+def _provider_inventario(provider: str) -> str:
+    """omp e o mesmo credencial/inventario do pi — uma liberacao na tabela cobre os dois, sem
+    linha propria pra `omp`."""
+    return "pi" if provider == "omp" else provider
+
+
 def _niveis(provider: str, modelo: str) -> tuple[str, ...] | None:
     """None = aceita qualquer (Kimi sem catálogo, Codex)."""
     if provider == "claude":
@@ -221,7 +227,7 @@ def permitido(provider: str, conta: str, modelo: str, esforco: str,
         # antes de montar a política (medido em 26/08/2026).
         niveis = _niveis(provider, modelo)
         return "erro_orq_esforco_invalido" if esforco and niveis is not None and esforco not in niveis else None
-    regra = next((c for c in pol if c.provider == provider
+    regra = next((c for c in pol if c.provider == _provider_inventario(provider)
                   and orq_md.normalizar(c.conta) == orq_md.normalizar(conta)), None)
     if regra is None:
         return "erro_orq_conta_nao_liberada"
