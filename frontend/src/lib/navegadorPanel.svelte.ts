@@ -37,10 +37,53 @@ function carregarLargura(): number {
 
 // `resizing` aqui e não num $state do NavegadorPane: o flag precisa sobreviver à desmontagem no
 // meio do arrasto (trocar de sessão remonta o Chat) — mesmo motivo do ctxPanel.
+// `abertos`: sessões com navegador aberto (chave workspaceSessionKey → url atual, '' = ainda não
+// navegou). Vive aqui porque o Chat remonta por key a cada troca de sessão — um $state local
+// esqueceria que a sessão X tem navegador aberto. Persistido pra um reload da página reexibir
+// (o view continua vivo no main; se o SHELL reiniciou, o front reabre com esta url).
 export const navegadorPanel = $state({
   largura: carregarLargura(),
   resizing: false,
+  abertos: carregarAbertos(),
 });
+
+const CHAVE_ABERTOS = 'cp_nav_abertos';
+
+function carregarAbertos(): Record<string, string> {
+  try {
+    const j = JSON.parse(localStorage.getItem(CHAVE_ABERTOS) || '{}');
+    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
+  } catch {
+    return {};
+  }
+}
+
+function salvarAbertos(): void {
+  try {
+    localStorage.setItem(CHAVE_ABERTOS, JSON.stringify(navegadorPanel.abertos));
+  } catch {
+    /* sem storage: vale só nesta sessão */
+  }
+}
+
+export function marcarNavAberto(chave: string): void {
+  if (!(chave in navegadorPanel.abertos)) {
+    navegadorPanel.abertos[chave] = '';
+    salvarAbertos();
+  }
+}
+
+export function atualizarNavUrl(chave: string, url: string): void {
+  if (chave in navegadorPanel.abertos) {
+    navegadorPanel.abertos[chave] = url;
+    salvarAbertos();
+  }
+}
+
+export function fecharNav(chave: string): void {
+  delete navegadorPanel.abertos[chave];
+  salvarAbertos();
+}
 
 // O painel cola na direita: largura = janela - clientX (espelho do arrastarLargura do ctxPanel).
 export function arrastarNav(clientX: number): void {

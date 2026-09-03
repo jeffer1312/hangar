@@ -158,7 +158,13 @@ async function criarJanela() {
   // (backend fora, usuário fechou em vez de responder), gravar essa URL faria a próxima abertura
   // tentar carregar a própria tela de erro. Nesse caso mantém a URL que já estava salva.
   win.on('close', () => {
-    fecharNavegador(win);   // tira o view do Map antes da janela virar objeto morto
+    // Janela morrendo leva TODOS os views de navegador dela — sem isto o Map guardaria
+    // referência de webContents mortos.
+    const views = navegadores.get(win);
+    if (views) {
+      navegadores.delete(win);
+      for (const v of views.values()) { try { v.webContents.close(); } catch { /* já morreu */ } }
+    }
     const u = win.webContents.getURL();
     // Na tela de recuperacao (data:) nao ha endereco de cockpit pra salvar — usa o ULTIMO que
     // carregou de verdade (urlBoa), nao o `cfg.url` do boot, que fica pra tras assim que o
@@ -270,56 +276,86 @@ function abrirJanela(origem) {
 }
 
 // ---------------------------------------------------------------------------
-// Navegador embutido. Um WebContentsView por janela, pendurado no contentView — navegação
-// top-level, então X-Frame-Options não se aplica (diferente de iframe). A POSIÇÃO é medida pelo
-// front (div âncora no NavegadorPane.svelte) e chega por IPC: o view não é DOM, flutua POR CIMA
-// da página — o layout do Chat reserva o espaço, e modal/sheet que abrir naquela área fica
-// "atrás" dele (limitação conhecida de overlay nativo; o front fecha o painel ao desmontar).
-const navegadores = new Map();   // BrowserWindow -> WebContentsView
+// Navegador embutido. UM WebContentsView POR SESSÃO (chave serverId::nome), pendurado no
+// contentView da janela — navegação top-level, então X-Frame-Options não se aplica (diferente de
+// iframe). Trocar de sessão ESCONDE o view (nav-hide), não fecha: o agente segue dirigindo ele
+// via CDP em background (backgroundThrottling: false abaixo é por isso). Fechar de verdade é só
+// pelo × do painel (nav-close). A POSIÇÃO é medida pelo front (div âncora no NavegadorPane) e
+// chega por IPC: o view não é DOM, flutua POR CIMA da página — o front esconde com bounds zero
+// quando um overlay DOM abre, e o layout do Chat reserva a faixa pra nada cobrir texto/composer.
+const navegadores = new Map();   // BrowserWindow -> Map<chave, WebContentsView>
 
-function fecharNavegador(win) {
-  const view = win && navegadores.get(win);
+function viewsDa(win) {
+  let m = navegadores.get(win);
+  if (!m) { m = new Map(); navegadores.set(win, m); }
+  return m;
+}
+
+function fecharNavegador(win, chave) {
+  const m = navegadores.get(win);
+  const view = m && m.get(chave);
   if (!view) return;
-  navegadores.delete(win);
+  m.delete(chave);
+  if (m.size === 0) navegadores.delete(win);
   try { win.contentView.removeChildView(view); } catch { /* janela já destruída */ }
   try { view.webContents.close(); } catch { /* idem */ }
 }
 
-ipcMain.handle('hangar:nav-open', (ev, { url, bounds } = {}) => {
+function viewDe(ev, chave) {
+  return navegadores.get(BrowserWindow.fromWebContents(ev.sender))?.get(chave);
+}
+
+ipcMain.handle('hangar:nav-open', (ev, { chave, url, bounds } = {}) => {
   const win = BrowserWindow.fromWebContents(ev.sender);
-  const destino = urlNavegavel(url);
-  if (!win || !destino) return { ok: false };
-  fecharNavegador(win);   // um por janela: abrir de novo troca a URL
-  // persist: cookies/localStorage no disco — o login (Google) sobrevive a reabrir o painel.
-  // backgroundThrottling: false porque o view ESCONDIDO (troca de sessão, no modelo um
-  // navegador por sessão) precisa seguir processando — o agente continua dirigindo ele via CDP.
-  const view = new WebContentsView({
-    webPreferences: { partition: 'persist:nav', backgroundThrottling: false },
-  });
-  view.webContents.setUserAgent(uaDeChrome(view.webContents.getUserAgent()));
-  // target=_blank vai pro navegador do sistema, mesmo padrão do cockpit.
-  view.webContents.setWindowOpenHandler(({ url: alvo }) => {
-    if (/^https?:/i.test(alvo)) shell.openExternal(alvo);
-    return { action: 'deny' };
-  });
-  win.contentView.addChildView(view);
+  if (!win || !chave) return { ok: false };
+  const views = viewsDa(win);
+  let view = views.get(chave);
+  if (!view) {
+    // View novo SÓ nasce com URL; o reexibir (troca de sessão, reload do front) chama open sem
+    // url e recebe ok:false se o shell já não tiver o view — aí o front repete com a url salva.
+    const destino = urlNavegavel(url);
+    if (!destino) return { ok: false };
+    // persist: cookies/localStorage no disco. COMPARTILHADA entre sessões de propósito — o uso é
+    // cada sessão com suas URLs, não isolamento de conta; se um dia precisar, vira por-sessão.
+    view = new WebContentsView({
+      webPreferences: { partition: 'persist:nav', backgroundThrottling: false },
+    });
+    view.webContents.setUserAgent(uaDeChrome(view.webContents.getUserAgent()));
+    // target=_blank vai pro navegador do sistema, mesmo padrão do cockpit.
+    view.webContents.setWindowOpenHandler(({ url: alvo }) => {
+      if (/^https?:/i.test(alvo)) shell.openExternal(alvo);
+      return { action: 'deny' };
+    });
+    win.contentView.addChildView(view);
+    views.set(chave, view);
+    view.webContents.loadURL(destino);
+  } else {
+    // Reexibir NUNCA recarrega: a URL atual do view pode ter mudado por navegação interna (o
+    // agente clicou em links) e o front só manda `url` quando o usuário digita uma nova.
+    const destino = url ? urlNavegavel(url) : null;
+    if (destino && view.webContents.getURL() !== destino) view.webContents.loadURL(destino);
+  }
+  view.setVisible(true);
   view.setBounds(normalizaBounds(bounds));
-  navegadores.set(win, view);
-  view.webContents.loadURL(destino);
   return { ok: true };
 });
 
-ipcMain.on('hangar:nav-bounds', (ev, bounds) => {
-  const view = navegadores.get(BrowserWindow.fromWebContents(ev.sender));
+ipcMain.on('hangar:nav-hide', (ev, { chave } = {}) => {
+  const view = viewDe(ev, chave);
+  if (view) view.setVisible(false);
+});
+
+ipcMain.on('hangar:nav-bounds', (ev, { chave, bounds } = {}) => {
+  const view = viewDe(ev, chave);
   if (view) view.setBounds(normalizaBounds(bounds));
 });
 
-ipcMain.on('hangar:nav-reload', (ev) => {
-  const view = navegadores.get(BrowserWindow.fromWebContents(ev.sender));
+ipcMain.on('hangar:nav-reload', (ev, { chave } = {}) => {
+  const view = viewDe(ev, chave);
   if (view) view.webContents.reload();
 });
 
-ipcMain.on('hangar:nav-close', (ev) => fecharNavegador(BrowserWindow.fromWebContents(ev.sender)));
+ipcMain.on('hangar:nav-close', (ev, { chave } = {}) => fecharNavegador(BrowserWindow.fromWebContents(ev.sender), chave));
 
 // Seletor nativo de pasta (window.hangar.pickFolder, via preload.cjs). Registrado UMA vez, fora
 // do criarJanela — handler duplicado por janela é erro do ipcMain. O diálogo ancora na janela que

@@ -113,7 +113,11 @@ vi.mock('../lib/activity', () => ({
     push: () => {}, save: () => {}, attach: () => {}, reset: () => {},
   })),
 }));
-vi.mock('../lib/workspaceCommands', () => ({}) );
+// O módulo inteiro é mockado vazio; a exceção é a função PURA que o Chat usa pra chavear o
+// navegador embutido por sessão — duplicada aqui pra não puxar o módulo real (e as deps dele).
+vi.mock('../lib/workspaceCommands', () => ({
+  workspaceSessionKey: (s: { serverId: string; name: string }) => `${s.serverId}::${s.name}`,
+}) );
 vi.mock('../lib/errosApi', () => ({ formataErro: vi.fn(() => '') }));
 
 function montar() {

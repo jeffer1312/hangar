@@ -7,17 +7,23 @@
   // O view nativo flutua POR CIMA do DOM — não é elemento HTML. Este componente só reserva o
   // espaço no layout (o Chat recua com --recuo-dir = --cp-nav-w) e mede o retângulo pro shell
   // pintar lá. Consequência conhecida: modal/sheet que abrir na área dele fica "atrás".
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import { navegadorNativo } from '../lib/navegadorNativo';
-  import { navegadorPanel, arrastarNav, salvarNav } from '../lib/navegadorPanel.svelte';
+  import { navegadorPanel, arrastarNav, salvarNav, atualizarNavUrl, fecharNav } from '../lib/navegadorPanel.svelte';
 
-  let { onClose }: { onClose: () => void } = $props();
+  // navKey = workspaceSessionKey da sessão dona deste painel. UM view por sessão: desmontar
+  // (troca de sessão) chama hide — o view fica vivo pro agente seguir usando via CDP; fechar de
+  // verdade é o ×, que faz fecharNav (o Chat desmonta este painel via store) + close no main.
+  let { navKey }: { navKey: string } = $props();
 
   const nativo = navegadorNativo();
   let ancora = $state<HTMLDivElement | null>(null);
-  let endereco = $state('');    // o que está no campo
-  let aberta = $state('');      // a URL efetivamente aberta ('' = nenhuma)
+  // O painel é remontado por sessão (o Chat tem key por sessão), então o valor INICIAL do navKey
+  // é o certo aqui — untrack declara isso sem warning.
+  const urlInicial = untrack(() => navegadorPanel.abertos[navKey] || '');
+  let endereco = $state(urlInicial);   // o que está no campo
+  let aberta = $state(urlInicial);     // a URL efetivamente aberta
   let recarregos = $state(0);   // iframe: trocar a key recria o elemento (= reload)
 
   // O rect TEM que sair como objeto plano: getBoundingClientRect devolve DOMRect, cujas
@@ -35,7 +41,8 @@
     const u = /^https?:\/\//i.test(t) ? t : `http://${t}`;
     endereco = u;
     aberta = u;
-    if (nativo) nativo.open(u, rectDaAncora());
+    atualizarNavUrl(navKey, u);
+    if (nativo) nativo.open(navKey, u, rectDaAncora());
   }
 
   // Drag na divisória ESQUERDA (o painel cola na direita): pointer capture no handle, largura
@@ -70,17 +77,23 @@
     // Os dois teleportam pro body, então um MutationObserver raso (childList) já cobre.
     const SELETOR_OVERLAY = '[role="dialog"]:not(.board-overlay), .bp-wrap';
     const sync = () => {
-      if (document.querySelector(SELETOR_OVERLAY)) nativo.bounds({ x: 0, y: 0, width: 0, height: 0 });
-      else nativo.bounds(rectDaAncora());
+      if (document.querySelector(SELETOR_OVERLAY)) nativo.bounds(navKey, { x: 0, y: 0, width: 0, height: 0 });
+      else nativo.bounds(navKey, rectDaAncora());
     };
     const ro = new ResizeObserver(sync);
     if (ancora) ro.observe(ancora);
     const mo = new MutationObserver(sync);
     mo.observe(document.body, { childList: true });
+    // Reexibe o view DESTA sessão (sem url: não recarrega — o view pode ter navegado por cliques).
+    // Se o main não o tem mais (shell reiniciou), ok:false e o front recria com a url salva.
+    nativo.open(navKey, undefined, rectDaAncora()).then((r) => {
+      const salva = navegadorPanel.abertos[navKey];
+      if (!r?.ok && salva) nativo.open(navKey, salva, rectDaAncora());
+    });
     return () => {
       ro.disconnect();
       mo.disconnect();
-      nativo.close();
+      nativo.hide(navKey);   // desmontou (troca de sessão): ESCONDE, não fecha — o × é o close
     };
   });
 </script>
@@ -100,12 +113,12 @@
     </form>
     <button
       class="nav-btn"
-      onclick={() => (nativo ? nativo.reload() : recarregos++)}
+      onclick={() => (nativo ? nativo.reload(navKey) : recarregos++)}
       disabled={!aberta}
       aria-label={m.nav_recarregar()}
       title={m.nav_recarregar()}
     >↻</button>
-    <button class="nav-btn" onclick={onClose} aria-label={m.shell_fechar_painel()} title={m.shell_fechar_painel()}>×</button>
+    <button class="nav-btn" onclick={() => { fecharNav(navKey); nativo?.close(navKey); }} aria-label={m.shell_fechar_painel()} title={m.shell_fechar_painel()}>×</button>
   </header>
 
   <div class="nav-main">

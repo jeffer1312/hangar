@@ -31,7 +31,8 @@
   import NavegadorPane from '../components/NavegadorPane.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
-  import { navegadorPanel } from '../lib/navegadorPanel.svelte';
+  import { navegadorPanel, marcarNavAberto, fecharNav } from '../lib/navegadorPanel.svelte';
+  import { navegadorNativo } from '../lib/navegadorNativo';
   import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
@@ -63,6 +64,7 @@
   import { createActivityFolder } from '../lib/activity';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile } from '../lib/types';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
+  import { workspaceSessionKey } from '../lib/workspaceCommands';
   import { countAwaiting, nextAwaiting, providerName, untrackedReason, stateColors } from '../lib/format';
   import * as diag from '../lib/diag';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
@@ -828,9 +830,16 @@
   // Chip de loop no header: dentro do chat não havia NENHUM sinal de loop ativo (só a lista tinha
   // badge). Os campos vêm do sessionsStore (singleton refcounted — zero SSE novo); tap abre o sheet.
   let loopSheetOpen = $state(false);
-  // Navegador embutido ao lado do chat (WebContentsView no shell; iframe fora dele). Só desktop:
-  // no celular quem cobre o caso é o PreviewSheet (túnel da porta pra URL alcançável).
-  let navOpen = $state(false);
+  // Navegador embutido: UM POR SESSÃO. O estado mora no store navegadorPanel.abertos (chave
+  // serverId::nome) porque o App remonta este Chat por key a cada troca de sessão — com $state
+  // local, voltar pra uma sessão que tinha navegador aberto o perderia. O view nativo fica VIVO
+  // escondido enquanto isso (o agente segue dirigindo via CDP).
+  const navKey = $derived(workspaceSessionKey({ serverId: getActiveId() ?? '', name: sessionName }));
+  const navOpen = $derived(desktop && navKey in navegadorPanel.abertos);
+  function alternarNavegador() {
+    if (navOpen) { fecharNav(navKey); navegadorNativo()?.close(navKey); }
+    else marcarNavAberto(navKey);
+  }
   // Com o navegador aberto, a sidebar colapsa pro trilho — override TEMPORÁRIO do sidebarPin
   // (o mesmo do Board/Canvas): mexe só no `forced`, nunca na preferência gravada, então fechar
   // o navegador devolve a sidebar como estava.
@@ -899,7 +908,7 @@
       action('pair', m.chat_parear_sessao(), () => (pairOpen = true)),
       action('run', m.chat_executar_workflow(), () => (runOpen = true)),
       action('terminal', m.ctx_terminal(), abrirTerminalReal),
-      action('navegador', m.ctx_navegador(), () => (navOpen = true)),
+      action('navegador', m.ctx_navegador(), alternarNavegador),
     ]);
     // Ao trocar a key servidor-aware ou desmontar este Chat, nenhum callback pode sobreviver.
     return () => publish([]);
@@ -1862,7 +1871,7 @@
   {/if}
   <div class="navbar-mount" bind:this={navEl}>
     {#if !splitTab}
-    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? () => (navOpen = !navOpen) : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
+    <NavBar title={sessionName} subtitle={desktop ? null : serverLabel || null} showBack={!desktop} onBack={onBack} onTitleTap={desktop ? undefined : openSwitcher} {crumbs} state={desktop ? currentState : undefined} {status} onExpandUsage={() => (usageOpen = true)} limited={stateEvent?.limited ?? false} limitReset={stateEvent?.limit_reset ?? null} onOpenActivity={desktop && hasActivity ? () => (activityOpen = true) : undefined} {activityBadge} {activityRunning} onOpenTerminal={abrirTerminalReal} terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen} onOpenNavegador={desktop ? alternarNavegador : undefined} onOpenRun={desktop ? () => (runOpen = true) : undefined} {runRunning} onMenu={desktop ? undefined : () => (moreOpen = true)} onOpenAttachments={desktop ? () => (anexosOpen = true) : undefined} working={currentState === 'working'} providerLabel={providerBadge} onProviderTap={isCodex ? () => (limitsOpen = true) : undefined} loopLabel={loopChip?.label ?? null} loopColor={LOOP_TONE_COLOR[loopChip?.tone ?? 'muted']} onLoopTap={() => (loopSheetOpen = true)} />
     {/if}
   </div>
 
@@ -1885,7 +1894,7 @@
       {sessionName}
       {events} {histGap} cwd={planSession?.cwd ?? null}
       onOpenTerminal={abrirTerminalReal}
-      onOpenNavegador={() => (navOpen = true)}
+      onOpenNavegador={alternarNavegador}
       terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}
@@ -1913,7 +1922,9 @@
   {/if}
 
   {#if desktop && navOpen}
-    <NavegadorPane onClose={() => (navOpen = false)} />
+    <!-- Sem onClose: o × do painel já faz fecharNav + close no main, e este bloco desmonta
+         sozinho porque navOpen é derivado do store. -->
+    <NavegadorPane {navKey} />
   {/if}
 
   {#if visorAberto && arquivoAberto}
