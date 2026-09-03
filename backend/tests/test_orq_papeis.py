@@ -9,6 +9,8 @@ from app.models import SessionInfo
 @pytest.fixture(autouse=True)
 def _pair_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    # leave() do último membro arquiva em ~/.hangar/pair-arquivo de verdade sem isto (Task 9).
+    monkeypatch.setattr(pair, "_arquivo_dir", lambda: tmp_path / "arq")
     return tmp_path
 
 
