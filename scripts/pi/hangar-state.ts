@@ -163,11 +163,18 @@ function supportedLevels(model: any): string[] {
 // o backend ja resolve nome da sessao -> .jsonl). Nao entra no bilhete do pane porque aquele e
 // reescrito a cada agent_start e o catalogo tem ~300 entradas: seria um write de dezenas de KB por
 // turno pra um dado que so muda quando o usuario troca de modelo.
-function publishModels(pi: ExtensionAPI, ctx: any): void {
+//
+// `override`: o omp aceita o setModel (devolve true, o rodape troca) e NAO atualiza `ctx.model`
+// nem emite evento de modelo. Publicar `ctx.model` ali republicaria o modelo VELHO com `ts` novo,
+// que o backend le como "a sessao recusou a troca". Quem sabe o modelo certo e quem acabou de
+// pedi-lo, entao ele vem por parametro.
+let ultimoModeloPublicado: string | null = null;
+
+function publishModels(pi: ExtensionAPI, ctx: any, override?: any): void {
   guard("publishModels", () => {
     const file = sessionFile(ctx);
     if (!file) return;
-    const model = ctx?.model;
+    const model = override ?? ctx?.model;
     const all = ctx?.modelRegistry?.getAvailable?.() ?? [];   // so provedores com auth configurada
     writeAtomic(path.join(modelDir, `${path.basename(file, ".jsonl")}.json`), {
       current: model ? { provider: model.provider, id: model.id, name: model.name } : null,
@@ -178,6 +185,7 @@ function publishModels(pi: ExtensionAPI, ctx: any): void {
       })),
       ts: Date.now() / 1000,
     });
+    ultimoModeloPublicado = model?.id ?? null;
   });
 }
 
@@ -519,6 +527,9 @@ export default function (pi: ExtensionAPI) {
     // turno da sessao, e tratar como se fosse confirmaria entrega de mensagem que ninguem leu.
     if (!sessaoRastreavel(ctx)) return;
     publishPane(ctx); publishState("working", ctx);
+    // Troca feita no teclado do omp nao emite evento nenhum de modelo; o inicio do turno e a
+    // primeira hora em que da pra notar. So republica se mudou — o catalogo tem ~300 entradas.
+    if (ctx?.model?.id && ctx.model.id !== ultimoModeloPublicado) publishModels(pi, ctx);
     trabalhando = true;
     eventosAgente.emit("agent_start");   // corrobora entrega pendente — ver bloco da entrega acima
   });
@@ -573,7 +584,9 @@ export default function (pi: ExtensionAPI) {
       const ok = await pi.setModel(model);
       ctx?.ui?.notify?.(ok ? `[cp] modelo: ${provider}/${id}` : `[cp] sem chave pra ${provider}`,
                         ok ? "info" : "error");
-      publishModels(pi, ctx);   // rede: model_select nao dispara quando o modelo ja era esse
+      // rede: model_select nao dispara quando o modelo ja era esse. Com `ok`, o modelo publicado e
+      // o que foi PEDIDO — ver o `override` de publishModels.
+      publishModels(pi, ctx, ok ? model : undefined);
     },
   });
 
