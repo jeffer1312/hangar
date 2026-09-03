@@ -61,7 +61,7 @@ from app import terminal_input
 from app.terminal_input import TerminalInput, drain
 from app.adapters import get_adapter
 from app.adapters.codex import sessions as codex_sessions
-from app.sse import merged_events
+from app.sse import merged_events, nav_pendente
 from app.state import corrige_ocioso_kimi
 from app.uploads import save_upload, resolve_upload, prune_old, list_uploads, UploadError, MAX_BYTES
 from app.video import is_video, extract_frames, extract_audio
@@ -2500,6 +2500,26 @@ async def steer_session(name: str):
     # deixava o chip "N na fila" aceso o turno inteiro — e clicavel, sobre um no-op.
     n = await _send_thread(PromptQueue(name).confirm_delivered)
     return {"ok": True, "promoted": True, "confirmed": n}
+
+
+class NavBody(_StrictBody):
+    url: str = Field(min_length=1)
+
+
+@app.post("/api/sessions/{name}/nav", dependencies=[Depends(require_auth)])
+async def abrir_nav_sessao(name: str, body: NavBody):
+    """O AGENTE abre o navegador embutido da própria sessão (CLI `hangar-preview open <url>`).
+
+    O backend não cria view — quem posiciona é o painel no front: aqui só entrega o evento 'nav'
+    no SSE da sessão. Sem stream vivo (sessão fora da tela), o pendente espera em memória até o
+    usuário abrir a sessão; backend reiniciado perde e o agente re-tenta."""
+    if not await _send_thread(_session_exists, name):
+        raise HTTPException(404, "sessão não encontrada")
+    u = body.url.strip()
+    if not re.match(r"^https?://", u, re.I):
+        u = "http://" + u
+    nav_pendente(name, u)
+    return {"ok": True}
 
 
 @app.post("/api/broadcast", dependencies=[Depends(require_auth)])

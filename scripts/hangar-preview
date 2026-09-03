@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // hangar-preview — dirige o navegador embutido DA SUA SESSÃO no shell Electron do hangar.
 //
+//   hangar-preview open <url>             abre o navegador desta sessão com a url (o painel monta
+//                                          sozinho na tela do usuário; se a sessão estiver fora da
+//                                          tela, abre quando ele abrir ela)
 //   hangar-preview list                    navegadores vivos (chave, url, vivo/morto)
 //   hangar-preview url                     URL atual do navegador desta sessão
 //   hangar-preview shot [arquivo.png]      screenshot da página (default /tmp/hangar-preview-<sessao>.png)
@@ -19,9 +22,9 @@
 // Se a sessão não tem navegador aberto, o CLI falha pedindo pra abrir — quem posiciona o view na
 // janela é o painel (botão Navegador no chat); não existe navegador invisível.
 import { execSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const CDP = 'http://127.0.0.1:9223';
 const DIR = join(homedir(), '.hangar', 'nav');
@@ -122,6 +125,32 @@ async function comAlvo(fn) {
   } finally {
     ws.close();
   }
+}
+
+// --- comandos ---
+if (cmd === 'open') {
+  // Pede ao BACKEND pra entregar o evento 'nav' no SSE da sessão — o painel monta sozinho na tela
+  // (quem posiciona o view é o painel; não existe view invisível). Token do backend/.env ao lado
+  // do script, mesmo padrão do hangar-send.
+  const url = pos[1];
+  if (!url) erro('open precisa de uma url: hangar-preview open localhost:3000');
+  const nome = nomeSessao();
+  if (!nome) erro('fora do tmux não dá pra saber a sessão — use --sessao <nome>');
+  const repo = join(dirname(realpathSync(process.argv[1])), '..');
+  let token = '';
+  try {
+    token = readFileSync(join(repo, 'backend', '.env'), 'utf8').match(/^CP_AUTH_TOKEN=(.+)$/m)?.[1]?.trim() ?? '';
+  } catch { /* sem .env */ }
+  if (!token) erro('não achei CP_AUTH_TOKEN no backend/.env do repo');
+  const res = await fetch(`http://127.0.0.1:${process.env.PORT || 8765}/api/sessions/${encodeURIComponent(nome)}/nav`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ url }),
+  });
+  if (res.status === 404) erro(`a sessão "${nome}" não existe no backend`);
+  if (!res.ok) erro(`o backend recusou: ${res.status} ${await res.text()}`);
+  console.log(`navegador de "${nome}" abrindo com ${url} (se a sessão estiver fora da tela, abre quando o usuário abrir ela)`);
+  process.exit(0);
 }
 
 // --- comandos ---

@@ -31,7 +31,7 @@
   import NavegadorPane from '../components/NavegadorPane.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
-  import { navegadorPanel, marcarNavAberto, fecharNav } from '../lib/navegadorPanel.svelte';
+  import { navegadorPanel, marcarNavAberto, fecharNav, atualizarNavUrl } from '../lib/navegadorPanel.svelte';
   import { navegadorNativo } from '../lib/navegadorNativo';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
@@ -1298,6 +1298,18 @@
     // Stepper nativo AskUserQuestion: abre o sheet com as perguntas recebidas via SSE
     es.addEventListener('ask_question', (e: MessageEvent) => {
       try { askPayload = JSON.parse(e.data); askOpen = true; } catch {}
+    });
+
+    // O agente abriu/empurrou o navegador embutido desta sessão (POST /api/sessions/<nome>/nav,
+    // via `hangar-preview open`). Marca no store SEMPRE (sem guard de desktop: se ele chegar com o
+    // usuário no celular e for descartado, o navegador nunca abre — marcado, abre quando a sessão
+    // estiver num desktop). O NavegadorPane monta pelo navOpen derivado e abre com a url salva.
+    es.addEventListener('nav', (e: MessageEvent) => {
+      try {
+        const { url } = JSON.parse(e.data) as { url?: string };
+        marcarNavAberto(navKey);
+        if (url) atualizarNavUrl(navKey, url);
+      } catch {}
     });
 
     // Preview ao vivo (best-effort) do bloco de assistente em voo. Full-replace; tambem e prova de

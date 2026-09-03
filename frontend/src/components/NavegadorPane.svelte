@@ -67,6 +67,17 @@
   // preso e a divisória redimensionaria só com o cursor por cima — mesmo motivo do ctxPanel.
   $effect(() => () => { navegadorPanel.resizing = false; });
 
+  // URL empurrada de fora (o agente, via `hangar-preview open`): o store é a via de entrada; se
+  // ela difere da aberta, navega. O ir() do usuário escreve no store junto, então não há loop.
+  $effect(() => {
+    const externa = navegadorPanel.abertos[navKey];
+    if (externa && externa !== aberta) {
+      endereco = externa;
+      aberta = externa;
+      if (nativo) nativo.open(navKey, externa, rectDaAncora());
+    }
+  });
+
   onMount(() => {
     if (!nativo) return;
     // Reenvia o retângulo a cada mudança de layout (resize da janela, arrasto da divisória,

@@ -20,6 +20,9 @@ target certo — duas sessões com a mesma URL aberta não se confundem.
 
 ## Comandos
 
+- `hangar-preview open <url>` — abre o navegador desta sessão com a url: o painel monta sozinho na
+  tela do usuário (se a sessão estiver fora da tela, abre quando ele abrir ela). **Avise o usuário**
+  no texto da resposta que você abriu — a janela dele muda na hora.
 - `hangar-preview url` — URL atual da página.
 - `hangar-preview shot [arq.png]` — screenshot; default `/tmp/hangar-preview-<sessao>.png`. Leia o
   PNG com a ferramenta de leitura de imagem.
@@ -34,10 +37,9 @@ target certo — duas sessões com a mesma URL aberta não se confundem.
 
 ## Regras
 
-- Se o comando disser que a sessão não tem navegador aberto, **peça pro usuário abrir** (botão
-  Navegador no painel do chat). Não tente criar view por conta — quem posiciona o view na janela é
-  o painel.
 - O view continua vivo quando o usuário troca de sessão no app — você pode seguir trabalhando
   nele via CLI em background, sem atrapalhar a tela dele.
+- Não fique abrindo e fechando navegador em loop nem trocando a url a cada passo: cada open pisca
+  na tela do usuário. Abra uma vez, trabalhe com `eval`/`shot`.
 - CDP cru, se precisar de mais (teclado, rede, emulação): http://127.0.0.1:9223 — cada navegador é
   um target; o sidecar da sua sessão está em `~/.hangar/nav/`.

@@ -115,7 +115,7 @@ export default defineConfig({
     // Leave the Login "URL do servidor" empty in dev so requests stay relative.
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8765',
+        target: process.env.HANGAR_BACKEND || 'http://127.0.0.1:8765',
         changeOrigin: true,
         // `ws: true` NAO e detalhe: sem ele o proxy repassa HTTP e SSE e ENGOLE o upgrade de
         // WebSocket — o painel do terminal (unico WS do navegador) abre vazio, com o cursor
@@ -146,7 +146,7 @@ export default defineConfig({
       // `ws: true` pelo mesmo motivo do server acima: o terminal e WebSocket, e o preview e o que
       // serve o BUILD atras do tailscale serve — sem isto, terminal em branco pra todo mundo que
       // nao esta em localhost:8765.
-      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true, ws: true },
+      '/api': { target: process.env.HANGAR_BACKEND || 'http://127.0.0.1:8765', changeOrigin: true, ws: true },
     },
     // .omniwise.com.br: a VPS (srv1633222) serve o BUILD via preview atrás do traefik do Coolify
     // (Host pocket.omniwise.com.br chega intacto no vite; sem isto o preview responde 403).
