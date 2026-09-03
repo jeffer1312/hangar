@@ -734,9 +734,13 @@ def test_sem_commit_na_sessao_mantem_a_contagem(tmp_path, monkeypatch):
 def test_falha_de_hook_e_grep_vazio_nao_sao_falhas_da_sessao(hangar2):
     jsonl, cwd = hangar2
     bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "Arquivos e comandos")
-    for ruido in ("Fact-Forcing Gate", "lembrete automático", "89 matches"):
+    for ruido in ("Fact-Forcing Gate", "lembrete automático"):
         assert ruido not in bloco
-    assert "FALHARAM" not in bloco            # no recorte, TODAS as falhas eram ruído
+    # O "89 matches" do recorte vem de um `grep … | head -80; echo ====; grep … | head -30`: o
+    # ÚLTIMO comando da cadeia é `head`, não grep — a origem do "Exit code 1" é ambígua (regra
+    # corrigida: só filtra quando o grep/rg é o último da cadeia), então ele fica como falha real.
+    assert "89 matches" in bloco
+    assert "FALHARAM" in bloco
 
 
 def test_grep_vazio_em_comando_composto():
@@ -746,6 +750,20 @@ def test_grep_vazio_em_comando_composto():
     assert bastao._grep_vazio("rg -n foo src/", "Exit code 1")
     assert not bastao._grep_vazio("grep -c foo bar", "Exit code 2\ngrep: bar: No such file or directory")
     assert not bastao._grep_vazio("uv run pytest -q", "Exit code 1\n1 failed")
+    # `&&`/`||` deixam ambíguo de quem é o exit code — não esconde uma falha real do pytest.
+    assert not bastao._grep_vazio("uv run pytest -q && grep -c PASS output.log", "Exit code 1\n1 failed")
+    assert not bastao._grep_vazio("grep -c foo bar; uv run pytest -q", "Exit code 1\n1 failed")  # grep não é o último
+    assert bastao._grep_vazio("git status --short | grep -c '^ M'", "Exit code 1")
+
+
+def test_erro_de_sistema_entre_colchetes_nao_e_ruido_de_hook():
+    # Nome de hook não tem dígito; `[Errno N]`/`[WinError N]` são falha de verdade do SO.
+    for erro in ("[Errno 2] No such file or directory", "[Errno 13] Permission denied",
+                 "[WinError 5] Access is denied"):
+        assert not bastao._e_ruido_de_hook(erro)
+    assert bastao._e_ruido_de_hook("[Fact-Forcing Gate] bloqueado")
+    assert bastao._e_ruido_de_hook("[pass-adversarial] …")
+    assert bastao._e_ruido_de_hook("algo com lembrete automático no meio")
 
 
 def test_comando_repetido_em_seguida_colapsa(hangar2):

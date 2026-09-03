@@ -416,7 +416,9 @@ def _sem_repetidas(linhas: list[str]) -> list[str]:
 # Resultado de hook do harness ("[Fact-Forcing Gate] …", "[pass-adversarial] …", o lembrete de
 # escrita via Bash) chega como is_error, mas não é falha da sessão: é o próprio agente sendo
 # freado. Listar isso como "ferramenta que FALHOU" manda a sucessora investigar o que não existe.
-_HOOK_RE = re.compile(r"^\s*\[[^\]\n]{2,40}\]")
+# Sem dígito na classe: nome de hook não tem número, e "[Errno 2] No such file..."/"[WinError 5] …"
+# são falha de verdade que não pode sumir por causa dos colchetes.
+_HOOK_RE = re.compile(r"^\s*\[[^\]\n\d]{2,40}\]")
 _LEMBRETE = "lembrete automático"
 
 
@@ -429,8 +431,10 @@ _SEP_CMD = re.compile(r"\s*(?:;|&&|\|\||\|)\s*")
 
 
 def _grep_vazio(cmd: str, result: str | None) -> bool:
-    """grep/rg com exit 1 é "não achou", não erro. Comando composto (`git status; grep -c …`)
-    conta se QUALQUER segmento é grep/rg — o exit 1 é do último deles."""
+    """grep/rg com exit 1 é "não achou", não erro — mas só quando o `grep`/`rg` é o ÚLTIMO comando
+    da cadeia e não há `&&`/`||`: com `;`/`|` o exit code é do último comando (sem ambiguidade);
+    com `&&`/`||` ele pode vir de outro comando ANTES do grep, e esconder isso custa mais que uma
+    linha de ruído (`uv run pytest -q && grep -c PASS out.log` falhando no pytest não pode sumir)."""
     r = (result or "").lstrip()
     if not r.startswith("Exit code 1"):
         return False
@@ -440,8 +444,12 @@ def _grep_vazio(cmd: str, result: str | None) -> bool:
     cabeca = "\n".join(r.split("\n", 2)[:2])
     if "No such" in cabeca or "error" in cabeca.lower():
         return False
+    if "&&" in cmd or "||" in cmd:
+        return False
     segmentos = [s for s in _SEP_CMD.split(cmd) if s.strip()]
-    return any((s.strip().split() or [""])[0].split("/")[-1] in ("grep", "rg") for s in segmentos)
+    if not segmentos:
+        return False
+    return (segmentos[-1].strip().split() or [""])[0].split("/")[-1] in ("grep", "rg")
 
 
 def _arquivos_tocados(eventos: list) -> list[str]:
