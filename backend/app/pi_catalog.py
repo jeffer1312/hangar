@@ -63,7 +63,11 @@ def _binario(provider: str = "pi") -> str:
     nome = _BIN[provider]
     exe = shutil.which(nome)
     if exe is None:
-        raise PiAusente(f"nao achei o executavel `{nome}` no PATH deste servidor")
+        # A dica é POR PROVIDER: o Pi vem do npm, o omp é binário nativo — mandar `npm i -g` numa
+        # máquina sem omp manda a pessoa instalar o agente errado.
+        raise PiAusente(f"nao achei o executavel `{nome}` no PATH deste servidor — " + (
+            "instale o oh-my-pi ou ajuste o PATH do backend" if provider == "omp"
+            else "instale o Pi (npm i -g @earendil-works/pi-coding-agent) ou ajuste o PATH do backend"))
     return exe
 
 

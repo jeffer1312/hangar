@@ -5406,7 +5406,10 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "", c
             # `[WinError 2] O sistema nao pode encontrar o arquivo especificado` dentro da mensagem
             # de falha do comando — a pessoa ia procurar defeito no `pi --list-models` de um pi que
             # nem estava instalado ali.
-            raise HTTPException(502, detail=erro("erro_pi_ausente", str(e), erro=str(e)))
+            # Codigo proprio por provider, mesmo motivo do erro_omp_list_models: o front traduz por
+            # `code`, entao um codigo so mandaria a sessao omp instalar o Pi.
+            codigo = "erro_omp_ausente" if provider == "omp" else "erro_pi_ausente"
+            raise HTTPException(502, detail=erro(codigo, str(e), erro=str(e)))
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             # Codigo proprio por provider: o front traduz por `code` (a `msg` do backend so aparece
             # pra codigo DESCONHECIDO), entao um so codigo pros dois faria a falha do omp renderizar

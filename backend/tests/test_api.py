@@ -2303,6 +2303,18 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
     assert "trabalhando" in r.json()["detail"]
 
 
+@pytest.mark.parametrize("provider,codigo", [("omp", "erro_omp_ausente"), ("pi", "erro_pi_ausente")])
+def test_model_options_binario_ausente_tem_codigo_por_provider(api_client_limpo, monkeypatch,
+                                                               provider, codigo):
+    # O front traduz por `code`: um codigo so pros dois mandava a sessao omp instalar o Pi.
+    from app import pi_catalog
+    pi_catalog._cache.clear()
+    monkeypatch.setattr(pi_catalog.shutil, "which", lambda _b: None)
+    r = api_client_limpo.get(f"/api/model-options?provider={provider}", headers=_h())
+    assert r.status_code == 502
+    assert r.json()["detail"]["code"] == codigo
+
+
 def test_engine_model_set_restaura_o_default_global(api_client_limpo):
     # O ponto da rota: `/model <id>` grava o id como default GLOBAL. O valor anterior volta pro
     # settings.json depois — a troca vale na sessao e em lugar nenhum mais.
