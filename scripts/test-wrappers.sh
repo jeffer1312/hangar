@@ -41,6 +41,36 @@ cat >"$TMP/bin/pi" <<'FAKE'
 FAKE
 chmod +x "$TMP/bin/pi"
 
+# Fake "omp": alem do ARGV + CP_PI_SESSION do fake pi, imprime o argumento de --session CRU, numa
+# linha propria. O `%q` do ARGV escapa espaco e acento (sob `env -i` o locale e C), e o caminho da
+# sessao carrega os dois de proposito — comparar por ele daria falso negativo.
+cat >"$TMP/bin/omp" <<'FAKE'
+#!/usr/bin/env bash
+{
+    printf 'ARGV:'; printf ' %q' "$@"; printf '\n'
+    printf 'ENV_CP_PI_SESSION=%s\n' "${CP_PI_SESSION:-}"
+    while [ $# -gt 0 ]; do
+        [ "$1" = "--session" ] && printf 'SESSION=%s\n' "${2:-}"
+        shift
+    done
+} > "$CP_TEST_OUT"
+FAKE
+chmod +x "$TMP/bin/omp"
+
+# cwd com espaco E acento: e exatamente o caso que ja quebrou o slug do lado python (ver o
+# docstring de app/adapters/pi/sessions.py). PI_CODING_AGENT_DIR isolado — nunca o ~/.omp real.
+OMP_CWD="$TMP/pasta com acento Área"
+OMP_DIR="$TMP/omp-agent"
+mkdir -p "$OMP_CWD" "$OMP_DIR"
+# Slug esperado vem do BACKEND, nao de uma copia da regra aqui: o wrapper so serve se os dois
+# montarem o MESMO diretorio (o backend acha o transcript por glob dentro dele).
+if ! OMP_SLUG=$(cd "$REPO/backend" && uv run --quiet python -c \
+        'import sys; from app.adapters.pi import sessions as s; print(s.cwd_slug(sys.argv[1]))' \
+        "$OMP_CWD" 2>/dev/null); then
+    OMP_SLUG=""
+    echo "aviso: uv/python indisponível — o slug do omp não será comparado com o do backend"
+fi
+
 # Motor de teste isolado — NUNCA o ~/.claude/engines.json real.
 CP_ENGINES_FILE="$TMP/engines.json"
 cat >"$CP_ENGINES_FILE" <<'JSON'
@@ -83,6 +113,48 @@ check_pi_injected() {
         sed 's/^/    /' "$out"
         fail=1
     fi
+}
+
+# $1=descrição  $2=arquivo de saída — o omp NÃO tem --session-id: quem escolhe a sessão é o CAMINHO
+# passado em --session, e ele precisa ser o mesmo que o backend montaria (transcript_alvo), senão o
+# glob `*_<uuid>.jsonl` do registry procura numa pasta e o transcript nasce noutra.
+check_omp_injected() {
+    local desc="$1" out="$2" sid caminho esperado_dir arquivo
+    if ! [ -f "$out" ]; then
+        echo "FAIL: $desc — sem arquivo de saída"
+        fail=1
+        return
+    fi
+    if grep -q -- '--session-id' "$out"; then
+        echo "FAIL: $desc — o omp não tem --session-id e ele apareceu no ARGV"
+        sed 's/^/    /' "$out"
+        fail=1
+        return
+    fi
+    sid=$(sed -n 's/^ENV_CP_PI_SESSION=//p' "$out")
+    caminho=$(sed -n 's/^SESSION=//p' "$out")
+    if [ -z "$sid" ] || [ -z "$caminho" ]; then
+        echo "FAIL: $desc — esperava --session e CP_PI_SESSION (sid='$sid', session='$caminho')"
+        sed 's/^/    /' "$out"
+        fail=1
+        return
+    fi
+    # <raiz>/<slug>/<ts>_<uuid>.jsonl — o uuid do NOME é o mesmo exportado em CP_PI_SESSION, que é
+    # como o backend liga o processo ao arquivo enquanto o bilhete da extensão não existe.
+    esperado_dir="$OMP_DIR/sessions${OMP_SLUG:+/$OMP_SLUG}"
+    arquivo=$(basename "$caminho")
+    if [ -n "$OMP_SLUG" ] && [ "$(dirname "$caminho")" != "$esperado_dir" ]; then
+        echo "FAIL: $desc — diretório da sessão '$(dirname "$caminho")' != '$esperado_dir'"
+        fail=1
+    fi
+    if ! printf '%s' "$arquivo" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{3}Z_.+\.jsonl$'; then
+        echo "FAIL: $desc — nome '$arquivo' fora do formato <ts>_<uuid>.jsonl"
+        fail=1
+    fi
+    case "$arquivo" in
+        *_"$sid".jsonl) ;;
+        *) echo "FAIL: $desc — o uuid do arquivo ('$arquivo') não é o CP_PI_SESSION ('$sid')"; fail=1 ;;
+    esac
 }
 
 # A secret só pode existir no ENV (é assim que o motor funciona); no ARGV é o vazamento que a task
@@ -145,6 +217,31 @@ fish_case_pi() {
             source "'"$REPO"'/scripts/shell/pi.fish"
             pi $argv
         ' -- "$@" </dev/null || true
+    printf '%s' "$out"
+}
+
+# Gêmeos dos de cima pro omp. Rodam num cwd com espaço e acento e com PI_CODING_AGENT_DIR próprio:
+# os dois entram no caminho que o wrapper monta pro --session.
+posix_case_omp() {
+    local sh="$1" out="$TMP/out.$RANDOM.$RANDOM"
+    shift
+    (cd "$OMP_CWD" && env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        PI_CODING_AGENT_DIR="$OMP_DIR" \
+        "$sh" -c '
+            source "'"$REPO"'/scripts/shell/omp.posix.sh"
+            omp "$@"
+        ' _ "$@" </dev/null) || true
+    printf '%s' "$out"
+}
+
+fish_case_omp() {
+    local out="$TMP/out.$RANDOM.$RANDOM"
+    (cd "$OMP_CWD" && env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        PI_CODING_AGENT_DIR="$OMP_DIR" \
+        fish --no-config -c '
+            source "'"$REPO"'/scripts/shell/omp.fish"
+            omp $argv
+        ' -- "$@" </dev/null) || true
     printf '%s' "$out"
 }
 
@@ -227,6 +324,44 @@ for SH in bash zsh; do
             command pi --raw
         ' </dev/null || true
     check "$SH command pi (bypass, sem injeção)" "$out" 'ARGV: --raw' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_omp "$SH")
+    check_omp_injected "$SH omp bare (injeta --session + CP_PI_SESSION)" "$out"
+
+    # Flags que gerenciam a própria sessão: passam CRUAS. Sobrepor --session a um `omp -c` abriria
+    # sessão fresca em vez de continuar — o mesmo caso do pi, com outra flag.
+    for flag in "--session foo" "--session-dir /tmp/x" "--resume abc" "-r" "-c" "--continue" "--no-session"; do
+        # shellcheck disable=SC2086
+        out=$(posix_case_omp "$SH" $flag)
+        check "$SH omp $flag (passthrough, sem injeção)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
+    done
+
+    # Subcomando (primeiro argumento) e uso não interativo chegam crus: `omp models` lista modelos,
+    # não abre TUI nenhuma. Precedente: o `pi remove npm:foo` que abria a TUI e não removia nada.
+    for sub in models install update agents commit git; do
+        out=$(posix_case_omp "$SH" "$sub" x)
+        check "$SH omp $sub (subcomando cru)" "$out" "ARGV: $sub x" 'ENV_CP_PI_SESSION='
+    done
+
+    for flag in -p --print --help -h --version -v; do
+        out=$(posix_case_omp "$SH" "$flag")
+        check "$SH omp $flag (não interativo, cru)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
+    done
+
+    out=$(posix_case_omp "$SH" --export out.html)
+    check "$SH omp --export (cru)" "$out" 'ARGV: --export out.html' 'ENV_CP_PI_SESSION='
+
+    # Subcomando SÓ como primeiro argumento: uma mensagem que começa com "models" continua prompt.
+    out=$(posix_case_omp "$SH" 'models are slow today')
+    check_omp_injected "$SH omp \"models are slow today\" (prompt, não subcomando)" "$out"
+
+    out="$TMP/out.$RANDOM.$RANDOM"
+    env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        "$SH" -c '
+            source "'"$REPO"'/scripts/shell/omp.posix.sh"
+            command omp --raw
+        ' </dev/null || true
+    check "$SH command omp (bypass, sem injeção)" "$out" 'ARGV: --raw' 'ENV_CP_PI_SESSION='
 done
 
 if command -v fish >/dev/null 2>&1; then
@@ -321,6 +456,40 @@ if command -v fish >/dev/null 2>&1; then
             command pi --raw
         ' </dev/null || true
     check "fish command pi (bypass, sem injeção)" "$out" 'ARGV: --raw' 'ENV_CP_PI_SESSION='
+
+    # Mesmos casos do bloco posix — os dois shells têm que tomar SEMPRE o mesmo ramo.
+    out=$(fish_case_omp)
+    check_omp_injected "fish omp bare (injeta --session + CP_PI_SESSION)" "$out"
+
+    for flag in "--session foo" "--session-dir /tmp/x" "--resume abc" "-r" "-c" "--continue" "--no-session"; do
+        # shellcheck disable=SC2086
+        out=$(fish_case_omp $flag)
+        check "fish omp $flag (passthrough, sem injeção)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
+    done
+
+    for sub in models install update agents commit git; do
+        out=$(fish_case_omp "$sub" x)
+        check "fish omp $sub (subcomando cru)" "$out" "ARGV: $sub x" 'ENV_CP_PI_SESSION='
+    done
+
+    for flag in -p --print --help -h --version -v; do
+        out=$(fish_case_omp "$flag")
+        check "fish omp $flag (não interativo, cru)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
+    done
+
+    out=$(fish_case_omp --export out.html)
+    check "fish omp --export (cru)" "$out" 'ARGV: --export out.html' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_omp 'models are slow today')
+    check_omp_injected "fish omp \"models are slow today\" (prompt, não subcomando)" "$out"
+
+    out="$TMP/out.$RANDOM.$RANDOM"
+    env -i PATH="$PATH_WITH_FAKES" HOME="$HOME" CP_TEST_OUT="$out" \
+        fish --no-config -c '
+            source "'"$REPO"'/scripts/shell/omp.fish"
+            command omp --raw
+        ' </dev/null || true
+    check "fish command omp (bypass, sem injeção)" "$out" 'ARGV: --raw' 'ENV_CP_PI_SESSION='
 else
     echo "== fish: não encontrado no PATH, pulando =="
 fi
@@ -334,7 +503,7 @@ echo "== carimbo de identidade (CP_SESSION_NAME) =="
 # wrappers criam sessao POR CONTA, entao precisam carimbar tambem.
 # ponytail: contagem por arquivo, nao casamento linha-a-linha; upgrade = pty + fake tmux se algum
 # dia um wrapper passar a montar o comando em pedacos e a contagem deixar de bater.
-for w in claude.posix.sh claude.fish claude.ps1 pi.posix.sh pi.fish; do
+for w in claude.posix.sh claude.fish claude.ps1 pi.posix.sh pi.fish omp.posix.sh omp.fish; do
     f="$REPO/scripts/shell/$w"
     # `^[^#]*` descarta MENÇÃO em comentário: os wrappers do pi citam "tmux new-session" no cabeçalho
     # pra explicar por que o export vai dentro do `sh -c`, e contar isso dava falso positivo.

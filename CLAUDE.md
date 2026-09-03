@@ -70,7 +70,8 @@ bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts
 ## Dev commands
 
 Requirements: `tmux`, `claude` (Claude Code), a current `codex` CLI with `--remote`,
-Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+.
+Python 3.14 + [`uv`](https://docs.astral.sh/uv/), Node 20+. Optional, one per provider you use:
+`pi`, `omp` (oh-my-pi), `kimi`.
 Frontend uses **npm** (has `package-lock.json`).
 
 ```bash
@@ -407,6 +408,40 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   re-reads the sidecar and returns what *stuck*, not what was asked (asking `max` on glm-5.2 lands on
   `xhigh`). Missing sidecar → 409 telling the user to re-run `install-claude-wrapper.sh`, never an
   empty list that reads as "no models".
+- **`omp` (oh-my-pi) é um FORK do Pi, e é por isso que ele engana** (`adapters/omp/` — `OmpAdapter`
+  é subclasse do `PiAdapter`; wrappers `scripts/shell/omp.*`). Mesmo JSONL, mesma API de extensão,
+  as MESMAS `scripts/pi/*.ts` — o que muda é pequeno e cada item já custou um bug calado. Medido em
+  02-03/09/2026, omp 18.1.4 (embute `pi-coding-agent` 0.84.4):
+  - **Binário ELF nativo com argv0 `omp`**, não um fork do processo `pi`. Sem a entrada própria em
+    `_EXEC_PROVIDER` o pane cai no default `claude` e é casado com o transcript do **Claude** do
+    mesmo cwd — a regressão que o Pi já pagou.
+  - **Raiz `~/.omp/agent`**, pela env `PI_CODING_AGENT_DIR` — que é variável do `pi-coding-agent` e
+    move os DOIS agentes, então ela nunca é lida como "a pasta do omp" sem se lembrar disso (o Pi
+    usa `PI_CODING_AGENT_SESSION_DIR` + `~/.pi/agent`). As extensões vão em
+    `~/.omp/agent/extensions/`, que não existe até alguém criar.
+  - **Não existe `--session-id`** (`Error: unknown flag`) — o id é do omp (uuidv7). Quem escolhe a
+    sessão é o CAMINHO: `--session <arquivo>` (não documentado) cria o transcript exatamente ali.
+    Por isso app e wrapper montam `<raiz>/<slug do cwd>/<ts>_<uuid>.jsonl` e exportam
+    `CP_PI_SESSION=<uuid>` junto: com o bilhete da extensão como ÚNICO vínculo, um bilhete recusado
+    deixa a sessão sem transcript até o próximo `agent_start` — que só chega se alguém conseguir
+    mandar prompt, o que o app não consegue numa sessão untracked. Resume é `-r <caminho>` (o id
+    interno do omp não é o do nome do arquivo).
+  - **Eventos com outro nome:** `agent_end` e `model_changed`, não `agent_settled` nem
+    `model_select`. Sem tratá-los, o estado ficava preso em `working` e a troca de modelo pelo app
+    dava falso "o Pi recusou a troca" (o `setModel` aplicava; o sidecar do catálogo é que não era
+    republicado).
+  - **Subagente roda no MESMO processo**, sem `PI_SUBAGENT_DEPTH`, emite `session_start` com o ctx
+    dele e grava em `<stem>/<NomeDoAgente>.jsonl` (o Pi: `<stem>/<taskId>/run-N/session.jsonl`).
+    Sem o portão, a extensão do subagente reescrevia o bilhete do pane e o histórico da sessão
+    virava a conversa do subagente.
+  - **`/reload` NÃO recarrega extensão editada nem descobre arquivo novo** (medido 2×): editou a
+    extensão, reabra a sessão. Mesmo aviso do Pi, só que ali o `/reload` resolve.
+  - **A ferramenta de perguntar chama `ask`** (no Pi é `question`), com shape multi-pergunta e um
+    cartão de resumo acima do picker, mais as linhas de descrição de cada opção — quem conta linha
+    de tela pra escolher opção precisa contar essas também.
+  - **Catálogo de modelos é `omp models --json`** — não há `--list-models`.
+  - **Sem chip de cota:** `~/.omp/agent` não tem `auth.json` nem `models.json` (é SQLite:
+    `agent.db`, `models.db`), e `cotas._chaves_do_pi` lê exatamente esses dois arquivos, do `~/.pi`.
 - **Before typing into the Pi's composer, ASK — the screen cannot tell a notice from a draft**
   (`terminal_input._composer_ocupado_pi` + `pi_inbox.perguntar` + `responderPergunta` in
   `scripts/pi/hangar-state.ts`). Pi prints extension notices (`console.error`) **inside the composer

@@ -99,12 +99,13 @@ source \"$SHELL_DIR/claude-conta.posix.sh\"
 source \"$SHELL_DIR/codex.posix.sh\"
 source \"$SHELL_DIR/claude-engine.posix.sh\"
 source \"$SHELL_DIR/pi.posix.sh\"
+source \"$SHELL_DIR/omp.posix.sh\"
 source \"$SHELL_DIR/kimi.posix.sh\""
 }
 
 install_fish() {
   local name dst src
-  for name in claude codex claude-engine claude-conta pi kimi; do
+  for name in claude codex claude-engine claude-conta pi omp kimi; do
     src="$SHELL_DIR/$name.fish"
     dst="$HOME/.config/fish/functions/$name.fish"
     mkdir -p "$(dirname "$dst")"
@@ -227,32 +228,36 @@ TMUXCONF
   tmux source-file "$HOME/.tmux.conf" 2>/dev/null && echo "  reloaded ~/.tmux.conf" || true
 fi
 
-# --- extensoes do Pi ----------------------------------------------------------------------------
-# hangar-state.ts: sem ela a sessao Pi aparece no app sempre "ociosa" (o estado vem do marcador, nao do
+# --- extensoes do Pi e do omp -------------------------------------------------------------------
+# hangar-state.ts: sem ela a sessao aparece no app sempre "ociosa" (o estado vem do marcador, nao do
 # pane). rich-status-line.ts: desenha o rodape E publica a linha INTEIRA no sidecar que o app le —
 # o que sai no terminal ja vem cortado na largura da janela (ver "Statusline por sidecar" no
-# CLAUDE.md), entao sem ela a sessao Pi em janela estreita fica sem contexto/cota no app.
-PI_EXT_DIR="$HOME/.pi/agent/extensions"
-if command -v pi >/dev/null 2>&1; then
-  mkdir -p "$PI_EXT_DIR"
-  # Link do nome ANTIGO (pre-rename): o alvo nao existe mais, entao ele fica pendurado e o Pi sobe
-  # sem a extensao — sessao "sem id", sem estado e sem previa, sem erro nenhum na tela. So symlink
-  # e removido; arquivo de verdade com esse nome e do usuario.
-  [ -L "$PI_EXT_DIR/cp-state.ts" ] && rm -f "$PI_EXT_DIR/cp-state.ts" && echo "  removido link antigo cp-state.ts"
-  ln -sfn "$SCRIPT_DIR/pi/hangar-state.ts" "$PI_EXT_DIR/hangar-state.ts"
-  echo "  linked hangar-state.ts into $PI_EXT_DIR"
+# CLAUDE.md), entao sem ela a sessao em janela estreita fica sem contexto/cota no app.
+# As MESMAS extensoes servem os dois: o omp e um fork do Pi, com a mesma API de extensao.
+link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "  $1 nao encontrado — pulando a extensao de estado (instale o $1 e rode de novo)"
+    return 0
+  fi
+  mkdir -p "$2"
+  # Link do nome ANTIGO (pre-rename): o alvo nao existe mais, entao ele fica pendurado e o agente
+  # sobe sem a extensao — sessao "sem id", sem estado e sem previa, sem erro nenhum na tela. So
+  # symlink e removido; arquivo de verdade com esse nome e do usuario.
+  [ -L "$2/cp-state.ts" ] && rm -f "$2/cp-state.ts" && echo "  removido link antigo cp-state.ts"
+  ln -sfn "$SCRIPT_DIR/pi/hangar-state.ts" "$2/hangar-state.ts"
+  echo "  linked hangar-state.ts into $2"
   # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
   # sobrescrever apagaria o trabalho dele. Avisa e deixa a decisao com quem sabe o que tem la.
-  if [ -e "$PI_EXT_DIR/rich-status-line.ts" ] && [ ! -L "$PI_EXT_DIR/rich-status-line.ts" ]; then
-    echo "  ⚠ $PI_EXT_DIR/rich-status-line.ts ja existe e nao e symlink — mantido como esta."
+  if [ -e "$2/rich-status-line.ts" ] && [ ! -L "$2/rich-status-line.ts" ]; then
+    echo "  ⚠ $2/rich-status-line.ts ja existe e nao e symlink — mantido como esta."
     echo "    (pra usar a do repo: mova a sua e rode de novo)"
   else
-    ln -sfn "$SCRIPT_DIR/pi/rich-status-line.ts" "$PI_EXT_DIR/rich-status-line.ts"
-    echo "  linked rich-status-line.ts into $PI_EXT_DIR"
+    ln -sfn "$SCRIPT_DIR/pi/rich-status-line.ts" "$2/rich-status-line.ts"
+    echo "  linked rich-status-line.ts into $2"
   fi
-else
-  echo "  pi nao encontrado — pulando a extensao de estado (instale o pi e rode de novo)"
-fi
+}
+link_agent_extensions pi  "$HOME/.pi/agent/extensions"
+link_agent_extensions omp "${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/extensions"
 
 # Statusline: ask if undecided and interactive; default yes otherwise.
 if [ -z "$DO_STATUS" ]; then

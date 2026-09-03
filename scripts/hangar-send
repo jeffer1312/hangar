@@ -20,7 +20,7 @@
 #                                  exato. --tmux força o caminho antigo.
 #   hangar-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
 #                                  truecolor, visível no app). cwd default = home.
-#                                  --provider <claude|codex|pi|kimi> escolhe o AGENTE da sessão
+#                                  --provider <claude|codex|pi|omp|kimi> escolhe o AGENTE da sessão
 #                                  nova (default claude). Ex: --provider kimi abre o Kimi Code.
 #                                  --engine <motor> nasce num motor de ~/.claude/engines.json
 #                                  (outro modelo, conta do provedor — ver "Par noutro modelo").
@@ -219,7 +219,7 @@ fi
 
 if [[ "$1" == "--new" ]]; then
     shift
-    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
+    name="${1:?uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]}"
     shift
     if [[ "$name" == *::* ]]; then
         echo "erro: '::' é reservado pro endereço servidor::sessao — escolha outro nome" >&2
@@ -230,7 +230,7 @@ if [[ "$1" == "--new" ]]; then
     # DESCARTADO calado — na conta Anthropic, parecendo que atendeu o pedido.
     if [[ "$name" == -* ]]; then
         echo "erro: nome de sessão não pode começar com '-' (esqueceu o nome?)" >&2
-        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
+        echo "uso: hangar-send --new <nome> [cwd] [--engine <motor>] [--provider <claude|codex|pi|omp|kimi>] [--model <id>] [--effort <nivel>] [--permissao <modo>]" >&2
         exit 2
     fi
     # --engine: a sessão nova nasce num MOTOR de modelo (~/.claude/engines.json) em vez da conta
@@ -259,7 +259,7 @@ if [[ "$1" == "--new" ]]; then
                 conta="${2:?uso: --conta <nome>}"; shift 2 ;;
             --provider)
                 [[ -n "$provider" ]] && { echo "erro: --provider informado duas vezes" >&2; exit 2; }
-                provider="${2:?uso: --provider <claude|codex|pi|kimi>}"; shift 2 ;;
+                provider="${2:?uso: --provider <claude|codex|pi|omp|kimi>}"; shift 2 ;;
             --model)
                 [[ -n "$model" ]] && { echo "erro: --model informado duas vezes" >&2; exit 2; }
                 model="${2:?uso: --model <id>}"; shift 2 ;;
