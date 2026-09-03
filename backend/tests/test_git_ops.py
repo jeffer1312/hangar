@@ -939,6 +939,12 @@ def test_git_log_since_fora_de_repo_devolve_vazio(tmp_path):
     assert git_ops.git_log_since(str(tmp_path), 0.0) == []
 
 
+def test_ambiente_de_teste_nao_herda_git_dir():
+    # Backstop do fixture de sessão em conftest.py: se ele não rodou (ou GIT_* voltou depois),
+    # `_repo` escreveria no `.git` real do processo, não no tmp_path isolado.
+    assert not [k for k in os.environ if k.startswith("GIT_")]
+
+
 def test_git_log_since_engole_giterror(tmp_path, monkeypatch):
     def explode(cwd, *a, **k):
         raise git_ops.GitError(504, "git timeout")

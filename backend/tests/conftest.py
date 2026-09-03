@@ -53,6 +53,17 @@ if os.name == "nt":
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _sem_git_dir_no_ambiente_de_teste():
+    # git_ops._run passa os.environ inteiro pro subprocess: dentro de um hook (pre-push, p.ex.) o
+    # processo herda GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE do git que roda o hook, e qualquer teste
+    # que faz `git init`/`commit` num tmp_path (test_git_ops._repo) escreve no `.git` REAL por trás
+    # do cwd em vez do repo isolado — foi o que corrompeu o `.git` desta sessão. Session-scoped
+    # porque a suíte inteira roda no mesmo processo; monkeypatch é function-scoped e não cobre isto.
+    for k in [k for k in os.environ if k.startswith("GIT_")]:
+        os.environ.pop(k, None)
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _sem_servidor_de_teste_vazado():
     """No fim da suite, nenhum socket de teste pode ter processo vivo.
 

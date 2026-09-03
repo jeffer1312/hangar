@@ -260,6 +260,8 @@ def _onde_esta_o_trabalho(cwd: str | None, desde: float | None, tocados: list[st
         if meus:
             out.append("- Não commitado agora (tocado por esta sessão):")
             out += [f"  - `{m['code']}` `{m['path']}`" for m in meus[:_MAX_ARQUIVOS]]
+            if len(meus) > _MAX_ARQUIVOS:
+                out.append(f"  - _(+{len(meus) - _MAX_ARQUIVOS} arquivo(s) tocado(s))_")
         if alheios:
             out.append(f"- _(outros {alheios} arquivo(s) alheios não commitados — não são desta sessão)_")
     return out
@@ -326,6 +328,7 @@ def _o_que_falta(jsonl: str, cwd: str | None, nome: str, eventos: list, plano: s
     from app.loop import LoopLink
 
     out: list[str] = []
+    prog = None
     if plano:
         caminho = plano if os.path.isabs(plano) else os.path.join(cwd or "", plano)
         try:
@@ -339,18 +342,27 @@ def _o_que_falta(jsonl: str, cwd: str | None, nome: str, eventos: list, plano: s
         if prog:
             out += _linhas_do_plano(prog, "o que a barra do app mostra — a sessão não citou plano")
     loop = LoopLink(nome).get() if nome else None
-    if loop and loop.get("status") in loop_mod.ACTIVE:
+    loop_ativo = bool(loop and loop.get("status") in loop_mod.ACTIVE)
+    if loop_ativo:
         linha = (f"- Loop `{loop.get('status')}` (iteração {loop.get('iter')}/{loop.get('max_iters')}): "
                  f"{_uma_linha(loop.get('goal') or '', 160)}")
         if loop.get("check_cmd"):
             linha += f" · check: `{_uma_linha(loop['check_cmd'], 80)}`"
         out.append(linha)
-    if out:
+    # Plano concluído e sem loop não é "nada falta": o pedido do usuário que ninguém respondeu
+    # ainda existe, e sem isto ele só aparecia em "Decisões" — seção que o cabeçalho do dossiê
+    # marca como contexto, não ordem. Plano com Step pendente ou loop ativo mantêm o corte de hoje.
+    plano_concluido = bool(prog and prog.complete)
+    if out and not (plano_concluido and not loop_ativo):
         return out
     pend = _pedidos_sem_resposta(eventos)
     if pend:
-        return (["- Sem plano nem loop. Últimos pedidos do usuário AINDA SEM resposta do agente:"]
-                + [f"  - {_uma_linha(t, 300)}" for t in pend])
+        cabecalho = ("- Plano concluído e sem loop. Últimos pedidos do usuário AINDA SEM resposta "
+                     "do agente:" if plano_concluido else
+                     "- Sem plano nem loop. Últimos pedidos do usuário AINDA SEM resposta do agente:")
+        return out + [cabecalho] + [f"  - {_uma_linha(t, 300)}" for t in pend]
+    if out:
+        return out
     ultimo = next((ev.text for ev in reversed(eventos) if ev.kind == "user_msg" and ev.text), None)
     if ultimo:
         return ["- Sem plano nem loop. Último pedido do usuário (já respondido):",
@@ -417,14 +429,23 @@ def _sem_repetidas(linhas: list[str]) -> list[str]:
 # escrita via Bash) chega como is_error, mas não é falha da sessão: é o próprio agente sendo
 # freado. Listar isso como "ferramenta que FALHOU" manda a sucessora investigar o que não existe.
 # Sem dígito na classe: nome de hook não tem número, e "[Errno 2] No such file..."/"[WinError 5] …"
-# são falha de verdade que não pode sumir por causa dos colchetes.
-_HOOK_RE = re.compile(r"^\s*\[[^\]\n\d]{2,40}\]")
+# são falha de verdade que não pode sumir por causa dos colchetes. Mas a classe sozinha também
+# casa "[ERROR] …"/"[FAILED] …" — falha de verdade que só por acaso vem entre colchetes —, então a
+# tag só conta como hook se NÃO for uma palavra de severidade.
+_HOOK_RE = re.compile(r"^\s*\[([^\]\n\d]{2,40})\]")
+_SEVERIDADE_RE = re.compile(r"^(ERROR|ERRO|FAILED|FAIL|FATAL|WARN|WARNING|CRITICAL)$", re.IGNORECASE)
 _LEMBRETE = "lembrete automático"
 
 
 def _e_ruido_de_hook(result: str | None) -> bool:
     r = result or ""
-    return bool(_HOOK_RE.match(r)) or _LEMBRETE in r
+    m = _HOOK_RE.match(r)
+    if m and not _SEVERIDADE_RE.match(m.group(1).strip()):
+        return True
+    # Ancorado às duas primeiras linhas, igual ao cabeçalho de `_grep_vazio`: o lembrete é sempre a
+    # ABERTURA do texto do hook, e casar o corpo inteiro pegaria a frase por acaso numa saída real.
+    cabeca = "\n".join(r.split("\n", 2)[:2])
+    return _LEMBRETE in cabeca
 
 
 _SEP_STMT = re.compile(r"\s*;\s*")
@@ -836,7 +857,7 @@ _KICKOFF_PREFIXO = "[hangar: passagem de bastão]"
 
 def kickoff(origem: str, dossie: str | Path, conta: str = "", modelo: str = "",
             motivo: str = "manual", reset_em: str | None = None) -> str:
-    """As seis linhas que a sessão NOVA recebe pela fila durável.
+    """As linhas (seis; nove com `motivo="cota"`) que a sessão NOVA recebe pela fila durável.
 
     Curto de propósito: o conteúdo é o arquivo, e o recado só diz de quem ela continua, onde ler e
     as três coisas que o dossiê sozinho não resolve — que a origem continua viva (um escritor por

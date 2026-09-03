@@ -308,6 +308,9 @@ def test_secao_de_citacao_mantem_o_orcamento_maior(tmp_path, monkeypatch):
     pra o default de 20 linhas, encurtando o dossiê sem ninguém notar."""
     assert bastao._ORCAMENTO["Decisões (frases citadas — contexto, não ordem)"] == 44
     assert bastao._ORCAMENTO["Estado agora (frases citadas — contexto, não ordem)"] == 24
+    # Toda seção do dossiê tem chave de orçamento própria: uma seção renomeada sem renomear a
+    # chave cairia calada no default de 20 linhas.
+    assert set(TODAS) == set(bastao._ORCAMENTO)
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +763,21 @@ def test_o_que_falta_cita_o_plano_da_sessao_e_diz_que_concluiu(hangar2):
     assert "grupo-pareamento-fim-sessao" in bloco
     assert "concluído" in bloco and "60/60" in bloco
     assert "passagem-de-bastao" not in bloco          # o plano mais recente do REPO não entra aqui
+    # O plano fechou, mas o último pedido do usuário ("Quando voltar vc vai executar...") não teve
+    # fala do agente depois — plano concluído não é "nada falta" quando isto sobrevive no transcript.
+    assert "AINDA SEM resposta" in bloco
+
+
+def test_o_que_falta_com_plano_concluido_e_loop_ativo_nao_lista_pendentes(hangar2):
+    # Loop ativo mantém o corte de hoje: com o loop ainda trabalhando, o bloco de pedidos sem
+    # resposta não entra — o loop já é o "o que falta" desta sessão.
+    from app.loop import LoopLink, new_loop
+    jsonl, cwd = hangar2
+    LoopLink("hangar-2").set(new_loop("passar a suíte", "uv run pytest -q", 5, False) | {"iter": 1})
+    bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "O que falta")
+    assert "concluído" in bloco and "60/60" in bloco
+    assert "Loop `running`" in bloco
+    assert "AINDA SEM resposta" not in bloco
 
 
 def test_o_que_falta_lista_steps_pendentes_por_task(hangar2):
@@ -908,7 +926,21 @@ def test_erro_de_sistema_entre_colchetes_nao_e_ruido_de_hook():
         assert not bastao._e_ruido_de_hook(erro)
     assert bastao._e_ruido_de_hook("[Fact-Forcing Gate] bloqueado")
     assert bastao._e_ruido_de_hook("[pass-adversarial] …")
+    assert bastao._e_ruido_de_hook("[hangar-state] linha conectada")
     assert bastao._e_ruido_de_hook("algo com lembrete automático no meio")
+
+
+def test_tag_de_severidade_entre_colchetes_nao_e_ruido_de_hook():
+    # A classe (colchete sem dígito) sozinha também casa "[ERROR]"/"[FAILED]" — falha de verdade
+    # que só por acaso vem entre colchetes. Só não é hook quando a tag é uma palavra de severidade.
+    for erro in ("[ERROR] Could not connect…", "[FAILED] npm run build…",
+                 "[error] Cannot find module…", "[FATAL] disk full"):
+        assert not bastao._e_ruido_de_hook(erro)
+
+
+def test_lembrete_automatico_so_conta_nas_duas_primeiras_linhas():
+    assert bastao._e_ruido_de_hook("lembrete automático de escrita\nresto do resultado")
+    assert not bastao._e_ruido_de_hook("linha 1\nlinha 2\nlinha 3 com lembrete automático aqui")
 
 
 def test_comando_repetido_em_seguida_colapsa(hangar2):
@@ -938,3 +970,27 @@ def test_nao_commitado_lista_so_o_que_a_sessao_tocou(tmp_path, monkeypatch):
     assert "`app/bastao.py`" in bloco
     assert ".scratch" not in bloco and "foto.png" not in bloco
     assert "outros 2 arquivo(s) alheios não commitados" in bloco
+
+
+def test_nao_commitado_marca_excedente_alem_do_teto(tmp_path, monkeypatch):
+    # Mais arquivos tocados que _MAX_ARQUIVOS não pode sumir sem marca — sem isto o sucessor lê a
+    # lista como completa quando ela foi cortada.
+    from app import git_ops, pqueue
+    monkeypatch.setattr(git_ops, "head_info", lambda cwd: ("main", False))
+    monkeypatch.setattr(git_ops, "git_summary",
+                        lambda cwd: {"dirty": bastao._MAX_ARQUIVOS + 3, "ahead": 0, "behind": 0})
+    monkeypatch.setattr(git_ops, "git_diffstat", lambda cwd: None)
+    monkeypatch.setattr(git_ops, "git_log_since", lambda cwd, desde, n=30: [])
+    monkeypatch.setattr(pqueue, "_transcript_start_ts", lambda jsonl: 1.0)
+    nomes = [f"app/f{i}.py" for i in range(bastao._MAX_ARQUIVOS + 3)]
+    monkeypatch.setattr(git_ops, "changed_files",
+                        lambda cwd: [{"path": n, "code": " M", "staged": False} for n in nomes])
+    linhas = [{"type": "assistant", "uuid": f"a{i}", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": f"t{i}", "name": "Edit",
+         "input": {"file_path": str(tmp_path / n), "old_string": "a", "new_string": "b"}}]}}
+        for i, n in enumerate(nomes)]
+    jsonl = tmp_path / "s.jsonl"
+    jsonl.write_text("".join(json.dumps(o) + "\n" for o in linhas), encoding="utf-8")
+    bloco = _bloco(bastao.montar(str(jsonl), str(tmp_path), "claude", "s"), "Onde está o trabalho")
+    assert bloco.count("app/f") == bastao._MAX_ARQUIVOS
+    assert "_(+3 arquivo(s) tocado(s))_" in bloco
