@@ -1361,3 +1361,38 @@ def test_submeter_multipla_sem_aba_de_envio_nao_manda_enter(sem_espera, monkeypa
         with pytest.raises(terminal_input.DriveError):
             TerminalInput().submeter_multipla("cc")
     assert call("cc", "Enter") not in sk.call_args_list
+
+
+# ── Cursor do picker do omp (tool `ask`): opcoes SEM numero ─────────────────────────────────────
+# Glifos de nerd font medidos no omp 18.1.4, por codigo pro arquivo ficar legivel: chevron da linha
+# selecionada e circulo que marca toda opcao.
+_OMP_SEL = chr(0xF054)
+_OMP_OPT = chr(0xF10C)
+
+
+def _omp_picker(marcada: int) -> str:
+    linhas = []
+    for i, rotulo in enumerate(["Azul", "Verde", "Other (type your own)"], start=1):
+        linhas.append(f"│ {_OMP_SEL} {_OMP_OPT} {rotulo}" if i == marcada
+                      else f"│   {_OMP_OPT} {rotulo}")
+    return ("╭─ Ask " + "─" * 45 + "\n│ Qual cor você prefere?\n" + "├" + "─" * 51 + "\n"
+            + "\n".join(linhas) + "\n│ Enter select · n note · ↑/↓ move · Esc cancel\n")
+
+
+def test_omp_cursor_row_e_a_posicao_entre_as_linhas_de_opcao():
+    assert terminal_input._pi_cursor_row(_omp_picker(1), "omp") == 1
+    assert terminal_input._pi_cursor_row(_omp_picker(2), "omp") == 2
+    assert terminal_input._pi_cursor_row(_omp_picker(3), "omp") == 3
+
+
+def test_omp_cursor_row_sem_marcador_e_none():
+    sem_marca = _omp_picker(0)
+    assert _OMP_SEL not in sem_marca
+    assert terminal_input._pi_cursor_row(sem_marca, "omp") is None
+
+
+def test_cursor_row_nao_mistura_os_dois_pickers():
+    pi = "> 1. Azul\n  2. Verde\n  3. Type something.\n"
+    assert terminal_input._pi_cursor_row(pi, "omp") is None
+    assert terminal_input._pi_cursor_row(pi) == 1
+    assert terminal_input._pi_cursor_row(_omp_picker(2)) is None

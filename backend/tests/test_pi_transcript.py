@@ -389,3 +389,49 @@ def test_other_tool_calls_are_not_questions(tmp_path):
 
 def test_missing_file_returns_none():
     assert pt.read_pending_question("/nao/existe/este/arquivo.jsonl") is None
+
+
+# ── read_pending_question no `ask` do omp ───────────────────────────────────────────────────────
+# Linhas REAIS medidas no omp 18.1.4 (o `|` dentro do toolCallId e do proprio omp, nao um typo).
+
+_ASK_ID = "call_00_ET_tj4L5r5vNIuESrsPU1o21751|2368867e-7c63-4953-96e5-77dbaf3a0b6b"
+_ASK_CALL = {"type": "message", "id": "07c3b414", "message": {"role": "assistant", "content": [
+    {"type": "toolCall", "id": _ASK_ID, "name": "ask",
+     "arguments": {"i": "Perguntando preferência de cor", "questions": [
+         {"id": "cor", "question": "Qual cor você prefere?",
+          "options": [{"label": "Azul"}, {"label": "Verde"}]}]},
+     "intent": "Perguntando preferência de cor"}]}}
+_ASK_RESULT = {"type": "message", "id": "9d95722f", "parentId": "07c3b414",
+               "timestamp": "2026-09-03T18:08:56.312Z",
+               "message": {"role": "toolResult", "toolCallId": _ASK_ID, "toolName": "ask",
+                           "content": [{"type": "text", "text": "User selected: Verde"}],
+                           "details": {"question": "Qual cor você prefere?",
+                                       "options": ["Azul", "Verde"], "multi": False,
+                                       "selectedOptions": ["Verde"]},
+                           "isError": False, "timestamp": 1788458936299}}
+
+
+def test_pending_ask_do_omp_normaliza_pro_shape_do_question(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text(json.dumps(_ASK_CALL, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert pt.read_pending_question(str(f), tool="ask") == {
+        "question": "Qual cor você prefere?", "header": "",
+        "options": [{"label": "Azul"}, {"label": "Verde"}]}
+    # A tool do Pi (`question`) nao conta o `ask`, mesmo com a chave "question" dentro dos arguments.
+    assert pt.read_pending_question(str(f)) is None
+
+
+def test_ask_respondido_do_omp_nao_esta_pendente(tmp_path):
+    f = tmp_path / "s.jsonl"
+    f.write_text(json.dumps(_ASK_CALL, ensure_ascii=False) + "\n"
+                 + json.dumps(_ASK_RESULT, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert pt.read_pending_question(str(f), tool="ask") is None
+
+
+def test_ask_sem_pergunta_utilizavel_e_none(tmp_path):
+    # Shape inesperado (lista vazia) nao pode virar um card sem opcao nenhuma no app.
+    f = tmp_path / "s.jsonl"
+    call = json.loads(json.dumps(_ASK_CALL))
+    call["message"]["content"][0]["arguments"]["questions"] = []
+    f.write_text(json.dumps(call, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert pt.read_pending_question(str(f), tool="ask") is None

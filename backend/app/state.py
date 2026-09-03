@@ -29,11 +29,27 @@ _OPTION_RE = re.compile(r"^\s*[❯>]?\s*\d+\.\s+(.*\S)\s*$")
 # virava "Rodar tudo" e aí o casamento por prefixo aprovava um label ERRADO. `│` e os cantos seguem
 # cortando sozinhos também: o box de `preview` de UMA coluna encosta no label sem o vão.
 _BOX_SPLIT_RE = re.compile(r"\s{2,}[│─╭╮╰╯┌┐└┘├┤┬┴┼]|[│╭╮╰╯┌┐└┘├┤┬┴┼]")
-# Cursor do picker: ❯ e do Claude, ">" e do Pi (ascii). O do Pi so vale com o rodape de navegacao
-# NO FUNDO do pane (ver _menu_block) — sem essa trava, um "> 1. ..." citado em prosa no scrollback
-# viraria menu fantasma.
+# Cursor do picker: ❯ e do Claude, ">" e do Pi (ascii), chevron de nerd font e do omp. Os dois
+# ultimos so valem com o rodape de navegacao NO FUNDO do pane (ver _menu_block) — sem essa trava,
+# um picker citado em prosa no scrollback viraria menu fantasma.
 _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
-_PI_CURSOR_RE = re.compile(r"^\s*>\s*\d+\.\s", re.M)
+# Glifos de nerd font do picker do omp (tool `ask`), por codigo porque a area de uso privado nao
+# desenha em fonte comum: chevron da linha selecionada e circulo que marca toda opcao. La as opcoes
+# NAO sao numeradas e vivem dentro da moldura (`│`) do box.
+_OMP_SEL = chr(0xF054)
+_OMP_OPT = chr(0xF10C)
+_PI_CURSOR_RE = re.compile(rf"^\s*>\s*\d+\.\s|^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s", re.M)
+_OMP_OPTION_RE = re.compile(rf"^\s*│\s*(?:{_OMP_SEL}\s+)?{_OMP_OPT}\s+(.*\S)\s*$")
+# Linha so de moldura (o `├───` que separa pergunta das opcoes no box do omp): nunca e pergunta nem
+# opcao. O _RULE_RE nao alcanca — ele exige a regua RETA do Claude, sem canto na ponta.
+_SO_MOLDURA_RE = re.compile(r"^[\s│─╭╮╰╯┌┐└┘├┤┬┴┼]*$")
+
+
+def _option(line: str) -> Optional[re.Match]:
+    """A linha como opcao de menu: numerada (Claude/Pi) ou marcada por glifo (omp). group(1) = label."""
+    return _OPTION_RE.match(line) or _OMP_OPTION_RE.match(line)
+
+
 # SEGUNDO marcador "N. " na mesma linha do cursor: a marca de uma lista digitada CORRIDA (rascunho no
 # composer), porque no menu cada opcao ocupa a propria linha. Procurado SO no que vem depois do
 # primeiro marcador (ver o uso) — aplicado na linha inteira ele casaria o proprio cursor, que e
@@ -78,10 +94,12 @@ def _question(lines: list[str]) -> Optional[str]:
     pane inteiro) pra nao pescar uma pergunta perdida no scrollback."""
     found = None
     for line in lines:
-        if _OPTION_RE.match(line):
+        if _option(line):
             break
-        s = line.strip()
-        if not s or _RULE_RE.match(line) or s[:1] in "☐☑":
+        # lstrip da moldura: no omp a pergunta vem dentro do box (`│ Qual cor...`) e sem isso o `│`
+        # entraria no texto que o app mostra.
+        s = line.strip().lstrip("│").strip()
+        if not s or _RULE_RE.match(line) or _SO_MOLDURA_RE.match(line) or s[:1] in "☐☑":
             continue
         found = s
     return found
@@ -89,7 +107,7 @@ def _question(lines: list[str]) -> Optional[str]:
 
 # Rodape de navegacao da AskUserQuestion (e de pickers similares). Ancora o limite INFERIOR
 # do bloco. O menu nativo de permissao NAO tem esse rodape -> o limite cai num boundary.
-_FOOTER_RE = re.compile(r"to navigate|Esc to cancel|Enter to select")
+_FOOTER_RE = re.compile(r"to navigate|Esc to cancel|Enter to select|Enter select")
 
 
 def is_overlay(pane_text: str) -> bool:
@@ -253,7 +271,7 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
         # corte, o conteúdo do preview entrava no label ("Alfabético (obedece │ using System..."). A
         # label ainda pode vir truncada por wrap de coluna; o gate do stepper (sse) casa por prefixo.
         options = [_BOX_SPLIT_RE.split(m.group(1))[0].strip()
-                   for m in (_OPTION_RE.match(ln) for ln in region) if m]
+                   for m in (_option(ln) for ln in region) if m]
         options = [o for o in options if o]
         # DUAS opcoes, no minimo: escolher entre uma coisa so nao e escolha, e todo menu real medido
         # tem de 3 a 5 (as cinco fixtures de pane deste repo). Uma sozinha e sinal de que o bloco foi

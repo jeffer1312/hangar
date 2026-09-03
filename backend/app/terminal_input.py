@@ -1028,24 +1028,45 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     # senao: pergunta unica ja submeteu na selecao; nada a confirmar.
 
 
-# ── Picker do Pi (tool `question`) ───────────────────────────────────────────
+# ── Picker do Pi (tool `question`) e do omp (tool `ask`) ─────────────────────
 # Cursor do picker do Pi: "> 3. label" (ascii, nao o ❯ do Claude). Nao misturar no _CURSOR_ROW
 # do Claude: aquele faz search no pane INTEIRO e um "> N." citado em prosa viraria falso cursor;
 # aqui o match so vale junto com o is_overlay (rodape de navegacao no FUNDO do pane), que e o que
 # separa o picker vivo da citacao no scrollback.
 _PI_CURSOR_ROW = re.compile(r"^\s*>\s*(\d+)\.", re.M)
+# Picker do omp (tool `ask`): as opcoes NAO sao numeradas — cada uma leva o circulo U+F10C e a
+# selecionada ganha o chevron U+F054 na frente (glifos de nerd font, por codigo porque a area de uso
+# privado nao desenha em fonte comum). Sem numero na tela, a linha alvo so sai contando as opcoes.
+_OMP_SEL = chr(0xF054)
+_OMP_OPT = chr(0xF10C)
+_OMP_OPTION_ROW = re.compile(rf"^\s*│\s*(?:{_OMP_SEL}\s+)?{_OMP_OPT}\s")
+_OMP_CURSOR_ROW = re.compile(rf"^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s")
 
 
-def _pi_cursor_row(screen: str) -> int | None:
+def _pi_cursor_row(screen: str, provider: str = "pi") -> int | None:
+    if provider == "omp":
+        # Posicao (1-based) da linha marcada entre as linhas de opcao do picker. Sem marcador
+        # visivel -> None, igual ao Pi: o drive nao navega as cegas.
+        pos = 0
+        for ln in screen.splitlines():
+            if _OMP_OPTION_ROW.match(ln):
+                pos += 1
+                if _OMP_CURSOR_ROW.match(ln):
+                    return pos
+        return None
     rows = _PI_CURSOR_ROW.findall(screen)
     return int(rows[-1]) if rows else None   # mais ao fundo = o picker vivo
 
 
-def answer_question_pi(name: str, answer: dict, question: dict) -> None:
+def answer_question_pi(name: str, answer: dict, question: dict, provider: str = "pi") -> None:
     """Dirige o picker da tool `question` do Pi: Down/Up em malha fechada (mesmo padrao do
     answer_questions do Claude) + Enter. kind=text: navega ate o "Type something." (sempre a
     ultima linha), Enter, digita, Enter. Input invalido -> ValueError (409); drive falhou ->
-    DriveError SEM submeter e SEM Escape (o caller faz Escape + fallback por texto, igual Claude)."""
+    DriveError SEM submeter e SEM Escape (o caller faz Escape + fallback por texto, igual Claude).
+
+    provider='omp' e o mesmo drive no picker da tool `ask`: so muda como a linha do cursor e lida
+    (ver _pi_cursor_row). A linha de texto livre e a ultima nos dois ("Type something." no Pi,
+    "Other (type your own)" no omp), entao o alvo do kind=text nao muda."""
     options = question.get("options") if isinstance(question.get("options"), list) else []
     kind = answer.get("kind")
     if kind == "option":
@@ -1073,7 +1094,7 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
         raise ValueError(f"kind nao suportado no picker do Pi: {kind!r}")
 
     screen = _capture(name)
-    if not is_overlay(screen) or _pi_cursor_row(screen) is None:
+    if not is_overlay(screen) or _pi_cursor_row(screen, provider) is None:
         raise DriveError("picker do Pi nao esta aberto no pane")
 
     def key(k: str) -> None:
@@ -1084,7 +1105,7 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
     # ILEGIVEL no meio (capture falho devolve ""), NAO se submete as cegas — DriveError e o
     # fallback por texto assume (um Enter cego podia cair na opcao errada; o Pi nao tem Review).
     for _ in range(3):
-        row = _pi_cursor_row(_capture(name))
+        row = _pi_cursor_row(_capture(name), provider)
         if row is None:
             raise DriveError("cursor do picker do Pi ficou ilegivel no meio do drive; nao submetido")
         if row == target:
@@ -1106,7 +1127,7 @@ def answer_question_pi(name: str, answer: dict, question: dict) -> None:
         after = _capture(name)
     if not after.strip():
         raise DriveError("capture vazio apos o Enter — nao da pra confirmar a submissao")
-    if is_overlay(after) and _pi_cursor_row(after) is not None:
+    if is_overlay(after) and _pi_cursor_row(after, provider) is not None:
         raise DriveError("picker do Pi ainda aberto apos o Enter — nada foi submetido")
 
 

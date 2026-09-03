@@ -4990,16 +4990,18 @@ def answer(name: str, body: AnswerBody):
     # Pi: a pergunta nativa (tool `question`) mora no proprio transcript — o front sintetiza o
     # payload do AskUserQuestion a partir do tool_use pendente e posta aqui igual; o drive e outro
     # (picker ascii do Pi, sem tela de Review). A pergunta some da fila (respondida no terminal)
-    # entre o card abrir e o toque -> 409 legivel, nunca drive as cegas.
-    if getattr(info, "provider", "claude") == "pi":
+    # entre o card abrir e o toque -> 409 legivel, nunca drive as cegas. O omp e o mesmo caminho
+    # com outra tool (`ask`, uma lista de perguntas que o parser normaliza) e outro cursor.
+    if getattr(info, "provider", "claude") in ("pi", "omp"):
         from app.adapters.pi.transcript import read_pending_question
-        q = read_pending_question(jsonl) if jsonl else None
+        tool = "ask" if info.provider == "omp" else "question"
+        q = read_pending_question(jsonl, tool=tool) if jsonl else None
         if q is None:
             raise HTTPException(409, detail=erro("erro_sem_pergunta_pi", "nenhuma pergunta do Pi pendente (ja respondida no terminal?)"))
         if not answers:
             raise HTTPException(409, detail=erro("erro_sem_resposta", "sem resposta"))
         try:
-            terminal_input.answer_question_pi(name, answers[0], q)
+            terminal_input.answer_question_pi(name, answers[0], q, provider=info.provider)
         except ValueError as e:
             raise HTTPException(409, str(e))
         except terminal_input.DriveError as e:

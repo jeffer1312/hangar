@@ -732,6 +732,7 @@
   // ramifica por provider. (2026-08-11)
   const pendingPiQuestion = $derived.by(() => {
     const toolName = sessionProvider === 'pi' ? 'question'
+      : sessionProvider === 'omp' ? 'ask'
       : sessionProvider === 'kimi' ? 'AskUserQuestion' : null;
     if (!toolName) return null;
     // Varredura UNICA: coleciona os resultados e lembra o ultimo tool_use question; pendente =
@@ -760,9 +761,12 @@
       label: String((o as Record<string, unknown> | null)?.label ?? ''),
       description: String((o as Record<string, unknown> | null)?.description ?? ''),
     })).filter((o) => o.label);
-    if (sessionProvider === 'kimi') {
-      // Shape do Claude: lista de perguntas pronta, so falta snake_case -> camelCase.
-      const qs = (Array.isArray(args.questions) ? args.questions : []).map((item) => {
+    if (sessionProvider === 'kimi' || sessionProvider === 'omp') {
+      // Shape do Claude: lista de perguntas pronta, so falta snake_case -> camelCase. O `ask` do omp
+      // tem a mesma lista, mas so a PRIMEIRA pergunta entra: o picker dele mostra uma por vez e o
+      // /answer do backend dirige apenas answers[0] — mostrar as outras prometeria o que nao chega.
+      const lista = Array.isArray(args.questions) ? args.questions : [];
+      const qs = (sessionProvider === 'omp' ? lista.slice(0, 1) : lista).map((item) => {
         const it = item as Record<string, unknown> | null;
         return {
           header: String(it?.header ?? ''),

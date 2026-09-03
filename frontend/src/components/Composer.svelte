@@ -47,7 +47,7 @@
   import { ditadoEstilo, estilosDitado, type EstiloDitado } from '../lib/ditadoEstilo.svelte';
   import { getCommands, setModelEffort, uploadFile, uploadUrl, transcribeFile, relimparDitado, getCodexModels, getPiModels, getKimiModels, getModelOptions, getPermissionModes, setPermissionMode, type ModelEffortBody } from '../lib/api';
   import { aoAquecer } from '../lib/aquecimento';
-  import type { State, StatsEvent } from '../lib/types';
+  import type { Provider, State, StatsEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ttsPlayer } from '../lib/ttsPlayer.svelte';
 
@@ -81,7 +81,7 @@
     // Provider da sessao (Chat.svelte, via allSessions). undefined/"claude" = comportamento de
     // sempre; "codex" esconde o picker de /model e o autocomplete de slash-commands (Claude-only —
     // o Codex nao tem nem um nem outro); "kimi" nao tem sheet de modelo neste MVP (pill so leitura).
-    provider?: 'claude' | 'codex' | 'pi' | 'kimi';
+    provider?: Provider;
     // Motor da sessao (SessionInfo.engine). Numa sessao de motor quem responde nao e o Claude,
     // entao o placeholder usa o modelo real (pill/statusline) em vez de "Claude".
     engine?: string | null;

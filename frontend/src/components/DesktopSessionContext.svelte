@@ -7,7 +7,7 @@ import * as m from '../paraglide/messages';
   import PlanRing from './PlanRing.svelte';
   import FilesPanel from './files/FilesPanel.svelte';
   import StateChip from './StateChip.svelte';
-  import type { State, SessionInfo, PlanDetail, ChatEvent } from '../lib/types';
+  import type { Provider, State, SessionInfo, PlanDetail, ChatEvent } from '../lib/types';
   import type { StatusFields } from '../lib/statusline';
   import { ctxWindow, providerName } from '../lib/format';
   import { planBadge } from '../lib/plan';
@@ -18,7 +18,7 @@ import * as m from '../paraglide/messages';
     status?: StatusFields | null;
     pairPeers?: string[] | null;
     serverLabel?: string;
-    provider?: 'claude' | 'codex' | 'pi' | 'kimi';
+    provider?: Provider;
     // Identidade do servidor (B2 do parecer): o FilesPanel chaveia o store por
     // serverId::sessionName; o Chat passa o MESMO getActiveId que ele usa, nunca calculado
     // diferente por caller.
