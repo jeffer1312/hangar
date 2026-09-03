@@ -9,12 +9,23 @@ import subprocess
 import uuid
 import pytest
 import app.api as api_mod
-from app import agentpane, registry, tmux
+from app import agentpane, pair, registry, tmux
+from app.registry import SessionRegistry
 
 from tmux_teste import matar_servidor, matar_sessao, novo_socket
 
 SESS = "cp-test-registry-agentpane"
 _UUID = "12345678-1234-1234-1234-123456789abc"
+
+
+@pytest.fixture(autouse=True)
+def _pair_dir_isolado(tmp_path, monkeypatch):
+    # reg.list() varre pareamento (Task 8) a cada chamada; este arquivo usa socket -L proprio, entao
+    # `vivos` so tem as 2 sessoes sinteticas e QUALQUER par real da maquina vira candidato a fantasma
+    # (achado do review de Task 8).
+    monkeypatch.setattr(pair.settings, "projects_dir", tmp_path / "projects")
+    monkeypatch.setattr(SessionRegistry, "_pair_ausencias", {})
+    monkeypatch.setattr(registry, "apos_saida_por_morte", None)
 
 
 @pytest.fixture
