@@ -1900,7 +1900,6 @@
       {sessionName}
       {events} {histGap} cwd={planSession?.cwd ?? null}
       onOpenTerminal={abrirTerminalReal}
-      onOpenNavegador={alternarNavegador}
       terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}
