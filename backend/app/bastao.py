@@ -834,7 +834,8 @@ def origem_resumida(jsonl: str) -> tuple[str, str]:
 _KICKOFF_PREFIXO = "[hangar: passagem de bastão]"
 
 
-def kickoff(origem: str, dossie: str | Path, conta: str = "", modelo: str = "") -> str:
+def kickoff(origem: str, dossie: str | Path, conta: str = "", modelo: str = "",
+            motivo: str = "manual", reset_em: str | None = None) -> str:
     """As seis linhas que a sessão NOVA recebe pela fila durável.
 
     Curto de propósito: o conteúdo é o arquivo, e o recado só diz de quem ela continua, onde ler e
@@ -845,7 +846,7 @@ def kickoff(origem: str, dossie: str | Path, conta: str = "", modelo: str = "") 
     """
     de = " · ".join(x for x in (f"conta `{conta}`" if conta else "",
                                 f"modelo `{modelo}`" if modelo else "") if x)
-    return "\n".join([
+    base = [
         f"{_KICKOFF_PREFIXO} Você continua o trabalho da sessão `{origem or '?'}` — não é tarefa "
         "nova, é a mesma, no ponto em que ela parou.",
         f"Comece lendo, com um `Read`, o dossiê em `{dossie}`: onde o trabalho está, o que já está "
@@ -863,4 +864,15 @@ def kickoff(origem: str, dossie: str | Path, conta: str = "", modelo: str = "") 
         (f"Ela vinha de {de} — você pode estar em outra." if de
          else "A conta e o modelo de onde ela vinha estão na primeira seção do dossiê — você pode "
               "estar em outros."),
-    ])
+    ]
+    if motivo == "cota":
+        # Passagem automática: a origem não escolheu parar. Sem isto a sucessora lê o dossiê como se
+        # a origem tivesse desistido — e trata a trava que ela vai receber como se fosse um recado.
+        quando = reset_em or "hora desconhecida"
+        base += [
+            f"A sessão `{origem or '?'}` parou por cota da conta, não por decisão: a janela de 5h esgotou.",
+            f"O reset da cota dela é às {quando} — ela pode acordar depois disso.",
+            "Ela vai receber uma trava do hangar (não escrever mais em arquivo): você é a única "
+            "escritora. Se precisar de contexto que só ela tem, pergunte por SendMessage/hangar-send.",
+        ]
+    return "\n".join(base)

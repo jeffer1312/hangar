@@ -347,6 +347,25 @@ def test_kickoff_sem_conta_nem_modelo_nao_inventa_nem_mostra_vazio():
     assert "primeira seção do dossiê" in txt
 
 
+def test_kickoff_manual_continua_identico():
+    assert bastao.kickoff("o", "/x.md") == bastao.kickoff("o", "/x.md", motivo="manual")
+    assert len(bastao.kickoff("o", "/x.md").splitlines()) == 6
+
+
+def test_kickoff_por_cota_diz_que_a_origem_parou_e_que_vai_ser_travada():
+    txt = bastao.kickoff("o", "/x.md", conta="a", modelo="m", motivo="cota", reset_em="01:59")
+    linhas = txt.splitlines()
+    assert len(linhas) == 9
+    assert "parou por cota" in linhas[6] and "não por decisão" in linhas[6]
+    assert "01:59" in linhas[7] and "pode acordar" in linhas[7]
+    assert "trava" in linhas[8] and "SendMessage" in linhas[8] and "hangar-send" in linhas[8]
+
+
+def test_kickoff_por_cota_sem_reset_nao_inventa_hora():
+    txt = bastao.kickoff("o", "/x.md", motivo="cota")
+    assert "None" not in txt and "hora desconhecida" in txt
+
+
 def test_origem_resumida_tira_o_modelo_da_statusline(monkeypatch):
     from app import statusline
     monkeypatch.setattr(statusline, "read",
