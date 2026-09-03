@@ -1,8 +1,10 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
 const { app, BrowserWindow, WebContentsView, dialog, ipcMain, screen, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { ler, gravar } = require('./settings.cjs');
-const { uaDeChrome, normalizaBounds, urlNavegavel } = require('./navegador.cjs');
+const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar } = require('./navegador.cjs');
 
 // O navegador embutido (WebContentsView, handlers hangar:nav-*) é dirigível por CDP na 9223 — o
 // agent-browser conecta nela como conecta no Chrome do usuário (9222), sem backend no meio. A
@@ -299,17 +301,54 @@ function fecharNavegador(win, chave) {
   if (m.size === 0) navegadores.delete(win);
   try { win.contentView.removeChildView(view); } catch { /* janela já destruída */ }
   try { view.webContents.close(); } catch { /* idem */ }
+  try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
+}
+
+// Sidecar por sessão em ~/.hangar/nav/<chave>.json — é o que o `hangar-preview` lê pra achar o
+// target CDP DESTA sessão sem adivinhar por URL (duas sessões no mesmo localhost:3000 teriam a
+// mesma). O targetId é descoberto por diff do /json/list antes/depois do view nascer: opens são
+// raros e seriais, então o alvo novo é o view. Gravação é async e tmp+rename (o CLI pode estar
+// lendo). Sem targetId (CDP fora do ar?), grava só chave+url e o CLI casa por URL.
+const NAV_SIDECARS = path.join(os.homedir(), '.hangar', 'nav');
+
+async function gravarSidecarNav(chave, urlInicial, idsAntes) {
+  for (let t = 0; t < 6; t++) {
+    try {
+      const r = await fetch('http://127.0.0.1:9223/json/list');
+      const targets = await r.json();
+      const novo = targets.find((x) => x.type === 'page' && !idsAntes.has(x.id) && x.url.startsWith('http'));
+      if (novo || t === 5) {
+        fs.mkdirSync(NAV_SIDECARS, { recursive: true });
+        const arq = path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`);
+        const tmp = path.join(NAV_SIDECARS, `.${nomeSidecar(chave)}.${process.pid}.tmp`);
+        fs.writeFileSync(tmp, JSON.stringify({ chave, url: novo ? novo.url : urlInicial, targetId: novo ? novo.id : null, ts: Date.now() }));
+        fs.renameSync(tmp, arq);
+        return;
+      }
+    } catch { /* CDP ainda subindo */ }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
+async function idsDeTargets() {
+  try {
+    const r = await fetch('http://127.0.0.1:9223/json/list');
+    return new Set((await r.json()).map((x) => x.id));
+  } catch {
+    return new Set();
+  }
 }
 
 function viewDe(ev, chave) {
   return navegadores.get(BrowserWindow.fromWebContents(ev.sender))?.get(chave);
 }
 
-ipcMain.handle('hangar:nav-open', (ev, { chave, url, bounds } = {}) => {
+ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
   const win = BrowserWindow.fromWebContents(ev.sender);
   if (!win || !chave) return { ok: false };
   const views = viewsDa(win);
   let view = views.get(chave);
+  const antes = await idsDeTargets();
   if (!view) {
     // View novo SÓ nasce com URL; o reexibir (troca de sessão, reload do front) chama open sem
     // url e recebe ok:false se o shell já não tiver o view — aí o front repete com a url salva.
@@ -329,6 +368,7 @@ ipcMain.handle('hangar:nav-open', (ev, { chave, url, bounds } = {}) => {
     win.contentView.addChildView(view);
     views.set(chave, view);
     view.webContents.loadURL(destino);
+    gravarSidecarNav(chave, destino, antes);   // async, não bloqueia o IPC
   } else {
     // Reexibir NUNCA recarrega: a URL atual do view pode ter mudado por navegação interna (o
     // agente clicou em links) e o front só manda `url` quando o usuário digita uma nova.

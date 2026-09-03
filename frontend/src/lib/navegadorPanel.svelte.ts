@@ -41,12 +41,11 @@ function carregarLargura(): number {
 // navegou). Vive aqui porque o Chat remonta por key a cada troca de sessão — um $state local
 // esqueceria que a sessão X tem navegador aberto. Persistido pra um reload da página reexibir
 // (o view continua vivo no main; se o SHELL reiniciou, o front reabre com esta url).
-export const navegadorPanel = $state({
-  largura: carregarLargura(),
-  resizing: false,
-  abertos: carregarAbertos(),
-});
-
+//
+// ORDEM IMPORTA: as consts e funções de carga ficam ANTES do $state — o inicializador roda na
+// linha dele, e uma const declarada depois está no TDZ (o try/catch do carregarAbertos engolia o
+// ReferenceError e o store nascia vazio mesmo com localStorage cheio — o painel não remontava
+// depois de reload).
 const CHAVE_ABERTOS = 'cp_nav_abertos';
 
 function carregarAbertos(): Record<string, string> {
@@ -57,6 +56,12 @@ function carregarAbertos(): Record<string, string> {
     return {};
   }
 }
+
+export const navegadorPanel = $state({
+  largura: carregarLargura(),
+  resizing: false,
+  abertos: carregarAbertos(),
+});
 
 function salvarAbertos(): void {
   try {

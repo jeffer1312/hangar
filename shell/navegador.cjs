@@ -30,4 +30,10 @@ function urlNavegavel(url) {
   }
 }
 
-module.exports = { uaDeChrome, normalizaBounds, urlNavegavel };
+// A chave da sessão (serverId::nome) vira nome de arquivo de sidecar em ~/.hangar/nav/.
+// `::` e qualquer coisa hostil a path viram traço — o CLI casa pelo SUFIXO `--<nome>.json`.
+function nomeSidecar(chave) {
+  return String(chave).replace(/::/g, '--').replace(/[^\w.-]+/g, '-');
+}
+
+module.exports = { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar };

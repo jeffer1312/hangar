@@ -1,0 +1,163 @@
+#!/usr/bin/env node
+// hangar-preview — dirige o navegador embutido DA SUA SESSÃO no shell Electron do hangar.
+//
+//   hangar-preview list                    navegadores vivos (chave, url, vivo/morto)
+//   hangar-preview url                     URL atual do navegador desta sessão
+//   hangar-preview shot [arquivo.png]      screenshot da página (default /tmp/hangar-preview-<sessao>.png)
+//   hangar-preview eval '<js>'             roda JS na página e imprime o resultado (JSON)
+//                                           ex: eval 'document.title'
+//                                           ex: eval 'document.querySelector(".btn").click()'
+//
+// A sessão é resolvida pelo nome da sessão tmux atual (dentro do tmux); fora dele, ou pra operar
+// o navegador de OUTRA sessão, use --sessao <nome>.
+//
+// Como funciona: o shell grava ~/.hangar/nav/<chave>.json a cada navegador aberto (chave da
+// sessão + targetId CDP), e este CLI fala CDP puro com o target em http://127.0.0.1:9223 — o
+// MESMO protocolo do agent-browser/Chrome. Sem backend, sem token. Cada sessão tem o SEU view:
+// duas sessões nunca se atrapalham, mesmo com a mesma URL aberta.
+//
+// Se a sessão não tem navegador aberto, o CLI falha pedindo pra abrir — quem posiciona o view na
+// janela é o painel (botão Navegador no chat); não existe navegador invisível.
+import { execSync } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const CDP = 'http://127.0.0.1:9223';
+const DIR = join(homedir(), '.hangar', 'nav');
+
+function erro(msg, codigo = 1) {
+  console.error(`hangar-preview: ${msg}`);
+  process.exit(codigo);
+}
+
+// --- argumentos ---
+const args = process.argv.slice(2);
+const flags = {};
+const pos = [];
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--sessao') flags.sessao = args[++i];
+  else pos.push(args[i]);
+}
+const cmd = pos[0];
+if (!cmd || cmd === 'help' || cmd === '--help') {
+  console.log('uso: hangar-preview <list|url|shot [arq.png]|eval <js>> [--sessao <nome>]');
+  process.exit(0);
+}
+
+// --- resolve a sessão (chave serverId::nome) ---
+function nomeSessao() {
+  if (flags.sessao) return flags.sessao;
+  if (process.env.TMUX) {
+    try {
+      return execSync('tmux display-message -p "#S"').toString().trim();
+    } catch { /* tmux indisponível */ }
+  }
+  return null;
+}
+
+function lerSidecars() {
+  if (!existsSync(DIR)) return [];
+  return readdirSync(DIR)
+    .filter((a) => a.endsWith('.json') && !a.startsWith('.'))
+    .map((a) => {
+      try { return JSON.parse(readFileSync(join(DIR, a), 'utf8')); } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
+function sidecarDa(nome) {
+  const todos = lerSidecars();
+  if (!todos.length) erro('nenhum navegador aberto em nenhuma sessão (o painel Navegador abre um, no chat da sessão)');
+  if (!nome) erro('fora do tmux não dá pra saber a sessão — use --sessao <nome>. Vivos:\n' + todos.map((s) => `  ${s.chave}  ${s.url}`).join('\n'));
+  const achados = todos.filter((s) => s.chave === nome || s.chave.endsWith(`::${nome}`));
+  if (achados.length === 1) return achados[0];
+  if (!achados.length) erro(`a sessão "${nome}" não tem navegador aberto. Vivos:\n` + todos.map((s) => `  ${s.chave}  ${s.url}`).join('\n'));
+  erro(`"${nome}" existe em mais de um servidor — use a chave completa:\n` + achados.map((s) => `  ${s.chave}`).join('\n'));
+}
+
+// --- CDP mínimo (fetch + WebSocket nativos) ---
+async function targets() {
+  try {
+    return await (await fetch(`${CDP}/json/list`)).json();
+  } catch {
+    erro('o shell do hangar não está no ar (9223 não responde). O navegador embutido vive no app desktop.');
+  }
+}
+
+async function acharTarget(sc) {
+  const todos = await targets();
+  const vivo = sc.targetId
+    ? todos.find((t) => t.id === sc.targetId)
+    : todos.filter((t) => t.type === 'page' && t.url === sc.url);
+  const alvo = Array.isArray(vivo) ? vivo[0] : vivo;
+  if (!alvo) erro(`o navegador de ${sc.chave} não está mais aberto (o shell reiniciou?). Abra de novo pelo painel.`);
+  return alvo;
+}
+
+async function cdp(ws, id, method, params) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timeout em ${method}`)), 8000);
+    const onMsg = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.id === id) {
+        clearTimeout(timer);
+        ws.removeEventListener('message', onMsg);
+        if (m.error) reject(new Error(m.error.message));
+        else resolve(m.result);
+      }
+    };
+    ws.addEventListener('message', onMsg);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+}
+
+async function comAlvo(fn) {
+  const sc = sidecarDa(nomeSessao());
+  const alvo = await acharTarget(sc);
+  const ws = new WebSocket(alvo.webSocketDebuggerUrl);
+  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('ws falhou')); });
+  try {
+    return await fn(ws);
+  } finally {
+    ws.close();
+  }
+}
+
+// --- comandos ---
+if (cmd === 'list') {
+  const vivos = await targets();
+  const linhas = lerSidecars().map((s) => {
+    const vivo = vivos.some((t) => (s.targetId && t.id === s.targetId) || t.url === s.url);
+    return `${s.chave}  ${s.url}  ${vivo ? 'vivo' : 'MORTO (reabra pelo painel)'}`;
+  });
+  console.log(linhas.length ? linhas.join('\n') : 'nenhum navegador registrado');
+  process.exit(0);
+}
+
+if (cmd === 'url') {
+  const r = await comAlvo((ws) => cdp(ws, 1, 'Runtime.evaluate', { expression: 'location.href', returnByValue: true }));
+  console.log(r.result.value);
+  process.exit(0);
+}
+
+if (cmd === 'shot') {
+  const arq = pos[1] || `/tmp/hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`;
+  const r = await comAlvo(async (ws) => {
+    await cdp(ws, 1, 'Page.enable', {});
+    return cdp(ws, 2, 'Page.captureScreenshot', { format: 'png' });
+  });
+  writeFileSync(arq, Buffer.from(r.data, 'base64'));
+  console.log(arq);
+  process.exit(0);
+}
+
+if (cmd === 'eval') {
+  if (!pos[1]) erro('eval precisa de um trecho JS: hangar-preview eval \'document.title\'');
+  const r = await comAlvo((ws) => cdp(ws, 1, 'Runtime.evaluate', { expression: pos[1], returnByValue: true, awaitPromise: true }));
+  if (r.exceptionDetails) erro(`o JS lançou: ${r.exceptionDetails.text} ${r.exceptionDetails.exception?.description || ''}`);
+  console.log(JSON.stringify(r.result?.value !== undefined ? r.result.value : r.result, null, 0));
+  process.exit(0);
+}
+
+erro(`comando desconhecido: ${cmd} (vale list|url|shot|eval)`);

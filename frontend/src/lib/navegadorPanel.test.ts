@@ -49,4 +49,18 @@ describe('navegadorPanel — largura redimensionável', () => {
     const mod2 = await importarFresco();
     expect(mod2.navegadorPanel.largura).toBe(700);
   });
+
+  it('abertos NASCE com o que está no localStorage (a carga não pode depender de const declarada depois)', async () => {
+    localStorage.setItem('cp_nav_abertos', JSON.stringify({ 'srv-x::hangar': 'http://localhost:3000/' }));
+    const mod = await importarFresco();
+    expect(mod.navegadorPanel.abertos['srv-x::hangar']).toBe('http://localhost:3000/');
+  });
+
+  it('marcar/fechar persiste o conjunto de abertos', async () => {
+    const mod = await importarFresco();
+    mod.marcarNavAberto('srv-x::hangar');
+    expect(JSON.parse(localStorage.getItem('cp_nav_abertos')!)).toHaveProperty('srv-x::hangar');
+    mod.fecharNav('srv-x::hangar');
+    expect(JSON.parse(localStorage.getItem('cp_nav_abertos')!)).not.toHaveProperty('srv-x::hangar');
+  });
 });
