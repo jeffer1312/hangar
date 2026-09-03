@@ -92,6 +92,19 @@ def _k(n: int) -> str:
     return f"{n // 1000}K" if n >= 1000 else str(n)
 
 
+def _int_ou_zero(v: object) -> int:
+    """Contexto/saída em formato inesperado (`"1M"`, uma lista) vale 0.
+
+    Mesmo critério do rótulo ilegível em `parse`: é coluna que só se lê, e derrubar a lista inteira
+    (ou perder o modelo) por causa dela é pior — a rota só captura RuntimeError/OSError/Timeout,
+    então um ValueError aqui virava 500.
+    """
+    try:
+        return int(v or 0)   # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 def parse_omp(saida: str) -> list[dict]:
     """`omp models --json` -> o shape de `parse`, pra tela de abertura e o popover nao saberem de
     qual dos dois veio."""
@@ -104,8 +117,8 @@ def parse_omp(saida: str) -> list[dict]:
         if not isinstance(m, dict) or not m.get("provider") or not m.get("id"):
             continue
         out.append({"provider": m["provider"], "id": m["id"],
-                    "context": _k(int(m.get("contextWindow") or 0)),
-                    "max_out": _k(int(m.get("maxTokens") or 0)),
+                    "context": _k(_int_ou_zero(m.get("contextWindow"))),
+                    "max_out": _k(_int_ou_zero(m.get("maxTokens"))),
                     "thinking": bool(m.get("thinking")),
                     "images": "image" in (m.get("input") or [])})
     return out

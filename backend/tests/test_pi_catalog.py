@@ -156,6 +156,16 @@ def test_parse_omp_devolve_o_mesmo_shape_do_pi():
     assert ms[1]["images"] is True and ms[1]["thinking"] is False
 
 
+def test_contexto_torto_no_json_do_omp_nao_derruba_a_lista():
+    # `int("1M")` levantava ValueError e a rota so captura RuntimeError/OSError/Timeout -> 500.
+    from app import pi_catalog
+    torto = OMP_JSON.replace('"contextWindow":1000000,"maxTokens":384000,"reasoning":true,\n"thinking":["low","high","max"]',
+                             '"contextWindow":"1M","maxTokens":384000,"reasoning":true,\n"thinking":["low","high","max"]')
+    assert '"1M"' in torto   # a troca casou de fato
+    ms = pi_catalog.parse_omp(torto)
+    assert len(ms) == 2 and ms[0]["context"] == "0" and ms[1]["context"] == "1M"
+
+
 def test_listar_omp_chama_omp_models_json_e_cacheia_por_provider(monkeypatch):
     from app import pi_catalog
     pi_catalog._cache.clear()
