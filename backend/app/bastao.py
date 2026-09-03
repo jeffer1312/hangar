@@ -217,7 +217,7 @@ def _de_onde_veio(jsonl: str, cwd: str | None, provider: str, nome: str) -> list
     return out
 
 
-def _onde_esta_o_trabalho(cwd: str | None, desde: float | None) -> list[str]:
+def _onde_esta_o_trabalho(cwd: str | None, desde: float | None, tocados: list[str]) -> list[str]:
     from app import git_ops
 
     if not cwd:
@@ -254,10 +254,14 @@ def _onde_esta_o_trabalho(cwd: str | None, desde: float | None) -> list[str]:
         out.append(f"- _(a lista de arquivos não veio: {_uma_linha(e.detail, 120)})_")
         return out
     if mudados:
-        out.append("- Não commitado agora:")
-        out += [f"  - `{m['code']}` `{m['path']}`" for m in mudados[:_MAX_ARQUIVOS]]
-        if len(mudados) > _MAX_ARQUIVOS:
-            out.append(f"  - _(+{len(mudados) - _MAX_ARQUIVOS} arquivo(s))_")
+        rel = {os.path.relpath(p, cwd) for p in tocados if p.startswith(cwd)}
+        meus = [m for m in mudados if m["path"] in rel or any(r.startswith(m["path"].rstrip("/") + "/") for r in rel)]
+        alheios = len(mudados) - len(meus)
+        if meus:
+            out.append("- Não commitado agora (tocado por esta sessão):")
+            out += [f"  - `{m['code']}` `{m['path']}`" for m in meus[:_MAX_ARQUIVOS]]
+        if alheios:
+            out.append(f"- _(outros {alheios} arquivo(s) alheios não commitados — não são desta sessão)_")
     return out
 
 
@@ -409,12 +413,56 @@ def _sem_repetidas(linhas: list[str]) -> list[str]:
     return unicas
 
 
+# Resultado de hook do harness ("[Fact-Forcing Gate] …", "[pass-adversarial] …", o lembrete de
+# escrita via Bash) chega como is_error, mas não é falha da sessão: é o próprio agente sendo
+# freado. Listar isso como "ferramenta que FALHOU" manda a sucessora investigar o que não existe.
+_HOOK_RE = re.compile(r"^\s*\[[^\]\n]{2,40}\]")
+_LEMBRETE = "lembrete automático"
+
+
+def _e_ruido_de_hook(result: str | None) -> bool:
+    r = result or ""
+    return bool(_HOOK_RE.match(r)) or _LEMBRETE in r
+
+
+_SEP_CMD = re.compile(r"\s*(?:;|&&|\|\||\|)\s*")
+
+
+def _grep_vazio(cmd: str, result: str | None) -> bool:
+    """grep/rg com exit 1 é "não achou", não erro. Comando composto (`git status; grep -c …`)
+    conta se QUALQUER segmento é grep/rg — o exit 1 é do último deles."""
+    r = (result or "").lstrip()
+    if not r.startswith("Exit code 1"):
+        return False
+    # Erro de verdade ("grep: invalid option", "No such file") mora logo após o "Exit code N" — as
+    # linhas seguintes são MATCHES, e um deles pode conter a palavra "error" por acaso (símbolo
+    # `PairMixError` num resultado de grep real). Checar o texto inteiro filtrava o match, não o erro.
+    cabeca = "\n".join(r.split("\n", 2)[:2])
+    if "No such" in cabeca or "error" in cabeca.lower():
+        return False
+    segmentos = [s for s in _SEP_CMD.split(cmd) if s.strip()]
+    return any((s.strip().split() or [""])[0].split("/")[-1] in ("grep", "rg") for s in segmentos)
+
+
+def _arquivos_tocados(eventos: list) -> list[str]:
+    """Paths de arquivo de todo tool_use (escrita ou leitura), na ordem, sem repetição."""
+    out: list[str] = []
+    for ev in eventos:
+        if ev.kind != "tool_use":
+            continue
+        tipo, valor = _alvo_da_ferramenta(ev.tool_input)
+        if tipo == "arquivo" and valor not in out:
+            out.append(valor)
+    return out
+
+
 def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
     """Arquivos escritos, comandos rodados e as ferramentas que FALHARAM, na ordem do transcript."""
     escritos: list[str] = []
     lidos: list[str] = []
-    comandos: list[str] = []
+    comandos: list[list] = []      # [texto, n] — repetição consecutiva colapsa em ×n
     nome_por_id: dict[str, str] = {}
+    cmd_por_id: dict[str, str] = {}
     falhas: list[str] = []
     for ev in eventos:
         if ev.kind == "tool_use":
@@ -426,9 +474,18 @@ def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
                 alvo = escritos if _sem_acento(nome).replace("_", "") in _ESCRITA else lidos
                 if valor not in alvo:
                     alvo.append(valor)
-            elif tipo == "comando" and not _e_leitura(valor):
-                comandos.append(_uma_linha(valor, 140))
+            elif tipo == "comando":
+                if ev.tool_use_id:
+                    cmd_por_id[ev.tool_use_id] = valor
+                if not _e_leitura(valor):
+                    txt = _uma_linha(valor, 140)
+                    if comandos and comandos[-1][0] == txt:
+                        comandos[-1][1] += 1
+                    else:
+                        comandos.append([txt, 1])
         elif ev.kind == "tool_result" and ev.is_error:
+            if _e_ruido_de_hook(ev.result) or _grep_vazio(cmd_por_id.get(ev.tool_use_id or "", ""), ev.result):
+                continue
             quem = nome_por_id.get(ev.tool_use_id or "", "ferramenta")
             falhas.append(f"  - `{quem}`: {_uma_linha(ev.result, 160)}")
 
@@ -448,7 +505,7 @@ def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
         out += [f"  - `{p}`" for p in lidos[-_MAX_ARQUIVOS:]]
     if comandos:
         out.append("- Últimos comandos:")
-        out += [f"  - `{c}`" for c in comandos[-_MAX_COMANDOS:]]
+        out += [f"  - `{c}`" + (f" ×{n}" if n > 1 else "") for c, n in comandos[-_MAX_COMANDOS:]]
     if falhas:
         # As falhas ficam por ÚLTIMO e nomeadas: é o que o sucessor não pode redescobrir sozinho —
         # um teste que quebrou, uma permissão negada, um comando que não existe naquela máquina.
@@ -674,6 +731,7 @@ def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = ""
     eventos = _eventos(nome, jsonl, provider)
     plano = _plano_citado(jsonl)
     desde = _inicio(jsonl)
+    tocados = _arquivos_tocados(eventos)
     linhas: list[str] = [
         f"# Passagem de bastão — sessão `{nome or '?'}`",
         "",
@@ -691,7 +749,7 @@ def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = ""
     ]
     linhas += _tentar("De onde veio", lambda: _de_onde_veio(jsonl, cwd, provider, nome))
     linhas += _tentar("O que falta", lambda: _o_que_falta(jsonl, cwd, nome, eventos, plano))
-    linhas += _tentar("Onde está o trabalho", lambda: _onde_esta_o_trabalho(cwd, desde))
+    linhas += _tentar("Onde está o trabalho", lambda: _onde_esta_o_trabalho(cwd, desde, tocados))
     linhas += _tentar("Arquivos e comandos", lambda: _arquivos_e_comandos(eventos, cwd))
     linhas += _tentar("Grupo e par", lambda: _grupo_e_par(nome))
     # Daqui pra baixo é citação. O rótulo vai no TÍTULO, e não só no aviso do topo, porque quem lê

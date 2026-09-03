@@ -725,3 +725,53 @@ def test_sem_commit_na_sessao_mantem_a_contagem(tmp_path, monkeypatch):
                    "Onde está o trabalho")
     assert "2 commit(s) à frente" in bloco
     assert "agora roda os testes" not in bloco
+
+
+# ---------------------------------------------------------------------------
+# Ruído fora de "Arquivos e comandos" e de "Não commitado" (bastão v2, item 4)
+# ---------------------------------------------------------------------------
+
+def test_falha_de_hook_e_grep_vazio_nao_sao_falhas_da_sessao(hangar2):
+    jsonl, cwd = hangar2
+    bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "Arquivos e comandos")
+    for ruido in ("Fact-Forcing Gate", "lembrete automático", "89 matches"):
+        assert ruido not in bloco
+    assert "FALHARAM" not in bloco            # no recorte, TODAS as falhas eram ruído
+
+
+def test_grep_vazio_em_comando_composto():
+    # No dossiê medido a "falha" era `Exit code 1\n89 matches…` de um `git status …; grep -c …`:
+    # o exit 1 é do grep no fim do pipeline, e o primeiro token é `git`.
+    assert bastao._grep_vazio("git status --short; echo x; grep -c foo bar", "Exit code 1\n89 matches")
+    assert bastao._grep_vazio("rg -n foo src/", "Exit code 1")
+    assert not bastao._grep_vazio("grep -c foo bar", "Exit code 2\ngrep: bar: No such file or directory")
+    assert not bastao._grep_vazio("uv run pytest -q", "Exit code 1\n1 failed")
+
+
+def test_comando_repetido_em_seguida_colapsa(hangar2):
+    jsonl, cwd = hangar2
+    bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "Arquivos e comandos")
+    assert bloco.count("rm -rf") == 1
+    assert "×2" in bloco
+
+
+def test_nao_commitado_lista_so_o_que_a_sessao_tocou(tmp_path, monkeypatch):
+    from app import git_ops, pqueue
+    monkeypatch.setattr(git_ops, "head_info", lambda cwd: ("main", False))
+    monkeypatch.setattr(git_ops, "git_summary", lambda cwd: {"dirty": 3, "ahead": 0, "behind": 0})
+    monkeypatch.setattr(git_ops, "git_diffstat", lambda cwd: None)
+    monkeypatch.setattr(git_ops, "git_log_since", lambda cwd, desde, n=30: [])
+    monkeypatch.setattr(pqueue, "_transcript_start_ts", lambda jsonl: 1.0)
+    monkeypatch.setattr(git_ops, "changed_files", lambda cwd: [
+        {"path": "app/bastao.py", "code": " M", "staged": False},
+        {"path": ".scratch/", "code": "??", "staged": False},
+        {"path": "foto.png", "code": "??", "staged": False}])
+    linhas = [{"type": "assistant", "uuid": "a1", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t1", "name": "Edit",
+         "input": {"file_path": str(tmp_path / "app/bastao.py"), "old_string": "a", "new_string": "b"}}]}}]
+    jsonl = tmp_path / "s.jsonl"
+    jsonl.write_text("".join(json.dumps(o) + "\n" for o in linhas), encoding="utf-8")
+    bloco = _bloco(bastao.montar(str(jsonl), str(tmp_path), "claude", "s"), "Onde está o trabalho")
+    assert "`app/bastao.py`" in bloco
+    assert ".scratch" not in bloco and "foto.png" not in bloco
+    assert "outros 2 arquivo(s) alheios não commitados" in bloco
