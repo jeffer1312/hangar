@@ -544,7 +544,7 @@
 <style>
   .tp {
     position: relative;   /* ancora o tp-resize-handle */
-    display: flex; flex-direction: column; height: 320px;
+    display: flex; flex-direction: column; height: min(460px, 55vh);
     border-top: 1px solid var(--border-subtle); overflow: hidden;
   }
   /* z-index 40, nao 5: precisa cobrir o .board-overlay (DesktopShell.svelte, z-index:30) quando o
