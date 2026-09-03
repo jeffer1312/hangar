@@ -17,6 +17,8 @@ arquivo, um namespace, um alvo de patch.
 """
 import logging
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -49,7 +51,42 @@ if not _TEM_PROC:
 # regressao na plataforma que ja esta em producao.
 
 
+# Cache do mapa de processos. O reuso DENTRO de uma listagem ja existia (o `children` passado
+# adiante); o que faltava era reuso ENTRE chamadas. Medido: 38 rotas chamam `registry.list()` direto,
+# sem passar pelo snapshot com TTL do api.py, e cada uma reconstruia o mapa — davam ~8 varreduras
+# completas do /proc por segundo, metade de todo o trabalho do backend. O mapa e o mesmo pra todos os
+# chamadores do mesmo instante, entao um TTL curto (a cadencia do poll e 1,5s) elimina a repeticao
+# sem que ninguem enxergue estado mais velho do que ja enxergava pelo snapshot.
+_MAPA_TTL = 1.0
+_mapa_cache: Optional[tuple[float, dict[int, list[int]]]] = None
+_mapa_lock = threading.Lock()
+
+
+def _invalidar_children_map() -> None:
+    """Descarta o mapa cacheado. Para quem PRECISA ver um processo que acabou de nascer — sem isto o
+    fallback de sessao recem-criada (api._guardar_snap com forcar) leria um mapa de ate 1s atras e
+    devolveria o mesmo 404 que ele existe pra evitar."""
+    global _mapa_cache
+    _mapa_cache = None
+
+
 def _proc_children_map() -> dict[int, list[int]]:
+    global _mapa_cache
+    cache = _mapa_cache
+    if cache is not None and time.monotonic() - cache[0] < _MAPA_TTL:
+        return cache[1]
+    with _mapa_lock:
+        # Re-checa dentro do lock: sem isto N threads que erram juntas varrem o /proc N vezes, que e
+        # exatamente o desperdicio que este cache existe pra tirar.
+        cache = _mapa_cache
+        if cache is not None and time.monotonic() - cache[0] < _MAPA_TTL:
+            return cache[1]
+        mapa = _varrer_children_map()
+        _mapa_cache = (time.monotonic(), mapa)
+        return mapa
+
+
+def _varrer_children_map() -> dict[int, list[int]]:
     if not _TEM_PROC:
         return _children_map_psutil()
     # Mapa ppid->filhos varrendo o /proc/*/stat UMA vez. Caro (le o stat de todo processo da maquina);

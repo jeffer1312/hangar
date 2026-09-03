@@ -192,16 +192,23 @@ _log = logging.getLogger("hangar.sse")
 # lock de asyncio aqui arriscaria bind em event loop errado nos testes.
 _LIST_TTL = 1.0
 _list_snap: dict = {"t": 0.0, "infos": None}
+_list_lock = asyncio.Lock()
 
 
 async def _cached_list():
     now = time.monotonic()
     if _list_snap["infos"] is not None and now - _list_snap["t"] < _LIST_TTL:
         return _list_snap["infos"]
-    infos = await asyncio.to_thread(_registry.list)
-    _list_snap["infos"] = infos
-    _list_snap["t"] = time.monotonic()
-    return infos
+    # Single-flight, pelo mesmo motivo do api._guardar_snap: o `await` cede o loop, entao os loops
+    # de todas as conexoes SSE erram o cache juntos e disparam um `registry.list()` cada. Com o
+    # lock, um varre e os outros aproveitam.
+    async with _list_lock:
+        if _list_snap["infos"] is not None and time.monotonic() - _list_snap["t"] < _LIST_TTL:
+            return _list_snap["infos"]
+        infos = await asyncio.to_thread(_registry.list)
+        _list_snap["infos"] = infos
+        _list_snap["t"] = time.monotonic()
+        return infos
 
 
 # Reducao ESTAVEL da statusline pro dedup da lista: modelo, contexto em baldes de 5%, ⚡5h% e 📅7d%.

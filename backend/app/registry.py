@@ -245,7 +245,7 @@ def _kimi_corrige_ocioso(info, marker):
 # sobem juntos pelo lancador, e ate a thread abrir nao ha sidecar nenhum. Sem esta linha o pane cai
 # no default "claude" e e casado com o transcript do CLAUDE do mesmo diretorio — a mesma regressao
 # que ja custou caro no Pi.
-_EXEC_PROVIDER = {"pi": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
+_EXEC_PROVIDER = {"pi": "pi", "omp": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
                   "codex": "codex"}
 
 # Windows: o argv0 vem com extensao (`claude.exe`), que nao casa em _EXEC_PROVIDER; e um CLI
@@ -721,6 +721,9 @@ class SessionRegistry:
             cmd = _cmdline(p)
             if not ("daemon" in cmd or "--bg-" in cmd or "--agent" in cmd):
                 continue
+            # Mesmo filtro do passo 1 do _resolve_tracked_impl, pelo mesmo motivo.
+            if _provider_do_argv(cmd.split()) is None:
+                continue
             cdir = _config_dir_of(p)
             j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)
             if j:
@@ -792,6 +795,14 @@ class SessionRegistry:
             for p in pids:
                 cmd = _cmdline(p)
                 if "daemon" in cmd or "--bg-" in cmd or "--agent" in cmd:
+                    continue
+                # So um CLI de agente abre transcript. O resto da arvore (servidores MCP, node, git,
+                # shells) nunca casa, e varrer o /proc/<pid>/fd deles e o passo mais caro da
+                # listagem: medido nesta maquina, 85% dos readlinks eram de nao-agentes e o
+                # resultado era None. `cmd.split()` e nao `_argv` (ao contrario do provider_of_pane,
+                # que evita o split por causa do espaco no caminho do node no Windows): daqui pra
+                # baixo so roda no Linux, porque fora dele o _open_jsonl ja devolve None sempre.
+                if _provider_do_argv(cmd.split()) is None:
                     continue
                 cdir = _config_dir_of(p)
                 j = _open_jsonl(p, (cdir / "projects") if cdir else self.projects_dir)

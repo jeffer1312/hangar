@@ -24,7 +24,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import atomico, atualizacoes, atualizar, diag, migracao_sidecars, pensamento_pt, tmux
+from app import (atomico, atualizacoes, atualizar, diag, migracao_sidecars, pensamento_pt,
+                 procinfo, tmux)
 from app.auth import require_auth, require_loopback
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
 from app.bastao import montar as bastao_montar
@@ -653,12 +654,32 @@ _LIST_TTL = 1.0
 # pequeno (a lista de uma thread carimbada com o relogio da outra, dezenas de ms a mais de atraso),
 # mas o par num STORE_SUBSCR so custa o mesmo e nao deixa a pergunta em aberto.
 _list_snap: dict = {"snap": None}
+# Single-flight: SEM ele o TTL nao segura nada sob carga. N threads que erram o cache juntas viram N
+# `registry.list()` completos; com dez em paralelo brigando pelo GIL cada uma passa de ~70ms pra
+# ~700ms, o TTL de 1s vence antes da leva seguinte e todas erram de novo — a avalanche se
+# auto-alimenta. Medido: 10,4 threads dentro de list() em TODA amostra, backend em 1,5 core parado.
+# Com o lock, a primeira varre e as outras esperam por ela; o resultado e o mesmo, o custo e 1/N.
+_list_lock = threading.Lock()
 
 
-def _guardar_snap() -> list[SessionInfo]:
-    infos = registry.list()
-    _list_snap["snap"] = (time.monotonic(), infos)
-    return infos
+def _guardar_snap(forcar: bool = False) -> list[SessionInfo]:
+    inicio = time.monotonic()
+    with _list_lock:
+        # Re-checa DENTRO do lock: quem ficou na fila enquanto a primeira varria ja tem snapshot
+        # fresco esperando e nao precisa varrer de novo. `forcar` e o miss por nome (sessao criada
+        # ha <1s): ai o que se quer e justamente uma varredura NOVA, entao so vale o snapshot que
+        # nasceu DEPOIS desta chamada comecar — senao o fallback devolveria o mesmo 404.
+        snap = _list_snap["snap"]
+        if snap is not None and (snap[0] > inicio if forcar
+                                 else time.monotonic() - snap[0] < _LIST_TTL):
+            return snap[1]
+        if forcar:
+            # Sessao criada ha <1s: o mapa de processos cacheado ainda nao a enxerga, e a varredura
+            # nova e justamente o que se quer aqui.
+            procinfo._invalidar_children_map()
+        infos = registry.list()
+        _list_snap["snap"] = (time.monotonic(), infos)
+        return infos
 
 
 def _cached_info_sync(name: str) -> SessionInfo | None:
@@ -671,7 +692,7 @@ def _cached_info_sync(name: str) -> SessionInfo | None:
              else _guardar_snap())
     info = next((s for s in infos if s.name == name), None)
     if info is None:
-        info = next((s for s in _guardar_snap() if s.name == name), None)
+        info = next((s for s in _guardar_snap(forcar=True) if s.name == name), None)
     return info
 
 
