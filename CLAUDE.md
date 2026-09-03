@@ -334,6 +334,23 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 
 - **CSS animations.** Shared tokens/keyframes live in `app.css` (`--ease-out`, `--spring`, …); a global
   `prefers-reduced-motion` rule neutralizes loops, so new keyframes don't each need their own guard.
+- **Ponte de skills (`app/skill_bridge.py`): o omp descobre sozinho as skills dos outros CLIs
+  (providers `claude`/`claude-plugins`/`agents`); pi, kimi e codex não — leem só as pastas da
+  própria config.** Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
+  cache VERSIONADO dos plugins (`plugins/cache/ecc/ecc/2.2.0/skills/...`): bump de versão =
+  dezenas de links pendurados, calados (03/09/2026: 3 fazendas manuais, 99/119/157 links, todas
+  com podres). A ponte varre as fontes (`~/.claude/skills`, `skills/` do repo, cache — só a
+  versão MAIS NOVA de cada plugin —, marketplaces, `~/.agents/skills`), dedup por nome na ordem
+  de precedência, e materializa symlinks nas pontes: pi → `~/.pi/agent/skills-bridge`, kimi →
+  `~/.kimi-code/skills-bridge`, codex → `~/.codex/skills`. Harness novo = uma linha em `TARGETS`;
+  o omp fica fora de propósito (descobre nativo). Regras duras: stdlib-only (o installer chama
+  com o python3 do sistema, regra do `engines.py`); **só mexe em symlink cujo alvo está numa
+  fonte conhecida** — arquivo real (o `.system` do codex) ou link à mão pra fora das fontes
+  nunca é tocado; config alheia (settings.json do pi, config.toml do kimi) é só CONFERIDA, com
+  aviso quando a ponte não está na lista — nunca editada. Roda na subida do backend e no
+  `install-claude-wrapper.sh` (precedente `migracao_sidecars`: atualizar é `git pull` + restart,
+  installer não é garantido). Standalone: `python3 backend/app/skill_bridge.py [--dry-run]`.
+
 - **Loop runner** (`app/loop.py` + `components/LoopSheet.svelte`): loop autônomo por sessão —
   goal → sessão trabalha → idle dispara tick (`_on_hook_transition`, dentro do `_work`, só com
   `sent == 0`) → roda `check_cmd` (exit 0 = `done`) ou procura `LOOP_DONE` (→ `done_claimed`,

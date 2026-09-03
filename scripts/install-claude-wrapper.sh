@@ -254,6 +254,17 @@ else
   echo "  pi nao encontrado — pulando a extensao de estado (instale o pi e rode de novo)"
 fi
 
+# --- ponte de skills (pi/kimi/codex) -----------------------------------------------------------
+# O omp descobre as skills dos outros CLIs sozinho na largada; pi, kimi e codex nao — leem so as
+# pastas declaradas na config deles. Este passo materializa symlinks pras skills do Claude
+# (plugins inclusos) nas pastas que eles leem. Tambem roda na subida do backend: o alvo e o cache
+# VERSIONADO dos plugins, e um bump de versao deixaria a fazenda pendurada ate o proximo install.
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$SCRIPT_DIR/../backend/app/skill_bridge.py" || echo "  ⚠ ponte de skills falhou — a instalacao segue"
+else
+  echo "  python3 nao encontrado — pulando a ponte de skills"
+fi
+
 # Statusline: ask if undecided and interactive; default yes otherwise.
 if [ -z "$DO_STATUS" ]; then
   if [ -t 0 ]; then
