@@ -11,6 +11,9 @@
 # Emergência: `git push --no-verify` pula. Saída deliberada, não bug.
 set -uo pipefail
 
+# O git entrega os refs uma vez só pelo stdin; guardado, porque dois laços leem (vazamento e CI).
+ENTRADA="$(cat)"
+
 PADROES=(
     "chave OpenAI::sk-[A-Za-z0-9_-]{20,}"
     "token GitHub::gh[pousr]_[A-Za-z0-9]{20,}"
@@ -72,7 +75,7 @@ while read -r _localref localsha _remoteref remotesha; do
             printf '%s\n' "$casadas" | head -5 | sed 's/^+/    /' | cut -c1-140
         fi
     done
-done
+done <<< "$ENTRADA"
 
 if (( achou )); then
     cat >&2 <<'FIM'
@@ -86,4 +89,18 @@ if (( achou )); then
 FIM
     exit 1
 fi
+
+# ── Portão do CI ─────────────────────────────────────────────────────────────
+# Push que chega na main com o CI vermelho não atualiza a release dist-latest, e o instalador segue
+# servindo tela velha. Roda aqui os mesmos gates do ci.yml (scripts/ci-gates.sh), só sobre o que
+# o push leva. `git push --no-verify` pula, como a trava acima.
+while read -r _localref localsha remoteref remotesha; do
+    [[ "$localsha" == "$ZERO" || "$remoteref" != "refs/heads/main" ]] && continue
+    # </dev/null: o portão herda o stdin do laço, e um filho que leia dali engole os refs seguintes.
+    if [[ "$remotesha" == "$ZERO" ]]; then
+        scripts/ci-gates.sh </dev/null || exit 1
+    else
+        scripts/ci-gates.sh "$remotesha" "$localsha" </dev/null || exit 1
+    fi
+done <<< "$ENTRADA"
 exit 0
