@@ -1,5 +1,8 @@
 <script lang="ts">
   import { ctxPanel, alternarCtxPanel, arrastarLargura, salvarLargura } from '../lib/ctxPanel.svelte';
+  import { navegadorPanel, arrastarNav, salvarNav } from '../lib/navegadorPanel.svelte';
+  import { workspaceSessionKey } from '../lib/workspaceCommands';
+  import NavegadorPane from './NavegadorPane.svelte';
 import * as m from '../paraglide/messages';
   import HangarWorking from './icons/HangarWorking.svelte';
   import RateChips from './RateChips.svelte';
@@ -139,12 +142,17 @@ import * as m from '../paraglide/messages';
     e.preventDefault();
   }
   function resizeMove(e: PointerEvent) {
-    if (ctxPanel.resizing) arrastarLargura(e.clientX);
+    if (!ctxPanel.resizing) return;
+    // Com a aba Navegador ativa a divisória mexe na largura DELE (store próprio, teto próprio) —
+    // a coluna engrossa pro browser; nas outras abas, a do contexto como sempre.
+    if (ctxPanel.aba === 'navegador') arrastarNav(e.clientX);
+    else arrastarLargura(e.clientX);
   }
   function resizeEnd() {
     if (!ctxPanel.resizing) return;
     ctxPanel.resizing = false;
-    salvarLargura();
+    if (ctxPanel.aba === 'navegador') salvarNav();
+    else salvarLargura();
   }
   // O flag vive no store (singleton de modulo) e sobrevive à desmontagem. Se a alca sair do DOM
   // no meio do arrasto — recolher, cruzar os 820px, trocar de sessao — o pointerup nao tem
@@ -280,7 +288,20 @@ import * as m from '../paraglide/messages';
             onclick={() => (ctxPanel.aba = 'arquivos')}>
       {m.arq_aba()}
     </button>
+    <button type="button" id="aba-ctx-navegador" class="aba" class:sel={ctxPanel.aba === 'navegador'}
+            role="tab" aria-selected={ctxPanel.aba === 'navegador'} aria-controls="painel-ctx-navegador"
+            onclick={() => (ctxPanel.aba = 'navegador')}>
+      {m.ctx_navegador()}
+    </button>
   </div>
+
+  {#if ctxPanel.aba === 'navegador'}
+  <!-- O navegador é uma ABA da coluna: trocar pra Contexto/Arquivos esconde o view (desmonta o
+       painel -> nav-hide; o agente segue usando via CDP), nunca fecha. O × dele é quem fecha. -->
+  <div id="painel-ctx-navegador" role="tabpanel" aria-labelledby="aba-ctx-navegador" class="ctx-tab ctx-tab-nav">
+    <NavegadorPane navKey={workspaceSessionKey({ serverId, name: sessionName })} />
+  </div>
+  {/if}
 
   {#if ctxPanel.aba === 'contexto'}
   <div id="painel-ctx-contexto" role="tabpanel" aria-labelledby="aba-ctx-contexto" class="ctx-tab">
@@ -413,7 +434,7 @@ import * as m from '../paraglide/messages';
   </section>
   </div>
   </div>
-  {:else}
+  {:else if ctxPanel.aba === 'arquivos'}
   <div id="painel-ctx-arquivos" role="tabpanel" aria-labelledby="aba-ctx-arquivos" class="ctx-tab">
     <FilesPanel sessionName={sessionName} {serverId} desktop={true} {events} {histGap} {cwd} />
   </div>

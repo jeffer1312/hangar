@@ -28,11 +28,9 @@
   import PairChatModal from '../components/PairChatModal.svelte';
   import LoopSheet from '../components/LoopSheet.svelte';
   import DesktopSessionContext from '../components/DesktopSessionContext.svelte';
-  import NavegadorPane from '../components/NavegadorPane.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
-  import { navegadorPanel, marcarNavAberto, fecharNav, atualizarNavUrl } from '../lib/navegadorPanel.svelte';
-  import { navegadorNativo } from '../lib/navegadorNativo';
+  import { navegadorPanel, marcarNavAberto, atualizarNavUrl } from '../lib/navegadorPanel.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
     getHistory,
@@ -834,14 +832,14 @@
   // local, voltar pra uma sessão que tinha navegador aberto o perderia. O view nativo fica VIVO
   // escondido enquanto isso (o agente segue dirigindo via CDP).
   const navKey = $derived(workspaceSessionKey({ serverId: getActiveId() ?? '', name: sessionName }));
-  const navOpen = $derived(desktop && navKey in navegadorPanel.abertos);
+  // O navegador é uma ABA do painel de contexto (DesktopSessionContext) — "abrir" é ir pra aba
+  // (abrindo o painel se recolhido); voltar pra Contexto esconde o view sem fechar, e quem fecha
+  // de verdade é o × do painel. A sidebar colapsa com a aba ativa (efeito no ctxPanel).
   function alternarNavegador() {
-    if (navOpen) { fecharNav(navKey); navegadorNativo()?.close(navKey); }
-    else marcarNavAberto(navKey);
+    if (ctxPanel.aba === 'navegador' && !ctxPanel.recolhido) { ctxPanel.aba = 'contexto'; return; }
+    ctxPanel.recolhido = false;
+    ctxPanel.aba = 'navegador';
   }
-  // Com o navegador aberto, a sidebar colapsa pro trilho SEM matar o fold — a lógica mora no
-  // store navegadorPanel (syncSidebar): o usuário pode expandir, e aí ela flutua por cima como
-  // gaveta em vez de empurrar o navegador.
   // Campos de loop vêm do SSE DA PRÓPRIA SESSÃO (stateEvent), não do sessionsStore: reter o
   // store aqui abria 1 stream de lista POR SERVIDOR no celular (com offline = retry eterno) e
   // derrubava a conexão do pocket — regressão real vista no iPhone, revertida.
@@ -1309,6 +1307,9 @@
         const { url } = JSON.parse(e.data) as { url?: string };
         marcarNavAberto(navKey);
         if (url) atualizarNavUrl(navKey, url);
+        // o agente abriu -> a aba Navegador já aparece aberta (e o painel, se estava recolhido)
+        ctxPanel.recolhido = false;
+        ctxPanel.aba = 'navegador';
       } catch {}
     });
 
@@ -1855,9 +1856,7 @@
   class:desktop
   class:split-pane={splitTab}
   class:with-context={desktop && showContextPanel}
-  class:with-nav={desktop && navOpen}
-  style:--cp-nav-w={navOpen ? `${navegadorPanel.largura}px` : undefined}
-  style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.largura}px`}
+  style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.aba === 'navegador' ? navegadorPanel.largura : ctxPanel.largura}px`}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
 >
@@ -1888,7 +1887,7 @@
     <LoopSheet open={true} sessionName={sessionName} onClose={() => (loopSheetOpen = false)} />
   {/if}
 
-  {#if desktop && showContextPanel && !navOpen}
+  {#if desktop && showContextPanel}
     <DesktopSessionContext
       toggleExterno={ctxToggleExterno}
       state={currentState}
@@ -1926,12 +1925,6 @@
       {planLoading}
       {planError}
     />
-  {/if}
-
-  {#if desktop && navOpen}
-    <!-- Sem onClose: o × do painel já faz fecharNav + close no main, e este bloco desmonta
-         sozinho porque navOpen é derivado do store. -->
-    <NavegadorPane {navKey} />
   {/if}
 
   {#if visorAberto && arquivoAberto}
@@ -2477,18 +2470,6 @@
     .chat-screen.with-context .bottom-dock :global(.composer-card) { max-width: min(calc(min(1440px, 100%) * var(--cp-width-scale, 1)), 100%); }
   }
 
-  /* Navegador embutido: ocupa o LUGAR do painel de contexto (que não monta com ele aberto) —
-     o recuo do conteúdo é a largura dele (--cp-nav-w, do store navegadorPanel, arrastável), e
-     vale em TODA a largura de desktop: as regras de --recuo-dir acima só existem em 1280+
-     porque só o contexto as usava; com o navegador aberto o conteúdo precisa recuar em qualquer
-     largura, senão o view nativo (que flutua POR CIMA do DOM) cobriria o texto e o composer.
-     O NavegadorPane se posiciona pela mesma var, então bounds do view e faixa reservada nunca
-     divergem. */
-  @media (min-width: 820px) {
-    .chat-screen.desktop.with-nav { --recuo-dir: var(--cp-nav-w, 0px); }
-    .chat-screen.desktop.with-nav :global(.message-list) { box-sizing: border-box; padding-right: var(--recuo-dir); }
-    .chat-screen.desktop.with-nav .bottom-dock { right: var(--recuo-dir); }
-  }
 
   /* Aviso flutuante "interação só pela TUI": acima do dock (bottom = altura do dock + gap, via JS).
      Pulsa pra chamar atenção; centralizado. z acima do dock. */

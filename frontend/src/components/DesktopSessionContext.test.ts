@@ -88,13 +88,14 @@ describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
     unmount(t.comp);
   });
 
-  it('a barra de abas tem Contexto e Arquivos, com a primeira ativa', async () => {
+  it('a barra de abas tem Contexto, Arquivos e Navegador, com a primeira ativa', async () => {
     const t = montar(false);
     await tick();
     const abas = [...document.querySelectorAll('.aba')];
-    expect(abas.map((a) => a.textContent?.trim())).toEqual(['Contexto', 'Arquivos']);
+    expect(abas.map((a) => a.textContent?.trim())).toEqual(['Contexto', 'Arquivos', 'Navegador']);
     expect(abas[0].getAttribute('aria-selected')).toBe('true');
     expect(abas[1].getAttribute('aria-selected')).toBe('false');
+    expect(abas[2].getAttribute('aria-selected')).toBe('false');
     unmount(t.comp);
   });
 

@@ -1,20 +1,20 @@
 <script lang="ts">
-  // Navegador embutido na coluna da DIREITA: quando abre, o painel de contexto sai e ele ocupa o
-  // lugar (mais largo, redimensionável pela divisória esquerda), e a sidebar colapsa (o Chat faz
-  // as duas coisas). No shell Electron o conteúdo é um WebContentsView NATIVO (login Google
-  // persistente via partição, dirigível por CDP); fora do shell cai no iframe.
+  // Navegador embutido — ABA da coluna da direita (DesktopSessionContext). No shell Electron o
+  // conteúdo é um WebContentsView NATIVO (partição persist:nav, dirigível por CDP); fora do shell
+  // cai no iframe.
   //
-  // O view nativo flutua POR CIMA do DOM — não é elemento HTML. Este componente só reserva o
-  // espaço no layout (o Chat recua com --recuo-dir = --cp-nav-w) e mede o retângulo pro shell
-  // pintar lá. Consequência conhecida: modal/sheet que abrir na área dele fica "atrás".
+  // O view nativo flutua POR CIMA do DOM — não é elemento HTML. Este componente só mede o
+  // retângulo do âncora e manda pro shell pintar lá. Trocar de aba/sessão DESMONTA este painel →
+  // nav-hide: o view fica vivo escondido e o agente segue dirigindo via CDP; fechar de verdade é
+  // o ×. E com overlay DOM aberto (sheet/modal/visor) o view se esconde (bounds zero) pra não
+  // cobrir nada.
   import { onMount, untrack } from 'svelte';
   import * as m from '../paraglide/messages';
   import { navegadorNativo } from '../lib/navegadorNativo';
-  import { navegadorPanel, arrastarNav, salvarNav, atualizarNavUrl, fecharNav } from '../lib/navegadorPanel.svelte';
+  import { navegadorPanel, atualizarNavUrl, fecharNav } from '../lib/navegadorPanel.svelte';
+  import { ctxPanel } from '../lib/ctxPanel.svelte';
 
-  // navKey = workspaceSessionKey da sessão dona deste painel. UM view por sessão: desmontar
-  // (troca de sessão) chama hide — o view fica vivo pro agente seguir usando via CDP; fechar de
-  // verdade é o ×, que faz fecharNav (o Chat desmonta este painel via store) + close no main.
+  // navKey = workspaceSessionKey da sessão dona deste painel.
   let { navKey }: { navKey: string } = $props();
 
   const nativo = navegadorNativo();
@@ -45,28 +45,6 @@
     if (nativo) nativo.open(navKey, u, rectDaAncora());
   }
 
-  // Drag na divisória ESQUERDA (o painel cola na direita): pointer capture no handle, largura
-  // clampada no store, salva no soltar. Mesma pegada do ctxPanel — sem transição de width, o
-  // arrasto segue o ponteiro sem lag (a classe resizing é a trava contra transição futura).
-  // O handle vive FORA do âncora, de propósito: o view nativo cobre o âncora e engoliria o
-  // clique — era por isso que "depois de abrir uma página não redimensionava mais".
-  function resizeStart(e: PointerEvent) {
-    navegadorPanel.resizing = true;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    e.preventDefault();
-  }
-  function resizeMove(e: PointerEvent) {
-    if (navegadorPanel.resizing) arrastarNav(e.clientX);
-  }
-  function resizeEnd() {
-    if (!navegadorPanel.resizing) return;
-    navegadorPanel.resizing = false;
-    salvarNav();
-  }
-  // A alça saindo do DOM no meio do arrasto (trocar de sessão remonta o Chat) deixaria o flag
-  // preso e a divisória redimensionaria só com o cursor por cima — mesmo motivo do ctxPanel.
-  $effect(() => () => { navegadorPanel.resizing = false; });
-
   // URL empurrada de fora (o agente, via `hangar-preview open`): o store é a via de entrada; se
   // ela difere da aberta, navega. O ir() do usuário escreve no store junto, então não há loop.
   $effect(() => {
@@ -80,12 +58,11 @@
 
   onMount(() => {
     if (!nativo) return;
-    // Reenvia o retângulo a cada mudança de layout (resize da janela, arrasto da divisória,
-    // sidebar) — o view nativo não acompanha o DOM sozinho.
-    // Com overlay DOM aberto (sheet, modal, visor de mídia) o view se esconde: ele flutua POR
-    // CIMA de tudo e cobriria o overlay — era o "não sai da frente da imagem". O seletor é o
-    // canônico do app (Composer/DesktopShell detectam modal com o mesmo) + .bp-wrap do visor.
-    // Os dois teleportam pro body, então um MutationObserver raso (childList) já cobre.
+    // Reenvia o retângulo a cada mudança de layout (resize da janela, drag da coluna, sidebar) —
+    // o view nativo não acompanha o DOM sozinho. Com overlay DOM aberto o view se esconde: ele
+    // flutua POR CIMA de tudo e cobriria o overlay. O seletor é o canônico do app (Composer/
+    // DesktopShell detectam modal com o mesmo) + .bp-wrap do visor de mídia; os dois teleportam
+    // pro body, então um MutationObserver raso (childList) já cobre.
     const SELETOR_OVERLAY = '[role="dialog"]:not(.board-overlay), .bp-wrap';
     const sync = () => {
       if (document.querySelector(SELETOR_OVERLAY)) nativo.bounds(navKey, { x: 0, y: 0, width: 0, height: 0 });
@@ -104,12 +81,12 @@
     return () => {
       ro.disconnect();
       mo.disconnect();
-      nativo.hide(navKey);   // desmontou (troca de sessão): ESCONDE, não fecha — o × é o close
+      nativo.hide(navKey);   // desmontou (troca de aba/sessão): ESCONDE, não fecha — o × é o close
     };
   });
 </script>
 
-<section class="nav-panel" class:resizing={navegadorPanel.resizing} aria-label={m.ctx_navegador()}>
+<div class="nav-pane">
   <header class="nav-bar">
     <form class="nav-form" onsubmit={(e) => { e.preventDefault(); ir(); }}>
       <input
@@ -129,63 +106,39 @@
       aria-label={m.nav_recarregar()}
       title={m.nav_recarregar()}
     >↻</button>
-    <button class="nav-btn" onclick={() => { fecharNav(navKey); nativo?.close(navKey); }} aria-label={m.shell_fechar_painel()} title={m.shell_fechar_painel()}>×</button>
+    <!-- O × fecha o navegador DE VERDADE (mata o view) e volta pra aba Contexto — esconder sem
+         fechar é trocar de aba. -->
+    <button
+      class="nav-btn"
+      onclick={() => { fecharNav(navKey); nativo?.close(navKey); ctxPanel.aba = 'contexto'; }}
+      aria-label={m.shell_fechar_painel()}
+      title={m.shell_fechar_painel()}
+    >×</button>
   </header>
 
-  <div class="nav-main">
-    <!-- Divisória esquerda FORA do âncora: o view nativo cobre o âncora, então um handle dentro
-         da área dele morre sem clique assim que uma página abre. -->
-    <div
-      class="nav-resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label={m.ctx_navegador()}
-      onpointerdown={resizeStart}
-      onpointermove={resizeMove}
-      onpointerup={resizeEnd}
-      onpointercancel={resizeEnd}
-    ></div>
-    {#if nativo}
-      <!-- O âncora precisa existir MESMO vazio: é ele que o ResizeObserver mede pro shell. -->
-      <div class="nav-body" bind:this={ancora}>
-        {#if !aberta}<p class="nav-hint">{m.nav_vazio()}</p>{/if}
-      </div>
-    {:else if aberta}
-      {#key aberta + recarregos}
-        <iframe class="nav-body nav-frame" src={aberta} title={m.ctx_navegador()}></iframe>
-      {/key}
-    {:else}
-      <div class="nav-body"><p class="nav-hint">{m.nav_vazio()}</p></div>
-    {/if}
-  </div>
-</section>
+  {#if nativo}
+    <!-- O âncora precisa existir MESMO vazio: é ele que o ResizeObserver mede pro shell. -->
+    <div class="nav-body" bind:this={ancora}>
+      {#if !aberta}<p class="nav-hint">{m.nav_vazio()}</p>{/if}
+    </div>
+  {:else if aberta}
+    {#key aberta + recarregos}
+      <iframe class="nav-body nav-frame" src={aberta} title={m.ctx_navegador()}></iframe>
+    {/key}
+  {:else}
+    <div class="nav-body"><p class="nav-hint">{m.nav_vazio()}</p></div>
+  {/if}
+</div>
 
 <style>
-  /* Colado na borda direita, no LUGAR do painel de contexto (que não monta com o navegador
-     aberto). A largura vem do Chat (--cp-nav-w, do store navegadorPanel), que recua o conteúdo
-     da mesma faixa — assim os bounds do view nativo e a área reservada nunca divergem. */
-  .nav-panel {
-    position: absolute;
-    top: calc(var(--nav-h, 0px) + 8px);
-    right: 6px;
-    bottom: 8px;
-    width: var(--cp-nav-w, 45vw);
+  /* Conteúdo de coluna: quem manda na largura é o painel de contexto (a aba Navegador usa a
+     largura do navegadorPanel). Nada de position aqui — o view nativo segue o âncora medido. */
+  .nav-pane {
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    background: var(--glass-panel);
-    overflow: hidden;
-    z-index: 19;
   }
-  .nav-main { flex: 1; min-height: 0; display: flex; }
-  .nav-resize-handle {
-    flex: 0 0 12px;
-    cursor: col-resize;
-    touch-action: none;
-    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  }
-  .nav-resize-handle:hover { background: var(--surface-raised); }
   .nav-bar {
     display: flex;
     align-items: center;
