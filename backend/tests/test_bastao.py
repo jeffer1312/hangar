@@ -734,13 +734,9 @@ def test_sem_commit_na_sessao_mantem_a_contagem(tmp_path, monkeypatch):
 def test_falha_de_hook_e_grep_vazio_nao_sao_falhas_da_sessao(hangar2):
     jsonl, cwd = hangar2
     bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "Arquivos e comandos")
-    for ruido in ("Fact-Forcing Gate", "lembrete automático"):
+    for ruido in ("Fact-Forcing Gate", "lembrete automático", "89 matches"):
         assert ruido not in bloco
-    # O "89 matches" do recorte vem de um `grep … | head -80; echo ====; grep … | head -30`: o
-    # ÚLTIMO comando da cadeia é `head`, não grep — a origem do "Exit code 1" é ambígua (regra
-    # corrigida: só filtra quando o grep/rg é o último da cadeia), então ele fica como falha real.
-    assert "89 matches" in bloco
-    assert "FALHARAM" in bloco
+    assert "FALHARAM" not in bloco            # no recorte, TODAS as falhas eram ruído
 
 
 def test_grep_vazio_em_comando_composto():
@@ -750,10 +746,15 @@ def test_grep_vazio_em_comando_composto():
     assert bastao._grep_vazio("rg -n foo src/", "Exit code 1")
     assert not bastao._grep_vazio("grep -c foo bar", "Exit code 2\ngrep: bar: No such file or directory")
     assert not bastao._grep_vazio("uv run pytest -q", "Exit code 1\n1 failed")
+    assert bastao._grep_vazio("git status --short | grep -c '^ M'", "Exit code 1")
+    # O caso medido no fixture: grep no ÚLTIMO statement, mas atrás de `| head` — o `head` não muda
+    # quem "não achou".
+    assert bastao._grep_vazio(
+        'grep -n "a" x.py | head -80; echo ====; grep -rn "b" y.py z.py | head -30',
+        "Exit code 1\n89 matches in 1 files:")
     # `&&`/`||` deixam ambíguo de quem é o exit code — não esconde uma falha real do pytest.
     assert not bastao._grep_vazio("uv run pytest -q && grep -c PASS output.log", "Exit code 1\n1 failed")
     assert not bastao._grep_vazio("grep -c foo bar; uv run pytest -q", "Exit code 1\n1 failed")  # grep não é o último
-    assert bastao._grep_vazio("git status --short | grep -c '^ M'", "Exit code 1")
 
 
 def test_erro_de_sistema_entre_colchetes_nao_e_ruido_de_hook():

@@ -427,14 +427,15 @@ def _e_ruido_de_hook(result: str | None) -> bool:
     return bool(_HOOK_RE.match(r)) or _LEMBRETE in r
 
 
-_SEP_CMD = re.compile(r"\s*(?:;|&&|\|\||\|)\s*")
+_SEP_STMT = re.compile(r"\s*;\s*")
+_SEP_PIPE = re.compile(r"\s*\|\s*")
 
 
 def _grep_vazio(cmd: str, result: str | None) -> bool:
-    """grep/rg com exit 1 é "não achou", não erro — mas só quando o `grep`/`rg` é o ÚLTIMO comando
-    da cadeia e não há `&&`/`||`: com `;`/`|` o exit code é do último comando (sem ambiguidade);
-    com `&&`/`||` ele pode vir de outro comando ANTES do grep, e esconder isso custa mais que uma
-    linha de ruído (`uv run pytest -q && grep -c PASS out.log` falhando no pytest não pode sumir)."""
+    """grep/rg com exit 1 é "não achou", não erro. `;` separa STATEMENTS (o exit code é do
+    último); dentro do último statement, `|` separa um PIPELINE, e QUALQUER estágio dele sendo
+    grep/rg conta (`grep … | head -30` — o `head` não muda quem "não achou"). `&&`/`||` tornam a
+    origem do exit code ambígua (pode ser de um comando ANTES do grep) — não filtra."""
     r = (result or "").lstrip()
     if not r.startswith("Exit code 1"):
         return False
@@ -446,10 +447,11 @@ def _grep_vazio(cmd: str, result: str | None) -> bool:
         return False
     if "&&" in cmd or "||" in cmd:
         return False
-    segmentos = [s for s in _SEP_CMD.split(cmd) if s.strip()]
-    if not segmentos:
+    statements = [s for s in _SEP_STMT.split(cmd) if s.strip()]
+    if not statements:
         return False
-    return (segmentos[-1].strip().split() or [""])[0].split("/")[-1] in ("grep", "rg")
+    estagios = [s for s in _SEP_PIPE.split(statements[-1]) if s.strip()]
+    return any((s.strip().split() or [""])[0].split("/")[-1] in ("grep", "rg") for s in estagios)
 
 
 def _arquivos_tocados(eventos: list) -> list[str]:
