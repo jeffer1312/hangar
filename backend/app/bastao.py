@@ -516,6 +516,8 @@ def _arquivos_e_comandos(eventos: list, cwd: str | None = None) -> list[str]:
                         comandos.append([txt, 1])
         elif ev.kind == "tool_result" and ev.is_error:
             if _e_ruido_de_hook(ev.result) or _grep_vazio(cmd_por_id.get(ev.tool_use_id or "", ""), ev.result):
+                # Heurística: se classificar errado, o rastro fica no log em vez de sumir calado.
+                _log.debug("bastao: falha tratada como ruído: %.80s", ev.result or "")
                 continue
             quem = nome_por_id.get(ev.tool_use_id or "", "ferramenta")
             falhas.append(f"  - `{quem}`: {_uma_linha(ev.result, 160)}")
@@ -750,6 +752,7 @@ def _inicio(jsonl: str) -> float | None:
     try:
         return _transcript_start_ts(jsonl) or None
     except Exception:
+        _log.warning("bastao: não deu pra achar o início do transcript %s", jsonl, exc_info=True)
         return None
 
 
