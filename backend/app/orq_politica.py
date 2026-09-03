@@ -23,6 +23,9 @@ _log = logging.getLogger("hangar.orq_politica")
 CABECALHO = ("conta", "provider", "apelido", "modelos", "trocar?")
 SECAO_PODE = "O que pode"
 SECAO_NAO_PODE = "O que NÃO pode"
+# Sem `omp`: ele é aceito como provider de PAPEL (executor/revisor), mas a política dele é a do Pi
+# — `permitido()` normaliza omp→pi antes de procurar a regra, então uma linha `omp` na tabela nunca
+# seria consultada. Ver `_provider_inventario`.
 PROVIDERS = ("claude", "kimi", "pi", "codex")
 CONTA_PADRAO = "padrao"      # o ~/.claude
 CONTA_CODEX = "openai-codex"
@@ -180,6 +183,9 @@ def _secao_nao_pode(texto: str) -> str:
 
 
 def gravar_conta(c: ContaPolitica, mtime_lido: float | None = None) -> float:
+    if c.provider == "omp":
+        raise ValueError("a política do omp é a do Pi — libere a conta no provider `pi`, "
+                         "que vale pros dois; a tabela não tem linha `omp`")
     texto, _ = orq_md.ler_arquivo(caminho())
     texto = orq_md.trocar_linha(texto, CABECALHO, c.conta, _para_linha(c), SECAO_PODE)
     texto = orq_md.trocar_secao(texto, SECAO_NAO_PODE, _secao_nao_pode(texto))
@@ -195,11 +201,18 @@ def desligar(conta: str, mtime_lido: float | None = None) -> float:
 
 # ------------------------------------------------------------------ regra
 
+def _provider_inventario(provider: str) -> str:
+    """omp e o mesmo credencial/inventario do pi — uma liberacao na tabela cobre os dois, sem
+    linha propria pra `omp`."""
+    return "pi" if provider == "omp" else provider
+
+
 def _niveis(provider: str, modelo: str) -> tuple[str, ...] | None:
     """None = aceita qualquer (Kimi sem catálogo, Codex)."""
     if provider == "claude":
         return model_args.EFFORT_CLAUDE
-    if provider == "pi":
+    if provider in ("pi", "omp"):
+        # omp usa o MESMO inventario de niveis do Pi — nao pede liberacao a parte na politica.
         return model_args.EFFORT_PI
     if provider == "kimi":
         cat = kimi_models.read_catalog()
@@ -220,7 +233,7 @@ def permitido(provider: str, conta: str, modelo: str, esforco: str,
         # antes de montar a política (medido em 26/08/2026).
         niveis = _niveis(provider, modelo)
         return "erro_orq_esforco_invalido" if esforco and niveis is not None and esforco not in niveis else None
-    regra = next((c for c in pol if c.provider == provider
+    regra = next((c for c in pol if c.provider == _provider_inventario(provider)
                   and orq_md.normalizar(c.conta) == orq_md.normalizar(conta)), None)
     if regra is None:
         return "erro_orq_conta_nao_liberada"

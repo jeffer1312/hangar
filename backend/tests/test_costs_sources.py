@@ -259,6 +259,7 @@ def test_coletar_junta_as_tres_fontes_e_dedup_e_por_fonte(tmp_path, monkeypatch)
                                                   "cacheRead": 0, "cacheWrite": 0}}},
     ])
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
+    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "sem-omp")
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sem-codex")
     monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "sem-kimi")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "conta-x")])
@@ -272,6 +273,7 @@ def test_cache_relê_quando_o_arquivo_muda(tmp_path, monkeypatch):
     cfg = tmp_path / ".claude"
     _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=0)
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "x")
+    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "sem-omp")
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "y")
     monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "z")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
@@ -295,6 +297,7 @@ def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
                                                   "cacheRead": 0, "cacheWrite": 0}}},
     ])
     monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
+    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "sem-omp")
     monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "sem-codex")
     monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "sem-kimi")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
@@ -317,6 +320,40 @@ def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
     cs.coletar()
     cs.coletar()
     assert chamadas == {"claude": 2, "pi": 1}, "pi cacheia por assinatura; claude roda a cada coletar()"
+
+
+def test_linhas_omp_le_a_raiz_do_omp_com_source_omp_e_model_change_novo(tmp_path, monkeypatch):
+    # omp grava model_change como "provider/id" (Pi grava provider e modelId separados).
+    raiz = tmp_path / "omp" / "sessions" / "--w--"
+    raiz.mkdir(parents=True)
+    f = raiz / "2026-09-03T15-51-00-640Z_01a067f7-6120-700b-b71d-6a6092e0c720.jsonl"
+    _escrever(f, [
+        {"type": "session", "version": 3, "id": "01a067f7", "timestamp": "2026-09-03T15:51:00.640Z", "cwd": "/w"},
+        {"type": "model_change", "model": "opencode-go/deepseek-v4-flash", "resolvedModelIsFallback": False},
+        {"type": "message", "message": {"role": "assistant", "content": [], "usage": {"input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0}}},
+    ])
+    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "omp" / "sessions")
+    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "pi-vazia")
+    linhas = cs.linhas_omp()
+    assert len(linhas) == 1 and linhas[0].source == "omp"
+    assert linhas[0].model == "deepseek-v4-flash"
+    assert cs.linhas_pi() == []
+
+
+def test_coletar_nao_conta_duas_vezes_quando_as_raizes_coincidem(tmp_path, monkeypatch):
+    # PI_CODING_AGENT_DIR é do pi-coding-agent: exportada, os dois agentes caem na mesma árvore.
+    raiz = tmp_path / "sessions"
+    raiz.mkdir()
+    monkeypatch.setattr(cs, "raiz_pi", lambda: raiz)
+    monkeypatch.setattr(cs, "raiz_omp", lambda: raiz)
+    monkeypatch.setattr(cs, "raiz_codex", lambda: tmp_path / "x")
+    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "y")
+    monkeypatch.setattr(cs, "_config_dirs", lambda: [])
+    vistos = []
+    monkeypatch.setattr(cs, "linhas_pi", lambda raiz=None, source="pi": vistos.append(source) or [])
+    monkeypatch.setattr(cs, "linhas_omp", lambda: vistos.append("omp") or [])
+    cs.coletar()
+    assert vistos == ["pi"]
 
 
 # --- Vieram do test_costs.py: o código que eles cobrem mudou de módulo, o risco não mudou -----

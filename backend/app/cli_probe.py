@@ -21,7 +21,7 @@ import time
 
 _log = logging.getLogger("hangar")
 
-_BIN = {"claude": "claude", "codex": "codex", "pi": "pi", "kimi": "kimi"}
+_BIN = {"claude": "claude", "codex": "codex", "pi": "pi", "omp": "omp", "kimi": "kimi"}
 
 # Seam para testes — monkeypatch para forjar o PATH do login (mesma técnica de procinfo.py).
 # Quando não-None, _obter_path() devolve este valor (se for callable, chama).

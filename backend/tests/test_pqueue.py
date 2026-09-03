@@ -536,6 +536,18 @@ def test_committed_user_lines_kimi_provider(tmp_path):
     assert not any("system-reminder" in l for l in lines)
 
 
+def test_committed_user_lines_pi_e_omp_provider(tmp_path):
+    # omp e o fork do Pi e usa o MESMO parser (app/adapters/pi/transcript.py) — sem cobertura direta
+    # aqui, um shape novo do parser quebraria os dois calado.
+    import json
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"type": "message", "id": "m1", "message": {
+        "role": "user", "timestamp": 1, "content": [{"type": "text", "text": "oi"}]}}) + "\n",
+        encoding="utf-8")
+    assert pqueue.committed_user_lines(str(j), provider="omp") == {"oi"}
+    assert pqueue.committed_user_lines(str(j), provider="pi") == {"oi"}
+
+
 def test_transcript_start_ts_kimi_envelope_time(tmp_path):
     # O ts do Kimi mora no envelope `time` (ms) — sem isto o start_ts era 0.0 e a poda de fila
     # pre-/clear nao funcionava pro provider.

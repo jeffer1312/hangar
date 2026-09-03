@@ -500,6 +500,68 @@ def test_uma_opcao_sozinha_nao_e_menu():
     assert state == "idle"
 
 
+# Glifos de nerd font do picker do omp, por codigo pro arquivo ficar legivel (fonte comum nao
+# desenha a area de uso privado): chevron da linha selecionada e circulo que marca toda opcao.
+_OMP_SEL = chr(0xF054)
+_OMP_OPT = chr(0xF10C)
+
+
+def test_omp_ask_picker_is_awaiting_input():
+    """Picker da tool `ask` do omp: opcoes SEM numero, marcadas por glifos de nerd font.
+
+    Medido no omp 18.1.4: a linha selecionada traz U+F054 (chevron) antes do U+F10C (circulo) que
+    marca toda opcao; o rodape e "Enter select · n note · ↑/↓ move · Esc cancel". A linha de texto
+    livre ("Other (type your own)") e sempre a ultima.
+    """
+    pane = (
+        "● Perguntando preferência de cor\n"
+        "╭─ Ask " + "─" * 45 + "\n"
+        "│ Qual cor você prefere?\n"
+        "├" + "─" * 51 + "\n"
+        f"│ {_OMP_SEL} {_OMP_OPT} Azul\n"
+        f"│   {_OMP_OPT} Verde\n"
+        f"│   {_OMP_OPT} Other (type your own)\n"
+        "│\n"
+        "├" + "─" * 51 + "\n"
+        "│ Enter select · n note · ↑/↓ move · Esc cancel\n"
+        "╰" + "─" * 51 + "\n"
+        " k3 (high) | hangar | sessão 45k\n"
+    )
+    state, label, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert question == "Qual cor você prefere?"
+    assert options == ["Azul", "Verde", "Other (type your own)"]
+
+
+def test_omp_ask_picker_tela_viva():
+    """Captura REAL do pane com o picker aberto (`tmux capture-pane -p`, 160 colunas).
+
+    Duas armadilhas que a tela medida a mao nao tinha e que quebraram o drive ao vivo: o omp deixa
+    NA TELA um cartao-resumo do toolCall com as mesmas marcas de opcao (as opcoes vinham duplicadas
+    e o alvo do drive saia deslocado), e o modelo pode pendurar uma DESCRICAO embaixo de cada opcao
+    (linha dentro da moldura, sem a marca) — que nao e opcao."""
+    pane = (Path(__file__).parent / "fixtures" / "pane_omp_ask_picker.txt").read_text(encoding="utf-8")
+    state, _, question, options = classify(pane)
+    assert state == "awaiting_input"
+    assert question == "Qual cor você prefere?"
+    assert options == ["Azul", "Verde (Recommended)", "Other (type your own)"]
+
+
+def test_omp_ask_picker_citado_sem_rodape_no_fundo_nao_e_menu():
+    # Mesma trava do Pi: o picker do omp so vale com o rodape de navegacao no FUNDO do pane.
+    pane = (
+        "Veja como o omp desenha:\n"
+        f"│ {_OMP_SEL} {_OMP_OPT} Azul\n"
+        f"│   {_OMP_OPT} Verde\n"
+        "│ Enter select · n note · ↑/↓ move · Esc cancel\n"
+        + "".join(f"linha de conversa {i} depois da citacao\n" for i in range(12))
+        + "╰" + "─" * 40 + "╯\n"
+        + " k3 (high) | sessao\n"
+    )
+    state, *_ = classify(pane)
+    assert state == "idle"
+
+
 def test_pi_cursor_citation_without_live_footer_is_not_a_menu():
     # "> 1." CITADO em prosa (o rodape da citacao subiu no scrollback) nao e picker vivo — sem a
     # trava do rodape-no-fundo isto travava a sessao num menu fantasma.

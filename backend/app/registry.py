@@ -245,7 +245,10 @@ def _kimi_corrige_ocioso(info, marker):
 # sobem juntos pelo lancador, e ate a thread abrir nao ha sidecar nenhum. Sem esta linha o pane cai
 # no default "claude" e e casado com o transcript do CLAUDE do mesmo diretorio — a mesma regressao
 # que ja custou caro no Pi.
-_EXEC_PROVIDER = {"pi": "pi", "omp": "pi", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
+# O `omp` entra por SI: o binario do oh-my-pi e um ELF nativo com argv0 `omp`, nao um fork do
+# processo `pi` -- sem esta entrada o pane cai no default "claude" e e casado com o transcript do
+# Claude do mesmo cwd, a mesma regressao do Pi acima.
+_EXEC_PROVIDER = {"pi": "pi", "omp": "omp", "claude": "claude", "kimi": "kimi", "kimi-code": "kimi",
                   "codex": "codex"}
 
 # Windows: o argv0 vem com extensao (`claude.exe`), que nao casa em _EXEC_PROVIDER; e um CLI
@@ -467,12 +470,12 @@ def _pi_sid_of(pid: int) -> Optional[str]:
     return None
 
 
-def _pi_transcript_of_id(cwd: str, sid: str) -> Optional[str]:
+def _pi_transcript_of_id(cwd: str, sid: str, provider: str = "pi") -> Optional[str]:
     # Indireção pro adapter (Task 1), que sabe o slug e o glob <timestamp>_<uuid>.jsonl. Import local
     # pelo mesmo motivo do get_adapter em create(): evita qualquer ciclo se um adapter futuro vier a
     # importar daqui.
     from app.adapters import get_adapter
-    return get_adapter("pi").transcript_path(cwd, sid) or None
+    return get_adapter(provider).transcript_path(cwd, sid) or None
 
 
 def _pi_is_subagent(path: str) -> bool:
@@ -521,7 +524,7 @@ def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
 
 
 def pi_session_file(pane_id: str, pid: Optional[int] = None,
-                    cwd: str = "") -> Optional[str]:
+                    cwd: str = "", provider: str = "pi") -> Optional[str]:
     """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
 
     Nenhum dos dois presente -> None, e a sessao entra na lista SEM transcript. Chutar o arquivo
@@ -585,7 +588,7 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
             return f
     except (OSError, ValueError):
         pass
-    return _pi_transcript_of_id(cwd, sid) if sid else None
+    return _pi_transcript_of_id(cwd, sid, provider) if sid else None
 
 
 _KIMI_TICKET_WARNED: set[tuple[str, str]] = set()
@@ -1044,8 +1047,8 @@ class SessionRegistry:
             # cairia no fallback newest-by-mtime, que pegaria o transcript do CLAUDE do mesmo cwd (a
             # regressao mais cara desta task). Resolve pelo bilhete da extensao / env do wrapper.
             prov = provider_of_pane(p["pid"], children)
-            if prov == "pi":
-                jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
+            if prov in ("pi", "omp"):
+                jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"], prov)
                 # tracked segue o TRANSCRITO, nao o provider. O bilhete/env sao deterministicos
                 # (nunca um chute como o newest-by-mtime do Claude), mas quando NENHUM dos dois
                 # resolve um arquivo nao ha vinculo nenhum: /events e /history exigem info.jsonl e
@@ -1080,12 +1083,8 @@ class SessionRegistry:
                                pair_peers=pair.get("peers") if pair else None,
                                pair_gid=pair.get("gid") if pair else None,
                                pair_task=pair.get("task") if pair else None)
-            if prov == "pi":
-                info.provider = "pi"
-            elif prov == "kimi":
-                info.provider = "kimi"
-            elif prov == "codex":
-                info.provider = "codex"
+            if prov in ("pi", "omp", "kimi", "codex"):
+                info.provider = prov
             # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
             # não é de graça, mas é local e sem rede. Feature em tick do SSE tem que ser barata.
@@ -1105,8 +1104,8 @@ class SessionRegistry:
                 from app import cotas
                 padrao = cotas.provider_padrao_kimi()
                 info.conta = f"kimi:{padrao}" if padrao else None
-            elif prov == "pi":
-                # Sessão Pi gasta a credencial do modelo escolhido NELA (o `current.provider` do
+            elif prov in ("pi", "omp"):
+                # Sessão Pi/omp gasta a credencial do modelo escolhido NELA (o `current.provider` do
                 # sidecar do catálogo), que pode ser a mesma chave Kimi/motor que já é uma conta
                 # desta lista. Provider sem chave conhecida (OAuth do Codex, provedor só do Pi)
                 # segue None, e a pílula cai no pior-geral como antes.
@@ -1458,7 +1457,7 @@ class SessionRegistry:
         #    a sessao subiria na conta do proprio pi PARECENDO estar no motor pedido.
         # Resume do Pi passou a existir (branch `elif provider == "pi"` la embaixo, com
         # `pi --session-id <id>`); a recusa que morava aqui tornava aquele branch INALCANCAVEL.
-        if provider == "pi" and engine:
+        if provider in ("pi", "omp") and engine:
             raise ValueError("motor so vale para provider claude")
         # Kimi anda no MESMO caminho tmux do Pi. Motor segue Claude-puro (hangar-engine so exporta
         # ANTHROPIC_*). Resume existe: `kimi --session <id>` (diferente do Pi, que nao tinha flag).
@@ -1504,6 +1503,16 @@ class SessionRegistry:
                 sid = resume_session_id
                 from app.adapters.codex.lancador import comando_do_lancador
                 cmd = tmux.join_cmd(comando_do_lancador(cwd, thread_id=sid))
+            elif provider == "omp":
+                # Retoma por CAMINHO: o id interno do omp nao e o do nome do arquivo, e spawn e
+                # resume sao verbos diferentes — reusar o spawn abriria conversa nova.
+                try:
+                    uuid.UUID(resume_session_id)
+                except (ValueError, AttributeError, TypeError):
+                    raise ValueError("session_id invalido")
+                sid = resume_session_id
+                from app.adapters import get_adapter
+                cmd = tmux.join_cmd(get_adapter("omp").resume_command(cwd, sid, model, effort))
             elif provider == "pi":
                 # `pi --session-id <id>` RETOMA quando o id ja existe ("creating it if missing", no
                 # --help do 0.82.1) -> o comando do resume e o mesmo do spawn, so com o id antigo.
@@ -1566,7 +1575,7 @@ class SessionRegistry:
         # Codex pelo mesmo motivo: o rollout so existe depois que a TUI abre a thread, e o caminho
         # dele nao se deriva de cwd+id (vem do thread/start). Devolver um path do layout do Claude
         # aqui envenenaria o _jsonl_cache, que e de CLASSE e compartilhado com o SSE.
-        jsonl = None if provider in ("pi", "kimi", "codex") else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
+        jsonl = None if provider in ("pi", "omp", "kimi", "codex") else str(base / sanitize_cwd(cwd) / f"{sid}.jsonl")
         # Pré-confia a pasta no .claude.json: sem isto, uma sessão criada pelo app numa pasta NOVA
         # nasce presa no "trust this folder?" do Claude Code (invisível/ininteragível pelo chat até
         # aceitar na TUI). Só é o 1º acesso à pasta — depois o próprio Claude Code grava. Best-effort.
@@ -1582,7 +1591,7 @@ class SessionRegistry:
             kimi_sessions.pretrust_cwd(cwd)
         elif provider == "codex":
             codex_sessions.pretrust_cwd(cwd)
-        elif provider != "pi":
+        elif provider not in ("pi", "omp"):
             _pretrust_cwd(cwd, config_dir)
         if not tmux.new_session(name, cwd, cmd, config_dir):
             raise ValueError("falha ao criar sessao no tmux")
@@ -1803,7 +1812,7 @@ class SessionRegistry:
         if prov != "claude":
             raise ValueError(
                 f"retomar so vale pra sessao Claude (esta e {prov}); "
-                "feche o pane e abra de novo pelo wrapper `pi`")
+                f"feche o pane e abra de novo pelo wrapper `{prov}`")
 
     def resume_candidates(self, name: str) -> tuple[str, bool, list[dict]]:
         # (cwd, ambiguo, candidatos). ambiguo = ha OUTRA sessao tmux no mesmo cwd -> o "mais recente por

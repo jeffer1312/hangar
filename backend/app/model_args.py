@@ -57,9 +57,10 @@ NIVEL_OK = re.compile(r"^[a-z]{2,32}\Z")
 # `provider/id` do config.toml, medido no --help do Kimi Code 0.37.2). Esforço é separado: o Kimi
 # NÃO tem flag de esforço no CLI (mora no [thinking] do config.toml), então não entra nos mapas
 # abaixo — pedir esforço pra ele é recusado com mensagem própria, não com "provider inválido".
-_ACEITA_MODELO = ("claude", "pi", "kimi", "codex")
-_FLAG_ESFORCO = {"claude": "--effort", "pi": "--thinking"}
-_NIVEIS = {"claude": EFFORT_CLAUDE, "pi": EFFORT_PI}
+# omp: fork do Pi, mesma flag `--thinking` e mesmos níveis (EFFORT_PI).
+_ACEITA_MODELO = ("claude", "pi", "omp", "kimi", "codex")
+_FLAG_ESFORCO = {"claude": "--effort", "pi": "--thinking", "omp": "--thinking"}
+_NIVEIS = {"claude": EFFORT_CLAUDE, "pi": EFFORT_PI, "omp": EFFORT_PI}
 
 
 def validar(provider: str, model: str | None, effort: str | None, permission_mode: str | None = None) -> tuple[str | None, str | None]:

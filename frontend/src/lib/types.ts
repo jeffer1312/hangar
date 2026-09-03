@@ -22,12 +22,13 @@ export interface LoopState {
 
 // Qual Adapter dirige a sessao (app.adapters.get_adapter no backend). "claude" e o default;
 // "codex" identifica as criadas via registry.create_codex; "pi" as detectadas pelo processo do
-// pane (registry.provider_of_pane); "kimi" idem ao pi (pane tmux, transcript tardio). O front usa
+// pane (registry.provider_of_pane); "kimi" idem ao pi (pane tmux, transcript tardio); "omp" e o
+// oh-my-pi, fork do pi — mesmo transcript, mas a pergunta ao usuario vem da tool `ask`. O front usa
 // isto pra esconder controles Claude-only (picker de /model, slash-commands) e pra rotular a
 // sessao (lib/format.providerName).
 // Tipo nomeado porque a mesma uniao viaja pela cadeia de criacao (CreateSessionSheet -> handleCreate
 // das duas views -> api.createSession): quando o Pi entrou, as copias literais ficaram pra tras.
-export type Provider = 'claude' | 'codex' | 'pi' | 'kimi';
+export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp';
 
 export interface SessionInfo {
   name: string;

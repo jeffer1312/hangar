@@ -6,7 +6,7 @@
 import { parseStatusLine } from './statusline';
 import type { SessionInfo } from './types';
 
-export type Provider = 'claude' | 'codex' | 'pi' | 'kimi';
+export type Provider = 'claude' | 'codex' | 'pi' | 'kimi' | 'omp';
 
 export interface Papel {
   papel: string;

@@ -3,10 +3,10 @@
 // orquestração oferece a mesma escolha (provider → conta → modelo) e uma segunda cópia divergiria.
 import { modelOptions, type ModelOption } from './api';
 
-// Os quatro escolhem modelo, cada um de uma fonte diferente (picker do Claude, `pi --list-models`,
-// config.toml do Kimi, `model/list` do Codex). Lista explícita: `provider !== 'codex'` como guarda
-// foi o que deixou o Kimi de fora na primeira versão da tela.
-export const PROVIDERS_COM_MODELO = ['claude', 'pi', 'kimi', 'codex'] as const;
+// Os cinco escolhem modelo, cada um de uma fonte diferente (picker do Claude, `pi --list-models`,
+// config.toml do Kimi, `model/list` do Codex; omp reusa a fonte do Pi). Lista explícita:
+// `provider !== 'codex'` como guarda foi o que deixou o Kimi de fora na primeira versão da tela.
+export const PROVIDERS_COM_MODELO = ['claude', 'pi', 'kimi', 'codex', 'omp'] as const;
 export const temEscolhaDeModelo = (provider: string) =>
   (PROVIDERS_COM_MODELO as readonly string[]).includes(provider);
 

@@ -935,6 +935,28 @@ def test_create_pi_with_engine_is_refused(api_client):
     cr.assert_not_called()
 
 
+def test_create_omp_provider_routes_to_claude_create_with_provider(api_client):
+    # omp e o fork do Pi: MESMO registry.create, so o provider muda o comando do pane.
+    with patch("app.api.registry.create",
+              return_value=SessionInfo(name="o", cwd="/tmp", provider="omp", jsonl=None)) as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "o", "cwd": "/tmp", "provider": "omp"})
+    assert r.status_code == 200
+    assert r.json()["provider"] == "omp"
+    assert r.json()["jsonl"] is None
+    cr.assert_called_once_with("o", "/tmp", None, provider="omp", engine=None,
+                               model=None, effort=None, context_window=None)
+
+
+def test_create_omp_with_engine_is_refused(api_client):
+    # Motor so faz sentido no Claude: o env do hangar-engine e Anthropic-only.
+    with patch("app.api.registry.create") as cr:
+        r = api_client.post("/api/sessions", headers=_h(),
+                            json={"name": "o", "cwd": "/tmp", "provider": "omp", "engine": "x"})
+    assert r.status_code == 400
+    cr.assert_not_called()
+
+
 def test_create_rejects_unknown_provider(api_client):
     with patch("app.api.registry.create") as cr:
         r = api_client.post("/api/sessions", headers=_h(),
@@ -1958,6 +1980,18 @@ def test_pi_models_missing_sidecar_is_409_not_empty_list(api_client):
     assert r.json()["detail"]["code"] == "erro_catalogo_pi_indisponivel"
 
 
+def test_omp_models_missing_sidecar_is_409_com_codigo_proprio(api_client):
+    # Codigo SEPARADO do erro_catalogo_pi_indisponivel: o front traduz por `code`, entao reusar o
+    # do Pi mostraria "reinicie a sessao" numa sessao omp, onde o /reload nao recarrega a extensao.
+    info_omp = SessionInfo(name="oo", cwd="/p", jsonl="/p/ts_uuid.jsonl", provider="omp")
+    with patch("app.api._cached_info", AsyncMock(return_value=info_omp)), \
+         patch("app.api.pi_models.read_catalog", return_value=None), \
+         patch("app.api._session_config_dir", return_value=None):
+        r = api_client.get("/api/sessions/oo/pi/models", headers=_h())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_catalogo_omp_indisponivel"
+
+
 def test_pi_model_set_sends_both_commands_and_reports_readback(api_client):
     # `xhigh` FORA dos levels do modelo novo: e o caso real do clamp (o Pi aterrissa em high).
     after = {**_PI_CAT, "current": {"provider": "clinepass", "id": "cline-pass/glm-5.2"},
@@ -2267,6 +2301,18 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
         r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
     assert r.status_code == 409
     assert "trabalhando" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("provider,codigo", [("omp", "erro_omp_ausente"), ("pi", "erro_pi_ausente")])
+def test_model_options_binario_ausente_tem_codigo_por_provider(api_client_limpo, monkeypatch,
+                                                               provider, codigo):
+    # O front traduz por `code`: um codigo so pros dois mandava a sessao omp instalar o Pi.
+    from app import pi_catalog
+    pi_catalog._cache.clear()
+    monkeypatch.setattr(pi_catalog.shutil, "which", lambda _b: None)
+    r = api_client_limpo.get(f"/api/model-options?provider={provider}", headers=_h())
+    assert r.status_code == 502
+    assert r.json()["detail"]["code"] == codigo
 
 
 def test_engine_model_set_restaura_o_default_global(api_client_limpo):

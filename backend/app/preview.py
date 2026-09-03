@@ -102,6 +102,8 @@ _KIMI_SPINNER_RE = re.compile(r"^\s*[⠀-⣿\U0001f311-\U0001f318]")
 _KIMI_TODO_HEAD_RE = re.compile(r"^\s*Todo\s*$")
 
 _STOPS_BY_PROVIDER = {"pi": (_PI_BOX_RE,),
+                      # omp: fork do Pi, mesma moldura de composer.
+                      "omp": (_PI_BOX_RE,),
                       # Kimi desenha o composer com a MESMA caixa arredondada do Pi (medido num
                       # pane real, 0.34.0) -> a ancora de corte e a mesma. Mas a caixa e o rodape
                       # MAIS BAIXO: entre ela e a resposta ainda cabem o eco do prompt e a dica, e
@@ -318,7 +320,7 @@ def extract_assistant_text(pane: str, provider: str = "claude") -> str:
                 and not _painel_de_subagente(lines, i, corpo)
                 and not (provider == "kimi" and _KIMI_USED_RE.match(corpo))
                 and not (provider == "kimi" and _kimi_linha_de_todo(lines, i))
-                and not (provider == "pi" and _pi_bloco_de_tool(lines, i, corpo))):
+                and not (provider in ("pi", "omp") and _pi_bloco_de_tool(lines, i, corpo))):
             start = i
     if start < 0:
         return ""

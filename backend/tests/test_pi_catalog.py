@@ -65,19 +65,19 @@ def test_tabela_com_coluna_a_mais_nao_vira_lista_vazia(monkeypatch):
             "cline deepseek/v4 1.0M 131.1K yes no 0.10\n")
     monkeypatch.setattr(pi_catalog.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, nova, ""))
-    pi_catalog._cache = None
+    pi_catalog._cache.clear()
     with pytest.raises(RuntimeError):
         pi_catalog.listar()
 
 
 def test_falha_nao_fica_no_cache(monkeypatch):
     """O vazio não pode sobreviver ao conserto do pi."""
-    pi_catalog._cache = None
+    pi_catalog._cache.clear()
     monkeypatch.setattr(pi_catalog.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", ""))
     with pytest.raises(RuntimeError):
         pi_catalog.listar()
-    assert pi_catalog._cache is None
+    assert "pi" not in pi_catalog._cache
     monkeypatch.setattr(pi_catalog.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, SAIDA, ""))
     assert len(pi_catalog.listar()) == 3
@@ -92,10 +92,10 @@ def test_id_com_byte_ilegivel_e_falha_do_provedor(monkeypatch):
     ruim = SAIDA.replace("k3", "k�3")
     monkeypatch.setattr(pi_catalog.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, ruim, ""))
-    pi_catalog._cache = None
+    pi_catalog._cache.clear()
     with pytest.raises(RuntimeError, match="ilegivel"):
         pi_catalog.listar()
-    assert pi_catalog._cache is None
+    assert "pi" not in pi_catalog._cache
 
 
 def test_argv_leva_o_caminho_RESOLVIDO_e_nao_o_nome_cru(monkeypatch):
@@ -110,7 +110,7 @@ def test_argv_leva_o_caminho_RESOLVIDO_e_nao_o_nome_cru(monkeypatch):
         return subprocess.CompletedProcess(argv, 0, SAIDA, "")
 
     monkeypatch.setattr(pi_catalog.subprocess, "run", falso_run)
-    pi_catalog._cache = None
+    pi_catalog._cache.clear()
     pi_catalog.listar()
     assert visto["argv"][0] == _PI_FALSO
     assert visto["argv"][0] != "pi"
@@ -123,10 +123,10 @@ def test_pi_fora_do_path_e_erro_PROPRIO(monkeypatch):
     monkeypatch.setattr(pi_catalog.shutil, "which", lambda nome: None)
     monkeypatch.setattr(pi_catalog.subprocess, "run",
                         lambda *a, **k: pytest.fail("nao pode nem tentar rodar sem binario"))
-    pi_catalog._cache = None
+    pi_catalog._cache.clear()
     with pytest.raises(pi_catalog.PiAusente, match="PATH"):
         pi_catalog.listar()
-    assert pi_catalog._cache is None
+    assert "pi" not in pi_catalog._cache
     # Subclasse de RuntimeError de proposito: a rota ja captura RuntimeError, entao um backend
     # antigo (ou outro chamador) nunca deixa isso virar 500 cru.
     assert issubclass(pi_catalog.PiAusente, RuntimeError)
@@ -137,5 +137,51 @@ def test_rotulo_ilegivel_em_coluna_de_leitura_nao_derruba_a_lista(monkeypatch):
     ruim = SAIDA.replace("200K", "20�K")
     monkeypatch.setattr(pi_catalog.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, ruim, ""))
-    pi_catalog._cache = None
+    pi_catalog._cache.clear()
     assert len(pi_catalog.listar()) == 3
+
+
+OMP_JSON = '''{"models":[{"provider":"opencode-go","id":"deepseek-v4-flash","selector":"opencode-go/deepseek-v4-flash",
+"name":"DeepSeek V4 Flash","contextWindow":1000000,"maxTokens":384000,"reasoning":true,
+"thinking":["low","high","max"],"input":["text"],"cost":{"input":0.22}},
+{"provider":"opencode-go","id":"deepseek-v4-flash-vision-exp","name":"x","contextWindow":1000000,
+"maxTokens":384000,"reasoning":true,"thinking":[],"input":["text","image"]}]}'''
+
+
+def test_parse_omp_devolve_o_mesmo_shape_do_pi():
+    from app import pi_catalog
+    ms = pi_catalog.parse_omp(OMP_JSON)
+    assert ms[0] == {"provider": "opencode-go", "id": "deepseek-v4-flash", "context": "1M",
+                     "max_out": "384K", "thinking": True, "images": False}
+    assert ms[1]["images"] is True and ms[1]["thinking"] is False
+
+
+def test_contexto_torto_no_json_do_omp_nao_derruba_a_lista():
+    # `int("1M")` levantava ValueError e a rota so captura RuntimeError/OSError/Timeout -> 500.
+    from app import pi_catalog
+    torto = OMP_JSON.replace('"contextWindow":1000000,"maxTokens":384000,"reasoning":true,\n"thinking":["low","high","max"]',
+                             '"contextWindow":"1M","maxTokens":384000,"reasoning":true,\n"thinking":["low","high","max"]')
+    assert '"1M"' in torto   # a troca casou de fato
+    ms = pi_catalog.parse_omp(torto)
+    assert len(ms) == 2 and ms[0]["context"] == "0" and ms[1]["context"] == "1M"
+
+
+def test_listar_omp_chama_omp_models_json_e_cacheia_por_provider(monkeypatch):
+    from app import pi_catalog
+    pi_catalog._cache.clear()
+    chamadas = []
+
+    class R:
+        returncode = 0; stderr = ""
+        def __init__(self, out): self.stdout = out
+    def fake_run(cmd, **kw):
+        chamadas.append(cmd)
+        return R(OMP_JSON if cmd[0].endswith("omp") else "provider id ctx max thinking images\npi-prov m1 128k 8k yes no\n")
+    monkeypatch.setattr(pi_catalog.subprocess, "run", fake_run)
+    monkeypatch.setattr(pi_catalog.shutil, "which", lambda b: f"/bin/{b}")
+    omp = pi_catalog.listar("omp")
+    pi = pi_catalog.listar("pi")
+    assert chamadas[0][:3] == ["/bin/omp", "models", "--json"]
+    assert chamadas[1] == ["/bin/pi", "--list-models"]
+    assert omp[0]["id"] == "deepseek-v4-flash" and pi[0]["id"] == "m1"
+    assert pi_catalog.listar("omp") is omp

@@ -337,7 +337,7 @@ class _FoldCodex(_Fold):
             self._llm(ts)
 
 
-_FOLDS = {"claude": _FoldClaude, "kimi": _FoldKimi, "pi": _FoldPi, "codex": _FoldCodex}
+_FOLDS = {"claude": _FoldClaude, "kimi": _FoldKimi, "pi": _FoldPi, "omp": _FoldPi, "codex": _FoldCodex}
 
 
 class Accumulator:
