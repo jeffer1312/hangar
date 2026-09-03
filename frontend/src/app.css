@@ -842,7 +842,10 @@ html:is([data-bg='image'], [data-bg='desktop']) .code-block pre { background: no
   /* `not coarse` e nao `fine`: ambiente que nao declara ponteiro nenhum (navegador automatizado,
      algum embed) responde `false` pras DUAS, e com `fine` a trava simplesmente nunca ligava la.
      O requisito e "nao atrapalhar tela de toque" — entao a excecao e o toque, nao a regra. */
-  .rolagem-travada { overflow: hidden !important; }
+  /* `overscroll-behavior: auto` junto do hidden: com `contain` (que o bloco usa quando destravado)
+     o Chromium PARA a cadeia da roda no bloco mesmo sem ele poder rolar — nada se movia, nem o
+     diff nem a conversa, e era isso que parecia travamento. */
+  .rolagem-travada { overflow: hidden !important; overscroll-behavior: auto !important; }
 }
 
 /* ── Formulário de sessão (CreateSessionSheet, OrquestracaoSheet) ─────────
