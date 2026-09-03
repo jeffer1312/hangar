@@ -81,7 +81,7 @@ def _obter_path() -> str:
 
 
 # Serializa a sondagem: cada chamada roda em `to_thread`, e duas com o cache vencido ao mesmo
-# tempo disparavam a varredura inteira (4 binários × PATH, subprocess com timeout de 2s) em
+# tempo disparavam a varredura inteira (todos os binários × PATH, subprocess com timeout de 2s) em
 # paralelo. Com o lock, a segunda espera e sai pelo cache que a primeira acabou de encher.
 _sonda_lock = threading.Lock()
 

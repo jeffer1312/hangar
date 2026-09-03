@@ -11,6 +11,7 @@ nada — devolve um número plausível e errado.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from collections.abc import Iterator
@@ -25,6 +26,9 @@ from app.config import list_config_dirs
 
 LOCAL = timezone(timedelta(hours=-3))
 PROJETO_DESCONHECIDO = "desconhecido"
+_log = logging.getLogger("hangar.costs")
+# Raízes já avisadas: `coletar()` roda a cada abertura da tela de custos, e o aviso é um só.
+_AVISOU_RAIZ_UNICA: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -406,7 +410,11 @@ def coletar() -> list[UsageRow]:
                                    ("kimi", raiz_kimi(), linhas_kimi)):
             if nome == "omp" and raiz == raiz_pi():
                 # PI_CODING_AGENT_DIR aponta pra árvore do pi-coding-agent: os dois caem na
-                # MESMA pasta, e contar de novo como "omp" dobraria o gasto.
+                # MESMA pasta, e contar de novo como "omp" dobraria o gasto. Avisa uma vez:
+                # "omp sem gasto" no relatório precisa ter causa no log, não parecer zero real.
+                if not _AVISOU_RAIZ_UNICA:
+                    _AVISOU_RAIZ_UNICA.add(str(raiz))
+                    _log.warning("custos: omp e pi na mesma raiz (%s) — gasto do omp somado como pi", raiz)
                 _cache.pop(nome, None)
                 continue
             if not raiz.is_dir():

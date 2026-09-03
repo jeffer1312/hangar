@@ -53,7 +53,7 @@ MODOS_PERMISSAO_CLAUDE = ("acceptEdits", "auto", "bypassPermissions", "manual", 
 # sobrescrita de config no comando do pane (`-c model_reasoning_effort="<nível>"`).
 NIVEL_OK = re.compile(r"^[a-z]{2,32}\Z")
 
-# Quem aceita ESCOLHA DE MODELO no arranque: os quatro têm `--model`/`-m` (o do Kimi aceita o alias
+# Quem aceita ESCOLHA DE MODELO no arranque: todos têm `--model`/`-m` (o do Kimi aceita o alias
 # `provider/id` do config.toml, medido no --help do Kimi Code 0.37.2). Esforço é separado: o Kimi
 # NÃO tem flag de esforço no CLI (mora no [thinking] do config.toml), então não entra nos mapas
 # abaixo — pedir esforço pra ele é recusado com mensagem própria, não com "provider inválido".

@@ -99,7 +99,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   // POST /api/ditado/relimpar — so aparece se o cliente mandar um estilo fora da lista (os botoes
   // da barra do ditado saem de estilosDitado, entao na pratica e defesa de contrato).
   erro_estilo_invalido: () => m.erro_estilo_invalido(),
-  // POST /api/sessions aceita claude/codex/pi/kimi — o texto generico nao pode orientar so
+  // POST /api/sessions aceita claude/codex/pi/kimi/omp — o texto generico nao pode orientar so
   // claude/pi (contrato do erro_provider_invalido, que so vale pro /api/model-options)
   erro_provider_sessao_invalido: () => m.erro_provider_sessao_invalido(),
 
