@@ -427,9 +427,15 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     mandar prompt, o que o app não consegue numa sessão untracked. Resume é `-r <caminho>` (o id
     interno do omp não é o do nome do arquivo).
   - **Eventos com outro nome:** `agent_end` e `model_changed`, não `agent_settled` nem
-    `model_select`. Sem tratá-los, o estado ficava preso em `working` e a troca de modelo pelo app
-    dava falso "o Pi recusou a troca" (o `setModel` aplicava; o sidecar do catálogo é que não era
-    republicado).
+    `model_select`. Sem tratá-los, o estado ficava preso em `working`. E a troca de modelo pelo app
+    dava falso "o Pi recusou a troca" por um motivo mais fundo, achado na revisão final: o
+    `setModel` devolve `true` e o rodapé troca, mas **`ctx.model` continua o modelo velho** e o omp
+    não emite evento de modelo nenhum (`model_changed` também não dispara aí; `pi.getModel` não
+    existe). Publicar `ctx.model` depois do `setModel` republicava o modelo VELHO com `ts` novo, e
+    o backend lê "ts novo com modelo velho" como recusa. Daí o `override` de `publishModels`
+    (`scripts/pi/hangar-state.ts`): quem sabe o modelo certo é quem acabou de pedi-lo. Troca feita
+    no teclado do omp não tem evento, então o `agent_start` republica quando `ctx.model.id` difere
+    do último publicado.
   - **Subagente roda no MESMO processo**, sem `PI_SUBAGENT_DEPTH`, emite `session_start` com o ctx
     dele e grava em `<stem>/<NomeDoAgente>.jsonl` (o Pi: `<stem>/<taskId>/run-N/session.jsonl`).
     Sem o portão, a extensão do subagente reescrevia o bilhete do pane e o histórico da sessão
@@ -442,6 +448,25 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   - **Catálogo de modelos é `omp models --json`** — não há `--list-models`.
   - **Sem chip de cota:** `~/.omp/agent` não tem `auth.json` nem `models.json` (é SQLite:
     `agent.db`, `models.db`), e `cotas._chaves_do_pi` lê exatamente esses dois arquivos, do `~/.pi`.
+  - **No Windows a sessão omp depende SÓ do bilhete da extensão.** `_com_env` (`adapters/omp/
+    adapter.py`) prefixa `env CP_PI_SESSION=<uuid>` porque o tmux não repassa o ambiente de quem
+    chama — e `env` não existe lá, então o ramo `os.name == "nt"` devolve o comando cru. Bilhete
+    recusado = sessão sem transcript. O conserto existe e não foi feito por falta de medição
+    naquela máquina: `tmux new-session -e` funciona no psmux (é o que `tmux._e_config_dir` já usa),
+    então dá pra mandar a variável pelo `-e` em vez do prefixo.
+  - **Subagente do omp não aparece no painel de Atividade.** `subagents.py` é Pi-puro por duas
+    travas independentes: `_pi_agents_dir` exige que o transcript esteja sob `sessions_root("pi")`
+    (o do omp está sob `~/.omp/agent`), e o leitor espera o layout `<stem>/<taskId>/run-<n>/
+    session.jsonl` — o omp grava `<stem>/<Nome>.jsonl`, sem `run-N`, então `_pi_run_dir` devolveria
+    `None` mesmo com a raiz certa. Lista vazia, não erro.
+  - **Executor omp no orquestrar usa o inventário do Pi.** `orq_politica.inventario` chama
+    `pi_catalog.listar()` sem argumento (= `pi`), coerente com "mesmo inventário, sem linha
+    própria" da política. Consequência a saber: `omp models --json` pode listar menos modelos que
+    `pi --list-models`, e a tela do orquestrar oferece a lista do Pi.
+  - **`rich-status-line.ts` honra `PI_CODING_AGENT_DIR` também numa sessão Pi.** A raiz sai de
+    `process.env.PI_CODING_AGENT_DIR || ~/.{omp,pi}/agent`, e é dela que saem `auth.json` e
+    `models.json` (o chip de cota). Quem exporta a variável no shell por causa do omp muda de onde
+    o **Pi** lê os dois.
 - **Before typing into the Pi's composer, ASK — the screen cannot tell a notice from a draft**
   (`terminal_input._composer_ocupado_pi` + `pi_inbox.perguntar` + `responderPergunta` in
   `scripts/pi/hangar-state.ts`). Pi prints extension notices (`console.error`) **inside the composer
