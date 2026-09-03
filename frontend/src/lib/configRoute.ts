@@ -3,9 +3,12 @@
 // escolhendo a tela de tras (chat, quadro, lista), e a query diz qual tela do painel esta por cima.
 // Assim o painel abre sobre QUALQUER rota sem que nenhuma delas precise saber que ele existe.
 
-export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'ditado' | 'notificacoes' | 'anexos' | 'avancado' | 'motores' | 'sobre' | 'diario' | 'servidores' | 'acesso' | 'contas' | 'orquestracao' | 'voz';
+export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'avancado' | 'motores' | 'sobre' | 'diario' | 'servidores' | 'acesso' | 'contas' | 'orquestracao' | 'voz';
 
-const TELAS: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'ditado', 'notificacoes', 'anexos', 'avancado', 'motores', 'sobre', 'diario', 'servidores', 'acesso', 'contas', 'orquestracao', 'voz'];
+const TELAS: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'avancado', 'motores', 'sobre', 'diario', 'servidores', 'acesso', 'contas', 'orquestracao', 'voz'];
+
+// Rotas de tela que mudaram de nome: um link guardado por alguém não pode virar tela em branco.
+const RENOMEADAS: Record<string, TelaConfig> = { ditado: 'voz' };
 
 /** Telas que mexem NUM servidor — sem alvo resolvido elas nao podem abrir (ver App.svelte). */
 export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['acesso', 'contas', 'notificacoes', 'anexos', 'avancado', 'motores', 'orquestracao', 'voz'];
@@ -23,8 +26,9 @@ export function parseConfig(hash: string): RotaConfig | null {
   const tela = p.get('config');
   // Tela desconhecida = painel fechado, caminho intacto. Nao adivinhar: um `?config=aparenca` com
   // typo abrindo a Aparencia esconderia o erro do link.
-  if (!tela || !TELAS.includes(tela as TelaConfig)) return null;
-  return { tela: tela as TelaConfig, srv: p.get('srv') || null };
+  const alvo = RENOMEADAS[tela ?? ''] ?? tela;
+  if (!alvo || !TELAS.includes(alvo as TelaConfig)) return null;
+  return { tela: alvo as TelaConfig, srv: p.get('srv') || null };
 }
 
 export function comConfig(hash: string, tela: TelaConfig | null, srv?: string | null): string {

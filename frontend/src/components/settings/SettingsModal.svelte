@@ -3,7 +3,6 @@
   import SettingsRow from './SettingsRow.svelte';
   import GeneralSettings from './GeneralSettings.svelte';
   import AppearanceSettings from './AppearanceSettings.svelte';
-  import DictationSettings from './DictationSettings.svelte';
   import VozSettings from './VozSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
@@ -91,7 +90,6 @@
     root: m.config_modal_titulo(),
     geral: m.config_geral_titulo(),
     aparencia: m.config_modal_aparencia(),
-    ditado: m.config_modal_ditado(),
     voz: m.voz_titulo(),
     sobre: m.config_modal_sobre(),
     diario: m.config_diag_titulo(),
@@ -99,7 +97,7 @@
     acesso: m.acesso_titulo(),
     contas: m.contas_titulo(),
     notificacoes: m.config_modal_notificacoes(),
-    anexos: m.config_modal_anexos(),
+    anexos: m.config_modal_anexos_curto(),
     avancado: m.config_modal_avancado(),
     motores: m.config_modal_motores(),
     orquestracao: m.config_modal_orquestracao(),
@@ -117,7 +115,7 @@
     { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: 'tela', servidor: false },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
-    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos(), icone: 'clipe', servidor: true },
+    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos_curto(), icone: 'clipe', servidor: true },
     { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: 'chave', servidor: true },
     { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: 'plug', servidor: true },
     { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: 'sliders', servidor: true },
@@ -348,8 +346,6 @@
     <GeneralSettings />
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
-  {:else if telaAtual === 'ditado'}
-    <DictationSettings />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
   {:else if telaAtual === 'orquestracao'}

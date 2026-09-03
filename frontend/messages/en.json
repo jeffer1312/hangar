@@ -723,6 +723,7 @@
   "config_modal_servidores": "Servers",
   "config_modal_notificacoes": "Notifications",
   "config_modal_anexos": "Attachments and transcription",
+  "config_modal_anexos_curto": "Attachments",
   "config_modal_avancado": "Advanced server settings",
   "config_modal_motores": "Model engines",
   "config_modal_desc_aparencia": "theme, background, reading and text",

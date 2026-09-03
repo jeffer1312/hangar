@@ -1,11 +1,5 @@
 <script lang="ts">
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
-import { intlLocale } from '../../lib/locale';
-  import { listarVozesTts, saldoTts, type TtsVoz } from '../../lib/api';
-  import Select from '../Select.svelte';
-  import { ttsPlayer } from '../../lib/ttsPlayer.svelte';
-  import { ouvirAmostra } from '../../lib/ouvir';
-  import { cortarAmostra } from '../../lib/ttsFormat';
   import { criarSeletorNativo } from '../../lib/pastaNativa.svelte';
   import LinhaConfig from './LinhaConfig.svelte';
   import * as m from '../../paraglide/messages';
@@ -25,7 +19,7 @@ import { intlLocale } from '../../lib/locale';
 
   const TITULOS: Record<Props['secao'], string> = {
     notificacoes: m.config_modal_notificacoes(),
-    anexos: m.config_modal_anexos(),
+    anexos: m.config_modal_anexos_curto(),
     avancado: m.config_modal_avancado(),
   };
 
@@ -36,21 +30,10 @@ import { intlLocale } from '../../lib/locale';
     tipo: 'texto' | 'segredo' | 'numero' | 'liga' | 'escolha';
     sufixo?: string;
     secao: Props['secao'];
-    /** Bloco temático com título próprio (o quinteto do LLM era ilegível solto: nada dizia que
-        era tudo do ditado). Campos sem grupo seguem soltos, como sempre foram. */
-    grupo?: 'ditado_voz';
     opcoes?: { value: string; label: string }[];
   }
 
-  const GRUPOS = {
-    ditado_voz: { titulo: m.config_avancado_grupo_ditado_voz(), ajuda: m.config_avancado_grupo_ditado_voz_ajuda() },
-  } as const;
-
   const CAMPOS: Campo[] = [
-    { chave: 'groq_api_key', rotulo: m.config_server_groq(), tipo: 'segredo', secao: 'anexos',
-      ajuda: m.config_server_groq_ajuda() },
-    { chave: 'ditado_vocabulario', rotulo: m.config_server_vocabulario(), tipo: 'texto', secao: 'anexos',
-      ajuda: m.config_server_vocabulario_ajuda() },
     { chave: 'upload_retention_days', rotulo: m.config_server_guardar_anexos(), tipo: 'numero', sufixo: m.config_server_dias(), secao: 'anexos',
       ajuda: m.config_server_guardar_ajuda() },
     { chave: 'automations', rotulo: m.config_server_automacoes(), tipo: 'liga', secao: 'avancado',
@@ -69,31 +52,6 @@ import { intlLocale } from '../../lib/locale';
       ajuda: m.config_server_marcar_travada_ajuda() },
     { chave: 'editor', rotulo: m.config_server_editor(), tipo: 'texto', secao: 'avancado',
       ajuda: m.config_server_editor_ajuda() },
-    { chave: 'llm_base_url', rotulo: m.config_server_endpoint_llm(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
-      ajuda: m.config_server_endpoint_llm_ajuda() },
-    { chave: 'llm_api_key', rotulo: m.config_server_chave_llm(), tipo: 'segredo', secao: 'avancado', grupo: 'ditado_voz',
-      ajuda: m.config_server_chave_llm_ajuda() },
-    { chave: 'llm_model', rotulo: m.config_server_modelo_llm(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
-      ajuda: m.config_server_modelo_llm_ajuda() },
-    // Raciocínio vira SELETOR: texto livre obrigava a adivinhar os valores válidos (none, low...).
-    // Vazio = a chave some do payload — provedor que não a conhece não leva 400 (regra do narrar.py).
-    { chave: 'llm_reasoning_effort', rotulo: m.config_server_raciocinio_llm(), tipo: 'escolha', secao: 'avancado', grupo: 'ditado_voz',
-      opcoes: [{ value: '', label: m.config_server_raciocinio_padrao() },
-               { value: 'none', label: 'none' }, { value: 'low', label: 'low' },
-               { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }],
-      ajuda: m.config_server_raciocinio_llm_ajuda() },
-    { chave: 'llm_briefing_base_url', rotulo: m.config_server_endpoint_llm_briefing(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
-      ajuda: m.config_server_endpoint_llm_briefing_ajuda() },
-    { chave: 'llm_briefing_api_key', rotulo: m.config_server_chave_llm_briefing(), tipo: 'segredo', secao: 'avancado', grupo: 'ditado_voz',
-      ajuda: m.config_server_chave_llm_briefing_ajuda() },
-    { chave: 'llm_briefing_model', rotulo: m.config_server_modelo_llm_briefing(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
-      ajuda: m.config_server_modelo_llm_briefing_ajuda() },
-    { chave: 'elevenlabs_api_key', rotulo: m.config_server_elevenlabs(), tipo: 'segredo', secao: 'anexos',
-      ajuda: m.config_server_elevenlabs_ajuda() },
-    { chave: 'tts_max_chars', rotulo: m.config_server_confirmar_leitura(), tipo: 'numero', sufixo: m.config_server_car(), secao: 'anexos',
-      ajuda: m.config_server_confirmar_leitura_ajuda() },
-    { chave: 'tts_local_cmd', rotulo: m.config_server_comando_voz(), tipo: 'texto', secao: 'avancado', grupo: 'ditado_voz',
-      ajuda: m.config_server_comando_voz_ajuda() },
   ];
 
   const visiveis = $derived(CAMPOS.filter((c) => c.secao === secao));
@@ -129,85 +87,6 @@ import { intlLocale } from '../../lib/locale';
   // shell Electron o botão não existe e a tela fica exatamente como era — o campo de texto continua
   // sendo o caminho de quem usa pelo navegador e pelo celular.
   const nativo = criarSeletorNativo();
-
-  // Vozes e saldo: sob demanda, no botao. As duas chamadas batem no provedor (ElevenLabs) e custam
-  // latencia — abrir a tela de config nao pode disparar rede pra fora so por estar aberta.
-  let vozes = $state<TtsVoz[]>([]);
-  let vozErro = $state('');
-  let carregandoVozes = $state(false);
-  let saldo = $state<{ usados: number | null; limite: number | null } | null>(null);
-  let saldoErro = $state('');
-
-  function carregarVozes() {
-    vozErro = '';
-    carregandoVozes = true;
-    listarVozesTts()
-      .then((v) => { vozes = v; })
-      .catch((e: Error) => { vozErro = e.message; })
-      .finally(() => { carregandoVozes = false; });
-    // Saldo e extra, nao pode quebrar a TELA (sem botao de retry, sem bloquear a voz, que e o
-    // principal) — mas a falha ainda tem que aparecer, no mesmo lugar e pelo mesmo motivo que a
-    // das vozes: sumir calada e o que a regra do projeto proibe.
-    saldoErro = '';
-    saldoTts().then((s) => { saldo = s; }).catch((e: Error) => { saldoErro = e.message; });
-  }
-
-  // Amostra (Feature A): o proprio ultimo trecho que o usuario mandou ouvir, cortado em 200
-  // caracteres — comparar vozes com o texto real do usuario diz mais que uma frase fixa.
-  const amostraTexto = $derived(cortarAmostra(ttsPlayer.ultimoTexto));
-
-  function ouvirAmostraDaVoz() {
-    const voz = (store.valorAtual('elevenlabs_voice_id') as string) || '';
-    ouvirAmostra(amostraTexto, voz);
-  }
-
-  // Naturalidade da voz (Feature B): quatro deslizantes que espelham voice_settings da ElevenLabs.
-  // O valor e SEMPRE real — o slider nasce no padrao do proprio provedor, nunca "vazio". Backend
-  // (tts.py:_ajustes_efetivos) so manda a chave quando o valor foge desse padrao.
-  interface AjusteSlider {
-    chave: string;
-    rotulo: string;
-    padrao: number;
-    min: number;
-    max: number;
-    esquerda: string;
-    direita: string;
-    ajuda: string;
-  }
-
-  const AJUSTES_VOZ: AjusteSlider[] = [
-    { chave: 'tts_stability', rotulo: m.config_server_estabilidade(), padrao: 50, min: 0, max: 100,
-      esquerda: m.config_server_mais_emotiva(), direita: m.config_server_mais_constante(),
-      ajuda: m.config_server_estabilidade_ajuda() },
-    { chave: 'tts_similarity_boost', rotulo: m.config_server_aderencia(), padrao: 75, min: 0, max: 100,
-      esquerda: m.config_server_mais_livre(), direita: m.config_server_mais_fiel(),
-      ajuda: m.config_server_aderencia_ajuda() },
-    { chave: 'tts_style', rotulo: m.config_server_exagero(), padrao: 0, min: 0, max: 100,
-      esquerda: m.config_server_neutro(), direita: m.config_server_marcante(),
-      ajuda: m.config_server_exagero_ajuda() },
-    { chave: 'tts_speed', rotulo: m.config_server_velocidade(), padrao: 100, min: 70, max: 120,
-      esquerda: m.config_server_mais_devagar(), direita: m.config_server_mais_rapido(),
-      ajuda: m.config_server_velocidade_ajuda() },
-  ];
-
-  // Le o rascunho/salvo como numero; sem valor nenhum (nunca tocou o slider) cai no padrao do
-  // PROVEDOR, nao em 0 — e o que faz o slider nascer na posicao certa em vez de encostado na ponta.
-  function ajusteValor(a: AjusteSlider): number {
-    const bruto = store.valorAtual(a.chave);
-    const n = typeof bruto === 'number' ? bruto : parseInt(String(bruto), 10);
-    return Number.isFinite(n) ? n : a.padrao;
-  }
-
-  function ajusteDefinir(a: AjusteSlider, n: number) {
-    store.setRascunho(a.chave, n);
-  }
-
-  // "Voltar ao padrao": grava o proprio numero padrao (nao ha como "apagar" a chave do runtime_config
-  // — aplicar() so soma/sobrescreve). Gravar o padrao e o backend omitir voice_settings quando o
-  // valor == padrao dao no mesmo audio, entao isto e inocuo.
-  function ajusteResetar(a: AjusteSlider) {
-    store.setRascunho(a.chave, a.padrao);
-  }
 </script>
 
 <div class="cfg">
@@ -223,88 +102,10 @@ import { intlLocale } from '../../lib/locale';
     <button class="btn" onclick={() => void store.carregar()}>{m.config_server_tentar_de_novo()}</button>
   {:else}
     <div class="lista">
-      {#each visiveis as c, i (c.chave)}
-        {#if c.grupo && (i === 0 || visiveis[i - 1].grupo !== c.grupo)}
-          <h3 class="grupo-titulo">{GRUPOS[c.grupo].titulo}</h3>
-          <p class="grupo-ajuda">{GRUPOS[c.grupo].ajuda}</p>
-        {/if}
+      {#each visiveis as c (c.chave)}
         <LinhaConfig campo={c} {store} />
       {/each}
     </div>
-
-    {#if secao === 'anexos'}
-      <div class="tts-extra">
-        <h3>{m.config_server_voz_leitura()}</h3>
-        {#if vozErro}
-          <p class="aviso erro">{vozErro}</p>
-          <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>{m.config_server_tentar_de_novo()}</button>
-        {:else if vozes.length}
-          <!-- Sem fallback pra vozes[0]: o servidor usa VOZ_PADRAO (tts.py) quando o campo esta
-               vazio, que NAO e a primeira voz da conta — mostrar a 1a aqui mentia sobre o que toca.
-               A opcao explicita tambem torna a 1a voz da lista escolhivel: com o fallback,
-               escolhe-la deixava o value igual ao que ja estava e o onchange nunca disparava. -->
-          <Select
-            class="campo-select"
-            ariaLabel={m.config_server_voz()}
-            value={String(store.valorAtual('elevenlabs_voice_id') ?? '')}
-            opcoes={[{ value: '', label: m.config_server_padrao_servidor() },
-                     ...vozes.map((v) => ({ value: v.id, label: v.nome }))]}
-            onchange={(v) => store.setRascunho('elevenlabs_voice_id', v)}
-          />
-        {:else}
-          <button class="btn" onclick={carregarVozes} disabled={carregandoVozes}>
-            {carregandoVozes ? m.comum_carregando() : m.config_server_carregar_vozes()}
-          </button>
-        {/if}
-
-        <div class="naturalidade">
-          {#each AJUSTES_VOZ as a (a.chave)}
-            {@const valor = ajusteValor(a)}
-            <div class="ajuste">
-              <div class="ajuste-cabeca">
-                <span class="ajuste-rot">{a.rotulo} <em>{valor}</em></span>
-                {#if valor !== a.padrao}
-                  <button class="ajuste-reset" onclick={() => ajusteResetar(a)}>{m.config_server_voltar_padrao()}</button>
-                {/if}
-              </div>
-              <span class="ajuda">{a.ajuda}</span>
-              <div class="ajuste-slider">
-                <span class="ponta">{a.esquerda}</span>
-                <input
-                  type="range"
-                  aria-label={a.rotulo}
-                  min={a.min}
-                  max={a.max}
-                  step="1"
-                  value={valor}
-                  oninput={(e) => ajusteDefinir(a, +e.currentTarget.value)}
-                />
-                <span class="ponta">{a.direita}</span>
-              </div>
-            </div>
-          {/each}
-        </div>
-
-        <div class="amostra">
-          <button class="btn" onclick={ouvirAmostraDaVoz} disabled={!ttsPlayer.ultimoTexto}>
-            {m.config_server_ouvir_amostra()}{ttsPlayer.ultimoTexto ? m.config_server_caracteres({ n: amostraTexto.length.toLocaleString(intlLocale()) }) : ''}
-          </button>
-          {#if !ttsPlayer.ultimoTexto}
-            <span class="ajuda">{m.config_server_ouca_antes()}</span>
-          {/if}
-          <!-- A falha da amostra PRECISA aparecer aqui, e nao so na TtsBar. Esta tela vive dentro de
-               um modal cujo veu esta em z-index 100; a barra do player fica em 39 de proposito, pra
-               nunca cobrir modal aberto. Sem esta linha, chave invalida ou credito esgotado sao
-               desenhados ATRAS do proprio modal e o toque no botao parece nao ter feito nada. -->
-          {#if ttsPlayer.error}<p class="aviso erro">{ttsPlayer.error}</p>{/if}
-        </div>
-
-        {#if saldo}
-          <p class="sub">{m.config_server_consumo({ usados: saldo.usados ?? '?', limite: saldo.limite ?? '?' })}</p>
-        {/if}
-        {#if saldoErro}<p class="aviso erro">{saldoErro}</p>{/if}
-      </div>
-    {/if}
 
     {#if secao === 'avancado'}
       <div class="raizes">
@@ -378,25 +179,18 @@ import { intlLocale } from '../../lib/locale';
   .cfg-head .sub { margin: 2px 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted); }
 
   .lista { display: flex; flex-direction: column; }
-  /* Bloco temático (ex.: Ditado e voz): título + linha de explicação — o que esses campos mudam, antes de pedir valor. */
-  .grupo-titulo {
-    margin: var(--space-4) 0 0; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary);
-  }
-  .grupo-ajuda { margin: 2px 0 0; font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; }
   /* "editado" = veio de override, não do .env — sem isso não dá pra saber de onde o valor vem.
-     Também usada fora da lista de campos (raízes mapeadas, :313), então continua aqui mesmo com
-     `LinhaConfig` tendo a própria cópia — CSS de Svelte é por componente, não compartilhado. */
+     Usada nas raízes mapeadas (badge de scan_roots, abaixo), fora da lista de campos — por isso
+     continua aqui mesmo com `LinhaConfig` tendo a própria cópia (CSS de Svelte é por componente). */
   .tag {
     font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
     color: var(--accent); background: var(--accent-dim);
     padding: 1px 6px; border-radius: var(--radius-full);
   }
   /* min-width:0 e o que importa aqui, nao so cosmetica: `.ajuda` e um <span>, e um <span> dentro de
-     um flex column (`.txt`, `.ajuste`) tem `min-width:auto` por padrao — o navegador reserva a
-     largura do texto INTEIRO sem quebrar, e a frase corta na borda do painel em vez de quebrar linha.
-     Vale pra toda ajuda do arquivo (o bug ja existia antes dos sliders, so nao tinha aparecido com
-     texto longo o bastante numa tela estreita). Segue aqui pelo mesmo motivo do `.tag` acima: ainda
-     usada nos sliders de voz e nas raízes mapeadas, fora da lista de campos. */
+     um flex column tem `min-width:auto` por padrao — o navegador reserva a largura do texto INTEIRO
+     sem quebrar, e a frase corta na borda do painel em vez de quebrar linha. Usada na ajuda das
+     raízes mapeadas e do bloco somente-leitura, abaixo. */
   .ajuda { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; min-width: 0; }
 
   /* Ainda usada pelo campo de texto de "Adicionar raiz" (:327), fora da lista de campos. O
@@ -414,38 +208,6 @@ import { intlLocale } from '../../lib/locale';
     min-width: 0;
   }
   input:focus { border-color: var(--accent); }
-
-  /* container-type pra o select de voz encolher sem depender da largura da JANELA — quem aperta a
-     linha aqui e a largura do PAINEL (dock desktop tem ~530px), nao a viewport. */
-  .tts-extra { container-type: inline-size; margin-top: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
-  .tts-extra h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
-  /* :global: o campo é o <button> do Select.svelte. Fonte de UI (nome de voz não é identificador) e
-     a mesma regra de container: acima de 360px encolhe pra caber ao lado do resto. */
-  .tts-extra :global(.campo-select) {
-    width: 100%;
-    font-family: var(--font-ui);
-    font-size: var(--text-sm);
-  }
-  @container (min-width: 360px) { .tts-extra :global(.campo-select) { width: auto; min-width: 220px; } }
-
-  .amostra { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); align-items: flex-start; }
-
-  /* Naturalidade da voz: mesmo vocabulario de slider do AppearanceSettings (rotulo + range + valor),
-     com as pontas da escala em palavra em vez de numero, e um "voltar ao padrao" por controle. */
-  .naturalidade { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-3) 0; }
-  .ajuste { display: flex; flex-direction: column; gap: 2px; }
-  .ajuste-cabeca { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
-  .ajuste-rot { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
-  .ajuste-rot em { margin-left: var(--space-2); font-style: normal; color: var(--text-muted); font-size: var(--text-xs); }
-  .ajuste-reset {
-    flex-shrink: 0;
-    font-size: var(--text-xs); color: var(--accent); background: none; border: none; padding: 0;
-  }
-  .ajuste-slider { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
-  .ajuste-slider input { flex: 1; min-width: 100px; accent-color: var(--accent); }
-  .ajuste-slider .ponta {
-    font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; flex-shrink: 0;
-  }
 
   .raizes { margin-top: var(--space-5); }
   .raizes h3 {

@@ -723,6 +723,7 @@
   "config_modal_servidores": "Servidores",
   "config_modal_notificacoes": "Notificações",
   "config_modal_anexos": "Anexos e transcrição",
+  "config_modal_anexos_curto": "Anexos",
   "config_modal_avancado": "Avançado do servidor",
   "config_modal_motores": "Motores de modelo",
   "config_modal_desc_aparencia": "tema, fundo, leitura e texto",

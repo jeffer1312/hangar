@@ -28,6 +28,9 @@ describe('parseConfig', () => {
   it('config vazio e tratado como painel fechado', () => {
     expect(parseConfig('#/?config=')).toBeNull();
   });
+  it('rota antiga do ditado abre a tela de Voz', () => {
+    expect(parseConfig('#/?config=ditado')).toEqual({ tela: 'voz', srv: null });
+  });
 });
 
 describe('comConfig', () => {
