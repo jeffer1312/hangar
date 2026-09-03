@@ -2514,6 +2514,7 @@ class PairBody(_StrictBody):
     peer: str = ""
     peers: list[str] = []
     task: str = ""
+    replace_task: bool = False
 
 
 def _group_text(me: str, others: list[str], task: str) -> str:
@@ -2558,7 +2559,7 @@ async def pair_session(name: str, body: PairBody):
             raise HTTPException(400, detail=erro("erro_pareamento_server_id_ausente",
                                              "CP_SERVER_ID ausente no backend/.env — obrigatório pra "
                                              "pareamento cross-server (é o endereço de resposta srv::sessao)"))
-        return await _pair_cross_server(name, others[0], body.task)
+        return await _pair_cross_server(name, others[0], body.task, body.replace_task)
     names = {s.name for s in await asyncio.to_thread(registry.list)}
     missing = [p for p in [name, *others] if p not in names]
     if missing:
@@ -2567,10 +2568,14 @@ async def pair_session(name: str, body: PairBody):
     # na janela entre elas entrava no grupo fora do snapshot e um rollback posterior não o
     # reverteria). O snapshot volta pra cá pra desfazer se o aviso não chegar em ninguém.
     try:
-        members, snap = await asyncio.to_thread(pair.join_group, name, others, body.task)
+        members, snap = await asyncio.to_thread(pair.join_group, name, others, body.task, substituir_task=body.replace_task)
     except pair.PairMixError as e:
         # Uma das sessões locais já está pareada cross-server (1:1) — não dá pra fundir em grupo local.
         raise HTTPException(400, str(e))
+    except pair.TaskConflito as e:
+        raise HTTPException(409, detail=erro("erro_pareamento_tarefa_existente",
+                                             f"o grupo já tem tarefa: {e.existente!r} — repita com "
+                                             f"--substituir-tarefa pra trocar", existente=e.existente))
     link = await asyncio.to_thread(lambda: PairLink(name).get() or {})
     task = link.get("task", body.task)
     # Protocolo completo só pra quem estava SOLTO; veterano ganha uma linha com quem entrou. Quem
@@ -2607,7 +2612,7 @@ async def pair_session(name: str, body: PairBody):
             if errs else None}
 
 
-async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
+async def _pair_cross_server(name: str, peer: str, task: str, replace_task: bool) -> dict:
     """Pareamento 1:1 entre máquinas. Registra o vínculo LOCAL (name.json peers=[srv::sessao];
     sidecar do remoto vive na máquina dele) e chama o /pair-remote do backend peer pra registrar o
     reverso + injetar o protocolo lá. Falha na chamada remota desfaz o vínculo local (mesmo racional
@@ -2617,10 +2622,14 @@ async def _pair_cross_server(name: str, peer: str, task: str) -> dict:
         raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
     srv, sess = peers.split_addr(peer)
     try:
-        members, snap = await asyncio.to_thread(pair.join_group, name, [peer], task)
+        members, snap = await asyncio.to_thread(pair.join_group, name, [peer], task, substituir_task=replace_task)
     except pair.PairMixError as e:
         # `name` já está num grupo local (ou já pareada cross-server): não dá pra cross-parear.
         raise HTTPException(400, str(e))
+    except pair.TaskConflito as e:
+        raise HTTPException(409, detail=erro("erro_pareamento_tarefa_existente",
+                                             f"o grupo já tem tarefa: {e.existente!r} — repita com "
+                                             f"--substituir-tarefa pra trocar", existente=e.existente))
     link = await asyncio.to_thread(lambda: PairLink(name).get() or {})
     task = link.get("task", task)
     initiator = f"{settings.server_id}::{name}"
@@ -2672,7 +2681,8 @@ async def pair_remote(name: str, body: PairRemoteBody):
     if name not in local_names:
         raise HTTPException(404, detail=erro("erro_sessao_nao_encontrada_detalhe", f"sessão não encontrada: {name}", detalhe=name))
     try:
-        members, snap = await asyncio.to_thread(pair.join_group, name, [body.initiator], body.task)
+        # substituir_task=True: a task que chega aqui é a combinada do iniciador, sempre vence.
+        members, snap = await asyncio.to_thread(pair.join_group, name, [body.initiator], body.task, substituir_task=True)
     except pair.PairMixError as e:
         # `name` já está num grupo local aqui — não pode virar par cross-server de outra máquina.
         raise HTTPException(409, str(e))

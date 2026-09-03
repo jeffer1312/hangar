@@ -191,3 +191,24 @@ def test_set_com_surrogate_solto_na_task_grava_e_le_de_volta():
     # `task` é rótulo digitado pelo usuário: meio emoji ali estourava no write_text do sidecar.
     PairLink("a").set(["b"], task="TICKET-0000 \ud83d", gid="g1")
     assert PairLink("a").get()["task"] == "TICKET-0000 �"
+
+
+def test_join_recusa_tarefa_diferente_sem_flag():
+    pair.join("a", "b", "PM-1")
+    with pytest.raises(pair.TaskConflito) as ex:
+        pair.join_group("c", ["a"], "PM-2")
+    assert ex.value.existente == "PM-1"
+    assert pair.PairLink("c").get() is None   # nada mutado
+
+
+def test_join_com_flag_substitui_tarefa_de_todos():
+    pair.join("a", "b", "PM-1")
+    pair.join_group("c", ["a"], "PM-2", substituir_task=True)
+    assert {pair.PairLink(n).get()["task"] for n in "abc"} == {"PM-2"}
+
+
+def test_join_tarefa_igual_ou_vazia_nao_conflita():
+    pair.join("a", "b", "PM-1")
+    pair.join_group("c", ["a"], "PM-1")
+    pair.join_group("d", ["a"], "")
+    assert pair.PairLink("d").get()["task"] == "PM-1"

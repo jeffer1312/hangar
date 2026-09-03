@@ -6,8 +6,10 @@
 #                                  RECUSA (código 3) quando o caminho NATIVO do Claude Code alcança
 #                                  os dois lados — ver "Caminho nativo" abaixo. --tmux força este.
 #   hangar-send <servidor>::<sessao> <mensagem...>  idem, pra sessão em OUTRO servidor (peers.json)
-#   hangar-send --pair <sessao> [tarefa...]  pareia ESTA sessão com outra (registra no app:
-#                                        badge 🤝 na UI + protocolo injetado nos dois lados)
+#   hangar-send --pair <sessao> [--substituir-tarefa] [tarefa...]  pareia ESTA sessão com outra
+#                                        (registra no app: badge 🤝 na UI + protocolo injetado nos
+#                                        dois lados). tarefa diferente da que o grupo já tem é
+#                                        recusada (409) sem o flag
 #   hangar-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
 #   hangar-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei", "contrato
 #                                  atualizado"). Chega como [grupo: X]. UNIDIRECIONAL — nunca
@@ -195,10 +197,12 @@ me() {
 }
 
 if [[ "$1" == "--pair" ]]; then
-    peer="${2:?uso: hangar-send --pair <sessao|servidor::sessao> [tarefa...]}"; shift 2
+    peer="${2:?uso: hangar-send --pair <sessao|servidor::sessao> [--substituir-tarefa] [tarefa...]}"; shift 2
+    substituir=false
+    if [[ "${1:-}" == "--substituir-tarefa" ]]; then substituir=true; shift; fi
     # peer local (nome cru) OU remoto (servidor::sessao) — o backend local resolve o remoto via
     # peers.json + CP_SERVER_ID e registra o vínculo dos dois lados (/pair-remote). Cross-server é 1:1.
-    body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2]}))' "$peer" "$*")
+    body=$(python3 -c 'import json,sys; print(json.dumps({"peer": sys.argv[1], "task": sys.argv[2], "replace_task": sys.argv[3] == "true"}))' "$peer" "$*" "$substituir")
     api POST "/api/sessions/$(me)/pair" "$body" >/dev/null
     echo "pareado: $(me) <-> $peer (registrado no app; os dois lados recebem o protocolo)"
     exit 0

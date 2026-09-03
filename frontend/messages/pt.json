@@ -1824,6 +1824,7 @@
   "erro_pareamento_aviso_unpair": "{sessao}: {erro}",
   "erro_pareamento_grupo_falha": "falha em: {avisos}",
   "erro_pareamento_saida_falhou": "aviso de saída falhou: {avisos}",
+  "erro_pareamento_tarefa_existente": "o grupo já tem tarefa: {existente} — repita com --substituir-tarefa pra trocar",
   "erro_provider_sessao_invalido": "provider inválido",
   "erro_envio_falhou": "não deu pra enviar: {erro}",
   "comum_ponto": ".",

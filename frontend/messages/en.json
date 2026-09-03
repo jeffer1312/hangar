@@ -1824,6 +1824,7 @@
   "erro_pareamento_aviso_unpair": "{sessao}: {erro}",
   "erro_pareamento_grupo_falha": "failure in: {avisos}",
   "erro_pareamento_saida_falhou": "leave notification failed: {avisos}",
+  "erro_pareamento_tarefa_existente": "the group already has a task: {existente} — repeat with --substituir-tarefa to replace it",
   "erro_provider_sessao_invalido": "invalid provider",
   "erro_envio_falhou": "failed to send: {erro}",
   "comum_ponto": ".",

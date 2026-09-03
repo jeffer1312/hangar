@@ -700,8 +700,8 @@ hangar-send --pair <session> "<work>: <where the contract is>"   # one call per 
 ```
 
 **NEVER put the role in the `--pair` string.** It is a **GROUP** field, not the session's: every
-member's sidecar holds the SAME `task`, and each new `--pair` **overwrites everyone's** and fires
-a group-wide notice with that text. Pairing the executor with `"role: executor"` and then the
+member's sidecar holds the SAME `task`, and a `--pair` carrying a different task is refused (409)
+unless `--substituir-tarefa` is passed; the first `--pair` sets it. Pairing the executor with `"role: executor"` and then the
 reviewer with `"role: independent reviewer"`, the executor receives a notice saying it is the
 reviewer — and assumes it, because the message came through the infrastructure, looking like
 authority: a session announcing *"the second message corrected my role"* and reading the contract

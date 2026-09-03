@@ -29,6 +29,16 @@ class PairMixError(ValueError):
     join_group). O caller (api.py) traduz pra HTTP 400."""
 
 
+class TaskConflito(ValueError):
+    """O grupo já tem tarefa e o join trouxe outra sem pedir a troca. Cada --pair de um árbitro
+    sobrescrevia a tarefa de TODOS os membros calado (a skill orquestrar avisava contra isso na
+    doc, que é sinal de que a API devia proteger). O caller traduz pra HTTP 409."""
+
+    def __init__(self, existente: str):
+        super().__init__(f"o grupo já tem tarefa: {existente!r}")
+        self.existente = existente
+
+
 def _pair_dir() -> Path:
     d = Path(settings.projects_dir).parent / ".hangar-pair"
     d.mkdir(parents=True, exist_ok=True)
@@ -112,16 +122,17 @@ def restore(snap: dict[str, dict | None]) -> None:
         _restore_locked(snap)
 
 
-def join_group(name: str, others: list[str], task: str = "") -> tuple[list[str], dict[str, dict | None]]:
+def join_group(name: str, others: list[str], task: str = "", substituir_task: bool = False) -> tuple[list[str], dict[str, dict | None]]:
     """Une os grupos de `name` e de CADA sessão em `others` num só (N sessões soltas = grupo novo)
     e devolve (membros finais, snapshot pré-join pra rollback). snapshot+join na MESMA seção
     crítica: em seções separadas, um join concorrente na janela entre elas entrava no grupo sem
     entrar no snapshot — e o restore() de um rollback nunca o reverteria (grupo fantasma parcial).
 
-    task informada substitui a anterior; vazia herda a primeira existente. gid: mantém o primeiro
-    grupo existente (estável pro arquivo de contrato); contratos dos grupos absorvidos são
-    ANEXADOS ao sobrevivente (nenhum combinado se perde órfão no disco). Escrita parcial (ex:
-    disco cheio no 4º de 5 sidecars) restaura o snapshot e propaga — nunca grupo assimétrico."""
+    task só entra em grupo sem tarefa; diferente da existente exige `substituir_task`, senão
+    `TaskConflito`; vazia herda. gid: mantém o primeiro grupo existente (estável pro arquivo de
+    contrato); contratos dos grupos absorvidos são ANEXADOS ao sobrevivente (nenhum combinado se
+    perde órfão no disco). Escrita parcial (ex: disco cheio no 4º de 5 sidecars) restaura o
+    snapshot e propaga — nunca grupo assimétrico."""
     with _LOCK:
         all_names = list(dict.fromkeys([name, *others]))
         infos = [_members_of(n) for n in all_names]
@@ -139,7 +150,11 @@ def join_group(name: str, others: list[str], task: str = "") -> tuple[list[str],
                 "pareamento cross-server é 1:1 (uma sessão local + um peer remoto); uma sessão já "
                 "pareada cross-server não entra em grupo local nem pareia com outro remoto")
         snap = {m: PairLink(m).get() for m in members}
-        final_task = task.strip() or next((t for _, t, _ in infos if t), "")
+        existente = next((t for _, t, _ in infos if t), "")
+        pedida = task.strip()
+        if pedida and existente and pedida != existente and not substituir_task:
+            raise TaskConflito(existente)   # antes de qualquer mutação
+        final_task = pedida if (pedida and (not existente or substituir_task)) else existente
         gids = list(dict.fromkeys([g for _, _, g in infos if g]))
         gid = gids[0] if gids else uuid.uuid4().hex[:8]
         for loser in gids[1:]:

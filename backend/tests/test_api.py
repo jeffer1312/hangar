@@ -2667,6 +2667,21 @@ def test_pair_merge_de_dois_grupos_avisa_entrada_dos_dois_lados(api_client):
     assert "'a', 'b' entrou" in entregues["c"] and "'a', 'b' entrou" in entregues["d"]
 
 
+# ---------------------------------------------------------------------------
+# Task 3: tarefa do grupo protegida contra sobrescrita
+# ---------------------------------------------------------------------------
+
+def test_pair_409_quando_tarefa_diferente_sem_replace(api_client):
+    from app import pair as pair_mod
+    with patch("app.api.registry.list",
+               return_value=[SessionInfo(name="me", cwd="/p"), SessionInfo(name="voce", cwd="/p")]), \
+         patch("app.api.pair.join_group", side_effect=pair_mod.TaskConflito("PM-1")):
+        r = api_client.post("/api/sessions/me/pair", headers=_h(), json={"peers": ["voce"], "task": "PM-2"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "erro_pareamento_tarefa_existente"
+    assert r.json()["detail"]["params"]["existente"] == "PM-1"
+
+
 def test_group_message_warning_carrega_avisos(api_client):
     # B1: group-message com falha em TODOS os peers -> warning com a lista estruturada.
     from app import api as api_mod
