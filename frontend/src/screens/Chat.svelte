@@ -31,6 +31,8 @@
   import NavegadorPane from '../components/NavegadorPane.svelte';
   import FileViewer from '../components/files/FileViewer.svelte';
   import { filesStores } from '../lib/filesStore.svelte';
+  import { navegadorPanel } from '../lib/navegadorPanel.svelte';
+  import { sidebarPin } from '../lib/sidebarPin.svelte';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import {
     getHistory,
@@ -829,6 +831,13 @@
   // Navegador embutido ao lado do chat (WebContentsView no shell; iframe fora dele). Só desktop:
   // no celular quem cobre o caso é o PreviewSheet (túnel da porta pra URL alcançável).
   let navOpen = $state(false);
+  // Com o navegador aberto, a sidebar colapsa pro trilho — override TEMPORÁRIO do sidebarPin
+  // (o mesmo do Board/Canvas): mexe só no `forced`, nunca na preferência gravada, então fechar
+  // o navegador devolve a sidebar como estava.
+  $effect(() => {
+    sidebarPin.setForced(desktop && navOpen ? true : null);
+    return () => sidebarPin.setForced(null);
+  });
   // Campos de loop vêm do SSE DA PRÓPRIA SESSÃO (stateEvent), não do sessionsStore: reter o
   // store aqui abria 1 stream de lista POR SERVIDOR no celular (com offline = retry eterno) e
   // derrubava a conexão do pocket — regressão real vista no iPhone, revertida.
@@ -1831,6 +1840,7 @@
   class:split-pane={splitTab}
   class:with-context={desktop && showContextPanel}
   class:with-nav={desktop && navOpen}
+  style:--cp-nav-w={navOpen ? `${navegadorPanel.largura}px` : undefined}
   style:--cp-ctx-w={`${ctxPanel.recolhido ? LARGURA_TRILHO : ctxPanel.largura}px`}
   bind:this={screenEl}
   style:--nav-h={navH + topInset + 'px'}
@@ -1862,7 +1872,7 @@
     <LoopSheet open={true} sessionName={sessionName} onClose={() => (loopSheetOpen = false)} />
   {/if}
 
-  {#if desktop && showContextPanel}
+  {#if desktop && showContextPanel && !navOpen}
     <DesktopSessionContext
       toggleExterno={ctxToggleExterno}
       state={currentState}
@@ -1875,6 +1885,7 @@
       {sessionName}
       {events} {histGap} cwd={planSession?.cwd ?? null}
       onOpenTerminal={abrirTerminalReal}
+      onOpenNavegador={() => (navOpen = true)}
       terminalAlert={tuiOverlay && !mirrorOpen && !xtermOpen && !terminalPanelOpen}
       onOpenRun={() => (runOpen = true)}
       {runRunning}
@@ -2448,14 +2459,15 @@
     .chat-screen.with-context .bottom-dock :global(.composer-card) { max-width: min(calc(min(1440px, 100%) * var(--cp-width-scale, 1)), 100%); }
   }
 
-  /* Navegador embutido: o recuo dele SOMA no do painel de contexto (--ctx-w), e vale em TODA a
-     largura de desktop — as regras de --recuo-dir acima só existem em 1280+ porque só o contexto
-     as usava; com o navegador aberto o conteúdo precisa recuar em qualquer largura, senão o view
-     nativo (que flutua POR CIMA do DOM) cobriria o texto e o composer. O NavegadorPane se posiciona
-     pela mesma var (--cp-nav-w), então bounds do view e faixa reservada nunca divergem. */
+  /* Navegador embutido: ocupa o LUGAR do painel de contexto (que não monta com ele aberto) —
+     o recuo do conteúdo é a largura dele (--cp-nav-w, do store navegadorPanel, arrastável), e
+     vale em TODA a largura de desktop: as regras de --recuo-dir acima só existem em 1280+
+     porque só o contexto as usava; com o navegador aberto o conteúdo precisa recuar em qualquer
+     largura, senão o view nativo (que flutua POR CIMA do DOM) cobriria o texto e o composer.
+     O NavegadorPane se posiciona pela mesma var, então bounds do view e faixa reservada nunca
+     divergem. */
   @media (min-width: 820px) {
-    .chat-screen.desktop.with-nav { --cp-nav-w: clamp(420px, 44vw, 920px); }
-    .chat-screen.desktop.with-nav { --recuo-dir: calc(var(--ctx-w, 0px) + var(--cp-nav-w, 0px)); }
+    .chat-screen.desktop.with-nav { --recuo-dir: var(--cp-nav-w, 0px); }
     .chat-screen.desktop.with-nav :global(.message-list) { box-sizing: border-box; padding-right: var(--recuo-dir); }
     .chat-screen.desktop.with-nav .bottom-dock { right: var(--recuo-dir); }
   }

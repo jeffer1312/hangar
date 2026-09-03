@@ -1,14 +1,16 @@
 <script lang="ts">
-  // Navegador embutido ao lado do chat. No shell Electron o conteúdo é um WebContentsView NATIVO
-  // (login Google persistente via partição, dirigível por CDP); fora do shell cai no iframe.
+  // Navegador embutido na coluna da DIREITA: quando abre, o painel de contexto sai e ele ocupa o
+  // lugar (mais largo, redimensionável pela divisória esquerda), e a sidebar colapsa (o Chat faz
+  // as duas coisas). No shell Electron o conteúdo é um WebContentsView NATIVO (login Google
+  // persistente via partição, dirigível por CDP); fora do shell cai no iframe.
   //
   // O view nativo flutua POR CIMA do DOM — não é elemento HTML. Este componente só reserva o
-  // espaço no layout (o Chat recua com --recuo-dir) e mede o retângulo pro shell pintar lá.
-  // Consequência conhecida: modal/sheet que abrir na área dele fica "atrás" — fechar o painel
-  // é a saída.
+  // espaço no layout (o Chat recua com --recuo-dir = --cp-nav-w) e mede o retângulo pro shell
+  // pintar lá. Consequência conhecida: modal/sheet que abrir na área dele fica "atrás".
   import { onMount } from 'svelte';
   import * as m from '../paraglide/messages';
   import { navegadorNativo } from '../lib/navegadorNativo';
+  import { navegadorPanel, arrastarNav, salvarNav } from '../lib/navegadorPanel.svelte';
 
   let { onClose }: { onClose: () => void } = $props();
 
@@ -27,10 +29,30 @@
     if (nativo && ancora) nativo.open(u, ancora.getBoundingClientRect());
   }
 
+  // Drag na divisória ESQUERDA (o painel cola na direita): pointer capture no handle, largura
+  // clampada no store, salva no soltar. Mesma pegada do ctxPanel — sem transição de width, o
+  // arrasto segue o ponteiro sem lag (a classe resizing é a trava contra transição futura).
+  function resizeStart(e: PointerEvent) {
+    navegadorPanel.resizing = true;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+  function resizeMove(e: PointerEvent) {
+    if (navegadorPanel.resizing) arrastarNav(e.clientX);
+  }
+  function resizeEnd() {
+    if (!navegadorPanel.resizing) return;
+    navegadorPanel.resizing = false;
+    salvarNav();
+  }
+  // A alça saindo do DOM no meio do arrasto (trocar de sessão remonta o Chat) deixaria o flag
+  // preso e a divisória redimensionaria só com o cursor por cima — mesmo motivo do ctxPanel.
+  $effect(() => () => { navegadorPanel.resizing = false; });
+
   onMount(() => {
     if (!nativo) return;
-    // Reenvia o retângulo a cada mudança de layout (resize da janela, sidebar, painel de
-    // contexto) — o view nativo não acompanha o DOM sozinho.
+    // Reenvia o retângulo a cada mudança de layout (resize da janela, arrasto da divisória,
+    // sidebar) — o view nativo não acompanha o DOM sozinho.
     const sync = () => { if (ancora) nativo.bounds(ancora.getBoundingClientRect()); };
     const ro = new ResizeObserver(sync);
     if (ancora) ro.observe(ancora);
@@ -41,7 +63,18 @@
   });
 </script>
 
-<section class="nav-panel" aria-label={m.ctx_navegador()}>
+<section class="nav-panel" class:resizing={navegadorPanel.resizing} aria-label={m.ctx_navegador()}>
+  <!-- Divisória esquerda: arrasta pra redimensionar (a largura mora no store navegadorPanel). -->
+  <div
+    class="nav-resize-handle"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label={m.ctx_navegador()}
+    onpointerdown={resizeStart}
+    onpointermove={resizeMove}
+    onpointerup={resizeEnd}
+    onpointercancel={resizeEnd}
+  ></div>
   <header class="nav-bar">
     <form class="nav-form" onsubmit={(e) => { e.preventDefault(); ir(); }}>
       <input
@@ -79,13 +112,13 @@
 </section>
 
 <style>
-  /* À esquerda do painel de contexto (a faixa --ctx-w é dele), abaixo da navbar. A largura vem
-     do Chat (--cp-nav-w), que também faz o conteúdo recuar a mesma faixa — assim os bounds do
-     view nativo nunca cobrem outro painel. */
+  /* Colado na borda direita, no LUGAR do painel de contexto (que não monta com o navegador
+     aberto). A largura vem do Chat (--cp-nav-w, do store navegadorPanel), que recua o conteúdo
+     da mesma faixa — assim os bounds do view nativo e a área reservada nunca divergem. */
   .nav-panel {
     position: absolute;
     top: calc(var(--nav-h, 0px) + 8px);
-    right: calc(var(--ctx-w, 0px) + 6px);
+    right: 6px;
     bottom: 8px;
     width: var(--cp-nav-w, 45vw);
     display: flex;
@@ -95,6 +128,16 @@
     background: var(--glass-panel);
     overflow: hidden;
     z-index: 19;
+  }
+  .nav-resize-handle {
+    position: absolute;
+    left: -5px;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    cursor: col-resize;
+    z-index: 2;
+    touch-action: none;
   }
   .nav-bar {
     display: flex;

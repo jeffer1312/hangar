@@ -38,6 +38,9 @@ import * as m from '../paraglide/messages';
     // opcionais: sem handler, sem botao (mesma regra da NavBar).
     onOpenTerminal?: () => void;
     terminalAlert?: boolean;
+    // Navegador embutido: abre o painel que toma o LUGAR desta coluna (o Chat desmonta este
+    // painel com o navegador aberto — os dois nunca convivem).
+    onOpenNavegador?: () => void;
     onOpenRun?: () => void;
     runRunning?: boolean;
     onOpenAttachments?: () => void;
@@ -83,6 +86,7 @@ import * as m from '../paraglide/messages';
     events = null, histGap = '', cwd = null,
     serverLabel = '', provider = 'claude', sessionName = '', serverId = '',
     onOpenTerminal = undefined, terminalAlert = false,
+    onOpenNavegador = undefined,
     onOpenRun = undefined, runRunning = false,
     onOpenAttachments = undefined,
     onOpenActivity = undefined, activityBadge = 0, activityRunning = false,
@@ -95,7 +99,7 @@ import * as m from '../paraglide/messages';
     toggleExterno = false,
   }: Props = $props();
 
-  const hasActions = $derived(onOpenTerminal || onOpenRun || onOpenAttachments || onOpenActivity);
+  const hasActions = $derived(onOpenTerminal || onOpenNavegador || onOpenRun || onOpenAttachments || onOpenActivity);
   // Atalho da secao Grupo: com UM par, tocar abre a sessao dele direto no modal. Com 2+ membros a
   // secao continua abrindo a PairSheet — la existe o botao por membro, e escolher por quem clicou
   // seria adivinhacao.
@@ -216,6 +220,16 @@ import * as m from '../paraglide/messages';
             <line x1="12.5" y1="15" x2="17" y2="15"/>
           </svg>
           <span>{m.ctx_terminal()}</span>
+        </button>
+      {/if}
+      {#if onOpenNavegador}
+        <button class="ctx-action" onclick={onOpenNavegador} aria-label={m.ctx_navegador()}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M3 12h18"/>
+            <path d="M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9s1.4-6.4 3.9-9z"/>
+          </svg>
+          <span>{m.ctx_navegador()}</span>
         </button>
       {/if}
       {#if onOpenRun}
