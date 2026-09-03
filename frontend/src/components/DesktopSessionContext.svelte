@@ -201,6 +201,8 @@ import * as m from '../paraglide/messages';
          coisas que precisam de largura. Estado e progresso continuam à vista na barra da esquerda. -->
   {:else}
   {#if working}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
+  <!-- Com a aba Navegador ativa o header some: o browser ganha a altura (pedido dele). -->
+  {#if ctxPanel.aba !== 'navegador'}
   <header>
     <div class="ctx-heading">
       <!-- Sem kicker: "Contexto da sessão" repetia o que o painel inteiro e (e ja esta no
@@ -215,6 +217,7 @@ import * as m from '../paraglide/messages';
       {/if}
     </div>
   </header>
+  {/if}
 
   <!-- Barra de abas do painel (Contexto | Arquivos), no desenho do mock aprovado. A aba ativa
        vive no ctxPanel (modulo): o App remonta este painel por {#key} a cada troca de sessao,

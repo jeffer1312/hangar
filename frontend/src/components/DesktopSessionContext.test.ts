@@ -109,6 +109,25 @@ describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
     fecharNav('srv-test::sess-1');
   });
 
+  it('com a aba Navegador ativa, o header e a fileira de ações saem (o browser ganha a altura)', async () => {
+    const { marcarNavAberto, fecharNav } = await import('../lib/navegadorPanel.svelte');
+    marcarNavAberto('srv-test::sess-1');
+    const t = montar(false);
+    await tick();
+    expect(document.querySelector('.session-context .ctx-heading')).not.toBeNull();
+    ctxPanel.aba = 'navegador';
+    await tick();
+    // o header do painel (nome+estado) some; o <header class=nav-bar> que fica é a barra de
+    // endereço DO NAVEGADOR, que é dele e tem que ficar.
+    expect(document.querySelector('.session-context .ctx-heading')).toBeNull();
+    expect(document.querySelector('.ctx-actions')).toBeNull();
+    ctxPanel.aba = 'contexto';
+    await tick();
+    expect(document.querySelector('.session-context .ctx-heading')).not.toBeNull();
+    unmount(t.comp);
+    fecharNav('srv-test::sess-1');
+  });
+
   it('aba Arquivos monta o FilesPanel e lista a sessao', async () => {
     const t = montar(false);
     await tick();
