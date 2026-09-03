@@ -291,7 +291,11 @@ ipcMain.handle('hangar:nav-open', (ev, { url, bounds } = {}) => {
   if (!win || !destino) return { ok: false };
   fecharNavegador(win);   // um por janela: abrir de novo troca a URL
   // persist: cookies/localStorage no disco — o login (Google) sobrevive a reabrir o painel.
-  const view = new WebContentsView({ webPreferences: { partition: 'persist:nav' } });
+  // backgroundThrottling: false porque o view ESCONDIDO (troca de sessão, no modelo um
+  // navegador por sessão) precisa seguir processando — o agente continua dirigindo ele via CDP.
+  const view = new WebContentsView({
+    webPreferences: { partition: 'persist:nav', backgroundThrottling: false },
+  });
   view.webContents.setUserAgent(uaDeChrome(view.webContents.getUserAgent()));
   // target=_blank vai pro navegador do sistema, mesmo padrão do cockpit.
   view.webContents.setWindowOpenHandler(({ url: alvo }) => {

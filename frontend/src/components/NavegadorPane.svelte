@@ -20,13 +20,22 @@
   let aberta = $state('');      // a URL efetivamente aberta ('' = nenhuma)
   let recarregos = $state(0);   // iframe: trocar a key recria o elemento (= reload)
 
+  // O rect TEM que sair como objeto plano: getBoundingClientRect devolve DOMRect, cujas
+  // propriedades são getters no prototype — o structuredClone do IPC vira {} e o view nasce
+  // com bounds zerados (invisível, área preta). Medido: open chegava no main com tudo 0.
+  function rectDaAncora() {
+    if (!ancora) return { x: 0, y: 0, width: 0, height: 0 };
+    const r = ancora.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  }
+
   function ir() {
     const t = endereco.trim();
     if (!t) return;
     const u = /^https?:\/\//i.test(t) ? t : `http://${t}`;
     endereco = u;
     aberta = u;
-    if (nativo && ancora) nativo.open(u, ancora.getBoundingClientRect());
+    if (nativo) nativo.open(u, rectDaAncora());
   }
 
   // Drag na divisória ESQUERDA (o painel cola na direita): pointer capture no handle, largura
@@ -53,7 +62,7 @@
     if (!nativo) return;
     // Reenvia o retângulo a cada mudança de layout (resize da janela, arrasto da divisória,
     // sidebar) — o view nativo não acompanha o DOM sozinho.
-    const sync = () => { if (ancora) nativo.bounds(ancora.getBoundingClientRect()); };
+    const sync = () => { nativo.bounds(rectDaAncora()); };
     const ro = new ResizeObserver(sync);
     if (ancora) ro.observe(ancora);
     return () => {
