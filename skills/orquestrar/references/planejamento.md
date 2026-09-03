@@ -732,8 +732,9 @@ A nonexistent engine returns `400` and the session is not born. List engines: `c
   is who, untouchables, gates, method, domain skill, branch, bars, accounts. Written now and
   nearly immutable after. Two pages.
 - **`~/.hangar/orq/<date>-<gid>/registro.md`** — the journal, which only the arbiter reads.
-  Progress, history, dated decisions. Never `grupo-<gid>.md`: the backend deletes that one with the
-  group.
+  Progress, history, dated decisions. Never `grupo-<gid>.md`: the backend archives `grupo-<gid>.md`
+  and `regras-<gid>.md` to `~/.hangar/pair-arquivo/<prefix>-<gid>-<timestamp>.md` when the group
+  dissolves.
 - **`licoes.md`** (in the durable directory) — the guidelines the run keeps fixing, with date and
   proof. **It grows freely and nothing leaves it.** Nobody reads it whole: the arbiter pastes into
   each kick-off the three or four that serve that Task. Born empty, header only.

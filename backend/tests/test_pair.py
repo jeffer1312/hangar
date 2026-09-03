@@ -124,15 +124,28 @@ def test_merge_appends_loser_contract(tmp_path):
     assert not pc.exists()
 
 
-def test_contract_dies_with_the_group_but_survives_membro_solto(tmp_path):
+def test_contrato_e_arquivado_quando_o_grupo_dissolve_e_sobrevive_a_membro_solto(tmp_path, monkeypatch):
     pair.join("a", "b")
     pair.join("a", "c")
     contrato = pair.contract_path_for("a")
     contrato.write_text("contrato ABC", encoding="utf-8")
     pair.leave("a")               # grupo continua (b + c) -> contrato fica
     assert contrato.exists()
-    pair.leave("b")               # último a sair dissolve -> contrato some (nada mais aponta pra ele)
+    monkeypatch.setattr(pair, "_arquivo_dir", lambda: tmp_path / "arq")
+    gid = pair.PairLink("b").get()["gid"]
+    pair.leave("b")                                   # último sai
     assert not contrato.exists()
+    arquivados = list((tmp_path / "arq").glob("grupo-*-*.md"))
+    assert len(arquivados) == 1 and arquivados[0].name.startswith(f"grupo-{gid}-")
+    assert arquivados[0].read_text(encoding="utf-8") == "contrato ABC"
+
+
+def test_arquivar_contratos_leva_grupo_e_regras_e_ignora_ausentes(tmp_path, monkeypatch):
+    monkeypatch.setattr(pair, "_arquivo_dir", lambda: tmp_path / "arq")
+    (pair._pair_dir() / "regras-g7.md").write_text("papéis", encoding="utf-8")
+    pair._arquivar_contratos("g7")               # só regras- existe; grupo- ausente não quebra
+    assert not (pair._pair_dir() / "regras-g7.md").exists()
+    assert [p.name.startswith("regras-g7-") for p in (tmp_path / "arq").iterdir()] == [True]
 
 
 def test_contract_path_stable_and_none_without_group(tmp_path):

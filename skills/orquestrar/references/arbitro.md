@@ -22,9 +22,10 @@ sit in its middle. You are the only one who writes to the contract.
   summarizes: it is phase 5's raw material. **Only you read it.** Send that path to no one.
 
   > **The journal and the lessons live in the work's durable directory, which nothing manages** —
-  > not in `<config>/.hangar-pair/`, which belongs to the backend: it deletes `grupo-<gid>.md`
-  > together with the group, so a killed last session takes a whole diary with it. **The rules
-  > stay there** — it is the path the app shows the team.
+  > not in `<config>/.hangar-pair/`, which belongs to the backend: it archives `grupo-<gid>.md` and
+  > `regras-<gid>.md` to `~/.hangar/pair-arquivo/<prefix>-<gid>-<timestamp>.md` together with the
+  > group, so a killed last session takes a whole diary with it. **The rules stay there** — it is
+  > the path the app shows the team.
 - **`regras-<gid>.md` — the rules.** **This work's agreement**, written at launch and nearly
   immutable after it: who is who, untouchables, gates, method, domain skill, branch, bars, what
   the review must cover, accounts. It is the only one the team reads **whole**, and it fits in two

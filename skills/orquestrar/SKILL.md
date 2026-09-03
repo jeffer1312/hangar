@@ -197,8 +197,9 @@ screens and the retrospective. It belongs to the arbiter and is described in
 `references/arbitro.md` — which is why that page speaks of **four** files and this one of three.
 
 > **The journal and the lessons live in the work's durable directory, which nothing manages.**
-> `<config>/.hangar-pair/` belongs to the backend: it deletes `grupo-<gid>.md` together with the
-> group. The **rules** stay there — it is the path the app shows the team.
+> `<config>/.hangar-pair/` belongs to the backend: it archives `grupo-<gid>.md` and `regras-<gid>.md`
+> to `~/.hangar/pair-arquivo/<prefix>-<gid>-<timestamp>.md` together with the group. The **rules**
+> stay there — it is the path the app shows the team.
 
 The boundary between the three is the content's **type**, not its subject:
 

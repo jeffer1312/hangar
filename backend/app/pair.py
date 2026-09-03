@@ -9,7 +9,9 @@ grupo (não muda quando membro entra/sai) — nomeia o arquivo de CONTRATO compa
 legado {"peer": "x"} (1:1) é lido como {"peers": ["x"]}. O efeito de comportamento (as sessões se
 falarem via hangar-send) vem do PROMPT que a API injeta; o sidecar persiste o vínculo pro badge/unpair."""
 import json
+import shutil
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -198,14 +200,35 @@ def join(a: str, b: str, task: str = "") -> list[str]:
     return join_with_snapshot(a, b, task)[0]
 
 
+def _arquivo_dir() -> Path:
+    # O cofre (~/.hangar), não o config dir de uma conta — mesma razão do orq.raiz_padrao().
+    return Path.home() / ".hangar" / "pair-arquivo"
+
+
+def _arquivar_contratos(gid: str) -> None:
+    """Último membro saiu: o contrato vai pro arquivo em vez de sumir — dois kills seguidos apagavam
+    as decisões de um trabalho inteiro. Best-effort: falha aqui não desfaz um leave que já valeu."""
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    for prefixo in ("grupo", "regras"):
+        src = _pair_dir() / f"{prefixo}-{gid}.md"
+        try:
+            if not src.is_file():
+                continue
+            dst = _arquivo_dir()
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst / f"{prefixo}-{gid}-{ts}.md"))
+        except OSError:
+            pass
+
+
 def leave(name: str) -> list[str]:
     """`name` sai do grupo. Devolve os ex-companheiros (pra notificação). Grupo restante de 1
     também é dissolvido (grupo de 1 não existe). Idempotente. Escrita parcial (ex: OSError no
     2º companheiro) restaura o estado anterior e propaga — sem isto sobrava companheiro-fantasma
     apontando pra quem já saiu.
 
-    Grupo dissolvido de vez (ninguém mais dentro) leva junto o arquivo de CONTRATO — senão o
-    grupo-<gid>.md fica órfão no disco pra sempre, sem nenhum sidecar apontando pra ele."""
+    Grupo dissolvido de vez (ninguém mais dentro) arquiva o contrato em `~/.hangar/pair-arquivo/`
+    (sem sidecar apontando pra ele, no lugar original seria órfão; apagar perdia decisões)."""
     with _LOCK:
         link = PairLink(name).get()
         if not link:
@@ -225,14 +248,10 @@ def leave(name: str) -> list[str]:
         except OSError:
             _restore_locked(snap)
             raise
-        # Fora do try: apagar contrato é faxina, best-effort — falha aqui não pode desfazer um
+        # Fora do try: arquivar contrato é faxina, best-effort — falha aqui não pode desfazer um
         # unpair que já deu certo (restore ressuscitaria o par).
         if len(peers) == 1 and link.get("gid"):
-            for prefixo in ("grupo", "regras"):
-                try:
-                    (_pair_dir() / f"{prefixo}-{link['gid']}.md").unlink(missing_ok=True)
-                except OSError:
-                    pass
+            _arquivar_contratos(link["gid"])
         return peers
 
 
