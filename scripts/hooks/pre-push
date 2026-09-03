@@ -11,7 +11,8 @@
 # Emergência: `git push --no-verify` pula. Saída deliberada, não bug.
 set -uo pipefail
 
-# O git entrega os refs uma vez só pelo stdin; guardado, porque dois laços leem (vazamento e CI).
+# O git entrega os refs uma vez só pelo stdin; guardado numa variável pra o laço não perdê-los se
+# algum filho ler daí.
 ENTRADA="$(cat)"
 
 PADROES=(
