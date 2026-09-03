@@ -133,6 +133,16 @@ def _reset_list_snapshot():
     api._list_snap["snap"] = None
 
 
+@pytest.fixture(autouse=True)
+def _reset_pair_ausencias():
+    # Backstop: com o dict vazio no início do teste, nenhuma varredura dentro de UM teste chega
+    # aos 5s — nenhum teste alcança o .hangar-pair real por esquecer o fixture por arquivo.
+    from app.registry import SessionRegistry
+    SessionRegistry._pair_ausencias.clear()
+    yield
+    SessionRegistry._pair_ausencias.clear()
+
+
 # Recortes REAIS do material_colors.scss, medidos em 05/08/2026 trocando o papel de parede: um azul
 # e um vermelho. Nao invente valores — a graca e provar que neutro frio vira neutro quente pelo
 # mesmo caminho de codigo.

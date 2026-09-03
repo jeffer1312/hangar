@@ -108,3 +108,16 @@ def test_lista_vazia_nao_varre():
     r._varrer_pares_mortos(set(), agora=100.0)
     r._varrer_pares_mortos(set(), agora=200.0)
     assert pair.PairLink("a").get() is not None
+
+
+def test_nome_com_espaco_nao_e_dissolvido_por_sanitizacao():
+    # sidecar de "meu proj" é "meu-proj.json" (_sanitize); vivos traz o nome CRU do tmux -- sem
+    # subtrair a versão sanitizada de vivos, a sessão viva nunca sai de candidatos.
+    pair.join("meu proj", "b")
+    r = _reg()
+    vivos = {"meu proj", "b"}
+    with patch("app.registry.PromptQueue") as pq:
+        r._varrer_pares_mortos(vivos, agora=100.0)
+        r._varrer_pares_mortos(vivos, agora=100.0 + SessionRegistry._PAIR_AUSENCIA_MIN_S)
+    assert pair.PairLink("meu proj").get() is not None
+    pq.return_value.append.assert_not_called()

@@ -701,12 +701,11 @@ hangar-send --pair <session> "<work>: <where the contract is>"   # one call per 
 
 **NEVER put the role in the `--pair` string.** It is a **GROUP** field, not the session's: every
 member's sidecar holds the SAME `task`, and a `--pair` carrying a different task is refused (409)
-unless `--substituir-tarefa` is passed; the first `--pair` sets it. Pairing the executor with `"role: executor"` and then the
-reviewer with `"role: independent reviewer"`, the executor receives a notice saying it is the
-reviewer — and assumes it, because the message came through the infrastructure, looking like
-authority: a session announcing *"the second message corrected my role"* and reading the contract
-as another role is the direct product, and fixing it costs role corrections and sidecar
-rewrites.
+unless `--substituir-tarefa` is passed; the first `--pair` sets it. Pairing the executor with
+`"role: executor"` and then the reviewer with `"role: independent reviewer"` no longer completes:
+the second `--pair` is a different task string, so the API refuses it with a task conflict instead
+of overwriting the group's task — the arbiter has to notice the 409 and fix the string, which still
+costs a round trip, but the executor never receives a message announcing it is the reviewer.
 
 The `--pair` string is **neutral and points at the contract**, never asserts a role:
 

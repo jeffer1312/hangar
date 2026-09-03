@@ -16,7 +16,7 @@ from app import runtime_config
 from app.names import sanitize_session_name
 from app.git_ops import git_summary, git_diffstat, head_info
 from app.models import SessionInfo, session_key
-from app.pqueue import PromptQueue
+from app.pqueue import PromptQueue, _sanitize
 from app.chain import ThenLink
 from app import pair, pair_texto
 from app.pair import PairLink, rename_pair, leave as pair_leave
@@ -1723,9 +1723,12 @@ class SessionRegistry:
         if not vivos:
             return   # tmux fora = lista vazia; varrer aqui dissolveria todos os grupos
         agora = time.monotonic() if agora is None else agora
-        candidatos = pair.referenciados_locais() - vivos
+        # referenciados_locais() devolve stem SANITIZADO (_sanitize do pqueue); vivos é nome CRU do
+        # tmux — sem subtrair a versão sanitizada de vivos, sessão com espaço/acento no nome nunca
+        # sai de candidatos e a varredura dissolve um grupo vivo (achado do review final).
+        candidatos = pair.referenciados_locais() - vivos - {_sanitize(v) for v in vivos}
         cls = type(self)
-        for n in [x for x in cls._pair_ausencias if x not in candidatos]:
+        for n in [x for x in dict(cls._pair_ausencias) if x not in candidatos]:
             cls._pair_ausencias.pop(n, None)  # varredura concorrente (2 registries) pode já ter tirado
         for n in candidatos:
             primeira = cls._pair_ausencias.setdefault(n, agora)

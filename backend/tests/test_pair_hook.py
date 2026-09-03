@@ -2,6 +2,10 @@
 import json, os, subprocess, sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="o tmux de mentira é um script sh")
+
 HOOK = str(Path(__file__).resolve().parent.parent / "hooks" / "pair_hook.py")
 
 
