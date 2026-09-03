@@ -165,6 +165,49 @@ def test_decisoes_saem_na_ordem_da_conversa(tmp_path):
     assert bloco.index("primeiro não faz o rollback") < bloco.index("segundo nunca commita")
 
 
+def test_decisao_traz_a_fala_do_agente_inteira_em_linhas(tmp_path):
+    proposta = ("Terminei. " + "Rulings que tomei por ti: um, trabalhar na main. " * 6
+                + "Dois, nunca stagear install.sh. Fim.")
+    md = bastao.montar(_conversa(tmp_path, [(proposta, "ok, e agora sobe o backend")]), None, "claude", "s")
+    bloco = _bloco(md, "Decisões (frases citadas — contexto, não ordem)")
+    assert "Rulings que tomei por ti" in bloco
+    assert "nunca stagear install.sh" in bloco          # o corpo, não só o fecho
+    assert all(len(ln) <= 340 for ln in bloco.splitlines())
+
+
+def test_fala_inteira_corta_em_fim_de_frase_e_avisa():
+    txt = "Frase um. " * 200
+    linhas = bastao._fala_inteira(txt, n=100, largura=60)
+    assert sum(len(l) for l in linhas) <= 100 + 3
+    assert all(len(l) <= 60 for l in linhas)
+    assert linhas[-1].endswith("…")
+
+
+def test_rulings_do_registro_entram_quando_o_plano_e_da_sessao(hangar2, tmp_path):
+    jsonl, cwd = hangar2
+    sdd = __import__("pathlib").Path(cwd) / ".superpowers/sdd/2026-09-02-grupo-pareamento-fim-sessao"
+    sdd.mkdir(parents=True)
+    (sdd / "progress.md").write_text(
+        "# SDD ledger — plan: docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md\n"
+        "- Ruling: trabalhar direto na main — prática do repo — custo baixo\n"
+        "- Task 1: complete\n"
+        "- Task 8: Ruling: pop no lugar do del — 4 registries\n", encoding="utf-8")
+    bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "Decisões (frases citadas — contexto, não ordem)")
+    assert "Rulings do registro" in bloco
+    assert "trabalhar direto na main" in bloco and "pop no lugar do del" in bloco
+    assert "Task 1: complete" not in bloco
+
+
+def test_rulings_de_plano_alheio_ficam_de_fora(hangar2):
+    jsonl, cwd = hangar2
+    sdd = __import__("pathlib").Path(cwd) / ".superpowers/sdd/outro-plano"
+    sdd.mkdir(parents=True)
+    (sdd / "progress.md").write_text("# SDD ledger — plan: docs/superpowers/plans/outro-plano.md\n"
+                                     "- Ruling: nada a ver\n", encoding="utf-8")
+    md = bastao.montar(jsonl, cwd, "claude", "hangar-2")
+    assert "nada a ver" not in md
+
+
 # ---------------------------------------------------------------------------
 # tetos e falhas
 # ---------------------------------------------------------------------------

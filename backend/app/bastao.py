@@ -55,7 +55,7 @@ _COL = 220              # teto de caracteres por linha (uma saída de ferramenta
 # importante caindo fora da janela.
 _EVENTOS = 600
 
-_MAX_DECISOES = 12      # pares proposta→resposta que sobrevivem ao corte
+_MAX_DECISOES = 6       # pares proposta→resposta que sobrevivem ao corte
 _MAX_ARQUIVOS = 12
 _MAX_COMANDOS = 8
 _MAX_FALHAS = 5
@@ -91,23 +91,32 @@ def _uma_linha(txt: str | None, n: int = _COL) -> str:
 _FIM_FRASE = re.compile(r"(?<=[.!?:])\s+")
 
 
-def _ultimas_frases(txt: str, n: int = 220) -> str:
-    """A última frase INTEIRA da fala do agente, não os últimos N caracteres dela.
+def _fala_inteira(txt: str, n: int = 1200, largura: int = 300) -> list[str]:
+    """A fala do agente de frente pra trás, em linhas de até `largura`, até `n` caracteres.
 
-    Cortar por caractere começava a citação no meio de uma palavra ("senhada como bolha cinza…") —
-    medido no primeiro dossiê real. A proposta é o fecho da mensagem: junta frases do fim pra trás
-    enquanto couber."""
+    O fecho sozinho perdia o corpo — e o corpo é onde vivem os rulings ("Rulings que tomei por ti:
+    …") que a sucessora precisa. Corte em fim de frase, com `…` avisando que há mais."""
     frases = [f.strip() for f in _FIM_FRASE.split(" ".join((txt or "").split())) if f.strip()]
-    if not frases:
-        return ""
-    escolhidas: list[str] = []
-    tam = 0
-    for f in reversed(frases):
-        if escolhidas and tam + len(f) > n:
+    linhas: list[str] = []
+    atual = ""
+    total = 0
+    cortou = False
+    for f in frases:
+        if total + len(f) + 1 > n:
+            cortou = True
             break
-        escolhidas.insert(0, f)
-        tam += len(f) + 1
-    return _uma_linha(" ".join(escolhidas), n)
+        if atual and len(atual) + 1 + len(f) > largura:
+            linhas.append(atual)
+            atual = f
+        else:
+            atual = f"{atual} {f}".strip()
+        total += len(f) + 1
+    if atual:
+        linhas.append(atual)
+    linhas = [_uma_linha(l, largura) for l in linhas]
+    if cortou and linhas:
+        linhas[-1] = linhas[-1].rstrip("…") + "…"
+    return linhas
 
 
 def _sem_acento(txt: str) -> str:
@@ -549,7 +558,34 @@ def _pares(eventos: list) -> list[tuple[int, str, str]]:
     return out
 
 
-def _decisoes(eventos: list) -> list[str]:
+_RULING_MAX = 15
+
+
+def _rulings_do_registro(cwd: str | None, plano: str | None) -> list[str]:
+    """Linhas `Ruling:` de um ledger `.superpowers/sdd/*/progress.md` cujo plano é o que a sessão
+    citou. O ledger costuma ser apagado no fim; quando existe, é a fonte mais precisa de decisão."""
+    if not cwd or not plano:
+        return []
+    nomes = {os.path.basename(plano)}
+    out: list[str] = []
+    for prog in sorted(Path(cwd).glob(".superpowers/sdd/*/progress.md")):
+        try:
+            texto = prog.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        cabeca = texto.splitlines()[0] if texto else ""
+        plano = cabeca.split("plan:", 1)[1].strip() if "plan:" in cabeca else ""
+        if not plano or os.path.basename(plano) not in nomes:
+            continue
+        for ln in texto.splitlines():
+            if "Ruling" in ln:
+                out.append(f"  - {_uma_linha(ln.lstrip('- '), 300)}")
+                if len(out) >= _RULING_MAX:
+                    return out
+    return out
+
+
+def _decisoes(eventos: list, cwd: str | None, plano: str | None) -> list[str]:
     from app.pqueue import linha_mais_parecida
 
     pares = _pares(eventos)
@@ -590,7 +626,13 @@ def _decisoes(eventos: list) -> list[str]:
     for _i, prop, resp in escolhidos:
         out.append(f"- **você:** {_uma_linha(resp, 260)}")
         if prop:
-            out.append(f"  - _antes disso, o agente:_ {_ultimas_frases(prop)}")
+            partes = _fala_inteira(prop)
+            out.append(f"  - _antes disso, o agente:_ {partes[0]}")
+            out += [f"    {p}" for p in partes[1:]]
+
+    rulings = _rulings_do_registro(cwd, plano)
+    if rulings:
+        out += ["", "Rulings do registro (`.superpowers/sdd/*/progress.md`), citação literal:"] + rulings
     return out
 
 
@@ -650,7 +692,7 @@ def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = ""
     # um dossiê de 200 linhas chega nestas seções longe da abertura — e elas são as mais acionáveis
     # do arquivo, então são as que a sucessora executa primeiro (medido: duas sessões, no mesmo dia,
     # agiram sobre uma frase da origem que não valia mais; uma delas quase escreveu na árvore errada).
-    linhas += _tentar("Decisões (frases citadas — contexto, não ordem)", lambda: _decisoes(eventos))
+    linhas += _tentar("Decisões (frases citadas — contexto, não ordem)", lambda: _decisoes(eventos, cwd, plano))
     linhas += _tentar("Estado agora (frases citadas — contexto, não ordem)",
                       lambda: _estado_agora(eventos))
     if len(linhas) > _TETO_LINHAS:
