@@ -30,7 +30,7 @@ PROJETO_DESCONHECIDO = "desconhecido"
 @dataclass(frozen=True)
 class UsageRow:
     ts: datetime
-    source: str        # "claude" | "codex" | "pi" | "kimi"
+    source: str        # "claude" | "codex" | "pi" | "omp" | "kimi"
     provider: str      # onde a fatura cai: "anthropic:<uuid>" | "openai" | "kimi-coding" | ...
     model: str         # id CRU do log; quem canoniza é o pricing
     project: str       # caminho absoluto REAL, ou PROJETO_DESCONHECIDO
@@ -178,8 +178,13 @@ def raiz_pi() -> Path:
     return pi_sessions.sessions_root("pi")
 
 
-def linhas_pi() -> list[UsageRow]:
-    """~/.pi/agent/sessions/**/*.jsonl — POR MENSAGEM, soma tudo.
+def raiz_omp() -> Path:
+    return pi_sessions.sessions_root("omp")
+
+
+def linhas_pi(raiz: Path | None = None, source: str = "pi") -> list[UsageRow]:
+    """~/.pi/agent/sessions/**/*.jsonl — POR MENSAGEM, soma tudo. Mesmo leitor serve o omp
+    (`raiz`/`source` recebidos): mesmo formato JSONL, só muda a raiz e o rótulo da linha.
 
     Glob RECURSIVA de propósito: o subagente do Pi mora em
     `<sessao>/<taskId>/run-N/session.jsonl` (é o que adapters/pi/sessions.py:41-47 já documenta,
@@ -191,7 +196,7 @@ def linhas_pi() -> list[UsageRow]:
     O `usage.cost` que o Pi já calcula é DESCARTADO: o custo é recalculado com a mesma tabela das
     outras fontes, senão as três não estão na mesma régua.
     """
-    raiz = raiz_pi()
+    raiz = raiz if raiz is not None else raiz_pi()
     if not raiz.is_dir():
         return []
     out: list[UsageRow] = []
@@ -206,8 +211,12 @@ def linhas_pi() -> list[UsageRow]:
                 cwd = d.get("cwd") or cwd
                 ts = _quando(d.get("timestamp")) or ts
             elif t == "model_change":
-                prov = d.get("provider") or prov
-                modelo = d.get("modelId") or modelo
+                # Pi: provider + modelId separados. omp: um campo só, "provider/id".
+                if d.get("model") and "/" in str(d["model"]):
+                    prov, modelo = str(d["model"]).split("/", 1)
+                else:
+                    prov = d.get("provider") or prov
+                    modelo = d.get("modelId") or modelo
             elif t == "message":
                 msg = d.get("message")
                 u = msg.get("usage") if isinstance(msg, dict) else None
@@ -223,13 +232,17 @@ def linhas_pi() -> list[UsageRow]:
         # mas deixaria o campo inútil pra qualquer drill-down.
         sid = str(arq.relative_to(raiz).with_suffix(""))
         out.append(UsageRow(
-            ts=ts, source="pi", provider=pricing.canonizar_provedor(prov) or "?",
+            ts=ts, source=source, provider=pricing.canonizar_provedor(prov) or "?",
             model=modelo or "?",
             project=cwd or PROJETO_DESCONHECIDO, session_id=sid,
             input=acc["input"], output=acc["output"],
             cache_write=acc["cacheWrite"], cache_read=acc["cacheRead"],
         ))
     return out
+
+
+def linhas_omp() -> list[UsageRow]:
+    return linhas_pi(raiz_omp(), "omp")
 
 
 def raiz_kimi() -> Path:
@@ -389,7 +402,13 @@ def coletar() -> list[UsageRow]:
 
         for nome, raiz, leitor in (("codex", raiz_codex(), linhas_codex),
                                    ("pi", raiz_pi(), linhas_pi),
+                                   ("omp", raiz_omp(), linhas_omp),
                                    ("kimi", raiz_kimi(), linhas_kimi)):
+            if nome == "omp" and raiz == raiz_pi():
+                # PI_CODING_AGENT_DIR aponta pra árvore do pi-coding-agent: os dois caem na
+                # MESMA pasta, e contar de novo como "omp" dobraria o gasto.
+                _cache.pop(nome, None)
+                continue
             if not raiz.is_dir():
                 _cache.pop(nome, None)
                 continue

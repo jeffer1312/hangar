@@ -1,11 +1,13 @@
-"""Onde Pi, Kimi e Codex guardam conversa MORTA -- o equivalente ao projects/ do Claude, que e o
-unico que o app.archive conhecia.
+"""Onde Pi, omp, Kimi e Codex guardam conversa MORTA -- o equivalente ao projects/ do Claude, que e
+o unico que o app.archive conhecia.
 
 Cada um guarda de um jeito, e nenhum guarda como o Claude:
 
-- **Pi**: `~/.pi/agent/sessions/<slug-do-cwd>/<ts>_<uuid>.jsonl`. O slug NAO e reversivel pro cwd
+- **Pi** (e o fork **omp**, mesmo formato, raiz propria via `pi_sessions.sessions_root`):
+  `~/.pi/agent/sessions/<slug-do-cwd>/<ts>_<uuid>.jsonl`. O slug NAO e reversivel pro cwd
   (barra vira traco), entao o cwd sai de dentro do arquivo, na 1a linha (`{"type":"session",...}`).
-  Subagente escreve em `<stem>/<taskId>/run-N/session.jsonl` e nao e conversa -- fica de fora.
+  Subagente escreve em `<stem>/<taskId>/run-N/session.jsonl` (Pi) ou `<stem>/<Nome>.jsonl` (omp)
+  e nao e conversa -- fica de fora do glob raso.
 - **Kimi**: `~/.kimi-code/sessions/<wd_...>/<session_id>/agents/main/wire.jsonl`, e existe um
   `session_index.jsonl` no home que ja mapeia sessionId -> sessionDir + workDir. E a unica fonte
   aqui que da o cwd SEM abrir transcript nenhum.
@@ -27,7 +29,7 @@ from app.models import ChatEvent
 
 _log = logging.getLogger("hangar.archive_providers")
 
-PROVIDERS = ("pi", "kimi", "codex")
+PROVIDERS = ("pi", "omp", "kimi", "codex")
 
 # Publico: e o id que identifica uma conversa nestes providers, e quem retoma uma do Arquivo tem
 # que validar pelo MESMO criterio (api.resume_archived, registry.create). Duas definicoes de "id
@@ -183,8 +185,10 @@ def _codex_jsonl(session_id: str) -> Optional[Path]:
 
 
 # ── Fachada ───────────────────────────────────────────────────────────────────
-_LISTAR = {"pi": _pi_conversas, "kimi": _kimi_conversas, "codex": _codex_conversas}
-_RESOLVER = {"pi": _pi_jsonl, "kimi": _kimi_jsonl, "codex": _codex_jsonl}
+_LISTAR = {"pi": _pi_conversas, "omp": lambda: _pi_conversas("omp"),
+           "kimi": _kimi_conversas, "codex": _codex_conversas}
+_RESOLVER = {"pi": _pi_jsonl, "omp": lambda sid: _pi_jsonl(sid, "omp"),
+             "kimi": _kimi_jsonl, "codex": _codex_jsonl}
 
 
 def conversas() -> list[Conversa]:
@@ -212,7 +216,7 @@ def jsonl_de(provider: str, session_id: str) -> Path:
 
 
 def parse_obj(provider: str, obj: dict) -> list[ChatEvent]:
-    if provider == "pi":
+    if provider in ("pi", "omp"):
         from app.adapters.pi import transcript as pi_transcript
         return pi_transcript.parse_obj(obj)
     if provider == "kimi":
