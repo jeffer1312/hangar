@@ -8,6 +8,10 @@
 # docs não paga 4 minutos de teste. O pre-push chama com o intervalo que vai sair.
 set -uo pipefail
 
+# O git exporta GIT_DIR/GIT_WORK_TREE pro pre-push; herdados pelo pytest, os testes que fazem
+# `git init` em tmp_path passam a operar no repo principal e falham só dentro do gancho.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+
 RAIZ="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
 cd "$RAIZ" || exit 1
 
