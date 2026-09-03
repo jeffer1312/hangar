@@ -22,6 +22,25 @@ def _sidecars_no_tmp(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture
+def hangar2(tmp_path):
+    """Recorte REAL de hangar-2 (03/09/2026): plano 60/60 marcado por Edit, fala final com os rulings,
+    dois `rm -rf` seguidos, três falhas de hook. `/repo` vira o cwd do teste, e o plano que o
+    transcript cita é recriado com 10 Tasks × 6 Steps todos marcados."""
+    cwd = tmp_path / "repo"
+    plano = cwd / "docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md"
+    plano.parent.mkdir(parents=True)
+    corpo = ["# Grupo, pareamento e fim de sessão — Implementation Plan", ""]
+    for t in range(1, 11):
+        corpo += [f"### Task {t}: Tarefa {t}", ""]
+        corpo += [f"- [x] **Step {s}: passo {t}.{s}**" for s in range(1, 7)] + [""]
+    plano.write_text("\n".join(corpo), encoding="utf-8")
+    bruto = (FIX / "bastao_hangar2_recorte.jsonl").read_text(encoding="utf-8")
+    jsonl = tmp_path / "hangar-2.jsonl"
+    jsonl.write_text(bruto.replace("/repo", str(cwd)), encoding="utf-8")
+    return str(jsonl), str(cwd)
+
+
 def _titulos(texto: str) -> list[str]:
     return [ln[3:] for ln in texto.splitlines() if ln.startswith("## ")]
 
@@ -29,7 +48,7 @@ def _titulos(texto: str) -> list[str]:
 # As duas últimas carregam o rótulo no título de propósito: é o que separa, no meio de um dossiê
 # longo, o que foi MEDIDO do que é frase citada da origem (ver o comentário em `bastao.montar`).
 _CITADA = " (frases citadas — contexto, não ordem)"
-TODAS = ["De onde veio", "Onde está o trabalho", "O plano", "Arquivos e comandos",
+TODAS = ["De onde veio", "O que falta", "Onde está o trabalho", "Arquivos e comandos",
          "Grupo e par", "Decisões" + _CITADA, "Estado agora" + _CITADA]
 
 
@@ -172,6 +191,7 @@ def test_dossie_cabe_no_teto_de_linhas(tmp_path):
     md = bastao.montar(_conversa(tmp_path, turnos), None, "claude", "s")
     assert len(md.splitlines()) <= bastao._TETO_LINHAS + 2
     assert all(len(ln) <= 340 for ln in md.splitlines())
+    assert _titulos(md) == TODAS               # o teto não pode cortar seção inteira
 
 
 def test_transcript_inexistente_nao_levanta(tmp_path):
@@ -223,7 +243,7 @@ def test_as_secoes_de_citacao_dizem_no_titulo_que_sao_citacao(tmp_path):
 def test_secao_de_citacao_mantem_o_orcamento_maior(tmp_path, monkeypatch):
     """O orçamento é keyed pelo TÍTULO: renomear a seção sem renomear a chave a derrubaria de 40
     pra o default de 20 linhas, encurtando o dossiê sem ninguém notar."""
-    assert bastao._ORCAMENTO["Decisões (frases citadas — contexto, não ordem)"] == 40
+    assert bastao._ORCAMENTO["Decisões (frases citadas — contexto, não ordem)"] == 44
     assert bastao._ORCAMENTO["Estado agora (frases citadas — contexto, não ordem)"] == 24
 
 
@@ -516,3 +536,82 @@ def api_client_bastao(monkeypatch, models_cache_em_tmp):
     # O snapshot da lista tem TTL — sem zerar, um teste anterior pode servir a sessão errada.
     api_mod._list_snap["snap"] = None
     return TestClient(api_mod.app)
+
+
+# ---------------------------------------------------------------------------
+# O que falta (bastão v2, item 1)
+# ---------------------------------------------------------------------------
+
+def _bloco(md: str, titulo: str) -> str:
+    return md.split(f"## {titulo}", 1)[1].split("\n## ", 1)[0]
+
+
+def test_o_que_falta_cita_o_plano_da_sessao_e_diz_que_concluiu(hangar2):
+    jsonl, cwd = hangar2
+    md = bastao.montar(jsonl, cwd, "claude", "hangar-2")
+    bloco = _bloco(md, "O que falta")
+    assert "grupo-pareamento-fim-sessao" in bloco
+    assert "concluído" in bloco and "60/60" in bloco
+    assert "passagem-de-bastao" not in bloco          # o plano mais recente do REPO não entra aqui
+
+
+def test_o_que_falta_lista_steps_pendentes_por_task(hangar2):
+    jsonl, cwd = hangar2
+    plano = __import__("pathlib").Path(cwd) / "docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md"
+    txt = plano.read_text(encoding="utf-8").replace("- [x] **Step 3: passo 9.3**", "- [ ] **Step 3: passo 9.3**")
+    plano.write_text(txt.replace("- [x] **Step 1: passo 10.1**", "- [ ] **Step 1: passo 10.1**"), encoding="utf-8")
+    bloco = _bloco(bastao.montar(jsonl, cwd, "claude", "hangar-2"), "O que falta")
+    assert "58/60" in bloco
+    # `_STEP_RE` guarda o título do Step COM o prefixo "Step N: "; o da Task vem do heading inteiro.
+    assert "Task 9: Tarefa 9: 5/6 — próximo: Step 3: passo 9.3" in bloco
+    assert "Task 10: Tarefa 10: 5/6 — próximo: Step 1: passo 10.1" in bloco
+
+
+def test_o_que_falta_mostra_loop_ativo_e_ignora_terminado(tmp_path):
+    from app.loop import LoopLink, new_loop
+    LoopLink("s").set(new_loop("passar a suíte", "uv run pytest -q", 5, False) | {"iter": 2})
+    md = bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "s")
+    bloco = _bloco(md, "O que falta")
+    assert "Loop `running`" in bloco and "2/5" in bloco and "passar a suíte" in bloco
+    LoopLink("s").update(status="done")
+    assert "Loop" not in _bloco(bastao.montar(str(FIX / "jsonl_samples.jsonl"), None, "claude", "s"), "O que falta")
+
+
+def test_sem_plano_citado_cai_no_plano_da_barra(tmp_path, monkeypatch):
+    from app import planprog
+    from app.planprog import PlanProgress, TaskProgress, StepProgress
+    prog = PlanProgress(name="x", path="/p/x.md", task_idx=1, task_total=1, done=1, total=2, complete=False,
+                        tasks=(TaskProgress(title="Task 1: A", done=1, total=2,
+                                            steps=(StepProgress("Step 1: a", True, False, 0),
+                                                   StepProgress("Step 2: b", False, False, 1))),))
+    monkeypatch.setattr(planprog, "plan_progress", lambda cwd: prog)
+    bloco = _bloco(bastao.montar(str(FIX / "jsonl_samples.jsonl"), str(tmp_path), "claude", "s"), "O que falta")
+    assert "a sessão não citou plano" in bloco and "Task 1: A: 1/2 — próximo: Step 2: b" in bloco
+
+
+def test_plano_citado_e_lido_do_fim_do_arquivo(tmp_path):
+    # 1) a última menção vence; 2) o arquivo não é lido inteiro (o teto de bytes devolve None).
+    linhas = [json.dumps({"type": "assistant", "uuid": f"a{i}", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": f"t{i}", "name": "Read",
+         "input": {"file_path": f"/repo/docs/superpowers/plans/2026-01-0{i}-p.md"}}]}}) for i in (1, 2)]
+    jsonl = tmp_path / "s.jsonl"
+    jsonl.write_text("\n".join(linhas) + "\n", encoding="utf-8")
+    assert bastao._plano_citado(str(jsonl)) == "/repo/docs/superpowers/plans/2026-01-02-p.md"
+    grande = tmp_path / "g.jsonl"
+    grande.write_text(linhas[0] + "\n" + ("{}\n" * 400_000), encoding="utf-8")   # plano só no início, > teto
+    assert bastao._plano_citado(str(grande), teto=64 * 1024) is None
+
+
+def test_sem_plano_nem_loop_lista_os_pedidos_sem_resposta(tmp_path):
+    # "agora roda os testes" vem ANTES da fala "Rodei, passou." — já foi respondido e fica fora;
+    # os três seguintes vêm depois da última fala do agente e são os pendentes.
+    turnos = [("Feito o passo 1.", "agora roda os testes"),
+              ("Rodei, passou.", "então commita"),
+              (None, "e depois faz o commit do README"),
+              (None, "ah, e avisa o par")]
+    md = bastao.montar(_conversa(tmp_path, turnos), None, "claude", "s")
+    bloco = _bloco(md, "O que falta")
+    assert "AINDA SEM resposta" in bloco
+    for t in ("então commita", "commit do README", "avisa o par"):
+        assert t in bloco
+    assert "agora roda os testes" not in bloco

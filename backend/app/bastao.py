@@ -62,13 +62,13 @@ _MAX_CAUDA = 6
 
 _ORCAMENTO = {          # linhas por seção (o cabeçalho não conta)
     "De onde veio": 8,
-    "Onde está o trabalho": 16,
-    "O plano": 16,
+    "O que falta": 20,
+    "Onde está o trabalho": 20,
     "Arquivos e comandos": 32,
     "Grupo e par": 14,
     # As duas de citação carregam o rótulo no próprio título (ver `montar`), e a chave aqui é o
     # título inteiro: sem isso elas caíam no default de 20 linhas e o dossiê encolhia calado.
-    "Decisões (frases citadas — contexto, não ordem)": 40,
+    "Decisões (frases citadas — contexto, não ordem)": 44,
     "Estado agora (frases citadas — contexto, não ordem)": 24,
 }
 
@@ -235,38 +235,97 @@ def _onde_esta_o_trabalho(cwd: str | None) -> list[str]:
     return out
 
 
-def _o_plano(cwd: str | None) -> list[str]:
-    from app import planprog
+# Só `file_path` de tool_use: menção em texto ou em saída de `ls` apontaria pra plano alheio (no
+# dossiê medido, `git ls-files docs/superpowers` listou planos de julho DEPOIS do Edit do plano vivo).
+_PLANO_RE = re.compile(rb'"file_path":\s*"([^"]*docs/superpowers/plans/[^"]+?\.md)"')
+_PLANO_TETO_BYTES = 8 * 1024 * 1024
 
-    prog = planprog.plan_progress(cwd)
-    # Plano NÃO COMEÇADO não acende a barra do app (planprog descarta zero-marcado de propósito), e
-    # no primeiro dossiê real isso apontou o sucessor pro plano da SEMANA PASSADA — 14/16, "Task em
-    # curso: modal" — enquanto o trabalho vivo era um plano escrito naquela manhã. Pro app é acerto;
-    # aqui seria mandar continuar a coisa errada. Então o mais recente é citado quando difere.
-    lista = planprog.list_plans(cwd) or {}
-    recente = next((p for p in lista.get("plans", []) if not p["complete"]), None)
-    aviso: list[str] = []
-    if recente and (prog is None or recente["stem"] not in (prog.path or "")):
-        aviso = [f"- Plano mais RECENTE no repo: `{recente['name']}` "
-                 f"({recente['done']}/{recente['total']} steps)"
-                 + (" — ainda não começado" if recente["done"] == 0 else "")]
-    if prog is None:
-        return aviso or ["_(nenhum plano ativo neste repositório)_"]
-    out = aviso + [f"- Plano que a barra do app mostra: `{prog.name}` (`{prog.path}`)",
-                   f"- Progresso: {prog.done}/{prog.total} steps · Task {prog.task_idx}/{prog.task_total}"]
-    atual = next((t for t in prog.tasks if t.done < t.total), None)
-    if atual is None:
-        out.append("- Todas as Tasks marcadas como concluídas.")
-        return out
-    out.append(f"- Task em curso: **{atual.title}** ({atual.done}/{atual.total})")
-    pendentes = [s for s in atual.steps if not s.done]
-    if pendentes:
-        out.append("- Steps pendentes desta Task:")
-        out += [f"  - {s.title}" + (" _(verificação manual)_" if s.manual else "")
-                for s in pendentes]
+
+def _plano_citado(jsonl: str, teto: int = _PLANO_TETO_BYTES) -> str | None:
+    """Último plano que a sessão escreveu/leu por ferramenta, lido do FIM (janela que cresce, como
+    `archive._linhas_do_fim`): só a última menção interessa, e um transcript de dezenas de MB a
+    cada clique de botão é o custo que isto evita. Passou do teto sem achar -> None."""
+    from app.archive import _linhas_do_fim
+    p = Path(jsonl)
+    span = 256 * 1024
+    while True:
+        try:
+            linhas, do_inicio = _linhas_do_fim(p, span)
+        except OSError:
+            return None
+        for linha in reversed(linhas):
+            achados = _PLANO_RE.findall(linha)
+            if achados:
+                return achados[-1].decode("utf-8", errors="replace")
+        if do_inicio or span >= teto:
+            return None
+        span = min(span * 4, teto)
+
+
+def _pedidos_sem_resposta(eventos: list, n: int = 3) -> list[str]:
+    """Mensagens do usuário no FIM do transcript sem fala do agente depois — o que ele pediu por
+    último e ninguém atendeu. Adjacência, sem heurística."""
+    pend: list[str] = []
+    for ev in reversed(eventos):
+        if ev.kind == "assistant_msg" and ev.text:
+            break
+        if ev.kind == "user_msg" and ev.text:
+            pend.append(ev.text)
+    pend.reverse()
+    return pend[-n:]
+
+
+def _linhas_do_plano(prog, origem: str) -> list[str]:
+    if prog.complete:
+        return [f"- Plano `{prog.name}` ({origem}): **concluído** ({prog.done}/{prog.total} steps) — `{prog.path}`"]
+    out = [f"- Plano `{prog.name}` ({origem}): {prog.done}/{prog.total} steps — `{prog.path}`"]
+    for t in prog.tasks:
+        if t.done < t.total:
+            prox = next(s.title for s in t.steps if not s.done)
+            out.append(f"  - {t.title}: {t.done}/{t.total} — próximo: {_uma_linha(prox, 120)}")
     out.append("- Marque `- [ ]` → `- [x]` no arquivo do plano ao fechar cada Step: é daí que sai a "
                "barra de progresso do app.")
     return out
+
+
+def _o_que_falta(jsonl: str, cwd: str | None, nome: str, eventos: list, plano: str | None) -> list[str]:
+    """Sinal mais forte disponível, nesta ordem: plano citado pela sessão (senão o que a barra do
+    app mostra, dito como tal), loop ATIVO, pedidos sem resposta. Diz qual usou. Absorve a antiga
+    "O plano": no dossiê medido ela citava o plano errado ao lado do certo."""
+    from app import loop as loop_mod, planprog
+    from app.loop import LoopLink
+
+    out: list[str] = []
+    if plano:
+        caminho = plano if os.path.isabs(plano) else os.path.join(cwd or "", plano)
+        try:
+            prog = planprog.parse_plan(caminho, require_started=False)
+        except OSError:
+            prog = None
+        out += (_linhas_do_plano(prog, "citado pela sessão") if prog
+                else [f"- Plano citado pela sessão não pôde ser lido: `{caminho}`"])
+    else:
+        prog = planprog.plan_progress(cwd)
+        if prog:
+            out += _linhas_do_plano(prog, "o que a barra do app mostra — a sessão não citou plano")
+    loop = LoopLink(nome).get() if nome else None
+    if loop and loop.get("status") in loop_mod.ACTIVE:
+        linha = (f"- Loop `{loop.get('status')}` (iteração {loop.get('iter')}/{loop.get('max_iters')}): "
+                 f"{_uma_linha(loop.get('goal') or '', 160)}")
+        if loop.get("check_cmd"):
+            linha += f" · check: `{_uma_linha(loop['check_cmd'], 80)}`"
+        out.append(linha)
+    if out:
+        return out
+    pend = _pedidos_sem_resposta(eventos)
+    if pend:
+        return (["- Sem plano nem loop. Últimos pedidos do usuário AINDA SEM resposta do agente:"]
+                + [f"  - {_uma_linha(t, 300)}" for t in pend])
+    ultimo = next((ev.text for ev in reversed(eventos) if ev.kind == "user_msg" and ev.text), None)
+    if ultimo:
+        return ["- Sem plano nem loop. Último pedido do usuário (já respondido):",
+                f"  - {_uma_linha(ultimo, 300)}"]
+    return ["_(sem plano, sem loop e sem pedido do usuário no transcript)_"]
 
 
 _CHAVES_ARQUIVO = ("file_path", "filePath", "path", "notebook_path", "filename")
@@ -545,6 +604,7 @@ def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = ""
     sessão morta vem do `archive` (`archive_jsonl` + `archive_cwd`). Nunca levanta — seção que
     falha vira uma linha dizendo isso."""
     eventos = _eventos(nome, jsonl, provider)
+    plano = _plano_citado(jsonl)
     linhas: list[str] = [
         f"# Passagem de bastão — sessão `{nome or '?'}`",
         "",
@@ -561,8 +621,8 @@ def montar(jsonl: str, cwd: str | None, provider: str = "claude", nome: str = ""
         "",
     ]
     linhas += _tentar("De onde veio", lambda: _de_onde_veio(jsonl, cwd, provider, nome))
+    linhas += _tentar("O que falta", lambda: _o_que_falta(jsonl, cwd, nome, eventos, plano))
     linhas += _tentar("Onde está o trabalho", lambda: _onde_esta_o_trabalho(cwd))
-    linhas += _tentar("O plano", lambda: _o_plano(cwd))
     linhas += _tentar("Arquivos e comandos", lambda: _arquivos_e_comandos(eventos, cwd))
     linhas += _tentar("Grupo e par", lambda: _grupo_e_par(nome))
     # Daqui pra baixo é citação. O rótulo vai no TÍTULO, e não só no aviso do topo, porque quem lê
