@@ -4,6 +4,7 @@
   import GeneralSettings from './GeneralSettings.svelte';
   import AppearanceSettings from './AppearanceSettings.svelte';
   import DictationSettings from './DictationSettings.svelte';
+  import VozSettings from './VozSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
@@ -91,6 +92,7 @@
     geral: m.config_geral_titulo(),
     aparencia: m.config_modal_aparencia(),
     ditado: m.config_modal_ditado(),
+    voz: m.voz_titulo(),
     sobre: m.config_modal_sobre(),
     diario: m.config_diag_titulo(),
     servidores: m.config_modal_servidores(),
@@ -108,12 +110,12 @@
   const LINHAS = [
     { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: 'globo', servidor: false },
     { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: 'pincel', servidor: false },
-    { id: 'ditado', secao: 'app', rotulo: m.config_modal_ditado(), icone: 'mic', servidor: false },
     { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
     { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: 'sinal', servidor: true },
     { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: 'pessoa', servidor: true },
     { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: 'tela', servidor: false },
+    { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
     { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos(), icone: 'clipe', servidor: true },
     { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: 'chave', servidor: true },
@@ -366,6 +368,8 @@
     <AcessoSettings alvo={resolvedServer} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
+  {:else if telaAtual === 'voz'}
+    <VozSettings {store} />
   {:else}
     <ServerSettings {store} secao={telaAtual} />
   {/if}

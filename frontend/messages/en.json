@@ -2220,5 +2220,19 @@
   "erro_bastao_fila": "session {nome} was created, but the kick-off never made it into its queue — send the request yourself, pointing at {dossie}",
   "config_avancado_grupo_ditado_voz": "Dictation and voice",
   "config_avancado_grupo_ditado_voz_ajuda": "The service that cleans up your dictation, builds the briefing and reads answers aloud. Every field below belongs to it — empty = Groq, the default.",
-  "config_server_raciocinio_padrao": "Provider default"
+  "config_server_raciocinio_padrao": "Provider default",
+  "voz_titulo": "Voice",
+  "voz_ditar": "Dictate",
+  "voz_transcrever": "Transcribe",
+  "voz_transcrever_ajuda": "Speech becomes text on an outside service. Groq does it for free — create a key and paste it here.",
+  "voz_transcrever_sem_chave": "Without a key, dictation stays off: the app records but nothing transcribes it.",
+  "voz_criar_chave": "Create a Groq key",
+  "voz_limpar": "Clean up the text",
+  "voz_limpar_ajuda": "After transcribing, a model removes hesitation, applies the corrections you spoke and builds the briefing. It works out of the box — change it only to use another service.",
+  "voz_usar_outro_servico": "Use another service",
+  "voz_ler": "Read out loud",
+  "voz_ler_sem_chave": "Off. With an ElevenLabs key you can listen to part of an answer instead of reading it.",
+  "voz_so_neste_aparelho": "Applies to this device only.",
+  "voz_estilo": "Style",
+  "voz_estilo_ajuda": "How much the model may change what you said: punctuate only, reorganise into prose, or turn it into a document with sections."
 }
