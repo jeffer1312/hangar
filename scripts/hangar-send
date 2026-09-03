@@ -11,9 +11,12 @@
 #                                        dois lados). tarefa diferente da que o grupo já tem é
 #                                        recusada (409) sem o flag
 #   hangar-send --unpair               desfaz o pareamento desta sessão (avisa os dois lados)
-#   hangar-send --group <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei", "contrato
-#                                  atualizado"). Chega como [grupo: X]. UNIDIRECIONAL — nunca
-#                                  responda um [grupo:] com --group (evita loop); responda 1:1.
+#   hangar-send --group [--tmux] <mensagem...>  AVISO pro grupo TODO de uma vez (marco: "terminei",
+#                                  "contrato atualizado"). Chega como [grupo: X]. UNIDIRECIONAL —
+#                                  nunca responda um [grupo:] com --group (evita loop); responda 1:1.
+#                                  Peer com caminho nativo NÃO recebe pelo tmux: o script sai com
+#                                  código 3 listando a quem mandar por SendMessage, com o texto
+#                                  exato. --tmux força o caminho antigo.
 #   hangar-send --new <nome> [cwd]     cria sessão Claude nova (tmux gerenciado pelo app: --session-id,
 #                                  truecolor, visível no app). cwd default = home.
 #                                  --provider <claude|codex|pi|kimi> escolhe o AGENTE da sessão
@@ -310,10 +313,32 @@ fi
 
 if [[ "$1" == "--group" ]]; then
     shift
-    [[ $# -ge 1 ]] || { echo "uso: hangar-send --group <mensagem...>" >&2; exit 2; }
-    body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "$*")
-    resp=$(api POST "/api/sessions/$(me)/group-message" "$body")
-    python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("aviso enviado ao grupo:", ", ".join(d["peers"])); w=d.get("warning"); print("  ⚠", w) if w else None' "$resp"
+    forcar_tmux=false
+    if [[ "${1:-}" == "--tmux" ]]; then forcar_tmux=true; shift; fi
+    [[ $# -ge 1 ]] || { echo "uso: hangar-send --group [--tmux] <mensagem...>" >&2; exit 2; }
+    eu=$(me)
+    nativo=false; [[ -n "${CLAUDE_CODE_MESSAGING_SOCKET:-}" ]] && nativo=true
+    body=$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1], "remetente_nativo": sys.argv[2] == "true", "forcar_tmux": sys.argv[3] == "true"}))' "$*" "$nativo" "$forcar_tmux")
+    resp=$(api POST "/api/sessions/$eu/group-message" "$body")
+    # Resumo no stdout (pulados NÃO entram aqui — quem chegou pelo tmux) e a lista de pulados,
+    # separada, pro código 3 abaixo — dois python3 em vez de /dev/tty (ruling do controlador).
+    python3 -c 'import json,sys
+d = json.loads(sys.argv[1])
+pul = d.get("pulados", [])
+entregues = [p for p in d["peers"] if p not in pul]
+if entregues: print("aviso enviado ao grupo:", ", ".join(entregues))
+w = d.get("warning")
+if w: print("  ⚠", w.get("msg", w))' "$resp"
+    pulados=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(",".join(d.get("pulados", [])))' "$resp")
+    if [[ -n "$pulados" ]]; then
+        # stderr + código 3, como o 1:1: o modelo PRECISA ver que ainda não entregou a esses.
+        cat >&2 <<EOF
+pendente: $pulados têm o caminho nativo — mande a CADA um, via SendMessage, exatamente este texto:
+[grupo: $eu] $*
+(ou repita com --group --tmux pra digitar no terminal deles)
+EOF
+        exit 3
+    fi
     exit 0
 fi
 

@@ -2738,6 +2738,44 @@ def test_group_estourou_esquece_fora_da_janela(monkeypatch):
     assert api_mod._group_estourou("g", 1000.0 + api_mod._GROUP_JANELA_S + 6) is False
 
 
+# ---------------------------------------------------------------------------
+# Task 6: --group respeita o caminho nativo
+# ---------------------------------------------------------------------------
+
+def test_group_message_pula_peers_com_socket_quando_remetente_e_nativo(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.registry.inbox_socket_of", side_effect=lambda n: "/run/b.sock" if n == "b" else None), \
+         patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/a/group-message",
+                            json={"text": "terminei", "remetente_nativo": True}, headers=_h())
+    assert r.status_code == 200
+    assert r.json()["pulados"] == ["b"]
+    assert [c.args[0] for c in sp.call_args_list] == ["c"]
+
+
+def test_group_message_forcar_tmux_entrega_a_todos(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b", "c"], "task": "", "gid": "g1"}), \
+         patch("app.registry.inbox_socket_of", return_value="/run/x.sock"), \
+         patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/a/group-message",
+                            json={"text": "terminei", "remetente_nativo": True, "forcar_tmux": True}, headers=_h())
+    assert r.json()["pulados"] == []
+    assert sorted(c.args[0] for c in sp.call_args_list) == ["b", "c"]
+
+
+def test_group_message_remetente_sem_socket_nao_pula_ninguem(api_client):
+    with patch("app.api.PairLink.get", return_value={"peers": ["b"], "task": "", "gid": "g1"}), \
+         patch("app.registry.inbox_socket_of", return_value="/run/b.sock") as iso, \
+         patch("app.api.terminal.send_prompt", return_value="sent") as sp, \
+         patch("app.pqueue.PromptQueue.append"):
+        r = api_client.post("/api/sessions/a/group-message", json={"text": "oi"}, headers=_h())
+    assert r.json()["pulados"] == []
+    iso.assert_not_called()
+    sp.assert_called_once()
+
+
 def test_unpair_warning_estruturado_sem_server_id(api_client, monkeypatch):
     # B2: peer remoto com CP_SERVER_ID vazio -> item {sessao, erro} (antes era string solta e o
     # x['sessao'] seguinte virava TypeError -> 500). O sair do grupo continua 200 com warning.

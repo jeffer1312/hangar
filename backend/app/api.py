@@ -2737,6 +2737,11 @@ def _group_estourou(gid: str, agora: float) -> bool:
 
 class GroupMsgBody(_StrictBody):
     text: str
+    # O hangar-send diz se o REMETENTE tem socket ($CLAUDE_CODE_MESSAGING_SOCKET); o backend
+    # decide o resto: peer local com inbox = caminho nativo alcança os dois lados = não digita
+    # nele, devolve em `pulados` pro modelo mandar por SendMessage. Mesmo critério do 1:1.
+    remetente_nativo: bool = False
+    forcar_tmux: bool = False
 
 
 @app.post("/api/sessions/{name}/group-message", dependencies=[Depends(require_auth)])
@@ -2760,9 +2765,15 @@ async def group_message(name: str, body: GroupMsgBody):
                                              f"mais de {_GROUP_MAX_NA_JANELA} avisos de grupo em "
                                              f"{_GROUP_JANELA_S}s — parece loop; espere ou responda 1:1",
                                              max=_GROUP_MAX_NA_JANELA, janela=_GROUP_JANELA_S))
+    from app.registry import inbox_socket_of
+    pulados: list[str] = []
+    if body.remetente_nativo and not body.forcar_tmux:
+        for p in membros:
+            if not peers.is_remote(p) and await asyncio.to_thread(inbox_socket_of, p):
+                pulados.append(p)
     text = f"[grupo: {name}] {body.text}"
     results: dict[str, dict] = {}
-    for p in membros:
+    for p in [x for x in membros if x not in pulados]:
         if not await _send_thread(_session_exists, p):
             results[p] = {"ok": False, "error": erro("erro_sessao_inexistente", "sessão não encontrada"), "delivered": False}
             continue
@@ -2771,7 +2782,7 @@ async def group_message(name: str, body: GroupMsgBody):
         else:
             results[p] = await _send_thread(_send_one, p, text)
     failed = [{"sessao": n, "erro": r.get("error")} for n, r in results.items() if not r.get("ok")]
-    return {"ok": True, "peers": membros,
+    return {"ok": True, "peers": membros, "pulados": pulados,
             "warning": erro("erro_pareamento_grupo_falha",
                             "falha em: " + "; ".join(
                                 f"{x['sessao']}: {_erro_texto(x['erro'])}" for x in failed),
