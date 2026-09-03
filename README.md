@@ -208,6 +208,8 @@ Install `hangar-send` to list sessions, send durable prompts, or pair sessions i
 ./scripts/install-hangar-send.sh
 hangar-send --list
 hangar-send --pair <session-name> "coordinate the demo task"
+hangar-send --pair <session-name> --substituir-tarefa "new task"
+hangar-send --group [--tmux] "milestone for the whole group"
 ```
 
 Pairing is local to the machine. The app shows the shared contract and conversation, while each session remains independently controlled.

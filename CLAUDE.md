@@ -891,6 +891,41 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   mexer nas chamadas), spinner nos comandos longos do sh (`gira` — sem TTY ou `--update`, passa
   direto com saída ao vivo), caixa RESUMO no fim (token só com TTY, mesma regra do passo 3/8).
 
+- **Grupo: o protocolo é do HOOK, a saída é de UMA esteira, e o anti-loop é do backend**
+  (`app/pair_texto.py` + `hooks/pair_hook.py` + `api._avisar_saida` + `registry._varrer_pares_mortos`,
+  02/09/2026). Decisões que fecham furos medidos na análise daquele dia:
+  - **Protocolo reinjetado no `SessionStart`** (`startup|resume|clear|compact`) a partir do sidecar
+    `.hangar-pair/<nome>.json`. O prompt do `--pair` sumia no `/clear` e na compactação; o badge
+    ficava e o modelo esquecia os pares. O `pair_dir` vai por argv porque é o do BACKEND — sessão em
+    `--conta` tem `CLAUDE_CONFIG_DIR` próprio, e o sidecar não mora lá. Por isso os textos moram em
+    `pair_texto.py`, stdlib-only (mesma regra do `engines.py`).
+  - **Protocolo completo só pro recém-chegado** (`snap[m] is None`); veterano recebe "fulano entrou";
+    peers e tarefa iguais = nada. Adicionar o 5º membro disparava 5 prompts de 1,5KB, 4 redundantes.
+  - **Tarefa diferente da existente é 409** sem `--substituir-tarefa` — cada `--pair` de um árbitro
+    sobrescrevia a de todos, calado.
+  - **Toda saída avisa quem ficou pela mesma esteira**: unpair, kill (não avisava ninguém — os pares
+    mandavam recado pra nome morto ou pra sessão nova que o reusasse) e morte fora do app. Remoto vai
+    por `/unpair-remote` no unpair e no kill; na varredura só loga (rede dentro do `list()` não).
+  - **Varredura de morto fora do app roda no fim de `list()`, e três coisas a seguram:** contador
+    DE CLASSE (há 4 instâncias de `SessionRegistry` — api, sse×2, prune — e todas chamam `list()`);
+    ausência confirmada por **tempo** (`_PAIR_AUSENCIA_MIN_S`), não por número de polls, porque
+    `kill()` e `rename()` chamam `list()` numa janela em que o nome está ausente de propósito; e lista
+    vazia = tmux fora = não varre, senão dissolvia todo grupo da máquina. Aviso pela fila durável
+    (nunca send-keys ali) + drain por callback (`apos_saida_por_morte`), porque a fila só drena em
+    transição de hook e o peer já ocioso nunca receberia. O dict de classe (`_pair_ausencias`) é
+    limpo com `pop(n, None)`, nunca `del` — as 4 instâncias varrem concorrentemente e outra thread
+    pode já ter tirado a mesma chave.
+  - **`--group` recusa `[grupo:`/`[de:` reencaminhado e limita 5/min por gid** (429) — só no que
+    passa pelo backend: peer com `inbox_socket_of` é devolvido em `pulados` e vai por `SendMessage`
+    (o script sai 3 listando quem falta); o socket do Claude Code está fora do alcance do backend.
+    `--group --tmux` força o antigo.
+  - Contrato do grupo dissolvido vai pra `~/.hangar/pair-arquivo/`, não pro `unlink`.
+  - **Teste que chega em `SessionRegistry.list()` ou num `pair.leave()` de último membro isola
+    `pair.settings.projects_dir`, zera `SessionRegistry._pair_ausencias`, anula
+    `registry.apos_saida_por_morte` e faz patch de `pair._arquivo_dir`** — sem as quatro, 2 vezes
+    neste plano uma suíte verde mexeu de verdade no `~/.claude/.hangar-pair`/`~/.hangar/pair-arquivo`
+    do desenvolvedor.
+
 - **Plan progress** (`app/planprog.py` + `registry._decorate_plan` + `PlanBar`/`PlanPanel.svelte`):
   the source of truth is the plan's own `.md` under `docs/superpowers/plans/` — no separate state
   file, `parse_plan` re-reads it and re-counts `- [x] **Step …**` on every discovery. Fenced blocks
