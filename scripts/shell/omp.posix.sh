@@ -15,7 +15,8 @@
 #    hangar-state.ts publica o arquivo real por dentro do omp.
 #  - uso não interativo -> cru. Duas formas: (a) o PRIMEIRO argumento é um subcomando do omp
 #    (`omp models` lista modelos; `omp "models are slow"` continua sendo prompt inicial);
-#    (b) uma flag que imprime e sai (-p/--print, --export, --help/-h, --version/-v).
+#    (b) uma flag que imprime e sai (-p/--print, --mode, --alias, --export, --help/-h,
+#    --version/-v).
 #  - já em tmux ($TMUX) / stdin não é tty -> só o --session + o export.
 #  - fora do tmux + interativo -> cria sessão tmux com o BASENAME da pasta (sufixo -2/-3 se já
 #    existir) e roda o omp dentro dela.
@@ -46,10 +47,12 @@ read|render|say|search|setup|share|shell|ssh|stats|tiny-models|token|ttsr|update
             ;;
     esac
 
-    # usos não interativos: o omp imprime e sai, não tem TUI pra envolver em tmux.
+    # usos não interativos: o omp imprime e sai, não tem TUI pra envolver em tmux. `--mode` é o
+    # caso que mais dói: `--mode rpc`/`rpc-ui`/`json` é um consumidor programático falando por
+    # stdio — envolver em tmux e ainda injetar --session quebraria todos eles.
     for a in "$@"; do
         case "$a" in
-            -p|--print|--export|--export=*|--help|-h|--version|-v)
+            -p|--print|--mode|--mode=*|--alias|--alias=*|--export|--export=*|--help|-h|--version|-v)
                 command omp "$@"
                 return
                 ;;

@@ -348,6 +348,14 @@ for SH in bash zsh; do
         check "$SH omp $flag (não interativo, cru)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
     done
 
+    # `--mode rpc` é consumidor programático falando por stdio: o ARGV tem que chegar EXATO (a
+    # linha é comparada inteira, então um --session injetado reprova) e sem tmux.
+    out=$(posix_case_omp "$SH" --mode rpc)
+    check "$SH omp --mode rpc (cru, sem --session)" "$out" 'ARGV: --mode rpc' 'ENV_CP_PI_SESSION='
+
+    out=$(posix_case_omp "$SH" --profile work --alias omp-work)
+    check "$SH omp --alias (cru)" "$out" 'ARGV: --profile work --alias omp-work' 'ENV_CP_PI_SESSION='
+
     out=$(posix_case_omp "$SH" --export out.html)
     check "$SH omp --export (cru)" "$out" 'ARGV: --export out.html' 'ENV_CP_PI_SESSION='
 
@@ -476,6 +484,12 @@ if command -v fish >/dev/null 2>&1; then
         out=$(fish_case_omp "$flag")
         check "fish omp $flag (não interativo, cru)" "$out" "ARGV: $flag" 'ENV_CP_PI_SESSION='
     done
+
+    out=$(fish_case_omp --mode rpc)
+    check "fish omp --mode rpc (cru, sem --session)" "$out" 'ARGV: --mode rpc' 'ENV_CP_PI_SESSION='
+
+    out=$(fish_case_omp --profile work --alias omp-work)
+    check "fish omp --alias (cru)" "$out" 'ARGV: --profile work --alias omp-work' 'ENV_CP_PI_SESSION='
 
     out=$(fish_case_omp --export out.html)
     check "fish omp --export (cru)" "$out" 'ARGV: --export out.html' 'ENV_CP_PI_SESSION='
