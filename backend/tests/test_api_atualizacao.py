@@ -165,3 +165,53 @@ def test_git_que_falha_nao_inventa_changelog():
 
     with patch("app.api.atualizar._git", return_value=P()):
         assert api._mudancas_pendentes() == []
+
+
+# ─── Auto-update: os gates do laço ───────────────────────────────────────────────────────────────────────
+
+import subprocess
+from datetime import datetime, timedelta
+
+
+def _auto_gate(checar=None, estado=None, sha_dist="abc123", sha_alvo="abc123"):
+    """Roda `_auto_update_motivo` com git/estado/dist do CI mockados. Devolve o motivo de NÃO atualizar (None = dispara)."""
+    from app import api
+    pre = {"pode": True, "behind": 2, "ahead": 0, "divergiu": False, "sujo": 0, "branch_de_trabalho": False}
+    if checar:
+        pre.update(checar)
+
+    class _Sha:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return (sha_dist or "").encode()
+
+    with patch("app.api.atualizar.checar", return_value=pre), \
+         patch("app.api.atualizar.estado", return_value=estado or {}), \
+         patch("app.api.urllib.request.urlopen", return_value=_Sha()), \
+         patch("app.api.atualizar._git",
+               return_value=subprocess.CompletedProcess([], 0, stdout=sha_alvo, stderr="")):
+        return api._auto_update_motivo()
+
+
+def test_auto_update_dispara_com_tudo_aberto():
+    assert _auto_gate() is None
+
+
+def test_auto_update_sem_dist_destes_commit_nao_builda_local():
+    """A regra que impede o build local no automático: sha do dist ≠ HEAD → espera o próximo tick."""
+    assert _auto_gate(sha_dist="velho", sha_alvo="novo") == "dist do CI ainda nao e deste commit"
+
+
+def test_auto_update_nao_toca_arvore_suja():
+    assert _auto_gate(checar={"sujo": 3}) == "arvore suja (trabalho nao commitado)"
+
+
+def test_auto_update_em_dia_nao_dispara():
+    assert _auto_gate(checar={"behind": 0}) == "em dia"
+
+
+def test_auto_update_nao_repete_falha_recente():
+    falha = {"ok": False, "fase": "pronto", "ts": datetime.now().astimezone().isoformat()}
+    assert _auto_gate(estado=falha) == "ultima atualizacao falhou"
+    velha = {"ok": False, "fase": "pronto", "ts": (datetime.now().astimezone() - timedelta(days=2)).isoformat()}
+    assert _auto_gate(estado=velha) is None

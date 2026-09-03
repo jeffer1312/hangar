@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.request
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -207,6 +209,16 @@ async def _lifespan(app: FastAPI):
                 _log.exception("_fetch_loop crashed", exc_info=exc)
 
     fetch_task.add_done_callback(_fetch_done)
+
+    auto_update_task = asyncio.create_task(_auto_update_loop())
+
+    def _auto_update_done(t: asyncio.Task) -> None:
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                _log.exception("_auto_update_loop crashed", exc_info=exc)
+
+    auto_update_task.add_done_callback(_auto_update_done)
 
     prune_task = asyncio.create_task(_prune_loop())
 
@@ -3528,6 +3540,84 @@ async def _fetch_loop():
         except Exception:                            # noqa: BLE001 — sem rede é o caso comum
             _log.debug("fetch periodico falhou", exc_info=True)
         await asyncio.sleep(1800)
+
+
+# ─── Auto-update ────────────────────────────────────────────────────────────────────────────────
+# O botão pede um clique; a correção de bug não pode esperar o clique em cada máquina. Este laço
+# checa a cada hora e dispara o MESMO motor do botão (`atualizar.iniciar`), sem ninguém tocar em
+# nada. Os gates vivem em `_auto_update_motivo`: qualquer um deles recusando, o tick vira um log e
+# a próxima hora tenta de novo.
+_AUTO_UPDATE_INTERVALO = 3600
+_AUTO_UPDATE_FALHA_JANELA_S = 86400   # uma atualização que falhou segura novas tentativas por 24h
+_DIST_SHA_URL = "https://github.com/jeffer1312/hangar/releases/download/dist-latest/frontend-dist.sha"
+
+
+def _auto_update_motivo() -> Optional[str]:
+    """Por que o auto-update NÃO deve disparar neste tick. None = dispara.
+
+    Diferenças pro botão, de propósito: árvore suja ou commits locais adiante BLOQUEIAM aqui (o
+    botão resguarda e pergunta; o automático não pode decidir sobre trabalho de ninguém), e sem o
+    dist do CI deste commit exato NÃO cai no build local — espera o próximo tick (sha publicado =
+    CI verde + build pronto, que é condição, não aceleração).
+    """
+    pre = atualizar.checar()
+    if not pre.get("pode"):
+        return "dependencias faltando"
+    if pre.get("branch_de_trabalho"):
+        return f"checkout na branch {pre.get('branch')}"
+    if pre.get("ahead"):
+        return "checkout adiante de origin/main (commits locais nao pushados)"
+    if not pre.get("behind"):
+        return "em dia"
+    if pre.get("divergiu"):
+        return "checkout divergiu de origin/main"
+    if pre.get("sujo"):
+        return "arvore suja (trabalho nao commitado)"
+    est = atualizar.estado()
+    if est.get("fase") == "rodando":
+        return "atualizacao ja rodando"
+    if est.get("ok") is False:
+        try:
+            idade = (datetime.now().astimezone() - datetime.fromisoformat(est.get("ts"))).total_seconds()
+        except (TypeError, ValueError):
+            idade = _AUTO_UPDATE_FALHA_JANELA_S
+        if idade < _AUTO_UPDATE_FALHA_JANELA_S:
+            return "ultima atualizacao falhou"
+    try:
+        with urllib.request.urlopen(_DIST_SHA_URL, timeout=15) as r:
+            sha_dist = r.read().decode().strip()
+    except (OSError, ValueError):
+        return "sem acesso ao dist do CI"
+    sha_alvo = atualizar._git("rev-parse", "origin/main", timeout=30).stdout.strip()
+    if sha_dist != sha_alvo:
+        return "dist do CI ainda nao e deste commit"
+    return None
+
+
+async def _auto_update_loop():
+    """Checa a cada hora e dispara a atualização quando TODOS os gates abrem. Fail-soft inteiro:
+    qualquer exceção vira log e o próximo tick, nunca derruba o laço nem o backend."""
+    await asyncio.sleep(_AUTO_UPDATE_INTERVALO)   # nunca na subida: o boot já é o ponto de ruído
+    while True:
+        try:
+            if automations_enabled():
+                await asyncio.to_thread(atualizar._git, "fetch", "origin", timeout=120)
+                motivo = await asyncio.to_thread(_auto_update_motivo)
+                if motivo is None:
+                    # Sessão trabalhando é gate async (classify captura os panes), não cabe no helper.
+                    infos = await registry.list_with_state()
+                    if any(i.state == "working" for i in infos):
+                        motivo = "sessao trabalhando"
+                if motivo is None:
+                    _log.info("auto-update: disparando atualizacao")
+                    r = await asyncio.to_thread(atualizar.iniciar, settings.port)
+                    if not r.get("ok"):
+                        _log.warning("auto-update: iniciar recusou (%s)", r.get("erro"))
+                elif motivo != "em dia":
+                    _log.info("auto-update: pulando (%s)", motivo)
+        except Exception:                            # noqa: BLE001 — sem rede/sem tmux é comum
+            _log.exception("auto-update: tick falhou")
+        await asyncio.sleep(_AUTO_UPDATE_INTERVALO)
 
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])
