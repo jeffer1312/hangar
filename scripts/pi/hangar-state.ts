@@ -25,6 +25,18 @@ function sessionFile(ctx: any): string | null {
   return ctx?.sessionManager?.getSessionFile?.() ?? null;   // --no-session: nada pra rastrear
 }
 
+// Subagente do omp roda no MESMO processo (nao ha PI_SUBAGENT_DEPTH) e grava em
+// <stem>/<Nome>.jsonl: um diretorio com nome de transcript de sessao so existe pra isso.
+const STEM_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_[0-9a-fA-F-]{36}$/;
+function ehSubagenteDoOmp(file: string): boolean {
+  return STEM_RE.test(path.basename(path.dirname(file)));
+}
+// Arquivo da sessao DO PANE, ou null: --no-session e subagente nao publicam nada.
+function sessaoRastreavel(ctx: any): string | null {
+  const file = sessionFile(ctx);
+  return file && !ehSubagenteDoOmp(file) ? file : null;
+}
+
 // ── subagente (pi-subagents) publica NADA ──────────────────────────────────────────────────────
 // O subagente do pi-subagents e OUTRO PROCESSO, nao outra sessao no mesmo processo: o fork so
 // ESCREVE o arquivo da sessao no disco (shared/fork-context.ts, `writeForkedSessionFile`) — nao
@@ -279,12 +291,14 @@ function marcarEntregue(id: string): void {
 // O ctx mais recente. Os handlers de evento recebem (event, ctx) e o socket NAO — mas quem sabe
 // responder "tem rascunho na caixa?" e o `ctx.ui`. Guardar o ultimo e o unico jeito de a linha
 // alcancar essa API; e legitimo porque a extensao so registra handler no processo do USUARIO (o
-// retorno cedo de `emSubagente` cobre o resto) e todo ctx que passa por aqui e da mesma sessao —
-// a troca de sessao (/new, /fork, /resume) emite session_start de novo e sobrescreve este valor.
+// retorno cedo de `emSubagente` cobre o pi-subagents, outro processo) e todo ctx que passa por
+// aqui e da mesma sessao do pane — a troca de sessao (/new, /fork, /resume) emite session_start de
+// novo e sobrescreve este valor. O subagente do omp e OUTRA sessao no MESMO processo (dispara os
+// mesmos eventos), entao o gate fica AQUI, uma vez so, em vez de em cada call site.
 let ctxAtual: any = null;
 
 function lembrarCtx(ctx: any): void {
-  if (ctx) ctxAtual = ctx;
+  if (ctx && !ehSubagenteDoOmp(sessionFile(ctx) ?? "")) ctxAtual = ctx;
 }
 
 // A pergunta que o backend faz antes de digitar. Vale a pena existir porque a TELA nao responde:
@@ -474,7 +488,7 @@ export default function (pi: ExtensionAPI) {
     // início de toda sessão nova dentro do MESMO processo, é o caminho mais simples que cobre
     // /new, /fork e /resume sem precisar decidir com o `reason` do evento — só "quit" de verdade
     // não passa por aqui de novo (o processo morre, e o valor não importa mais).
-    if (!sessionFile(ctx)) return;   // --no-session: nada pra rastrear
+    if (!sessaoRastreavel(ctx)) return;   // --no-session ou subagente do omp: nada pra rastrear
     desligando = false;
     publishPane(ctx); publishModels(pi, ctx); conectar(pi);
   });
@@ -482,12 +496,15 @@ export default function (pi: ExtensionAPI) {
   // NOVO: fecha de propósito ao morrer. Sem isto, um /reload deixaria o backend achando que ainda
   // tem alguém lendo até o prazo estourar, e a mensagem daquele intervalo esperaria à toa.
   pi.on("session_shutdown", async (_e: any, ctx: any) => {
-    // Sem gate de dono: no processo do usuario (emSubagente falso), toda shutdown e da propria
-    // sessao — trocas legitimas passam por teardownCurrent, que emite session_shutdown ANTES do
-    // session_start da nova —, e a copia que roda no subagente nao registra handler nenhum.
-    // Antes do 24f1b75, o shutdown de QUALQUER sessao ligava `desligando`; a trava sessaoDoPane
-    // (removida — ver `emSubagente`) tapava isso comparando sessoes no mesmo processo, o que o
-    // fork de subagente nunca faz: pai e filho nao compartilham evento.
+    // Subagente do omp dispara este MESMO evento (mesmo processo): seu shutdown nao pode ligar
+    // `desligando` nem fechar o socket da sessao do pane, que continua rodando.
+    if (ehSubagenteDoOmp(sessionFile(ctx) ?? "")) return;
+    // Sem gate de dono pro resto: no processo do usuario, toda shutdown que sobra e da propria
+    // sessao do pane — trocas legitimas passam por teardownCurrent, que emite session_shutdown
+    // ANTES do session_start da nova. Antes do 24f1b75, o shutdown de QUALQUER sessao ligava
+    // `desligando`; a trava sessaoDoPane (removida — ver `emSubagente`) tapava isso comparando
+    // sessoes no mesmo processo, o que o fork de subagente do pi-subagents nunca faz: pai e filho
+    // nao compartilham evento (esse continua sendo outro processo — ver `emSubagente` no topo).
     desligando = true;
     // Zera a previa da sessao que SAI. "session_shutdown" dispara em /new, /fork, /resume e /tree —
     // inclusive com o turno rodando —, e nesse caminho nem "message_end" nem "agent_settled" chegam:
@@ -499,34 +516,45 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_start", async (_e: any, ctx: any) => {
     lembrarCtx(ctx);
     // O gate de subagente vale tambem pro `trabalhando`/corroboracao: o turno do subagente nao e o
-    // turno da sessao, e tratar como se fosse confirmaria entrega de mensagem que ninguem leu —
-    // mas quem bloqueia isso e o `emSubagente` la em cima; aqui so o --no-session.
-    if (!sessionFile(ctx)) return;
+    // turno da sessao, e tratar como se fosse confirmaria entrega de mensagem que ninguem leu.
+    if (!sessaoRastreavel(ctx)) return;
     publishPane(ctx); publishState("working", ctx);
     trabalhando = true;
     eventosAgente.emit("agent_start");   // corrobora entrega pendente — ver bloco da entrega acima
   });
-  pi.on("agent_settled", async (_e: any, ctx: any) => {
+  // `agent_settled` e do Pi; o oh-my-pi (omp) so emite `agent_end`. Sem os dois o estado fica
+  // preso em "working" depois do turno.
+  const turnoFechou = async (_e: any, ctx: any) => {
     lembrarCtx(ctx);
-    if (!sessionFile(ctx)) return;
+    if (!sessaoRastreavel(ctx)) return;
     publishState("idle", ctx); trabalhando = false;
     publishPreview(ctx, "", true);   // turno fechou: nada em voo (rede pro message_end perdido)
-  });
+  };
+  pi.on("agent_settled", turnoFechou);
+  pi.on("agent_end", turnoFechou);
 
   // Previa ao vivo. `message_update` e o unico que traz o texto parcial; `message_end` fecha o bloco
   // (a bolha real vem do transcript, entao a previa TEM que zerar aqui — senao o texto ficaria
   // duplicado por um instante, uma vez na previa e outra na bolha).
   pi.on("message_update", async (e: any, ctx: any) => {
-    lembrarCtx(ctx); publishPreview(ctx, textoEmVoo(e?.message), false);
+    lembrarCtx(ctx);
+    if (!sessaoRastreavel(ctx)) return;
+    publishPreview(ctx, textoEmVoo(e?.message), false);
   });
   pi.on("message_end", async (e: any, ctx: any) => {
     if (e?.message?.role !== "assistant") return;
+    if (!sessaoRastreavel(ctx)) return;
     publishPreview(ctx, "", true);
   });
   // Republica tambem quando a troca vem do TUI (usuario no teclado, Ctrl+P, /model, /settings) —
   // senao o app mostraria o modelo velho ate a proxima sessao.
-  pi.on("model_select", async (_e: any, ctx: any) => { publishModels(pi, ctx); });
-  pi.on("thinking_level_select", async (_e: any, ctx: any) => { publishModels(pi, ctx); });
+  pi.on("model_select", async (_e: any, ctx: any) => { if (sessaoRastreavel(ctx)) publishModels(pi, ctx); });
+  pi.on("thinking_level_select", async (_e: any, ctx: any) => { if (sessaoRastreavel(ctx)) publishModels(pi, ctx); });
+  // omp: model_select/thinking_level_select nao existem; ele emite `model_changed`.
+  pi.on("model_changed", async (_e: any, ctx: any) => {
+    if (!sessaoRastreavel(ctx)) return;
+    publishModels(pi, ctx);
+  });
 
   // Argumento separado por ESPACO (`<provider> <id>`) e nao por "/": o id do modelo ja contem
   // barra (ex `cline-pass/glm-5.2` no provedor `clinepass`), entao "provider/id" seria ambiguo.

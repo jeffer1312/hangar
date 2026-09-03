@@ -40,6 +40,7 @@ const fakePi = () => {
 };
 
 const disparar = (pi, evento, ctx) => pi.handlers.get(evento)?.({}, ctx) ?? Promise.resolve();
+const dispararCom = (pi, evento, e, ctx) => pi.handlers.get(evento)?.(e, ctx) ?? Promise.resolve();
 
 const sessao = (file, modelo) => ({
   sessionManager: { getSessionFile: () => file, getSessionId: () => path.basename(file) },
@@ -115,6 +116,34 @@ const noPsmux = path.join(cfg, ".hangar-pi", "pi-teste-2.json");
 assert.ok(fs.existsSync(noPsmux), "no psmux o bilhete e do NOME da sessao, sanitizado pra arquivo");
 assert.equal(JSON.parse(fs.readFileSync(noPsmux, "utf8")).file, A);
 delete process.env.PSMUX_SESSION;
+
+// ── caso real 3 (omp): subagente no MESMO processo, arquivo <stem>/<Nome>.jsonl, sem PI_SUBAGENT_DEPTH ──
+{
+  const piOmp = fakePi();
+  (await import("./pi/hangar-state.ts?omp=1")).default(piOmp);
+  const M = path.join(cfg, "2026-09-03T16-17-19-304Z_01a0680f-77c8-7397-805f-c8651e6051f1.jsonl");
+  const SUB = path.join(cfg, "2026-09-03T16-17-19-304Z_01a0680f-77c8-7397-805f-c8651e6051f1", "ContarLinhas.jsonl");
+  const estado = (f) => JSON.parse(fs.readFileSync(path.join(cfg, ".hangar-state", `${path.basename(f, ".jsonl")}.json`), "utf8")).state;
+  await disparar(piOmp, "session_start", sessao(M, "main-model"));
+  assert.equal(bilhete(), M);
+  await disparar(piOmp, "agent_start", sessao(M, "main-model"));
+  await disparar(piOmp, "session_start", sessao(SUB, "sub-model"));
+  await disparar(piOmp, "agent_start", sessao(SUB, "sub-model"));
+  await disparar(piOmp, "agent_end", sessao(SUB, "sub-model"));
+  await disparar(piOmp, "session_shutdown", sessao(SUB, "sub-model"));
+  assert.equal(bilhete(), M, "subagente do omp nao reescreve o bilhete");
+  assert.ok(!temEstado(SUB), "subagente nao publica estado");
+  assert.equal(estado(M), "working", "o agent_end do subagente nao fecha o turno do main");
+  // a sessao do pane continua viva depois do shutdown do subagente: a previa do main ainda sai
+  await dispararCom(piOmp, "message_update", { message: { role: "assistant", content: [{ type: "text", text: "oi" }] } }, sessao(M, "main-model"));
+  await new Promise((r) => setTimeout(r, 250));
+  assert.ok(temPreview(M), "shutdown do subagente nao desliga a sessao do pane");
+  await disparar(piOmp, "agent_end", sessao(M, "main-model"));
+  assert.equal(estado(M), "idle");
+  fs.rmSync(path.join(cfg, ".hangar-pi", "models"), { recursive: true, force: true });
+  await disparar(piOmp, "model_changed", sessao(M, "main-model"));
+  assert.ok(temCatalogo(M), "model_changed republica o catalogo");
+}
 
 fs.rmSync(cfg, { recursive: true, force: true });
 console.log("ok: subagente nao publica nada; sessao do usuario publica; psmux chaveia pelo nome (hangar-state.ts)");
