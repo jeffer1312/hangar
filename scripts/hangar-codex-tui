@@ -146,6 +146,16 @@ def main() -> int:
     from app.adapters.codex import sessions as codex_sessions
     from app.adapters.codex.lancador import APPROVAL, SANDBOX
 
+    # Skill instalada no Claude vale JA nesta abertura: o codex le so a pasta dele, e a ponte que
+    # a materializa la era refeita apenas na subida do backend. Fail-soft — isto e conveniencia no
+    # caminho de abrir o agente, nunca motivo pra ele nao abrir.
+    try:
+        from app import skill_bridge
+        skill_bridge.rebuild(log=lambda _m: None)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"hangar-codex-tui: ponte de skills falhou ({exc}); a sessao abre assim mesmo",
+              file=sys.stderr)
+
     endpoint = _porta_livre()
     # stdout no lixo (no modo WebSocket o protocolo nao passa por ele), mas o stderr vai pra um
     # arquivo temporario: PIPE sem consumidor encheria numa sessao longa, e DEVNULL jogaria fora

@@ -59,6 +59,10 @@ pi() {
         esac
     done
 
+    # Daqui pra baixo abre TUI: refaz a ponte de skills agora, pra skill instalada no Claude valer
+    # já nesta abertura (antes dependia de reiniciar o backend). Silencioso e fail-soft.
+    command -v hangar-skills-sync >/dev/null 2>&1 && hangar-skills-sync
+
     # Flags que gerenciam a própria sessão: NUNCA injetar --session-id (id novo por cima de `pi -c`
     # abriria sessão FRESCA em vez de continuar). Mas o tmux continua valendo — antes essas flags
     # passavam cruas e a sessão retomada ficava INVISÍVEL pro app. O rastreio não depende do id

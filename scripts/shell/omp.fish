@@ -59,6 +59,10 @@ function omp
         end
     end
 
+    # Daqui pra baixo abre TUI: refaz a ponte de skills agora, pra skill instalada no Claude valer
+    # já nesta abertura (antes dependia de reiniciar o backend). Silencioso e fail-soft.
+    command -q hangar-skills-sync; and hangar-skills-sync
+
     set -l own_session 0
     for a in $argv
         switch $a

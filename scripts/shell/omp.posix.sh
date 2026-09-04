@@ -59,6 +59,10 @@ read|render|say|search|setup|share|shell|ssh|stats|tiny-models|token|ttsr|update
         esac
     done
 
+    # Daqui pra baixo abre TUI: refaz a ponte de skills agora, pra skill instalada no Claude valer
+    # já nesta abertura (antes dependia de reiniciar o backend). Silencioso e fail-soft.
+    command -v hangar-skills-sync >/dev/null 2>&1 && hangar-skills-sync
+
     local own_session=0
     for a in "$@"; do
         case "$a" in

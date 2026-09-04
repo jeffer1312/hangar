@@ -130,6 +130,11 @@ echo "  installed Codex launcher -> $HOME/.local/bin/hangar-codex-tui"
 chmod +x "$SCRIPT_DIR/hangar-engine"
 ln -sfn "$SCRIPT_DIR/hangar-engine" "$HOME/.local/bin/hangar-engine"
 echo "  installed engine helper -> $HOME/.local/bin/hangar-engine"
+# Chamado pelos wrappers de pi/omp/kimi e pelo lancador do Codex na largada de cada sessao. Vai
+# pro PATH porque o wrapper de shell nao sabe onde este repo mora.
+chmod +x "$SCRIPT_DIR/hangar-skills-sync"
+ln -sfn "$SCRIPT_DIR/hangar-skills-sync" "$HOME/.local/bin/hangar-skills-sync"
+echo "  installed skills sync -> $HOME/.local/bin/hangar-skills-sync"
 
 # Helper de contas (claude-conta). Symlink absoluto, mesma regra dos dois acima: descoberta do
 # backend/.env preservada de qualquer cwd e atualização automática depois de git pull.

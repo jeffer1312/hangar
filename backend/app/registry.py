@@ -1469,6 +1469,16 @@ class SessionRegistry:
             if engine:
                 raise ValueError("motor so vale para provider claude")
             _exigir_lancador_codex()
+        # Skill instalada no Claude vale JA nesta sessao. pi, kimi e codex leem so as pastas deles;
+        # quem materializa as skills do Claude la e a ponte, e ela era refeita apenas na subida do
+        # backend — instalar uma skill exigia reiniciar o servico. Claude e omp ficam de fora
+        # porque os dois descobrem as fontes sozinhos. Fail-soft: criar sessao nunca depende disto.
+        if provider in ("pi", "kimi", "codex"):
+            try:
+                from app import skill_bridge
+                skill_bridge.rebuild(log=lambda _m: None)
+            except Exception:                          # noqa: BLE001
+                _log.warning("ponte de skills falhou antes de criar %s", name, exc_info=True)
         # Unicidade contra tmux (Claude) E sidecars Codex: sem o segundo check, um nome de sessao
         # Codex reusado aqui geraria DOIS SessionInfo com o mesmo name no list() (front keyed por
         # nome) e o kill(name) cairia no branch Codex (checado 1o) -> fecharia o client Codex sem

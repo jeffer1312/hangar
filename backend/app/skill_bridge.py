@@ -252,6 +252,14 @@ def rebuild(home: Path | None = None, *, dry_run: bool = False,
         try:
             stats[nome] = _rebuild_um(nome, home / rel_ponte, fontes, raizes, config_ok,
                                       home, dry_run, log)
+            # Loga SEMPRE, inclusive o rebuild que não mudou nada: sem esta linha, "a ponte rodou
+            # e achou pouco" e "a ponte nem rodou" são o mesmo silêncio no diário — e foi
+            # exatamente essa dúvida que sobrou quando 67 skills sumiram das três pontes.
+            s = stats[nome]
+            log(f"skill-bridge[{nome}]: {s['criados']} criados, {s['trocados']} trocados, "
+                f"{s['removidos']} removidos, {s['mantidos']} mantidos"
+                + (f", {s['pulados_reais']} entradas do usuário puladas"
+                   if s["pulados_reais"] else ""))
         except Exception as e:  # noqa: BLE001 — os outros harnesses seguem
             log(f"  ⚠ {nome}: rebuild falhou ({e}) — a ponte dele ficou como estava")
             stats[nome] = {"erro": 1}
@@ -267,14 +275,11 @@ def main(argv: list[str] | None = None) -> int:
     log = (lambda *a: None) if args.quiet else print
     stats = rebuild(dry_run=args.dry_run, log=log)
     if not args.quiet:
+        # O resumo por harness sai do proprio rebuild (todo chamador o recebe); aqui sobra o que
+        # so o CLI sabe dizer.
         for nome, st in stats.items():
             if "erro" in st:
                 print(f"skill-bridge[{nome}]: FALHOU — ver aviso acima")
-                continue
-            print(f"skill-bridge[{nome}]: {st['criados']} criados, {st['trocados']} trocados, "
-                  f"{st['removidos']} removidos, {st['mantidos']} mantidos"
-                  + (f", {st['pulados_reais']} entradas do usuário puladas"
-                     if st["pulados_reais"] else ""))
         if not stats:
             print("skill-bridge: nenhum harness (pi/kimi/codex) encontrado")
     return 0
