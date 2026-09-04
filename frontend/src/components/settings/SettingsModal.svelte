@@ -507,10 +507,13 @@
        app.css) — medido no navegador, não os 32px do CSS. */
     padding-top: calc(var(--space-3) + 44px + var(--space-2));
   }
+  /* O halo (box-shadow da cor do painel) existe porque o conteúdo ROLA por baixo do ✕: sem ele,
+     texto e slider passavam encostados no botão e a leitura embolava. */
   .st-fechar {
     position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
     width: 32px; height: 32px; border-radius: var(--radius-full);
-    border: 1px solid var(--border-subtle); background: var(--surface-raised);
+    border: 1px solid var(--border-subtle); background: var(--glass-modal);
+    box-shadow: 0 0 0 8px var(--glass-modal);
     color: var(--text-secondary); font-size: var(--text-base); line-height: 1; cursor: pointer;
   }
   .st-nav-item {

@@ -161,15 +161,19 @@
   {#if store.erro && Object.keys(store.campos).length}<p class="aviso erro">{store.erro}</p>{/if}
 </div>
 
-{#if !store.carregando && Object.keys(store.campos).length}
-  <!-- O rascunho e UM so pras tres fatias, entao Salvar grava tudo que foi mexido, inclusive fora
-       desta tela. E o unico significado honesto: com rascunho compartilhado, um Salvar que gravasse so
-       a propria fatia faria o MESMO botao significar coisas diferentes conforme a tela. -->
+<!-- O rascunho e UM so pras tres fatias, entao Salvar grava tudo que foi mexido, inclusive fora
+     desta tela. E o unico significado honesto: com rascunho compartilhado, um Salvar que gravasse so
+     a propria fatia faria o MESMO botao significar coisas diferentes conforme a tela.
+     So aparece quando ha o que salvar: um botao apagado permanente ocupava uma faixa inteira do
+     painel pra nao oferecer nada. -->
+{#if !store.carregando && Object.keys(store.campos).length && (store.temMudanca || store.salvando || store.salvo)}
   <div class="rodape">
     {#if store.salvo}<span class="ok">{m.config_server_salvo()}</span>{/if}
-    <button class="btn primario" onclick={store.salvar} disabled={!store.temMudanca || store.salvando}>
-      {store.salvando ? m.config_motores_salvando() : m.ctx_salvar()}
-    </button>
+    {#if store.temMudanca || store.salvando}
+      <button class="btn primario" onclick={store.salvar} disabled={store.salvando}>
+        {store.salvando ? m.config_motores_salvando() : m.ctx_salvar()}
+      </button>
+    {/if}
   </div>
 {/if}
 
@@ -254,12 +258,15 @@
      formulário rola por baixo. `--bg-surface` cru aqui não é esquecimento da regra de Transparência
      (CLAUDE.md) — com token de véu o texto do formulário atravessaria os botões. Mesmo caso do
      `.acoes` dos Motores. NÃO converter. */
+  /* De ponta a ponta do painel e na COR dele: as margens negativas cancelam o respiro do scroller
+     (.st-conteudo), senão a faixa morria antes da borda e ficava de outro tom, como um remendo. */
   .rodape {
-    position: sticky; bottom: 0;
+    position: sticky; bottom: calc(-1 * var(--space-4));
     display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3);
+    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
     padding: var(--space-3) var(--space-4);
-    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
-    background: var(--bg-surface);
+    padding-bottom: calc(var(--space-3) + var(--space-4) + env(safe-area-inset-bottom));
+    background: rgb(var(--glass-panel-rgb));
     border-top: 1px solid var(--border-subtle);
   }
   .ok { font-size: var(--text-xs); color: var(--success); animation: st-row-in-ok 200ms var(--ease-out); }

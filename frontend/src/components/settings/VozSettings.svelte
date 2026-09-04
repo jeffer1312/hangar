@@ -163,9 +163,16 @@
   function ajusteResetar(a: AjusteSlider) {
     store.setRascunho(a.chave, a.padrao);
   }
+
+  // O rodapé só existe quando há o que salvar — e, quando existe, a tela reserva a altura dele:
+  // grudado no pé, ele cobria o último campo de quem estava justamente editando aquele campo.
+  const rodapeVisivel = $derived(
+    !store.carregando && Object.keys(store.campos).length > 0
+      && (store.temMudanca || store.salvando || store.salvo),
+  );
 </script>
 
-<div class="voz">
+<div class="voz" class:com-rodape={rodapeVisivel}>
   <header class="cfg-head">
     <h2>{m.voz_titulo()}</h2>
     <p class="sub">{m.config_server_valem()}</p>
@@ -280,7 +287,10 @@
           </div>
 
           <div class="amostra">
-            <button class="btn" onclick={ouvirAmostraDaVoz} disabled={!ttsPlayer.ultimoTexto}>
+            <!-- O motivo de estar apagado viaja com o botão: solto numa linha ao lado, ele lia como
+                 botão quebrado. -->
+            <button class="btn" onclick={ouvirAmostraDaVoz} disabled={!ttsPlayer.ultimoTexto}
+                    title={ttsPlayer.ultimoTexto ? '' : m.config_server_ouca_antes()}>
               {m.config_server_ouvir_amostra()}{ttsPlayer.ultimoTexto ? m.config_server_caracteres({ n: amostraTexto.length.toLocaleString(intlLocale()) }) : ''}
             </button>
             {#if !ttsPlayer.ultimoTexto}
@@ -303,24 +313,37 @@
   {#if store.erro && Object.keys(store.campos).length}<p class="aviso erro">{store.erro}</p>{/if}
 </div>
 
-{#if !store.carregando && Object.keys(store.campos).length}
+{#if rodapeVisivel}
   <div class="rodape">
     {#if store.salvo}<span class="ok">{m.config_server_salvo()}</span>{/if}
-    <button class="btn primario" onclick={store.salvar} disabled={!store.temMudanca || store.salvando}>
-      {store.salvando ? m.config_motores_salvando() : m.ctx_salvar()}
-    </button>
+    {#if store.temMudanca || store.salvando}
+      <button class="btn primario" onclick={store.salvar} disabled={store.salvando}>
+        {store.salvando ? m.config_motores_salvando() : m.ctx_salvar()}
+      </button>
+    {/if}
   </div>
 {/if}
 
 <style>
   /* Container query, nunca media query: quem aperta a linha e a largura do PAINEL. */
+  /* O respiro de baixo é a altura do rodapé grudado: sem ele o último campo fica escondido atrás
+     do botão Salvar, e a pessoa nem sabe que ele existe. */
   .voz { container-type: inline-size; padding: var(--space-2) var(--space-4) var(--space-4); display: flex; flex-direction: column; gap: var(--space-5); }
+  .voz.com-rodape { padding-bottom: 84px; }
 
   /* Mesmo par h2+sub das telas irmãs (ServerSettings.svelte) — a Voz também é config de servidor. */
   .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
   .cfg-head .sub { margin: 2px 0 0; font-size: var(--text-xs); color: var(--text-muted); }
 
-  .secao h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
+  /* O título da etapa tem que pesar MAIS que o rótulo do campo — com os dois em `sm`/600 a
+     hierarquia se invertia e a tela virava uma lista sem começo. */
+  .secao h3 {
+    margin: 0 0 var(--space-3);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--text-base); font-weight: 600; letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
 
   .txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .rot { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
@@ -341,7 +364,10 @@
   .tts-extra :global(.campo-select) { width: 100%; font-family: var(--font-ui); font-size: var(--text-sm); }
   @container (min-width: 360px) { .tts-extra :global(.campo-select) { width: auto; min-width: 220px; } }
 
-  .amostra { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); align-items: flex-start; }
+  /* A explicação cola no botão (gap curto): com o respiro de sempre ela parecia legenda de outro
+     controle, e o botão apagado ficava sem motivo à vista. */
+  .amostra { display: flex; flex-direction: column; gap: 6px; margin-top: var(--space-3); align-items: flex-start; }
+  .amostra .ajuda { padding-left: 2px; }
 
   .naturalidade { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-3) 0; }
   .ajuste { display: flex; flex-direction: column; gap: 2px; }
@@ -349,7 +375,9 @@
   .ajuste-rot { font-size: var(--text-sm); font-weight: 600; color: var(--text-primary); }
   .ajuste-rot em { margin-left: var(--space-2); font-style: normal; color: var(--text-muted); font-size: var(--text-xs); }
   .ajuste-reset { flex-shrink: 0; font-size: var(--text-xs); color: var(--accent); background: none; border: none; padding: 0; }
-  .ajuste-slider { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-1); }
+  /* Trilho contido: esticado na largura toda do painel, um passo do slider virava um pixel e as
+     pontas ("neutro"/"marcante") ficavam longe demais do que elas descrevem. */
+  .ajuste-slider { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-1); max-width: 460px; }
   .ajuste-slider input { flex: 1; min-width: 100px; accent-color: var(--accent); }
   .ajuste-slider .ponta { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
 
@@ -359,12 +387,17 @@
 
   /* CHROME FUNCIONAL, sólido de propósito: grudado no fim da folha — mesma exceção que o
      .rodape do ServerSettings/EnginesSettings já documenta. NÃO converter pra token de véu. */
+  /* Rodapé de ponta a ponta do painel: as margens negativas cancelam o respiro do scroller
+     (.st-conteudo), senão sobra uma faixa de conteúdo passando dos dois lados e por baixo dele. */
   .rodape {
-    position: sticky; bottom: 0;
+    position: sticky; bottom: calc(-1 * var(--space-4));
     display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3);
+    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
     padding: var(--space-3) var(--space-4);
-    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
-    background: var(--bg-surface);
+    padding-bottom: calc(var(--space-3) + var(--space-4) + env(safe-area-inset-bottom));
+    /* Tom do PRÓPRIO painel, mas opaco: com `--bg-surface` a barra era de outra cor, e com o véu do
+       `--glass-modal` o texto que rola por baixo aparecia através dela. */
+    background: rgb(var(--glass-panel-rgb));
     border-top: 1px solid var(--border-subtle);
   }
   .ok { font-size: var(--text-xs); color: var(--success); }

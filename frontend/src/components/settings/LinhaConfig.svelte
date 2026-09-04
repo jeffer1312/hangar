@@ -131,7 +131,8 @@
   }
   input:focus { border-color: var(--accent); }
   .campo-num { display: flex; align-items: center; gap: var(--space-2); }
-  .campo-num input { width: 100px; }
+  /* Largura de 5 dígitos: a caixa de 100px para um "30" parecia campo de texto vazio. */
+  .campo-num input { width: 7ch; text-align: right; font-variant-numeric: tabular-nums; }
   .sufixo { font-size: var(--text-xs); color: var(--text-muted); }
 
   .mascara {
