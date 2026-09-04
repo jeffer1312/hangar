@@ -101,8 +101,11 @@ _pretrust_lock = threading.Lock()
 
 
 def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
-    """Marca `hasTrustDialogAccepted=True` pra `cwd` no .claude.json (o do config_dir, senão o
-    ~/.claude.json) — pré-aprova o "trust this folder?" que o Claude Code mostra no 1º acesso a uma
+    """Marca `hasTrustDialogAccepted=True` pra `cwd` no .claude.json que a sessão nova vai LER —
+    quem responde qual é o arquivo é `tmux.claude_json_de`, o mesmo lugar que decide se o pane
+    recebe `CLAUDE_CONFIG_DIR` (duas cópias da regra é como o pre-trust escrevia no arquivo errado
+    e a sessão nascia presa no "trust this folder?" mesmo assim).
+    Pré-aprova o dialog que o Claude Code mostra no 1º acesso a uma
     pasta nova. Read-modify-write atômico (tmp+replace) sob _pretrust_lock: dois create()
     concorrentes (rodam em threads via to_thread) fariam read-modify-write no MESMO arquivo e
     last-write-wins perderia uma entrada — mesmo padrão do _append_lock (pqueue) / _LOCK (pair).
@@ -115,7 +118,7 @@ def _pretrust_cwd(cwd: str, config_dir: str | None) -> None:
     colisão rara e aceita; fechar exigiria flock que o CLI teria de respeitar (não verificável)."""
     with _pretrust_lock:
         try:
-            cfg = Path(config_dir or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"
+            cfg = tmux.claude_json_de(config_dir)
             data = json.loads(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
             projects = data.setdefault("projects", {})
             entry = projects.setdefault(cwd, {})
