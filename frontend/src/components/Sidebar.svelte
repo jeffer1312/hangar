@@ -410,7 +410,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   function flash(msg: string) {
     menuMsg = msg;
     clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => { menuMsg = ''; }, 4000);
+    // Saída de git/servidor leva mais que 4s pra ler; mensagem curta some rápido como antes.
+    flashTimer = setTimeout(() => { menuMsg = ''; }, msg.length > 60 ? 8000 : 4000);
   }
 
   // Candidatas ao encadeamento: sessoes do MESMO servidor da fonte (o vinculo e resolvido pelo backend
@@ -1041,7 +1042,28 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     }}
     onFlash={flash} />
 {/if}
-{#if menuMsg}<div class="menu-toast" role="status">{menuMsg}</div>{/if}
+{#if menuMsg}
+  <!-- "rótulo: corpo" vira duas linhas: o rótulo (o que foi tentado) em texto de interface e o
+       corpo (saída do git/servidor) em mono. Clique fecha; erro fica mais tempo que aviso. -->
+  {@const sep = menuMsg.indexOf(': ')}
+  {@const rotulo = sep > 0 && sep < 40 ? menuMsg.slice(0, sep) : ''}
+  {@const corpo = rotulo ? menuMsg.slice(sep + 2) : menuMsg}
+  <!-- Mouse em cima segura o toast (o erro sumia antes de dar pra ler ou copiar). -->
+  <div class="menu-toast" role="status"
+       onmouseenter={() => clearTimeout(flashTimer)}
+       onmouseleave={() => { flashTimer = setTimeout(() => { menuMsg = ''; }, 3000); }}>
+    <span class="toast-texto">
+      {#if rotulo}<span class="toast-rotulo">{rotulo}</span>{/if}
+      <span class="toast-corpo">{corpo}</span>
+    </span>
+    <span class="toast-acoes">
+      <button type="button" class="toast-bt" title={m.toast_copiar()} aria-label={m.toast_copiar()}
+              onclick={() => { void navigator.clipboard?.writeText(menuMsg).then(() => flash(m.toast_copiado())); }}>⧉</button>
+      <button type="button" class="toast-bt" title={m.sessao_fechar()} aria-label={m.sessao_fechar()}
+              onclick={() => { menuMsg = ''; }}>✕</button>
+    </span>
+  </div>
+{/if}
 
 <!-- Renomear com a sidebar RECOLHIDA: a <aside> está fora do DOM (sem edição inline) — diálogo
      acessível com input, mesmo padrão do modal de Adicionar servidor. Enter confirma, Esc
@@ -1297,22 +1319,28 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .pair-pill-head {
     width: 100%; height: 22px; margin-bottom: calc(-1 * var(--space-1));
     display: flex; align-items: center; justify-content: center; gap: 3px;
-    background: var(--surface-raised); border: 1px solid var(--border-subtle); border-bottom: none;
-    border-radius: 12px 12px 0 0; color: var(--text-muted); cursor: pointer; padding: 0;
+    /* Tinta de accent na pílula inteira (tampa + membros): com a superfície neutra o grupo se
+       confundia com o resto do trilho — o olho precisa ver o bloco antes de ler o glifo. */
+    background: var(--pill-bg); border: 1px solid var(--pill-border); border-bottom: none;
+    border-radius: 12px 12px 0 0; color: var(--accent); cursor: pointer; padding: 0;
+    --pill-bg: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+    --pill-border: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
   }
-  .pair-pill-head.recolhido { border-bottom: 1px solid var(--border-subtle); border-radius: 12px; margin-bottom: 0; }
+  .pair-pill-head.recolhido { border-bottom: 1px solid var(--pill-border); border-radius: 12px; margin-bottom: 0; }
   .pair-pill-count {
     font-size: 9px; font-weight: 600; line-height: 13px; padding: 0 4px; border-radius: 6px;
     color: var(--text-primary); background: var(--accent-dim);
   }
   @media (hover: hover) { .pair-pill-head:hover { color: var(--text-primary); } }
   .sidebar.collapsed .sess-row.pair-member {
-    background: var(--surface-raised); border: 1px solid var(--border-subtle);
+    --pill-bg: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+    --pill-border: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
+    background: var(--pill-bg); border: 1px solid var(--pill-border);
     border-top: none; border-bottom: none; border-radius: 0;
     margin-bottom: calc(-1 * var(--space-1)); padding-bottom: var(--space-1);
   }
   .sidebar.collapsed .sess-row.pair-member.pair-last {
-    border-bottom: 1px solid var(--border-subtle); border-radius: 0 0 12px 12px; margin-bottom: 0;
+    border-bottom: 1px solid var(--pill-border); border-radius: 0 0 12px 12px; margin-bottom: 0;
   }
   /* A pílula pinta o fundo dos membros com mais especificidade que `.active`; repõe o realce da
      sessão aberta (fundo E barra), senão dentro do grupo a aberta fica igual às ociosas. */
@@ -1455,17 +1483,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     display: flex; align-items: center; gap: var(--space-2);
     width: 100%; text-align: left;
     padding: 5px var(--space-2) 5px var(--space-3); margin-bottom: -2px;
-    background: var(--surface-raised); border: 1px solid var(--border-subtle); border-bottom: none;
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-subtle)); border-bottom: none;
     cursor: pointer;
     font-size: var(--text-xs); font-weight: 600; color: var(--accent);
     border-radius: var(--radius-md) var(--radius-md) 0 0;
   }
-  .pair-head.recolhido { border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-md); margin-bottom: 0; }
+  .pair-head.recolhido { border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-subtle)); border-radius: var(--radius-md); margin-bottom: 0; }
   .pair-head-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; }
   @media (hover: hover) { .pair-head:hover { color: var(--text-primary); } }
   .sidebar:not(.collapsed) .sess-row.pair-member {
-    background: var(--surface-raised);
-    border-right: 1px solid var(--border-subtle); border-radius: 0;
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+    border-right: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border-subtle)); border-radius: 0;
     margin-bottom: -2px; padding-bottom: 2px;
   }
   .sidebar:not(.collapsed) .sess-row.pair-member.pair-last {
@@ -1872,12 +1901,24 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .resume-item-meta { font-size: var(--text-xs); color: var(--text-muted); }
 
   /* Banner efemero (resultado do git pull / erro do editor). */
+  /* Canto inferior esquerdo (nasce da sidebar, não do chat) e fundo SÓLIDO: é caixa flutuante
+     por cima de conversa, não superfície de painel — a transparência aqui vira ruído. */
   .menu-toast {
-    position: fixed; z-index: 42; left: 50%; bottom: 20px; transform: translateX(-50%);
-    max-width: min(520px, 90vw); padding: 8px 14px;
-    background: var(--surface-raised); border: 1px solid var(--border-default);
-    border-radius: var(--radius-md); box-shadow: 0 6px 20px rgba(0,0,0,0.35);
-    color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-mono);
-    white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto;
+    position: fixed; z-index: 42; left: 12px; bottom: 16px;
+    display: flex; align-items: flex-start; gap: var(--space-2); text-align: left;
+    width: min(380px, calc(100vw - 24px)); padding: 10px 12px 10px 14px;
+    background: var(--bg-elevated); border: 1px solid var(--border-default);
+    border-left: 3px solid var(--warning);
+    border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    color: var(--text-primary); max-height: 40vh; overflow-y: auto;
   }
+  .toast-texto { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .toast-acoes { flex-shrink: 0; display: flex; gap: 2px; }
+  .toast-bt {
+    width: 24px; height: 24px; border-radius: var(--radius-sm); border: none; cursor: pointer;
+    background: transparent; color: var(--text-muted); font-size: 13px; line-height: 1;
+  }
+  @media (hover: hover) { .toast-bt:hover { background: var(--bg-hover); color: var(--text-primary); } }
+  .toast-rotulo { font-size: var(--text-xs); font-weight: 600; color: var(--warning); text-transform: uppercase; letter-spacing: var(--label-tracking); }
+  .toast-corpo { font-size: var(--text-xs); font-family: var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
 </style>

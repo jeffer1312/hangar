@@ -395,6 +395,8 @@
   "lista_agrupar_servidor": "Server",
   "lista_agrupar_projeto": "Project",
   "sessao_fechar": "Close",
+  "toast_copiar": "Copy the error",
+  "toast_copiado": "Copied",
   "sessao_poe_stash": "puts them in the stash (recover with \"pop\" in the Git tab).",
   "sessao_sem_previa": "(no preview)",
   "board_vazio": "empty",
