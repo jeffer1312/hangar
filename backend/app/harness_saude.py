@@ -377,6 +377,9 @@ def _omp_gravar_chave(provedor: str, api_key: str) -> tuple[bool, str]:
     try:
         con = sqlite3.connect(db, timeout=5)
         try:
+            # Sem UNIQUE em provider: conferir antes, senão cada sync empilha outra linha.
+            if con.execute("select 1 from auth_credentials where provider=? limit 1", (provedor,)).fetchone():
+                return True, "ja-existe"
             con.execute("insert into auth_credentials (provider, credential_type, data) values (?, 'api_key', ?)",
                         (provedor, json.dumps({"key": api_key, "source": "manual"})))
             con.commit()
@@ -404,10 +407,12 @@ def _sincronizar(cli: str) -> str:
         else:
             try:
                 modelos = engine_probe.listar_modelos(cred["base_url"], cred["api_key"])
-            except Exception:  # noqa: BLE001 — lista de modelos é opcional
+            except Exception as e:  # noqa: BLE001 — lista de modelos é opcional
+                _log.debug("sync %s: sem modelos para %s: %r", cli, cred["nome"], e)
                 modelos = []
             r = agentes_sync.sincronizar(cred["nome"], cred["base_url"], cred["api_key"], modelos, (cli,))
-            ok, motivo = r[cli]["ok"], r[cli]["motivo"]
+            res = r.get(cli) or {"ok": False, "motivo": "alvo-desconhecido"}
+            ok, motivo = res["ok"], res["motivo"]
         # O Codex guarda só o NOME da variável de ambiente: o motivo dele diz qual exportar, e
         # esconder isso atrás de "ok" seria prometer uma chave que ele ainda não vê.
         feitos.append(f"{alvo}: {motivo if (not ok or 'exporte' in motivo) else 'ok'}")
@@ -530,7 +535,7 @@ def consertar(id_: str) -> str:
         if cfg.exists():
             raise ValueError("já configurado — /fullscreen-on na TUI")
         cfg.parent.mkdir(parents=True, exist_ok=True)
-        cfg.write_text('{\n\t"enabled": true\n}\n', encoding="utf-8")
+        oauth_codex._gravar_json(cfg, {"enabled": True})
         return "fullscreen ligado; vale nas sessões novas"
     if id_ in ("sync:pi", "sync:omp", "sync:kimi", "sync:codex"):
         return _sincronizar(id_.split(":", 1)[1])

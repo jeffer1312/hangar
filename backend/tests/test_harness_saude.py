@@ -34,9 +34,24 @@ def test_hooks_do_claude_faltando_apontam_o_conserto(tmp_path):
 
 
 def test_conserto_desconhecido_ou_caminho_arbitrario_falha_alto():
-    for id_ in ("nada", "extensoes:/tmp/qualquer"):
+    for id_ in ("nada", "extensoes:/tmp/qualquer", "sync:/tmp/qualquer", "fullscreen:../../etc", "fullscreen:kimi"):
         try:
             h.consertar(id_)
         except ValueError:
             continue
         raise AssertionError(f"{id_} não pode virar no-op nem escrever fora dos agentes")
+
+
+def test_chave_no_omp_nao_duplica(tmp_path, monkeypatch):
+    import sqlite3
+    from app import oauth_codex
+    db = tmp_path / "agent.db"
+    con = sqlite3.connect(db)
+    con.execute("create table auth_credentials (id integer primary key autoincrement, provider text not null, "
+                "credential_type text not null, data text not null, disabled_cause text, identity_key text)")
+    con.commit(); con.close()
+    monkeypatch.setattr(oauth_codex, "_omp_db", lambda home=None: db)
+    assert h._omp_gravar_chave("opencode", "k1") == (True, str(db))
+    assert h._omp_gravar_chave("opencode", "k2") == (True, "ja-existe")
+    con = sqlite3.connect(db)
+    assert con.execute("select count(*) from auth_credentials").fetchone()[0] == 1

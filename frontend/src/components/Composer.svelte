@@ -464,21 +464,27 @@
   }
 
   async function ciclarPermissao() {
-    if (permCarregando) return;
+    if (permCarregando || !permSondavel) return;
+    // Mesmo token de sequência e mesma amarra de sessão do poll (permSeq / sn): a resposta de
+    // uma sessão que saiu da tela não pode escrever o ciclo da que entrou, nem o atalho aplicar
+    // na sessão atual um modo calculado pelo ciclo da anterior.
+    const sn = sessionName;
+    const seq = ++permSeq;
     let modos = permModes;
     if (modos.length === 0) {
       permCarregando = true;
       try {
-        const res = await getPermissionModes(sessionName);
+        const res = await getPermissionModes(sn);
+        if (seq !== permSeq || sn !== sessionName) return;
         permCurrent = res.current;
         permModes = res.modes;
         permSondavel = res.sondavel;
         modos = res.modes;
       } catch (e) {
-        permError = e instanceof Error ? e.message : String(e);
+        if (seq === permSeq && sn === sessionName) permError = e instanceof Error ? e.message : String(e);
         return;
       } finally {
-        permCarregando = false;
+        if (seq === permSeq) permCarregando = false;
       }
     }
     if (modos.length === 0) return;

@@ -102,6 +102,7 @@
     avancado: m.config_modal_avancado(),
     motores: m.config_modal_motores(),
     orquestracao: m.config_modal_orquestracao(),
+    harnesses: m.harness_titulo(),
   };
 
   // Valores de rotulo vindo de funcao (m.*) dependem do locale: o `as const` nao pode mais
