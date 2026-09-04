@@ -135,6 +135,10 @@ Install the wrapper once so sessions receive stable ids and appear reliably in t
 ./scripts/install-claude-wrapper.sh
 ```
 
+On Linux/macOS, the wrapper installer also links the shared fullscreen TUI extension into Pi and
+Oh My Pi and enables it on first install. Use `/fullscreen-off` in either agent to opt out; the
+installer preserves that choice. To zoom an individual tmux pane, use `Ctrl-b z`.
+
 Start the backend on loopback:
 
 ```bash

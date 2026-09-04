@@ -424,11 +424,13 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - **As extensões de FUNCIONAMENTO da experiência Claude no Pi moram aqui** (`scripts/pi/`,
   04/09/2026): `claude-bridge.ts` (agents/commands/skills do `~/.claude` como recursos do Pi),
   `claude-todo.ts` (painel de tarefas), `claude-hooks-adapter.ts` (hooks do `settings.json` nos
-  eventos do Pi) e `git-checkpoint.ts` (`/rewind`) vieram do repo `pi-claude-bridge`, que ficou
-  só com aparência (caixa da mensagem, fullscreen, título do terminal, temas). Motivo: sem elas
-  uma sessão Pi criada pelo app não enxerga skills/agents nem roda hooks, e quem instala o Hangar
-  não deveria precisar de um segundo repo pra isso. O `install-claude-wrapper.sh` symlinka as seis
-  (`link_agent_extensions`) em `~/.pi/agent/extensions/` e `~/.omp/agent/extensions/`. Duas
+  eventos do Pi), `git-checkpoint.ts` (`/rewind`) e `fullscreen-tui.ts` (alternate screen no OMP)
+  vieram do repo `pi-claude-bridge`, que ficou só com aparência (caixa da mensagem, título do
+  terminal e temas). Motivo: sem elas uma sessão Pi criada pelo app não enxerga skills/agents nem
+  roda hooks, e quem instala o Hangar não deveria precisar de um segundo repo pra isso. O
+  `install-claude-wrapper.sh` symlinka as sete (`link_agent_extensions`) em
+  `~/.pi/agent/extensions/` e `~/.omp/agent/extensions/`. No Pi com fullscreen nativo, a extensão
+  não assume o alternate screen para evitar dupla posse; no OMP, ela liga na primeira instalação.
   regras herdadas do adapter: a allowlist embutida libera só `~/.claude/hooks/` — hook que mora
   noutro lugar entra por `~/.pi/agent/claude-hooks-adapter.json`, e `allowPatterns` ali
   **substitui** a lista, não soma; e os hooks só-Claude do próprio app (`state_hook`, `askq_capture`,

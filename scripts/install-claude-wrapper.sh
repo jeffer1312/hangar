@@ -238,40 +238,82 @@ fi
 # pane). rich-status-line.ts: desenha o rodape E publica a linha INTEIRA no sidecar que o app le —
 # o que sai no terminal ja vem cortado na largura da janela (ver "Statusline por sidecar" no
 # CLAUDE.md), entao sem ela a sessao em janela estreita fica sem contexto/cota no app.
+# fullscreen-tui.ts: troca o TUI para o alternate screen, mantendo o compositor preso na tela ao
+# rolar — equivalente ao fullscreen do Claude dentro de um terminal/tmux.
 # As MESMAS extensoes servem os dois: o omp e um fork do Pi, com a mesma API de extensao.
 link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "  $1 nao encontrado — pulando a extensao de estado (instale o $1 e rode de novo)"
+  local binario=$1 extensions_dir=$2 ext target source_ext current_target
+  if ! command -v "$binario" >/dev/null 2>&1; then
+    echo "  $binario nao encontrado — pulando a extensao de estado (instale o $binario e rode de novo)"
     return 0
   fi
-  mkdir -p "$2"
+  mkdir -p "$extensions_dir"
   # Link do nome ANTIGO (pre-rename): o alvo nao existe mais, entao ele fica pendurado e o agente
   # sobe sem a extensao — sessao "sem id", sem estado e sem previa, sem erro nenhum na tela. So
   # symlink e removido; arquivo de verdade com esse nome e do usuario.
-  [ -L "$2/cp-state.ts" ] && rm -f "$2/cp-state.ts" && echo "  removido link antigo cp-state.ts"
+  [ -L "$extensions_dir/cp-state.ts" ] && rm -f "$extensions_dir/cp-state.ts" && echo "  removido link antigo cp-state.ts"
   # Alem das duas do app, as extensoes de FUNCIONAMENTO da experiencia Claude no Pi (vieram do
   # pi-claude-bridge, que ficou so com as de aparencia): claude-bridge (agents/commands/skills do
   # ~/.claude como recursos do Pi), claude-todo (painel de tarefas), claude-hooks-adapter (hooks do
-  # settings.json nos eventos do Pi) e git-checkpoint (/rewind).
-  for ext in hangar-state rich-status-line claude-bridge claude-todo claude-hooks-adapter git-checkpoint; do
+  # settings.json nos eventos do Pi), git-checkpoint (/rewind) e fullscreen-tui (alternate screen).
+  for ext in hangar-state rich-status-line claude-bridge claude-todo claude-hooks-adapter git-checkpoint fullscreen-tui; do
+    source_ext="$SCRIPT_DIR/pi/$ext.ts"
     # Fonte ausente = link pendurado que o Pi ignora calado; melhor dizer do que fingir "linked".
-    if [ ! -f "$SCRIPT_DIR/pi/$ext.ts" ]; then
-      echo "  ⚠ $SCRIPT_DIR/pi/$ext.ts nao existe — $ext pulada (checkout incompleto?)"
+    if [ ! -f "$source_ext" ]; then
+      echo "  ⚠ $source_ext nao existe — $ext pulada (checkout incompleto?)"
       continue
     fi
-    # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
-    # sobrescrever apagaria o trabalho dele. Avisa e deixa a decisao com quem sabe o que tem la.
-    if [ -e "$2/$ext.ts" ] && [ ! -L "$2/$ext.ts" ]; then
-      echo "  ⚠ $2/$ext.ts ja existe e nao e symlink — mantido como esta."
+    target="$extensions_dir/$ext.ts"
+    if [ -L "$target" ]; then
+      current_target=$(readlink "$target")
+      if [ "$current_target" = "$source_ext" ]; then
+        echo "  linked $ext.ts into $extensions_dir (ja apontada)"
+      else
+        echo "  ⚠ $target e um symlink customizado — mantido como esta."
+        echo "    (pra usar a do repo: remova o link e rode de novo)"
+      fi
+    elif [ -e "$target" ]; then
+      echo "  ⚠ $target ja existe e nao e symlink — mantido como esta."
       echo "    (pra usar a do repo: mova a sua e rode de novo)"
     else
-      ln -sfn "$SCRIPT_DIR/pi/$ext.ts" "$2/$ext.ts"
-      echo "  linked $ext.ts into $2"
+      ln -s "$source_ext" "$target"
+      echo "  linked $ext.ts into $extensions_dir"
     fi
   done
 }
-link_agent_extensions pi  "$HOME/.pi/agent/extensions"
-link_agent_extensions omp "${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/extensions"
+
+enable_fullscreen() {  # $1 = binario, $2 = dir do agente
+  local binario=$1 agent_dir=$2 config extension expected_target current_target
+  if ! command -v "$binario" >/dev/null 2>&1; then return 0; fi
+  extension="$agent_dir/extensions/fullscreen-tui.ts"
+  expected_target="$SCRIPT_DIR/pi/fullscreen-tui.ts"
+  if [ ! -L "$extension" ]; then
+    echo "  fullscreen-tui customizado em $extension (config mantida)"
+    return 0
+  fi
+  current_target=$(readlink "$extension")
+  if [ "$current_target" != "$expected_target" ]; then
+    echo "  fullscreen-tui customizado em $extension (config mantida)"
+    return 0
+  fi
+  config="$agent_dir/fullscreen-tui.json"
+  mkdir -p "$agent_dir"
+  # O instalador liga o recurso na primeira instalação, mas nunca desfaz uma escolha explícita
+  # posterior de /fullscreen-off.
+  if [ -e "$config" ] || [ -L "$config" ]; then
+    echo "  fullscreen-tui ja configurado em $config (mantido)"
+  else
+    printf '{\n\t"enabled": true\n}\n' >"$config"
+    echo "  fullscreen-tui ativado em $config"
+  fi
+}
+
+PI_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+OMP_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
+link_agent_extensions pi  "$PI_AGENT_DIR/extensions"
+link_agent_extensions omp "$OMP_AGENT_DIR/extensions"
+enable_fullscreen pi  "$PI_AGENT_DIR"
+enable_fullscreen omp "$OMP_AGENT_DIR"
 
 # --- ponte de skills (pi/kimi/codex) -----------------------------------------------------------
 # O omp descobre as skills dos outros CLIs sozinho na largada; pi, kimi e codex nao — leem so as
