@@ -1,6 +1,7 @@
 """Rotas do painel de saúde dos harnesses (app/harness_saude.py)."""
 import asyncio
 import sqlite3
+import subprocess
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -23,6 +24,6 @@ async def consertar(id_: str) -> dict:
         feito = await asyncio.to_thread(harness_saude.consertar, id_)
     except ValueError as e:
         raise HTTPException(400, detail=erro("erro_harness_conserto", str(e), motivo=str(e)))
-    except (OSError, contas.ContaError, sqlite3.Error) as e:
+    except (OSError, contas.ContaError, sqlite3.Error, subprocess.SubprocessError) as e:
         raise HTTPException(500, detail=erro("erro_harness_conserto", str(e), motivo=str(e)))
     return {"feito": feito, "harnesses": await asyncio.to_thread(harness_saude.diagnosticar)}

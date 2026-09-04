@@ -51,7 +51,8 @@ def _versao(cli: str) -> str | None:
                                encoding="utf-8", errors="replace")
             linha = (r.stdout or r.stderr or "").strip().splitlines()
             v = linha[0].strip() if linha else ""
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as e:
+            _log.warning("harness: `%s --version` falhou: %r", cli, e)
             v = ""
     _versoes[cli] = (time.monotonic(), v)
     return v
@@ -149,7 +150,8 @@ def _tmux(args: list[str]) -> str | None:
     try:
         r = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=5,
                            encoding="utf-8", errors="replace")
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        _log.warning("harness: tmux %s falhou: %r", " ".join(args), e)
         return None
     return r.stdout.strip() if r.returncode == 0 else None
 
@@ -487,7 +489,12 @@ def consertar(id_: str) -> str:
     """Roda o conserto e devolve uma linha do que fez (saída de comando, não interface).
     Id desconhecido → ValueError."""
     if id_ == "skills":
-        stats = skill_bridge.rebuild(log=lambda *_: None)
+        # O rebuild só diz POR QUE falhou pelo log: guardá-lo é o que separa "nada a fazer" de
+        # "a ponte do kimi quebrou" — os dois davam a mesma linha de zeros.
+        linhas: list[str] = []
+        stats = skill_bridge.rebuild(log=lambda m: linhas.append(str(m)))
+        if any("erro" in v for v in stats.values()):
+            raise ValueError(" | ".join(l.strip() for l in linhas if "⚠" in l) or "rebuild falhou")
         return "; ".join(f"{k}: {v.get('criados', 0)} criados, {v.get('removidos', 0)} removidos"
                          for k, v in stats.items()) or "nada a fazer"
     if id_ == "hooks-claude":
@@ -499,7 +506,11 @@ def consertar(id_: str) -> str:
             tocados.update(fn())
         return f"{len(tocados)} config dirs gravados"
     if id_ == "hooks-kimi":
-        return "config.toml gravado" if kimi_hook_installer.ensure_kimi_hooks_installed() else "já estava"
+        # `[]` de volta é "já estava" OU "falhou" (o instalador só loga); a releitura decide.
+        gravou = kimi_hook_installer.ensure_kimi_hooks_installed()
+        if _hooks_kimi(kimi_home())["ok"] is not True:
+            raise ValueError("hooks do Kimi não ficaram instalados — ver o log do backend")
+        return "config.toml gravado" if gravou else "já estava"
     if id_ == "contas":
         avisos = []
         for nome in contas.listar():
@@ -510,7 +521,9 @@ def consertar(id_: str) -> str:
             raise ValueError("nenhum login do ChatGPT pra espalhar")
         r = oauth_codex.propagar()
         linha = "; ".join(f"{k}: {v['motivo']}" for k, v in r.items())
-        if not any(v["ok"] for v in r.values()):
+        # `nao-instalado` não é falha; qualquer outro alvo que não gravou é, mesmo com os
+        # irmãos gravados — sucesso parcial contado como feito escondia o que ficou quebrado.
+        if any(not v["ok"] and v["motivo"] != "nao-instalado" for v in r.values()):
             raise ValueError(linha)
         return linha
     if id_ == "tmux":
