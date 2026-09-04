@@ -22,6 +22,8 @@ export type NavNativo = {
     Promise<{ ok: boolean; gravados: number; falhos: number; erro?: string; detalhe?: string }>;
   /** Abre o Chrome do usuário com a porta de depuração; `ok:false` diz por quê. */
   abrirChrome?: (porta?: number) => Promise<{ ok: boolean; porta: number; motivo?: string }>;
+  /** Fecha o Chrome do usuário (restaura as abas ao voltar) e reabre com a porta. */
+  reabrirChrome?: (porta?: number) => Promise<{ ok: boolean; porta: number; motivo?: string }>;
 };
 
 export function navegadorNativo(): NavNativo | undefined {

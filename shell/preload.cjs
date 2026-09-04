@@ -34,5 +34,8 @@ contextBridge.exposeInMainWorld('hangar', {
     importCookies: (chave, host, porta, recarregar) => ipcRenderer.invoke('hangar:nav-import-cookies', { chave, host, porta, recarregar }),
     // Abre o Chrome do usuário já com a porta de depuração (quem clica não precisa saber a porta).
     abrirChrome: (porta) => ipcRenderer.invoke('hangar:chrome-abrir', { porta }),
+    // Fecha o Chrome do usuário (ele restaura as abas) e reabre com a porta — quando já estava
+    // aberto sem ela e o lançamento normal não sobe a porta.
+    reabrirChrome: (porta) => ipcRenderer.invoke('hangar:chrome-reabrir', { porta }),
   },
 });

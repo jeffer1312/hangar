@@ -521,15 +521,24 @@ const PORTA_CHROME = () => portaValida(ler(app.getPath('userData')).chromeCdpPor
 
 // Abre o Chrome do usuário (perfil normal) com a porta de depuração. Se já há um Chrome aberto
 // SEM a porta, o Chrome reaproveita o processo e a porta nunca sobe: o resultado diz isso.
-ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
-  const p = portaValida(porta) || PORTA_CHROME();
+async function portaResponde(p, tentativas = 12) {
+  for (let i = 0; i < tentativas; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const r = await fetch(`http://127.0.0.1:${p}/json/version`, { signal: AbortSignal.timeout(800) });
+      if (r.ok) return true;
+    } catch { /* ainda subindo */ }
+  }
+  return false;
+}
+
+async function lancarChrome(p) {
   const { spawn } = require('child_process');
   const candidatos = process.platform === 'win32'
     ? ['chrome', 'msedge']
     : process.platform === 'darwin'
       ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 'google-chrome']
       : ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'brave'];
-  let aberto = false;
   for (const bin of candidatos) {
     // ENOENT chega pelo evento `error`, não por exceção: esperar `spawn` é o que separa
     // "sem Chrome instalado" de "Chrome já aberto sem a porta".
@@ -540,16 +549,48 @@ ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
       ch.once('error', () => res(false));
       setTimeout(() => res(false), 1500);
     });
-    if (nasceu) { ch.unref(); aberto = true; break; }
+    if (nasceu) { ch.unref(); return true; }
   }
-  if (!aberto) return { ok: false, porta: p, motivo: 'sem_binario' };
-  for (let i = 0; i < 12; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    try {
-      const r = await fetch(`http://127.0.0.1:${p}/json/version`, { signal: AbortSignal.timeout(800) });
-      if (r.ok) return { ok: true, porta: p };
-    } catch { /* ainda subindo */ }
+  return false;
+}
+
+// Pids do Chrome DO USUÁRIO (processo principal: sem `--type=`), fora os headless de automação
+// (perfil em pasta temporária). É o que precisa morrer pra porta subir: fechar as janelas não
+// basta, o Chrome fica rodando em segundo plano e reaproveita o processo no próximo lançamento.
+function pidsDoChromeDoUsuario() {
+  const { execSync } = require('child_process');
+  try {
+    if (process.platform === 'win32') return [];   // lá o taskkill por nome resolve
+    const linhas = execSync('ps -eo pid=,args=', { encoding: 'utf8' }).split('\n');
+    return linhas
+      .filter((l) => /(chrome|chromium|brave)( |$)/i.test(l) && !/--type=/.test(l) && !/crashpad/.test(l)
+        && !/--headless/.test(l) && !/user-data-dir=\/tmp/.test(l) && !/electron/.test(l))
+      .map((l) => parseInt(l.trim().split(/\s+/)[0], 10))
+      .filter((n) => Number.isInteger(n) && n !== process.pid);
+  } catch { return []; }
+}
+
+ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
+  const p = portaValida(porta) || PORTA_CHROME();
+  if (!(await lancarChrome(p))) return { ok: false, porta: p, motivo: 'sem_binario' };
+  if (await portaResponde(p)) return { ok: true, porta: p };
+  return { ok: false, porta: p, motivo: 'ja_aberto_sem_porta' };
+});
+
+// Fecha o Chrome do usuário (SIGTERM: o Chrome grava a sessão e oferece "restaurar" ao voltar)
+// e relança com a porta. É o único caminho quando ele já está rodando sem a porta.
+ipcMain.handle('hangar:chrome-reabrir', async (_ev, { porta } = {}) => {
+  const p = portaValida(porta) || PORTA_CHROME();
+  const { execSync } = require('child_process');
+  if (process.platform === 'win32') {
+    try { execSync('taskkill /IM chrome.exe', { stdio: 'ignore' }); } catch { /* já fechado */ }
+  } else {
+    for (const pid of pidsDoChromeDoUsuario()) { try { process.kill(pid, 'SIGTERM'); } catch { /* já saiu */ } }
   }
+  for (let i = 0; i < 20 && pidsDoChromeDoUsuario().length; i++) await new Promise((r) => setTimeout(r, 500));
+  if (pidsDoChromeDoUsuario().length) return { ok: false, porta: p, motivo: 'nao_fechou' };
+  if (!(await lancarChrome(p))) return { ok: false, porta: p, motivo: 'sem_binario' };
+  if (await portaResponde(p, 20)) return { ok: true, porta: p };
   return { ok: false, porta: p, motivo: 'ja_aberto_sem_porta' };
 });
 

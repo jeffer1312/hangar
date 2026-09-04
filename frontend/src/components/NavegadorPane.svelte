@@ -108,15 +108,21 @@
   // subindo, a importação roda de novo sozinha. Chrome já aberto sem a porta reaproveita o
   // processo e a porta não sobe — aí o texto diz pra fechar e clicar de novo.
   let ofereceAbrir = $state(false);
+  // Chrome já rodando sem a porta (fechar as janelas não basta, ele fica em segundo plano): o
+  // segundo botão fecha o processo dele — o Chrome restaura as abas — e reabre com a porta.
+  let ofereceReabrir = $state(false);
   let abrindo = $state(false);
-  async function abrirChrome() {
-    if (!nativo?.abrirChrome) return;
+  async function abrirChrome(reabrir = false) {
+    const fn = reabrir ? nativo?.reabrirChrome : nativo?.abrirChrome;
+    if (!fn) return;
     abrindo = true;
     cookiesStatus = m.nav_cookies_abrindo_chrome();
     try {
-      const r = await nativo.abrirChrome();
-      if (r.ok) { ofereceAbrir = false; chromeFechado = false; await importarCookies(aberta, true); }
-      else cookiesStatus = r.motivo === 'sem_binario' ? m.nav_cookies_sem_chrome() : m.nav_cookies_chrome_sem_porta();
+      const r = await fn();
+      if (r.ok) { ofereceAbrir = false; ofereceReabrir = false; chromeFechado = false; await importarCookies(aberta, true); }
+      else if (r.motivo === 'sem_binario') { cookiesStatus = m.nav_cookies_sem_chrome(); ofereceAbrir = false; }
+      else if (r.motivo === 'nao_fechou') cookiesStatus = m.nav_cookies_nao_fechou();
+      else { cookiesStatus = m.nav_cookies_chrome_sem_porta(); ofereceAbrir = false; ofereceReabrir = !!nativo?.reabrirChrome; }
     } catch (e) {
       cookiesStatus = m.nav_cookies_erro({ e: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -219,7 +225,10 @@
     <p class="nav-status" role="status">
       {cookiesStatus}
       {#if ofereceAbrir}
-        <button type="button" class="nav-abrir-chrome" onclick={abrirChrome} disabled={abrindo}>{m.nav_cookies_abrir_chrome()}</button>
+        <button type="button" class="nav-abrir-chrome" onclick={() => abrirChrome(false)} disabled={abrindo}>{m.nav_cookies_abrir_chrome()}</button>
+      {/if}
+      {#if ofereceReabrir}
+        <button type="button" class="nav-abrir-chrome" onclick={() => abrirChrome(true)} disabled={abrindo}>{m.nav_cookies_reabrir_chrome()}</button>
       {/if}
     </p>
   {/if}
