@@ -26,6 +26,7 @@
       "navegador.cjs",
       "settings.cjs",
       "preview_fmt.cjs",
+      "preview_ctl.cjs",
       "package.json"
     ],
     "linux": {
