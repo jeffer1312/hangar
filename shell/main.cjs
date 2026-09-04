@@ -557,16 +557,30 @@ async function lancarChrome(p) {
 // Pids do Chrome DO USUÁRIO (processo principal: sem `--type=`), fora os headless de automação
 // (perfil em pasta temporária). É o que precisa morrer pra porta subir: fechar as janelas não
 // basta, o Chrome fica rodando em segundo plano e reaproveita o processo no próximo lançamento.
-function pidsDoChromeDoUsuario() {
-  const { execSync } = require('child_process');
+async function pidsDoChromeDoUsuario() {
+  const { execFile } = require('child_process');
   try {
-    if (process.platform === 'win32') return [];   // lá o taskkill por nome resolve
-    const linhas = execSync('ps -eo pid=,args=', { encoding: 'utf8' }).split('\n');
-    return linhas
-      .filter((l) => /(chrome|chromium|brave)( |$)/i.test(l) && !/--type=/.test(l) && !/crashpad/.test(l)
-        && !/--headless/.test(l) && !/user-data-dir=\/tmp/.test(l) && !/electron/.test(l))
-      .map((l) => parseInt(l.trim().split(/\s+/)[0], 10))
-      .filter((n) => Number.isInteger(n) && n !== process.pid);
+    if (process.platform === 'win32') {
+      // `tasklist` em CSV: "chrome.exe","1234",... — só o nome do binário interessa.
+      const out = await new Promise((res, rej) => execFile('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8' },
+        (e, so) => (e ? rej(e) : res(so))));
+      return out.split('\n').filter((l) => /^"(chrome|msedge)\.exe"/i.test(l))
+        .map((l) => parseInt(l.split('","')[1], 10)).filter(Number.isInteger);
+    }
+    // `-o pid,uid,args` sem cabeçalho e SÓ do usuário atual: `ps -e` lista todo mundo, e matar o
+    // Chrome de outra pessoa na mesma máquina era EPERM engolido que parecia "fechou".
+    const out = await new Promise((res, rej) => execFile('ps', ['-eo', 'pid=,uid=,args='], { encoding: 'utf8' },
+      (e, so) => (e ? rej(e) : res(so))));
+    const meuUid = process.getuid();
+    return out.split('\n').map((l) => l.trim().split(/\s+/)).filter((c) => c.length >= 3).filter((c) => {
+      const [pid, uid, bin, ...args] = c;
+      const nome = bin.split('/').pop().toLowerCase();
+      const linha = args.join(' ');
+      // Basename do BINÁRIO, não a linha inteira: `python chrome_report.py` não é o Chrome.
+      return +uid === meuUid && +pid !== process.pid
+        && /^(chrome|google-chrome(-stable)?|chromium(-browser)?|brave(-browser)?)$/.test(nome)
+        && !/--type=/.test(linha) && !/--headless/.test(linha) && !/user-data-dir=\/tmp/.test(linha);
+    }).map((c) => +c[0]);
   } catch { return []; }
 }
 
@@ -581,14 +595,17 @@ ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
 // e relança com a porta. É o único caminho quando ele já está rodando sem a porta.
 ipcMain.handle('hangar:chrome-reabrir', async (_ev, { porta } = {}) => {
   const p = portaValida(porta) || PORTA_CHROME();
-  const { execSync } = require('child_process');
+  const { execFile } = require('child_process');
   if (process.platform === 'win32') {
-    try { execSync('taskkill /IM chrome.exe', { stdio: 'ignore' }); } catch { /* já fechado */ }
+    // Com `/F`: sem ele o Chrome em segundo plano ignora o WM_CLOSE e nada fecha.
+    await new Promise((res) => execFile('taskkill', ['/F', '/IM', 'chrome.exe'], () => res()));
   } else {
-    for (const pid of pidsDoChromeDoUsuario()) { try { process.kill(pid, 'SIGTERM'); } catch { /* já saiu */ } }
+    for (const pid of await pidsDoChromeDoUsuario()) {
+      try { process.kill(pid, 'SIGTERM'); } catch (e) { if (e.code !== 'ESRCH') console.warn('chrome-reabrir: kill', pid, e.code); }
+    }
   }
-  for (let i = 0; i < 20 && pidsDoChromeDoUsuario().length; i++) await new Promise((r) => setTimeout(r, 500));
-  if (pidsDoChromeDoUsuario().length) return { ok: false, porta: p, motivo: 'nao_fechou' };
+  for (let i = 0; i < 20 && (await pidsDoChromeDoUsuario()).length; i++) await new Promise((r) => setTimeout(r, 500));
+  if ((await pidsDoChromeDoUsuario()).length) return { ok: false, porta: p, motivo: 'nao_fechou' };
   if (!(await lancarChrome(p))) return { ok: false, porta: p, motivo: 'sem_binario' };
   if (await portaResponde(p, 20)) return { ok: true, porta: p };
   return { ok: false, porta: p, motivo: 'ja_aberto_sem_porta' };
