@@ -464,7 +464,10 @@ describe('Sidebar — trilho original no modo rail', () => {
     const t = montar();
     await tick();
     expect(document.querySelector('.sess-main')!.getAttribute('aria-label')).toBe('hangar · Servidor A · em execução');
-    expect(document.querySelector('.initials')!.classList.contains('busy')).toBe(true);
+    // O estado saiu do anel das iniciais e virou marca própria no canto: trabalhando é a marca
+    // animada, o resto é o ponto.
+    expect(document.querySelector('.estado-marca')).not.toBeNull();
+    expect(document.querySelector('.estado-ponto')).toBeNull();
     unmount(t.comp);
   });
 
@@ -475,7 +478,10 @@ describe('Sidebar — trilho original no modo rail', () => {
     const t = montar();
     await tick();
     expect(document.querySelector('.sess-main')!.getAttribute('aria-label')).toBe('hangar · Servidor A · pode estar travada');
-    expect(document.querySelector('.initials')!.classList.contains('stalled')).toBe(true);
+    const ponto = document.querySelector<HTMLElement>('.estado-ponto')!;
+    expect(ponto).not.toBeNull();
+    expect(ponto.getAttribute('style')).toContain('--warning');
+    expect(document.querySelector('.estado-marca')).toBeNull();
     unmount(t.comp);
   });
 
