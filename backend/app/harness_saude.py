@@ -126,6 +126,23 @@ def _contas_claude() -> dict:
     return _item("contas", True, "contas_ok", "contas", n=len(nomes), lista=", ".join(nomes))
 
 
+def _plugins_claude() -> dict:
+    """Plugins ligados no settings.json do compartilhado, conferidos contra o installed_plugins.json
+    e a pasta de cada um — a mesma checagem que a reconciliação de conta faz."""
+    try:
+        ligados = json.loads((contas.compartilhado() / "settings.json").read_text(encoding="utf-8")).get("enabledPlugins") or {}
+    except (OSError, ValueError, AttributeError):
+        return _item("plugins", None, "config_ilegivel")
+    nomes = sorted(n.split("@", 1)[0] for n, on in ligados.items() if on)
+    try:
+        avisos = contas._conferir_plugins(contas.compartilhado())
+    except contas.ContaError:
+        return _item("plugins", None, "config_ilegivel")
+    if avisos:
+        return _item("plugins", False, "plugins_com_problema", n=len(avisos), lista="; ".join(avisos))
+    return _item("plugins", True, "plugins_ok", n=len(nomes), lista=", ".join(nomes))
+
+
 def _hooks_kimi(home: Path) -> dict:
     cfg = home / "config.toml"
     try:
@@ -156,7 +173,7 @@ def diagnosticar() -> list[dict]:
     hooks = (next((i for i in itens if i["ok"] is False), None) or next((i for i in itens if i["ok"] is None), None)
              or (itens[0] if itens else _item("hooks", None, "nenhuma_conta")))
     saida.append({"id": "claude", "nome": "Claude Code", "instalado": v is not None, "versao": v,
-                  "itens": [hooks, _contas_claude()]})
+                  "itens": [hooks, _plugins_claude(), _contas_claude()]})
 
     v = _versao("codex")
     d = home / ".codex"

@@ -84,6 +84,32 @@ const CONFIG_PATH = join(AGENT_DIR, "rich-status-line.json");
 const PI_AUTH_PATH = join(AGENT_DIR, "auth.json");
 const PI_MODELS_PATH = join(AGENT_DIR, "models.json");
 
+// As credenciais no formato do auth.json do Pi (`{ provider: { type, access|key, ... } }`). No omp
+// não existe auth.json — o cofre é a tabela `auth_credentials` do agent.db (SQLite), com o `type`
+// numa coluna e o resto em `data`. Sem esta leitura o chip de cota (⚡5h/📅7d) nunca aparecia no omp.
+function lerAuth(): Record<string, any> {
+	try {
+		return JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+	} catch {}
+	if (!EH_OMP) return {};
+	try {
+		const { Database } = require("bun:sqlite");
+		const db = new Database(join(AGENT_DIR, "agent.db"), { readonly: true });
+		try {
+			const linhas = db
+				.query("select provider, credential_type, data from auth_credentials where disabled_cause is null")
+				.all() as { provider: string; credential_type: string; data: string }[];
+			const auth: Record<string, any> = {};
+			for (const l of linhas) auth[l.provider] = { type: l.credential_type, ...JSON.parse(l.data) };
+			return auth;
+		} finally {
+			db.close();
+		}
+	} catch {
+		return {};
+	}
+}
+
 // Tema identidade pra montar a linha fora do render: toda chamada de tema neste arquivo é
 // `theme.fg(cor, texto)`, e o sidecar quer o texto puro (o `cpPublishStatus` tira ANSI de qualquer
 // jeito).
@@ -142,7 +168,7 @@ function codexUsageSummary(): string {
 		return codexUsageCache.text;
 	}
 	try {
-		const auth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+		const auth = lerAuth();
 		const token = auth?.["openai-codex"]?.access;
 		if (!token) return "";
 		const body = execFileSync(
@@ -257,7 +283,7 @@ function kimiTokenFor(providerName: string | undefined): string {
 	} catch {}
 	if (providerName === "kimi-coding") {
 		try {
-			const auth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+			const auth = lerAuth();
 			return auth?.["kimi-coding"]?.access ?? auth?.["kimi-coding"]?.key ?? "";
 		} catch {}
 	}
@@ -454,7 +480,7 @@ function clineUsageSummary(): string {
 	}
 
 	try {
-		const auth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+		const auth = lerAuth();
 		const token =
 			auth?.clinepass?.access ??
 			auth?.clinepass?.key ??

@@ -64,6 +64,8 @@
     nenhuma_conta: () => m.harness_nenhuma_conta(),
     so_conta_padrao: () => m.harness_so_conta_padrao(),
     contas_ok: (p) => m.harness_contas_ok({ n: p.n ?? '', lista: p.lista ?? '' }),
+    plugins_ok: (p) => m.harness_plugins_ok({ n: p.n ?? '', lista: p.lista ?? '' }),
+    plugins_com_problema: (p) => m.harness_plugins_com_problema({ n: p.n ?? '', lista: p.lista ?? '' }),
     login_ok: () => m.harness_login_ok(),
     sem_login: () => m.harness_sem_login(),
     sem_login_com_cofre: () => m.harness_sem_login_com_cofre(),
@@ -72,6 +74,7 @@
   };
   const ROTULOS: Record<string, () => string> = {
     hooks: m.harness_item_hooks, contas: m.harness_item_contas, login: m.harness_item_login,
+    plugins: m.harness_item_plugins,
     skills: m.harness_item_skills, extensoes: m.harness_item_extensoes, statusline: m.harness_item_statusline,
   };
   function texto(i: ItemHarness): string { return (TEXTOS[i.codigo] ?? (() => i.codigo))(i.params); }
