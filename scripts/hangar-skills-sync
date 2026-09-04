@@ -14,5 +14,8 @@ set -u
 alvo=$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")
 ponte=$(dirname "$alvo")/../backend/app/skill_bridge.py
 
-[ -f "$ponte" ] && python3 "$ponte" --quiet >/dev/null 2>&1
+# stdout no lixo (o --quiet ja nao fala), mas o stderr vai pra um arquivo: engolir os dois deixava
+# este o unico caminho da ponte sem rastro NENHUM — python3 fora do PATH ou a ponte quebrando
+# sumiam sem deixar nada, e a pessoa so notava dias depois que uma skill nova nao aparecia no pi.
+[ -f "$ponte" ] && python3 "$ponte" --quiet >/dev/null 2>>"${TMPDIR:-/tmp}/hangar-skills-sync.err"
 exit 0

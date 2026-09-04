@@ -1476,7 +1476,14 @@ class SessionRegistry:
         if provider in ("pi", "kimi", "codex"):
             try:
                 from app import skill_bridge
-                skill_bridge.rebuild(log=lambda _m: None)
+                # Silencioso no caso comum (nada mudou) e falante quando MEXEU: sem a segunda
+                # metade, "a ponte rodou e achou pouco" e "a ponte nem rodou" voltam a ser o mesmo
+                # silencio no diario — que foi a duvida que sobrou quando 67 skills sumiram.
+                stats = skill_bridge.rebuild(log=lambda _m: None)
+                mexeu = {n: s for n, s in stats.items()
+                         if any(s.get(k) for k in ("criados", "trocados", "removidos", "erro"))}
+                if mexeu:
+                    _log.info("ponte de skills antes de criar %s: %s", name, mexeu)
             except Exception:                          # noqa: BLE001
                 _log.warning("ponte de skills falhou antes de criar %s", name, exc_info=True)
         # Unicidade contra tmux (Claude) E sidecars Codex: sem o segundo check, um nome de sessao

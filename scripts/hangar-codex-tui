@@ -151,7 +151,14 @@ def main() -> int:
     # caminho de abrir o agente, nunca motivo pra ele nao abrir.
     try:
         from app import skill_bridge
-        skill_bridge.rebuild(log=lambda _m: None)
+        # Calado quando nada mudou: este stderr e o pane que a pessoa esta olhando, e uma linha
+        # por harness a cada abertura de Codex seria ruido. Quando a ponte MEXEU, ela fala — sem
+        # isso nao ha como saber depois se ela rodou.
+        stats = skill_bridge.rebuild(log=lambda _m: None)
+        mexeu = {n: s for n, s in stats.items()
+                 if any(s.get(k) for k in ("criados", "trocados", "removidos", "erro"))}
+        if mexeu:
+            print(f"hangar-codex-tui: ponte de skills atualizada: {mexeu}", file=sys.stderr)
     except Exception as exc:                          # noqa: BLE001
         print(f"hangar-codex-tui: ponte de skills falhou ({exc}); a sessao abre assim mesmo",
               file=sys.stderr)

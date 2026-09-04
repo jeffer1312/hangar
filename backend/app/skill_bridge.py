@@ -196,7 +196,15 @@ def _rebuild_um(nome: str, ponte: Path, fontes: dict[str, Path], raizes: tuple[s
         if quer is None or not entrada.exists():
             st["removidos"] += 1
             if not dry_run:
-                entrada.unlink()
+                # Dois rebuilds concorrentes (cada abertura de pi/kimi/codex dispara um, e o
+                # `orquestrar` abre várias sessões de uma vez) decidem remover a MESMA entrada
+                # obsoleta; o segundo unlink chega num arquivo que já não está lá. Isso não é
+                # falha — é o outro processo tendo feito o mesmo trabalho —, e sem esta guarda
+                # virava `{"erro": 1}` naquele harness mais um aviso no log a cada colisão.
+                try:
+                    entrada.unlink()
+                except FileNotFoundError:
+                    pass
             # Fora do snapshot em qualquer modo: o laço de criação abaixo recria no MESMO run
             # quando a skill existe noutra fonte (remover sem recriar deixava a skill fora das
             # pontes até o próximo rebuild).

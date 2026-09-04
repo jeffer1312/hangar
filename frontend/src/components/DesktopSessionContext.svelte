@@ -7,7 +7,6 @@
   // `navChave` muda. Foi o que derrubou a primeira tentativa, feita com onMount/onDestroy — ela
   // nunca reexecutava, e a aba continuava se perdendo.
   const ABA_POR_SESSAO = new Map<string, 'contexto' | 'arquivos' | 'navegador'>();
-  let chaveVista: string | null = null;
 </script>
 
 <script lang="ts">
@@ -119,6 +118,12 @@ import * as m from '../paraglide/messages';
   // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
   // botão da fileira ou o agente via hangar-preview open).
   const temNav = $derived(navChave in navegadorPanel.abertos);
+  // Qual sessão este painel já viu. Por INSTÂNCIA, não no módulo: hoje só existe um painel montado
+  // por vez (no split os Chat extras não recebem showContextPanel, e o overlay é ramo `:else if`),
+  // mas com a marca no módulo dois painéis vivos brigariam — um deles nunca casaria a chave e
+  // ficaria forçando a própria aba por cima da do irmão. O Map continua no módulo de propósito: ele
+  // é a memória por sessão, e é ela que precisa sobreviver a uma remontagem.
+  let chaveVista: string | null = null;
   // Mesma sessão: a aba de agora é a escolha dela, guarda. Sessão nova: devolve a aba em que ela
   // estava. Lê as duas coisas no topo de propósito — o efeito precisa acordar tanto na troca de
   // sessão quanto no clique de aba, e ler só dentro de um ramo perderia uma das duas.
