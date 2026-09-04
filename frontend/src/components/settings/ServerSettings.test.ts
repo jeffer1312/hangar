@@ -14,9 +14,14 @@ import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
 vi.mock('../../lib/api', () => ({
   listarVozesTts: vi.fn(async () => []),
   saldoTts: vi.fn(async () => ({ usados: 0, limite: 0 })),
+  getPushSettings: vi.fn(() => new Promise(() => {})),
+  getPushSettingsForServer: vi.fn(() => new Promise(() => {})),
+  setQuietHours: vi.fn(),
+  setQuietHoursForServer: vi.fn(),
 }));
 vi.mock('../../lib/ttsPlayer.svelte', () => ({ ttsPlayer: { tocando: false, parar: vi.fn() } }));
 vi.mock('../../lib/ouvir', () => ({ ouvirAmostra: vi.fn() }));
+vi.mock('../../lib/push', () => ({ enablePush: vi.fn(), pushSupported: () => true }));
 
 /** Store de mentira com UM campo reativo: o `scan_roots` é a string "a,b" (mesmo formato do
  *  CP_SCAN_ROOTS) e o `setRascunho` a reescreve, que é o que a tela faz de verdade. `criarProps`
@@ -153,5 +158,27 @@ describe('ServerSettings — Pastas mapeadas e o seletor nativo', () => {
     expect(t.estado.valor).toBe('/home/voce/projetos,/srv/outra');
     expect(input.value).toBe('');
     unmount(t.comp);
+  });
+});
+
+describe('ServerSettings — notificações', () => {
+  it('a seção Notificações traz o push e as horas silenciosas', async () => {
+    const alvo = document.createElement('div');
+    document.body.appendChild(alvo);
+    const app = mount(ServerSettings, { target: alvo, props: { store: criarStore('').store, secao: 'notificacoes', apiTarget: null } });
+    await tick();
+    expect(alvo.textContent).toContain(m.notif_push_legenda());
+    unmount(app);
+    alvo.remove();
+  });
+
+  it('o Avançado não traz o push', async () => {
+    const alvo = document.createElement('div');
+    document.body.appendChild(alvo);
+    const app = mount(ServerSettings, { target: alvo, props: { store: criarStore('').store, secao: 'avancado' } });
+    await tick();
+    expect(alvo.textContent).not.toContain(m.notif_push_legenda());
+    unmount(app);
+    alvo.remove();
   });
 });

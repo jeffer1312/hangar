@@ -5,10 +5,8 @@
   import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeer,
            type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
-  import { pushSupported } from '../../lib/push';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
-  import PushQuiet from '../PushQuiet.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import QrScanner from '../QrScanner.svelte';
   import type { RemovalSnapshot, Server } from '../../lib/auth';
@@ -174,12 +172,6 @@
       logoutInFlight = false;
     }
   }
-
-  const pushTarget = $derived(
-    !resolvedServer ? { mode: 'unavailable' } as const
-    : apiTarget ? { mode: 'server', server: apiTarget } as const
-    : { mode: 'global' } as const,
-  );
 
   // ── Seções da Task 5: identificador desta máquina + máquinas que este servidor alcança ───────
   // O backend/peers.json (lido também pelo hangar-send) guarda id -> {base_url, token}; a rota
@@ -427,21 +419,6 @@
   onRemove={abrirRemocao}
   onAdd={() => { showAdd = true; addUrlText = ''; addError = ''; }}
 />
-
-{#if pushSupported()}
-  <div class="ss-sep"></div>
-  <!-- Bloco de natureza MISTA, e por isso a legenda existe: ativar o push é do aparelho (assina o
-       navegador e registra em todos os servidores de uma vez), as horas silenciosas são do servidor
-       escolhido acima. Sem dizer isso, a tela deixava as duas parecendo a mesma coisa. -->
-  <p class="ss-secao">{m.config_modal_notificacoes()}</p>
-  <p class="ss-legenda">
-    {m.config_servidores_push_1()} {resolvedServer ? m.config_modal_em({ nome: resolvedServer.label }) : m.config_servidores_push_global()}{m.comum_ponto()}
-  </p>
-  <PushQuiet target={pushTarget} open={true} />
-{:else}
-  <div class="ss-sep"></div>
-  <p class="ss-muted">{m.config_servidores_sem_push()}</p>
-{/if}
 
 <div class="ss-sep"></div>
 <!-- Fronteira explícita: daqui pra baixo NADA vai pro servidor escolhido acima. Reconectar refaz as

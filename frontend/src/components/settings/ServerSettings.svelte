@@ -2,6 +2,10 @@
   import type { ConfigServidorStore } from '../../lib/serverConfig.svelte';
   import { criarSeletorNativo } from '../../lib/pastaNativa.svelte';
   import LinhaConfig from './LinhaConfig.svelte';
+  import type { Server } from '../../lib/auth';
+  import PushQuiet from '../PushQuiet.svelte';
+  import { pushSupported } from '../../lib/push';
+  import type { PushTarget } from '../../lib/quietHours';
   import * as m from '../../paraglide/messages';
 
   // Configuração do servidor pelo app. Até aqui tudo vinha só de env/.env: pra mudar a chave da
@@ -14,8 +18,12 @@
     store: ConfigServidorStore;
     /** Qual fatia mostrar. O ESTADO e um so, compartilhado pelas tres. */
     secao: 'notificacoes' | 'anexos' | 'avancado';
+    // Só a seção notificacoes lê: onde as horas silenciosas são gravadas. null = servidor ativo.
+    apiTarget?: Server | null;
   }
-  let { store, secao }: Props = $props();
+  let { store, secao, apiTarget = null }: Props = $props();
+
+  const pushTarget = $derived<PushTarget>(apiTarget ? { mode: 'server', server: apiTarget } : { mode: 'global' });
 
   const TITULOS: Record<Props['secao'], string> = {
     notificacoes: m.config_modal_notificacoes(),
@@ -168,6 +176,17 @@
   {#if store.erro && Object.keys(store.campos).length}<p class="aviso erro">{store.erro}</p>{/if}
 </div>
 
+{#if secao === 'notificacoes'}
+  <div class="cfg push">
+    {#if pushSupported()}
+      <p class="ajuda">{m.notif_push_legenda()}</p>
+      <PushQuiet target={pushTarget} open={true} />
+    {:else}
+      <p class="aviso">{m.config_servidores_sem_push()}</p>
+    {/if}
+  </div>
+{/if}
+
 <!-- O rascunho e UM so pras tres fatias, entao Salvar grava tudo que foi mexido, inclusive fora
      desta tela. E o unico significado honesto: com rascunho compartilhado, um Salvar que gravasse so
      a propria fatia faria o MESMO botao significar coisas diferentes conforme a tela.
@@ -189,6 +208,9 @@
   /* O respiro de baixo é a altura do rodapé grudado: sem ele o último campo fica escondido atrás
      do botão Salvar, e a pessoa nem sabe que ele existe. */
   .cfg.com-rodape { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
+  /* Bloco de push é um `.cfg` próprio (mesmo respiro lateral), sem repetir o padding-top que já
+     veio do bloco de campos acima dele. */
+  .push { padding-top: 0; }
   .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
   .cfg-head .sub { margin: 2px 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted); }
 

@@ -372,7 +372,7 @@
   {:else if telaAtual === 'voz'}
     <VozSettings {store} />
   {:else}
-    <ServerSettings {store} secao={telaAtual} />
+    <ServerSettings {store} secao={telaAtual} apiTarget={alvo} />
   {/if}
 {/snippet}
 
