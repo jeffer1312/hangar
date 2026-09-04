@@ -5825,7 +5825,8 @@ def navegador_da_sessao(name: str):
         for arq in pasta.glob("*.json"):
             try:
                 sc = json.loads(arq.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except (OSError, ValueError) as e:
+                _log.warning("sidecar de navegador ilegivel %s: %s", arq, e)
                 continue
             chave = sc.get("chave", "") if isinstance(sc, dict) else ""
             if chave == name or chave.endswith(f"::{name}"):

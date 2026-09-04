@@ -23,9 +23,9 @@ import * as m from '../paraglide/messages';
       const u = (await getNavegadorDaSessao(sessionName)).url;
       if (!u) return;
       const p = new URL(u);
-      if (!['localhost', '127.0.0.1'].includes(p.hostname)) return;
+      if (!['localhost', '127.0.0.1', '[::1]'].includes(p.hostname)) return;
       navUrl = u;
-      navPorta = p.port ? Number(p.port) : 80;
+      navPorta = p.port ? Number(p.port) : (p.protocol === 'https:' ? 443 : 80);
       navPath = p.pathname + p.search + p.hash;
     } catch { /* sem navegador ou fora do app desktop */ }
   }
