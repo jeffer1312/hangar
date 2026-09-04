@@ -13,7 +13,8 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
   let fila = Promise.resolve();
   let refs = new Map();
   let temaAtual = 'sistema';
-  let ultimaRede = 0;
+  let ultimaRede = Date.now();
+  let requisicoesEmVoo = 0;
   const console_ = [];
   const rede = [];
 
@@ -27,9 +28,16 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
     guardar(console_, `${p.type}: ${texto}`, TETO_CONSOLE);
   });
   dbg.on('Log.entryAdded', (_e, p) => guardar(console_, `${p.entry.level}: ${p.entry.text}`, TETO_CONSOLE));
+  dbg.on('Network.requestWillBeSent', (_e, _p) => {
+    requisicoesEmVoo++;
+  });
   dbg.on('Network.responseReceived', (_e, p) => {
+    requisicoesEmVoo = Math.max(0, requisicoesEmVoo - 1);
     ultimaRede = Date.now();   // alimenta o `wait --idle` da Task 4
     guardar(rede, `${p.response.status} ${p.response.url}`, TETO_REDE);
+  });
+  dbg.on('Network.loadingFailed', (_e, _p) => {
+    requisicoesEmVoo = Math.max(0, requisicoesEmVoo - 1);
   });
 
   async function aplicarTema() {
@@ -158,21 +166,28 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
           const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.body.innerText', returnByValue: true });
           return String(r.result && r.result.value).includes(args[1]);
         }
-        // `--idle` é REDE parada, não `readyState`. O readyState vira 'complete' quase no ato da
-        // navegação e não diz nada sobre o fetch que ainda vai popular a tela — quem trocasse
-        // `sleep` por `wait --idle` continuaria adivinhando, que é a queixa que este verbo existe
-        // pra matar. O carimbo vem do mesmo buffer de rede que o controlador já mantém.
+        // `--idle` é REDE parada (contador zero + 500ms sem resposta) + readyState complete.
+        // readyState vira 'complete' quase no ato da navegação e não diz nada sobre fetch que
+        // ainda vai popular a tela. Contador de requisição detecta SPA com fetch novo em voo.
         if (alvo === '--idle') {
-          return Date.now() - ultimaRede > 500 && (await (async () => {
-            const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.readyState', returnByValue: true });
-            return r.result && r.result.value === 'complete';
-          })());
+          if (requisicoesEmVoo > 0) return false;
+          if (Date.now() - ultimaRede <= 500) return false;
+          const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.readyState', returnByValue: true });
+          return r.result && r.result.value === 'complete';
         }
         return false;
       };
       while (Date.now() < limite) {
-        if (await cheque()) return `ok: wait ${args.join(' ')}`;
-        await new Promise((r) => setTimeout(r, 120));
+        const tempoRestante = limite - Date.now();
+        if (tempoRestante <= 0) break;
+        // Protege `cheque()` contra penduração: teto é o menor entre 100ms e tempo restante
+        const tetoChecagem = Math.min(100, tempoRestante);
+        const checagemComTeto = new Promise((r) => setTimeout(() => r(false), tetoChecagem));
+        const resultado = await Promise.race([cheque(), checagemComTeto]);
+        if (resultado) return `ok: wait ${args.join(' ')}`;
+        // Intervalo entre checagens: usar tempo restante se for menor
+        const intervalo = Math.min(120, limite - Date.now());
+        if (intervalo > 0) await new Promise((r) => setTimeout(r, intervalo));
       }
       return `erro: wait ${args.join(' ')} nao aconteceu em ${tetoEspera}ms`;
     },

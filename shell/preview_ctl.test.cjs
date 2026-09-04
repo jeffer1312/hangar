@@ -235,3 +235,49 @@ test('wait estoura o teto e devolve erro em vez de travar', async () => {
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {}, tetoEspera: 60 });
   assert.match(await ctl.esperar(['--text', 'nunca']), /^erro: wait --text nunca nao aconteceu/);
 });
+
+test('wait protege contra sendCommand pendurado — devolve erro dentro do teto', async () => {
+  const dbg = dubleDbg();
+  dbg.sendCommand = async (m) => {
+    if (m === 'Runtime.evaluate') {
+      await new Promise(() => {}); // nunca resolve
+    }
+    return {};
+  };
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {}, tetoEspera: 80 });
+  const inicio = Date.now();
+  const saida = await ctl.esperar(['--text', 'nunca']);
+  const decorrido = Date.now() - inicio;
+  assert.match(saida, /^erro: wait --text nunca nao aconteceu/);
+  assert.ok(decorrido < 150, `saiu em ${decorrido}ms, deve ser ~80ms do teto`);
+});
+
+test('wait --url volta assim que URL contém o trecho', async () => {
+  let url = 'http://ex.com/page';
+  const dbg = dubleDbg();
+  dbg.sendCommand = async (m, p) => {
+    if (m === 'Runtime.evaluate' && String(p.expression).includes('location.href')) {
+      return { result: { value: url } };
+    }
+    return {};
+  };
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  setTimeout(() => { url = 'http://ex.com/resultado'; }, 30);
+  assert.match(await ctl.esperar(['--url', 'resultado']), /^ok: wait/);
+});
+
+test('wait --idle detecta requisição em voo e bloqueia', async () => {
+  const dbg = dubleDbg({ 'Runtime.evaluate': { result: { value: 'complete' } } });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {}, tetoEspera: 1200 });
+  // Emite requisição em voo
+  dbg.emitir('Network.requestWillBeSent', {});
+  // Inicia espera por --idle
+  const promiseWait = ctl.esperar(['--idle']);
+  // Aguarda 100ms: deve estar bloqueado enquanto requisição em voo
+  await new Promise((r) => setTimeout(r, 100));
+  // Emite resposta e 500ms de silêncio — esperar vai passar
+  dbg.emitir('Network.responseReceived', { response: { status: 200, url: 'http://ex.com/api' } });
+  await new Promise((r) => setTimeout(r, 520)); // um pouco além de 500ms
+  const saida = await promiseWait;
+  assert.match(saida, /^ok: wait/);
+});
