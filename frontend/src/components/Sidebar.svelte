@@ -1049,7 +1049,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   {@const rotulo = sep > 0 && sep < 40 ? menuMsg.slice(0, sep) : ''}
   {@const corpo = rotulo ? menuMsg.slice(sep + 2) : menuMsg}
   <!-- Mouse em cima segura o toast (o erro sumia antes de dar pra ler ou copiar). -->
-  <div class="menu-toast"
+  <div class="menu-toast" role="group"
        onpointerenter={() => clearTimeout(flashTimer)}
        onpointerleave={() => { clearTimeout(flashTimer); flashTimer = setTimeout(() => { menuMsg = ''; }, 3000); }}>
     <span class="toast-texto" role="status">
@@ -1506,8 +1506,11 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   /* Mesma especificidade que o fundo da pílula: sem isto a sessão aberta e o hover somem dentro
      do grupo (o fundo plano do membro vencia `.sess-row.active` e `.sess-row:hover`). */
   @media (hover: hover) { .sidebar:not(.collapsed) .sess-row.pair-member:hover { background: var(--bg-hover); } }
+  /* Dentro da pílula (já tingida a 12%) a aberta precisa de MAIS que o tint padrão: dobra a
+     tinta e ganha a barra de accent na borda, igual ao trilho. */
   .sidebar:not(.collapsed) .sess-row.pair-member.active {
-    background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+    background: color-mix(in srgb, var(--accent) 26%, var(--surface-raised));
+    box-shadow: inset 3px 0 0 0 var(--accent);
   }
   .grp-chevron {
     flex-shrink: 0; font-size: 9px; color: var(--text-muted);
