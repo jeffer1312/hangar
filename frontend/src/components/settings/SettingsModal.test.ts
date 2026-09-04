@@ -53,6 +53,19 @@ vi.mock('../../lib/sessionsStore.svelte', () => ({
   sessionsStore: { refreshServers: vi.fn(), reconnect: vi.fn() },
 }));
 vi.mock('../../lib/push', () => ({ enablePush: vi.fn(), pushSupported: () => true }));
+vi.mock('../../lib/peers', () => ({
+  getIdentificador: vi.fn(async () => ({ identificador: '' })),
+  setIdentificador: vi.fn(),
+  listarPeers: vi.fn(async () => []),
+  gravarPeer: vi.fn(),
+  removerPeer: vi.fn(),
+  checkPeer: vi.fn(async () => ({ estado: 'ok' })),
+}));
+vi.mock('../../lib/alcance', () => ({
+  alcanceDoServidor: vi.fn(() => new Promise(() => {})),
+  pareamentoDoServidor: vi.fn(),
+  fraseDeEstado: () => '',
+}));
 
 const apiMock = vi.mocked(api);
 const authMock = vi.mocked(auth);
@@ -111,8 +124,8 @@ function stubMobile() {
 }
 
 describe('SettingsModal — GET config por tela', () => {
-  it('tela servidores: zero GET config', async () => {
-    const t = montar('servidores');
+  it('tela maquinas: zero GET config', async () => {
+    const t = montar('maquinas');
     await Promise.resolve();
     expect(apiMock.getConfig).not.toHaveBeenCalled();
     expect(apiMock.getConfigForServer).not.toHaveBeenCalled();
@@ -126,10 +139,10 @@ describe('SettingsModal — GET config por tela', () => {
     unmount(t.comp);
   });
 
-  it('desktop: Acesso e Contas aparecem na navegação do grupo do servidor, e clicar em cada uma troca a tela', async () => {
+  it('desktop: Máquinas e Contas aparecem na navegação do grupo do servidor, e clicar em cada uma troca a tela', async () => {
     stubDesktop();
     // Com alvo: semServidor=false — é o estado do mock, com as abas do servidor habilitadas.
-    const t = montar('servidores', SRV);
+    const t = montar('maquinas', SRV);
     await tick();
     // O BottomSheet teleporta pro <body> (use:portal) — o conteúdo não fica dentro de t.el.
     const itens = [...document.querySelectorAll<HTMLButtonElement>('.st-nav-item')];
@@ -137,31 +150,23 @@ describe('SettingsModal — GET config por tela', () => {
     // baseLocale 'en' no teste (sem setLocale), então o esperado vem de m.*(), nunca literal.
     const rotulos = itens.map((b) => b.textContent?.trim() ?? '');
     const acha = (rot: string) => rotulos.findIndex((r) => r.includes(rot));
-    expect(acha(m.acesso_titulo())).toBeGreaterThanOrEqual(0);
+    expect(acha(m.maquinas_titulo())).toBeGreaterThanOrEqual(0);
     expect(acha(m.contas_titulo())).toBeGreaterThanOrEqual(0);
-    // Grupo do servidor: Acesso e Contas vêm ANTES de Servidores (que já era a primeira do grupo).
-    const servidores = acha(m.config_modal_servidores());
-    expect(servidores).toBeGreaterThanOrEqual(0);
-    expect(acha(m.acesso_titulo())).toBeLessThan(servidores);
-    expect(acha(m.contas_titulo())).toBeLessThan(servidores);
+    // Grupo do servidor: Máquinas vem antes de Contas (já era a primeira do grupo).
+    expect(acha(m.maquinas_titulo())).toBeLessThan(acha(m.contas_titulo()));
     // Clicar em cada uma troca a tela (o dono da rota é o App, que recebe o id via onIrPara).
-    itens[acha(m.acesso_titulo())].click();
-    expect(t.onIrPara).toHaveBeenCalledWith('acesso');
+    itens[acha(m.maquinas_titulo())].click();
+    expect(t.onIrPara).toHaveBeenCalledWith('maquinas');
     itens[acha(m.contas_titulo())].click();
     expect(t.onIrPara).toHaveBeenCalledWith('contas');
     unmount(t.comp);
   });
 
-  it('acesso virou tela real: a seção de endereços aparece e o stub sai', async () => {
-    // A Task 3 substitui o stub de Acesso pela tela de endereços. O que prova que a
-    // substituição aconteceu é o marcador da tela REAL (a seção de endereços) e a
-    // AUSÊNCIA do stub — não a tela inteira, que depende do fetch do alvo (pendente
-    // no happy-dom, que aborta o fetch no teardown).
+  it('acesso mora dentro de Máquinas: a seção de endereços aparece quando há alvo', async () => {
     stubDesktop();
-    const t = montar('acesso');
+    const t = montar('maquinas', SRV, undefined, { resolvedServer: SRV as Server });
     await tick();
     expect(document.body.textContent).toContain(m.acesso_secao_enderecos());
-    expect(document.body.textContent).not.toContain(m.comum_em_construcao());
     unmount(t.comp);
     // Contas também virou tela real — a Task 4 mergeou e a prova dela é o teste
     // 'aba Contas mostra a lista da fonte única' logo abaixo.

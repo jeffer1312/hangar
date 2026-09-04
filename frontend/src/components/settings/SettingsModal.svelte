@@ -8,8 +8,7 @@
   import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
   import DiarioSettings from './DiarioSettings.svelte';
-  import ServidoresSettings from './ServidoresSettings.svelte';
-  import AcessoSettings from './AcessoSettings.svelte';
+  import MaquinasSettings from './MaquinasSettings.svelte';
   import ContasSettings from './ContasSettings.svelte';
   import HarnessSettings from './HarnessSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
@@ -73,18 +72,18 @@
   // (b) se voltou de Servidores pro alvo corrente — trocar de tela no MESMO alvo preserva o
   // rascunho único (decisão do usuário; o store decide pelo ultimoDono, não pela tela).
   let identidadeAnterior = $state<string | undefined>(undefined);
-  // null no primeiro run: `veioDeServidores` exige telaAnterior === 'servidores', então o boot
+  // null no primeiro run: `veioDeMaquinas` exige telaAnterior === 'maquinas', então o boot
   // cai no ramo `mudouAlvo` (carrega) — comportamento idêntico, sem capturar `tela` no $state.
   let telaAnterior = $state<TelaConfig | null>(null);
   $effect(() => {
     const id = identidade;
     const mudouAlvo = id !== identidadeAnterior;
-    const veioDeServidores = telaAnterior === 'servidores' && tela !== 'servidores';
+    const veioDeMaquinas = telaAnterior === 'maquinas' && tela !== 'maquinas';
     identidadeAnterior = id;
     telaAnterior = tela;
-    if (tela === 'servidores') { store.invalidar(); return; }
+    if (tela === 'maquinas') { store.invalidar(); return; }
     if (mudouAlvo) store.carregar();
-    else if (veioDeServidores) store.carregar();
+    else if (veioDeMaquinas) store.carregar();
   });
 
   const TITULO: Record<TelaConfig, string> = {
@@ -94,8 +93,7 @@
     voz: m.voz_titulo(),
     sobre: m.config_modal_sobre(),
     diario: m.config_diag_titulo(),
-    servidores: m.config_modal_servidores(),
-    acesso: m.acesso_titulo(),
+    maquinas: m.maquinas_titulo(),
     contas: m.contas_titulo(),
     notificacoes: m.config_modal_notificacoes(),
     anexos: m.config_modal_anexos_curto(),
@@ -112,10 +110,9 @@
     { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: 'pincel', servidor: false },
     { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
-    { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: 'sinal', servidor: true },
+    { id: 'maquinas', secao: 'servidor', rotulo: m.maquinas_titulo(), icone: 'tela', servidor: false },
     { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: 'pessoa', servidor: true },
     { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
-    { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: 'tela', servidor: false },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
     { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos_curto(), icone: 'clipe', servidor: true },
@@ -357,14 +354,10 @@
     <DiarioSettings />
   {:else if telaAtual === 'sobre'}
     <SobreSettings />
-  {:else if telaAtual === 'servidores'}
-    <ServidoresSettings resolvedServer={resolvedServer} apiTarget={alvo}
+  {:else if telaAtual === 'maquinas'}
+    <MaquinasSettings resolvedServer={resolvedServer} apiTarget={alvo}
       fallbackFocus={fecharEl}
       onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
-  {:else if telaAtual === 'acesso'}
-    <!-- O alvo por PROP (não pela rota lida dentro da tela): com o seletor do grupo a troca
-         não remonta a tela, e a prop reativa é o que remede os endereços (achado da revisão). -->
-    <AcessoSettings alvo={resolvedServer} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
   {:else if telaAtual === 'harnesses'}

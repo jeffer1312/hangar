@@ -9,6 +9,7 @@
   import ServerManager from '../ServerManager.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import QrScanner from '../QrScanner.svelte';
+  import AcessoSettings from './AcessoSettings.svelte';
   import type { RemovalSnapshot, Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
 
@@ -456,6 +457,10 @@
          onblur={salvarIdentificador} />
 </div>
 {#if idErro}<p class="id-erro" role="alert">{idErro}</p>{/if}
+
+{#if resolvedServer}
+  <AcessoSettings alvo={resolvedServer} />
+{/if}
 
 <div class="ss-sep"></div>
 <!-- Máquinas que este servidor alcança (Task 5): a lista do peers.json. O estado das duas pontas

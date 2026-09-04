@@ -3,15 +3,15 @@
 // escolhendo a tela de tras (chat, quadro, lista), e a query diz qual tela do painel esta por cima.
 // Assim o painel abre sobre QUALQUER rota sem que nenhuma delas precise saber que ele existe.
 
-export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'avancado' | 'motores' | 'sobre' | 'diario' | 'servidores' | 'acesso' | 'contas' | 'orquestracao' | 'voz' | 'harnesses';
+export type TelaConfig = 'root' | 'geral' | 'aparencia' | 'notificacoes' | 'anexos' | 'avancado' | 'motores' | 'sobre' | 'diario' | 'maquinas' | 'contas' | 'orquestracao' | 'voz' | 'harnesses';
 
-const TELAS: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'avancado', 'motores', 'sobre', 'diario', 'servidores', 'acesso', 'contas', 'orquestracao', 'voz', 'harnesses'];
+const TELAS: readonly TelaConfig[] = ['root', 'geral', 'aparencia', 'notificacoes', 'anexos', 'avancado', 'motores', 'sobre', 'diario', 'maquinas', 'contas', 'orquestracao', 'voz', 'harnesses'];
 
 // Rotas de tela que mudaram de nome: um link guardado por alguém não pode virar tela em branco.
-const RENOMEADAS: Record<string, TelaConfig> = { ditado: 'voz' };
+const RENOMEADAS: Record<string, TelaConfig> = { ditado: 'voz', servidores: 'maquinas', acesso: 'maquinas' };
 
 /** Telas que mexem NUM servidor — sem alvo resolvido elas nao podem abrir (ver App.svelte). */
-export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['acesso', 'contas', 'notificacoes', 'anexos', 'avancado', 'motores', 'orquestracao', 'voz', 'harnesses'];
+export const TELAS_DE_SERVIDOR: readonly TelaConfig[] = ['contas', 'notificacoes', 'anexos', 'avancado', 'motores', 'orquestracao', 'voz', 'harnesses'];
 
 export interface RotaConfig {
   tela: TelaConfig;

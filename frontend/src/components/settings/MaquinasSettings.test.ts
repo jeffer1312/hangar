@@ -4,7 +4,7 @@
 // clear de credenciais é dono do App/lib/logout.ts, este componente não chama).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
-import ServidoresSettings from './ServidoresSettings.svelte';
+import MaquinasSettings from './MaquinasSettings.svelte';
 import { criarProps } from './props-reativas.svelte';
 import * as m from '../../paraglide/messages';
 import * as auth from '../../lib/auth';
@@ -53,6 +53,11 @@ vi.mock('../../lib/peers', () => ({
   removerPeer: vi.fn(async () => []),
   checkPeer: vi.fn(async () => ({ estado: 'ok' })),
 }));
+vi.mock('../../lib/alcance', () => ({
+  alcanceDoServidor: vi.fn(() => new Promise(() => {})),
+  pareamentoDoServidor: vi.fn(),
+  fraseDeEstado: () => '',
+}));
 
 const authMock = vi.mocked(auth);
 const apiMock = vi.mocked(api);
@@ -73,7 +78,7 @@ function montar(over: { onLogout?: () => Promise<void> } = {}) {
   onLogoutCalls = vi.fn<() => Promise<void>>(over.onLogout ?? onLogoutDeferred);
   const el = document.createElement('div');
   document.body.appendChild(el);
-  const comp = mount(ServidoresSettings, {
+  const comp = mount(MaquinasSettings, {
     target: el,
     props: { resolvedServer: SRV, apiTarget: null, onPickTarget: vi.fn(), onLogout: onLogoutCalls },
   });
@@ -82,7 +87,7 @@ function montar(over: { onLogout?: () => Promise<void> } = {}) {
 
 beforeEach(() => { vi.clearAllMocks(); onLogoutResolve = null; mudouCb = null; });
 
-describe('ServidoresSettings — logout idempotente', () => {
+describe('MaquinasSettings — logout idempotente', () => {
   it('Sair + remover-último durante a Promise chamam onLogout UMA vez', async () => {
     const t = montar();
     // 1) Sair -> confirmação -> logout começa (Promise pendente). O ModalDialog vive num portal
@@ -165,7 +170,7 @@ describe('ServidoresSettings — logout idempotente', () => {
   });
 });
 
-describe('ServidoresSettings — remoção com fingerprint + revision (round 4)', () => {
+describe('MaquinasSettings — remoção com fingerprint + revision (round 4)', () => {
   async function confirmarRemocao(t: { el: HTMLElement }) {
     t.el.querySelector<HTMLButtonElement>('.sm-srv-del')!.click();
     await tick();
@@ -329,7 +334,7 @@ describe('ServidoresSettings — remoção com fingerprint + revision (round 4)'
 });
 
 // ── Seções da Task 5: identificador desta máquina + máquinas que este servidor alcança ───
-describe('ServidoresSettings — identificador e peers (Task 5)', () => {
+describe('MaquinasSettings — identificador e peers (Task 5)', () => {
   async function esperarCarga() {
     // A Task 8 encadeia gravação + checagens + listagem no registrar: microtasks em
     // quantidade variável. settled() espera TODAS as pendentes + re-renders (Svelte 5).
@@ -463,7 +468,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
     const outro = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
     const el = document.createElement('div');
     document.body.appendChild(el);
-    const comp = mount(ServidoresSettings, { target: el, props: {
+    const comp = mount(MaquinasSettings, { target: el, props: {
       resolvedServer: outro, apiTarget: outro, onPickTarget: vi.fn(), onLogout: vi.fn() } });
     await esperarCarga();
     expect(peersMock.getIdentificador).toHaveBeenCalledWith(outro);
@@ -474,7 +479,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
   it('servidor indisponível não carrega nada', async () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
-    const comp = mount(ServidoresSettings, { target: el, props: {
+    const comp = mount(MaquinasSettings, { target: el, props: {
       resolvedServer: null, apiTarget: null, onPickTarget: vi.fn(), onLogout: vi.fn() } });
     await esperarCarga();
     expect(peersMock.getIdentificador).not.toHaveBeenCalled();
@@ -591,7 +596,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
                                onPickTarget: vi.fn(), onLogout: vi.fn() });
     const el = document.createElement('div');
     document.body.appendChild(el);
-    const comp = mount(ServidoresSettings, { target: el, props });
+    const comp = mount(MaquinasSettings, { target: el, props });
     const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
     await passos();
 
@@ -672,7 +677,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
                                onPickTarget: vi.fn(), onLogout: vi.fn() });
     const el = document.createElement('div');
     document.body.appendChild(el);
-    const comp = mount(ServidoresSettings, { target: el, props });
+    const comp = mount(MaquinasSettings, { target: el, props });
     const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
     await passos();
 
@@ -714,7 +719,7 @@ describe('ServidoresSettings — identificador e peers (Task 5)', () => {
                                onPickTarget: vi.fn(), onLogout: vi.fn() });
     const el = document.createElement('div');
     document.body.appendChild(el);
-    const comp = mount(ServidoresSettings, { target: el, props });
+    const comp = mount(MaquinasSettings, { target: el, props });
     const passos = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); await tick(); await tick(); };
     await passos();
 
