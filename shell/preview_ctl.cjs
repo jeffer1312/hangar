@@ -138,7 +138,7 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       const estouro = new Promise((r) => setTimeout(() => r('__teto__'), tetoEspera));
       const r = await Promise.race([chamada, estouro]);
       if (r === '__teto__') return `erro: eval nao respondeu em ${tetoEspera}ms`;
-      if (r.exceptionDetails) return `erro: ${r.exceptionDetails.text}`;
+      if (r.exceptionDetails) return `erro: ${r.exceptionDetails.exception?.description || r.exceptionDetails.text}`;
       return `ok: ${JSON.stringify(r.result && r.result.value)}`;
     },
   };

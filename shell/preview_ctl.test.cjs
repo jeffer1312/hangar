@@ -131,3 +131,87 @@ test('preencher limpa o campo e usa insertText (input controlado por React aceit
   const inserir = dbg.chamadas.find(([m]) => m === 'Input.insertText');
   assert.equal(inserir[1].text, 'Jefferson');
 });
+
+test('digitar manda Input.insertText com o texto exato', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  const saida = await ctl.digitar('hello world');
+  const inserir = dbg.chamadas.find(([m]) => m === 'Input.insertText');
+  assert.equal(inserir[1].text, 'hello world');
+  assert.match(saida, /^ok: type/);
+});
+
+test('teclar manda keyDown e keyUp com a tecla pedida nessa ordem', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  const saida = await ctl.teclar('Enter');
+  const eventos = dbg.chamadas.filter(([m]) => m === 'Input.dispatchKeyEvent');
+  assert.equal(eventos.length, 2, 'keyDown e keyUp');
+  assert.equal(eventos[0][1].type, 'keyDown');
+  assert.equal(eventos[0][1].key, 'Enter');
+  assert.equal(eventos[1][1].type, 'keyUp');
+  assert.equal(eventos[1][1].key, 'Enter');
+  assert.match(saida, /^ok: press Enter/);
+});
+
+test('pairar manda mouseMoved no centro da caixa e nada quando ref nao existe', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'button' }, name: { value: 'Hover' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  const saida = await ctl.pairar('@e1');
+  const mouse = dbg.chamadas.filter(([m]) => m === 'Input.dispatchMouseEvent');
+  assert.equal(mouse.length, 1, 'so mouseMoved');
+  assert.equal(mouse[0][1].type, 'mouseMoved');
+  assert.equal(mouse[0][1].x, 20);
+  assert.equal(mouse[0][1].y, 30);
+  assert.match(saida, /^ok: hover @e1/);
+});
+
+test('pairar em ref desconhecida nao dispara evento nenhum', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  const saida = await ctl.pairar('@e9');
+  assert.match(saida, /^erro: ref @e9 nao existe/);
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Input.dispatchMouseEvent').length, 0);
+});
+
+test('avaliar no caminho feliz devolve ok: com valor serializado', async () => {
+  const dbg = dubleDbg({
+    'Runtime.evaluate': { result: { value: 42 }, exceptionDetails: null },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  const saida = await ctl.avaliar('2 + 2 * 20');
+  assert.match(saida, /^ok: 42/);
+});
+
+test('avaliar quando CDP nao responde antes do teto dispara erro com tempo', async () => {
+  const dbg = dubleDbg();
+  dbg.sendCommand = async (m, p) => {
+    if (m === 'Runtime.evaluate') {
+      await new Promise(() => {}); // nunca resolve
+    }
+    return {};
+  };
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {}, tetoEspera: 100 });
+  const saida = await ctl.avaliar('document.title');
+  assert.match(saida, /^erro: eval nao respondeu em 100ms/);
+});
+
+test('avaliar prefere exception.description sobre exception.text', async () => {
+  const dbg = dubleDbg({
+    'Runtime.evaluate': {
+      exceptionDetails: {
+        text: 'Uncaught',
+        exception: { description: 'TypeError: x is not a function' },
+      },
+    },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  const saida = await ctl.avaliar('x()');
+  assert.match(saida, /TypeError: x is not a function/);
+});
