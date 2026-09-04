@@ -87,9 +87,16 @@
   // shell Electron o botão não existe e a tela fica exatamente como era — o campo de texto continua
   // sendo o caminho de quem usa pelo navegador e pelo celular.
   const nativo = criarSeletorNativo();
+
+  // O rodapé só existe quando há o que salvar — e, quando existe, a tela reserva a altura dele:
+  // grudado no pé, ele cobria o último campo de quem estava editando.
+  const rodapeVisivel = $derived(
+    !store.carregando && Object.keys(store.campos).length > 0
+      && (store.temMudanca || store.salvando || store.salvo),
+  );
 </script>
 
-<div class="cfg">
+<div class="cfg" class:com-rodape={rodapeVisivel}>
   <header class="cfg-head">
     <h2>{TITULOS[secao]}</h2>
     <p class="sub">{m.config_server_valem()}</p>
@@ -166,7 +173,7 @@
      a propria fatia faria o MESMO botao significar coisas diferentes conforme a tela.
      So aparece quando ha o que salvar: um botao apagado permanente ocupava uma faixa inteira do
      painel pra nao oferecer nada. -->
-{#if !store.carregando && Object.keys(store.campos).length && (store.temMudanca || store.salvando || store.salvo)}
+{#if rodapeVisivel}
   <div class="rodape">
     {#if store.salvo}<span class="ok">{m.config_server_salvo()}</span>{/if}
     {#if store.temMudanca || store.salvando}
@@ -179,6 +186,9 @@
 
 <style>
   .cfg { padding: var(--space-2) var(--space-4) var(--space-4); }
+  /* O respiro de baixo é a altura do rodapé grudado: sem ele o último campo fica escondido atrás
+     do botão Salvar, e a pessoa nem sabe que ele existe. */
+  .cfg.com-rodape { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
   .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
   .cfg-head .sub { margin: 2px 0 var(--space-4); font-size: var(--text-xs); color: var(--text-muted); }
 
@@ -258,16 +268,22 @@
      formulário rola por baixo. `--bg-surface` cru aqui não é esquecimento da regra de Transparência
      (CLAUDE.md) — com token de véu o texto do formulário atravessaria os botões. Mesmo caso do
      `.acoes` dos Motores. NÃO converter. */
-  /* De ponta a ponta do painel e na COR dele: as margens negativas cancelam o respiro do scroller
-     (.st-conteudo), senão a faixa morria antes da borda e ficava de outro tom, como um remendo. */
+  /* De ponta a ponta e na COR do painel: as margens negativas cancelam o respiro de quem envolve
+     o rodapé, e esse respiro muda por modo (a folha no celular soma --space-5 + faixa segura
+     embaixo, a coluna do modal dividido usa --space-4). Base calibrada pra folha; o override
+     abaixo troca pra coluna — sem ele a faixa morria antes da borda, de outro tom, como um remendo. */
   .rodape {
-    position: sticky; bottom: calc(-1 * var(--space-4));
+    position: sticky; bottom: calc(env(safe-area-inset-bottom) * -1 - var(--space-5));
     display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3);
-    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+    margin: 0 calc(-1 * var(--space-5)) calc(env(safe-area-inset-bottom) * -1 - var(--space-5));
     padding: var(--space-3) var(--space-4);
     padding-bottom: calc(var(--space-3) + var(--space-4) + env(safe-area-inset-bottom));
     background: rgb(var(--glass-panel-rgb));
     border-top: 1px solid var(--border-subtle);
+  }
+  :global(.st-conteudo) .rodape {
+    bottom: calc(-1 * var(--space-4));
+    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
   }
   .ok { font-size: var(--text-xs); color: var(--success); animation: st-row-in-ok 200ms var(--ease-out); }
   @keyframes st-row-in-ok {

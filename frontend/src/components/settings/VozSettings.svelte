@@ -329,7 +329,7 @@
   /* O respiro de baixo é a altura do rodapé grudado: sem ele o último campo fica escondido atrás
      do botão Salvar, e a pessoa nem sabe que ele existe. */
   .voz { container-type: inline-size; padding: var(--space-2) var(--space-4) var(--space-4); display: flex; flex-direction: column; gap: var(--space-5); }
-  .voz.com-rodape { padding-bottom: 84px; }
+  .voz.com-rodape { padding-bottom: calc(84px + env(safe-area-inset-bottom)); }
 
   /* Mesmo par h2+sub das telas irmãs (ServerSettings.svelte) — a Voz também é config de servidor. */
   .cfg-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; color: var(--text-primary); }
@@ -387,18 +387,24 @@
 
   /* CHROME FUNCIONAL, sólido de propósito: grudado no fim da folha — mesma exceção que o
      .rodape do ServerSettings/EnginesSettings já documenta. NÃO converter pra token de véu. */
-  /* Rodapé de ponta a ponta do painel: as margens negativas cancelam o respiro do scroller
-     (.st-conteudo), senão sobra uma faixa de conteúdo passando dos dois lados e por baixo dele. */
+  /* Rodapé de ponta a ponta: as margens negativas cancelam o respiro de quem envolve o rodapé — e
+     esse respiro muda por modo (a folha no celular tem --space-5 de sobra + faixa segura embaixo,
+     a coluna do modal dividido tem --space-4). Base calibrada pra folha; o override abaixo troca
+     pra coluna. */
   .rodape {
-    position: sticky; bottom: calc(-1 * var(--space-4));
+    position: sticky; bottom: calc(env(safe-area-inset-bottom) * -1 - var(--space-5));
     display: flex; align-items: center; justify-content: flex-end; gap: var(--space-3);
-    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+    margin: 0 calc(-1 * var(--space-5)) calc(env(safe-area-inset-bottom) * -1 - var(--space-5));
     padding: var(--space-3) var(--space-4);
     padding-bottom: calc(var(--space-3) + var(--space-4) + env(safe-area-inset-bottom));
     /* Tom do PRÓPRIO painel, mas opaco: com `--bg-surface` a barra era de outra cor, e com o véu do
        `--glass-modal` o texto que rola por baixo aparecia através dela. */
     background: rgb(var(--glass-panel-rgb));
     border-top: 1px solid var(--border-subtle);
+  }
+  :global(.st-conteudo) .rodape {
+    bottom: calc(-1 * var(--space-4));
+    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
   }
   .ok { font-size: var(--text-xs); color: var(--success); }
   .btn {
