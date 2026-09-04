@@ -23,6 +23,12 @@ vi.mock('../lib/format', () => ({
 }));
 vi.mock('../lib/plan', () => ({ planBadge: vi.fn() }));
 import { planBadge } from '../lib/plan';
+// A QuotaPill lê as cotas ao montar; sem isto cada teste deixava um fetch REAL escapar pro
+// `localhost:3000` do happy-dom (19 ECONNREFUSED/AbortError por suíte, um por teste).
+vi.mock('../lib/contaEstado', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/contaEstado')>();
+  return { ...real, listarCotas: vi.fn().mockResolvedValue([]) };
+});
 
 function montar(over: { ctxDisponivel?: boolean } = {}) {
   const el = document.createElement('div');
