@@ -47,7 +47,7 @@ def _versao(cli: str) -> str | None:
     v: str | None = None
     if shutil.which(cli):
         try:
-            r = subprocess.run([cli, "--version"], capture_output=True, text=True, timeout=8,
+            r = subprocess.run([cli, "-V" if cli == "tmux" else "--version"], capture_output=True, text=True, timeout=8,
                                encoding="utf-8", errors="replace")
             linha = (r.stdout or r.stderr or "").strip().splitlines()
             v = linha[0].strip() if linha else ""
@@ -57,9 +57,134 @@ def _versao(cli: str) -> str | None:
     return v
 
 
-def _item(id_: str, ok: bool | None, codigo: str, conserto: str | None = None, **params) -> dict:
+def _item(id_: str, ok: bool | None, codigo: str, conserto: str | None = None, *, info: bool = False,
+          **params) -> dict:
+    """`info=True` é linha informativa (o que o CLI tem), não checagem: a tela desenha um ponto,
+    não um ✓, e ela nunca pinta o card de vermelho."""
     return {"id": id_, "ok": ok, "codigo": codigo, "params": {k: str(v) for k, v in params.items()},
-            "conserto": conserto}
+            "conserto": conserto, "info": info}
+
+
+def _ler_json(p: Path) -> dict:
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _ler_toml(p: Path) -> dict:
+    try:
+        return tomllib.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+# ---------------------------------------------------------------- informativos
+
+def _mcp(cli: str) -> dict:
+    home = Path.home()
+    if cli == "claude":
+        nomes = list((_ler_json(home / ".claude.json").get("mcpServers") or {}).keys())
+    elif cli == "codex":
+        nomes = list((_ler_toml(_codex_dir(None) / "config.toml").get("mcp_servers") or {}).keys())
+    elif cli in ("pi", "omp"):
+        nomes = list((_ler_json(_raiz_agente(cli) / "mcp.json").get("mcpServers") or {}).keys())
+    else:
+        cfg = _ler_toml(kimi_home() / "config.toml")
+        nomes = list((cfg.get("mcp") or cfg.get("mcp_servers") or {}).keys())
+    if not nomes:
+        return _item("mcp", True, "mcp_nenhum", info=True)
+    return _item("mcp", True, "mcp_ok", info=True, n=len(nomes), lista=", ".join(sorted(nomes)))
+
+
+def _modelo_padrao(cli: str) -> dict:
+    home = Path.home()
+    if cli == "claude":
+        m = _ler_json(home / ".claude" / "settings.json").get("model")
+    elif cli == "codex":
+        m = _ler_toml(_codex_dir(None) / "config.toml").get("model")
+    elif cli in ("pi", "omp"):
+        s = _ler_json(_raiz_agente(cli) / "settings.json")
+        m = "/".join(x for x in (s.get("defaultProvider"), s.get("defaultModel")) if x) or None
+    else:
+        m = _ler_toml(kimi_home() / "config.toml").get("default_model")
+    if not m:
+        return _item("modelo", True, "modelo_padrao_nenhum", info=True)
+    return _item("modelo", True, "modelo_padrao", info=True, modelo=str(m))
+
+
+def _origem_das_skills(ponte: Path, home: Path) -> str:
+    """Quantas skills da ponte vêm de cada fonte — o que responde 'e os plugins?' no Codex/Pi/Kimi:
+    eles não têm plugin, recebem as skills dos plugins do Claude pela ponte."""
+    contagem = {"plugins": 0, "pessoais": 0, "hangar": 0, "agents": 0}
+    raizes = {
+        "pessoais": os.path.normpath(str(home / ".claude" / "skills")),
+        "plugins": os.path.normpath(str(home / ".claude" / "plugins")),
+        "hangar": os.path.normpath(str(_REPO / "skills")),
+        "agents": os.path.normpath(str(home / ".agents" / "skills")),
+    }
+    for p in ponte.iterdir():
+        if not p.is_symlink():
+            continue
+        alvo = os.path.normpath(str(Path(os.readlink(p))))
+        for nome, raiz in raizes.items():
+            if alvo.startswith(raiz + os.sep):
+                contagem[nome] += 1
+                break
+    return ", ".join(f"{v} {k}" for k, v in contagem.items() if v)
+
+
+def _hooks_codex() -> dict:
+    hooks = _ler_json(_codex_dir(None) / "hooks.json").get("hooks")
+    if not isinstance(hooks, dict) or not hooks:
+        return _item("hooks", True, "hooks_nenhum", info=True)
+    n = sum(len(v) for v in hooks.values() if isinstance(v, list))
+    return _item("hooks", True, "hooks_codex", info=True, n=n, eventos=", ".join(sorted(hooks)))
+
+
+# ---------------------------------------------------------------- tmux
+
+def _tmux(args: list[str]) -> str | None:
+    try:
+        r = subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=5,
+                           encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _card_tmux() -> dict:
+    """As opções que o app EXIGE do tmux e por quê (o texto de cada uma mora no front). Lidas do
+    servidor vivo, não do arquivo: é o que as sessões estão usando agora. O conserto único refaz o
+    bloco gerenciado do ~/.tmux.conf e recarrega (install-claude-wrapper.sh --no-statusline)."""
+    v = _versao("tmux")
+    itens = []
+    if v is None:
+        return {"id": "tmux", "nome": "tmux", "instalado": False, "versao": None, "itens": []}
+    conf = Path.home() / ".tmux.conf"
+    try:
+        bloco = "# >>> hangar >>>" in conf.read_text(encoding="utf-8")
+    except OSError:
+        bloco = False
+    itens.append(_item("bloco", bloco, "tmux_bloco_ok" if bloco else "tmux_bloco_ausente", None if bloco else "tmux"))
+    term = _tmux(["show", "-gv", "default-terminal"]) or ""
+    ok_term = bool(term) and not term.startswith(("tmux", "screen"))
+    itens.append(_item("default_terminal", ok_term, "tmux_term_ok" if ok_term else "tmux_term_ruim",
+                       None if ok_term else "tmux", valor=term or "?"))
+    env = _tmux(["show-environment", "-g"]) or ""
+    ok_tc = "COLORTERM=truecolor" in env and "CLAUDE_CODE_TMUX_TRUECOLOR=1" in env
+    itens.append(_item("truecolor", ok_tc, "tmux_truecolor_ok" if ok_tc else "tmux_truecolor_ruim",
+                       None if ok_tc else "tmux"))
+    titulos = _tmux(["show", "-gv", "set-titles-string"]) or ""
+    ok_tit = titulos == "#S"
+    itens.append(_item("titulo", ok_tit, "tmux_titulo_ok" if ok_tit else "tmux_titulo_ruim",
+                       None if ok_tit else "tmux", valor=titulos or "?"))
+    mouse = _tmux(["show", "-gv", "mouse"]) == "on"
+    itens.append(_item("mouse", True, "tmux_mouse_on" if mouse else "tmux_mouse_off", info=True))
+    tpm = (Path.home() / ".tmux" / "plugins" / "tmux-resurrect").is_dir()
+    itens.append(_item("persistencia", True, "tmux_persist_on" if tpm else "tmux_persist_off", info=True))
+    return {"id": "tmux", "nome": "tmux", "instalado": True, "versao": v, "itens": itens}
 
 
 # ---------------------------------------------------------------- checagens
@@ -82,7 +207,7 @@ def _ponte_skills(nome: str, home: Path) -> dict:
             return _item("skills", False, "ponte_fora_da_config", n=len(links), cli=nome)
         if cfg is None:
             return _item("skills", None, "config_ilegivel")
-    return _item("skills", True, "skills_ok", n=len(links))
+    return _item("skills", True, "skills_ok", n=len(links), origem=_origem_das_skills(ponte, home))
 
 
 def _raiz_agente(cli: str) -> Path:
@@ -287,24 +412,27 @@ def diagnosticar() -> list[dict]:
     hooks = (next((i for i in itens if i["ok"] is False), None) or next((i for i in itens if i["ok"] is None), None)
              or (itens[0] if itens else _item("hooks", None, "nenhuma_conta")))
     saida.append({"id": "claude", "nome": "Claude Code", "instalado": v is not None, "versao": v,
-                  "itens": [hooks, _plugins_claude(), _contas_claude()]})
+                  "itens": [hooks, _plugins_claude(), _contas_claude(), _mcp("claude"), _modelo_padrao("claude")]})
 
     v = _versao("codex")
     d = home / ".codex"
     saida.append({"id": "codex", "nome": "Codex", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("codex"), _ponte_skills("codex", home)]
+                  "itens": [_credenciais("codex"), _ponte_skills("codex", home), _hooks_codex(), _mcp("codex"),
+                            _modelo_padrao("codex")]
                   if d.is_dir() else []})
 
     v = _versao("pi")
     d = home / ".pi" / "agent"
     saida.append({"id": "pi", "nome": "Pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("pi"), _extensoes("pi"), _fullscreen("pi"), _ponte_skills("pi", home)]
+                  "itens": [_credenciais("pi"), _extensoes("pi"), _fullscreen("pi"), _ponte_skills("pi", home),
+                            _mcp("pi"), _modelo_padrao("pi")]
                   if d.is_dir() else []})
 
     v = _versao("omp")
     d = _raiz_agente("omp")
     saida.append({"id": "omp", "nome": "oh-my-pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("omp"), _extensoes("omp"), _fullscreen("omp")] if d.is_dir() else []})
+                  "itens": [_credenciais("omp"), _extensoes("omp"), _fullscreen("omp"), _mcp("omp"),
+                            _modelo_padrao("omp")] if d.is_dir() else []})
 
     v = _versao("kimi")
     d = kimi_home()
@@ -312,8 +440,10 @@ def diagnosticar() -> list[dict]:
     if d.is_dir():
         tem_status = (d / "statusline.js").is_file()
         itens = [_credenciais("kimi"), _hooks_kimi(d), _ponte_skills("kimi", home),
-                 _item("statusline", tem_status, "statusline_ok" if tem_status else "sem_statusline")]
+                 _item("statusline", tem_status, "statusline_ok" if tem_status else "sem_statusline"),
+                 _mcp("kimi"), _modelo_padrao("kimi")]
     saida.append({"id": "kimi", "nome": "Kimi Code", "instalado": v is not None or d.is_dir(), "versao": v, "itens": itens})
+    saida.append(_card_tmux())
     return saida
 
 
@@ -365,6 +495,15 @@ def consertar(id_: str) -> str:
         if not any(v["ok"] for v in r.values()):
             raise ValueError(linha)
         return linha
+    if id_ == "tmux":
+        # O bloco gerenciado é do instalador (bash); rodar o próprio instalador é o único jeito de
+        # escrevê-lo igual ao de uma instalação nova. Idempotente, e o --no-statusline evita pergunta.
+        r = subprocess.run(["bash", str(_REPO / "scripts" / "install-claude-wrapper.sh"), "--no-statusline"],
+                           capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
+                           cwd=str(_REPO))
+        if r.returncode != 0:
+            raise ValueError(f"instalador saiu com {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
+        return "bloco do ~/.tmux.conf refeito e recarregado"
     if id_ in ("fullscreen:pi", "fullscreen:omp"):
         cfg = _raiz_agente(id_.split(":", 1)[1]) / "fullscreen-tui.json"
         if cfg.exists():

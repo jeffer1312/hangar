@@ -168,6 +168,8 @@ export interface ItemHarness {
   codigo: string;
   params: Record<string, string>;
   conserto: string | null;
+  /** Linha informativa (o que o CLI tem), não checagem: ponto em vez de ✓, nunca pinta o card. */
+  info?: boolean;
 }
 
 export interface Harness {

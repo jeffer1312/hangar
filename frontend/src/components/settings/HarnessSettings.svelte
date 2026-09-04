@@ -52,7 +52,25 @@
   // O código vem do servidor; a frase é daqui. Código desconhecido (backend mais novo que o app)
   // aparece cru em vez de sumir — sumir esconderia justamente o item que mudou.
   const TEXTOS: Record<string, (p: Record<string, string>) => string> = {
-    skills_ok: (p) => m.harness_skills_ok({ n: p.n ?? '' }),
+    skills_ok: (p) => (p.origem ? m.harness_skills_origem({ n: p.n ?? '', origem: p.origem }) : m.harness_skills_ok({ n: p.n ?? '' })),
+    mcp_ok: (p) => m.harness_mcp_ok({ n: p.n ?? '', lista: p.lista ?? '' }),
+    mcp_nenhum: () => m.harness_mcp_nenhum(),
+    modelo_padrao: (p) => m.harness_modelo_padrao({ modelo: p.modelo ?? '' }),
+    modelo_padrao_nenhum: () => m.harness_modelo_padrao_nenhum(),
+    hooks_nenhum: () => m.harness_hooks_nenhum(),
+    hooks_codex: (p) => m.harness_hooks_codex({ n: p.n ?? '', eventos: p.eventos ?? '' }),
+    tmux_bloco_ok: () => m.harness_tmux_bloco_ok(),
+    tmux_bloco_ausente: () => m.harness_tmux_bloco_ausente(),
+    tmux_term_ok: (p) => m.harness_tmux_term_ok({ valor: p.valor ?? '' }),
+    tmux_term_ruim: (p) => m.harness_tmux_term_ruim({ valor: p.valor ?? '' }),
+    tmux_truecolor_ok: () => m.harness_tmux_truecolor_ok(),
+    tmux_truecolor_ruim: () => m.harness_tmux_truecolor_ruim(),
+    tmux_titulo_ok: () => m.harness_tmux_titulo_ok(),
+    tmux_titulo_ruim: (p) => m.harness_tmux_titulo_ruim({ valor: p.valor ?? '' }),
+    tmux_mouse_on: () => m.harness_tmux_mouse_on(),
+    tmux_mouse_off: () => m.harness_tmux_mouse_off(),
+    tmux_persist_on: () => m.harness_tmux_persist_on(),
+    tmux_persist_off: () => m.harness_tmux_persist_off(),
     sem_ponte: () => m.harness_sem_ponte(),
     ponte_ausente: () => m.harness_ponte_ausente(),
     links_pendurados: (p) => m.harness_links_pendurados({ n: p.n ?? '', total: p.total ?? '' }),
@@ -78,6 +96,9 @@
   const ROTULOS: Record<string, () => string> = {
     hooks: m.harness_item_hooks, contas: m.harness_item_contas, credenciais: m.harness_item_credenciais,
     plugins: m.harness_item_plugins, fullscreen: m.harness_item_fullscreen,
+    mcp: m.harness_item_mcp, modelo: m.harness_item_modelo,
+    bloco: m.harness_item_tmux_bloco, default_terminal: m.harness_item_tmux_term, truecolor: m.harness_item_tmux_truecolor,
+    titulo: m.harness_item_tmux_titulo, mouse: m.harness_item_tmux_mouse, persistencia: m.harness_item_tmux_persist,
     skills: m.harness_item_skills, extensoes: m.harness_item_extensoes, statusline: m.harness_item_statusline,
   };
   function texto(i: ItemHarness): string { return (TEXTOS[i.codigo] ?? (() => i.codigo))(i.params); }
@@ -99,14 +120,14 @@
               class:ruim={h.instalado && h.itens.some((i) => i.ok === false)} aria-hidden="true"></span>
         <ProvedorIcone tipo={h.id === 'claude' ? 'claude' : 'chave'}
           baseUrl={h.id === 'kimi' ? 'https://api.kimi.com' : h.id === 'codex' ? 'https://api.openai.com' : ''}
-          iniciais={h.id === 'omp' ? 'ω' : h.id === 'pi' ? 'π' : h.nome.slice(0, 2).toUpperCase()} size={22} />
+          iniciais={h.id === 'omp' ? 'ω' : h.id === 'pi' ? 'π' : h.id === 'tmux' ? '⌗' : h.nome.slice(0, 2).toUpperCase()} size={22} />
         <span class="hs-nome">{h.nome}</span>
         <span class="hs-versao">{h.instalado ? (h.versao || m.harness_instalado()) : m.harness_nao_instalado()}</span>
       </div>
       {#each h.itens as i (i.id)}
         <div class="hs-item">
-          <span class="hs-marca" class:ok={i.ok === true} class:ruim={i.ok === false} aria-hidden="true"
-            >{i.ok === true ? '✓' : i.ok === false ? '✕' : '?'}</span>
+          <span class="hs-marca" class:ok={i.ok === true && !i.info} class:ruim={i.ok === false} aria-hidden="true"
+            >{i.info ? '·' : i.ok === true ? '✓' : i.ok === false ? '✕' : '?'}</span>
           <span class="hs-item-txt"><b>{rotulo(i)}</b> {texto(i)}</span>
           {#if i.conserto}
             <button type="button" class="hs-btn" onclick={() => consertar(i.conserto!)}
