@@ -2095,6 +2095,7 @@
   "atualizar_botao": "Update",
   "atualizar_agora_nao": "Not now",
   "atualizar_fechar": "Close",
+  "atualizar_reabrir_agora": "Close and reopen now",
   "atualizar_rodando_titulo": "Updating…",
   "atualizar_rodando_sub": "Step {passo} of {total}. You can leave this open.",
   "atualizar_sessoes_trabalhando": "{n} sessions are working right now. They keep running — only this screen's connection drops for a few seconds while the server restarts.",

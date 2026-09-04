@@ -506,6 +506,13 @@ ipcMain.on('hangar:nav-close', (ev, { chave } = {}) => fecharNavegador(BrowserWi
 // Seletor nativo de pasta (window.hangar.pickFolder, via preload.cjs). Registrado UMA vez, fora
 // do criarJanela — handler duplicado por janela é erro do ipcMain. O diálogo ancora na janela que
 // pediu, senão ele nasce solto e pode cair atrás do app.
+// Reabrir o app depois de uma atualização que tocou shell/: `relaunch` agenda uma instância nova
+// com os mesmos argumentos e `exit` derruba esta — é o único jeito de carregar o main.cjs novo.
+ipcMain.handle('hangar:relaunch', () => {
+  app.relaunch();
+  app.exit(0);
+});
+
 ipcMain.handle('hangar:pick-folder', async (ev) => {
   const win = BrowserWindow.fromWebContents(ev.sender);
   const r = await (win ? dialog.showOpenDialog(win, { properties: ['openDirectory'] })

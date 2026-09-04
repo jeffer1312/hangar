@@ -231,7 +231,17 @@
   // Só dentro da janela nativa: o restart do backend não alcança o `main.cjs` que o Electron já
   // carregou, e no navegador/celular não há shell nenhum pra reabrir. `Electron/` e não a marca
   // `hangar-shell`: aquela só entra no user agent quando a janela é transparente (background.ts).
-  const shellMudou = $derived(estado.shell_mudou === true && navigator.userAgent.includes('Electron/'));
+  // O `shell_mudou` fica gravado no estado até a PRÓXIMA atualização sobrescrevê-lo, então o aviso
+  // reaparecia com o app já reaberto. O shell novo diz o commit que carregou: igual ao atualizado,
+  // o aviso não vale mais. Shell antigo (sem o campo) segue avisando — ele de fato não reabriu.
+  const ponte = (window as { hangar?: { shellCommit?: string | null; relaunch?: () => Promise<void> } }).hangar;
+  const shellJaNovo = $derived(!!ponte?.shellCommit && ponte.shellCommit === estado.commit_para);
+  const shellMudou = $derived(estado.shell_mudou === true && navigator.userAgent.includes('Electron/') && !shellJaNovo);
+  const podeReabrir = $derived(typeof ponte?.relaunch === 'function');
+  function reabrir() {
+    // Rejeição = shell sem o handler (mais velho que este front): fica só o texto de fechar à mão.
+    void ponte?.relaunch?.().catch(() => {});
+  }
   const terminouComAvisos = $derived(estado.fase === 'pronto' && estado.ok === true
                                      && (avisos.length > 0 || shellMudou));
   const decorrido = $derived.by(() => {
@@ -368,7 +378,12 @@
         {#each avisos as aviso (aviso)}<li>{aviso}</li>{/each}
       </ul>
       <div class="acoes">
-        <button class="bt primario" onclick={onClose}>{m.atualizar_fechar()}</button>
+        {#if shellMudou && podeReabrir}
+          <button class="bt primario" onclick={reabrir}>{m.atualizar_reabrir_agora()}</button>
+          <button class="bt" onclick={onClose}>{m.atualizar_fechar()}</button>
+        {:else}
+          <button class="bt primario" onclick={onClose}>{m.atualizar_fechar()}</button>
+        {/if}
       </div>
 
     {:else if faltaReiniciar}
