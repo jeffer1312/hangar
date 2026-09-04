@@ -23,7 +23,9 @@
     "files": [
       "main.cjs",
       "preload.cjs",
+      "navegador.cjs",
       "settings.cjs",
+      "preview_fmt.cjs",
       "package.json"
     ],
     "linux": {
