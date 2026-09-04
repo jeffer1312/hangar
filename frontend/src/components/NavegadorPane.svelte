@@ -79,7 +79,10 @@
     if (!manual && (hostLocal(host) || hostsImportados.has(host) || chromeFechado)) return;
     hostsImportados.add(host);
     if (manual) cookiesStatus = m.nav_cookies_buscando();
-    const r = await nativo.importCookies(navKey, host);
+    // O invoke rejeita quando o shell é mais velho que este front (sem o handler) — sem o catch
+    // o status ficava em "Buscando…" pra sempre.
+    const r = await nativo.importCookies(navKey, host).catch((e: unknown) =>
+      ({ ok: false as const, gravados: 0, falhos: 0, erro: 'shell', detalhe: e instanceof Error ? e.message : String(e) }));
     if (r.ok) {
       chromeFechado = false;
       if (manual || r.gravados > 0) cookiesStatus = m.nav_cookies_ok({ n: r.gravados });
@@ -88,12 +91,32 @@
     if (r.erro === 'chrome_fechado') {
       chromeFechado = true;
       hostsImportados.delete(host);   // volta a tentar quando o Chrome abrir e a pessoa clicar
-      if (manual) cookiesStatus = m.nav_cookies_chrome_fechado();
+      if (manual) { cookiesStatus = m.nav_cookies_chrome_fechado(); ofereceAbrir = !!nativo.abrirChrome; }
       return;
     }
     if (manual) cookiesStatus = m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
   }
   const importarSeNovo = (u: string) => importarCookies(u, false);
+
+  // Quem clica não precisa saber porta nem comando: o shell abre o Chrome dele com a porta e,
+  // subindo, a importação roda de novo sozinha. Chrome já aberto sem a porta reaproveita o
+  // processo e a porta não sobe — aí o texto diz pra fechar e clicar de novo.
+  let ofereceAbrir = $state(false);
+  let abrindo = $state(false);
+  async function abrirChrome() {
+    if (!nativo?.abrirChrome) return;
+    abrindo = true;
+    cookiesStatus = m.nav_cookies_abrindo_chrome();
+    try {
+      const r = await nativo.abrirChrome();
+      if (r.ok) { ofereceAbrir = false; chromeFechado = false; await importarCookies(aberta, true); }
+      else cookiesStatus = r.motivo === 'sem_binario' ? m.nav_cookies_sem_chrome() : m.nav_cookies_chrome_sem_porta();
+    } catch (e) {
+      cookiesStatus = m.nav_cookies_erro({ e: e instanceof Error ? e.message : String(e) });
+    } finally {
+      abrindo = false;
+    }
+  }
 
   // URL empurrada de fora (o agente, via `hangar-preview open`): o store é a via de entrada; se
   // ela difere da aberta, navega. O ir() do usuário escreve no store junto, então não há loop.
@@ -187,7 +210,12 @@
     >×</button>
   </header>
   {#if cookiesStatus}
-    <p class="nav-status" role="status">{cookiesStatus}</p>
+    <p class="nav-status" role="status">
+      {cookiesStatus}
+      {#if ofereceAbrir}
+        <button type="button" class="nav-abrir-chrome" onclick={abrirChrome} disabled={abrindo}>{m.nav_cookies_abrir_chrome()}</button>
+      {/if}
+    </p>
   {/if}
 
   {#if nativo}
@@ -244,7 +272,12 @@
   }
   .nav-btn:hover:not(:disabled) { background: var(--surface-raised); }
   .nav-btn:disabled { opacity: 0.4; cursor: default; }
-  .nav-status { margin: 0; padding: 2px var(--space-3) 4px; font-size: var(--text-xs); color: var(--text-muted); }
+  .nav-status { margin: 0; padding: 2px var(--space-3) 4px; font-size: var(--text-xs); color: var(--text-muted); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  .nav-abrir-chrome {
+    font-size: var(--text-xs); font-weight: 600; padding: 2px 10px; border-radius: var(--radius-full);
+    border: 1px solid var(--accent); background: var(--accent-dim); color: var(--accent); cursor: pointer;
+  }
+  .nav-abrir-chrome:disabled { opacity: 0.6; cursor: default; }
   .nav-body { flex: 1; min-height: 0; display: grid; place-items: center; }
   .nav-frame { border: 0; width: 100%; height: 100%; display: block; }
   .nav-hint { opacity: 0.55; font-size: var(--text-sm); padding: var(--space-4); text-align: center; }

@@ -43,8 +43,11 @@ O navegador embutido guarda cookies numa partição persistente (`persist:nav`):
 login continua logado nas próximas aberturas. O que barra é a **tela de login** do Google e afins,
 que recusa navegador com depuração ligada. O botão 🍪 do painel (e a importação automática ao abrir
 um host novo) traz os cookies do seu Chrome real por CDP — já decifrados, sem ler o arquivo
-`Cookies` do perfil. Precisa do Chrome aberto com `google-chrome-stable --remote-debugging-port=9222`
-(porta trocável em `settings.json` do userData, campo `chromeCdpPort`). Cookie do Google expira e
+`Cookies` do perfil. Precisa do Chrome aberto com a porta de depuração: o próprio painel oferece
+**Abrir o Chrome** (lança o perfil normal com `--remote-debugging-port=9226`; Chrome já aberto sem a
+porta reaproveita o processo e a porta não sobe — feche as janelas e clique de novo). A porta é 9226,
+não 9222, porque a 9222 costuma estar com um Chrome headless de automação (agent-browser), que é
+recusado. Trocável em `settings.json` do userData, campo `chromeCdpPort`. Cookie do Google expira e
 rotaciona: quando cair, clique de novo.
 
 ## Desfoque atrás da janela

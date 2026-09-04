@@ -32,5 +32,7 @@ contextBridge.exposeInMainWorld('hangar', {
     close: (chave) => ipcRenderer.send('hangar:nav-close', { chave }),
     // Cookies do Chrome real (CDP) -> partição do view. Resolve sempre; erro vem no objeto.
     importCookies: (chave, host, porta) => ipcRenderer.invoke('hangar:nav-import-cookies', { chave, host, porta }),
+    // Abre o Chrome do usuário já com a porta de depuração (quem clica não precisa saber a porta).
+    abrirChrome: (porta) => ipcRenderer.invoke('hangar:chrome-abrir', { porta }),
   },
 });

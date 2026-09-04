@@ -1,13 +1,16 @@
 // Cookies do Chrome REAL do usuário, via CDP, já decifrados — o arquivo `Cookies` em disco é
 // cifrado com a chave do chaveiro e muda de formato a cada versão. Precisa do Chrome aberto com
 // `--remote-debugging-port`; sem isso, erro `chrome_fechado` com a instrução.
-const COMANDO = 'google-chrome-stable --remote-debugging-port=9222';
+const COMANDO = 'google-chrome-stable --remote-debugging-port=9226';
 const SAME_SITE = { Strict: 'strict', Lax: 'lax', None: 'no_restriction' };
 
 class ChromeFechado extends Error {
-  constructor(porta) {
-    super(`Chrome sem a porta de depuração ${porta} — abra com: ${COMANDO}`);
+  constructor(porta, motivo = 'fechado') {
+    super(motivo === 'headless'
+      ? `a porta ${porta} está com um Chrome de automação (headless), não o seu — abra o seu com: ${COMANDO}`
+      : `Chrome sem a porta de depuração ${porta} — abra com: ${COMANDO}`);
     this.code = 'chrome_fechado';
+    this.motivo = motivo;
   }
 }
 
@@ -31,8 +34,12 @@ async function urlDoWs(porta) {
   try {
     const r = await fetch(`http://127.0.0.1:${porta}/json/version`, { signal: AbortSignal.timeout(2000) });
     const j = await r.json();
+    // A porta pode estar com um Chrome HEADLESS de automação (agent-browser de outra sessão
+    // ocupa a 9222): sem cookies de ninguém, e trazer 0 parecia "não tinha login". Recusa como
+    // "Chrome fechado", que é o que vale pra pessoa: abra o SEU Chrome com a porta.
+    if (/Headless/i.test(j['User-Agent'] || '')) throw new ChromeFechado(porta, 'headless');
     if (j.webSocketDebuggerUrl) return j.webSocketDebuggerUrl;
-  } catch { /* cai no erro abaixo */ }
+  } catch (e) { if (e instanceof ChromeFechado) throw e; }
   throw new ChromeFechado(porta);
 }
 
@@ -51,7 +58,7 @@ function cdp(wsUrl, metodo, params = {}) {
   });
 }
 
-async function importarCookiesDoChrome({ porta = 9222, dominio }) {
+async function importarCookiesDoChrome({ porta = 9226, dominio }) {
   const ws = await urlDoWs(porta);
   // `Storage.getCookies` responde no target do browser; `Network.getAllCookies` só num de página.
   const { cookies } = await cdp(ws, 'Storage.getCookies');
