@@ -83,7 +83,7 @@ import * as m from '../paraglide/messages';
   // dominante. Git e Loop moraram na row-right ate aqui: 2 botoes de 40px + chip + chevron comiam
   // quase metade da largura e o cwd/nome viviam truncados no iPhone. Sao acoes raras -> swipe.
   const ACTION_W = 64;
-  const OPEN = $derived(session.cwd ? -3 * ACTION_W : -ACTION_W);
+  const OPEN = $derived(session.cwd ? -2 * ACTION_W : -ACTION_W);
   let offset = $state(0);
   let startX = 0, startY = 0, startOffset = 0;
   let dragging = $state(false);
@@ -216,15 +216,6 @@ import * as m from '../paraglide/messages';
           <path d="M18 9a9 9 0 0 1-9 9"/>
         </svg>
         <span>{m.sessao_git()}</span>
-      </button>
-      <button class="act loop" onclick={() => { offset = 0; onLoop?.(); }} aria-label={m.sessao_aria_loop({ n: session.name })}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="m17 2 4 4-4 4"/>
-          <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
-          <path d="m7 22-4-4 4-4"/>
-          <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
-        </svg>
-        <span>{m.sessao_loop_runner()}</span>
       </button>
     {/if}
     <button class="act del" onclick={onDelete} aria-label={m.sessao_aria_excluir_sessao({ n: session.name })}>
@@ -421,20 +412,6 @@ import * as m from '../paraglide/messages';
             <path d="M18 9a9 9 0 0 1-9 9"/>
           </svg>
         </button>
-        <button
-          class="kbd-only"
-          inert={offset === OPEN}
-          onpointerdown={(e) => e.stopPropagation()}
-          onclick={(e) => { e.stopPropagation(); onLoop?.(); }}
-          aria-label={m.sessao_aria_loop({ n: session.name })}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="m17 2 4 4-4 4"/>
-            <path d="M3 11v-1a4 4 0 0 1 4-4h14"/>
-            <path d="m7 22-4-4 4-4"/>
-            <path d="M21 13v1a4 4 0 0 1-4 4H3"/>
-          </svg>
-        </button>
       {/if}
       <button
         class="kbd-only del"
@@ -522,7 +499,7 @@ import * as m from '../paraglide/messages';
     border-bottom: 1px solid var(--border-subtle);
   }
 
-  /* Trilha de acoes revelada pelo swipe: Git | Loop | Excluir. */
+  /* Trilha de acoes revelada pelo swipe: Git | Excluir. Loop runner fica só no menu ⋯ do card. */
   .swipe-actions {
     position: absolute;
     right: 0;
@@ -530,7 +507,7 @@ import * as m from '../paraglide/messages';
     bottom: 0;
     display: flex;
   }
-  /* opacity, nao display:none: o layout da trilha (3 botoes de 64px) precisa continuar medido pro
+  /* opacity, nao display:none: o layout da trilha (2 botoes de 64px) precisa continuar medido pro
      OPEN bater com a largura real. */
   .swipe-actions.oculta { opacity: 0; }
   .swipe-actions .act {
@@ -547,7 +524,6 @@ import * as m from '../paraglide/messages';
     border-radius: 0;
   }
   .swipe-actions .git { background: var(--bg-elevated); color: var(--text-secondary); }
-  .swipe-actions .loop { background: var(--accent-dim); color: var(--accent); }
   .swipe-actions .del { background: var(--error); color: #fff; }
 
   .session-row {
