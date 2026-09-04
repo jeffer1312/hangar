@@ -15,8 +15,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import HoverPreview from './HoverPreview.svelte';
   import StateChip from './StateChip.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import GroupGlyph from './icons/GroupGlyph.svelte';
   import type { SessionInfo, AggSession, Provider } from '../lib/types';
-  import { cwdParts, rotuloEstado, stateColors, countAwaiting, initials, fmtWhen, latestAssistantEvent, clusterByPair, untrackedReason, providerTag } from '../lib/format';
+  import { cwdParts, rotuloEstado, stateColors, countAwaiting, railLabel, fmtWhen, latestAssistantEvent, clusterByPair, untrackedReason, providerTag } from '../lib/format';
   import { updateBadge } from '../lib/badge';
   import { loopBadge, LOOP_TONE_COLOR } from '../lib/loop';
   import { planBadge } from '../lib/plan';
@@ -655,12 +656,23 @@ import ConfirmDialog from './ConfirmDialog.svelte';
       {#each clusterByPair(g.sessions) as item (item.kind === 'header' ? `ph:${item.gid}` : `${item.session.serverId}::${item.session.name}`)}
         {#if item.kind === 'header'}
           {#if expanded}
-          <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo, dentro do servidor. -->
-          <button class="pair-head" onclick={() => model.toggleGroup(`pair:${item.gid}`)}
+          <!-- Cluster de pareamento (Opção C): sub-header colapsável do grupo, dentro do servidor.
+               É a TAMPA da "pasta": ele e os membros formam uma pílula contínua (CSS .pair-head /
+               .pair-member / .pair-last), pra o grupo se ler como um bloco e não como recuo. -->
+          <button class="pair-head" class:recolhido={model.collapsed.has(`pair:${item.gid}`)}
+                  onclick={() => model.toggleGroup(`pair:${item.gid}`)}
                   aria-expanded={!model.collapsed.has(`pair:${item.gid}`)} title={m.sessao_grupo_pareado({ label: item.label })}>
             <span class="grp-chevron" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
-            <span class="pair-head-label">🤝&nbsp;{item.label}</span>
+            <span class="pair-head-label"><GroupGlyph size={13} />&nbsp;{item.label}</span>
             <span class="grp-count">{item.count}</span>
+          </button>
+          {:else}
+          <!-- Trilho: a mesma pasta, só com o glifo e a contagem — o nome do grupo vai no tooltip. -->
+          <button class="pair-pill-head" class:recolhido={model.collapsed.has(`pair:${item.gid}`)}
+                  onclick={() => model.toggleGroup(`pair:${item.gid}`)}
+                  aria-expanded={!model.collapsed.has(`pair:${item.gid}`)}
+                  aria-label={m.sessao_grupo_pareado({ label: item.label })} title={m.sessao_grupo_pareado({ label: item.label })}>
+            <GroupGlyph size={14} /><b class="pair-pill-count">{item.count}</b>
           </button>
           {/if}
         {:else if !item.gid || !model.collapsed.has(`pair:${item.gid}`)}
@@ -675,7 +687,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
              (button) e nos botoes irmaos. O hover aqui e decoracao redundante (a resposta ja esta no
              chat), entao nao pede equivalente de teclado. -->
         <div class="sess-row" class:active={s.serverId === activeId && s.name === currentSession}
-             class:pair-member={!!item.gid}
+             class:pair-member={!!item.gid} class:pair-last={!!item.ultimo}
              class:awaiting={s.state === 'awaiting_input'} role="presentation"
              onmouseenter={(e) => hpEnter(e, s.name, s.serverId)} onmouseleave={hpLeave}>
 
@@ -713,22 +725,14 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 {#if model.selectMode}
                   <input type="checkbox" class="select-check" checked={model.selected.has(selKey)} tabindex="-1" aria-hidden="true" />
                 {:else if !expanded}
-                  <!-- Rail recolhido: SEMPRE iniciais — é o único texto que identifica a sessão sem
-                       o nome. O ESTADO saiu do anel em volta delas e virou o ponto do canto: o anel
-                       usava --accent pra "trabalhando", a mesma cor que o app usa pra destaque em
-                       todo lugar, e "ociosa" era a ausência de anel — indistinguível de sessão que
-                       ainda não reportou estado. Com ponto próprio, todo estado tem desenho e a
-                       ausência não significa mais duas coisas. -->
-                  <span class="initials" title={`${s.name} — ${estadoTxt}`}>{initials(s.name)}</span>
-                  <!-- Trabalhando é a MESMA marca animada da lista aberta, só que no canto: um
-                       ponto azul parado ao lado de um verde parado não dizia "está ocupada", e
-                       inventar outra animação aqui seria um segundo vocabulário pro mesmo estado.
-                       As iniciais ficam — trocá-las pelo indicador é o que fazia a coluna virar
-                       bolinhas anônimas justo nas sessões ocupadas. O pulso do halo segue reservado
-                       a quem espera resposta. -->
+                  <!-- Rail recolhido: ESTADO em cima, NOME embaixo em duas linhas mono de até 8
+                       caracteres (railLabel). Sigla saiu: era código, e ninguém memoriza código.
+                       Trabalhando é a MESMA marca animada da lista aberta; o resto é o ponto, com
+                       cor própria pra cada estado — assim "sem marca" nunca é um estado. O pulso do
+                       halo segue reservado a quem espera resposta. -->
                   {#if s.state === 'working' && !s.stalled}
                     <span class="estado-marca" title={estadoTxt} style="color: {stateColors[s.state]};">
-                      <HangarWorking size={14} />
+                      <HangarWorking size={12} />
                     </span>
                   {:else}
                     <span
@@ -738,6 +742,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       style="--cor: {s.stalled ? 'var(--warning)' : stateColors[s.state]};"
                     ></span>
                   {/if}
+                  {@const [l1, l2] = railLabel(s.name, item.label)}
+                  <span class="rail-lbl" class:aguardando={s.state === 'awaiting_input' && !s.stalled}><b>{l1}</b><i>{l2}</i></span>
                 {:else if s.state === 'working'}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarWorking size={18} /></span>
                 {:else}
@@ -813,8 +819,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                       {#if s.then_target}
                         <span class="chain-chip" title={m.sessao_chain_envia({ n: s.then_target })}>🔗&nbsp;{s.then_target}</span>
                       {/if}
-                      {#if s.pair_peers?.length}
-                        <span class="chain-chip" title={m.sessao_grupo_chip({ n: s.pair_peers.join(', ') })}>🤝&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
+                      {#if s.pair_peers?.length && !item.gid}
+                        <!-- Dentro da pasta o cabeçalho já diz o grupo; o chip só sobrevive fora dela. -->
+                        <span class="chain-chip" title={m.sessao_grupo_chip({ n: s.pair_peers.join(', ') })}><GroupGlyph size={11} />&nbsp;{s.pair_peers.length === 1 ? s.pair_peers[0] : s.pair_peers.length + 1}</span>
                       {/if}
                       {#if s.loop_status}
                         {@const lb = loopBadge(s.loop_status, s.loop_iter, s.loop_max)}
@@ -1217,7 +1224,9 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     background: var(--glass-bg);
   }
 
-  .sidebar.collapsed { width: 56px; padding: var(--space-3) var(--space-2); }
+  /* 3px de padding lateral, não 8: o rótulo mono de 8 caracteres precisa de ~44px, e com 8px de
+     cada lado sobravam 38 — `storefro` saía como `torefro`, cortado pelos dois lados. */
+  .sidebar.collapsed { width: 56px; padding: var(--space-3) 3px; }
 
   /* Aparência → Painéis → "Soltos" (o padrão): a sidebar deixa de ser parede colada e vira card,
      mesmo tratamento do painel de contexto (DesktopSessionContext.svelte:287) e do dock recolhido
@@ -1269,7 +1278,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      mesmo raio. Antes conviviam 36px de icone, 48px de linha de sessao e 36px de botao redondo, com
      tres raios — a coluna parecia desalinhada mesmo com todos os itens centralizados. O circulo
      fica reservado ao avatar da conta: circulo = pessoa, quadrado arredondado = acao. */
-  .sidebar.collapsed .sess-main { min-height: 36px; }
+  .sidebar.collapsed .sess-main { min-height: 44px; }
   /* Sessao ABERTA no trilho: anel accent na moldura da linha. O realce era um fundo accent a 10%
      atras de um quadrado que cobre a linha toda — invisivel. O anel vai por dentro (inset) pra nao
      estourar os 40px uteis do dock, e nao disputa com o box-shadow das iniciais (travada/ocupada). */
@@ -1282,7 +1291,30 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .sidebar.collapsed .sess-list { gap: var(--space-1); }
   /* 36px em TODAS as caixas visiveis do trilho. Com iniciais/avatar a 32 e os botoes a 36, a coluna
      lia como desalinhada: os itens estavam centrados, mas com larguras diferentes. */
-  .sidebar.collapsed .initials { width: 36px; height: 36px; border-radius: var(--radius-md); }
+  /* "Pasta" do grupo no trilho: cabeçalho (glifo + contagem) e membros numa pílula contínua, um
+     tom acima do trilho. O gap da lista é compensado com margin negativa pra a pílula não ter
+     costura entre as linhas. Cabeçalho `.recolhido` é a pílula inteira (raio nos 4 cantos). */
+  .pair-pill-head {
+    width: 100%; height: 22px; margin-bottom: calc(-1 * var(--space-1));
+    display: flex; align-items: center; justify-content: center; gap: 3px;
+    background: var(--surface-raised); border: 1px solid var(--border-subtle); border-bottom: none;
+    border-radius: 12px 12px 0 0; color: var(--text-muted); cursor: pointer; padding: 0;
+  }
+  .pair-pill-head.recolhido { border-bottom: 1px solid var(--border-subtle); border-radius: 12px; margin-bottom: 0; }
+  .pair-pill-count {
+    font-size: 9px; font-weight: 600; line-height: 13px; padding: 0 4px; border-radius: 6px;
+    color: var(--text-primary); background: var(--accent-dim);
+  }
+  @media (hover: hover) { .pair-pill-head:hover { color: var(--text-primary); } }
+  .sidebar.collapsed .sess-row.pair-member {
+    background: var(--surface-raised); border: 1px solid var(--border-subtle);
+    border-top: none; border-bottom: none; border-radius: 0;
+    margin-bottom: calc(-1 * var(--space-1)); padding-bottom: var(--space-1);
+  }
+  .sidebar.collapsed .sess-row.pair-member.pair-last {
+    border-bottom: 1px solid var(--border-subtle); border-radius: 0 0 12px 12px; margin-bottom: 0;
+  }
+  .sidebar.collapsed .sess-row.pair-member.active { box-shadow: inset 3px 0 0 0 var(--accent); }
   .sidebar.collapsed .side-foot.rail .cta-new {
     height: 36px;
     border-radius: var(--radius-md);
@@ -1328,7 +1360,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     background: transparent; border: 0; border-radius: var(--radius-md);
     color: var(--text-muted); cursor: pointer;
   }
-  .sidebar.collapsed .fold-btn { width: 100%; }
+  .sidebar.collapsed .fold-btn { width: 40px; }
   @media (hover: hover) { .fold-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); } }
   .fold-btn:disabled { color: var(--text-muted); opacity: 0.55; cursor: default; }
   /* o rotulo so aparece se sobrar espaco: no rodape em linha o icone ja basta */
@@ -1410,24 +1442,31 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      padding-left: var(--space-4) → chevron na coluna x=16px, mesmo eixo da borda-accent dos
      .pair-member logo abaixo (8px de margin + 3px de border + padding da .sess-main = label em
      ~19px; o texto do pair-head cai na mesma coluna porque o gap+16px de padding fecham a conta). */
+  /* "Pasta" do grupo na lista aberta: o cabeçalho é a tampa e os membros o corpo de UMA pílula
+     (fundo um tom acima, borda sutil, raio no topo do cabeçalho e na base do último). O recuo +
+     borda fina de antes não se lia como grupo — o usuário pediu destaque maior. O gap da lista é
+     compensado com margin negativa pra não haver costura. */
   .pair-head {
     display: flex; align-items: center; gap: var(--space-2);
     width: 100%; text-align: left;
-    padding: 4px var(--space-2) 4px calc(var(--space-4) + 3px);
-    background: none; border: none; cursor: pointer;
+    padding: 5px var(--space-2) 5px var(--space-3); margin-bottom: -2px;
+    background: var(--surface-raised); border: 1px solid var(--border-subtle); border-bottom: none;
+    cursor: pointer;
     font-size: var(--text-xs); font-weight: 600; color: var(--accent);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
   }
-  .pair-head-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  @media (hover: hover) { .pair-head:hover { background: var(--bg-hover); } }
-  /* Linha de MEMBRO do cluster: o recuo liga as sessões do grupo. Escopo `:not(.collapsed)` porque
-     no trilho de 56px o `margin-left` empurrava as iniciais 10px pra direita — as sessões pareadas
-     saíam do eixo dos outros itens do dock, e o agrupamento nem se lê lá (não há sub-header). */
-  /* A borda accent do pair-member herda --space-2 de margin, mas a .sess-row recebe também
-     border-left 3px no escopo :not(.collapsed) (awaiting). Somando: borda começa em 8px e label em
-     ~19px — sobrando 3px a menos que o pair-head, que começa a escrever em 19px+ (ver .pair-head).
-     Muover a borda para dentro da .sess-row alinha a faixa com o cabeçalho. */
-  .sidebar:not(.collapsed) .sess-row.pair-member { margin-left: calc(var(--space-2) - 3px); }
+  .pair-head.recolhido { border-bottom: 1px solid var(--border-subtle); border-radius: var(--radius-md); margin-bottom: 0; }
+  .pair-head-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; }
+  @media (hover: hover) { .pair-head:hover { color: var(--text-primary); } }
+  .sidebar:not(.collapsed) .sess-row.pair-member {
+    background: var(--surface-raised);
+    border-right: 1px solid var(--border-subtle); border-radius: 0;
+    margin-bottom: -2px; padding-bottom: 2px;
+  }
+  .sidebar:not(.collapsed) .sess-row.pair-member.pair-last {
+    border-bottom: 1px solid var(--border-subtle); border-radius: 0 0 var(--radius-md) var(--radius-md);
+    margin-bottom: 0;
+  }
   .grp-chevron {
     flex-shrink: 0; font-size: 9px; color: var(--text-muted);
     transition: transform 160ms var(--ease-out);
@@ -1642,39 +1681,33 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     padding: 1px 6px; border-radius: var(--radius-full);
   }
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
-  /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */
-  .sidebar.collapsed .lead { width: auto; position: relative; }
-  /* Rail recolhido — as INICIAIS dizem quem é; quem diz como está é o ponto do canto. Antes a cor
-     do estado pintava a letra E o fundo do chip, então o olho lia "chip verde / chip roxo" em vez
-     de ler a sessão. Superfície em --surface-raised (e não uma cor sólida) porque era o único
-     elemento do trilho que não deixava o papel de parede passar. */
-  .initials {
-    width: 30px; height: 30px; border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
-    color: var(--text-primary);
-    background: var(--surface-raised);
-    border: 1px solid var(--border);
+  /* Rail recolhido: coluna estado-em-cima / nome-embaixo, altura FIXA pra toda sessão ocupar o
+     mesmo bloco — é o que iguala `hangar` e `storefront-web` (a 2ª linha vazia mantém a altura). */
+  .sidebar.collapsed .lead {
+    width: 100%; height: 40px; position: relative;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    gap: 2px; padding-top: 3px;
   }
-  /* O estado tem desenho PRÓPRIO agora — este ponto no canto de cima do avatar. Ele existe pros
-     quatro estados, então "sem marca" deixou de ser um deles: antes ociosa era a ausência de anel,
-     que é o mesmo desenho de uma sessão que ainda não reportou nada. A borda na cor do painel
-     recorta o ponto do avatar em qualquer papel de parede. */
+  /* Mono de propósito: 8 caracteres têm SEMPRE a mesma largura, a coluna de nomes vira um bloco
+     alinhado. Corte seco em 8 mora no railLabel; aqui só se garante que nada quebra linha. */
+  .rail-lbl {
+    display: flex; flex-direction: column; align-items: center; line-height: 1.1;
+    font-family: var(--font-mono); font-size: 9px; white-space: nowrap;
+  }
+  .rail-lbl b { font-weight: 600; color: var(--text-primary); }
+  .rail-lbl i { font-style: normal; font-weight: 400; color: var(--text-muted); min-height: 10px; }
+  .rail-lbl.aguardando b { color: var(--warning); }
+  /* O estado tem desenho PRÓPRIO — este ponto acima do nome. Ele existe pros quatro estados, então
+     "sem marca" deixou de ser um deles: antes ociosa era a ausência de anel, que é o mesmo desenho
+     de uma sessão que ainda não reportou nada. */
   .estado-ponto {
-    position: absolute; right: -3px; top: -3px;
-    width: 9px; height: 9px; border-radius: var(--radius-full);
+    width: 7px; height: 7px; border-radius: var(--radius-full);
     background: var(--cor, var(--text-secondary));
-    border: 2px solid var(--bg-elevated);
-    box-sizing: content-box;
+    flex-shrink: 0;
   }
-  /* Trabalhando: a marca do hangar com a animação que ela já tem na lista aberta. Fundo próprio
-     (não transparente) porque são traços finos sobre a quina do avatar — sem ele os arcos se
-     misturam com a borda e com o papel de parede. */
+  /* Trabalhando: a marca do hangar com a animação que ela já tem na lista aberta. */
   .estado-marca {
-    position: absolute; right: -6px; top: -6px;
-    display: inline-flex; align-items: center; justify-content: center;
-    padding: 1px; border-radius: var(--radius-full);
-    background: var(--bg-elevated);
+    display: inline-flex; align-items: center; justify-content: center; height: 9px;
   }
   /* ÊNFASE POR URGÊNCIA — quem pulsa é quem precisa DE TI. Quem espera resposta ganha um halo largo
      e lento. O halo NUNCA vai a zero de alfa: sobre papel de parede movimentado ele sumia entre um

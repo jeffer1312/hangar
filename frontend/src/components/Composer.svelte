@@ -17,6 +17,7 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte';
   import * as m from '../paraglide/messages';
+  import GroupGlyph from './icons/GroupGlyph.svelte';
   import { novoEstadoVad, passoVad } from '../lib/vad';
   import type { EstadoVad } from '../lib/vad';
   import { lerMaosLivres } from '../lib/maosLivres';
@@ -1524,7 +1525,7 @@
           <button class="repo-chip pair-chip" class:pair-chip--on={!!pairPeers?.length}
                   title={pairPeers?.length ? m.composer_grupo_voce({ n: pairPeers.join(', ') }) : m.composer_parear_outra()}
                   onclick={onOpenPair} aria-label={m.composer_pareamento_sessoes()}>
-            <span class="repo-glyph" aria-hidden="true">🤝</span>
+            <span class="repo-glyph" aria-hidden="true"><GroupGlyph size={13} /></span>
             {#if pairLabel}
               <span class="repo-name">{pairLabel}</span>
               {#if pairedState}

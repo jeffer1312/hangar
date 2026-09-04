@@ -15,6 +15,7 @@
   import { workspaceSessionKey } from '../lib/workspaceCommands';
   import NavegadorPane from './NavegadorPane.svelte';
 import * as m from '../paraglide/messages';
+import GroupGlyph from './icons/GroupGlyph.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
   import RateChips from './RateChips.svelte';
   import PlanPanel from './PlanPanel.svelte';
@@ -433,7 +434,7 @@ import * as m from '../paraglide/messages';
         <button type="button" class="sec-open" onclick={openGroup}
                 aria-label={soloPeer && onOpenPeerChat ? m.ctx_abrir_sessao_modal({ n: soloPeer }) : m.ctx_abrir_par({ n: pairPeers.join(', ') })}>
           <span class="sec-open-body">
-            <strong>🤝 {pairPeers.join(' · ')}</strong>
+            <strong><GroupGlyph size={13} /> {pairPeers.join(' · ')}</strong>
             <p>{soloPeer && onOpenPeerChat ? m.ctx_abrir_conversa_dele() : `${pairPeers.length + 1} ${m.ctx_sessoes_pareadas()}`}</p>
           </span>
           <span class="sec-open-arrow" aria-hidden="true">›</span>
@@ -446,7 +447,7 @@ import * as m from '../paraglide/messages';
           </button>
         {/if}
       {:else}
-        <strong>🤝 {pairPeers.join(' · ')}</strong>
+        <strong><GroupGlyph size={13} /> {pairPeers.join(' · ')}</strong>
         <p>{pairPeers.length + 1} {m.ctx_sessoes_pareadas()}</p>
       {/if}
     {:else if onOpenPair}

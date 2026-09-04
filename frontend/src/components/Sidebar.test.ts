@@ -68,6 +68,7 @@ vi.mock('../lib/format', () => ({
   rotuloEstado: (s: string) => ({ working: 'em execução', idle: 'pronto', awaiting_input: 'aguardando', dead: 'encerrado' })[s] ?? '',
   stateColors: {}, countAwaiting: () => 0,
   groupSelectedByServer: () => [], initials: (n: string) => n.slice(0, 2),
+  railLabel: (n: string) => [n.slice(0, 8), ''],
   projectKey: () => '', projectLabel: () => '', effectiveGroupBy: () => 'server',
   fmtWhen: () => '', sortSessions: (s: unknown[]) => s, latestAssistantEvent: () => null,
   // Mesmo shape do real: itens do cluster são {session} (ou {kind:'header',...}); o template lê
@@ -347,8 +348,8 @@ describe('Sidebar — renomear com a sidebar recolhida (round 7)', () => {
     expect(aside).not.toBeNull();
     expect(aside?.classList.contains('collapsed')).toBe(true);
     expect(aside?.classList.contains('rail')).toBe(false);
-    // Iniciais com anel de estado — nada da reconstrução da Task 5
-    expect(aside?.querySelector('.initials')).not.toBeNull();
+    // Nome em duas linhas mono (railLabel) — nada da reconstrução da Task 5
+    expect(aside?.querySelector('.rail-lbl')).not.toBeNull();
     expect(aside?.querySelector('.rail-iniciais')).toBeNull();
     expect(aside?.querySelector('.rail-state-dot')).toBeNull();
     // Rodapé sem o toggle do painel de contexto: ele vive só na barra superior (SessionTabs)

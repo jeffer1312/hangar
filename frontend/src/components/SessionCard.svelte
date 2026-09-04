@@ -10,6 +10,7 @@ import * as m from '../paraglide/messages';
   import BottomSheet from './BottomSheet.svelte';
   import HangarWorking from './icons/HangarWorking.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import GroupGlyph from './icons/GroupGlyph.svelte';
 
   interface Props {
     session: SessionInfo;
@@ -335,7 +336,7 @@ import * as m from '../paraglide/messages';
                provider ausente = Claude (o campo só viaja quando não é Claude). -->
           <span class="prov-chip" class:prov-chip--so-icone={!provTag} title={`${m.sessao_grupo()} ${provTag ?? 'Claude'}`}><span class="sr-only">{m.sessao_grupo()}&nbsp;</span><ProviderGlyph provider={session.provider} size={12} />{#if provTag}{provTag}{/if}</span>
           {#if session.pair_peers?.length}
-            <span class="paired-chip" title={m.sessao_grupo_com({ n: session.pair_peers.join(', ') })}>🤝&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
+            <span class="paired-chip" title={m.sessao_grupo_com({ n: session.pair_peers.join(', ') })}><GroupGlyph size={12} />&nbsp;{session.pair_peers.length === 1 ? session.pair_peers[0] : session.pair_peers.length + 1}</span>
           {/if}
           {#if limited}
             <span

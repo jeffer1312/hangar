@@ -240,7 +240,27 @@ export function effectiveGroupBy(pref: GroupBy, serverCount: number): GroupBy {
 export interface PairFields { name: string; pair_gid?: string | null; pair_peers?: string[] | null; pair_task?: string | null; }
 export type PairRow<T> =
   | { kind: 'header'; gid: string; label: string; count: number }
-  | { kind: 'session'; session: T; gid: string | null };
+  | { kind: 'session'; session: T; gid: string | null; label?: string; ultimo?: boolean };
+
+// Rótulo do trilho recolhido: o NOME em duas linhas de até 8 caracteres (corte seco), em vez de
+// sigla — sigla é código e ninguém memoriza código. Linha 1 = primeiro pedaço; linha 2 = o que
+// distingue (o resto). Dentro de um grupo, o pedaço que o rótulo do grupo já carrega sai
+// (`api-1234` no grupo `ABC-1234` vira só `api`). Toda linha ocupa o mesmo bloco, então a 2ª
+// pode ficar vazia sem mudar a altura — é o que iguala `hangar` e `storefront-web`.
+export const RAIL_MAX = 8;
+export function railLabel(name: string, grupo?: string | null): [string, string] {
+  let parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (!parts.length) return [name.slice(0, RAIL_MAX), ''];
+  if (grupo) {
+    // Só a CHAVE do grupo (a primeira palavra: `ABC-1234`), não a tarefa inteira — ela cita os
+    // nomes dos membros, e casar contra ela apagava o nome todo (`api-1234` ficava sem sobra).
+    const chave = grupo.trim().split(/\s/)[0];
+    const doGrupo = new Set(chave.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((t) => t.toLowerCase()));
+    const sobra = parts.filter((p) => !doGrupo.has(p.toLowerCase()));
+    if (sobra.length) parts = sobra;   // nome INTEIRO igual ao grupo: fica como está
+  }
+  return [parts[0].slice(0, RAIL_MAX), parts.slice(1).join('-').slice(0, RAIL_MAX)];
+}
 
 export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[] {
   // Pré-agrupa por gid numa passada (O(n)) — evita o filter-dentro-do-loop O(n²), já que roda
@@ -263,7 +283,7 @@ export function clusterByPair<T extends PairFields>(sessions: T[]): PairRow<T>[]
     const task = members.map((m) => m.pair_task).find((t) => t && t.trim());
     const label = task ? task.trim() : members.map((m) => m.name).join(', ');
     out.push({ kind: 'header', gid, label, count: members.length });
-    for (const m of members) out.push({ kind: 'session', session: m, gid });
+    members.forEach((m, i) => out.push({ kind: 'session', session: m, gid, label, ultimo: i === members.length - 1 }));
   }
   return out;
 }

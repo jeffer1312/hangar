@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from 'svelte';
 import * as m from '../paraglide/messages';
+import GroupGlyph from './icons/GroupGlyph.svelte';
   import AssistantBubble from './AssistantBubble.svelte';
   import {
     getHistoryTailCached, getHistoryTailForServer, sendInputForServer, selectOptionForServer,
@@ -446,12 +447,12 @@ import * as m from '../paraglide/messages';
                   style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
                   onclick={(e) => { e.stopPropagation(); onGatherPair?.(); }}
                   title={m.board_pareada_com_clicar({ n: session.pair_peers.join(', ') })}>
-            🤝 {session.pair_peers.join(', ')}
+            <GroupGlyph size={12} /> {session.pair_peers.join(', ')}
           </button>
         {:else}
           <span class="bc-chip"
                 style="background: color-mix(in srgb, {pc} 16%, transparent); color: {pc};"
-                title={m.board_pareada_com({ n: session.pair_peers.join(', ') })}>🤝 {session.pair_peers.join(', ')}</span>
+                title={m.board_pareada_com({ n: session.pair_peers.join(', ') })}><GroupGlyph size={12} /> {session.pair_peers.join(', ')}</span>
         {/if}
       {/if}
       {#if meta?.costUsd != null}<span title={m.board_custo_sessao()}>💵 ${meta.costUsd.toFixed(2)}</span>{/if}

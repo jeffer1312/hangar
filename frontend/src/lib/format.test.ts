@@ -6,7 +6,7 @@ import {
   abbrevNum, attentionFeed, countAwaiting, effectiveGroupBy, fmtWhen, groupSelectedByServer, initials, nextAwaiting,
   pedeMarcacao,
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn, relativeTime,
-  clusterByPair, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
+  clusterByPair, railLabel, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag,
   untrackedReason,
   summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts,
   rotuloEstado,
@@ -434,6 +434,35 @@ describe('clusterByPair', () => {
   it('label cai nos nomes quando não há task', () => {
     const rows = clusterByPair([S('front', 'g1'), S('back', 'g1')]);
     expect((rows[0] as any).label).toBe('front, back');
+  });
+
+  it('membro carrega o rótulo do cluster e o último é marcado (a pílula do trilho fecha nele)', () => {
+    const rows = clusterByPair([S('a', 'g1', 'ABC-1'), S('b', 'g1')]);
+    expect(rows[1]).toMatchObject({ label: 'ABC-1', ultimo: false });
+    expect(rows[2]).toMatchObject({ label: 'ABC-1', ultimo: true });
+  });
+});
+
+describe('railLabel', () => {
+  it('primeiro pedaço em cima, o resto embaixo', () => {
+    expect(railLabel('hangar-nav')).toEqual(['hangar', 'nav']);
+    expect(railLabel('hangar')).toEqual(['hangar', '']);
+    expect(railLabel('abc1234-design')).toEqual(['abc1234', 'design']);
+  });
+  it('corta seco em 8 nas duas linhas', () => {
+    expect(railLabel('storefront-web')).toEqual(['storefro', 'web']);
+    expect(railLabel('mailerdaemon-front-antigo')).toEqual(['mailerda', 'front-an']);
+  });
+  it('dentro do grupo, o pedaço que a CHAVE do grupo já diz sai (a tarefa cita os membros e não conta)', () => {
+    expect(railLabel('api-1234', 'ABC-1234 — Evolução do editor')).toEqual(['api', '']);
+    expect(railLabel('storefront-web', 'ABC-1234')).toEqual(['storefro', 'web']);
+    expect(railLabel('api-1234', 'ABC-1234 — api-1234 faz o C#, storefront-web faz o front')).toEqual(['api', '']);
+  });
+  it('nome igual ao grupo inteiro não some', () => {
+    expect(railLabel('abc-1234', 'ABC-1234')).toEqual(['abc', '1234']);
+  });
+  it('nome só de símbolos cai no nome cru', () => {
+    expect(railLabel('---')).toEqual(['---', '']);
   });
 });
 

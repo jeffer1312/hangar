@@ -7,6 +7,7 @@
   import { getActiveId } from '../lib/auth';
   import type { SessionInfo, State } from '../lib/types';
   import * as m from '../paraglide/messages';
+  import GroupGlyph from './icons/GroupGlyph.svelte';
 
   interface Props {
     open: boolean;
@@ -243,7 +244,7 @@
                   {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
                 </span>
                 {#if s.pair_peers?.length}
-                  <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}>🤝 {s.pair_peers.length}</span>
+                  <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}><GroupGlyph size={12} /> {s.pair_peers.length}</span>
                 {/if}
               </button>
             {/each}
@@ -316,7 +317,7 @@
                 {#if s.cwd}<span class="row-cwd">{s.cwd}</span>{/if}
               </span>
               {#if s.pair_peers?.length}
-                <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}>🤝 {s.pair_peers.length}</span>
+                <span class="row-paired" title={m.par_ja_agrupada({ nomes: s.pair_peers.join(', ') })}><GroupGlyph size={12} /> {s.pair_peers.length}</span>
               {/if}
             </button>
           {/each}
