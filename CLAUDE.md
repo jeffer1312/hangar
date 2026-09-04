@@ -303,11 +303,11 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   janela — num monitor de 1440px o dock tem 530px e uma media query de 560px nunca dispara ali.
   **Config e opção num modal único — implementado (2026-08-16).** A direção acordada de juntar as
   configs num só modal (antes marcada "ainda não implementada") existe: `SettingsModal.svelte` abre
-  todas as telas num `BottomSheet` de navegação por seções (Aplicativo · Servidor) com onze linhas —
-  Geral, Aparência, Ditado, Sobre, Acesso, Contas, Servidores, Notificações, Anexos, Avançado,
-  Motores. Quem for adicionar aba: registra no `LINHAS` do `SettingsModal.svelte` e no
+  todas as telas num `BottomSheet` de navegação por seções (Aplicativo · Servidor) com as linhas de
+  `LINHAS` — hoje Geral, Aparência, Diário, Sobre (aplicativo) e Máquinas, Contas, Harnesses, Voz,
+  Notificações, Anexos, Avançado, Motores, Orquestração (servidor). Quem for adicionar aba: registra no `LINHAS` do `SettingsModal.svelte` e no
   `lib/configRoute.ts` (`TelaConfig`/`TELAS_DE_SERVIDOR`), com chave de idioma nos dois
-  `messages/*.json` no mesmo commit. O `lib/gitTabs.ts` + `GitTabs.svelte` continuam sendo o
+  `messages/*.json` no mesmo commit. Servidores e Acesso viraram **Máquinas** (2026-09-04); as rotas antigas seguem por `RENOMEADAS`. O `lib/gitTabs.ts` + `GitTabs.svelte` continuam sendo o
   precedente de navegação por abas DENTRO de uma tela (incluindo nível por aba no celular).
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.

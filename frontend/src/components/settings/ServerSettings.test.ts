@@ -182,3 +182,26 @@ describe('ServerSettings — notificações', () => {
     alvo.remove();
   });
 });
+
+describe('ServerSettings — somente leitura', () => {
+  it('o Avançado não repete o que mora em Máquinas', async () => {
+    const store = {
+      get campos() { return {}; }, get leitura() { return { port: 8765, lan_bind_ip: '0.0.0.0', server_id: 'casa', public_url: '', terminal_panel: true, versao: 'abc' }; },
+      get carregando() { return false; }, get salvando() { return false; },
+      get erro() { return ''; }, get salvo() { return false; }, get temMudanca() { return false; },
+      valorAtual: () => '', rascunhoDe: () => '', setRascunho: vi.fn(),
+      carregar: vi.fn(), salvar: vi.fn(), invalidar: vi.fn(),
+    } as unknown as ConfigServidorStore;
+    const alvo = document.createElement('div');
+    document.body.appendChild(alvo);
+    const app = mount(ServerSettings, { target: alvo, props: { store, secao: 'avancado' } });
+    await tick();
+    expect(alvo.textContent).toContain(m.config_server_painel_terminal());
+    expect(alvo.textContent).toContain('abc');
+    expect(alvo.textContent).not.toContain('8765');
+    expect(alvo.textContent).not.toContain('0.0.0.0');
+    expect(alvo.textContent).not.toContain('casa');
+    unmount(app);
+    alvo.remove();
+  });
+});

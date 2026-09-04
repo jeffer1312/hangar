@@ -64,11 +64,13 @@
 
   const visiveis = $derived(CAMPOS.filter((c) => c.secao === secao));
 
+  // O que a tela Máquinas já mostra (identificador editável; porta, IP e URL na lista de endereços)
+  // não se repete aqui — um dado, um lugar.
+  const LEITURA_EM_MAQUINAS = new Set(['port', 'lan_bind_ip', 'server_id', 'public_url']);
   const ROTULO_LEITURA: Record<string, string> = {
-    port: m.config_server_porta(), lan_bind_ip: m.config_server_ip_bind(), server_id: m.config_server_id(),
-    public_url: m.config_server_url_publica(),
     terminal_panel: m.config_server_painel_terminal(),
   };
+  const leituraVisivel = $derived(Object.entries(store.leitura).filter(([k]) => !LEITURA_EM_MAQUINAS.has(k)));
 
   // Pastas mapeadas do seletor de pasta (scan_roots): o valor no runtime_config é a string "a,b"
   // (mesmo formato do CP_SCAN_ROOTS); a tela edita como lista de linhas.
@@ -163,7 +165,7 @@
         <p class="ajuda">
           {m.config_server_so_servidor_1()} <code>.env</code>{m.config_server_so_servidor_2()}
         </p>
-        {#each Object.entries(store.leitura) as [k, v] (k)}
+        {#each leituraVisivel as [k, v] (k)}
           <div class="ro-linha">
             <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
             <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? m.config_server_sim() : m.config_server_nao()) : v}</span>
