@@ -84,10 +84,25 @@ def transcript_path(cwd: str, session_id: str, provider: str) -> str:
     """Caminho do JSONL da sessao, ou "" se ela ainda nao escreveu nada ("" e nao excecao: o
     registry chama isto logo depois do spawn, e a TUI so cria o arquivo no primeiro turno)."""
     d = sessions_root(provider) / cwd_slug(cwd)
-    if not d.is_dir():
+    if d.is_dir():
+        cands = sorted(d.glob(f"*_{session_id}.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if cands:
+            return str(cands[0])
+    return localizar_na_raiz(f"*_{session_id}.jsonl", provider) if provider == "omp" else ""
+
+
+def localizar_na_raiz(padrao: str, provider: str) -> str:
+    """Procura o arquivo em QUALQUER pasta de cwd da raiz de sessoes. O omp nao honra o diretorio
+    do `--session`: grava o transcript principal em `sessions/-/<nome>` (so os subagentes vao
+    pro diretorio pedido), entao o caminho que a gente montou — e que a extensao dele devolve
+    em getSessionFile() — pode nao existir."""
+    raiz = sessions_root(provider)
+    if not raiz.is_dir():
         return ""
-    cands = sorted(d.glob(f"*_{session_id}.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return str(cands[0]) if cands else ""
+    cands = [p for p in raiz.glob(f"*/{padrao}") if p.is_file()]
+    if not cands:
+        return ""
+    return str(max(cands, key=lambda p: p.stat().st_mtime))
 
 
 def transcript_alvo(cwd: str, session_id: str, provider: str) -> str:

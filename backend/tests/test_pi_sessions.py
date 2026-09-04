@@ -72,6 +72,20 @@ def test_transcript_path_globs_past_the_timestamp_prefix(tmp_path, monkeypatch):
     assert got == str(target)
 
 
+def test_omp_transcript_fora_da_pasta_do_cwd_e_achado_pelo_nome(tmp_path, monkeypatch):
+    # omp 18.1.6 grava o transcript principal em `sessions/-/<nome>` e nao no diretorio do
+    # `--session`; o Pi nao faz isso, entao no Pi a busca fica restrita a pasta do cwd.
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path))
+    raiz = tmp_path / "sessions"
+    (raiz / "-").mkdir(parents=True)
+    alvo = raiz / "-" / "2026-09-04T19-42-03-000Z_d5bb540a-af7b-45a7-ad80-e7de61326ead.jsonl"
+    alvo.write_text("")
+    assert pi_sessions.transcript_path("/tmp", "d5bb540a-af7b-45a7-ad80-e7de61326ead", "omp") == str(alvo)
+    assert pi_sessions.localizar_na_raiz(alvo.name, "omp") == str(alvo)
+    monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(raiz))
+    assert pi_sessions.transcript_path("/tmp", "d5bb540a-af7b-45a7-ad80-e7de61326ead", "pi") == ""
+
+
 def test_transcript_path_empty_when_session_not_created_yet(tmp_path, monkeypatch):
     # Sessao recem-spawnada: o arquivo so nasce no primeiro turno. "" (nao excecao) porque o
     # registry chama isto ANTES de a TUI escrever qualquer coisa.

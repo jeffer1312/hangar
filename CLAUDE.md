@@ -460,6 +460,13 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     deixa a sessão sem transcript até o próximo `agent_start` — que só chega se alguém conseguir
     mandar prompt, o que o app não consegue numa sessão untracked. Resume é `-r <caminho>` (o id
     interno do omp não é o do nome do arquivo).
+    **E o diretório do `--session` não é honrado (omp 18.1.6, medido 04/09/2026):** o transcript
+    principal nasce em `sessions/-/<nome>.jsonl` (o `-` é o slug de um cwd vazio) e só os
+    subagentes vão pra pasta pedida — enquanto o `getSessionFile()` que a extensão publica no
+    bilhete continua devolvendo o caminho pedido, que não existe. A sessão aparecia vazia no app
+    com a TUI cheia. `pi_sessions.localizar_na_raiz` procura o mesmo NOME de arquivo em qualquer
+    pasta da raiz (`registry.pi_session_file` e `transcript_path`, só pro omp); o Pi honra o
+    diretório e continua restrito à pasta do cwd.
   - **Eventos com outro nome:** `agent_end` e `model_changed`, não `agent_settled` nem
     `model_select`. Sem tratá-los, o estado ficava preso em `working`. E a troca de modelo pelo app
     dava falso "o Pi recusou a troca" por um motivo mais fundo, achado na revisão final: o

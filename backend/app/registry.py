@@ -588,6 +588,11 @@ def pi_session_file(pane_id: str, pid: Optional[int] = None,
         # forte: compara o bilhete com o nascimento DESTE processo. Mesmo contrato do Claude, cujo
         # create() tambem fixa um caminho que so passa a existir depois.
         if f:
+            # omp: o bilhete devolve o caminho do `--session`, mas o transcript principal nasce
+            # em `sessions/-/<nome>` (ver pi_sessions.localizar_na_raiz). Mesmo nome, outra pasta.
+            if provider == "omp" and not os.path.exists(f):
+                from app.adapters.pi.sessions import localizar_na_raiz   # import local, como os irmaos acima
+                f = localizar_na_raiz(os.path.basename(f), provider) or f
             return f
     except (OSError, ValueError):
         pass
