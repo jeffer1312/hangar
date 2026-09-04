@@ -315,6 +315,22 @@ function fecharNavegador(win, chave) {
 // lendo). Sem targetId (CDP fora do ar?), grava só chave+url e o CLI casa por URL.
 const NAV_SIDECARS = path.join(os.homedir(), '.hangar', 'nav');
 
+// Varre a pasta na largada. O sidecar não sobrevive ao processo — o view morre junto com a janela
+// —, mas ele só era apagado no × e no close da janela: app derrubado por sinal ou por crash
+// deixava o arquivo pra trás, e um navegador MORTO de um servidor passava a disputar o nome com um
+// vivo de outro, obrigando o `hangar-preview` a exigir a chave completa. A trava de instância única
+// (logo abaixo) garante um dono só, então tudo que está aqui na subida é de execução encerrada.
+function limparSidecaresNav() {
+  let restos = [];
+  try {
+    restos = fs.readdirSync(NAV_SIDECARS);
+  } catch { return; }                 // pasta ainda não existe: nada a limpar
+  for (const nome of restos) {
+    if (!nome.endsWith('.json') && !nome.endsWith('.tmp')) continue;
+    try { fs.rmSync(path.join(NAV_SIDECARS, nome), { force: true }); } catch { /* já sumiu */ }
+  }
+}
+
 async function gravarSidecarNav(chave, urlInicial, idsAntes) {
   for (let t = 0; t < 6; t++) {
     try {
@@ -444,7 +460,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => abrirJanela('segunda janela'));
-  app.whenReady().then(() => abrirJanela('arranque'));
+  app.whenReady().then(() => { limparSidecaresNav(); abrirJanela('arranque'); });
 }
 
 app.on('window-all-closed', () => app.quit());
