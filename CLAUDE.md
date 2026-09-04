@@ -32,6 +32,11 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
   cairia no default `claude` e seria casado com o transcript do Claude do mesmo diretório; e nessa
   janela `info.jsonl` é `None`, então tudo que deriva chave do transcript (`session_key`) tem que
   desviar — `session_key(None)` levanta `TypeError` e derrubaria a lista inteira, de todas as sessões.
+  E uma terceira, medida em 04/09/2026: **a TUI só sobe depois de a porta do app-server aceitar
+  conexão** (`_esperar_porta`). O `codex --remote` conecta UMA vez e, recusado, sai com 1 — o pane
+  morre, o tmux imprime `[exited]` e o `hangar-codex` apaga a sessão em menos de 1s. Só aparece com a
+  máquina carregada (load ~5 com suítes rodando): aí o servidor perde a corrida pro bind e a TUI
+  chega antes. Com a máquina folgada nunca reproduzia, em nenhum terminal.
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in

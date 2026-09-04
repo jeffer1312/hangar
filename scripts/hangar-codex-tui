@@ -77,6 +77,33 @@ def _porta_livre() -> str:
     return f"ws://127.0.0.1:{porta}"
 
 
+def _avisar_servidor_morto(endpoint: str, servidor, erros) -> None:
+    """O stderr DELE e a unica pista de por que nao abriu a porta."""
+    erros.seek(0)
+    cauda = erros.read()[-_ERRO_MAX:].decode(errors="replace").strip()
+    print(f"hangar-codex-tui: o app-server saiu com codigo {servidor.returncode} antes de "
+          f"abrir {endpoint}" + (f":\n{cauda}" if cauda else ""), file=sys.stderr)
+
+
+def _esperar_porta(endpoint: str, servidor, erros, teto: float) -> bool:
+    """Bloqueia ate o app-server aceitar conexao. A TUI nao tenta de novo: se sobe antes do bind,
+    leva `Connection refused`, sai com 1, o pane morre e a sessao some — e isso acontece justo
+    quando a maquina esta carregada, que e quando o servidor demora."""
+    host, porta = endpoint.rsplit("/", 1)[1].rsplit(":", 1)
+    limite = time.monotonic() + teto
+    while time.monotonic() < limite:
+        if servidor.poll() is not None:
+            _avisar_servidor_morto(endpoint, servidor, erros)
+            return False
+        try:
+            with socket.create_connection((host, int(porta)), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    print(f"hangar-codex-tui: app-server nao respondeu em {endpoint}", file=sys.stderr)
+    return False
+
+
 def _espera_thread(endpoint: str, cwd: str, servidor, erros, salvar) -> None:
     """Escuta o app-server ate a TUI abrir a thread e grava o sidecar. Roda numa thread propria.
 
@@ -90,14 +117,7 @@ def _espera_thread(endpoint: str, cwd: str, servidor, erros, salvar) -> None:
     ws = None
     while ws is None and time.monotonic() < limite:
         if servidor.poll() is not None:
-            # Morreu antes de abrir a porta. O motivo esta no stderr DELE, e sem imprimir isto a
-            # unica pista seria a espera estourando 60s depois — falha calada, no processo com mais
-            # chance de falhar aqui.
-            erros.seek(0)
-            cauda = erros.read()[-_ERRO_MAX:].decode(errors="replace").strip()
-            print(f"hangar-codex-tui: o app-server saiu com codigo {servidor.returncode} antes de "
-                  f"abrir {endpoint}" + (f":\n{cauda}" if cauda else ""), file=sys.stderr)
-            return
+            return   # quem avisa e o `_esperar_porta` da thread principal, uma vez so
         try:
             ws = connect(endpoint, open_timeout=1, max_size=None)
         except Exception:
@@ -105,21 +125,27 @@ def _espera_thread(endpoint: str, cwd: str, servidor, erros, salvar) -> None:
     if ws is None:
         print(f"hangar-codex-tui: app-server nao respondeu em {endpoint}", file=sys.stderr)
         return
+    from websockets.exceptions import ConnectionClosed
     with ws:
-        ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                            "params": {"clientInfo": CLIENT_INFO, "capabilities": None}}))
-        for cru in ws:
-            try:
-                msg = json.loads(cru)
-            except ValueError:
-                continue
-            if not isinstance(msg, dict) or msg.get("method") != "thread/started":
-                continue
-            thread = (msg.get("params") or {}).get("thread") or {}
-            if thread.get("cwd") != cwd:
-                continue
-            if thread.get("id") and thread.get("path"):
-                salvar(thread["id"], thread["path"])
+        try:
+            ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                "params": {"clientInfo": CLIENT_INFO, "capabilities": None}}))
+            for cru in ws:
+                try:
+                    msg = json.loads(cru)
+                except ValueError:
+                    continue
+                if not isinstance(msg, dict) or msg.get("method") != "thread/started":
+                    continue
+                thread = (msg.get("params") or {}).get("thread") or {}
+                if thread.get("cwd") != cwd:
+                    continue
+                if thread.get("id") and thread.get("path"):
+                    salvar(thread["id"], thread["path"])
+                return
+        except ConnectionClosed:
+            # Servidor foi embora (a TUI saiu e o `finally` o matou): nao ha o que salvar, e um
+            # traceback aqui so suja o pane por cima do erro de verdade.
             return
 
 
@@ -234,6 +260,8 @@ def main() -> int:
     if args.prompt:
         argv.append(args.prompt)
     try:
+        if not _esperar_porta(endpoint, servidor, erros, _ESPERA_THREAD):
+            return 1
         return subprocess.run(argv).returncode
     finally:
         servidor.terminate()

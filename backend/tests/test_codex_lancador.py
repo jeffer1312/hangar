@@ -37,6 +37,7 @@ if args[:1] == ["app-server"]:
         sys.exit(3)
     from websockets.sync.server import serve
     porta = int(args[args.index("--listen") + 1].rsplit(":", 1)[1])
+    time.sleep(float(os.environ.get("FAKE_SERVIDOR_LENTO", "0")))   # maquina carregada
 
     def handler(ws):
         for cru in ws:
@@ -54,6 +55,17 @@ if args[:1] == ["app-server"]:
 else:
     with open(os.environ["FAKE_TUI_OUT"], "w") as fh:
         fh.write("\\n".join(args))
+    if os.environ.get("FAKE_TUI_CONN"):
+        # A TUI de verdade conecta UMA vez e morre no refused; aqui so registramos o que ela veria.
+        import socket
+        host, porta = args[args.index("--remote") + 1].rsplit("/", 1)[1].rsplit(":", 1)
+        try:
+            socket.create_connection((host, int(porta)), timeout=1).close()
+            resultado = "conectou"
+        except OSError:
+            resultado = "recusou"
+        with open(os.environ["FAKE_TUI_CONN"], "w") as fh:
+            fh.write(resultado)
     time.sleep(float(os.environ.get("FAKE_TUI_SLEEP", "0.2")))
 '''
 
@@ -183,6 +195,21 @@ def test_sigterm_no_lancador_derruba_o_app_server(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="o lancador so e usado em pane POSIX por ora")
+def test_tui_so_sobe_depois_de_o_app_server_aceitar_conexao(tmp_path):
+    """Sem esperar a porta, num servidor lento a TUI levava `Connection refused`, saia com 1 e o
+    pane morria — foi o `[exited]` de 1s ao digitar `codex` com a maquina carregada."""
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    env = _ambiente(tmp_path, cwd)
+    env["FAKE_SERVIDOR_LENTO"] = "1.5"
+    env["FAKE_TUI_CONN"] = str(tmp_path / "tui-conn.txt")
+    r = subprocess.run([sys.executable, str(_LANCADOR), "--name", "sess", "--cwd", str(cwd)],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "tui-conn.txt").read_text() == "conectou"
+    assert "Traceback" not in r.stderr, r.stderr
+
+
 def test_app_server_que_morre_na_largada_diz_o_motivo(tmp_path):
     """O stderr do app-server e a UNICA pista quando ele nao sobe (versao sem `--listen`, por
     exemplo). Jogado fora, a falha vira uma espera de 60s sem explicacao."""
