@@ -48,4 +48,30 @@ describe('Composer — pílula de permissão reage a sessionState', () => {
     unmount(harness as never);
     document.body.innerHTML = '';
   });
+
+  it('Alt+Shift+P passa pro PRÓXIMO modo do ciclo vivo (e dá a volta no fim)', async () => {
+    vi.mocked(api.getPermissionModes).mockResolvedValue({ current: 'acceptEdits', modes: ['plan', 'acceptEdits'], sondavel: true });
+    vi.mocked(api.setPermissionMode).mockResolvedValue({ mode: 'plan', current: 'plan' });
+    // desktop: o atalho é só de tela larga
+    window.matchMedia = ((q: string) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} })) as never;
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const harness = mount(Harness as never, { target: el });
+    await tick(); await tick(); await tick();
+    await new Promise((r) => setTimeout(r, 0));
+    await tick();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', key: 'P', altKey: true, shiftKey: true, bubbles: true }));
+    await tick(); await new Promise((r) => setTimeout(r, 0)); await tick();
+    // acceptEdits é o último da lista de 2 -> volta pro primeiro
+    expect(vi.mocked(api.setPermissionMode)).toHaveBeenCalledWith('perm-test', 'plan');
+
+    // sem Shift não é o atalho
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', key: 'p', altKey: true, bubbles: true }));
+    await tick(); await new Promise((r) => setTimeout(r, 0));
+    expect(vi.mocked(api.setPermissionMode)).toHaveBeenCalledTimes(1);
+
+    unmount(harness as never);
+    document.body.innerHTML = '';
+  });
 });

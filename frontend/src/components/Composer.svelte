@@ -451,6 +451,48 @@
     return () => document.removeEventListener('keydown', aoAtalhoMic);
   });
 
+  // Atalho de permissão (só desktop, só Claude): Alt+Shift+P passa pro PRÓXIMO modo do ciclo
+  // vivo — a mesma lista que a pílula mostra (4 ou 5 modos lidos da sessão), nunca a lista
+  // canônica: modo só-de-criação não entra no ciclo. Mesmos guards do atalho do mic.
+  function aoAtalhoPermissao(e: KeyboardEvent) {
+    if (e.repeat || !e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== 'KeyP') return;
+    if (!isClaude || !window.matchMedia('(min-width: 820px)').matches) return;
+    if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    void ciclarPermissao();
+  }
+
+  async function ciclarPermissao() {
+    if (permCarregando) return;
+    let modos = permModes;
+    if (modos.length === 0) {
+      permCarregando = true;
+      try {
+        const res = await getPermissionModes(sessionName);
+        permCurrent = res.current;
+        permModes = res.modes;
+        permSondavel = res.sondavel;
+        modos = res.modes;
+      } catch (e) {
+        permError = e instanceof Error ? e.message : String(e);
+        return;
+      } finally {
+        permCarregando = false;
+      }
+    }
+    if (modos.length === 0) return;
+    const i = permCurrent ? modos.indexOf(permCurrent) : -1;
+    const alvo = modos[(i + 1) % modos.length];
+    if (alvo === permCurrent) return;
+    try { await handlePermApply(alvo); } catch { /* erro já está em permError */ }
+  }
+
+  $effect(() => {
+    document.addEventListener('keydown', aoAtalhoPermissao);
+    return () => document.removeEventListener('keydown', aoAtalhoPermissao);
+  });
+
   // ── Pills de modelo e de esforco: cada uma abre seu popover (aplica via endpoint dedicado) ──
   // Display otimista: a escolha aparece na hora; o status (read-back real do statusline)
   // reconcilia o modelo quando confirma. Esforco e write-only (sem read-back confiavel)
@@ -1832,9 +1874,24 @@
                 </span>
               </button>
             {/if}
-            <!-- Permissão NÃO é mais pill da fileira: em telas de celular a palavra do modo
-                 ("bypassPermissions") estourava a linha e derrubava os controles. Ela virou uma
-                 linha dentro do seletor de modelo (ClaudeModelPopover), que é onde se mexe nela. -->
+            <!-- Permissão: linha dentro do seletor de modelo (ClaudeModelPopover) em qualquer tela,
+                 e pill própria SÓ no desktop (.pill-perm some no celular via media query): ali a
+                 palavra do modo ("bypassPermissions") estourava a linha e derrubava os controles.
+                 Alt+Shift+P passa pro próximo modo do ciclo. -->
+            {#if permCurrent}
+              <button
+                class="model-pill pill-perm"
+                onclick={() => void abrirPermissao()}
+                aria-haspopup="dialog"
+                aria-expanded={permPopOpen}
+                aria-label={m.composer_permissao()}
+                title={m.permissao_atalho()}
+              >
+                <span class="pill-label">
+                  <span class="pill-model">{permCurrent}</span>
+                </span>
+              </button>
+            {/if}
           </span>
         {:else}
           <!-- Codex: pill-duo como os outros três. O esforço tem metade própria em vez de virar
@@ -2287,6 +2344,7 @@
     /* Anexo e pill de estilo saem da fileira (estão no "+"); o mic fica. */
     .control-left > .attach-btn:not(.mic-btn):not(.plus-btn) { display: none; }
     .control-left > .model-pill { display: none; }
+    .pill-perm { display: none; }
     .pill-duo {
       display: inline-flex;
       align-items: center;

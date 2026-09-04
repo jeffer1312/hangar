@@ -1837,6 +1837,7 @@
   "composer_permissao": "Permissão",
   "permissao_so_criacao": "só na criação — recrie a sessão para usar este modo",
   "permissao_so_criacao_curto": "só criação",
+  "permissao_atalho": "Modo de permissão · Alt+Shift+P passa pro próximo",
   "permissao_dica": "Shift+Tab no terminal também troca — a lista aqui é o que esta sessão pode percorrer",
   "permissao_dontask_sem_volta": "esta sessão nasceu em dontAsk; sair dele é irreversível — use Shift+Tab no terminal, ou recrie a sessão",
   "erro_rota_so_pi": "esta rota só existe pra sessões Pi/OMP",

@@ -1837,6 +1837,7 @@
   "composer_permissao": "Permission",
   "permissao_so_criacao": "only at creation — recreate the session to use this mode",
   "permissao_so_criacao_curto": "creation only",
+  "permissao_atalho": "Permission mode · Alt+Shift+P cycles to the next",
   "permissao_dica": "Shift+Tab in the terminal also cycles — this list is what this session can reach",
   "permissao_dontask_sem_volta": "this session was born in dontAsk; leaving it is irreversible — use Shift+Tab in the terminal, or recreate the session",
   "erro_rota_so_pi": "this route only exists for Pi/OMP sessions",
