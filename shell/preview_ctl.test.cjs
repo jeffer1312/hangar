@@ -132,6 +132,26 @@ test('preencher limpa o campo e usa insertText (input controlado por React aceit
   assert.equal(inserir[1].text, 'Jefferson');
 });
 
+test('preencher usa Ctrl+A + Delete pra limpar e Input.insertText pra inserir', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'textbox' }, name: { value: 'Nome' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  await ctl.preencher('@e1', 'novo');
+  const chamadas = dbg.chamadas.map(([m]) => m);
+  assert.ok(chamadas.includes('Input.dispatchMouseEvent'), 'foca com click');
+  assert.ok(chamadas.includes('Input.dispatchKeyEvent'), 'dispara Ctrl+A e Delete');
+  assert.ok(chamadas.includes('Input.insertText'), 'insere o texto');
+  const ctrlA = dbg.chamadas.filter(([m, p]) => m === 'Input.dispatchKeyEvent' && p.key === 'a');
+  const deletes = dbg.chamadas.filter(([m, p]) => m === 'Input.dispatchKeyEvent' && p.key === 'Delete');
+  assert.equal(ctrlA.length, 2, 'Ctrl+A = keyDown + keyUp');
+  assert.equal(deletes.length, 2, 'Delete = keyDown + keyUp');
+});
+
 test('digitar manda Input.insertText com o texto exato', async () => {
   const dbg = dubleDbg();
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });

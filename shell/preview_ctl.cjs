@@ -111,9 +111,14 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       const p = await this.centroDe(ref);
       if (!p) return `erro: ref ${ref} nao existe (rode snapshot de novo)`;
       await this.clicar(ref);
-      // Seleciona tudo e substitui: `value=` em JS não dispara o onChange do React.
+      // Seleciona tudo e substitui: `value=` em JS não dispara onChange no React. Ctrl+A + Input.insertText
+      // em navegadores reais deveria funcionar (o texto selecionado é deletado antes de inserir).
+      // Se não funcionar, é porque Input.insertText não respeita seleção — então apaga com Delete + insere.
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 });
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
+      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Delete' });
+      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete' });
+      // Input.insertText deveria agora inserir em campo vazio. Se ainda concatenar, é bug do CDP.
       await dbg.sendCommand('Input.insertText', { text: String(texto) });
       return `ok: fill ${ref}`;
     },
