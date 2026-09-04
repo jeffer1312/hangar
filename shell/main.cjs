@@ -323,14 +323,22 @@ async function gravarSidecarNav(chave, urlInicial, idsAntes) {
       // O diff por idsAntes só vale se a leitura de ANTES do view nascer foi confiável; com ela
       // falha (null), casar por "target novo" pode pegar o app do hangar (com o token no
       // localStorage) — então sem diff não grava targetId e o CLI casa por URL.
+      // SEM filtro de url: o target do view nasce em about:blank e só vira http quando a página
+      // carrega. Exigir http aqui perdia a corrida em página lenta (um app Vite local), as 6
+      // tentativas acabavam e o sidecar ia pro disco com targetId null — o `hangar-preview` então
+      // só casa por URL, que a primeira navegação do agente já invalida, e responde "morto" com o
+      // navegador aberto na frente do usuário. Quem identifica o target é o diff, não a url.
       const novo = idsAntes
-        ? targets.find((x) => x.type === 'page' && !idsAntes.has(x.id) && x.url.startsWith('http'))
+        ? targets.find((x) => x.type === 'page' && !idsAntes.has(x.id))
         : null;
       if (novo || t === 5) {
         fs.mkdirSync(NAV_SIDECARS, { recursive: true });
         const arq = path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`);
         const tmp = path.join(NAV_SIDECARS, `.${nomeSidecar(chave)}.${process.pid}.tmp`);
-        fs.writeFileSync(tmp, JSON.stringify({ chave, url: novo ? novo.url : urlInicial, targetId: novo ? novo.id : null, ts: Date.now() }));
+        // about:blank não é endereço de nada: com o target ainda carregando, o que vale gravar é a
+        // url pedida — é ela que serve de plano B quando não há targetId.
+        const url = novo && novo.url.startsWith('http') ? novo.url : urlInicial;
+        fs.writeFileSync(tmp, JSON.stringify({ chave, url, targetId: novo ? novo.id : null, ts: Date.now() }));
         fs.renameSync(tmp, arq);
         return;
       }

@@ -1,4 +1,12 @@
+<script module lang="ts">
+  // Aba escolhida POR SESSÃO. `ctxPanel.aba` é uma só pro app inteiro, e este painel remonta a
+  // cada troca de sessão — sem esta memória, passar por uma sessão sem navegador zerava a aba e
+  // a sessão de origem voltava em Contexto, com o navegador vivo e escondido atrás dela.
+  const ABA_POR_SESSAO = new Map<string, 'contexto' | 'arquivos' | 'navegador'>();
+</script>
+
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { ctxPanel, alternarCtxPanel, arrastarLargura, salvarLargura } from '../lib/ctxPanel.svelte';
   import { navegadorPanel, arrastarNav, salvarNav } from '../lib/navegadorPanel.svelte';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
@@ -107,10 +115,18 @@ import * as m from '../paraglide/messages';
   // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
   // botão da fileira ou o agente via hangar-preview open).
   const temNav = $derived(navChave in navegadorPanel.abertos);
-  // A aba é global (ctxPanel, por desenho) mas o navegador é POR SESSÃO: trocou pra uma sessão sem
-  // navegador com a aba ativa, volta pra Contexto — senão a coluna fica em branco (os três painéis
-  // têm guard, e header/fileira somem pelo mesmo motivo). Medido no app dele: troca de sessão com
-  // a aba ativa deixava a coluna vazia.
+  // Volta pra aba em que ESTA sessão estava (ver ABA_POR_SESSAO no script de módulo) e guarda a
+  // escolha ao sair. onMount/onDestroy e não $effect: o painel remonta por key a cada troca.
+  onMount(() => {
+    const chave = navChave;
+    const lembrada = ABA_POR_SESSAO.get(chave);
+    if (lembrada) ctxPanel.aba = lembrada;
+    return () => ABA_POR_SESSAO.set(chave, ctxPanel.aba);
+  });
+  // A aba é global (ctxPanel, por desenho) mas o navegador é POR SESSÃO: sessão sem navegador com
+  // a aba ativa volta pra Contexto — senão a coluna fica em branco (os três painéis têm guard, e
+  // header/fileira somem pelo mesmo motivo). Medido no app dele: troca de sessão com a aba ativa
+  // deixava a coluna vazia.
   $effect(() => {
     if (ctxPanel.aba === 'navegador' && !temNav) ctxPanel.aba = 'contexto';
   });
