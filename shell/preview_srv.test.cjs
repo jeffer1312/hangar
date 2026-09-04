@@ -25,6 +25,30 @@ test('recusa sem token e atende com token', async () => {
   srv.fechar();
 });
 
+test('token de tamanho diferente do certo recusa sem lancar (timingSafeEqual)', async () => {
+  const srv = await subirServidor({ controladorDe: () => ctlFalso, escrever: () => {} });
+  const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
+    method: 'POST',
+    body: JSON.stringify({ chave: 'srv::x', verbo: 'snapshot', args: [] }),
+    headers: { Authorization: 'Bearer curto' },
+  });
+  assert.equal(r.status, 401);
+  srv.fechar();
+});
+
+test('corpo acima do teto responde 413 e nao derruba o servidor', async () => {
+  const srv = await subirServidor({ controladorDe: () => ctlFalso, escrever: () => {} });
+  const corpoGrande = 'a'.repeat(200 * 1024);
+  const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
+    method: 'POST',
+    body: corpoGrande,
+    headers: { Authorization: `Bearer ${srv.token}` },
+  });
+  assert.equal(r.status, 413);
+  assert.match(await r.text(), /corpo grande demais/);
+  srv.fechar();
+});
+
 test('sessao sem navegador aberto responde 404 com recado util', async () => {
   const srv = await subirServidor({ controladorDe: () => null, escrever: () => {} });
   const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
