@@ -301,7 +301,13 @@ def _list_sig(infos) -> str:
           # `problema` entra pelo mesmo motivo do engine: ele aparece e some sem mexer em mais
           # nada (o hook e aprovado na TUI e a sessao passa a ter marcador), e sem isto o aviso na
           # tela ficaria preso ate outra coisa qualquer mudar a assinatura.
-          getattr(i, "problema", None))
+          getattr(i, "problema", None),
+          # Uma sessao Pi/omp/kimi nasce classificada como `claude` e so vira o provider dela
+          # quando a extensao publica o bilhete do pane. Sem o provider aqui, essa virada so
+          # re-emite a lista se o `jsonl` mudar junto — e a lista fica com o glifo errado (e sem
+          # os chips de provider, que so aparecem quando ela mistura harnesses) ate outra coisa
+          # qualquer mudar a assinatura.
+          getattr(i, "provider", None))
          for i in infos],
         ensure_ascii=False,
     )
