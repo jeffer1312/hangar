@@ -215,3 +215,23 @@ test('avaliar prefere exception.description sobre exception.text', async () => {
   const saida = await ctl.avaliar('x()');
   assert.match(saida, /TypeError: x is not a function/);
 });
+
+test('wait --text volta assim que o texto aparece', async () => {
+  let html = '<p>carregando</p>';
+  const dbg = dubleDbg();
+  dbg.sendCommand = async (m, p) => {
+    if (m === 'Runtime.evaluate' && String(p.expression).includes('innerText')) {
+      return { result: { value: html } };
+    }
+    return {};
+  };
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  setTimeout(() => { html = '<p>pronto</p>'; }, 30);
+  assert.match(await ctl.esperar(['--text', 'pronto']), /^ok: wait/);
+});
+
+test('wait estoura o teto e devolve erro em vez de travar', async () => {
+  const dbg = dubleDbg({ 'Runtime.evaluate': { result: { value: '' } } });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {}, tetoEspera: 60 });
+  assert.match(await ctl.esperar(['--text', 'nunca']), /^erro: wait --text nunca nao aconteceu/);
+});

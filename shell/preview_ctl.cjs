@@ -141,6 +141,41 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       if (r.exceptionDetails) return `erro: ${r.exceptionDetails.exception?.description || r.exceptionDetails.text}`;
       return `ok: ${JSON.stringify(r.result && r.result.value)}`;
     },
+    async esperar(args) {
+      const alvo = args[0];
+      if (/^\d+$/.test(String(alvo))) {
+        await new Promise((r) => setTimeout(r, Number(alvo)));
+        return `ok: wait ${alvo}ms`;
+      }
+      const limite = Date.now() + tetoEspera;
+      const cheque = async () => {
+        if (String(alvo).startsWith('@')) { await this.snapshot(); return refs.has(alvo); }
+        if (alvo === '--url') {
+          const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'location.href', returnByValue: true });
+          return String(r.result && r.result.value).includes(args[1]);
+        }
+        if (alvo === '--text') {
+          const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.body.innerText', returnByValue: true });
+          return String(r.result && r.result.value).includes(args[1]);
+        }
+        // `--idle` é REDE parada, não `readyState`. O readyState vira 'complete' quase no ato da
+        // navegação e não diz nada sobre o fetch que ainda vai popular a tela — quem trocasse
+        // `sleep` por `wait --idle` continuaria adivinhando, que é a queixa que este verbo existe
+        // pra matar. O carimbo vem do mesmo buffer de rede que o controlador já mantém.
+        if (alvo === '--idle') {
+          return Date.now() - ultimaRede > 500 && (await (async () => {
+            const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.readyState', returnByValue: true });
+            return r.result && r.result.value === 'complete';
+          })());
+        }
+        return false;
+      };
+      while (Date.now() < limite) {
+        if (await cheque()) return `ok: wait ${args.join(' ')}`;
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      return `erro: wait ${args.join(' ')} nao aconteceu em ${tetoEspera}ms`;
+    },
   };
 }
 
