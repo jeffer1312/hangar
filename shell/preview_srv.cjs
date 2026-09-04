@@ -46,13 +46,17 @@ async function subirServidor({ controladorDe, escrever }) {
       // Sem teto, um `for await` sem limite deixa quem tem o token derrubar por memória o
       // processo PRINCIPAL do Electron — não só a requisição, o app inteiro. A leitura mora
       // dentro do try pra uma desconexão do cliente no meio virar 500, não rejeição solta.
-      let bruto = '';
+      // Concatenar `p` (Buffer) direto em string decodifica pedaço por pedaço: um multibyte
+      // (acento, o caso comum aqui) cortado na fronteira entre dois pedaços chega partido duas
+      // vezes. Guarda os Buffers e decodifica UMA vez no fim.
+      const pedacos = [];
       let tamanho = 0;
       for await (const p of req) {
         tamanho += p.length;
         if (tamanho > TETO_CORPO) { responder(413, 'erro: corpo grande demais'); req.destroy(); return; }
-        bruto += p;
+        pedacos.push(p);
       }
+      const bruto = Buffer.concat(pedacos).toString('utf8');
       let pedido;
       try { pedido = JSON.parse(bruto); } catch { return responder(400, 'erro: corpo invalido'); }
       const ctl = controladorDe(pedido.chave);

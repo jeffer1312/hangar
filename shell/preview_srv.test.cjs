@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const net = require('node:net');
 const { subirServidor } = require('./preview_srv.cjs');
 
 const ctlFalso = { enfileirar: (fn) => fn(), snapshot: async () => '- button "Ok" [ref=@e1]' };
@@ -33,6 +34,36 @@ test('token de tamanho diferente do certo recusa sem lancar (timingSafeEqual)', 
     headers: { Authorization: 'Bearer curto' },
   });
   assert.equal(r.status, 401);
+  srv.fechar();
+});
+
+test('corpo com caractere multibyte cortado na fronteira do pedaço chega integro', async () => {
+  let recebido = null;
+  const ctl = { enfileirar: (fn) => fn(), digitar: async (texto) => { recebido = texto; return 'ok: type'; } };
+  const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });
+  const textoEsperado = 'João da Silva çãé';
+  const corpoTexto = JSON.stringify({ chave: 'srv::f', verbo: 'type', args: [textoEsperado] });
+  const corpoBuf = Buffer.from(corpoTexto, 'utf8');
+  // corta no MEIO de um caractere multibyte (depois do 1º byte de um 0xC3), não em fronteira de char
+  const corte = corpoBuf.indexOf(0xc3) + 1;
+  const parte1 = corpoBuf.subarray(0, corte);
+  const parte2 = corpoBuf.subarray(corte);
+
+  await new Promise((resolve, reject) => {
+    const socket = net.connect(srv.porta, '127.0.0.1', () => {
+      socket.write(
+        `POST /cmd HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ${srv.token}\r\n` +
+        `Content-Type: application/json\r\nContent-Length: ${corpoBuf.length}\r\nConnection: close\r\n\r\n`,
+      );
+      socket.write(parte1);
+      setTimeout(() => socket.write(parte2), 20);
+    });
+    socket.on('end', resolve);
+    socket.on('error', reject);
+    socket.resume();
+  });
+
+  assert.equal(recebido, textoEsperado);
   srv.fechar();
 });
 
