@@ -356,6 +356,12 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   aviso quando a ponte não está na lista — nunca editada. Roda na subida do backend e no
   `install-claude-wrapper.sh` (precedente `migracao_sidecars`: atualizar é `git pull` + restart,
   installer não é garantido). Standalone: `python3 backend/app/skill_bridge.py [--dry-run]`.
+  **Ela é a ÚNICA dona das pastas de ponte** (04/09/2026): o `scripts/install-skills-bridge.sh`
+  — que o hook `SessionStart` do Claude chama, e que o `claude-hooks-adapter` roda também dentro
+  do Pi — tinha uma poda própria, só de plugins, e apagava a cada largada do Pi os 67 links de
+  skills pessoais/marketplace que a ponte criava (o Pi abria listando cada uma como "skill path
+  does not exist", e o backend as recriava no restart seguinte: 67 criados, todo dia). Hoje esse
+  script cuida de persona, `hooks.json` do Codex e pacotes do Pi, e chama a ponte no fim.
 
 - **Loop runner** (`app/loop.py` + `components/LoopSheet.svelte`): loop autônomo por sessão —
   goal → sessão trabalha → idle dispara tick (`_on_hook_transition`, dentro do `_work`, só com
