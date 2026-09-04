@@ -465,6 +465,17 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     });
     win.contentView.addChildView(view);
     views.set(chave, view);
+    // Estado de navegação pro painel (barra de carregamento, ✕/↻, voltar/avançar, endereço que
+    // acompanha os cliques). O view não tem DOM no cockpit — sem isto a página carrega em silêncio.
+    const wc = view.webContents;
+    const publicar = () => {
+      if (win.isDestroyed() || wc.isDestroyed()) return;
+      win.webContents.send('hangar:nav-estado', {
+        chave, url: wc.getURL(), carregando: wc.isLoading(),
+        voltar: wc.navigationHistory.canGoBack(), avancar: wc.navigationHistory.canGoForward(),
+      });
+    };
+    for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page']) wc.on(ev, publicar);
     // O depurador fica ANEXADO enquanto o view viver: é o que dá tema, console e rede contínuos.
     // O `targetIdDe` que já existia anexa e solta na hora, e por isso não servia pra guardar estado.
     // `isAttached` antes: reabrir o painel da mesma sessão passa por aqui de novo, e o Electron
@@ -583,6 +594,15 @@ ipcMain.handle('hangar:nav-import-cookies', async (ev, { chave, host, porta, rec
 ipcMain.on('hangar:nav-reload', (ev, { chave } = {}) => {
   const view = viewDe(ev, chave);
   if (view) view.webContents.reload();
+});
+ipcMain.on('hangar:nav-stop', (ev, { chave } = {}) => { viewDe(ev, chave)?.webContents.stop(); });
+ipcMain.on('hangar:nav-back', (ev, { chave } = {}) => {
+  const wc = viewDe(ev, chave)?.webContents;
+  if (wc?.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+});
+ipcMain.on('hangar:nav-forward', (ev, { chave } = {}) => {
+  const wc = viewDe(ev, chave)?.webContents;
+  if (wc?.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
 });
 
 ipcMain.on('hangar:nav-close', (ev, { chave } = {}) => fecharNavegador(BrowserWindow.fromWebContents(ev.sender), chave));

@@ -31,6 +31,26 @@
   let aberta = $state(urlInicial);     // a URL efetivamente aberta
   let recarregos = $state(0);   // iframe: trocar a key recria o elemento (= reload)
 
+  // Estado que o main empurra (view nativo não tem DOM aqui): carregando, voltar/avançar e a URL
+  // real — quem clica em link dentro da página muda a barra de endereço como em qualquer navegador.
+  let carregando = $state(false);
+  let podeVoltar = $state(false);
+  let podeAvancar = $state(false);
+  $effect(() => {
+    if (!nativo?.onEstado) return;
+    return nativo.onEstado((p) => {
+      if (p.chave !== navKey) return;
+      carregando = p.carregando;
+      podeVoltar = p.voltar;
+      podeAvancar = p.avancar;
+      if (p.url && p.url !== aberta && !p.url.startsWith('about:')) {
+        aberta = p.url;
+        endereco = p.url;
+        atualizarNavUrl(navKey, p.url);
+      }
+    });
+  });
+
   // O rect TEM que sair como objeto plano: getBoundingClientRect devolve DOMRect, cujas
   // propriedades são getters no prototype — o structuredClone do IPC vira {} e o view nasce
   // com bounds zerados (invisível, área preta). Medido: open chegava no main com tudo 0.
@@ -170,7 +190,13 @@
 </script>
 
 <div class="nav-pane">
-  <header class="nav-bar">
+  <header class="nav-bar" class:carregando>
+    {#if nativo?.back}
+      <button class="nav-btn" onclick={() => nativo?.back?.(navKey)} disabled={!podeVoltar}
+              aria-label={m.nav_voltar()} title={m.nav_voltar()}>←</button>
+      <button class="nav-btn" onclick={() => nativo?.forward?.(navKey)} disabled={!podeAvancar}
+              aria-label={m.nav_avancar()} title={m.nav_avancar()}>→</button>
+    {/if}
     <form class="nav-form" onsubmit={(e) => { e.preventDefault(); ir(); }}>
       <input
         class="nav-url"
@@ -182,13 +208,18 @@
         autocomplete="off"
       />
     </form>
-    <button
-      class="nav-btn"
-      onclick={() => (nativo ? nativo.reload(navKey) : recarregos++)}
-      disabled={!aberta}
-      aria-label={m.nav_recarregar()}
-      title={m.nav_recarregar()}
-    >↻</button>
+    {#if carregando && nativo?.stop}
+      <!-- Carregando: o ↻ vira ✕, como no Chrome. -->
+      <button class="nav-btn" onclick={() => nativo?.stop?.(navKey)} aria-label={m.nav_parar()} title={m.nav_parar()}>✕</button>
+    {:else}
+      <button
+        class="nav-btn"
+        onclick={() => (nativo ? nativo.reload(navKey) : recarregos++)}
+        disabled={!aberta}
+        aria-label={m.nav_recarregar()}
+        title={m.nav_recarregar()}
+      >↻</button>
+    {/if}
     {#if nativo?.importCookies}
       <button
         class="nav-btn"
@@ -206,6 +237,8 @@
       title={m.shell_fechar_painel()}
     >×</button>
   </header>
+  <!-- Barra de carregamento da PÁGINA (não da sessão): indeterminada, some no did-stop-loading. -->
+  {#if carregando}<div class="nav-progresso" role="progressbar" aria-label={m.nav_carregando()}></div>{/if}
   {#if cookiesStatus}
     <p class="nav-status" role="status">
       {cookiesStatus}
@@ -269,6 +302,13 @@
   }
   .nav-btn:hover:not(:disabled) { background: var(--surface-raised); }
   .nav-btn:disabled { opacity: 0.4; cursor: default; }
+  .nav-progresso {
+    height: 2px; margin: -2px var(--space-2) 0; border-radius: 2px;
+    background: linear-gradient(90deg, transparent 0 20%, var(--accent) 50%, transparent 80% 100%);
+    background-size: 200% 100%;
+    animation: nav-progresso 1.1s linear infinite;
+  }
+  @keyframes nav-progresso { from { background-position: 100% 0; } to { background-position: -100% 0; } }
   .nav-status { margin: 0; padding: 2px var(--space-3) 4px; font-size: var(--text-xs); color: var(--text-muted); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
   .nav-abrir-chrome {
     font-size: var(--text-xs); font-weight: 600; padding: 2px 10px; border-radius: var(--radius-full);

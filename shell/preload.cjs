@@ -29,6 +29,16 @@ contextBridge.exposeInMainWorld('hangar', {
     hide: (chave) => ipcRenderer.send('hangar:nav-hide', { chave }),
     bounds: (chave, b) => ipcRenderer.send('hangar:nav-bounds', { chave, bounds: b }),
     reload: (chave) => ipcRenderer.send('hangar:nav-reload', { chave }),
+    stop: (chave) => ipcRenderer.send('hangar:nav-stop', { chave }),
+    back: (chave) => ipcRenderer.send('hangar:nav-back', { chave }),
+    forward: (chave) => ipcRenderer.send('hangar:nav-forward', { chave }),
+    // Estado de navegação empurrado pelo main (carregando, url, voltar/avançar). Devolve o
+    // cancelamento; o payload é filtrado por `chave` no painel.
+    onEstado: (cb) => {
+      const h = (_e, p) => cb(p);
+      ipcRenderer.on('hangar:nav-estado', h);
+      return () => ipcRenderer.removeListener('hangar:nav-estado', h);
+    },
     close: (chave) => ipcRenderer.send('hangar:nav-close', { chave }),
     // Cookies do Chrome real (CDP) -> partição do view. Resolve sempre; erro vem no objeto.
     importCookies: (chave, host, porta, recarregar) => ipcRenderer.invoke('hangar:nav-import-cookies', { chave, host, porta, recarregar }),

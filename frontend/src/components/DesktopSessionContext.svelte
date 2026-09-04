@@ -239,7 +239,9 @@ import GroupGlyph from './icons/GroupGlyph.svelte';
          texto vertical e um anel, enquanto o valor do painel é o plano, as ações e as métricas —
          coisas que precisam de largura. Estado e progresso continuam à vista na barra da esquerda. -->
   {:else}
-  {#if working}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
+  <!-- Na aba Navegador a varredura de "sessão trabalhando" some: em cima de uma página web ela
+       lê como "a página está carregando" — e o carregamento de verdade tem barra própria lá. -->
+  {#if working && ctxPanel.aba !== 'navegador'}<div class="ctx-sweep" aria-hidden="true"></div>{/if}
   <!-- Com a aba Navegador ativa o header some: o browser ganha a altura (pedido dele). -->
   {#if ctxPanel.aba !== 'navegador'}
   <header>
