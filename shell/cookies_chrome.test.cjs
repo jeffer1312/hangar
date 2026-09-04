@@ -23,6 +23,17 @@ test('sameSite do CDP vira o do Electron; sessao (expires -1) sem expirationDate
   assert.equal(c.url, 'https://x.com/p');
 });
 
+test('DevToolsActivePort do perfil vira a URL do WebSocket do browser', () => {
+  const { endpointDoPerfil } = require('./cookies_chrome.cjs');
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const raiz = fs.mkdtempSync(path.join(os.tmpdir(), 'hangar-perfil-'));
+  fs.writeFileSync(path.join(raiz, 'DevToolsActivePort'), '41235\n/devtools/browser/abc-123\n');
+  assert.equal(endpointDoPerfil(raiz), 'ws://127.0.0.1:41235/devtools/browser/abc-123');
+  fs.writeFileSync(path.join(raiz, 'DevToolsActivePort'), 'lixo\n');
+  assert.equal(endpointDoPerfil(raiz), null);
+  assert.equal(endpointDoPerfil(path.join(raiz, 'nao-existe')), null);
+});
+
 test('porta fechada -> erro chrome_fechado', async () => {
   // Porta livre: abre e fecha um servidor só pra descobrir uma que ninguém escuta.
   const srv = net.createServer();

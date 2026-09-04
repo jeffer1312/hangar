@@ -7,7 +7,7 @@ const { ler, gravar } = require('./settings.cjs');
 const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar } = require('./navegador.cjs');
 const { criarControlador } = require('./preview_ctl.cjs');
 const { commitDoCheckout } = require('./versao.cjs');
-const { importarCookiesDoChrome } = require('./cookies_chrome.cjs');
+const { importarCookiesDoChrome, PAGINA_ATIVAR } = require('./cookies_chrome.cjs');
 
 // Lido UMA vez, na subida: é o código que este processo de fato carregou, e é isso que a tela de
 // atualização compara com o commit atualizado pra saber se "feche e abra o Hangar" ainda vale.
@@ -512,103 +512,38 @@ ipcMain.on('hangar:nav-bounds', (ev, { chave, bounds } = {}) => {
 
 // Cookies do Chrome real -> partição do navegador embutido. Nunca rejeita: o front lê `erro`.
 // Porta: argumento > `chromeCdpPort` das configurações > 9222.
-// 9226, não 9222: a 9222 costuma estar com um Chrome headless de automação (agent-browser), e
-// o Chrome real nem consegue a porta. O usuário nunca precisa saber o número — o botão abre.
 // Porta SEMPRE inteiro: no Windows o spawn roda com `shell: true` e o valor vai numa linha de
 // comando — um settings.json adulterado ou um caller de IPC com "9226 & calc" executaria isso.
 const portaValida = (v) => (Number.isInteger(+v) && +v > 0 && +v < 65536 ? +v : null);
-const PORTA_CHROME = () => portaValida(ler(app.getPath('userData')).chromeCdpPort) || 9226;
+const PORTA_CHROME = () => portaValida(ler(app.getPath('userData')).chromeCdpPort) || null;
 
-// Abre o Chrome do usuário (perfil normal) com a porta de depuração. Se já há um Chrome aberto
-// SEM a porta, o Chrome reaproveita o processo e a porta nunca sobe: o resultado diz isso.
-async function portaResponde(p, tentativas = 12) {
-  for (let i = 0; i < tentativas; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    try {
-      const r = await fetch(`http://127.0.0.1:${p}/json/version`, { signal: AbortSignal.timeout(800) });
-      if (r.ok) return true;
-    } catch { /* ainda subindo */ }
-  }
-  return false;
-}
-
-async function lancarChrome(p) {
+// Abre `chrome://inspect/#remote-debugging` no Chrome do usuário (na instância que já está
+// aberta, ou abrindo uma). O Chrome 136+ não aceita `--remote-debugging-port` no perfil padrão;
+// o que liga a depuração é o toggle dessa página, que grava o `DevToolsActivePort` que o
+// `cookies_chrome.cjs` lê. NÃO se lança o Chrome direto deste processo: o filho herdava o socket
+// do CDP do próprio shell (a 9223) e o segurava depois de o shell fechar — por isso o `sh` que
+// fecha todo descritor acima de 2 antes do exec.
+ipcMain.handle('hangar:chrome-ativar', async () => {
   const { spawn } = require('child_process');
+  const url = PAGINA_ATIVAR;
   const candidatos = process.platform === 'win32'
-    ? ['chrome', 'msedge']
+    ? [['cmd', ['/c', 'start', '', 'chrome', url]]]
     : process.platform === 'darwin'
-      ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', 'google-chrome']
-      : ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'brave'];
-  for (const bin of candidatos) {
-    // ENOENT chega pelo evento `error`, não por exceção: esperar `spawn` é o que separa
-    // "sem Chrome instalado" de "Chrome já aberto sem a porta".
-    const ch = spawn(bin, [`--remote-debugging-port=${p}`], { detached: true, stdio: 'ignore',
-      ...(process.platform === 'win32' ? { shell: true } : {}) });
-    const nasceu = await new Promise((res) => {
-      ch.once('spawn', () => res(true));
+      ? [['open', ['-a', 'Google Chrome', url]]]
+      : ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'brave'].map((bin) =>
+        ['sh', ['-c', 'for fd in $(seq 3 1023); do eval "exec $fd>&-"; done 2>/dev/null; exec "$0" "$@"', bin, url]]);
+  for (const [cmd, args] of candidatos) {
+    const ch = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+    // ENOENT chega pelo evento `error`, não por exceção. O `sh` sempre nasce; o binário
+    // inexistente aparece como saída 127 logo em seguida.
+    const ok = await new Promise((res) => {
       ch.once('error', () => res(false));
-      setTimeout(() => res(false), 1500);
+      ch.once('exit', (code) => res(code !== 127));
+      setTimeout(() => res(true), 1500);   // ainda rodando = abriu
     });
-    if (nasceu) { ch.unref(); return true; }
+    if (ok) { ch.unref(); return { ok: true }; }
   }
-  return false;
-}
-
-// Pids do Chrome DO USUÁRIO (processo principal: sem `--type=`), fora os headless de automação
-// (perfil em pasta temporária). É o que precisa morrer pra porta subir: fechar as janelas não
-// basta, o Chrome fica rodando em segundo plano e reaproveita o processo no próximo lançamento.
-async function pidsDoChromeDoUsuario() {
-  const { execFile } = require('child_process');
-  try {
-    if (process.platform === 'win32') {
-      // `tasklist` em CSV: "chrome.exe","1234",... — só o nome do binário interessa.
-      const out = await new Promise((res, rej) => execFile('tasklist', ['/FO', 'CSV', '/NH'], { encoding: 'utf8' },
-        (e, so) => (e ? rej(e) : res(so))));
-      return out.split('\n').filter((l) => /^"(chrome|msedge)\.exe"/i.test(l))
-        .map((l) => parseInt(l.split('","')[1], 10)).filter(Number.isInteger);
-    }
-    // `-o pid,uid,args` sem cabeçalho e SÓ do usuário atual: `ps -e` lista todo mundo, e matar o
-    // Chrome de outra pessoa na mesma máquina era EPERM engolido que parecia "fechou".
-    const out = await new Promise((res, rej) => execFile('ps', ['-eo', 'pid=,uid=,args='], { encoding: 'utf8' },
-      (e, so) => (e ? rej(e) : res(so))));
-    const meuUid = process.getuid();
-    return out.split('\n').map((l) => l.trim().split(/\s+/)).filter((c) => c.length >= 3).filter((c) => {
-      const [pid, uid, bin, ...args] = c;
-      const nome = bin.split('/').pop().toLowerCase();
-      const linha = args.join(' ');
-      // Basename do BINÁRIO, não a linha inteira: `python chrome_report.py` não é o Chrome.
-      return +uid === meuUid && +pid !== process.pid
-        && /^(chrome|google-chrome(-stable)?|chromium(-browser)?|brave(-browser)?)$/.test(nome)
-        && !/--type=/.test(linha) && !/--headless/.test(linha) && !/user-data-dir=\/tmp/.test(linha);
-    }).map((c) => +c[0]);
-  } catch { return []; }
-}
-
-ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
-  const p = portaValida(porta) || PORTA_CHROME();
-  if (!(await lancarChrome(p))) return { ok: false, porta: p, motivo: 'sem_binario' };
-  if (await portaResponde(p)) return { ok: true, porta: p };
-  return { ok: false, porta: p, motivo: 'ja_aberto_sem_porta' };
-});
-
-// Fecha o Chrome do usuário (SIGTERM: o Chrome grava a sessão e oferece "restaurar" ao voltar)
-// e relança com a porta. É o único caminho quando ele já está rodando sem a porta.
-ipcMain.handle('hangar:chrome-reabrir', async (_ev, { porta } = {}) => {
-  const p = portaValida(porta) || PORTA_CHROME();
-  const { execFile } = require('child_process');
-  if (process.platform === 'win32') {
-    // Com `/F`: sem ele o Chrome em segundo plano ignora o WM_CLOSE e nada fecha.
-    await new Promise((res) => execFile('taskkill', ['/F', '/IM', 'chrome.exe'], () => res()));
-  } else {
-    for (const pid of await pidsDoChromeDoUsuario()) {
-      try { process.kill(pid, 'SIGTERM'); } catch (e) { if (e.code !== 'ESRCH') console.warn('chrome-reabrir: kill', pid, e.code); }
-    }
-  }
-  for (let i = 0; i < 20 && (await pidsDoChromeDoUsuario()).length; i++) await new Promise((r) => setTimeout(r, 500));
-  if ((await pidsDoChromeDoUsuario()).length) return { ok: false, porta: p, motivo: 'nao_fechou' };
-  if (!(await lancarChrome(p))) return { ok: false, porta: p, motivo: 'sem_binario' };
-  if (await portaResponde(p, 20)) return { ok: true, porta: p };
-  return { ok: false, porta: p, motivo: 'ja_aberto_sem_porta' };
+  return { ok: false, motivo: 'sem_binario' };
 });
 
 ipcMain.handle('hangar:nav-import-cookies', async (ev, { chave, host, porta, recarregar = true } = {}) => {

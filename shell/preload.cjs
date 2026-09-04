@@ -32,10 +32,8 @@ contextBridge.exposeInMainWorld('hangar', {
     close: (chave) => ipcRenderer.send('hangar:nav-close', { chave }),
     // Cookies do Chrome real (CDP) -> partição do view. Resolve sempre; erro vem no objeto.
     importCookies: (chave, host, porta, recarregar) => ipcRenderer.invoke('hangar:nav-import-cookies', { chave, host, porta, recarregar }),
-    // Abre o Chrome do usuário já com a porta de depuração (quem clica não precisa saber a porta).
-    abrirChrome: (porta) => ipcRenderer.invoke('hangar:chrome-abrir', { porta }),
-    // Fecha o Chrome do usuário (ele restaura as abas) e reabre com a porta — quando já estava
-    // aberto sem ela e o lançamento normal não sobe a porta.
-    reabrirChrome: (porta) => ipcRenderer.invoke('hangar:chrome-reabrir', { porta }),
+    // Abre chrome://inspect/#remote-debugging no Chrome do usuário: é lá que ele liga a
+    // depuração (o Chrome atual não aceita mais a porta por flag no perfil padrão).
+    ativarChrome: () => ipcRenderer.invoke('hangar:chrome-ativar'),
   },
 });

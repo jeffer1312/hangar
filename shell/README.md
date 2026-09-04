@@ -43,12 +43,15 @@ O navegador embutido guarda cookies numa partição persistente (`persist:nav`):
 login continua logado nas próximas aberturas. O que barra é a **tela de login** do Google e afins,
 que recusa navegador com depuração ligada. O botão 🍪 do painel (e a importação automática ao abrir
 um host novo) traz os cookies do seu Chrome real por CDP — já decifrados, sem ler o arquivo
-`Cookies` do perfil. Precisa do Chrome aberto com a porta de depuração: o próprio painel oferece
-**Abrir o Chrome** (lança o perfil normal com `--remote-debugging-port=9226`; Chrome já aberto sem a
-porta reaproveita o processo e a porta não sobe — feche as janelas e clique de novo). A porta é 9226,
-não 9222, porque a 9222 costuma estar com um Chrome headless de automação (agent-browser), que é
-recusado. Trocável em `settings.json` do userData, campo `chromeCdpPort`. Cookie do Google expira e
-rotaciona: quando cair, clique de novo.
+`Cookies` do perfil. Precisa da depuração remota ligada no Chrome, e o Chrome 136+ **não aceita mais
+`--remote-debugging-port` no perfil padrão** (o flag entra na linha de comando e a porta nunca sobe):
+o que liga é o toggle em `chrome://inspect/#remote-debugging` ("Permitir depuração remota para este
+navegador"), que grava `DevToolsActivePort` na raiz do perfil — é esse arquivo que o shell lê. O
+painel oferece **Abrir a página no Chrome** pra chegar lá. Plano B pra Chromium/Brave antigos: porta
+fixa em `settings.json` do userData, campo `chromeCdpPort`; um Chrome headless de automação na porta
+(agent-browser na 9222) é recusado. Cookie do Google expira e rotaciona: quando cair, clique de novo.
+Nunca lance o Chrome direto do processo do shell sem fechar os descritores: o filho herda o socket do
+CDP do shell (9223) e o segura depois de o shell fechar.
 
 ## Desfoque atrás da janela
 

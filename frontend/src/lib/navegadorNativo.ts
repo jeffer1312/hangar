@@ -20,10 +20,8 @@ export type NavNativo = {
   /** Cookies do Chrome real (CDP) pro view. Opcional: shell antigo não tem. Nunca rejeita. */
   importCookies?: (chave: string, host: string, porta?: number, recarregar?: boolean) =>
     Promise<{ ok: boolean; gravados: number; falhos: number; erro?: string; detalhe?: string }>;
-  /** Abre o Chrome do usuário com a porta de depuração; `ok:false` diz por quê. */
-  abrirChrome?: (porta?: number) => Promise<{ ok: boolean; porta: number; motivo?: string }>;
-  /** Fecha o Chrome do usuário (restaura as abas ao voltar) e reabre com a porta. */
-  reabrirChrome?: (porta?: number) => Promise<{ ok: boolean; porta: number; motivo?: string }>;
+  /** Abre chrome://inspect/#remote-debugging no Chrome do usuário, onde ele liga a depuração. */
+  ativarChrome?: () => Promise<{ ok: boolean; motivo?: string }>;
 };
 
 export function navegadorNativo(): NavNativo | undefined {

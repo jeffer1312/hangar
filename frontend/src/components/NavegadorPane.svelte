@@ -97,32 +97,25 @@
     hostsImportados.delete(host);   // qualquer falha volta a tentar depois (a causa pode ser passageira)
     if (r.erro === 'chrome_fechado') {
       chromeFechado = true;
-      if (manual) { cookiesStatus = m.nav_cookies_chrome_fechado(); ofereceAbrir = !!nativo.abrirChrome; }
+      if (manual) { cookiesStatus = m.nav_cookies_chrome_fechado(); ofereceAtivar = !!nativo.ativarChrome; }
       return;
     }
     if (manual) cookiesStatus = m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
   }
   const importarSeNovo = (u: string) => importarCookies(u, false);
 
-  // Quem clica não precisa saber porta nem comando: o shell abre o Chrome dele com a porta e,
-  // subindo, a importação roda de novo sozinha. Chrome já aberto sem a porta reaproveita o
-  // processo e a porta não sobe — aí o texto diz pra fechar e clicar de novo.
-  let ofereceAbrir = $state(false);
-  // Chrome já rodando sem a porta (fechar as janelas não basta, ele fica em segundo plano): o
-  // segundo botão fecha o processo dele — o Chrome restaura as abas — e reabre com a porta.
-  let ofereceReabrir = $state(false);
+  // O Chrome atual não aceita porta por flag no perfil padrão: quem liga a depuração é a pessoa,
+  // no toggle de chrome://inspect/#remote-debugging. O botão abre essa página no Chrome dela; ao
+  // voltar e clicar no 🍪 de novo, a importação acha o `DevToolsActivePort` que o toggle gravou.
+  let ofereceAtivar = $state(false);
   let abrindo = $state(false);
-  async function abrirChrome(reabrir = false) {
-    const fn = reabrir ? nativo?.reabrirChrome : nativo?.abrirChrome;
-    if (!fn) return;
+  async function ativarChrome() {
+    if (!nativo?.ativarChrome) return;
     abrindo = true;
-    cookiesStatus = m.nav_cookies_abrindo_chrome();
     try {
-      const r = await fn();
-      if (r.ok) { ofereceAbrir = false; ofereceReabrir = false; chromeFechado = false; await importarCookies(aberta, true); }
-      else if (r.motivo === 'sem_binario') { cookiesStatus = m.nav_cookies_sem_chrome(); ofereceAbrir = false; }
-      else if (r.motivo === 'nao_fechou') cookiesStatus = m.nav_cookies_nao_fechou();
-      else { cookiesStatus = m.nav_cookies_chrome_sem_porta(); ofereceAbrir = false; ofereceReabrir = !!nativo?.reabrirChrome; }
+      const r = await nativo.ativarChrome();
+      if (r.ok) { cookiesStatus = m.nav_cookies_ativar_instrucao(); ofereceAtivar = false; }
+      else { cookiesStatus = m.nav_cookies_sem_chrome(); ofereceAtivar = false; }
     } catch (e) {
       cookiesStatus = m.nav_cookies_erro({ e: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -224,11 +217,8 @@
   {#if cookiesStatus}
     <p class="nav-status" role="status">
       {cookiesStatus}
-      {#if ofereceAbrir}
-        <button type="button" class="nav-abrir-chrome" onclick={() => abrirChrome(false)} disabled={abrindo}>{m.nav_cookies_abrir_chrome()}</button>
-      {/if}
-      {#if ofereceReabrir}
-        <button type="button" class="nav-abrir-chrome" onclick={() => abrirChrome(true)} disabled={abrindo}>{m.nav_cookies_reabrir_chrome()}</button>
+      {#if ofereceAtivar}
+        <button type="button" class="nav-abrir-chrome" onclick={ativarChrome} disabled={abrindo}>{m.nav_cookies_ativar_chrome()}</button>
       {/if}
     </p>
   {/if}
