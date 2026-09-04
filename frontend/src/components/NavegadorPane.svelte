@@ -55,7 +55,10 @@
   function ir() {
     const t = endereco.trim();
     if (!t) return;
-    const u = /^https?:\/\//i.test(t) ? t : `http://${t}`;
+    // Sem esquema: https como qualquer navegador; http só pra endereço local (localhost, IP,
+    // nome sem ponto, .local), que é onde o servidor de dev costuma estar sem certificado.
+    const local = /^(localhost|127\.|10\.|192\.168\.|\[)/i.test(t) || !/\.[a-z]/i.test(t.split(/[/:]/)[0]) || /^[^/]+\.local(\/|:|$)/i.test(t);
+    const u = /^https?:\/\//i.test(t) ? t : `${local ? 'http' : 'https'}://${t}`;
     endereco = u;
     aberta = u;
     atualizarNavUrl(navKey, u);
