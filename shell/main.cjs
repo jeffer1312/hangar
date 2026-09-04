@@ -452,7 +452,12 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
       // do painel nem pelo close da janela — sem isto o controlador ficava órfão no Map até o
       // usuário reabrir o painel, e um comando nesse meio-tempo virava 500 de CDP em vez do 404
       // de sessão sem navegador. `once`: o próprio evento já indica que não há mais o que soltar.
-      view.webContents.once('destroyed', () => soltarControlador(chave, view));
+      // A checagem de identidade é o que impede um `destroyed` ATRASADO (fechar o painel dispara
+      // `view.webContents.close()`, que é assíncrono, e o usuário pode reabrir a MESMA chave antes
+      // dele terminar) de apagar o controlador do view NOVO — quem morre só limpa o que é dele.
+      view.webContents.once('destroyed', () => {
+        if (views.get(chave) === view) soltarControlador(chave, view);
+      });
     } catch (err) {
       // Falha aqui custa os verbos novos, não o navegador: o painel abre e o usuário navega na mão.
       console.error('[nav] depurador nao anexou:', err && err.message);
