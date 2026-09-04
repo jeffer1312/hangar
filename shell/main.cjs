@@ -1,5 +1,5 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
-const { app, BrowserWindow, WebContentsView, dialog, ipcMain, screen, session, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, screen, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -535,6 +535,10 @@ const PORTA_CHROME = () => portaValida(ler(app.getPath('userData')).chromeCdpPor
 ipcMain.handle('hangar:chrome-ativar', async () => {
   const { spawn } = require('child_process');
   const url = PAGINA_ATIVAR;
+  // O Chrome em execução recusa `chrome://` vindo da linha de comando (abre uma "Nova guia" em
+  // branco, medido no Chrome 150). Então o endereço vai pra área de transferência e a instrução
+  // manda colar na barra — a aba nova que o Chrome abre já deixa a janela dele na frente.
+  clipboard.writeText(url);
   const candidatos = process.platform === 'win32'
     ? [['cmd', ['/c', 'start', '', 'chrome', url]]]
     : process.platform === 'darwin'

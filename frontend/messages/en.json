@@ -668,7 +668,7 @@
   "nav_cookies_ok_parcial": "{n} cookies imported from Chrome, {f} rejected by the embedded browser",
   "nav_cookies_chrome_fechado": "Your Chrome doesn't have remote debugging on. It's a switch on a page inside Chrome itself (once).",
   "nav_cookies_ativar_chrome": "Open the page in Chrome",
-  "nav_cookies_ativar_instrucao": "In Chrome, check \"Allow remote debugging for this browser\", then come back and click the 🍪 again.",
+  "nav_cookies_ativar_instrucao": "Opened a Chrome tab and copied the address. There: Ctrl+L, Ctrl+V, Enter → check \"Allow remote debugging for this browser\" → come back and click the 🍪 again.",
   "nav_cookies_sem_chrome": "Couldn't find Chrome installed on this machine.",
   "nav_cookies_erro": "Couldn't bring the login: {e}",
   "chat_acao_navegador_detalhe": "Open a browser next to the chat",

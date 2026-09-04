@@ -668,7 +668,7 @@
   "nav_cookies_ok_parcial": "{n} cookies trazidos do Chrome, {f} recusados pelo navegador embutido",
   "nav_cookies_chrome_fechado": "O seu Chrome está sem a depuração remota ligada. Ela se liga numa página do próprio Chrome (uma vez só).",
   "nav_cookies_ativar_chrome": "Abrir a página no Chrome",
-  "nav_cookies_ativar_instrucao": "No Chrome, marque \"Permitir depuração remota para este navegador\" e volte aqui pra clicar no 🍪 de novo.",
+  "nav_cookies_ativar_instrucao": "Abri uma aba no Chrome e copiei o endereço. Lá: Ctrl+L, Ctrl+V, Enter → marque \"Permitir depuração remota para este navegador\" → volte e clique no 🍪 de novo.",
   "nav_cookies_sem_chrome": "Não achei o Chrome instalado nesta máquina.",
   "nav_cookies_erro": "Não deu pra trazer o login: {e}",
   "chat_acao_navegador_detalhe": "Abrir um navegador ao lado do chat",
