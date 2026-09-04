@@ -59,7 +59,8 @@ function credenciaisPara(host) {
     try {
       fs.copyFileSync(db, tmp);
       const linhas = execFileSync('sqlite3', ['-newline', '\x1e', '-separator', '\x1f', tmp,
-        "select origin_url, username_value, hex(password_value) from logins where blacklisted_by_user=0 and length(password_value)>0"],
+        // Mais usada/mais recente primeiro: é a que o Chrome sugere, e a 1ª é a que preenche.
+        "select origin_url, username_value, hex(password_value) from logins where blacklisted_by_user=0 and length(password_value)>0 order by date_last_used desc, times_used desc"],
         { encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
       for (const linha of linhas.split('\x1e')) {
         const [url, usuario, hex] = linha.split('\x1f');

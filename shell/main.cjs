@@ -14,18 +14,37 @@ const { credenciaisPara } = require('./senhas_chrome.cjs');
 // (não no renderer): a senha em claro só existe aqui e no campo da página, some depois, nunca vai
 // a disco nem a outra máquina. Escolhe a 1ª credencial do domínio; a página pode ter mais de um
 // campo de senha (login + trocar-senha) — preenche o primeiro VISÍVEL e o texto/email antes dele.
-function preencherLogin(wc, host) {
+async function preencherLogin(wc, host) {
   let creds;
   try { creds = credenciaisPara(host); } catch (e) { console.warn('[senha] leitura falhou:', e.message); return; }
   if (!creds.length) return;
   const { usuario, senha } = creds[0];
+  // SPA desenha o formulário depois do dom-ready: três tentativas, e para na primeira que achou.
+  for (const espera of [0, 1500, 4000]) {
+    await new Promise((r) => setTimeout(r, espera));
+    if (wc.isDestroyed()) return;
+    if (await injetarLogin(wc, usuario, senha)) return;
+  }
+}
+
+function injetarLogin(wc, usuario, senha) {
   // O valor entra como JSON literal (nunca concatenado na string do script) — senha com aspas,
   // barra ou template não pode virar código.
   const arg = JSON.stringify({ usuario, senha });
-  wc.executeJavaScript(`(() => {
+  return wc.executeJavaScript(`(() => {
     const { usuario, senha } = ${arg};
     const vis = (el) => el && el.offsetParent !== null && !el.disabled && !el.readOnly;
-    const pw = [...document.querySelectorAll('input[type=password]')].find(vis);
+    // Atravessa shadow DOM aberto: tela de login em web component (authentik, Lit) não tem
+    // input nenhum no document — o querySelectorAll de cima devolvia vazio e nada preenchia.
+    const inputs = [];
+    const anda = (raiz) => {
+      for (const el of raiz.querySelectorAll('*')) {
+        if (el.tagName === 'INPUT') inputs.push(el);
+        if (el.shadowRoot) anda(el.shadowRoot);
+      }
+    };
+    anda(document);
+    const pw = inputs.find((el) => el.type === 'password' && vis(el));
     if (!pw) return false;
     const set = (el, v) => {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -36,13 +55,12 @@ function preencherLogin(wc, host) {
     set(pw, senha);
     if (usuario) {
       // Campo de usuário: o de texto/email/tel mais próximo ANTES do de senha no fluxo do DOM.
-      const todos = [...document.querySelectorAll('input')];
-      const ate = todos.slice(0, todos.indexOf(pw));
+      const ate = inputs.slice(0, inputs.indexOf(pw));
       const user = ate.reverse().find((el) => vis(el) && /^(text|email|tel|)$/i.test(el.type));
       if (user) set(user, usuario);
     }
     return true;
-  })()`, true).catch(() => {});
+  })()`, true).catch(() => false);
 }
 
 // Lido UMA vez, na subida: é o código que este processo de fato carregou, e é isso que a tela de
