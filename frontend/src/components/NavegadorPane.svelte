@@ -60,57 +60,38 @@
     aberta = u;
     atualizarNavUrl(navKey, u);
     void abrirNativo(u);
-    void importarSeNovo(u);
   }
 
-  // Login trazido do Chrome real (CDP). Automático por host, uma vez por carga da página; com o
-  // Chrome fechado, para até o próximo clique manual — senão cada URL nova viraria um erro igual.
+  // Login trazido do Chrome real (CDP), SÓ no clique e TUDO de uma vez: cada conexão ao CDP
+  // faz o Chrome perguntar "Permitir a depuração remota?" na tela da pessoa — a importação
+  // automática por host era um diálogo por site visitado.
   let cookiesStatus = $state('');
-  const hostsImportados = new Set<string>();
-  let chromeFechado = false;
-  const hostLocal = (h: string) =>
-    /^(localhost|127\.|10\.|192\.168\.)/.test(h) || /\.(ts\.net|local)$/.test(h) || !h.includes('.');
-  function hostDe(u: string): string {
-    try { return new URL(u).hostname; } catch { return ''; }
-  }
-  async function importarCookies(u: string, manual: boolean) {
-    const host = hostDe(u);
-    if (!nativo?.importCookies || !host) return;
-    if (!manual && (hostLocal(host) || hostsImportados.has(host) || chromeFechado)) return;
-    hostsImportados.add(host);
-    if (manual) cookiesStatus = m.nav_cookies_buscando();
+  async function importarCookies() {
+    if (!nativo?.importCookies) return;
+    cookiesStatus = m.nav_cookies_buscando();
     // O invoke rejeita quando o shell é mais velho que este front (sem o handler) — sem o catch
     // o status ficava em "Buscando…" pra sempre.
-    // Reload do view só no clique: o automático roda em cima de uma navegação que pode ser do
-    // agente, no meio de um formulário.
-    const r = await nativo.importCookies(navKey, host, undefined, manual).catch((e: unknown) =>
+    const r = await nativo.importCookies(navKey, '*', undefined, true).catch((e: unknown) =>
       ({ ok: false as const, gravados: 0, falhos: 0, erro: 'shell', detalhe: e instanceof Error ? e.message : String(e) }));
     if (r.ok) {
-      chromeFechado = false;
-      if (manual || r.gravados > 0) {
-        cookiesStatus = r.falhos > 0
-          ? m.nav_cookies_ok_parcial({ n: r.gravados, f: r.falhos })
-          : m.nav_cookies_ok({ n: r.gravados });
-      }
+      const texto = r.falhos > 0
+        ? m.nav_cookies_ok_parcial({ n: r.gravados, f: r.falhos })
+        : m.nav_cookies_ok({ n: r.gravados });
+      cookiesStatus = texto;
+      // Sucesso é aviso, não estado: some sozinho. Erro fica até a próxima tentativa.
+      setTimeout(() => { if (cookiesStatus === texto) cookiesStatus = ''; }, 6000);
       return;
     }
-    hostsImportados.delete(host);   // qualquer falha volta a tentar depois (a causa pode ser passageira)
     if (r.erro === 'chrome_fechado') {
-      chromeFechado = true;
-      // Clique no 🍪 sem depuração ligada já abre a página do toggle no Chrome — um passo, não
+      // Sem depuração ligada, o clique já abre a página do toggle no Chrome — um passo, não
       // dois. O botão fica só como repetição, se a pessoa fechou a aba sem marcar.
-      if (manual) {
-        cookiesStatus = m.nav_cookies_chrome_fechado();
-        if (nativo.ativarChrome) await ativarChrome();
-      }
+      cookiesStatus = m.nav_cookies_chrome_fechado();
+      if (nativo.ativarChrome) await ativarChrome();
       return;
     }
-    if (manual) {
-      cookiesStatus = /No handler registered/.test(r.detalhe ?? '') ? m.nav_shell_velho()
-        : m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
-    }
+    cookiesStatus = /No handler registered/.test(r.detalhe ?? '') ? m.nav_shell_velho()
+      : m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
   }
-  const importarSeNovo = (u: string) => importarCookies(u, false);
 
   // O Chrome atual não aceita porta por flag no perfil padrão: quem liga a depuração é a pessoa,
   // no toggle de chrome://inspect/#remote-debugging. O botão abre essa página no Chrome dela; ao
@@ -141,7 +122,6 @@
       endereco = externa;
       aberta = externa;
       void abrirNativo(externa);
-      void importarSeNovo(externa);
     }
   });
 
@@ -209,8 +189,7 @@
     {#if nativo?.importCookies}
       <button
         class="nav-btn"
-        onclick={() => void importarCookies(aberta, true)}
-        disabled={!aberta}
+        onclick={() => void importarCookies()}
         aria-label={m.nav_cookies_trazer()}
         title={m.nav_cookies_trazer()}
       >🍪</button>

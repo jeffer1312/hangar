@@ -159,7 +159,10 @@ async function importarCookiesDoChrome({ porta, dominio, perfis }) {
     for (let tentativa = 0; tentativa < 2; tentativa++) {
       try {
         const { cookies } = await cdp(ws, 'Storage.getCookies');
-        return cookies.filter((c) => casaDominio(c.domain, dominio)).map((c) => paraElectron(c, dominio));
+        // `*` = tudo de uma vez: cada conexão ao CDP faz o Chrome perguntar "Permitir a depuração
+        // remota?" na tela da pessoa, então uma importação por domínio era um diálogo por site.
+        const escolhidos = dominio === '*' ? cookies : cookies.filter((c) => casaDominio(c.domain, dominio));
+        return escolhidos.map((c) => paraElectron(c, dominio));
       } catch (e) {
         ultimo = e;
         console.warn(`cookies_chrome: ${ws} tentativa ${tentativa + 1} falhou: ${e.message}`);
