@@ -36,6 +36,17 @@ test('HEAD solto (checkout de commit) devolve o proprio hash', () => {
   assert.equal(commitDoCheckout(r), HASH);
 });
 
+test('worktree: .git e arquivo gitdir:, HEAD na pasta da worktree, ref no repo principal', () => {
+  const principal = repo({ HEAD: 'ref: refs/heads/main\n', 'refs/heads/main': `${HASH}\n` });
+  const wtGit = path.join(principal, '.git', 'worktrees', 'wt');
+  fs.mkdirSync(wtGit, { recursive: true });
+  fs.writeFileSync(path.join(wtGit, 'HEAD'), 'ref: refs/heads/main\n');
+  fs.writeFileSync(path.join(wtGit, 'commondir'), '../..\n');
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'hangar-versao-wt-'));
+  fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${wtGit}\n`);
+  assert.equal(commitDoCheckout(wt), HASH);
+});
+
 test('sem .git devolve null, nunca lanca', () => {
   assert.equal(commitDoCheckout(fs.mkdtempSync(path.join(os.tmpdir(), 'hangar-versao-'))), null);
 });

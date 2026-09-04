@@ -8,15 +8,28 @@ const path = require('path');
 
 function commitDoCheckout(raizRepo) {
   try {
-    const git = path.join(raizRepo, '.git');
-    const head = fs.readFileSync(path.join(git, 'HEAD'), 'utf8').trim();
+    let git = path.join(raizRepo, '.git');
+    // Worktree (`git worktree add`): `.git` é ARQUIVO com `gitdir: <pasta real>`. Sem seguir o
+    // ponteiro, o shell aberto de uma worktree ficava sem commit e o aviso nunca sumia.
+    if (fs.statSync(git).isFile()) {
+      const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(git, 'utf8'));
+      if (!m) return null;
+      git = path.resolve(raizRepo, m[1].trim());
+    }
+    let head = fs.readFileSync(path.join(git, 'HEAD'), 'utf8').trim();
+    // Na worktree o HEAD mora na pasta dela, mas as refs ficam no repo principal (`commondir`).
+    let comum = git;
+    try {
+      const c = fs.readFileSync(path.join(git, 'commondir'), 'utf8').trim();
+      if (c) comum = path.resolve(git, c);
+    } catch { /* checkout normal: sem commondir */ }
     const m = /^ref:\s*(\S+)/.exec(head);
     if (!m) return /^[0-9a-f]{40}$/.test(head) ? head : null;   // HEAD solto (checkout de commit)
     const ref = m[1];
-    const solto = path.join(git, ...ref.split('/'));
+    const solto = path.join(comum, ...ref.split('/'));
     if (fs.existsSync(solto)) return fs.readFileSync(solto, 'utf8').trim() || null;
     // Ref empacotada (`git gc`): uma linha "<hash> <ref>" em packed-refs.
-    const packed = fs.readFileSync(path.join(git, 'packed-refs'), 'utf8');
+    const packed = fs.readFileSync(path.join(comum, 'packed-refs'), 'utf8');
     for (const linha of packed.split('\n')) {
       const [hash, nome] = linha.trim().split(/\s+/);
       if (nome === ref && /^[0-9a-f]{40}$/.test(hash)) return hash;

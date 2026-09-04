@@ -2096,6 +2096,7 @@
   "atualizar_agora_nao": "Agora não",
   "atualizar_fechar": "Fechar",
   "atualizar_reabrir_agora": "Fechar e abrir agora",
+  "atualizar_reabrir_falhou": "Não consegui reabrir sozinho (a janela ainda é a versão antiga) — feche e abra o Hangar à mão.",
   "atualizar_rodando_titulo": "Atualizando…",
   "atualizar_rodando_sub": "Etapa {passo} de {total}. Pode deixar aberto.",
   "atualizar_sessoes_trabalhando": "{n} sessões estão trabalhando agora. Elas continuam rodando — só a conexão desta tela cai por alguns segundos quando o servidor reiniciar.",

@@ -237,10 +237,16 @@
   const ponte = (window as { hangar?: { shellCommit?: string | null; relaunch?: () => Promise<void> } }).hangar;
   const shellJaNovo = $derived(!!ponte?.shellCommit && ponte.shellCommit === estado.commit_para);
   const shellMudou = $derived(estado.shell_mudou === true && navigator.userAgent.includes('Electron/') && !shellJaNovo);
-  const podeReabrir = $derived(typeof ponte?.relaunch === 'function');
+  // A página recarrega ao fim da atualização e o preload NOVO expõe `relaunch` mesmo com o main
+  // ainda velho, sem o handler: o invoke rejeita. Falhou = o botão some e a tela diz que é à mão.
+  let reabrirFalhou = $state(false);
+  const podeReabrir = $derived(typeof ponte?.relaunch === 'function' && !reabrirFalhou);
   function reabrir() {
-    // Rejeição = shell sem o handler (mais velho que este front): fica só o texto de fechar à mão.
-    void ponte?.relaunch?.().catch(() => {});
+    void ponte?.relaunch?.().catch((e: unknown) => {
+      reabrirFalhou = true;
+      diag.registrar({ evento: 'atualizar.reabrir_falhou', nivel: 'aviso', tela: 'config',
+                       detalhe: e instanceof Error ? e.message : String(e) });
+    });
   }
   const terminouComAvisos = $derived(estado.fase === 'pronto' && estado.ok === true
                                      && (avisos.length > 0 || shellMudou));
@@ -375,6 +381,7 @@
       <p class="sub">{m.atualizar_com_avisos()}</p>
       <ul class="avisos">
         {#if shellMudou}<li>{m.atualizar_shell_mudou()}</li>{/if}
+        {#if reabrirFalhou}<li>{m.atualizar_reabrir_falhou()}</li>{/if}
         {#each avisos as aviso (aviso)}<li>{aviso}</li>{/each}
       </ul>
       <div class="acoes">
