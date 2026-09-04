@@ -8,6 +8,42 @@ const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar } = require('./na
 const { criarControlador } = require('./preview_ctl.cjs');
 const { commitDoCheckout } = require('./versao.cjs');
 const { importarCookiesDoChrome, PAGINA_ATIVAR } = require('./cookies_chrome.cjs');
+const { credenciaisPara } = require('./senhas_chrome.cjs');
+
+// Preenche usuário/senha no view a partir das senhas salvas do Chrome. A decifração roda no MAIN
+// (não no renderer): a senha em claro só existe aqui e no campo da página, some depois, nunca vai
+// a disco nem a outra máquina. Escolhe a 1ª credencial do domínio; a página pode ter mais de um
+// campo de senha (login + trocar-senha) — preenche o primeiro VISÍVEL e o texto/email antes dele.
+function preencherLogin(wc, host) {
+  let creds;
+  try { creds = credenciaisPara(host); } catch (e) { console.warn('[senha] leitura falhou:', e.message); return; }
+  if (!creds.length) return;
+  const { usuario, senha } = creds[0];
+  // O valor entra como JSON literal (nunca concatenado na string do script) — senha com aspas,
+  // barra ou template não pode virar código.
+  const arg = JSON.stringify({ usuario, senha });
+  wc.executeJavaScript(`(() => {
+    const { usuario, senha } = ${arg};
+    const vis = (el) => el && el.offsetParent !== null && !el.disabled && !el.readOnly;
+    const pw = [...document.querySelectorAll('input[type=password]')].find(vis);
+    if (!pw) return false;
+    const set = (el, v) => {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);   // React ouve o setter nativo
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    set(pw, senha);
+    if (usuario) {
+      // Campo de usuário: o de texto/email/tel mais próximo ANTES do de senha no fluxo do DOM.
+      const todos = [...document.querySelectorAll('input')];
+      const ate = todos.slice(0, todos.indexOf(pw));
+      const user = ate.reverse().find((el) => vis(el) && /^(text|email|tel|)$/i.test(el.type));
+      if (user) set(user, usuario);
+    }
+    return true;
+  })()`, true).catch(() => {});
+}
 
 // Lido UMA vez, na subida: é o código que este processo de fato carregou, e é isso que a tela de
 // atualização compara com o commit atualizado pra saber se "feche e abra o Hangar" ainda vale.
@@ -476,6 +512,18 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
       });
     };
     for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page']) wc.on(ev, publicar);
+    // Preenchimento de login com as senhas salvas do Chrome do usuário, ao terminar de carregar
+    // uma página cujo domínio tem senha salva. Uma vez por URL (o `dom-ready` repete em SPA).
+    let ultimoPreenchido = '';
+    wc.on('dom-ready', () => {
+      if (win.isDestroyed() || wc.isDestroyed()) return;
+      let host = '';
+      try { host = new URL(wc.getURL()).hostname; } catch { return; }
+      const url = wc.getURL();
+      if (!host || url === ultimoPreenchido) return;
+      ultimoPreenchido = url;
+      preencherLogin(wc, host);
+    });
     // O depurador fica ANEXADO enquanto o view viver: é o que dá tema, console e rede contínuos.
     // O `targetIdDe` que já existia anexa e solta na hora, e por isso não servia pra guardar estado.
     // `isAttached` antes: reabrir o painel da mesma sessão passa por aqui de novo, e o Electron

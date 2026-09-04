@@ -41,9 +41,16 @@ systemctl --user stop cockpit-shell     # fechar
 
 O navegador embutido guarda cookies numa partição persistente (`persist:nav`): site que aceita o
 login continua logado nas próximas aberturas. O que barra é a **tela de login** do Google e afins,
-que recusa navegador com depuração ligada. O botão 🍪 do painel (e a importação automática ao abrir
-um host novo) traz os cookies do seu Chrome real por CDP — já decifrados, sem ler o arquivo
-`Cookies` do perfil. Precisa da depuração remota ligada no Chrome, e o Chrome 136+ **não aceita mais
+que recusa navegador com depuração ligada. O botão 🍪 do painel traz os cookies do seu Chrome real
+por CDP — já decifrados, sem ler o arquivo `Cookies` do perfil —, TODOS de uma vez (uma conexão =
+um diálogo "Permitir depuração remota?" no Chrome; por domínio seria um diálogo por site).
+
+E as SENHAS salvas: ao abrir uma página cujo domínio tem senha no Chrome, o shell preenche
+usuário+senha (`senhas_chrome.cjs` lê `Login Data`, decifra `password_value` — AES-128-CBC v10 com
+a chave "peanuts" ou a do chaveiro "Chrome Safe Storage"). A senha em claro só existe no processo
+MAIN e no campo da página; nunca vai a disco nem a outra máquina. Cookie e senha são coisas
+diferentes: cookie = login já feito (sessão); senha = os campos preenchidos. Site sem senha salva
+(ex.: um X que você nunca salvou) não tem o que preencher. Precisa da depuração remota ligada no Chrome, e o Chrome 136+ **não aceita mais
 `--remote-debugging-port` no perfil padrão** (o flag entra na linha de comando e a porta nunca sobe):
 o que liga é o toggle em `chrome://inspect/#remote-debugging` ("Permitir depuração remota para este
 navegador"), que grava `DevToolsActivePort` na raiz do perfil — é esse arquivo que o shell lê. O
