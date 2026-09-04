@@ -17,19 +17,19 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
   const console_ = [];
   const rede = [];
 
-  const guardar = (lista, linha) => {
+  const guardar = (lista, linha, teto) => {
     lista.push(linha);
-    if (lista.length > (lista === console_ ? TETO_CONSOLE : TETO_REDE)) lista.shift();
+    if (lista.length > teto) lista.shift();
   };
 
   dbg.on('Runtime.consoleAPICalled', (_e, p) => {
     const texto = (p.args || []).map((a) => (a.value !== undefined ? a.value : a.description || a.type)).join(' ');
-    guardar(console_, `${p.type}: ${texto}`);
+    guardar(console_, `${p.type}: ${texto}`, TETO_CONSOLE);
   });
-  dbg.on('Log.entryAdded', (_e, p) => guardar(console_, `${p.entry.level}: ${p.entry.text}`));
+  dbg.on('Log.entryAdded', (_e, p) => guardar(console_, `${p.entry.level}: ${p.entry.text}`, TETO_CONSOLE));
   dbg.on('Network.responseReceived', (_e, p) => {
     ultimaRede = Date.now();   // alimenta o `wait --idle` da Task 4
-    guardar(rede, `${p.response.status} ${p.response.url}`);
+    guardar(rede, `${p.response.status} ${p.response.url}`, TETO_REDE);
   });
 
   async function aplicarTema() {

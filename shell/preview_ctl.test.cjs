@@ -54,3 +54,24 @@ test('console guarda no maximo o teto e devolve as ultimas', async () => {
   assert.match(saida, /m249/);
   assert.doesNotMatch(saida, /m49\b/);
 });
+
+test('fila continua apos comando do meio rejeitar', async () => {
+  const ctl = criarControlador({ dbg: dubleDbg(), capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  const ordem = [];
+  const a = ctl.enfileirar(async () => { ordem.push('a'); });
+  const b = ctl.enfileirar(async () => { ordem.push('b'); throw new Error('falha'); });
+  const c = ctl.enfileirar(async () => { ordem.push('c'); });
+  await Promise.all([a, c]);
+  assert.deepEqual(ordem, ['a', 'b', 'c'], 'terceiro comando rodou mesmo apos rejeicao do meio');
+  await assert.rejects(async () => b, /falha/, 'segundo comando rejeitou pra quem chamou');
+});
+
+test('rede guarda no maximo o teto e devolve as ultimas', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  for (let i = 0; i < 250; i++) dbg.emitir('Network.responseReceived', { response: { status: 200, url: `http://ex.com/r${i}` } });
+  const saida = ctl.rede();
+  assert.equal(saida.split('\n').length, 200);
+  assert.match(saida, /r249/);
+  assert.doesNotMatch(saida, /r49\b/);
+});
