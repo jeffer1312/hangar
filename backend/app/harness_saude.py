@@ -529,7 +529,10 @@ def consertar(id_: str) -> str:
     if id_ == "tmux":
         # O bloco gerenciado é do instalador (bash); rodar o próprio instalador é o único jeito de
         # escrevê-lo igual ao de uma instalação nova. Idempotente, e o --no-statusline evita pergunta.
-        r = subprocess.run(["bash", str(_REPO / "scripts" / "install-claude-wrapper.sh"), "--no-statusline"],
+        bash = shutil.which("bash")
+        if not bash:
+            raise ValueError("sem bash nesta máquina — o bloco do tmux é do instalador POSIX")
+        r = subprocess.run([bash, str(_REPO / "scripts" / "install-claude-wrapper.sh"), "--no-statusline"],
                            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace",
                            cwd=str(_REPO))
         if r.returncode != 0:
