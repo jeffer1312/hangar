@@ -2112,6 +2112,7 @@
   "harness_tmux_persist_off": "sem tmux-resurrect — reboot leva as sessões junto (opcional: scripts/tmux-persist-setup.sh)",
   "harness_fullscreen_ok": "tela cheia ligada (alternate screen no tmux)",
   "harness_fullscreen_desligado": "nunca ligado — dentro do tmux a rolagem sai do lugar sem isto",
+  "harness_fullscreen_claude_desligado": "sem \"tui\": \"fullscreen\" no settings.json — dentro do tmux a tela rola inteira a cada frame",
   "harness_fullscreen_por_escolha": "desligado por escolha (/fullscreen-off) — mantido",
   "harness_plugins_ok": "{n} ligados: {lista}",
   "harness_plugins_com_problema": "{n} com problema: {lista}",

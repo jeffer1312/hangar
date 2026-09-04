@@ -90,6 +90,7 @@
     statusline_ok: () => m.harness_statusline_ok(),
     fullscreen_ok: () => m.harness_fullscreen_ok(),
     fullscreen_desligado: () => m.harness_fullscreen_desligado(),
+    fullscreen_claude_desligado: () => m.harness_fullscreen_claude_desligado(),
     fullscreen_por_escolha: () => m.harness_fullscreen_por_escolha(),
     sem_statusline: () => m.harness_sem_statusline(),
   };

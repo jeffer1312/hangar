@@ -247,6 +247,18 @@ def _fullscreen(cli: str) -> dict:
     return _item("fullscreen", True, "fullscreen_ok" if ligado else "fullscreen_por_escolha")
 
 
+def _fullscreen_claude() -> dict:
+    """`"tui": "fullscreen"` no settings.json do compartilhado (chave de topo: a reconciliação de
+    conta a espelha pras cópias). Fora dele, dentro do tmux o Claude rola a tela toda a cada frame."""
+    settings = contas.compartilhado() / "settings.json"
+    if not settings.is_file():
+        return _item("fullscreen", None, "config_ilegivel")
+    d = _ler_json(settings)
+    ligado = d.get("tui") == "fullscreen"
+    return _item("fullscreen", ligado, "fullscreen_ok" if ligado else "fullscreen_claude_desligado",
+                 None if ligado else "fullscreen:claude")
+
+
 def _hooks_claude(dir_conta: Path) -> dict:
     settings = dir_conta / "settings.json"
     try:
@@ -412,7 +424,8 @@ def diagnosticar() -> list[dict]:
     hooks = (next((i for i in itens if i["ok"] is False), None) or next((i for i in itens if i["ok"] is None), None)
              or (itens[0] if itens else _item("hooks", None, "nenhuma_conta")))
     saida.append({"id": "claude", "nome": "Claude Code", "instalado": v is not None, "versao": v,
-                  "itens": [hooks, _plugins_claude(), _contas_claude(), _mcp("claude"), _modelo_padrao("claude")]})
+                  "itens": [hooks, _plugins_claude(), _fullscreen_claude(), _contas_claude(), _mcp("claude"),
+                            _modelo_padrao("claude")]})
 
     v = _versao("codex")
     d = home / ".codex"
@@ -504,6 +517,14 @@ def consertar(id_: str) -> str:
         if r.returncode != 0:
             raise ValueError(f"instalador saiu com {r.returncode}: {(r.stderr or r.stdout)[-300:]}")
         return "bloco do ~/.tmux.conf refeito e recarregado"
+    if id_ == "fullscreen:claude":
+        settings = contas.compartilhado() / "settings.json"
+        d = hook_installer._load_settings(settings)
+        if d is None:
+            raise ValueError("settings.json ilegível")
+        d["tui"] = "fullscreen"
+        hook_installer._write(settings, d)
+        return "tui = fullscreen no settings.json; vale nas sessões novas"
     if id_ in ("fullscreen:pi", "fullscreen:omp"):
         cfg = _raiz_agente(id_.split(":", 1)[1]) / "fullscreen-tui.json"
         if cfg.exists():
