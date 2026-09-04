@@ -331,46 +331,42 @@ function limparSidecaresNav() {
   }
 }
 
-async function gravarSidecarNav(chave, urlInicial, idsAntes) {
-  for (let t = 0; t < 6; t++) {
-    try {
-      const r = await fetch('http://127.0.0.1:9223/json/list');
-      const targets = await r.json();
-      // O diff por idsAntes só vale se a leitura de ANTES do view nascer foi confiável; com ela
-      // falha (null), casar por "target novo" pode pegar o app do hangar (com o token no
-      // localStorage) — então sem diff não grava targetId e o CLI casa por URL.
-      // SEM filtro de url: o target do view nasce em about:blank e só vira http quando a página
-      // carrega. Exigir http aqui perdia a corrida em página lenta (um app Vite local), as 6
-      // tentativas acabavam e o sidecar ia pro disco com targetId null — o `hangar-preview` então
-      // só casa por URL, que a primeira navegação do agente já invalida, e responde "morto" com o
-      // navegador aberto na frente do usuário. Quem identifica o target é o diff, não a url.
-      const novo = idsAntes
-        ? targets.find((x) => x.type === 'page' && !idsAntes.has(x.id))
-        : null;
-      if (novo || t === 5) {
-        fs.mkdirSync(NAV_SIDECARS, { recursive: true });
-        const arq = path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`);
-        const tmp = path.join(NAV_SIDECARS, `.${nomeSidecar(chave)}.${process.pid}.tmp`);
-        // about:blank não é endereço de nada: com o target ainda carregando, o que vale gravar é a
-        // url pedida — é ela que serve de plano B quando não há targetId.
-        const url = novo && novo.url.startsWith('http') ? novo.url : urlInicial;
-        fs.writeFileSync(tmp, JSON.stringify({ chave, url, targetId: novo ? novo.id : null, ts: Date.now() }));
-        fs.renameSync(tmp, arq);
-        return;
-      }
-    } catch { /* CDP ainda subindo */ }
-    await new Promise((r) => setTimeout(r, 400));
+// PERGUNTA AO PRÓPRIO VIEW quem ele é. A versão anterior descobria o id por diferença da lista
+// global de alvos do CDP (foto antes de criar, foto depois, o que apareceu é ele) — e a lista é do
+// processo inteiro, não desta janela: dois `nav-open` ao mesmo tempo (duas janelas do app, ou dois
+// cliques seguidos) e a foto "antes" de um já continha o alvo criado pelo outro, então cada um
+// podia levar o targetId da sessão errada. Um agente dirigindo o navegador da sessão vizinha é o
+// pior desfecho possível aqui, e nenhuma quantidade de tentativas conserta um diff sobre estado
+// compartilhado. Anexar o depurador ao webContents pergunta direto, sem lista e sem corrida.
+// Solta na hora: enquanto anexado, o alvo não aceita outro cliente CDP (é o `hangar-preview`).
+async function targetIdDe(view) {
+  const dbg = view.webContents.debugger;
+  try {
+    dbg.attach('1.3');
+    const info = await dbg.sendCommand('Target.getTargetInfo');
+    return info?.targetInfo?.targetId ?? null;
+  } catch (err) {
+    console.error('[nav] targetId indisponivel:', err?.message || err);
+    return null;   // o CLI cai no casamento por URL, como já fazia
+  } finally {
+    try { dbg.detach(); } catch { /* já solto */ }
   }
 }
 
-// null em falha (NÃO Set vazio): um conjunto vazio por erro de leitura faria o diff achar que
-// qualquer target é "novo" — inclusive o app principal do hangar.
-async function idsDeTargets() {
+async function gravarSidecarNav(chave, urlInicial, view) {
+  const targetId = await targetIdDe(view);
   try {
-    const r = await fetch('http://127.0.0.1:9223/json/list');
-    return new Set((await r.json()).map((x) => x.id));
-  } catch {
-    return null;
+    fs.mkdirSync(NAV_SIDECARS, { recursive: true });
+    const arq = path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`);
+    // O tmp leva o pid: duas janelas do app são o MESMO processo, mas o nome fixo ainda deixaria
+    // duas gravações da mesma chave se sobreporem no rename.
+    const tmp = path.join(NAV_SIDECARS, `.${nomeSidecar(chave)}.${process.pid}.tmp`);
+    // A url gravada é a PEDIDA, não a que o alvo mostra: no instante da criação ele ainda está em
+    // about:blank, que não é endereço de nada. Ela é só o plano B de quem não tem targetId.
+    fs.writeFileSync(tmp, JSON.stringify({ chave, url: urlInicial, targetId, ts: Date.now() }));
+    fs.renameSync(tmp, arq);
+  } catch (err) {
+    console.error('[nav] sidecar nao gravado:', err?.message || err);
   }
 }
 
@@ -395,14 +391,6 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     // url e recebe ok:false se o shell já não tiver o view — aí o front repete com a url salva.
     const destino = urlNavegavel(url);
     if (!destino) return { ok: false };
-    // A foto do /json/list tem que ser tirada ANTES de o view existir — é a definição do diff.
-    // Ela estava sendo tirada DEPOIS (o comentário dizia "antes", o código fazia depois), e o
-    // target do view já entra na lista quando ele é construído: o id ficava dentro do "antes",
-    // nenhum target era novo, e TODO sidecar nascia com targetId null. Sem id, o `hangar-preview`
-    // só casa por URL — que a primeira navegação invalida — e responde "morto" com o navegador
-    // aberto. Fetch ao CDP que falha devolve null (não Set vazio): sem diff confiável, grava sem
-    // id em vez de eleger o primeiro target page, que pode ser o próprio app.
-    const antes = await idsDeTargets();
     // persist: cookies/localStorage no disco. COMPARTILHADA entre sessões de propósito — o uso é
     // cada sessão com suas URLs, não isolamento de conta; se um dia precisar, vira por-sessão.
     view = new WebContentsView({
@@ -417,7 +405,7 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     win.contentView.addChildView(view);
     views.set(chave, view);
     view.webContents.loadURL(destino).catch((err) => console.error('[nav] loadURL falhou:', err?.message || err));
-    gravarSidecarNav(chave, destino, antes);   // async, não bloqueia o IPC
+    gravarSidecarNav(chave, destino, view);   // async, não bloqueia o IPC
   } else {
     // Reexibir NUNCA recarrega: a URL atual do view pode ter mudado por navegação interna (o
     // agente clicou em links) e o front só manda `url` quando o usuário digita uma nova.
