@@ -22,7 +22,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app import agentes_sync, apelidos, contas, cotas, engines, opencode_cota
+from app import agentes_sync, apelidos, contas, cotas, engines, oauth_codex, opencode_cota
 from app.auth import require_auth
 from app import engine_probe
 from app.config import list_config_dirs
@@ -241,3 +241,30 @@ def sincronizar_nos_agentes(body: SyncBody) -> dict:
     alvos = tuple(a for a in body.alvos if a in agentes_sync.ALVOS) or agentes_sync.ALVOS
     return {"id": body.id, "modelos": len(modelos),
             "resultado": agentes_sync.sincronizar(nome, base_url, api_key, modelos, alvos)}
+
+
+# ---------------------------------------------------------------- login OAuth do ChatGPT (Codex)
+# O app faz o fluxo de código de dispositivo e espalha o resultado pro Codex, Pi e omp
+# (app/oauth_codex.py). O poll é do front: `GET /codex/login` a cada 2s até `concluido`.
+
+@credenciais_router.get("/codex", dependencies=[Depends(require_auth)])
+def codex_estado() -> dict:
+    return oauth_codex.estado()
+
+
+@credenciais_router.post("/codex/login", dependencies=[Depends(require_auth)])
+def codex_login_iniciar() -> dict:
+    try:
+        return oauth_codex.iniciar()
+    except RuntimeError as e:
+        raise HTTPException(409, detail=erro("erro_codex_login", str(e), motivo=str(e)))
+
+
+@credenciais_router.get("/codex/login", dependencies=[Depends(require_auth)])
+def codex_login_passo() -> dict:
+    return oauth_codex.passo()
+
+
+@credenciais_router.delete("/codex/login", dependencies=[Depends(require_auth)])
+def codex_login_cancelar() -> dict:
+    return oauth_codex.cancelar()

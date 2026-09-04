@@ -124,3 +124,64 @@ export function sincronizarNosAgentes(alvo: Server | null, id: string): Promise<
     body: JSON.stringify({ id }),
   });
 }
+
+// Login OAuth do ChatGPT (o do Codex), feito pelo servidor por código de dispositivo e espalhado
+// pro Codex, Pi e omp. O front só mostra o código e faz o poll do passo.
+export interface EstadoCodex {
+  cofre: boolean;
+  plano: string;
+  expira_em: number | null;
+  codex: boolean;
+  pi: boolean;
+  omp: boolean;
+}
+
+export interface PassoCodex {
+  etapa: 'idle' | 'aguardando' | 'concluido' | 'falhou' | 'cancelado';
+  user_code?: string;
+  url?: string;
+  erro?: string;
+  resultado?: Record<string, { ok: boolean; motivo: string }> | null;
+}
+
+export function codexEstado(alvo: Server | null): Promise<EstadoCodex> {
+  return em(alvo, '/api/credenciais/codex');
+}
+
+export function codexLoginIniciar(alvo: Server | null): Promise<PassoCodex> {
+  return em(alvo, '/api/credenciais/codex/login', { method: 'POST' });
+}
+
+export function codexLoginPasso(alvo: Server | null): Promise<PassoCodex> {
+  return em(alvo, '/api/credenciais/codex/login');
+}
+
+export function codexLoginCancelar(alvo: Server | null): Promise<PassoCodex> {
+  return em(alvo, '/api/credenciais/codex/login', { method: 'DELETE' });
+}
+
+// Painel de saúde dos harnesses (backend/app/harness_saude.py): o que o app instalou em cada CLI
+// e o botão que refaz. O texto de cada item vem como código + params e é traduzido aqui.
+export interface ItemHarness {
+  id: string;
+  ok: boolean | null;
+  codigo: string;
+  params: Record<string, string>;
+  conserto: string | null;
+}
+
+export interface Harness {
+  id: string;
+  nome: string;
+  instalado: boolean;
+  versao: string | null;
+  itens: ItemHarness[];
+}
+
+export function listarHarnesses(alvo: Server | null): Promise<Harness[]> {
+  return em(alvo, '/api/harness');
+}
+
+export function consertarHarness(alvo: Server | null, conserto: string): Promise<{ feito: string; harnesses: Harness[] }> {
+  return em(alvo, `/api/harness/conserto/${encodeURIComponent(conserto)}`, { method: 'POST' });
+}
