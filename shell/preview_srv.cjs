@@ -17,6 +17,7 @@ const VERBOS = {
   tema: (c, a) => c.tema(a[0]),
   console: (c, a) => c.console(a[0] === '--limpar'),
   network: (c) => c.rede(),
+  text: (c) => c.texto(),
   url: (c) => c.avaliar('location.href'),
   shot: async (c, a) => {
     if (!a[0]) return 'erro: shot precisa de um caminho de arquivo';

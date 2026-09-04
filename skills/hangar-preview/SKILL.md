@@ -1,14 +1,16 @@
 ---
 name: hangar-preview
 description: |
-  Use quando a sessão tem um navegador embutido aberto no app Hangar (o painel "Navegador" ao lado
-  do chat, só no app desktop Electron) e a tarefa pede pra VER, ler, clicar, testar ou tirar
-  screenshot da página que está nele — "vê o que tem na minha página", "testa o fluxo no preview",
-  "clica no botão lá", "tira um print do preview", "lê o console da página". Cada sessão tem o SEU
-  navegador; esta skill é o jeito de dirigir o da sua (ou, com --sessao, o de outra sessão quando o
-  usuário pedir). NÃO use para: sites fora do Hangar (isso é o agent-browser), o túnel de porta do
-  celular (PreviewSheet), ou abrir navegador pra uma sessão que não tem — o painel é aberto pelo
-  usuário, nunca pelo agente.
+  Use sempre que o app desktop do Hangar estiver aberto (o hook avisa "[hangar] ... navegador
+  embutido" no prompt) e a tarefa envolver VER, ler, clicar, testar ou tirar screenshot de uma
+  página web — mexeu numa tela e quer conferir, "testa o login", "vê como ficou", "clica no botão
+  lá", "lê o console da página" —, mesmo que o usuário não fale em preview ou navegador. A skill
+  ABRE o navegador embutido desta sessão (`hangar-preview open <url>`, o painel monta na tela do
+  usuário) e o dirige por refs de acessibilidade. Com o app desktop aberto ela vence agent-browser
+  e ver-front pra página local. Cada sessão tem o SEU navegador; --sessao opera o de outra só
+  quando o usuário pedir. NÃO use para: máquina sem o app desktop (sem o aviso do hook, é
+  agent-browser), site externo que precisa do login do usuário (browser-harness), ou o túnel de
+  porta do celular (PreviewSheet).
 allowed-tools: Bash(hangar-preview:*)
 ---
 
@@ -17,6 +19,29 @@ allowed-tools: Bash(hangar-preview:*)
 O navegador embutido é um Chromium de verdade (view nativo do Electron), um por sessão. O CLI
 resolve sozinho QUAL é o da sua sessão (pelo nome da sessão tmux) e fala com o servidor local do
 shell — duas sessões com a mesma URL aberta não se confundem.
+
+## O fluxo comum: mexeu na tela, quer conferir
+
+O hook diz no prompt se o app desktop está aberto e, se esta sessão já tem navegador, em qual URL.
+Daí:
+
+```
+hangar-preview open http://localhost:3000/login    # só se ainda não houver navegador (pisca na tela dele)
+hangar-preview wait --idle                          # rede parada
+hangar-preview shot /tmp/login-01.png               # print da viewport
+```
+
+Leia o PNG com a ferramenta de leitura de imagem e **cite o caminho absoluto do arquivo no texto da
+resposta** (`/tmp/login-01.png`, cru, sem crase) — é assim que o app do celular mostra a imagem pro
+usuário. Print tirado e não citado é print que ele não vê.
+
+**Navegador já aberto em outra rota? Não chame `open` de novo** — cada `open` remonta o painel na
+tela do usuário. Troque de rota por dentro e espere:
+
+```
+hangar-preview eval 'location.href="/conversa"'
+hangar-preview wait --idle
+```
 
 ## O ciclo: snapshot → @ref → ação
 
@@ -34,6 +59,13 @@ $ hangar-preview snapshot
 $ hangar-preview click @e1
 ok: click @e1
 ```
+
+Página grande enche o contexto com `StaticText` e `paragraph`. Quando você só quer agir, filtre:
+`hangar-preview snapshot | grep 'ref='`. Quando só quer LER (mensagem de erro, lista, resultado),
+use `hangar-preview text` — o texto visível da página, sem árvore nenhuma.
+
+`click`, `fill` e `hover` rolam a página até o elemento antes de agir: ref abaixo da dobra
+funciona sem `scrollIntoView` por `eval`.
 
 **A ref morre em toda navegação e em todo re-render que desmonte o nó.** Não é só trocar de
 página: numa lista React, um clique que faz a lista mudar já invalida as refs seguintes daquela
@@ -65,7 +97,10 @@ tire `snapshot` de novo antes de agir.
 - `hangar-preview wait <alvo>` — espera algo acontecer; ver seção **Esperar** abaixo.
 - `hangar-preview eval '<js>'` — roda JS na página e imprime o resultado (`ok: <json>` ou `erro:
   <mensagem>`). Use pra ler estado que não é DOM (`localStorage`, uma variável global) ou pra algo
-  que os verbos acima não cobrem — não pra clicar/preencher, que têm verbo próprio.
+  que os verbos acima não cobrem — não pra clicar/preencher, que têm verbo próprio. Aceita
+  expressão (`document.title`) e também declarações, como o console do DevTools: em
+  `location.reload(); "ok"` ou `const a=1; a+1` o resultado é o valor da última expressão, sem
+  precisar de `return`.
 - `hangar-preview tema <claro|escuro|sistema>` — emula `prefers-color-scheme` **nesta sessão**. Fica
   valendo através de navegações (o Electron perde a emulação ao navegar; o controlador reaplica
   sozinho). `sistema` volta ao tema real da máquina.
@@ -75,9 +110,13 @@ tire `snapshot` de novo antes de agir.
   **primeira** chamada de `network` ou de `wait --idle` (custa CPU o tempo todo, então não fica
   ligada à toa): a primeira leitura devolve pouco ou nada, e o buffer só enxerga daí pra frente.
   Quer ver as requisições de um clique? Chame `network` uma vez ANTES do clique.
+- `hangar-preview text` — texto visível da página (`innerText`), cru. Pra ler conteúdo sem pagar
+  a árvore do `snapshot`.
 - `hangar-preview url` — URL atual.
-- `hangar-preview shot [arq.png]` — screenshot; default `/tmp/hangar-preview-<sessao>.png`. Leia o
-  PNG com a ferramenta de leitura de imagem.
+- `hangar-preview shot [arq.png]` — screenshot da **viewport** (o que está na tela, não a página
+  inteira; role com `eval 'scrollTo(0, 9999)'` pra ver o fim); default
+  `/tmp/hangar-preview-<sessao>.png`. Leia o PNG com a ferramenta de leitura de imagem e cite o
+  caminho na resposta.
 - `hangar-preview list` — quais sessões têm navegador vivo agora.
 - `--sessao <nome>` opera o navegador de OUTRA sessão — só quando o usuário pedir, e avise-o.
 

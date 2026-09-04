@@ -360,3 +360,82 @@ test('enable que falha vira erro nomeado no verbo, e a proxima chamada tenta de 
   await ctl.snapshot();
   assert.equal(dbg.chamadas.filter(([m]) => m === 'Accessibility.enable').length, 2);
 });
+
+test('avaliar reavalia declaracoes cru (replMode) quando a expressao da SyntaxError', async () => {
+  const dbg = dubleDbg();
+  dbg.sendCommand = async (m, p) => {
+    dbg.chamadas.push([m, p]);
+    if (m !== 'Runtime.evaluate') return {};
+    if (p.replMode) return { result: { value: 2 } };
+    return { exceptionDetails: { text: 'Uncaught', exception: { description: "SyntaxError: Unexpected token 'const'" } } };
+  };
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  const saida = await ctl.avaliar('const a=1; a+1');
+  assert.equal(saida, 'ok: 2');
+  const cru = dbg.chamadas.find(([m, p]) => m === 'Runtime.evaluate' && p.replMode);
+  assert.equal(cru[1].expression, 'const a=1; a+1');
+});
+
+test('avaliar com SyntaxError de verdade devolve o erro da segunda tentativa, nao pendura', async () => {
+  const dbg = dubleDbg({
+    'Runtime.evaluate': { exceptionDetails: { text: 'Uncaught', exception: { description: 'SyntaxError: Unexpected end of input' } } },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  assert.match(await ctl.avaliar('foo('), /^erro: SyntaxError/);
+});
+
+test('click e shot esperam um quadro pintado antes de responder', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'button' }, name: { value: 'Ok' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+  });
+  let capturas = 0;
+  const ctl = criarControlador({ dbg, capturarPagina: async () => { capturas++; return Buffer.alloc(0); }, aoNavegar: () => {} });
+  await ctl.snapshot();
+  await ctl.clicar('@e1');
+  const ordem = dbg.chamadas.map(([m, p]) => (m === 'Runtime.evaluate' ? `frame:${/requestAnimationFrame/.test(p.expression)}` : m));
+  assert.deepEqual(ordem.slice(-3), ['Input.dispatchMouseEvent', 'Input.dispatchMouseEvent', 'frame:true']);
+  const antes = dbg.chamadas.length;
+  await ctl.capturarPagina();
+  assert.equal(capturas, 1);
+  assert.equal(dbg.chamadas[antes][0], 'Runtime.evaluate', 'o quadro vem ANTES da captura');
+});
+
+test('clicar rola ate o elemento ANTES de medir a caixa', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'button' }, name: { value: 'Ok' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  await ctl.clicar('@e1');
+  const metodos = dbg.chamadas.map(([m]) => m);
+  const rolou = metodos.indexOf('DOM.scrollIntoViewIfNeeded');
+  assert.ok(rolou >= 0 && rolou < metodos.indexOf('DOM.getBoxModel'));
+  assert.equal(dbg.chamadas[rolou][1].backendNodeId, 5);
+});
+
+test('texto devolve o innerText cru da pagina', async () => {
+  const dbg = dubleDbg({ 'Runtime.evaluate': { result: { value: 'Olá\nmundo' } } });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  assert.equal(await ctl.texto(), 'Olá\nmundo');
+  assert.match(dbg.chamadas[0][1].expression, /innerText/);
+});
+
+test('quadro que falha (contexto destruido pela navegacao do clique) nao derruba o click', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'link' }, name: { value: 'Ir' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+  });
+  const base = dbg.sendCommand;
+  dbg.sendCommand = async (m, p) => { if (m === 'Runtime.evaluate') throw new Error('Cannot find context with specified id'); return base(m, p); };
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  assert.equal(await ctl.clicar('@e1'), 'ok: click @e1');
+});

@@ -51,7 +51,9 @@ function parseLote(texto) {
     .map((l) => {
       const [verbo, ...resto] = l.split(/\s+/);
       if (!COM_TEXTO.has(verbo) || resto.length < 2) return { verbo, args: resto };
-      const corte = verbo === 'fill' ? 1 : 0;   // fill leva a ref antes do texto
+      // fill leva a ref antes do texto; wait leva a flag (--text/--url) antes dele — colada ao
+      // texto, o wait nunca a reconhecia e estourava o teto com o texto já na tela.
+      const corte = verbo === 'fill' || (verbo === 'wait' && resto[0].startsWith('--')) ? 1 : 0;
       return { verbo, args: [...resto.slice(0, corte), resto.slice(corte).join(' ')] };
     });
 }

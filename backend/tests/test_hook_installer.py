@@ -218,3 +218,59 @@ def test_pair_hook_entra_no_session_start_com_matcher(tmp_path, monkeypatch):
     assert bloco["matcher"] == "startup|resume|clear|compact"
     assert "pair_hook.py" in bloco["hooks"][0]["command"]
     assert hi.ensure_pair_hook_installed() == []   # idempotente
+
+
+def test_nav_hook_entra_no_user_prompt_submit(tmp_path, monkeypatch):
+    from app import hook_installer as hi
+    monkeypatch.setattr(hi, "list_config_dirs", lambda: [])
+    monkeypatch.setattr(hi, "_backend_config_base", lambda: tmp_path)
+    (tmp_path / "settings.json").write_text("{}")
+    assert hi.ensure_nav_hook_installed() == [str(tmp_path)]
+    data = json.loads((tmp_path / "settings.json").read_text())
+    assert "nav_hook.py" in data["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+    assert hi.ensure_nav_hook_installed() == []   # idempotente
+
+
+NAV_HOOK = Path(__file__).parent.parent / "hooks" / "nav_hook.py"
+
+
+def _roda_nav_hook(home: Path, pane: str | None = None) -> str:
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("TMUX_PANE", None)
+    if pane:
+        env["TMUX_PANE"] = pane
+    r = subprocess.run([sys.executable, str(NAV_HOOK)], input="{}", text=True,
+                       capture_output=True, env=env)
+    assert r.returncode == 0
+    return r.stdout
+
+
+def test_nav_hook_fica_calado_sem_electron(tmp_path):
+    nav = tmp_path / ".hangar" / "nav"
+    nav.mkdir(parents=True)
+    assert _roda_nav_hook(tmp_path) == ""                       # sem _srv.json
+    # 2**22 e o pid_max do Linux 64-bit: nenhum processo pode ter este pid.
+    (nav / "_srv.json").write_text(json.dumps({"porta": 1, "token": "x", "pid": 2**22 + 7}))
+    assert _roda_nav_hook(tmp_path) == ""                       # pid morto: arquivo sobrou de crash
+
+
+def test_nav_hook_avisa_como_abrir_e_a_url_quando_ja_aberto(tmp_path, monkeypatch):
+    nav = tmp_path / ".hangar" / "nav"
+    nav.mkdir(parents=True)
+    (nav / "_srv.json").write_text(json.dumps({"porta": 1, "token": "x", "pid": os.getpid()}))
+    saida = json.loads(_roda_nav_hook(tmp_path))
+    ctx = saida["hookSpecificOutput"]["additionalContext"]
+    assert saida["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert "hangar-preview open <url>" in ctx
+    # Com o sidecar da sessao, a URL entra no aviso (o nome vem do tmux; aqui o pane nao existe,
+    # entao o hook nao acha a sessao e cai no aviso de "abra").
+    (nav / "s--x.json").write_text(json.dumps({"chave": "srv-1::minha", "url": "http://localhost:3100/"}))
+    assert "hangar-preview open <url>" in json.loads(_roda_nav_hook(tmp_path, pane="%999999"))["hookSpecificOutput"]["additionalContext"]
+
+    from importlib import util as iu
+    spec = iu.spec_from_file_location("nav_hook", NAV_HOOK)
+    mod = iu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._url_do_navegador(str(nav), "minha") == "http://localhost:3100/"
+    assert mod._url_do_navegador(str(nav), "outra") is None
+    assert "http://localhost:3100/" in mod.texto("http://localhost:3100/")

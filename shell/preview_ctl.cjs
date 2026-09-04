@@ -74,6 +74,17 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
     if (temaAtual !== 'sistema') await aplicarTema();
   });
 
+  // Dois frames, não um: o primeiro rAF roda ANTES da pintura do quadro seguinte; só o segundo
+  // garante que o que a ação mudou já está pintado — um `shot` logo após `click` saía com o
+  // quadro anterior (botão sem a marca de selecionado). O timer de dentro cobre view escondido,
+  // onde rAF nunca dispara; o de fora, renderer travado. Falha (contexto destruído por navegação
+  // que o próprio clique causou) não é erro da ação.
+  const QUADRO = 'new Promise(r=>{requestAnimationFrame(()=>requestAnimationFrame(r));setTimeout(r,100)})';
+  const quadro = () => Promise.race([
+    dbg.sendCommand('Runtime.evaluate', { expression: QUADRO, awaitPromise: true }).catch(() => {}),
+    new Promise((r) => setTimeout(r, 500)),
+  ]);
+
   function enfileirar(fn) {
     const resultado = fila.then(fn, fn);
     fila = resultado.then(() => {}, () => {});
@@ -103,7 +114,13 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       return saida;
     },
     async rede() { await ligar('Network'); return rede.join('\n'); },
-    capturarPagina,
+    // Texto visível da página, cru: ler uma mensagem de erro ou uma lista não precisa da árvore
+    // de acessibilidade inteira.
+    async texto() {
+      const r = await dbg.sendCommand('Runtime.evaluate', { expression: 'document.body.innerText', returnByValue: true });
+      return String((r.result && r.result.value) ?? '');
+    },
+    async capturarPagina() { await quadro(); return capturarPagina(); },
     fechar() { console_.length = 0; rede.length = 0; refs = new Map(); },
     // Ref VELHA e ref INEXISTENTE dão no mesmo lugar de propósito: o `backendDOMNodeId` morre em
     // qualquer re-render que desmonte o nó, não só em navegação — e é justo o caso de uma lista
@@ -112,6 +129,10 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
     async centroDe(ref) {
       const id = refs.get(ref);
       if (id == null) return null;
+      // O clique é por coordenada de tela: elemento abaixo da dobra dava coordenada fora da
+      // viewport e o evento não acertava nada, sem erro. Falha aqui não é "ref não existe" —
+      // quem decide isso é o getBoxModel logo abaixo.
+      try { await dbg.sendCommand('DOM.scrollIntoViewIfNeeded', { backendNodeId: id }); } catch { /* segue */ }
       try {
         const { model } = await dbg.sendCommand('DOM.getBoxModel', { backendNodeId: id });
         const q = model && model.content;
@@ -128,6 +149,7 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       const base = { x: p.x, y: p.y, button: 'left', clickCount: 1 };
       await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', ...base });
       await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base });
+      await quadro();
       return `ok: click ${ref}`;
     },
     async preencher(ref, texto) {
@@ -142,38 +164,50 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', commands: ['selectAll'] });
       // insertText substitui a seleção, texto vazio incluído — daí não haver passo de apagar.
       await dbg.sendCommand('Input.insertText', { text: String(texto) });
+      await quadro();
       return `ok: fill ${ref}`;
     },
     async digitar(texto) {
       await dbg.sendCommand('Input.insertText', { text: String(texto) });
+      await quadro();
       return 'ok: type';
     },
     async teclar(tecla) {
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: tecla });
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: tecla });
+      await quadro();
       return `ok: press ${tecla}`;
     },
     async pairar(ref) {
       const p = await this.centroDe(ref);
       if (!p) return `erro: ref ${ref} nao existe (rode snapshot de novo)`;
       await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+      await quadro();
       return `ok: hover ${ref}`;
     },
     async avaliar(js) {
+      const rodar = async (params) => {
+        const chamada = dbg.sendCommand('Runtime.evaluate', { awaitPromise: true, returnByValue: true, ...params });
+        // Rejeição que chega DEPOIS de o teto vencer a corrida não pode virar rejeição solta no
+        // processo principal (um `location.reload()` no eval derruba o contexto no meio).
+        chamada.catch(() => {});
+        const estouro = new Promise((r) => setTimeout(() => r('__teto__'), tetoEspera));
+        return Promise.race([chamada, estouro]);
+      };
+      const erroDe = (r) => r.exceptionDetails && (r.exceptionDetails.exception?.description || r.exceptionDetails.text);
       // Um frame antes de ler: `eval` que clica e lê no mesmo comando devolvia o DOM de ANTES do
-      // React re-renderizar, e isso já foi lido como bug de aplicação. O frame corre contra um
-      // timer DENTRO da página porque `requestAnimationFrame` não dispara em view escondido —
-      // esperar só por ele deixava o comando pendurado pra sempre quando o painel estava noutra
-      // aba. E o teto de fora cobre o resto: script do usuário que nunca resolve.
-      const espera = 'Promise.race([new Promise(requestAnimationFrame), new Promise(r=>setTimeout(r,50))])';
-      const chamada = dbg.sendCommand('Runtime.evaluate', {
-        expression: `(async()=>{const v=(${js});await ${espera};return v})()`,
-        awaitPromise: true, returnByValue: true,
-      });
-      const estouro = new Promise((r) => setTimeout(() => r('__teto__'), tetoEspera));
-      const r = await Promise.race([chamada, estouro]);
+      // React re-renderizar, e isso já foi lido como bug de aplicação. O teto de fora cobre
+      // script do usuário que nunca resolve.
+      let r = await rodar({ expression: `(async()=>{const v=(${js});await ${QUADRO};return v})()` });
+      // Declaração (`const a=1; a+1`, `location.reload(); "ok"`) não cabe entre parênteses e vira
+      // SyntaxError. Aí roda cru, como no console do DevTools: o valor é o da última expressão e
+      // `replMode` deixa `const`/`let` serem redeclarados numa segunda chamada.
+      if (r !== '__teto__' && /^SyntaxError/.test(erroDe(r) || '')) {
+        r = await rodar({ expression: js, replMode: true });
+        if (r !== '__teto__' && !r.exceptionDetails) await quadro();
+      }
       if (r === '__teto__') return `erro: eval nao respondeu em ${tetoEspera}ms`;
-      if (r.exceptionDetails) return `erro: ${r.exceptionDetails.exception?.description || r.exceptionDetails.text}`;
+      if (r.exceptionDetails) return `erro: ${erroDe(r)}`;
       return `ok: ${JSON.stringify(r.result && r.result.value)}`;
     },
     async esperar(args) {

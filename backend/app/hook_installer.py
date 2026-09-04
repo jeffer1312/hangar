@@ -376,6 +376,28 @@ def ensure_pair_hook_installed() -> list[str]:
     return touched
 
 
+NAV_HOOK = str((Path(__file__).parent.parent / "hooks" / "nav_hook.py").resolve())
+_NAV_COMMAND = f'"{sys.executable}" "{NAV_HOOK}"{_FALHA_NAO_BLOQUEIA}'
+
+
+def ensure_nav_hook_installed() -> list[str]:
+    """Instala (idempotente) o aviso de navegador embutido no UserPromptSubmit, em cada config dir.
+    A cada prompt, e nao so na abertura: o navegador abre e fecha no meio da sessao."""
+    try:
+        dirs = {Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()}
+    except Exception:
+        return []
+    touched: list[str] = []
+    for d in dirs:
+        try:
+            if d.is_dir() and _ensure_event_hook(d / "settings.json", "UserPromptSubmit", _NAV_COMMAND,
+                                                 por_nome=True):
+                touched.append(str(d))
+        except Exception:
+            continue
+    return touched
+
+
 def ensure_askq_hook_installed() -> list[str]:
     """Instala (idempotente) o hook PreToolUse de captura do AskUserQuestion no settings.json
     de cada config dir do Claude. Fail-soft por arquivo: um settings.json problematico nunca

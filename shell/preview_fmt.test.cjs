@@ -29,3 +29,13 @@ test('parseLote ignora vazio e comentário e preserva texto com espaço', () => 
     { verbo: 'fill', args: ['@e2', 'dois nomes'] },
   ]);
 });
+
+test('parseLote mantem a flag do wait separada do texto', () => {
+  assert.deepEqual(parseLote('wait --text Encerrar esta conversa\nwait --url conversa\nwait @e3\nwait --idle\nwait 300'), [
+    { verbo: 'wait', args: ['--text', 'Encerrar esta conversa'] },
+    { verbo: 'wait', args: ['--url', 'conversa'] },
+    { verbo: 'wait', args: ['@e3'] },
+    { verbo: 'wait', args: ['--idle'] },
+    { verbo: 'wait', args: ['300'] },
+  ]);
+});

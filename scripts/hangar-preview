@@ -16,6 +16,7 @@
 //   hangar-preview tema <claro|escuro|sistema>
 //   hangar-preview console [--limpar]      log do console da página
 //   hangar-preview network                 últimas respostas de rede
+//   hangar-preview text                    texto visível da página (innerText)
 //   hangar-preview url                     URL atual do navegador desta sessão
 //   hangar-preview shot [arquivo.png]      screenshot (default /tmp/hangar-preview-<sessao>.png)
 //   hangar-preview batch                   lê várias linhas do stdin, uma por comando (ver skill)
@@ -40,7 +41,7 @@ const CDP = 'http://127.0.0.1:9223';
 const DIR = join(homedir(), '.hangar', 'nav');
 const VERBOS_SERVIDOR = new Set([
   'snapshot', 'click', 'fill', 'type', 'press', 'hover', 'wait', 'eval',
-  'tema', 'console', 'network', 'url', 'shot',
+  'tema', 'console', 'network', 'text', 'url', 'shot',
 ]);
 
 function erro(msg, codigo = 1) {
@@ -58,7 +59,27 @@ for (let i = 0; i < args.length; i++) {
 }
 const cmd = pos[0];
 if (!cmd || cmd === 'help' || cmd === '--help') {
-  console.log('uso: hangar-preview <open <url>|list|snapshot|click @eN|fill @eN <texto>|type <texto>|press <tecla>|hover @eN|wait <alvo>|eval <js>|tema <claro|escuro|sistema>|console [--limpar]|network|url|shot [arq.png]|batch> [--sessao <nome>]');
+  console.log(`uso: hangar-preview <verbo> [args] [--sessao <nome>]
+
+  open <url>              abre o navegador desta sessão com a url
+  list                    navegadores vivos (chave, url, vivo/morto)
+  snapshot                árvore de acessibilidade compacta, com refs @eN
+  click @eN               clica no elemento da ref
+  fill @eN <texto>        limpa o campo da ref e digita o texto
+  type <texto>            digita no elemento com foco
+  press <tecla>           uma tecla (Enter, Tab, Escape, ...)
+  hover @eN               passa o mouse sobre a ref
+  wait <alvo>             @eN | --url <trecho> | --text <trecho> | --idle | <ms>
+  eval '<js>'             roda JS na página (expressão ou declarações) e imprime o resultado
+  tema <claro|escuro|sistema>
+  console [--limpar]      log do console da página
+  network                 últimas respostas de rede
+  text                    texto visível da página (innerText), sem árvore
+  url                     URL atual
+  shot [arquivo.png]      screenshot (default /tmp/hangar-preview-<sessao>.png)
+  batch                   lê várias linhas do stdin, uma por comando
+
+Referência completa: skill hangar-preview.`);
   process.exit(0);
 }
 
@@ -86,7 +107,7 @@ function lerSidecars() {
 
 function sidecarDa(nome) {
   const todos = lerSidecars();
-  if (!todos.length) erro('nenhum navegador aberto em nenhuma sessão (o painel Navegador abre um, no chat da sessão)');
+  if (!todos.length) erro('nenhum navegador aberto em nenhuma sessão (abra o seu com: hangar-preview open <url>)');
   if (!nome) erro('fora do tmux não dá pra saber a sessão — use --sessao <nome>. Vivos:\n' + todos.map((s) => `  ${s.chave}  ${s.url}`).join('\n'));
   const achados = todos.filter((s) => s.chave === nome || s.chave.endsWith(`::${nome}`));
   if (achados.length === 1) return achados[0];
@@ -206,4 +227,4 @@ if (cmd === 'batch') {
   process.exit(0);
 }
 
-erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|console|network|url|shot|batch)`);
+erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|console|network|text|url|shot|batch)`);
