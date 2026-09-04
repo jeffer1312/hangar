@@ -40,6 +40,18 @@
     return { x: r.x, y: r.y, width: r.width, height: r.height };
   }
 
+  // Front mais novo que o shell Electron: o preload expõe `hangar.nav`, mas o main não registrou o
+  // handler IPC, e `invoke` rejeita com "No handler registered for 'hangar:nav-open'". Sem isto o
+  // painel ficava em branco, calado (10 no diário de uma semana).
+  let shellVelho = $state(false);
+  function abrirNativo(url: string | undefined): Promise<{ ok: boolean }> {
+    if (!nativo) return Promise.resolve({ ok: false });
+    return nativo.open(navKey, url, rectDaAncora()).catch(() => {
+      shellVelho = true;
+      return { ok: false };
+    });
+  }
+
   function ir() {
     const t = endereco.trim();
     if (!t) return;
@@ -47,7 +59,7 @@
     endereco = u;
     aberta = u;
     atualizarNavUrl(navKey, u);
-    if (nativo) nativo.open(navKey, u, rectDaAncora());
+    void abrirNativo(u);
   }
 
   // URL empurrada de fora (o agente, via `hangar-preview open`): o store é a via de entrada; se
@@ -57,7 +69,7 @@
     if (externa && externa !== aberta) {
       endereco = externa;
       aberta = externa;
-      if (nativo) nativo.open(navKey, externa, rectDaAncora());
+      void abrirNativo(externa);
     }
   });
 
@@ -90,9 +102,9 @@
     mo.observe(document.body, { childList: true });
     // Reexibe o view DESTA sessão (sem url: não recarrega — o view pode ter navegado por cliques).
     // Se o main não o tem mais (shell reiniciou), ok:false e o front recria com a url salva.
-    nativo.open(navKey, undefined, rectDaAncora()).then((r) => {
+    void abrirNativo(undefined).then((r) => {
       const salva = navegadorPanel.abertos[navKey];
-      if (!r?.ok && salva) nativo.open(navKey, salva, rectDaAncora());
+      if (!r?.ok && salva && !shellVelho) void abrirNativo(salva);
     });
     return () => {
       ro.disconnect();
@@ -135,7 +147,8 @@
   {#if nativo}
     <!-- O âncora precisa existir MESMO vazio: é ele que o ResizeObserver mede pro shell. -->
     <div class="nav-body" bind:this={ancora}>
-      {#if !aberta}<p class="nav-hint">{m.nav_vazio()}</p>{/if}
+      {#if shellVelho}<p class="nav-hint">{m.nav_shell_velho()}</p>
+      {:else if !aberta}<p class="nav-hint">{m.nav_vazio()}</p>{/if}
     </div>
   {:else if aberta}
     {#key aberta + recarregos}

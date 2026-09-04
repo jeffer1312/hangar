@@ -947,7 +947,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
         : (sidebarPin.collapsed ? m.sessao_expandir_barra() : m.sessao_recolher_barra())}
       title={sidebarPin.forcedOverride === true
         ? m.sessao_quadro_recolhe()
-        : (sidebarPin.collapsed ? m.sessao_expandir() : m.sessao_recolher())}>
+        : (sidebarPin.collapsed ? m.sessao_expandir_atalho() : m.sessao_recolher_atalho())}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <rect x="3" y="4" width="18" height="16" rx="2"/>
         <line x1="9" y1="4" x2="9" y2="20"/>

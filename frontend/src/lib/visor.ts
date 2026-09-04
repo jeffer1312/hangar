@@ -77,12 +77,22 @@ function trocarArrasto(novo: (() => void) | null) {
 
 export function ligarArrastoPraBaixo(wrap: HTMLElement, fechar: () => void): () => void {
   let y0: number | null = null;
+  // Fecha só ao SOLTAR, não no meio do arrasto: fechar no pointermove desmonta o visor com o
+  // gesto em curso, e o pointerup da própria biblioteca chega sem o estado do arrasto dela
+  // (`n.x` undefined — 6 no diário de uma semana, no toque, em dois navegadores).
+  let fecharAoSoltar = false;
   const desce = (e: PointerEvent) => {
     if (y0 === null || wrap.classList.contains('bp-zoomed')) return;
-    if (e.clientY - y0 > _ARRASTO_FECHA) { y0 = null; fechar(); }
+    if (e.clientY - y0 > _ARRASTO_FECHA) { y0 = null; fecharAoSoltar = true; }
   };
-  const comeca = (e: PointerEvent) => { y0 = wrap.classList.contains('bp-zoomed') ? null : e.clientY; };
-  const acaba = () => { y0 = null; };
+  const comeca = (e: PointerEvent) => {
+    fecharAoSoltar = false;
+    y0 = wrap.classList.contains('bp-zoomed') ? null : e.clientY;
+  };
+  const acaba = () => {
+    y0 = null;
+    if (fecharAoSoltar) { fecharAoSoltar = false; fechar(); }
+  };
   wrap.addEventListener('pointerdown', comeca);
   wrap.addEventListener('pointermove', desce);
   wrap.addEventListener('pointerup', acaba);
