@@ -5,29 +5,43 @@
 //                                          sozinho na tela do usuário; se a sessão estiver fora da
 //                                          tela, abre quando ele abrir ela)
 //   hangar-preview list                    navegadores vivos (chave, url, vivo/morto)
+//   hangar-preview snapshot                árvore de acessibilidade compacta, com refs @eN
+//   hangar-preview click @eN               clica no elemento da ref
+//   hangar-preview fill @eN <texto>        limpa o campo da ref e digita o texto
+//   hangar-preview type <texto>            digita no elemento com foco
+//   hangar-preview press <tecla>           uma tecla (Enter, Tab, Escape, ...)
+//   hangar-preview hover @eN               passa o mouse sobre a ref
+//   hangar-preview wait <@eN|--url texto|--text texto|--idle|Nms>   espera algo acontecer
+//   hangar-preview eval '<js>'             roda JS na página e imprime o resultado
+//   hangar-preview tema <claro|escuro|sistema>
+//   hangar-preview console [--limpar]      log do console da página
+//   hangar-preview network                 últimas respostas de rede
 //   hangar-preview url                     URL atual do navegador desta sessão
-//   hangar-preview shot [arquivo.png]      screenshot da página (default /tmp/hangar-preview-<sessao>.png)
-//   hangar-preview eval '<js>'             roda JS na página e imprime o resultado (JSON)
-//                                           ex: eval 'document.title'
-//                                           ex: eval 'document.querySelector(".btn").click()'
+//   hangar-preview shot [arquivo.png]      screenshot (default /tmp/hangar-preview-<sessao>.png)
+//   hangar-preview batch                   lê várias linhas do stdin, uma por comando (ver skill)
 //
 // A sessão é resolvida pelo nome da sessão tmux atual (dentro do tmux); fora dele, ou pra operar
 // o navegador de OUTRA sessão, use --sessao <nome>.
 //
-// Como funciona: o shell grava ~/.hangar/nav/<chave>.json a cada navegador aberto (chave da
-// sessão + targetId CDP), e este CLI fala CDP puro com o target em http://127.0.0.1:9223 — o
-// MESMO protocolo do agent-browser/Chrome. Sem backend, sem token. Cada sessão tem o SEU view:
-// duas sessões nunca se atrapalham, mesmo com a mesma URL aberta.
-//
-// Se a sessão não tem navegador aberto, o CLI falha pedindo pra abrir — quem posiciona o view na
-// janela é o painel (botão Navegador no chat); não existe navegador invisível.
+// Como funciona: o shell mantém um controlador por navegador (fila, refs, tema, buffers de
+// console/rede) dentro do processo Electron, e publica porta+token efêmeros num sidecar que só o
+// dono lê (~/.hangar/nav/_srv.json). Este CLI é cliente HTTP desse servidor local (POST /cmd) —
+// não fala CDP direto: dois clientes CDP no mesmo alvo o Electron recusa quando o DevTools daquele
+// webContents está aberto. `open` e `list` continuam fora do servidor: `open` passa pelo backend
+// (quem monta o painel na tela) e `list` só lê os sidecares de sessão — os dois têm que funcionar
+// mesmo com o shell fora do ar.
 import { execSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import fmt from '../shell/preview_fmt.cjs';
 
 const CDP = 'http://127.0.0.1:9223';
 const DIR = join(homedir(), '.hangar', 'nav');
+const VERBOS_SERVIDOR = new Set([
+  'snapshot', 'click', 'fill', 'type', 'press', 'hover', 'wait', 'eval',
+  'tema', 'console', 'network', 'url', 'shot',
+]);
 
 function erro(msg, codigo = 1) {
   console.error(`hangar-preview: ${msg}`);
@@ -44,7 +58,7 @@ for (let i = 0; i < args.length; i++) {
 }
 const cmd = pos[0];
 if (!cmd || cmd === 'help' || cmd === '--help') {
-  console.log('uso: hangar-preview <list|url|shot [arq.png]|eval <js>> [--sessao <nome>]');
+  console.log('uso: hangar-preview <open <url>|list|snapshot|click @eN|fill @eN <texto>|type <texto>|press <tecla>|hover @eN|wait <alvo>|eval <js>|tema <claro|escuro|sistema>|console [--limpar]|network|url|shot [arq.png]|batch> [--sessao <nome>]');
   process.exit(0);
 }
 
@@ -62,7 +76,8 @@ function nomeSessao() {
 function lerSidecars() {
   if (!existsSync(DIR)) return [];
   return readdirSync(DIR)
-    .filter((a) => a.endsWith('.json') && !a.startsWith('.'))
+    // _srv.json é o sidecar do PROCESSO (porta+token do servidor local), não de um navegador.
+    .filter((a) => a.endsWith('.json') && !a.startsWith('.') && a !== '_srv.json')
     .map((a) => {
       try { return JSON.parse(readFileSync(join(DIR, a), 'utf8')); } catch { return null; }
     })
@@ -79,7 +94,7 @@ function sidecarDa(nome) {
   erro(`"${nome}" existe em mais de um servidor — use a chave completa:\n` + achados.map((s) => `  ${s.chave}`).join('\n'));
 }
 
-// --- CDP mínimo (fetch + WebSocket nativos) ---
+// --- CDP mínimo, só pro liveness check do `list` ---
 async function targets() {
   try {
     return await (await fetch(`${CDP}/json/list`)).json();
@@ -88,49 +103,25 @@ async function targets() {
   }
 }
 
-async function acharTarget(sc) {
-  const todos = await targets();
-  if (sc.targetId) {
-    const alvo = todos.find((t) => t.id === sc.targetId);
-    if (alvo) return alvo;
-    erro(`o navegador de ${sc.chave} não está mais aberto (o shell reiniciou?). Abra de novo pelo painel.`);
-  }
-  // Sem targetId (o shell não conseguiu o diff): casa por URL — mas só se for ÚNICA, senão o CLI
-  // dirigia o navegador de OUTRA sessão com a mesma página aberta, calado.
-  const porUrl = todos.filter((t) => t.type === 'page' && t.url === sc.url);
-  if (porUrl.length > 1) erro(`mais de um navegador com ${sc.url} aberto e o sidecar não tem targetId — feche e reabra o painel da sessão pra regravar.`);
-  const alvo = porUrl[0];
-  if (!alvo) erro(`o navegador de ${sc.chave} não está mais aberto (o shell reiniciou?). Abra de novo pelo painel.`);
-  return alvo;
-}
-
-async function cdp(ws, id, method, params) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout em ${method}`)), 8000);
-    const onMsg = (e) => {
-      const m = JSON.parse(e.data);
-      if (m.id === id) {
-        clearTimeout(timer);
-        ws.removeEventListener('message', onMsg);
-        if (m.error) reject(new Error(m.error.message));
-        else resolve(m.result);
-      }
-    };
-    ws.addEventListener('message', onMsg);
-    ws.send(JSON.stringify({ id, method, params }));
-  });
-}
-
-async function comAlvo(fn) {
-  const sc = sidecarDa(nomeSessao());
-  const alvo = await acharTarget(sc);
-  const ws = new WebSocket(alvo.webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('ws falhou')); });
+// --- cliente do servidor local (Task 5) ---
+function srv() {
   try {
-    return await fn(ws);
-  } finally {
-    ws.close();
+    return JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8'));
+  } catch {
+    erro('o shell do hangar nao esta no ar (ou e uma versao antiga): abra o app e tente de novo');
   }
+}
+
+async function comando(chave, verbo, cmdArgs) {
+  const { porta, token } = srv();
+  const r = await fetch(`http://127.0.0.1:${porta}/cmd`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chave, verbo, args: cmdArgs }),
+  });
+  const texto = await r.text();
+  console.log(texto);
+  return r.ok ? 0 : 1;
 }
 
 // --- comandos ---
@@ -159,7 +150,6 @@ if (cmd === 'open') {
   process.exit(0);
 }
 
-// --- comandos ---
 if (cmd === 'list') {
   const vivos = await targets();
   const linhas = lerSidecars().map((s) => {
@@ -170,29 +160,20 @@ if (cmd === 'list') {
   process.exit(0);
 }
 
-if (cmd === 'url') {
-  const r = await comAlvo((ws) => cdp(ws, 1, 'Runtime.evaluate', { expression: 'location.href', returnByValue: true }));
-  console.log(r.result.value);
-  process.exit(0);
+if (VERBOS_SERVIDOR.has(cmd)) {
+  if (cmd === 'eval' && !pos[1]) erro('eval precisa de um trecho JS: hangar-preview eval \'document.title\'');
+  const chave = sidecarDa(nomeSessao()).chave;
+  const cmdArgs = pos.slice(1);
+  if (cmd === 'shot' && !cmdArgs[0]) cmdArgs[0] = `/tmp/hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`;
+  process.exit(await comando(chave, cmd, cmdArgs));
 }
 
-if (cmd === 'shot') {
-  const arq = pos[1] || `/tmp/hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`;
-  const r = await comAlvo(async (ws) => {
-    await cdp(ws, 1, 'Page.enable', {});
-    return cdp(ws, 2, 'Page.captureScreenshot', { format: 'png' });
-  });
-  writeFileSync(arq, Buffer.from(r.data, 'base64'));
-  console.log(arq);
-  process.exit(0);
+if (cmd === 'batch') {
+  const chave = sidecarDa(nomeSessao()).chave;
+  const linhas = readFileSync(0, 'utf8'); // stdin inteiro
+  let pior = 0;
+  for (const { verbo, args: a } of fmt.parseLote(linhas)) pior = Math.max(pior, await comando(chave, verbo, a));
+  process.exit(pior);
 }
 
-if (cmd === 'eval') {
-  if (!pos[1]) erro('eval precisa de um trecho JS: hangar-preview eval \'document.title\'');
-  const r = await comAlvo((ws) => cdp(ws, 1, 'Runtime.evaluate', { expression: pos[1], returnByValue: true, awaitPromise: true }));
-  if (r.exceptionDetails) erro(`o JS lançou: ${r.exceptionDetails.text} ${r.exceptionDetails.exception?.description || ''}`);
-  console.log(JSON.stringify(r.result?.value !== undefined ? r.result.value : r.result, null, 0));
-  process.exit(0);
-}
-
-erro(`comando desconhecido: ${cmd} (vale list|url|shot|eval)`);
+erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|console|network|url|shot|batch)`);
