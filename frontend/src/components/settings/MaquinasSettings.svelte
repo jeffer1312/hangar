@@ -1,14 +1,13 @@
 <script lang="ts">
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
-           addServerWithRollback, validarPareamento, onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
-  import { getSessions } from '../../lib/api';
+           onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
   import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeer,
            type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
   import ServerManager from '../ServerManager.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
-  import QrScanner from '../QrScanner.svelte';
+  import AdicionarMaquina from './AdicionarMaquina.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
   import type { RemovalSnapshot, Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
@@ -57,71 +56,7 @@
   // montar — abrir qualquer sessão o sobrescreve. Um botão nesta tela era um controle que mente.
   // O que se escolhe aqui é o ALVO das telas de config de servidor, e só.
 
-  // Adicionar servidor: colar URL de pareamento (com token) ou QR — mesmo fluxo do Sidebar
-  // (mesma rota de parse), com CSS local. O reload no sucesso é deliberado: a lista nova muda
-  // ativo/token e o SSE do store precisa renascer limpo.
-  //
-  // Validação ESTRITA compartilhada (auth.validarPareamento, manual E QR — mesma função testável):
-  // base absoluta http/https com hostname, api válida quando presente, token não vazio, URL sem
-  // ?token= recusada — tudo ANTES de tocar storage. Gravar URL quebrada como credencial vira um
-  // 401 sem pista depois.
-  function erroPareamento(cru: string): string {
-    if (!cru.includes('://')) return m.config_servidores_erro_cole();
-    if (cru.includes('?token=')) return m.config_servidores_erro_invalida();
-    return m.config_servidores_erro_token();
-  }
   let showAdd = $state(false);
-  let addUrlText = $state('');
-  let addError = $state('');
-  // Transação em voo: o botão Add e o QR ficam desabilitados até o settle (sucesso ou rollback) —
-  // o helper é serializado FIFO, mas um segundo clique não pode abrir outra tentativa por cima.
-  let addBusy = $state(false);
-  let scanning = $state(false);
-  function autofocus(node: HTMLInputElement) { node.focus(); }
-  async function submitPasteServer() {
-    if (addBusy) return;   // guard: o botão é disabled, mas Enter chama o handler direto (round 6)
-    const cru = addUrlText.trim();
-    const parsed = validarPareamento(cru);
-    if (!parsed) { addError = erroPareamento(cru); return; }
-    // Add transacional: probe rejeitado não recarrega — erro visível e o diálogo fica pra retry
-    // (o rollback escopado já rodou dentro do helper).
-    addBusy = true;
-    try {
-      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
-      window.location.reload();
-    } catch (err) {
-      // Erro TARDIO não some: o usuário pode ter fechado o diálogo enquanto a transação rodava —
-      // reabre com a mensagem visível (mesmo caminho do QR logo abaixo).
-      showAdd = true;
-      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
-    } finally {
-      addBusy = false;
-    }
-  }
-  async function handleScan(text: string) {
-    if (addBusy) return;   // guard: callback QR não pode iniciar transação por cima de outra (round 6)
-    const cru = text.trim();
-    const parsed = validarPareamento(cru);
-    if (!parsed) {
-      // QR inválido NÃO fecha silencioso: volta pro diálogo com o erro visível (role=alert) e o
-      // usuário pode escanear de novo ou colar à mão.
-      scanning = false;
-      showAdd = true;
-      addError = erroPareamento(cru);
-      return;
-    }
-    scanning = false;
-    addBusy = true;
-    try {
-      await addServerWithRollback(parsed.base, parsed.token, () => getSessions());
-      window.location.reload();
-    } catch (err) {
-      showAdd = true;
-      addError = err instanceof Error ? `${m.falha_conexao()}: ${err.message}` : m.erro_desconhecido();
-    } finally {
-      addBusy = false;
-    }
-  }
 
   // Remoção com confirmação REAL (ConfirmDialog). O ÚLTIMO servidor é removível de propósito:
   // remover tudo dispara o logout global (única saída pra deslogar o aparelho) — por isso o
@@ -522,7 +457,7 @@
   onRename={rename}
   onUpdateToken={updateToken}
   onRemove={abrirRemocao}
-  onAdd={() => { showAdd = true; addUrlText = ''; addError = ''; }}
+  onAdd={() => (showAdd = true)}
 />
 <div class="ss-acoes">
   <button class="ss-btn" onclick={() => sessionsStore.reconnect()} disabled={logoutInFlight}>{m.config_servidores_reconectar()}</button>
@@ -530,31 +465,7 @@
 </div>
 
 {#if showAdd}
-  <ConfirmDialog title={m.sessao_adicionar_servidor()} aria={m.sessao_adicionar_servidor()} role="dialog"
-    {fallbackFocus}
-    onClose={() => (showAdd = false)}
-    actions={[
-      { label: m.sessao_escanear_qr(), disabled: addBusy, onClick: () => { showAdd = false; scanning = true; } },
-      { label: m.config_servidores_adicionar(), kind: 'primary', disabled: !addUrlText.trim() || addBusy, onClick: submitPasteServer },
-    ]}>
-    <input
-      type="url"
-      class="ss-add-input"
-      bind:value={addUrlText}
-      placeholder={m.config_servidores_colar_url()}
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      spellcheck={false}
-      use:autofocus
-      onkeydown={(e) => { addError = ''; if (e.key === 'Enter' && !addBusy) submitPasteServer(); }}
-      disabled={addBusy}
-      aria-label={m.config_servidores_url_pareamento()}
-      aria-invalid={!!addError}
-      aria-describedby={addError ? 'ss-add-err' : undefined}
-    />
-    {#if addError}<p id="ss-add-err" class="ss-add-err" role="alert">{addError}</p>{/if}
-  </ConfirmDialog>
+  <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)} />
 {/if}
 
 {#if mostrandoRegistro}
@@ -600,10 +511,6 @@
     ]}>
     <p class="ss-dialog-copy">{m.config_servidores_token_removido()}</p>
   </ConfirmDialog>
-{/if}
-
-{#if scanning}
-  <QrScanner onScan={handleScan} onClose={() => (scanning = false)} />
 {/if}
 
 {#if pendingRemoval}
@@ -659,15 +566,6 @@
   .ss-danger { color: var(--error); }
   .ss-danger:hover { background: rgba(255, 69, 58, 0.1); }
 
-  /* Input do modal "Adicionar servidor" (mesmo desenho do Sidebar, CSS local). */
-  .ss-add-input {
-    width: 100%; height: 44px; padding: 0 var(--space-3);
-    background: var(--surface-inset); border: 1px solid var(--border-default); border-radius: var(--radius-md);
-    color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-sm); outline: none;
-  }
-  .ss-add-input::placeholder { color: var(--text-muted); }
-  .ss-add-input:focus { border-color: var(--accent); }
-  .ss-add-err { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--error); }
   .ss-dialog-copy { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
 
   /* ── Seções Task 5: identificador + máquinas que este servidor alcança ──────────────────
