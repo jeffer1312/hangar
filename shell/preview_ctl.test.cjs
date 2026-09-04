@@ -115,7 +115,9 @@ test('ref que ficou velha (no desmontado por re-render) responde como ref inexis
   assert.match(await ctl.clicar('@e1'), /^erro: ref @e1 nao existe \(rode snapshot de novo\)/);
 });
 
-test('preencher limpa o campo e usa insertText (input controlado por React aceita)', async () => {
+// A ORDEM é o contrato: focar, selecionar tudo, inserir. Sem o passo da seleção o insertText
+// concatena — foi o defeito medido no navegador de verdade.
+test('preencher foca, seleciona tudo com o comando de edicao e insere por cima', async () => {
   const dbg = dubleDbg({
     'Accessibility.getFullAXTree': { nodes: [
       { nodeId: '1', role: { value: 'textbox' }, name: { value: 'Nome' }, childIds: [], backendDOMNodeId: 5 },
@@ -125,14 +127,19 @@ test('preencher limpa o campo e usa insertText (input controlado por React aceit
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
   await ctl.snapshot();
   await ctl.preencher('@e1', 'Jefferson');
-  const metodos = dbg.chamadas.map(([m]) => m);
-  assert.ok(metodos.includes('Input.dispatchMouseEvent'), 'foca clicando');
-  assert.ok(metodos.includes('Input.insertText'));
-  const inserir = dbg.chamadas.find(([m]) => m === 'Input.insertText');
-  assert.equal(inserir[1].text, 'Jefferson');
+  const entrada = dbg.chamadas.filter(([m]) => m.startsWith('Input.'));
+  assert.deepEqual(entrada.map(([m]) => m), [
+    'Input.dispatchMouseEvent',   // mousePressed
+    'Input.dispatchMouseEvent',   // mouseReleased
+    'Input.dispatchKeyEvent',     // selectAll
+    'Input.insertText',
+  ]);
+  // O que seleciona é o `commands`, não a tecla: Ctrl+A sem virtual key code não seleciona nada.
+  assert.deepEqual(entrada[2][1], { type: 'keyDown', commands: ['selectAll'] });
+  assert.equal(entrada[3][1].text, 'Jefferson');
 });
 
-test('preencher usa Ctrl+A + Delete pra limpar e Input.insertText pra inserir', async () => {
+test('preencher com texto vazio so limpa: seleciona tudo e insere string vazia', async () => {
   const dbg = dubleDbg({
     'Accessibility.getFullAXTree': { nodes: [
       { nodeId: '1', role: { value: 'textbox' }, name: { value: 'Nome' }, childIds: [], backendDOMNodeId: 5 },
@@ -141,15 +148,17 @@ test('preencher usa Ctrl+A + Delete pra limpar e Input.insertText pra inserir', 
   });
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
   await ctl.snapshot();
-  await ctl.preencher('@e1', 'novo');
-  const chamadas = dbg.chamadas.map(([m]) => m);
-  assert.ok(chamadas.includes('Input.dispatchMouseEvent'), 'foca com click');
-  assert.ok(chamadas.includes('Input.dispatchKeyEvent'), 'dispara Ctrl+A e Delete');
-  assert.ok(chamadas.includes('Input.insertText'), 'insere o texto');
-  const ctrlA = dbg.chamadas.filter(([m, p]) => m === 'Input.dispatchKeyEvent' && p.key === 'a');
-  const deletes = dbg.chamadas.filter(([m, p]) => m === 'Input.dispatchKeyEvent' && p.key === 'Delete');
-  assert.equal(ctrlA.length, 2, 'Ctrl+A = keyDown + keyUp');
-  assert.equal(deletes.length, 2, 'Delete = keyDown + keyUp');
+  await ctl.preencher('@e1', '');
+  const inserir = dbg.chamadas.find(([m]) => m === 'Input.insertText');
+  assert.equal(inserir[1].text, '');
+  assert.ok(dbg.chamadas.some(([m, p]) => m === 'Input.dispatchKeyEvent' && p.commands?.[0] === 'selectAll'));
+});
+
+test('preencher em ref desconhecida nao dispara evento nenhum', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  assert.match(await ctl.preencher('@e9', 'x'), /^erro: ref @e9 nao existe/);
+  assert.equal(dbg.chamadas.filter(([m]) => m.startsWith('Input.')).length, 0);
 });
 
 test('digitar manda Input.insertText com o texto exato', async () => {

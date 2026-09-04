@@ -111,14 +111,13 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       const p = await this.centroDe(ref);
       if (!p) return `erro: ref ${ref} nao existe (rode snapshot de novo)`;
       await this.clicar(ref);
-      // Seleciona tudo e substitui: `value=` em JS não dispara onChange no React. Ctrl+A + Input.insertText
-      // em navegadores reais deveria funcionar (o texto selecionado é deletado antes de inserir).
-      // Se não funcionar, é porque Input.insertText não respeita seleção — então apaga com Delete + insere.
-      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 });
-      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
-      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Delete' });
-      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete' });
-      // Input.insertText deveria agora inserir em campo vazio. Se ainda concatenar, é bug do CDP.
+      // SUBSTITUI: sem seleção o insertText gruda no que já estava. Quem seleciona é o campo
+      // `commands` — a tecla sozinha (Ctrl+A) não seleciona nada, porque o Chromium mapeia
+      // tecla→comando de edição pelo virtual key code, que o evento sintético não carrega.
+      // `commands` não vale em keyUp, não depende de Ctrl vs Cmd, e pega o campo inteiro
+      // (triplo clique pegaria só uma linha de um textarea).
+      await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', commands: ['selectAll'] });
+      // insertText substitui a seleção, texto vazio incluído — daí não haver passo de apagar.
       await dbg.sendCommand('Input.insertText', { text: String(texto) });
       return `ok: fill ${ref}`;
     },
