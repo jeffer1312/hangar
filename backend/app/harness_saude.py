@@ -258,7 +258,9 @@ def _sincronizar(cli: str) -> str:
                 modelos = []
             r = agentes_sync.sincronizar(cred["nome"], cred["base_url"], cred["api_key"], modelos, (cli,))
             ok, motivo = r[cli]["ok"], r[cli]["motivo"]
-        feitos.append(f"{alvo}: {'ok' if ok else motivo}")
+        # O Codex guarda só o NOME da variável de ambiente: o motivo dele diz qual exportar, e
+        # esconder isso atrás de "ok" seria prometer uma chave que ele ainda não vê.
+        feitos.append(f"{alvo}: {motivo if (not ok or 'exporte' in motivo) else 'ok'}")
     return "; ".join(feitos) or "nada faltava"
 
 

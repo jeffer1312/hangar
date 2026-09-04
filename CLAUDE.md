@@ -643,7 +643,12 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   do Pi/omp, ponte de skills, statusline do Kimi) e um botão por item que **reusa o instalador que já
   existe** (`hook_installer.ensure_*`, `skill_bridge.rebuild`, `contas.reconciliar`,
   `oauth_codex.propagar`, o symlink das `scripts/pi/*.ts`). A checagem é só leitura; o texto vai como
-  `codigo`+`params` e o front traduz (`harness_<codigo>`). `instalado` é "binário no PATH OU pasta de
+  `codigo`+`params` e o front traduz (`harness_<codigo>`). O item **Credenciais** cruza o store de
+  cada CLI (auth.json+models.json do Pi, `auth_credentials` do omp, `providers` do Kimi,
+  `model_providers`+login do Codex) com o que o app conhece (engines.json + cofre OAuth), no nome
+  que AQUELE harness usa (`provedor_embutido_do_pi` pra Pi/omp, o nome do motor pros outros);
+  "Sincronizar" reusa o `agentes_sync` e, no omp, grava a chave no mesmo SQLite do login. O Codex
+  continua guardando só o nome da variável, e o resultado diz qual exportar. `instalado` é "binário no PATH OU pasta de
   config existe" porque o backend roda como serviço com PATH curto — só o binário dava "Kimi não
   instalado" com o `~/.kimi-code` cheio.
 - **Runtime por conta não vira atalho** (`contas._RUNTIME_DA_CONTA`, 04/09/2026): `telemetry/`,
