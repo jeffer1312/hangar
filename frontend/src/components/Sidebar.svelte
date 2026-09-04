@@ -713,41 +713,51 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 {#if model.selectMode}
                   <input type="checkbox" class="select-check" checked={model.selected.has(selKey)} tabindex="-1" aria-hidden="true" />
                 {:else if !expanded}
-                  <!-- Rail recolhido: SEMPRE iniciais, tingidas pelo estado — é o único texto que
-                       identifica a sessão sem o nome. Trabalhando trocava as iniciais pelo spinner,
-                       e aí a coluna virava bolinhas anônimas justo nas sessões ocupadas; agora o
-                       "trabalhando" é um anel pulsando em volta das mesmas iniciais, no mesmo
-                       vocabulário do anel âmbar da travada (que continua tendo prioridade: um aviso
-                       não pode virar animação de rotina). -->
-                  <span
-                    class="initials"
-                    class:stalled={s.stalled}
-                    class:ociosa={s.state === 'idle' && !s.stalled}
-                    class:busy={s.state === 'working' && !s.stalled}
-                    class:aguardando={s.state === 'awaiting_input' && !s.stalled}
-                    title={`${s.name} — ${estadoTxt}`}
-                    style="--anel: {stateColors[s.state]};"
-                  >{initials(s.name)}</span>
+                  <!-- Rail recolhido: SEMPRE iniciais — é o único texto que identifica a sessão sem
+                       o nome. O ESTADO saiu do anel em volta delas e virou o ponto do canto: o anel
+                       usava --accent pra "trabalhando", a mesma cor que o app usa pra destaque em
+                       todo lugar, e "ociosa" era a ausência de anel — indistinguível de sessão que
+                       ainda não reportou estado. Com ponto próprio, todo estado tem desenho e a
+                       ausência não significa mais duas coisas. -->
+                  <span class="initials" title={`${s.name} — ${estadoTxt}`}>{initials(s.name)}</span>
+                  <!-- Trabalhando é a MESMA marca animada da lista aberta, só que no canto: um
+                       ponto azul parado ao lado de um verde parado não dizia "está ocupada", e
+                       inventar outra animação aqui seria um segundo vocabulário pro mesmo estado.
+                       As iniciais ficam — trocá-las pelo indicador é o que fazia a coluna virar
+                       bolinhas anônimas justo nas sessões ocupadas. O pulso do halo segue reservado
+                       a quem espera resposta. -->
+                  {#if s.state === 'working' && !s.stalled}
+                    <span class="estado-marca" title={estadoTxt} style="color: {stateColors[s.state]};">
+                      <HangarWorking size={14} />
+                    </span>
+                  {:else}
+                    <span
+                      class="estado-ponto"
+                      class:aguardando={s.state === 'awaiting_input' && !s.stalled}
+                      title={estadoTxt}
+                      style="--cor: {s.stalled ? 'var(--warning)' : stateColors[s.state]};"
+                    ></span>
+                  {/if}
                 {:else if s.state === 'working'}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarWorking size={18} /></span>
                 {:else}
                   <span class="row-mark" style="color: {stateColors[s.state]};"><HangarMark size={18} /></span>
                 {/if}
-                {#if !expanded && !model.selectMode && provTag}
-                  <!-- Rail recolhido: nao cabe chip na linha; o glifo do harness vai colado na base
-                       do avatar. Absoluto, pra nao mudar a altura da row nem empurrar as iniciais. -->
-                  <span class="prov-rail" title={provTag}><ProviderGlyph provider={s.provider} size={10} /></span>
+                {#if !expanded && !model.selectMode && model.showProviderTags}
+                  <!-- Mesma regra da lista aberta: quando a lista MISTURA agentes, todo mundo leva o
+                       glifo, Claude incluído — marcar só a exceção não diz nada num trilho onde os
+                       nomes já sumiram. Vai no canto de cima do avatar (o de baixo é da barra de
+                       plano, o outro de cima é do ponto de estado), absoluto pra não empurrar as
+                       iniciais nem mudar a altura da linha. -->
+                  <span class="prov-rail" title={provTag ?? 'Claude'}><ProviderGlyph provider={s.provider} size={10} /></span>
                 {/if}
               </span>
-              {#if !expanded && !model.selectMode && !provTag}
+              {#if !expanded && !model.selectMode}
                 <!-- Rail recolhido: barra única na base da row, irmã de .lead (não dentro dele —
-                     .lead é a coluna das iniciais, gated em provTag). .sess-main precisa de
-                     position:relative pra ancorar o position:absolute do compact (ver CSS).
-                     ponytail: gate em !provTag — geometria do .prov-rail (badge do provider, também
-                     absoluto e centralizado na base do avatar) ocupa a MESMA faixa de ~13px que a
-                     barra usaria; os 36-40px do trilho não têm altura pra empilhar os dois sem
-                     colidir. Mutuamente exclusivo por ora (raro ter Pi/Codex + plano ativo); se
-                     precisar dos dois ao mesmo tempo, mover um dos dois pro topo do avatar. -->
+                     .lead é a coluna das iniciais). .sess-main precisa de position:relative pra
+                     ancorar o position:absolute do compact (ver CSS). A barra e o glifo do harness
+                     disputavam esta mesma faixa e eram mutuamente exclusivos; o glifo subiu pro
+                     canto de cima do avatar e a base voltou a ser só da barra. -->
                 <PlanBar session={s} compact />
               {/if}
               {#if expanded}
@@ -1619,7 +1629,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
      bottom: -3px e não -7px: com densidade compacta a row cai pra 34px e o avatar de 30px quase a
      preenche — a -7px a etiqueta passava da row e encostava no avatar de baixo. */
   .prov-rail {
-    position: absolute; left: 50%; bottom: -3px; transform: translateX(-50%);
+    position: absolute; left: -4px; top: -4px;
     color: var(--text-secondary); background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     padding: 1px 3px; border-radius: var(--radius-full); white-space: nowrap;
@@ -1634,10 +1644,10 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .lead { width: 18px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
   /* Rail recolhido: iniciais precisam de mais espaco que o icone de 18px. */
   .sidebar.collapsed .lead { width: auto; position: relative; }
-  /* Rail recolhido — as INICIAIS dizem quem é, o ANEL diz como está. Antes a cor do estado pintava
-     a letra E o fundo do chip, então o olho lia "chip verde / chip roxo" em vez de ler a sessão, e o
-     roxo do trabalhando era o mesmo --accent do selecionado. Superfície em --surface-raised (e não
-     uma cor sólida) porque era o único elemento do trilho que não deixava o papel de parede passar. */
+  /* Rail recolhido — as INICIAIS dizem quem é; quem diz como está é o ponto do canto. Antes a cor
+     do estado pintava a letra E o fundo do chip, então o olho lia "chip verde / chip roxo" em vez
+     de ler a sessão. Superfície em --surface-raised (e não uma cor sólida) porque era o único
+     elemento do trilho que não deixava o papel de parede passar. */
   .initials {
     width: 30px; height: 30px; border-radius: 8px;
     display: flex; align-items: center; justify-content: center;
@@ -1645,31 +1655,36 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     color: var(--text-primary);
     background: var(--surface-raised);
     border: 1px solid var(--border);
-    box-shadow: 0 0 0 2px var(--anel, transparent);
   }
-  /* Ociosa é o estado calmo: sem anel, pra que anel signifique "olha aqui". */
-  .initials.ociosa { box-shadow: none; }
-  /* Travada (feature #7) no rail recolhido: anel âmbar sutil, mesma ideia do .state-chip.stalled. */
-  .initials.stalled {
-    box-shadow: inset 0 0 0 1px var(--warning);
+  /* O estado tem desenho PRÓPRIO agora — este ponto no canto de cima do avatar. Ele existe pros
+     quatro estados, então "sem marca" deixou de ser um deles: antes ociosa era a ausência de anel,
+     que é o mesmo desenho de uma sessão que ainda não reportou nada. A borda na cor do painel
+     recorta o ponto do avatar em qualquer papel de parede. */
+  .estado-ponto {
+    position: absolute; right: -3px; top: -3px;
+    width: 9px; height: 9px; border-radius: var(--radius-full);
+    background: var(--cor, var(--text-secondary));
+    border: 2px solid var(--bg-elevated);
+    box-sizing: content-box;
   }
-  /* ÊNFASE POR URGÊNCIA — quem pulsa é quem precisa DE TI.
-     Antes era ao contrário: "trabalhando" (rotina) era o único estado animado, e "esperando
-     resposta", que é o único que exige ação humana, tinha só a cor do anel. Agora:
-       aguardando -> halo pulsando, largo e lento (chama sem apressar)
-       trabalhando -> anel firme, sem pulso (informa, não interrompe)
-       travada    -> anel âmbar por dentro (aviso, não animação de rotina)
-     O halo NUNCA vai a zero de alfa: sobre papel de parede movimentado a sessão sumia entre um
+  /* Trabalhando: a marca do hangar com a animação que ela já tem na lista aberta. Fundo próprio
+     (não transparente) porque são traços finos sobre a quina do avatar — sem ele os arcos se
+     misturam com a borda e com o papel de parede. */
+  .estado-marca {
+    position: absolute; right: -6px; top: -6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 1px; border-radius: var(--radius-full);
+    background: var(--bg-elevated);
+  }
+  /* ÊNFASE POR URGÊNCIA — quem pulsa é quem precisa DE TI. Quem espera resposta ganha um halo largo
+     e lento. O halo NUNCA vai a zero de alfa: sobre papel de parede movimentado ele sumia entre um
      pulso e outro. */
-  .initials.busy {
-    box-shadow: 0 0 0 2px var(--anel, transparent);
-  }
-  .initials.aguardando {
+  .estado-ponto.aguardando {
     animation: rail-chama 2.2s var(--ease-out) infinite;
   }
   @keyframes rail-chama {
-    0%, 100% { box-shadow: 0 0 0 2px var(--anel, transparent), 0 0 0 2px color-mix(in srgb, var(--anel, transparent) 55%, transparent); }
-    55%      { box-shadow: 0 0 0 2px var(--anel, transparent), 0 0 0 8px color-mix(in srgb, var(--anel, transparent) 0%, transparent); }
+    0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--cor, transparent) 55%, transparent); }
+    55%      { box-shadow: 0 0 0 7px color-mix(in srgb, var(--cor, transparent) 0%, transparent); }
   }
   .sidebar.collapsed .sess-row { justify-content: center; }
   /* position:relative pra ancorar a PlanBar compact (position:absolute) — sem isto ela flutua em

@@ -16,6 +16,7 @@ import * as m from '../paraglide/messages';
   import { getActiveId, serverColor } from '../lib/auth';
   import HangarMark from './icons/HangarMark.svelte';
   import ProviderGlyph from './icons/ProviderGlyph.svelte';
+  import HangarWorking from './icons/HangarWorking.svelte';
   import QuotaPill from './QuotaPill.svelte';
   import type { AggSession } from '../lib/types';
 
@@ -171,7 +172,14 @@ import * as m from '../paraglide/messages';
           sidebarBridge.openSessionMenu(e, tab.session, tab.session.serverId);
         }}
         title={`${tab.session.name} · ${stateName}${plano}`}>
-        <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
+        <!-- Trabalhando é a MESMA marca animada da lista, não um ponto de outra cor: entre um ponto
+             azul e um verde, os dois parados, não dá pra ver quem está ocupada. Os demais estados
+             seguem no ponto. -->
+        {#if tab.session.state === 'working'}
+          <span class="tab-marca" style:color={stateColors[tab.session.state]} aria-hidden="true"><HangarWorking size={14} /></span>
+        {:else}
+          <span class="tab-dot" style:background={stateColors[tab.session.state]} aria-hidden="true"></span>
+        {/if}
         <!-- Marca colorida do provider em TODA aba (referência: tab bar do super.engineering, onde
              cada agente carrega seu ícone). Diferente do prov-chip da lista, aqui o Claude também
              ganha glifo — pedido do usuário: na aba o ícone é o reconhecimento, não há texto. -->
@@ -333,6 +341,9 @@ import * as m from '../paraglide/messages';
   }
   .tab.active:hover { background: var(--accent-dim); }
   .tab-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; }
+  /* Ocupa a mesma largura do ponto que ela substitui, senão a aba pula de tamanho a cada troca de
+     estado e a fila inteira reflui. */
+  .tab-marca { flex-shrink: 0; display: inline-flex; align-items: center; margin: -3px; }
   .tab-name {
     min-width: 0;
     overflow: hidden;
