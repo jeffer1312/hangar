@@ -663,6 +663,8 @@ export interface AtualizacaoEstado {
   etapa_inicio?: string;
   /** Terminou bem, mas algo ficou pra trás (ex: dependências da janela nativa). */
   avisos?: string[];
+  /** O pull tocou `shell/`: a janela nativa só pega o código novo ao fechar e abrir o app. */
+  shell_mudou?: boolean;
   commit_de?: string;
   commit_para?: string;
   ts?: string;

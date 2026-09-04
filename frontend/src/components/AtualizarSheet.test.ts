@@ -411,6 +411,62 @@ describe('ciclo de vida', () => {
 });
 
 describe('deu erro', () => {
+  it('pull que tocou shell/ avisa pra reabrir o app — só dentro da janela nativa', async () => {
+    const uaOriginal = navigator.userAgent;
+    const comUa = (ua: string) => Object.defineProperty(navigator, 'userAgent', {
+      value: ua, configurable: true, writable: true,
+    });
+    try {
+      vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
+        base({ estado: { fase: 'pronto', ok: true, shell_mudou: true } }),
+      );
+      comUa('Mozilla/5.0 Chrome/150.0 Electron/43.3.0 Safari/537.36');
+      montar();
+      await tick();
+      await tick();
+      expect(document.body.textContent ?? '').toContain(m.atualizar_shell_mudou());
+
+      if (comp) unmount(comp);
+      comp = null;
+      alvo.remove();
+      comUa('Mozilla/5.0 (iPhone) Safari');
+      montar();
+      await tick();
+      await tick();
+      expect(document.body.textContent ?? '').not.toContain(m.atualizar_shell_mudou());
+    } finally {
+      comUa(uaOriginal);
+    }
+  });
+
+  it('com shell_mudou a caixa NÃO recarrega sozinha ao terminar — a pessoa precisa ler o aviso', async () => {
+    const uaOriginal = navigator.userAgent;
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 Chrome/150.0 Electron/43.3.0', configurable: true, writable: true,
+    });
+    const reload = vi.fn();
+    const locationOriginal = window.location;
+    Object.defineProperty(window, 'location', {
+      value: { ...locationOriginal, reload }, configurable: true, writable: true,
+    });
+    vi.useFakeTimers();
+    try {
+      const spy = vi.spyOn(api, 'getAtualizacao');
+      spy.mockResolvedValueOnce(base({ estado: { fase: 'rodando', passo: 1, total: 5, texto: 'x' } }));
+      spy.mockResolvedValue(base({ estado: { fase: 'pronto', ok: true, shell_mudou: true } }));
+      montar();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(2500);   // um tique do acompanhamento vê o "pronto"
+      expect(document.body.textContent ?? '').toContain(m.atualizar_shell_mudou());
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperty(window, 'location', { value: locationOriginal, configurable: true, writable: true });
+      Object.defineProperty(navigator, 'userAgent', { value: uaOriginal, configurable: true, writable: true });
+    }
+  });
+
   it('mostra o erro, o estado da máquina e a branch de resgate', async () => {
     vi.spyOn(api, 'getAtualizacao').mockResolvedValue(
       base({

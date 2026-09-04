@@ -2110,6 +2110,7 @@
   "atualizar_procurar_falhou": "Could not reach the server.",
   "atualizar_com_mudancas_locais": "with local changes not committed to the repository",
   "atualizar_com_avisos": "Updated, but something was left pending:",
+  "atualizar_shell_mudou": "The app window also changed in this version: close and reopen Hangar for it to take effect (the server is already on the new code).",
   "orqcfg_titulo": "Orchestration",
   "orqcfg_aba_papeis": "Group roles",
   "orqcfg_aba_contas": "Allowed accounts",

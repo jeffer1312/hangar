@@ -475,6 +475,20 @@ def _puxar(pre: dict) -> None:
         raise RuntimeError(f"nao consegui alinhar com o codigo novo: {_cauda(r)}")
 
 
+def _shell_mudou(de: str, para: str) -> bool:
+    """A janela nativa (Electron) roda o `main.cjs` que estava no disco quando abriu: o restart do
+    backend não a alcança, e só fechar e abrir o app traz o shell novo. A tela precisa dizer isso."""
+    if not de or not para or de == para:
+        return False
+    p = _git("diff", "--name-only", f"{de}..{para}", "--", "shell/", timeout=30)
+    if p.returncode != 0:
+        # Na dúvida, avisa: um "feche e abra" a mais custa um clique; um a menos deixa o shell
+        # velho no ar sem ninguém saber.
+        _log.warning("nao consegui saber se shell/ mudou (%s..%s): %s", de[:8], para[:8], _cauda(p))
+        return True
+    return any(linha and not linha.endswith(".test.cjs") for linha in p.stdout.splitlines())
+
+
 def _reaplicar(topologia: str) -> None:
     """O que o `git pull` não atualiza: units, deps, build. Já existe, por sistema."""
     if _E_WINDOWS:
@@ -594,7 +608,7 @@ def _executar(porta: int) -> dict:
     # no terminalzinho, mesmo tendo sido registrada.
     _escrever(fase="rodando", ok=None, erro=None, resgate=None,
               commit_de="", commit_para=None, pid=os.getpid(),
-              reiniciar_manual=False, log=[])
+              reiniciar_manual=False, shell_mudou=False, log=[])
     pre = checar()
     de = pre.get("commit", "")
     _escrever(commit_de=de)
@@ -619,7 +633,7 @@ def _executar(porta: int) -> dict:
         _etapa("codigo")
         _puxar(pre)
         para = _git("rev-parse", "HEAD", timeout=30).stdout.strip()
-        _escrever(commit_para=para)
+        _escrever(commit_para=para, shell_mudou=_shell_mudou(de, para))
 
         _etapa("passos")
         _aplicar_passos()

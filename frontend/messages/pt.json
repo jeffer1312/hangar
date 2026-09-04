@@ -2110,6 +2110,7 @@
   "atualizar_procurar_falhou": "Não consegui falar com o servidor.",
   "atualizar_com_mudancas_locais": "com alterações locais não salvas no repositório",
   "atualizar_com_avisos": "Atualizado, mas algo ficou pendente:",
+  "atualizar_shell_mudou": "A janela do app também mudou nesta versão: feche e abra o Hangar para ela valer (o servidor já está no código novo).",
   "orqcfg_titulo": "Orquestração",
   "orqcfg_aba_papeis": "Papéis do grupo",
   "orqcfg_aba_contas": "Contas liberadas",

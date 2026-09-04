@@ -229,6 +229,29 @@ def test_backend_que_nao_sobe_volta_pro_commit_anterior(repo, monkeypatch):
     assert final["ok"] is False and "nao respondeu" in final["erro"]
 
 
+@pytest.mark.parametrize("arquivo, esperado", [
+    ("shell/main.cjs", True),
+    ("shell/preview_ctl.test.cjs", False),
+    ("backend/x.py", False),
+])
+def test_shell_mudou_so_quando_o_pull_toca_a_janela(repo, monkeypatch, arquivo, esperado):
+    def _puxar_avanca(pre):
+        alvo = repo / arquivo
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        alvo.write_text("novo\n", encoding="utf-8")
+        _git(repo, "add", arquivo)
+        _git(repo, "commit", "-m", "versao nova")
+
+    monkeypatch.setattr(atualizar, "_puxar", _puxar_avanca)
+    monkeypatch.setattr(atualizar, "_aplicar_passos", lambda: None)
+    monkeypatch.setattr(atualizar, "_reaplicar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_reiniciar", lambda t: None)
+    monkeypatch.setattr(atualizar, "_subiu", lambda porta, teto=0: True)
+    final = atualizar.executar()
+    assert final["ok"] is True
+    assert final["shell_mudou"] is esperado
+
+
 def test_pronto_marca_ok(repo, monkeypatch):
     for nome in ("_puxar", "_aplicar_passos", "_reaplicar", "_reiniciar"):
         monkeypatch.setattr(atualizar, nome,

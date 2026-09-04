@@ -112,7 +112,7 @@
         // Com pendência, NÃO recarrega sozinho: o reload some com a caixa, e com ela o único lugar
         // onde o aviso aparece — a pessoa nunca saberia que a janela nativa ficou quebrada. Aqui
         // ela lê e fecha quando quiser.
-        if (estado.ok === true && !faltaReiniciar && !avisos.length) concluir();
+        if (estado.ok === true && !faltaReiniciar && !avisos.length && !shellMudou) concluir();
       } catch (e) {
         // REGISTRA, não engole. O `catch {}` vazio que estava aqui escondia exatamente a classe de
         // erro que esta instrumentação existe pra pegar — e não protegia nada: no navegador, uma
@@ -228,8 +228,12 @@
   const invalidos = $derived(estado.passos_invalidos ?? []);
   /** O instalador terminou bem, mas deixou algo pra trás (ex: dependências da janela nativa). */
   const avisos = $derived(estado.avisos ?? []);
+  // Só dentro da janela nativa: o restart do backend não alcança o `main.cjs` que o Electron já
+  // carregou, e no navegador/celular não há shell nenhum pra reabrir. `Electron/` e não a marca
+  // `hangar-shell`: aquela só entra no user agent quando a janela é transparente (background.ts).
+  const shellMudou = $derived(estado.shell_mudou === true && navigator.userAgent.includes('Electron/'));
   const terminouComAvisos = $derived(estado.fase === 'pronto' && estado.ok === true
-                                     && avisos.length > 0);
+                                     && (avisos.length > 0 || shellMudou));
   const decorrido = $derived.by(() => {
     if (!rodando || !estado.etapa_inicio) return '';
     const s = Math.max(0, Math.round((agoraMs - new Date(estado.etapa_inicio).getTime()) / 1000));
@@ -360,6 +364,7 @@
       <h2 class="titulo">{m.atualizar_em_dia_titulo()}</h2>
       <p class="sub">{m.atualizar_com_avisos()}</p>
       <ul class="avisos">
+        {#if shellMudou}<li>{m.atualizar_shell_mudou()}</li>{/if}
         {#each avisos as aviso (aviso)}<li>{aviso}</li>{/each}
       </ul>
       <div class="acoes">
