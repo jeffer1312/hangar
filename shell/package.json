@@ -27,6 +27,7 @@
       "settings.cjs",
       "preview_fmt.cjs",
       "preview_ctl.cjs",
+      "preview_srv.cjs",
       "package.json"
     ],
     "linux": {
