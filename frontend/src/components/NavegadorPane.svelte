@@ -97,7 +97,12 @@
     hostsImportados.delete(host);   // qualquer falha volta a tentar depois (a causa pode ser passageira)
     if (r.erro === 'chrome_fechado') {
       chromeFechado = true;
-      if (manual) { cookiesStatus = m.nav_cookies_chrome_fechado(); ofereceAtivar = !!nativo.ativarChrome; }
+      // Clique no 🍪 sem depuração ligada já abre a página do toggle no Chrome — um passo, não
+      // dois. O botão fica só como repetição, se a pessoa fechou a aba sem marcar.
+      if (manual) {
+        cookiesStatus = m.nav_cookies_chrome_fechado();
+        if (nativo.ativarChrome) await ativarChrome();
+      }
       return;
     }
     if (manual) cookiesStatus = m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
@@ -114,7 +119,7 @@
     abrindo = true;
     try {
       const r = await nativo.ativarChrome();
-      if (r.ok) { cookiesStatus = m.nav_cookies_ativar_instrucao(); ofereceAtivar = false; }
+      if (r.ok) { cookiesStatus = m.nav_cookies_ativar_instrucao(); ofereceAtivar = true; }
       else { cookiesStatus = m.nav_cookies_sem_chrome(); ofereceAtivar = false; }
     } catch (e) {
       cookiesStatus = m.nav_cookies_erro({ e: e instanceof Error ? e.message : String(e) });
