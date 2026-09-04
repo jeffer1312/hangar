@@ -249,17 +249,26 @@ link_agent_extensions() {  # $1 = binario, $2 = dir de extensoes
   # sobe sem a extensao — sessao "sem id", sem estado e sem previa, sem erro nenhum na tela. So
   # symlink e removido; arquivo de verdade com esse nome e do usuario.
   [ -L "$2/cp-state.ts" ] && rm -f "$2/cp-state.ts" && echo "  removido link antigo cp-state.ts"
-  ln -sfn "$SCRIPT_DIR/pi/hangar-state.ts" "$2/hangar-state.ts"
-  echo "  linked hangar-state.ts into $2"
-  # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
-  # sobrescrever apagaria o trabalho dele. Avisa e deixa a decisao com quem sabe o que tem la.
-  if [ -e "$2/rich-status-line.ts" ] && [ ! -L "$2/rich-status-line.ts" ]; then
-    echo "  ⚠ $2/rich-status-line.ts ja existe e nao e symlink — mantido como esta."
-    echo "    (pra usar a do repo: mova a sua e rode de novo)"
-  else
-    ln -sfn "$SCRIPT_DIR/pi/rich-status-line.ts" "$2/rich-status-line.ts"
-    echo "  linked rich-status-line.ts into $2"
-  fi
+  # Alem das duas do app, as extensoes de FUNCIONAMENTO da experiencia Claude no Pi (vieram do
+  # pi-claude-bridge, que ficou so com as de aparencia): claude-bridge (agents/commands/skills do
+  # ~/.claude como recursos do Pi), claude-todo (painel de tarefas), claude-hooks-adapter (hooks do
+  # settings.json nos eventos do Pi) e git-checkpoint (/rewind).
+  for ext in hangar-state rich-status-line claude-bridge claude-todo claude-hooks-adapter git-checkpoint; do
+    # Fonte ausente = link pendurado que o Pi ignora calado; melhor dizer do que fingir "linked".
+    if [ ! -f "$SCRIPT_DIR/pi/$ext.ts" ]; then
+      echo "  ⚠ $SCRIPT_DIR/pi/$ext.ts nao existe — $ext pulada (checkout incompleto?)"
+      continue
+    fi
+    # Arquivo REAL no lugar (extensao propria do usuario, com o mesmo nome) nao vira symlink calado:
+    # sobrescrever apagaria o trabalho dele. Avisa e deixa a decisao com quem sabe o que tem la.
+    if [ -e "$2/$ext.ts" ] && [ ! -L "$2/$ext.ts" ]; then
+      echo "  ⚠ $2/$ext.ts ja existe e nao e symlink — mantido como esta."
+      echo "    (pra usar a do repo: mova a sua e rode de novo)"
+    else
+      ln -sfn "$SCRIPT_DIR/pi/$ext.ts" "$2/$ext.ts"
+      echo "  linked $ext.ts into $2"
+    fi
+  done
 }
 link_agent_extensions pi  "$HOME/.pi/agent/extensions"
 link_agent_extensions omp "${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}/extensions"

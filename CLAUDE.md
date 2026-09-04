@@ -410,6 +410,18 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   digitar agora?" usa **duas capturas**, não uma: um pane parado não distingue spinner vivo de
   marcador de turno concluído (está na docstring do `state.classify`), e uma captura só recusava,
   com "está trabalhando", uma sessão que tinha acabado de terminar.
+- **As extensões de FUNCIONAMENTO da experiência Claude no Pi moram aqui** (`scripts/pi/`,
+  04/09/2026): `claude-bridge.ts` (agents/commands/skills do `~/.claude` como recursos do Pi),
+  `claude-todo.ts` (painel de tarefas), `claude-hooks-adapter.ts` (hooks do `settings.json` nos
+  eventos do Pi) e `git-checkpoint.ts` (`/rewind`) vieram do repo `pi-claude-bridge`, que ficou
+  só com aparência (caixa da mensagem, fullscreen, título do terminal, temas). Motivo: sem elas
+  uma sessão Pi criada pelo app não enxerga skills/agents nem roda hooks, e quem instala o Hangar
+  não deveria precisar de um segundo repo pra isso. O `install-claude-wrapper.sh` symlinka as seis
+  (`link_agent_extensions`) em `~/.pi/agent/extensions/` e `~/.omp/agent/extensions/`. Duas
+  regras herdadas do adapter: a allowlist embutida libera só `~/.claude/hooks/` — hook que mora
+  noutro lugar entra por `~/.pi/agent/claude-hooks-adapter.json`, e `allowPatterns` ali
+  **substitui** a lista, não soma; e os hooks só-Claude do próprio app (`state_hook`, `askq_capture`,
+  `preview_hook`, `subagent_hook`) ficam no `skipPatterns` porque o Pi tem extensão própria pra isso.
 - **Pi model + thinking level** (`app/pi_models.py` + `scripts/pi/hangar-state.ts` + `components/PiModelPopover.svelte` + `components/PiEffortPopover.svelte`):
   the third mechanism, next to Claude's TUI picker and Codex's app-server, and it does **not** scrape
   the pane. Measured on pi 0.82.1: `/model` is a fuzzy-**search** list of ~300 entries (footer
