@@ -78,8 +78,14 @@ DRIFT_TETO = 3
 # CÓPIA real deixada de eras antigas numa conta fazia _resolver_colisao "subir" o arquivo velho
 # por cima do compartilhado, apagando os apelidos (aconteceu 19/08 08:52, mesma janela do
 # incidente do settings.json).
+# Runtime POR CONTA, que o próprio CLI (`telemetry`, `feedback`, `image-cache`,
+# `.last-update-result.json`) ou o backend (`.hangar-models.json`, cache do picker por config dir)
+# regravam com tmp+rename — o que troca o atalho por arquivo real. Ligados, cada reconciliação
+# achava a "deriva" de novo, gavetava e avisava; a gaveta desta máquina chegou a `telemetry.3`.
+_RUNTIME_DA_CONTA = {"telemetry", "feedback", "image-cache", ".last-update-result.json",
+                     ".hangar-models.json"}
 _NAO_LIGAR = {MARCADOR, ".drift", ".claude.json", ".credentials.json", "projects", "settings.json",
-              ".hangar-apelidos.json"}
+              ".hangar-apelidos.json"} | _RUNTIME_DA_CONTA
 
 
 def compartilhado() -> Path:
@@ -490,9 +496,13 @@ def _reconciliar(dir_conta: Path, projeto: str | None) -> list[str]:
         raise ContaError(400, "projeto inválido")
     avisos: list[str] = []
     for alvo in sorted(compartilhado().iterdir()):
-        if alvo.name in _NAO_LIGAR:
-            continue
         destino = dir_conta / alvo.name
+        if alvo.name in _NAO_LIGAR:
+            # Atalho de runtime deixado por versão anterior: desfaz, senão a conta segue
+            # escrevendo o runtime dela dentro do compartilhado.
+            if alvo.name in _RUNTIME_DA_CONTA and destino.is_symlink() and _aponta_para(destino, alvo):
+                destino.unlink()
+            continue
         if destino.is_symlink() and _aponta_para(destino, alvo):
             continue
         if destino.is_symlink() or destino.exists():

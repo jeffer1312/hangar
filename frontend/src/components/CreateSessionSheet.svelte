@@ -989,7 +989,9 @@
           <label class="field-label" for="model-pick">{m.composer_modelo()}</label>
           <Select id="model-pick" class="field-input" ariaLabel={m.composer_modelo()} value={modelo}
             opcoes={[{ value: '', label: m.criar_padrao() },
-                     ...modelos.map((mod) => ({
+                     // `default` do picker do Claude é o mesmo que o campo vazio (sem --model):
+                     // as duas linhas juntas viravam "Padrão" e "Default" uma em cima da outra.
+                     ...modelos.filter((mod) => mod.id !== 'default').map((mod) => ({
                        value: valorModelo(mod),
                        label: mod.name ?? mod.id,
                        // Quatro formatos do campo `models` (Task 4): pi traz provider/context/

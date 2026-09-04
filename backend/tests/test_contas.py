@@ -231,6 +231,25 @@ def test_reconciliar_pega_pasta_que_apareceu_depois(casa):
     assert (casa / ".claude-conta2" / "plugins").is_symlink()
 
 
+def test_reconciliar_deixa_runtime_da_conta_local_e_calado(casa):
+    """`telemetry`/`.last-update-result.json` o CLI regrava por conta (tmp+rename troca o atalho
+    por arquivo real). Ligados, cada reconciliação avisava a "deriva" de novo — era o toast."""
+    contas.criar("conta2")
+    (casa / ".claude" / "telemetry").mkdir()
+    (casa / ".claude" / ".last-update-result.json").write_text("{}")
+    conta = casa / ".claude-conta2"
+    # Atalho deixado por versão anterior é desfeito; a conta ganha o runtime dela.
+    (conta / "telemetry").symlink_to(casa / ".claude" / "telemetry")
+    assert contas.reconciliar("conta2") == []
+    assert not (conta / "telemetry").exists() and not (conta / "telemetry").is_symlink()
+    (conta / "telemetry").mkdir()
+    (conta / ".last-update-result.json").write_text('{"local": 1}')
+    assert contas.reconciliar("conta2") == []
+    assert (conta / "telemetry").is_dir() and not (conta / "telemetry").is_symlink()
+    assert (conta / ".last-update-result.json").read_text() == '{"local": 1}'
+    assert not (conta / ".drift").exists()
+
+
 def test_reconciliar_e_idempotente(casa):
     contas.criar("conta2")
     assert contas.reconciliar("conta2") == []
