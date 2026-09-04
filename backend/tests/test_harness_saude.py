@@ -19,7 +19,7 @@ def test_extensoes_faltando_e_o_conserto_liga(tmp_path, monkeypatch):
     item = h._extensoes("pi")
     assert item["ok"] is False and item["codigo"] == "faltam" and item["conserto"] == "extensoes:pi"
     assert "claude-todo" not in item["params"]["lista"] and "hangar-state" in item["params"]["lista"]
-    assert h.consertar(item["conserto"]) == "5 extensões ligadas"
+    assert h.consertar(item["conserto"]) == f"{len(h._EXTENSOES_PI) - 1} extensões ligadas"
     assert h._extensoes("pi")["ok"] is True
     assert (raiz / "extensions" / "claude-todo.ts").read_text() == "meu"
 

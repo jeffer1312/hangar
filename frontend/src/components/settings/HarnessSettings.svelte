@@ -70,11 +70,14 @@
     credenciais_ok: (p) => m.harness_credenciais_ok({ tem: p.tem ?? '' }),
     credenciais_faltam: (p) => m.harness_credenciais_faltam({ tem: p.tem ?? '', faltam: p.faltam ?? '' }),
     statusline_ok: () => m.harness_statusline_ok(),
+    fullscreen_ok: () => m.harness_fullscreen_ok(),
+    fullscreen_desligado: () => m.harness_fullscreen_desligado(),
+    fullscreen_por_escolha: () => m.harness_fullscreen_por_escolha(),
     sem_statusline: () => m.harness_sem_statusline(),
   };
   const ROTULOS: Record<string, () => string> = {
     hooks: m.harness_item_hooks, contas: m.harness_item_contas, credenciais: m.harness_item_credenciais,
-    plugins: m.harness_item_plugins,
+    plugins: m.harness_item_plugins, fullscreen: m.harness_item_fullscreen,
     skills: m.harness_item_skills, extensoes: m.harness_item_extensoes, statusline: m.harness_item_statusline,
   };
   function texto(i: ItemHarness): string { return (TEXTOS[i.codigo] ?? (() => i.codigo))(i.params); }

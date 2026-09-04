@@ -32,7 +32,7 @@ _log = logging.getLogger("hangar.harness_saude")
 
 _REPO = Path(__file__).resolve().parents[2]
 _EXTENSOES_PI = ("hangar-state", "rich-status-line", "claude-bridge", "claude-todo",
-                 "claude-hooks-adapter", "git-checkpoint")
+                 "claude-hooks-adapter", "git-checkpoint", "fullscreen-tui")
 _HOOKS_CLAUDE = ("state_hook.py", "askq_capture.py", "preview_hook.py", "subagent_hook.py",
                  "pair_hook.py", "nav_hook.py")
 
@@ -107,6 +107,19 @@ def _extensoes(cli: str) -> dict:
     if faltam:
         return _item("extensoes", False, "faltam", f"extensoes:{cli}", lista=", ".join(faltam))
     return _item("extensoes", True, "extensoes_ok", n=len(_EXTENSOES_PI))
+
+
+def _fullscreen(cli: str) -> dict:
+    """Alternate screen do Pi/omp dentro do tmux (extensão fullscreen-tui). Arquivo ausente =
+    nunca ligado → conserto liga; `enabled: false` é escolha da pessoa (/fullscreen-off) e fica."""
+    cfg = _raiz_agente(cli) / "fullscreen-tui.json"
+    if not cfg.is_file():
+        return _item("fullscreen", False, "fullscreen_desligado", f"fullscreen:{cli}")
+    try:
+        ligado = json.loads(cfg.read_text(encoding="utf-8")).get("enabled") is True
+    except (OSError, ValueError, AttributeError):
+        return _item("fullscreen", None, "config_ilegivel")
+    return _item("fullscreen", True, "fullscreen_ok" if ligado else "fullscreen_por_escolha")
 
 
 def _hooks_claude(dir_conta: Path) -> dict:
@@ -285,13 +298,13 @@ def diagnosticar() -> list[dict]:
     v = _versao("pi")
     d = home / ".pi" / "agent"
     saida.append({"id": "pi", "nome": "Pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("pi"), _extensoes("pi"), _ponte_skills("pi", home)]
+                  "itens": [_credenciais("pi"), _extensoes("pi"), _fullscreen("pi"), _ponte_skills("pi", home)]
                   if d.is_dir() else []})
 
     v = _versao("omp")
     d = _raiz_agente("omp")
     saida.append({"id": "omp", "nome": "oh-my-pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("omp"), _extensoes("omp")] if d.is_dir() else []})
+                  "itens": [_credenciais("omp"), _extensoes("omp"), _fullscreen("omp")] if d.is_dir() else []})
 
     v = _versao("kimi")
     d = kimi_home()
@@ -352,6 +365,13 @@ def consertar(id_: str) -> str:
         if not any(v["ok"] for v in r.values()):
             raise ValueError(linha)
         return linha
+    if id_ in ("fullscreen:pi", "fullscreen:omp"):
+        cfg = _raiz_agente(id_.split(":", 1)[1]) / "fullscreen-tui.json"
+        if cfg.exists():
+            raise ValueError("já configurado — /fullscreen-on na TUI")
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text('{\n\t"enabled": true\n}\n', encoding="utf-8")
+        return "fullscreen ligado; vale nas sessões novas"
     if id_ in ("sync:pi", "sync:omp", "sync:kimi", "sync:codex"):
         return _sincronizar(id_.split(":", 1)[1])
     # Só os dois agentes que o diagnóstico conhece: o id vem do cliente e vira caminho.
