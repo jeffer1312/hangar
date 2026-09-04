@@ -75,3 +75,59 @@ test('rede guarda no maximo o teto e devolve as ultimas', async () => {
   assert.match(saida, /r249/);
   assert.doesNotMatch(saida, /r49\b/);
 });
+
+test('clicar usa evento de mouse REAL no centro da caixa, nao .click() em JS', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'button' }, name: { value: 'Ok' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [10, 20, 30, 20, 30, 40, 10, 40] } },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  const saida = await ctl.clicar('@e1');
+  const mouse = dbg.chamadas.filter(([m]) => m === 'Input.dispatchMouseEvent');
+  assert.equal(mouse.length, 2, 'mousePressed e mouseReleased');
+  assert.equal(mouse[0][1].type, 'mousePressed');
+  assert.equal(mouse[0][1].x, 20);
+  assert.equal(mouse[0][1].y, 30);
+  assert.match(saida, /^ok: click @e1/);
+});
+
+test('clicar em ref desconhecida nao dispara evento nenhum', async () => {
+  const dbg = dubleDbg();
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  assert.match(await ctl.clicar('@e9'), /^erro: ref @e9 nao existe/);
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Input.dispatchMouseEvent').length, 0);
+});
+
+test('ref que ficou velha (no desmontado por re-render) responde como ref inexistente', async () => {
+  const dbg = dubleDbg({ 'Accessibility.getFullAXTree': { nodes: [
+    { nodeId: '1', role: { value: 'button' }, name: { value: 'Ok' }, childIds: [], backendDOMNodeId: 5 },
+  ] } });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  // O React trocou a lista sem navegar: o nó sumiu, mas a ref segue no mapa.
+  dbg.sendCommand = async (m) => {
+    if (m === 'DOM.getBoxModel') throw new Error('Could not find node with given id');
+    return {};
+  };
+  assert.match(await ctl.clicar('@e1'), /^erro: ref @e1 nao existe \(rode snapshot de novo\)/);
+});
+
+test('preencher limpa o campo e usa insertText (input controlado por React aceita)', async () => {
+  const dbg = dubleDbg({
+    'Accessibility.getFullAXTree': { nodes: [
+      { nodeId: '1', role: { value: 'textbox' }, name: { value: 'Nome' }, childIds: [], backendDOMNodeId: 5 },
+    ] },
+    'DOM.getBoxModel': { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } },
+  });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  await ctl.preencher('@e1', 'Jefferson');
+  const metodos = dbg.chamadas.map(([m]) => m);
+  assert.ok(metodos.includes('Input.dispatchMouseEvent'), 'foca clicando');
+  assert.ok(metodos.includes('Input.insertText'));
+  const inserir = dbg.chamadas.find(([m]) => m === 'Input.insertText');
+  assert.equal(inserir[1].text, 'Jefferson');
+});
