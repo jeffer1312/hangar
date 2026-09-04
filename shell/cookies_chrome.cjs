@@ -154,10 +154,18 @@ async function importarCookiesDoChrome({ porta, dominio, perfis }) {
   // `Network.getAllCookies` só num de página.
   let ultimo = null;
   for (const ws of await candidatosWs({ porta, perfis })) {
-    try {
-      const { cookies } = await cdp(ws, 'Storage.getCookies');
-      return cookies.filter((c) => casaDominio(c.domain, dominio)).map((c) => paraElectron(c, dominio));
-    } catch (e) { ultimo = e; }
+    // Duas tentativas: medido, a PRIMEIRA conexão ao servidor do toggle depois de um tempo
+    // parado cai (as seguintes respondem em <1s) — uma só virava "Chrome sem depuração" falso.
+    for (let tentativa = 0; tentativa < 2; tentativa++) {
+      try {
+        const { cookies } = await cdp(ws, 'Storage.getCookies');
+        return cookies.filter((c) => casaDominio(c.domain, dominio)).map((c) => paraElectron(c, dominio));
+      } catch (e) {
+        ultimo = e;
+        console.warn(`cookies_chrome: ${ws} tentativa ${tentativa + 1} falhou: ${e.message}`);
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
   }
   throw ultimo instanceof ChromeFechado ? ultimo : new ChromeFechado(porta);
 }
