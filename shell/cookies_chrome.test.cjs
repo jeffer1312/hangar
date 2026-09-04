@@ -40,7 +40,7 @@ test('porta fechada -> erro chrome_fechado', async () => {
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   const porta = srv.address().port;
   await new Promise((r) => srv.close(r));
-  await assert.rejects(importarCookiesDoChrome({ porta, dominio: 'x.com' }), (e) => e.code === 'chrome_fechado');
+  await assert.rejects(importarCookiesDoChrome({ porta, dominio: 'x.com', perfis: [] }), (e) => e.code === 'chrome_fechado');
 });
 
 test('Chrome headless na porta (automacao de outra sessao) e recusado como chrome_fechado', async () => {
@@ -52,7 +52,7 @@ test('Chrome headless na porta (automacao de outra sessao) e recusado como chrom
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   const porta = srv.address().port;
   try {
-    await assert.rejects(importarCookiesDoChrome({ porta, dominio: 'x.com' }),
+    await assert.rejects(importarCookiesDoChrome({ porta, dominio: 'x.com', perfis: [] }),
       (e) => e.code === 'chrome_fechado' && e.motivo === 'headless');
   } finally {
     await new Promise((r) => srv.close(r));

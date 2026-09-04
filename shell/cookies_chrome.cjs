@@ -78,46 +78,88 @@ async function urlDaPorta(porta) {
 
 // Endpoint do browser: o arquivo do perfil primeiro (o jeito que o Chrome atual aceita), a porta
 // fixa depois. O arquivo pode sobrar de um Chrome já fechado — por isso quem lê testa a conexão.
-async function urlDoWs({ porta, perfis = raizesDePerfil() }) {
-  for (const raiz of perfis) {
-    const ws = endpointDoPerfil(raiz);
-    if (ws && (await responde(ws))) return ws;
-  }
+async function candidatosWs({ porta, perfis = raizesDePerfil() }) {
+  const out = perfis.map(endpointDoPerfil).filter(Boolean);
   const daPorta = porta ? await urlDaPorta(porta) : null;
-  if (daPorta) return daPorta;
-  throw new ChromeFechado(porta);
+  if (daPorta) out.push(daPorta);
+  return out;
 }
 
-function responde(wsUrl) {
-  return new Promise((resolve) => {
-    let ws;
-    try { ws = new WebSocket(wsUrl); } catch { return resolve(false); }
-    const t = setTimeout(() => { ws.close(); resolve(false); }, 1500);
-    ws.onerror = () => { clearTimeout(t); resolve(false); };
-    ws.onopen = () => { clearTimeout(t); ws.close(); resolve(true); };
-  });
+// Cliente WebSocket mínimo em cima de `net`, e não o `WebSocket` global do Node: contra o servidor
+// que o toggle sobe, o global fica pendurado no handshake (medido no Chrome 150: `curl` e este
+// cliente recebem 101 e a resposta; o global nunca dispara `open` nem `error`). Só o que o CDP
+// usa: handshake, um frame de texto mascarado pra fora, frames de texto sem máscara pra dentro.
+const net = require('net');
+const crypto = require('crypto');
+
+function frameTexto(txt) {
+  const p = Buffer.from(txt);
+  const mask = crypto.randomBytes(4);
+  const cab = [0x81];
+  if (p.length < 126) cab.push(0x80 | p.length);
+  else if (p.length < 65536) cab.push(0x80 | 126, p.length >> 8, p.length & 255);
+  else { cab.push(0x80 | 127, 0, 0, 0, 0, (p.length >>> 24) & 255, (p.length >>> 16) & 255, (p.length >>> 8) & 255, p.length & 255); }
+  return Buffer.concat([Buffer.from(cab), mask, Buffer.from(p.map((b, i) => b ^ mask[i % 4]))]);
 }
 
-function cdp(wsUrl, metodo, params = {}) {
+// Abre a conexão; `aoAbrir` recebe (socket, enviar). Resolve com a primeira mensagem de texto
+// completa (mensagens grandes chegam em vários frames — junta até o FIN).
+function conectarWs(wsUrl, { timeoutMs = 5000, soHandshake = false, metodo, params } = {}) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(wsUrl);
-    const t = setTimeout(() => { ws.close(); reject(new Error('CDP sem resposta')); }, 5000);
-    ws.onerror = () => { clearTimeout(t); reject(new ChromeFechado(new URL(wsUrl).port)); };
-    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: metodo, params }));
-    ws.onmessage = (ev) => {
-      const m = JSON.parse(ev.data);
-      if (m.id !== 1) return;
-      clearTimeout(t); ws.close();
-      m.error ? reject(new Error(m.error.message)) : resolve(m.result);
-    };
+    const u = new URL(wsUrl);
+    const s = net.connect(+u.port || 80, u.hostname);
+    let buf = Buffer.alloc(0); let hs = false; let texto = '';
+    const t = setTimeout(() => { s.destroy(); reject(new Error('CDP sem resposta')); }, timeoutMs);
+    const fim = (fn) => { clearTimeout(t); s.destroy(); fn(); };
+    s.on('error', () => fim(() => reject(new ChromeFechado(u.port))));
+    s.on('connect', () => s.write(`GET ${u.pathname}${u.search} HTTP/1.1\r\nHost: ${u.host}\r\nUpgrade: websocket\r\n`
+      + `Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\n\r\n`));
+    s.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      if (!hs) {
+        const i = buf.indexOf('\r\n\r\n');
+        if (i < 0) return;
+        if (!/^HTTP\/1\.1 101/.test(buf.toString('latin1', 0, 12))) return fim(() => reject(new ChromeFechado(u.port)));
+        hs = true; buf = buf.subarray(i + 4);
+        if (soHandshake) return fim(() => resolve(true));
+        s.write(frameTexto(JSON.stringify({ id: 1, method: metodo, params: params || {} })));
+      }
+      for (;;) {
+        if (buf.length < 2) return;
+        const fin = (buf[0] & 0x80) !== 0; const op = buf[0] & 0x0f;
+        let len = buf[1] & 127; let off = 2;
+        if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); off = 4; }
+        else if (len === 127) { if (buf.length < 10) return; len = Number(buf.readBigUInt64BE(2)); off = 10; }
+        if (buf.length < off + len) return;
+        const corpo = buf.subarray(off, off + len); buf = buf.subarray(off + len);
+        if (op === 8) return fim(() => reject(new Error('CDP fechou a conexão')));
+        if (op === 1 || op === 0) texto += corpo.toString();
+        if (fin && (op === 1 || op === 0)) {
+          const m = JSON.parse(texto); texto = '';
+          if (m.id !== 1) continue;
+          return fim(() => (m.error ? reject(new Error(m.error.message)) : resolve(m.result)));
+        }
+      }
+    });
   });
 }
+
+// 15s: medido, a primeira conexão depois de um tempo parado leva de 2 a 6s pra responder.
+const cdp = (wsUrl, metodo, params = {}) => conectarWs(wsUrl, { metodo, params, timeoutMs: 15000 });
 
 async function importarCookiesDoChrome({ porta, dominio, perfis }) {
-  const ws = await urlDoWs({ porta, perfis });
-  // `Storage.getCookies` responde no target do browser; `Network.getAllCookies` só num de página.
-  const { cookies } = await cdp(ws, 'Storage.getCookies');
-  return cookies.filter((c) => casaDominio(c.domain, dominio)).map((c) => paraElectron(c, dominio));
+  // Uma conexão só por candidato (o handshake deste servidor leva ~2s — sondar antes e conectar
+  // de novo dobrava o tempo). `DevToolsActivePort` pode sobrar de um Chrome já fechado: aí a
+  // conexão falha e passa pro próximo. `Storage.getCookies` responde no target do browser;
+  // `Network.getAllCookies` só num de página.
+  let ultimo = null;
+  for (const ws of await candidatosWs({ porta, perfis })) {
+    try {
+      const { cookies } = await cdp(ws, 'Storage.getCookies');
+      return cookies.filter((c) => casaDominio(c.domain, dominio)).map((c) => paraElectron(c, dominio));
+    } catch (e) { ultimo = e; }
+  }
+  throw ultimo instanceof ChromeFechado ? ultimo : new ChromeFechado(porta);
 }
 
 module.exports = { importarCookiesDoChrome, casaDominio, paraElectron, ChromeFechado, endpointDoPerfil, raizesDePerfil, PAGINA_ATIVAR };
