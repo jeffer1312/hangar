@@ -21,7 +21,9 @@ const VERBOS = {
   shot: async (c, a) => {
     if (!a[0]) return 'erro: shot precisa de um caminho de arquivo';
     const img = await c.capturarPagina();
-    fs.writeFileSync(a[0], img.toPNG());
+    // Assincrona: writeFileSync roda na thread principal do Electron e travaria a interface
+    // inteira enquanto um disco lento escreve o PNG.
+    await fs.promises.writeFile(a[0], img.toPNG());
     return `ok: shot ${a[0]}`;
   },
 };
@@ -61,8 +63,11 @@ async function subirServidor({ controladorDe, escrever }) {
       try { pedido = JSON.parse(bruto); } catch { return responder(400, 'erro: corpo invalido'); }
       const ctl = controladorDe(pedido.chave);
       if (!ctl) return responder(404, `erro: a sessao ${pedido.chave} nao tem navegador aberto`);
+      // Object.hasOwn, nao `VERBOS[pedido.verbo]` direto: um verbo tipo "constructor" alcancaria o
+      // prototype (Object.prototype.constructor) e devolveria 200 com [object Object] em vez do
+      // 400 de verbo desconhecido.
+      if (!Object.hasOwn(VERBOS, pedido.verbo)) return responder(400, `erro: verbo desconhecido: ${pedido.verbo}`);
       const fn = VERBOS[pedido.verbo];
-      if (!fn) return responder(400, `erro: verbo desconhecido: ${pedido.verbo}`);
       responder(200, String(await ctl.enfileirar(() => fn(ctl, pedido.args || []))));
     } catch (err) {
       responder(500, `erro: ${err && err.message ? err.message : err}`);

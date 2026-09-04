@@ -56,8 +56,4 @@ function parseLote(texto) {
     });
 }
 
-function linhaDeErro(msg) {
-  return `erro: ${msg}`;
-}
-
-module.exports = { compactarAX, parseLote, linhaDeErro };
+module.exports = { compactarAX, parseLote };

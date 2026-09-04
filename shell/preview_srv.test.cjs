@@ -126,6 +126,18 @@ test('verbo shot grava PNG no caminho pedido', async () => {
   srv.fechar();
 });
 
+test('verbo "constructor" nao alcanca o prototype de VERBOS', async () => {
+  const srv = await subirServidor({ controladorDe: () => ctlFalso, escrever: () => {} });
+  const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
+    method: 'POST',
+    body: JSON.stringify({ chave: 'srv::g', verbo: 'constructor', args: [] }),
+    headers: { Authorization: `Bearer ${srv.token}` },
+  });
+  assert.equal(r.status, 400);
+  assert.match(await r.text(), /verbo desconhecido/);
+  srv.fechar();
+});
+
 test('verbo shot sem caminho devolve erro', async () => {
   const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ toPNG: () => Buffer.from('png') }) };
   const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });

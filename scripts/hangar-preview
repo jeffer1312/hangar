@@ -33,7 +33,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import fmt from '../shell/preview_fmt.cjs';
 
 const CDP = 'http://127.0.0.1:9223';
@@ -104,12 +104,27 @@ async function targets() {
 }
 
 // --- cliente do servidor local (Task 5) ---
+const MSG_SHELL_FORA = 'o shell do hangar nao esta no ar (ou e uma versao antiga): abra o app e tente de novo';
+
+// A porta de loopback do sidecar pode ter sido RECICLADA por outro processo depois que o app
+// fechou (o _srv.json não é apagado na saída — só no will-quit do main.cjs, e sinal/crash ainda
+// deixa o arquivo pra trás). Sem conferir o pid, o CLI falaria com quem estiver ali agora e
+// imprimiria a resposta dele como se fosse do navegador. "pid morto é sessão morta, não sessão a
+// reconectar."
+function pidVivo(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (err) { return err && err.code === 'EPERM'; }
+}
+
 function srv() {
+  let dados;
   try {
-    return JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8'));
+    dados = JSON.parse(readFileSync(join(DIR, '_srv.json'), 'utf8'));
   } catch {
-    erro('o shell do hangar nao esta no ar (ou e uma versao antiga): abra o app e tente de novo');
+    erro(MSG_SHELL_FORA);
   }
+  if (!pidVivo(dados.pid)) erro(MSG_SHELL_FORA);
+  return dados;
 }
 
 async function comando(chave, verbo, cmdArgs) {
@@ -121,7 +136,8 @@ async function comando(chave, verbo, cmdArgs) {
   });
   const texto = await r.text();
   console.log(texto);
-  return r.ok ? 0 : 1;
+  // O servidor local responde SEMPRE 200 (é o texto que carrega erro: ...) — r.ok não basta.
+  return r.ok && !texto.startsWith('erro:') ? 0 : 1;
 }
 
 // --- comandos ---
@@ -164,16 +180,30 @@ if (VERBOS_SERVIDOR.has(cmd)) {
   if (cmd === 'eval' && !pos[1]) erro('eval precisa de um trecho JS: hangar-preview eval \'document.title\'');
   const chave = sidecarDa(nomeSessao()).chave;
   const cmdArgs = pos.slice(1);
-  if (cmd === 'shot' && !cmdArgs[0]) cmdArgs[0] = `/tmp/hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`;
+  // Sempre absoluto, resolvido contra o cwd do CLI (é o cwd que o agente conhece) — um caminho
+  // relativo mandado cru pro shell grava no cwd de onde o ELECTRON subiu, não no do agente, e a
+  // resposta citava um caminho que não existia onde o agente (e o app do celular) foram procurar.
+  if (cmd === 'shot') {
+    cmdArgs[0] = resolve(cmdArgs[0] || `/tmp/hangar-preview-${(nomeSessao() || 'nav').replace(/\W+/g, '-')}.png`);
+  }
   process.exit(await comando(chave, cmd, cmdArgs));
 }
 
 if (cmd === 'batch') {
   const chave = sidecarDa(nomeSessao()).chave;
   const linhas = readFileSync(0, 'utf8'); // stdin inteiro
-  let pior = 0;
-  for (const { verbo, args: a } of fmt.parseLote(linhas)) pior = Math.max(pior, await comando(chave, verbo, a));
-  process.exit(pior);
+  const comandos = fmt.parseLote(linhas);
+  // Para na PRIMEIRA linha que falhar: seguir depois de um `click` que não achou o alvo faz o
+  // próximo `type` (ex.: senha) digitar no que estiver com foco, que não é o campo pretendido.
+  for (let i = 0; i < comandos.length; i++) {
+    const { verbo, args: a } = comandos[i];
+    const codigo = await comando(chave, verbo, a);
+    if (codigo !== 0) {
+      console.error(`hangar-preview: batch parou na linha ${i + 1} (${verbo})`);
+      process.exit(codigo);
+    }
+  }
+  process.exit(0);
 }
 
 erro(`comando desconhecido: ${cmd} (vale open|list|snapshot|click|fill|type|press|hover|wait|eval|tema|console|network|url|shot|batch)`);

@@ -296,8 +296,10 @@ function abrirJanela(origem) {
 // quando um overlay DOM abre, e o layout do Chat reserva a faixa pra nada cobrir texto/composer.
 const navegadores = new Map();   // BrowserWindow -> Map<chave, WebContentsView>
 
-// chave da sessão -> controlador. Vive fora do `navegadores` porque a vida é a mesma do VIEW,
-// não a da janela, e é por ele que o servidor local acha o alvo de um comando.
+// chave da sessão -> { ctl, view }. Vive fora do `navegadores` porque a vida é a mesma do VIEW,
+// não a da janela, e é por ele que o servidor local acha o alvo de um comando. Guarda o `view`
+// junto do controlador (não só o controlador) porque é a identidade que `soltarControlador`
+// confere antes de apagar — ver comentário ali.
 const controladores = new Map();
 
 function viewsDa(win) {
@@ -310,9 +312,16 @@ function viewsDa(win) {
 // pontos (× do painel, queda da janela, webContents morto por fora): um lugar só. Sem isto num
 // dos três, o Map fica com controlador órfão apontando pra webContents morto: o servidor local
 // acha ele (não devolve null) e um comando vira 500 de CDP em vez do 404 "sem navegador aberto".
+// A CONFERÊNCIA DE IDENTIDADE (entrada.view === view) é o que impede uma janela A de apagar o
+// controlador da janela B: com duas janelas do app abrindo a MESMA sessão, a segunda sobrescreve
+// a entrada da primeira no Map global `controladores` (chave é só a sessão, não a janela); sem
+// checar de quem é a entrada ATUAL antes de soltar, fechar a janela A apagava o controlador vivo
+// da B — o painel dela ficava aberto respondendo 404 pra todo comando. Mesma guarda que já
+// existia no ouvinte `destroyed` (linha abaixo), agora na função compartilhada — vale pros três
+// chamadores, não só pra esse.
 function soltarControlador(chave, view) {
-  const ctl = controladores.get(chave);
-  if (ctl) { ctl.fechar(); controladores.delete(chave); }
+  const entrada = controladores.get(chave);
+  if (entrada && entrada.view === view) { entrada.ctl.fechar(); controladores.delete(chave); }
   try { view.webContents.debugger.detach(); } catch { /* já solto */ }
 }
 
@@ -443,11 +452,11 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
       for (const dominio of ['Runtime.enable', 'Log.enable', 'Network.enable', 'DOM.enable', 'Accessibility.enable']) {
         dbg.sendCommand(dominio).catch(() => {});
       }
-      controladores.set(chave, criarControlador({
+      controladores.set(chave, { ctl: criarControlador({
         dbg,
         capturarPagina: () => view.webContents.capturePage(),
         aoNavegar: (cb) => view.webContents.on('did-navigate', cb),
-      }));
+      }), view });
       // Alvo morrendo por fora (Target.closeTarget via CDP, crash do renderer) não passa pelo ×
       // do painel nem pelo close da janela — sem isto o controlador ficava órfão no Map até o
       // usuário reabrir o painel, e um comando nesse meio-tempo virava 500 de CDP em vez do 404
@@ -509,7 +518,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     limparSidecaresNav();
     subirServidor({
-      controladorDe: (chave) => controladores.get(chave) || null,
+      controladorDe: (chave) => controladores.get(chave)?.ctl || null,
       escrever: (dados) => {
         fs.mkdirSync(NAV_SIDECARS, { recursive: true });
         fs.writeFileSync(path.join(NAV_SIDECARS, '_srv.json'), JSON.stringify(dados), { mode: 0o600 });
@@ -520,3 +529,11 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.on('window-all-closed', () => app.quit());
+
+// `limparSidecaresNav` pula `_srv.json` de propósito (é do processo VIVO) — ninguém mais o
+// apagava na saída. Sem isto, o CLI encontrava o arquivo de uma execução morta e falava com
+// qualquer processo que tivesse reciclado aquela porta de loopback, imprimindo a resposta dele
+// como se fosse do navegador. `will-quit` roda mesmo em `app.quit()` disparado por sinal.
+app.on('will-quit', () => {
+  try { fs.rmSync(path.join(NAV_SIDECARS, '_srv.json'), { force: true }); } catch { /* ja sumiu */ }
+});
