@@ -379,6 +379,14 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     // url e recebe ok:false se o shell já não tiver o view — aí o front repete com a url salva.
     const destino = urlNavegavel(url);
     if (!destino) return { ok: false };
+    // A foto do /json/list tem que ser tirada ANTES de o view existir — é a definição do diff.
+    // Ela estava sendo tirada DEPOIS (o comentário dizia "antes", o código fazia depois), e o
+    // target do view já entra na lista quando ele é construído: o id ficava dentro do "antes",
+    // nenhum target era novo, e TODO sidecar nascia com targetId null. Sem id, o `hangar-preview`
+    // só casa por URL — que a primeira navegação invalida — e responde "morto" com o navegador
+    // aberto. Fetch ao CDP que falha devolve null (não Set vazio): sem diff confiável, grava sem
+    // id em vez de eleger o primeiro target page, que pode ser o próprio app.
+    const antes = await idsDeTargets();
     // persist: cookies/localStorage no disco. COMPARTILHADA entre sessões de propósito — o uso é
     // cada sessão com suas URLs, não isolamento de conta; se um dia precisar, vira por-sessão.
     view = new WebContentsView({
@@ -392,10 +400,6 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     });
     win.contentView.addChildView(view);
     views.set(chave, view);
-    // idsDeTargets ANTES de criar o view: o targetId sai por diff do /json/list. Se o fetch ao
-    // CDP falha (Set vazio), o diff pegaria o PRIMEIRO target page — que pode ser o COCKPIT (com
-    // o token no localStorage). Sem diff confiável, grava sem targetId e o CLI casa por URL.
-    const antes = await idsDeTargets();
     view.webContents.loadURL(destino).catch((err) => console.error('[nav] loadURL falhou:', err?.message || err));
     gravarSidecarNav(chave, destino, antes);   // async, não bloqueia o IPC
   } else {

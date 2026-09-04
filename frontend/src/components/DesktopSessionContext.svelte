@@ -1,12 +1,16 @@
 <script module lang="ts">
-  // Aba escolhida POR SESSÃO. `ctxPanel.aba` é uma só pro app inteiro, e este painel remonta a
-  // cada troca de sessão — sem esta memória, passar por uma sessão sem navegador zerava a aba e
-  // a sessão de origem voltava em Contexto, com o navegador vivo e escondido atrás dela.
+  // Aba escolhida POR SESSÃO. `ctxPanel.aba` é uma só pro app inteiro — sem esta memória, passar
+  // por uma sessão sem navegador zerava a aba (o guard logo abaixo) e a sessão de origem voltava
+  // em Contexto, com o navegador vivo e escondido atrás dela.
+  //
+  // Mora no módulo, e não na instância, porque este painel NÃO remonta na troca de sessão: só o
+  // `navChave` muda. Foi o que derrubou a primeira tentativa, feita com onMount/onDestroy — ela
+  // nunca reexecutava, e a aba continuava se perdendo.
   const ABA_POR_SESSAO = new Map<string, 'contexto' | 'arquivos' | 'navegador'>();
+  let chaveVista: string | null = null;
 </script>
 
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { ctxPanel, alternarCtxPanel, arrastarLargura, salvarLargura } from '../lib/ctxPanel.svelte';
   import { navegadorPanel, arrastarNav, salvarNav } from '../lib/navegadorPanel.svelte';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
@@ -115,13 +119,19 @@ import * as m from '../paraglide/messages';
   // A aba Navegador só existe na tab bar quando a sessão TEM navegador aberto (quem cria é o
   // botão da fileira ou o agente via hangar-preview open).
   const temNav = $derived(navChave in navegadorPanel.abertos);
-  // Volta pra aba em que ESTA sessão estava (ver ABA_POR_SESSAO no script de módulo) e guarda a
-  // escolha ao sair. onMount/onDestroy e não $effect: o painel remonta por key a cada troca.
-  onMount(() => {
+  // Mesma sessão: a aba de agora é a escolha dela, guarda. Sessão nova: devolve a aba em que ela
+  // estava. Lê as duas coisas no topo de propósito — o efeito precisa acordar tanto na troca de
+  // sessão quanto no clique de aba, e ler só dentro de um ramo perderia uma das duas.
+  $effect(() => {
     const chave = navChave;
-    const lembrada = ABA_POR_SESSAO.get(chave);
-    if (lembrada) ctxPanel.aba = lembrada;
-    return () => ABA_POR_SESSAO.set(chave, ctxPanel.aba);
+    const aba = ctxPanel.aba;
+    if (chave === chaveVista) {
+      ABA_POR_SESSAO.set(chave, aba);
+      return;
+    }
+    chaveVista = chave;
+    const lembrada = ABA_POR_SESSAO.get(chave) ?? 'contexto';
+    if (lembrada !== aba) ctxPanel.aba = lembrada;   // reentra uma vez e cai no ramo de cima
   });
   // A aba é global (ctxPanel, por desenho) mas o navegador é POR SESSÃO: sessão sem navegador com
   // a aba ativa volta pra Contexto — senão a coluna fica em branco (os três painéis têm guard, e
