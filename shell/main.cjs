@@ -168,9 +168,7 @@ async function criarJanela() {
     if (views) {
       navegadores.delete(win);
       for (const [chave, v] of views) {
-        const ctl = controladores.get(chave);
-        if (ctl) { ctl.fechar(); controladores.delete(chave); }
-        try { v.webContents.debugger.detach(); } catch { /* já solto */ }
+        soltarControlador(chave, v);
         try { v.webContents.close(); } catch { /* já morreu */ }
       }
       // ...e os sidecars das chaves dela, senão o CLI lista "MORTO" acumulando lixo a cada quit.
@@ -308,15 +306,23 @@ function viewsDa(win) {
   return m;
 }
 
+// Fecha o controlador de uma chave e desanexa o depurador do view — trio repetido em três
+// pontos (× do painel, queda da janela, webContents morto por fora): um lugar só. Sem isto num
+// dos três, o Map fica com controlador órfão apontando pra webContents morto: o servidor local
+// acha ele (não devolve null) e um comando vira 500 de CDP em vez do 404 "sem navegador aberto".
+function soltarControlador(chave, view) {
+  const ctl = controladores.get(chave);
+  if (ctl) { ctl.fechar(); controladores.delete(chave); }
+  try { view.webContents.debugger.detach(); } catch { /* já solto */ }
+}
+
 function fecharNavegador(win, chave) {
   const m = navegadores.get(win);
   const view = m && m.get(chave);
   if (!view) return;
   m.delete(chave);
   if (m.size === 0) navegadores.delete(win);
-  const ctl = controladores.get(chave);
-  if (ctl) { ctl.fechar(); controladores.delete(chave); }
-  try { view.webContents.debugger.detach(); } catch { /* já solto */ }
+  soltarControlador(chave, view);
   try { win.contentView.removeChildView(view); } catch { /* janela já destruída */ }
   try { view.webContents.close(); } catch { /* idem */ }
   try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
@@ -400,8 +406,12 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
   let view = views.get(chave);
   // O webContents pode ter morrido por fora (fechado via CDP Target.closeTarget, crash do
   // renderer): sem esta checagem o view volta invisível e nunca mais pinta — a área fica preta.
-  if (view && view.webContents.isDestroyed()) {
+  // Medido: um Target.closeTarget externo pode deixar `view.webContents` undefined (não só
+  // isDestroyed()===true) — sem o `!view.webContents` o acesso a `.isDestroyed()` lança e derruba
+  // o handler do IPC inteiro, antes de soltar o controlador.
+  if (view && (!view.webContents || view.webContents.isDestroyed())) {
     views.delete(chave);
+    soltarControlador(chave, view);
     try { win.contentView.removeChildView(view); } catch { /* já saiu */ }
     view = undefined;
   }
@@ -438,6 +448,11 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
         capturarPagina: () => view.webContents.capturePage(),
         aoNavegar: (cb) => view.webContents.on('did-navigate', cb),
       }));
+      // Alvo morrendo por fora (Target.closeTarget via CDP, crash do renderer) não passa pelo ×
+      // do painel nem pelo close da janela — sem isto o controlador ficava órfão no Map até o
+      // usuário reabrir o painel, e um comando nesse meio-tempo virava 500 de CDP em vez do 404
+      // de sessão sem navegador. `once`: o próprio evento já indica que não há mais o que soltar.
+      view.webContents.once('destroyed', () => soltarControlador(chave, view));
     } catch (err) {
       // Falha aqui custa os verbos novos, não o navegador: o painel abre e o usuário navega na mão.
       console.error('[nav] depurador nao anexou:', err && err.message);
