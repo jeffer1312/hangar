@@ -617,6 +617,41 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
     medido no muse-spark, um ditado com autocorreção longa cai pra 62% de cobertura e o estilo
     `limpar` (piso 0,80) devolve o cru com aviso — o modelo apagou a versão corrigida, que é a
     regra funcionando, mas o piso de `limpar` não foi calibrado nele.
+- **Login do ChatGPT (Codex) é UM login pra três CLIs, e quem faz é o app** (`app/oauth_codex.py` +
+  a linha "Conta do ChatGPT (Codex)" do `NovaCredencialSheet` + `app/harness_saude.py`, 04/09/2026).
+  Codex CLI, Pi e omp usam o MESMO OAuth — `client_id app_EMoamEEZ73f0CkXaXp7hrann`, mesmo
+  `auth.openai.com/oauth/token`, mesmo fluxo de código de dispositivo — e cada um guarda o resultado
+  no formato dele: `~/.codex/auth.json` (`tokens.{id_token,access_token,refresh_token,account_id}`),
+  `~/.pi/agent/auth.json` (`openai-codex: {type:"oauth", access, refresh, expires em ms, accountId}`)
+  e a tabela `auth_credentials` do `~/.omp/agent/agent.db` (`provider`, `credential_type='oauth'`,
+  `data` = a credencial do Pi sem o `type`, `identity_key` = accountId; conferido com
+  `omp token openai-codex` devolvendo JWT). O app roda o fluxo de dispositivo sozinho (stdlib), guarda
+  em `~/.hangar/auth/openai-codex.json` (0600) e escreve nos três — **só onde não há login**; login
+  existente é da pessoa. Três medições que decidem o desenho:
+  - **Rotação do refresh não invalida a cópia.** Renovando pelo refresh do Codex por fora, a resposta
+    trouxe refresh NOVO, o antigo continuou renovando e o Codex seguiu autenticando com o store
+    intocado (o 400 seguinte foi de modelo, não de auth). Por isso cada CLI renova sozinho, sem
+    renovador central; o custo de um dia isso mudar é a linha "Login" do painel ficar vermelha.
+  - **A Cloudflare do `auth.openai.com` devolve 530 (`cf_route_error`) pro User-Agent padrão do
+    urllib.** Qualquer outro UA passa; `_http` manda `hangar/1.0`.
+  - **`earliest_refresh_at` na resposta do token**: o servidor diz quando o próximo refresh é aceito
+    (~9 dias, com o access valendo 10). Não é erro, é o ritmo dele.
+  O `codex login` (0.153.1) não tem `--device-auth` visível no `--help`; o app não depende dele.
+- **Painel de saúde dos harnesses** (`app/harness_saude.py` + `harness_api.py` +
+  `components/settings/HarnessSettings.svelte`, aba "Harnesses" em Configurações → Servidor): uma
+  linha por CLI com o que o app instalou nele (hooks do Claude, contas, login do ChatGPT, extensões
+  do Pi/omp, ponte de skills, statusline do Kimi) e um botão por item que **reusa o instalador que já
+  existe** (`hook_installer.ensure_*`, `skill_bridge.rebuild`, `contas.reconciliar`,
+  `oauth_codex.propagar`, o symlink das `scripts/pi/*.ts`). A checagem é só leitura; o texto vai como
+  `codigo`+`params` e o front traduz (`harness_<codigo>`). `instalado` é "binário no PATH OU pasta de
+  config existe" porque o backend roda como serviço com PATH curto — só o binário dava "Kimi não
+  instalado" com o `~/.kimi-code` cheio.
+- **Runtime por conta não vira atalho** (`contas._RUNTIME_DA_CONTA`, 04/09/2026): `telemetry/`,
+  `feedback/`, `image-cache/`, `.last-update-result.json` (o Claude Code regrava por config dir com
+  tmp+rename, que troca o symlink por arquivo real) e `.hangar-models.json` (cache do picker, por
+  config dir). Ligados, cada `--prep` achava a "deriva" de novo, gavetava e disparava o toast
+  "CONTA" — a gaveta desta máquina chegou a `telemetry.3`. A reconciliação desfaz o atalho antigo
+  desses nomes, senão a conta seguia gravando o runtime dela dentro do `~/.claude`.
 - **Statusline por sidecar, não pelo pane** (`app/statusline.py` + `scripts/omniroute-statusline.js`
   + `scripts/pi/rich-status-line.ts` + `~/.kimi-code/statusline.js`): a linha que o app mostra
   (modelo, contexto, ⚡5h/📅7d, custo)

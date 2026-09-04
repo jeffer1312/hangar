@@ -24,8 +24,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
-from app import (atomico, atualizacoes, atualizar, diag, migracao_sidecars, pensamento_pt,
-                 procinfo, tmux)
+from app import (atomico, atualizacoes, atualizar, diag, harness_api, migracao_sidecars,
+                 pensamento_pt, procinfo, tmux)
 from app.auth import require_auth, require_loopback
 from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
 from app.bastao import montar as bastao_montar
@@ -355,6 +355,7 @@ app.include_router(alcance.alcance_router)
 app.include_router(conta_estado.conta_estado_router)
 app.include_router(cotas.cotas_router)
 app.include_router(credenciais.credenciais_router)
+app.include_router(harness_api.harness_router)
 app.include_router(peers_api.peers_router)
 registry = SessionRegistry()
 # Peer avisado pela varredura de morte já pode estar ocioso: sem este drain a fila só esvazia no

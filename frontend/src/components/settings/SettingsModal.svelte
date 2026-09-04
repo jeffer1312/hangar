@@ -11,6 +11,7 @@
   import ServidoresSettings from './ServidoresSettings.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
   import ContasSettings from './ContasSettings.svelte';
+  import HarnessSettings from './HarnessSettings.svelte';
   import ServidorSeletor from './ServidorSeletor.svelte';
   import ConfigIcone from './ConfigIcone.svelte';
   import { criarConfigServidor } from '../../lib/serverConfig.svelte';
@@ -112,6 +113,7 @@
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
     { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: 'sinal', servidor: true },
     { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: 'pessoa', servidor: true },
+    { id: 'harnesses', secao: 'servidor', rotulo: m.harness_titulo(), icone: 'pulso', servidor: true },
     { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: 'tela', servidor: false },
     { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
@@ -364,6 +366,8 @@
     <AcessoSettings alvo={resolvedServer} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
+  {:else if telaAtual === 'harnesses'}
+    <HarnessSettings apiTarget={alvo} />
   {:else if telaAtual === 'voz'}
     <VozSettings {store} />
   {:else}
