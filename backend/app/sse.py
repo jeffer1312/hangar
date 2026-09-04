@@ -4,6 +4,7 @@ import logging
 import re
 import sys
 import time
+import traceback
 from pathlib import Path
 from app import diag
 from app.adapters import get_adapter
@@ -368,8 +369,13 @@ class _ListRefresher:
                     # AskUserQuestion — um erro de serialização ali ecoaria conversa dentro de um
                     # arquivo que promete não guardar nenhuma. A mensagem inteira vai no log local
                     # (o `_log.warning` acima, com traceback), que não é o arquivo que se envia.
+                    # Tipo + `arquivo:linha` da moldura mais interna: zero conteúdo, e responde
+                    # ONDE — só o tipo deixava 290 `RuntimeError` num diário sem pista nenhuma.
+                    _tipo, _exc, _tb = sys.exc_info()
+                    quadro = traceback.extract_tb(_tb)[-1] if _tb else None
+                    onde = f" @ {Path(quadro.filename).name}:{quadro.lineno}" if quadro else ""
                     diag.registrar("lista.refresher_falhou", "erro",
-                                   detalhe=type(sys.exc_info()[1]).__name__)
+                                   detalhe=f"{type(_exc).__name__}{onde}")
                     async with self._cond:
                         self.errored = True
                         self.version += 1

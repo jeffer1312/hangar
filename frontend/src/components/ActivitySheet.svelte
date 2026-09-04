@@ -218,12 +218,14 @@
         subDetail = d;
         subFails = 0;
         subError = '';
-      } catch {
+      } catch (e) {
         if (g !== geracaoSub) return;
         // Uma falha isolada e normal (o arquivo some quando o agente termina) -> mantem o ultimo
         // estado. Tres seguidas nao sao "sumiu": e erro de verdade, e a tela precisa parar de
-        // fingir que esta ao vivo.
-        if (++subFails >= 3) {
+        // fingir que esta ao vivo. 404 e definitivo na PRIMEIRA: a sessao morreu por baixo do
+        // painel, e insistir a cada 2,5s so enche o diario (medido: 406 num dia).
+        const definitivo = (e as { status?: number })?.status === 404;
+        if (definitivo || ++subFails >= 3) {
           stopSubPoll();
           subError = m.atividade_erro_vivo();
         }

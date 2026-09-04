@@ -25,6 +25,8 @@
 #                                  --engine <motor> nasce num motor de ~/.claude/engines.json
 #                                  (outro modelo, conta do provedor — ver "Par noutro modelo").
 #                                  --conta <nome> nasce em OUTRA CONTA Anthropic (ver abaixo).
+#                                  --conta auto deixa a cota escolher: a conta Claude com mais
+#                                  folga na janela que mais aperta (5h, 7d ou a do modelo).
 #                                  --model <id> a sessão já ABRE nesse modelo (opus, sonnet,
 #                                  haiku, claude-opus-5…) — vale pra claude, pi e kimi.
 #                                  --effort <low|medium|high|xhigh|max> já abre nesse esforço
@@ -39,6 +41,8 @@
 # `hangar-conta --new <nome>` cria uma (o /login é interativo, feito na primeira sessão dela).
 # `hangar-send --new <nome> <cwd> --conta 200-01` abre a sessão já logada naquela conta — o consumo vai
 # pra assinatura DELA, não pra conta padrão. Sem o flag, nasce na conta padrão (~/.claude).
+# `--conta auto` pergunta ao backend (GET /api/cotas/sugestao) qual conta tem mais folga e nasce
+# nela; sem nenhuma conta com leitura de cota o script para com erro, nunca cai calado na padrão.
 #
 # Remetente é detectado pelo nome da sessão tmux atual e prefixado como "[de: X]",
 # pra sessão destino saber a origem e pra onde responder.
@@ -279,7 +283,19 @@ if [[ "$1" == "--new" ]]; then
     cwd="${cwd:-$HOME}"
     # Conta inexistente para AQUI, antes do POST: o backend recusaria com 400, mas o erro do
     # hangar-conta já diz o nome errado e o `hangar-conta --list` mostra os certos.
-    if [[ -n "$conta" ]]; then
+    # --conta auto: o backend escolhe a conta Claude com mais folga na janela que mais aperta
+    # (5h, 7d ou a semanal por modelo). Sem conta com leitura de cota ele responde 404 — e aqui
+    # isso PARA, em vez de cair calado na conta padrão que talvez seja justo a esgotada.
+    if [[ "$conta" == "auto" ]]; then
+        sugestao=$(api GET /api/cotas/sugestao) || {
+            echo "erro: nenhuma conta com leitura de cota — escolha uma: hangar-conta --list" >&2
+            exit 2
+        }
+        IFS=$'\t' read -r config_dir conta < <(python3 -c 'import json,sys
+s = json.load(sys.stdin); print(s["path"] + "\t" + s["label"])' <<<"$sugestao")
+        echo "conta escolhida pela cota: $conta" >&2
+    fi
+    if [[ -n "$conta" && "$config_dir" == "" ]]; then
         config_dir=$("$(dirname "$(realpath "$0")")/hangar-conta" --prep "$conta") || {
             echo "erro: conta '$conta' indisponível — veja as configuradas com: hangar-conta --list" >&2
             exit 2

@@ -1160,6 +1160,9 @@
   const SSE_RETRY_MIN = 3000;
   const SSE_RETRY_MAX = 30000;
   let sseRetryDelay = SSE_RETRY_MIN;
+  // Servidor recusou o stream de vez (readyState CLOSED no onerror). Mostra a faixa com
+  // "tentar de novo" em vez de reconectar em laço.
+  let sseRecusado = $state(false);
   // Componente vivo? connectSSE pos-destroy criava EventSource FANTASMA (watchdog proprio,
   // reconectando pra sempre, nada nunca fecha) — 1 leak por ciclo background->foreground->navegar.
   let alive = false;
@@ -1172,6 +1175,7 @@
     if (kimiPreNascimento) return;
     clearTimeout(reconnectTimer);
     if (es) { es.close(); es = null; }
+    sseRecusado = false;
 
     es = openEventStream(sessionName, lastEventId);
     // Ciclo de vida da conexão no diário de uso. É o que faltava nos relatos de "a conversa parou"
@@ -1397,6 +1401,10 @@
       diag.registrar({ evento: 'sse.caiu', nivel: 'erro', tela: 'chat', sessao: sessionName,
                        codigo: String(estadoSSE), ms: sseRetryDelay, detalhe: motivo });
       if (currentState === 'dead' || !alive) return;
+      // CLOSED = recusa definitiva (404/401): insistir a cada 30s não muda a resposta — medido
+      // 2h14 de laço, duas madrugadas seguidas, numa sessão que o servidor dizia não existir.
+      // Para, e deixa a pessoa tentar de novo (ou o onVisible, quando a aba voltar).
+      if (estadoSSE === 2) { sseRecusado = true; return; }
       clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(connectSSE, sseRetryDelay);
       sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_MAX);
@@ -2079,6 +2087,12 @@
         <button class="back-btn" onclick={onBack}>{'← '}{m.comum_voltar()}</button>
       </div>
     {:else}
+      {#if sseRecusado}
+        <div class="sse-recusado" role="status">
+          <span>{m.chat_sse_recusado()}</span>
+          <button type="button" class="sse-retry" onclick={connectSSE}>{m.chat_sse_tentar()}</button>
+        </div>
+      {/if}
       <!-- Composer SEMPRE visivel (exceto sessao morta). Antes ele sumia em awaiting_input e,
            se as opcoes nao fossem parseadas, o usuario ficava sem input E sem botoes = preso.
            Os OptionButtons continuam aparecendo na lista; o composer fica como saida garantida. -->
@@ -2621,6 +2635,25 @@
     font-size: var(--text-sm);
     color: var(--text-muted);
     text-align: center;
+  }
+
+  .sse-recusado {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .sse-retry {
+    background: var(--surface-raised);
+    color: var(--text);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 2px var(--space-3);
+    font-size: var(--text-sm);
+    cursor: pointer;
   }
 
   .back-btn {

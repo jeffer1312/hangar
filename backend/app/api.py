@@ -2164,6 +2164,10 @@ async def events(name: str, request: Request):
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if not info or not info.jsonl:
+        # No diário COM o motivo: o 404 sozinho não separa sessão que sumiu da lista de sessão viva
+        # sem transcript (Pi/Kimi nos primeiros segundos, ou tmux sem responder).
+        diag.registrar("sse.recusado", "aviso", sessao=name,
+                       detalhe="fora-da-lista" if not info else "sem-transcript")
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
     # Retomada exata: o id que emitimos no transcript e "<stem-do-jsonl>:<offset-em-bytes>". Chega
     # por header (Last-Event-ID, que o browser reenvia sozinho quando o MESMO EventSource reconecta)
@@ -4074,10 +4078,10 @@ async def relimpar_ditado(body: RelimparBody):
 
 
 class PensamentoPtBody(_StrictBody):
-    # Teto por ITEM, e não só na quantidade: o texto vai pro provedor de LLM, e no Pi e no Kimi
-    # este campo carrega raciocínio CRU, sem tamanho previsível. Mesma regra do TtsBody.
-    textos: list[Annotated[str, Field(max_length=pensamento_pt.MAX_CHARS)]] = Field(
-        min_length=1, max_length=20)
+    # Teto por ITEM só contra abuso: o pensamento do Pi e do Kimi vem CRU, sem tamanho previsível,
+    # e recusar com 422 acima de `MAX_CHARS` deixava a pessoa abrindo o bloco sem nada acontecer.
+    # O corte em `MAX_CHARS` é feito no handler; aqui só o que nem cabe num pedido razoável.
+    textos: list[Annotated[str, Field(max_length=200_000)]] = Field(min_length=1, max_length=20)
 
 
 @app.post("/api/pensamento/pt", dependencies=[Depends(require_auth)])
@@ -4088,7 +4092,10 @@ async def pensamento_para_pt(body: PensamentoPtBody):
     esta aberto na tela quando esta chamada sai — trocar o conteudo por uma mensagem de erro seria
     apagar o que ela acabou de pedir pra ler.
     """
-    saida = await asyncio.to_thread(pensamento_pt.traduzir_varios, body.textos)
+    # Corta em vez de recusar: um resumo do começo do pensamento é o que a pessoa pediu; um 422
+    # calado não é (medido: 198 no diário de uma semana, 110 num dia só).
+    textos = [t[:pensamento_pt.MAX_CHARS] for t in body.textos]
+    saida = await asyncio.to_thread(pensamento_pt.traduzir_varios, textos)
     return {"textos": saida}
 
 

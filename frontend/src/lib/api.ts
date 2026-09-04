@@ -83,20 +83,31 @@ function authHeaders(): HeadersInit {
 // cru na tela seria pior que mostrar a lingua errada. Endpoint ainda nao migrado manda string,
 // e o caminho antigo continua inteiro.
 export async function errorDetail(res: Response): Promise<string> {
+  return (await lerErro(res)).msg;
+}
+
+// Mensagem traduzida + o CÓDIGO cru do backend (`erro_*`). O código é o que deixa quem chama
+// decidir por identidade e não por texto — a mensagem muda com o idioma.
+async function lerErro(res: Response): Promise<{ msg: string; code?: string }> {
   const text = await res.text().catch(() => '');
   try {
     const j = JSON.parse(text);
-    if (j && typeof j.detail === 'string') return j.detail;
+    if (j && typeof j.detail === 'string') return { msg: j.detail };
     if (j?.detail && typeof j.detail.code === 'string') {
       const traduzida = mensagemDeErro(j.detail.code, j.detail.params ?? {});
-      return traduzida ?? j.detail.msg ?? j.detail.code;
+      return { msg: traduzida ?? j.detail.msg ?? j.detail.code, code: j.detail.code };
     }
   } catch { /* corpo nao-JSON: cai no texto cru abaixo */ }
   // text e statusText podem os DOIS vir vazios (502 de infra sem corpo JSON, servidor HTTP/2 que
   // nao popula statusText) — sem este ultimo fallback, quem le `.message` (TtsBar, ServerSettings)
   // trata string vazia como "sem erro" e desenha a UI de sucesso por cima de uma falha real.
-  return text || res.statusText || `falha ${res.status} sem detalhe do servidor`;
+  return { msg: text || res.statusText || `falha ${res.status} sem detalhe do servidor` };
 }
+
+// Rotas GET que estão falhando por rede AGORA. O diário ganha uma linha na primeira falha e uma
+// no retorno, não uma por poll: 4 abas × poll de 4s deram 455 linhas iguais numa tarde em que o
+// backend só estava lento (máquina saturada), e afogaram o resto do dia.
+const _semRede = new Set<string>();
 
 // Trata a resposta compartilhada por apiFetch e uploadFile. Self-heal de token invalido/rotacionado:
 // isAuthenticated() so checa se EXISTE token, nao se vale. Num 401 COM token salvo, limpamos a
@@ -112,7 +123,10 @@ async function ensureOk(res: Response): Promise<void> {
   // (acima do limite de aviso, pede confirmacao) de qualquer outra falha so pela mensagem. A
   // MENSAGEM fica limpa (sem o "409: " na frente) — quem precisa do numero le `.status`, nao
   // texto que o usuario acaba vendo cru (ex: window.confirm da confirmacao de custo do TTS).
-  if (!res.ok) throw Object.assign(new Error(await errorDetail(res)), { status: res.status });
+  if (!res.ok) {
+    const { msg, code } = await lerErro(res);
+    throw Object.assign(new Error(msg), { status: res.status, code });
+  }
 }
 
 // Segmentos cujo VALOR seguinte não pode ir pro diário como está.
@@ -162,10 +176,20 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     // mão, por exemplo, em vez do `AbortSignal.timeout`) precisa saber disto: por este caminho a
     // falha some do diário sem deixar rastro.
     if (!isAbortError(e)) {
-      registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req,
-                      detalhe: `${init?.method ?? 'GET'} ${rotaGenerica(path)}` });
+      const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
+      const poll = rota.startsWith('GET ');
+      if (!poll || !_semRede.has(rota)) {
+        registrarDiag({ evento: 'api.sem_rede', nivel: 'erro', ms: Date.now() - t0, req, detalhe: rota });
+      }
+      if (poll) _semRede.add(rota);
     }
     throw e;
+  }
+  {
+    const rota = `${(init?.method ?? 'GET').toUpperCase()} ${rotaGenerica(path)}`;
+    if (_semRede.delete(rota)) {
+      registrarDiag({ evento: 'api.voltou', nivel: 'ok', ms: Date.now() - t0, req, detalhe: rota });
+    }
   }
   // O que entra no diário, e por quê:
   //  - toda AÇÃO (POST/PUT/PATCH/DELETE), dando certo ou não. É o uso: enviar mensagem, responder
@@ -1556,14 +1580,16 @@ export interface ModelOptionsResponse {
 // popover abrir em "Carregando…" a CADA toque. TTL 60s + dedupe de em-voo (dois consumidores
 // dividem UM GET) + invalidação nos set*. O prefetch ao trocar de sessão (Composer) aquece a
 // chave antes do primeiro toque — a abertura fica instantânea.
-const _catCache = new Map<string, { at: number; data: unknown }>();
+const _catCache = new Map<string, { at: number; data: unknown; recusa?: boolean }>();
 const _catEmVoo = new Map<string, Promise<unknown>>();
 const _catEpoca = new Map<string, number>();   // por sessão: o set* incrementa -> GET em voo não grava dado pré-troca
 const _CAT_TTL = 60_000;
 
 function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
   const hit = _catCache.get(key);
-  if (hit && Date.now() - hit.at < _CAT_TTL) return Promise.resolve(hit.data as T);
+  if (hit && Date.now() - hit.at < _CAT_TTL) {
+    return hit.recusa ? Promise.reject(hit.data) : Promise.resolve(hit.data as T);
+  }
   const emVoo = _catEmVoo.get(key);
   if (emVoo) return emVoo as Promise<T>;
   const sessao = key.slice(key.indexOf('|') + 1);
@@ -1578,6 +1604,15 @@ function _catalogo<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
         }
       }
       return data;
+    })
+    .catch((e: unknown) => {
+      // "Esta rota só existe pra Claude" é resposta FINAL pra esta sessão, não falha transitória:
+      // cacheia a recusa pelo mesmo TTL. Sem isto cada montagem do Composer numa sessão Pi/Kimi
+      // repetia o GET e o 400 (medido: 516 numa semana).
+      if ((e as { code?: string })?.code === 'erro_rota_so_claude') {
+        _catCache.set(key, { at: Date.now(), data: e, recusa: true });
+      }
+      throw e;
     })
     .finally(() => { _catEmVoo.delete(key); });
   _catEmVoo.set(key, p);

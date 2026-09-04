@@ -1,4 +1,6 @@
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -118,6 +120,30 @@ def _reset_agentpane_cache():
     agentpane.invalidate()
     yield
     agentpane.invalidate()
+
+
+_DIARIO_DE_TESTE = Path(tempfile.mkdtemp(prefix="hangar-diag-")) / ".hangar-diag"
+# O CLAUDE_CONFIG_DIR que a suíte HERDOU é o da conta de quem roda (sessão em `--conta` tem um):
+# esse é o real, e vale tanto quanto `~/.claude`. Só um valor DIFERENTE, posto por um teste, isola.
+_CONFIG_DIR_HERDADO = os.environ.get("CLAUDE_CONFIG_DIR")
+
+
+@pytest.fixture(autouse=True)
+def _diario_isolado():
+    # `diag._base()` lê CLAUDE_CONFIG_DIR/~/.claude e a suíte escrevia no diário REAL da máquina:
+    # 361 `pergunta.fallback_texto` da sessão `s1` (test_api.py) numa semana de uso exportada,
+    # indistinguíveis de picker preso de verdade. Sem `monkeypatch`/`tmp_path` na assinatura —
+    # ver a armadilha de ordem de fixtures documentada em `_instalar_home_do_windows`.
+    from app import diag
+    original = diag._base
+    # `test_diag.py` isola pelo próprio CLAUDE_CONFIG_DIR (um por teste): só o fallback `~/.claude`
+    # é trocado, senão aquela suíte inteira passaria a compartilhar um diário só.
+    def _base_de_teste() -> Path:
+        v = os.environ.get("CLAUDE_CONFIG_DIR")
+        return Path(v) / ".hangar-diag" if v and v != _CONFIG_DIR_HERDADO else _DIARIO_DE_TESTE
+    diag._base = _base_de_teste
+    yield
+    diag._base = original
 
 
 @pytest.fixture(autouse=True)

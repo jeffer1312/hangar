@@ -609,10 +609,16 @@
   // atrasada de um pisava no resultado do outro — inclusive zerando `permModes` (o poll pede sem
   // sondar, e volta `[]` enquanto o servidor não tem cache) com o popover já aberto na lista.
   let permSeq = 0;
+  // Sessão (nome|provider) pra qual o backend já disse "modo de permissão só vale para Claude".
+  // `isClaude` é "não é codex/pi/kimi", e uma sessão Pi/Kimi recém-criada chega como `claude` nos
+  // primeiros ~15s — o poll refazia o 409 a cada mudança de estado (medido: 558 numa semana). A
+  // recusa é final até o provider mudar; a chave inclui o provider justamente por isso.
+  let permSoClaudeEm = $state('');
   $effect(() => {
-    if (!isClaude) return;
+    if (!isClaude || permSoClaudeEm === `${sessionName}|${provider}`) return;
     void sessionState;
     const sn = sessionName;
+    const chave = `${sn}|${provider}`;
     const seq = ++permSeq;
     // só lê o atual (zero teclas); ciclo só ao abrir a pílula (bloqueador 1)
     // Atrás do histórico na PRIMEIRA rodada (ver lib/aquecimento); depois que ele pinta, a espera
@@ -628,10 +634,11 @@
           if (res.modes.length > 0 || permModes.length === 0) permModes = res.modes;
           permSondavel = res.sondavel;
         })
-        .catch(() => {
+        .catch((e: unknown) => {
           if (seq !== permSeq || sn !== sessionName) return;
           permCurrent = null;
           permModes = [];
+          if ((e as { code?: string })?.code === 'erro_permissao_so_claude') permSoClaudeEm = chave;
         });
     });
   });
@@ -1339,6 +1346,30 @@
     if (files && files.length) addFiles(files);
   }
 
+  // Arrastar arquivo pro card = mesmo fluxo do clipe. Só reage a arrasto que traz ARQUIVO: texto
+  // selecionado arrastado de outra janela continua caindo na textarea como sempre.
+  let arrastando = $state(false);
+  const temArquivo = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files');
+  function onDragOver(e: DragEvent) {
+    if (!temArquivo(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
+    arrastando = true;
+  }
+  function onDragLeave(e: DragEvent) {
+    // `dragleave` dispara ao passar pra um FILHO do card; só apaga quando saiu do card mesmo.
+    const alvo = e.relatedTarget;
+    if (alvo instanceof Node && (e.currentTarget as HTMLElement).contains(alvo)) return;
+    arrastando = false;
+  }
+  function onDrop(e: DragEvent) {
+    if (!temArquivo(e)) return;
+    e.preventDefault();
+    arrastando = false;
+    const files = e.dataTransfer?.files;
+    if (files && files.length) addFiles(files);
+  }
+
   // Colar imagem(ns) (desktop garante; iOS Safari e instavel). Pega todos os itens de imagem
   // do clipboard e joga no mesmo fluxo do anexo.
   function onPaste(e: ClipboardEvent) {
@@ -1472,7 +1503,11 @@
   />
   <!-- O card precisa delegar foco para a textarea em areas vazias, mas contem varios botoes:
        nao pode virar button/role=button sem aninhar controles interativos. -->
-  <div class="composer-card" role="button" tabindex="-1" onclick={focusInput} onkeydown={focusInput}>
+  <div class="composer-card" class:arrastando role="button" tabindex="-1" onclick={focusInput} onkeydown={focusInput}
+       ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
+    {#if arrastando}
+      <div class="solte-anexo" aria-hidden="true">{m.composer_soltar_anexo()}</div>
+    {/if}
     <div class="composer-top">
       <div class="top-left">
         {#if !isCodex}
@@ -2122,6 +2157,18 @@
 
   .composer-card:focus-within {
     border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .composer-card.arrastando { border-color: var(--accent); border-style: dashed; }
+  /* Véu por cima do card inteiro enquanto o arquivo está no ar. pointer-events: none pra o
+     dragleave/drop continuarem chegando no card, não no véu. */
+  .solte-anexo {
+    position: absolute; inset: 0; z-index: 2;
+    display: grid; place-items: center;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    font-size: var(--text-sm); font-weight: 600;
+    pointer-events: none;
   }
 
   /* Camada de vidro: leaf bare (sem conteúdo, sem descendente posicionado), bounded à caixa do dock. */

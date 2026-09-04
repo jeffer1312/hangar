@@ -10,7 +10,10 @@ Fontes, todas verificadas contra a API real em 18/08/2026:
 
  - Claude: GET https://api.anthropic.com/api/oauth/usage com o `accessToken` de
    `<conta>/.credentials.json`. Devolve `five_hour`/`seven_day` com `utilization` (percentual) e
-   `resets_at` (ISO). NÃO é chamada de inferência — não consome cota nenhuma.
+   `resets_at` (ISO). NÃO é chamada de inferência — não consome cota nenhuma. O limite semanal
+   POR MODELO (o do Fable) não está nesses dois: vem só em `limits[]`, como `kind =
+   "weekly_scoped"` com `scope.model.display_name` e `percent` (medido 04/09/2026: 5h 26%,
+   7d 64%, Fable 79% — a janela que mais aperta era a que a faixa não mostrava).
  - Kimi: GET <base_url>/usages com a `api_key` de cada provider `type = "kimi"` do
    `~/.kimi-code/config.toml`. A janela curta vem em `limits[]` (`window.duration == 300`
    minutos) e a longa em `usage`. Os dois trazem `limit`/`remaining` como STRING, e o usado é
@@ -42,7 +45,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import apelidos, codex_appserver, contas, engines, opencode_cota, renova_token
@@ -237,7 +240,26 @@ def _ler_claude(dir_conta: Path, ativa: bool = False, renovou_agora: bool = Fals
                            _janela_claude(j.get("seven_day"), "7d")) if w is not None]
     if not janelas:
         return "indisponivel", [], "formato-desconhecido"
+    janelas += _janelas_por_modelo(j.get("limits"))
     return "lida", janelas, None
+
+
+def _janelas_por_modelo(limits: object) -> list[JanelaCota]:
+    """As janelas `weekly_scoped` de `limits[]`, rotuladas pelo nome do modelo ("Fable")."""
+    if not isinstance(limits, list):
+        return []
+    out = []
+    for lim in limits:
+        if not isinstance(lim, dict) or lim.get("kind") != "weekly_scoped":
+            continue
+        modelo = (lim.get("scope") or {}).get("model") if isinstance(lim.get("scope"), dict) else None
+        nome = modelo.get("display_name") if isinstance(modelo, dict) else None
+        pct = lim.get("percent")
+        if not isinstance(nome, str) or not nome or not isinstance(pct, (int, float)) \
+                or isinstance(pct, bool):
+            continue
+        out.append(JanelaCota(rotulo=nome, pct=float(pct), reset_ts=_iso_ts(lim.get("resets_at"))))
+    return out
 
 
 # ------------------------------------------------------------------------------------ Kimi
@@ -704,3 +726,43 @@ def listar_cotas(forcar: bool = False) -> list[CotaConta]:
                 "label": nomes.get(c.id) or c.label,
                 "idade_s": (agora - c.ts) if c.ts is not None else None}))
     return saida
+
+
+class SugestaoConta(BaseModel):
+    id: str
+    label: str
+    path: str
+    ativa: bool
+    # Percentual que sobra na janela mais cheia da conta — a que aperta primeiro.
+    folga: float
+
+
+def sugerir_claude(contas_lidas: list[CotaConta]) -> SugestaoConta | None:
+    """A conta Claude com mais folga. Empate fica com a conta padrão (sessão nasce nela sem flag).
+
+    Só conta com leitura vale: expirada ou indisponível não tem número, e chutar seria mandar
+    uma sessão nascer numa conta que talvez peça login.
+    """
+    melhor: tuple[float, bool, CotaConta] | None = None
+    for c in contas_lidas:
+        if c.provedor != "claude" or c.estado != "lida" or not c.janelas:
+            continue
+        folga = 100.0 - max(j.pct for j in c.janelas)
+        chave = (folga, c.ativa)
+        if melhor is None or chave > (melhor[0], melhor[1]):
+            melhor = (folga, c.ativa, c)
+    if melhor is None:
+        return None
+    folga, _, c = melhor
+    return SugestaoConta(id=c.id, label=c.label, path=c.id.removeprefix("claude:"),
+                         ativa=c.ativa, folga=folga)
+
+
+@cotas_router.get("/sugestao", dependencies=[Depends(require_auth)],
+                  response_model=SugestaoConta)
+def sugerir_conta() -> SugestaoConta:
+    """Conta Claude com mais folga pra uma sessão nova (`hangar-send --new … --conta auto`)."""
+    s = sugerir_claude(listar_cotas())
+    if s is None:
+        raise HTTPException(404, detail="sem-conta-legivel")
+    return s
