@@ -618,13 +618,21 @@ if [ ${#PROBLEMAS[@]} -gt 0 ]; then
 else
   say "Pronto"
 fi
+PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+PORTA_FIM=${PORTA_FIM:-8765}
 if [ "${ABRIR_SHELL:-0}" = 1 ]; then
+  # O passo 7/8 acabou de reiniciar o backend; abrir antes da porta voltar mostra a tela de
+  # "não consegui carregar a interface" (medido: serviço active às :53, janela aberta no mesmo
+  # segundo, porta ainda fechada). Espera até 20s; sem serviço a porta nunca abre e aí a janela
+  # mesmo mostra o que falta.
+  for _ in $(seq 1 40); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$PORTA_FIM") 2>/dev/null && break
+    sleep 0.5
+  done
   # Destacado do instalador (setsid + sem stdio): fechar o terminal não leva a janela junto.
   (cd shell && setsid ./node_modules/electron/dist/electron main.cjs </dev/null >/dev/null 2>&1 &)
   ok "janela do Hangar aberta"
 fi
-PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
-PORTA_FIM=${PORTA_FIM:-8765}
 URL_FIM=$(grep '^CP_PUBLIC_URL=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
 # O valor do token só aparece com terminal: sem TTY isto roda em provisionamento e o stdout
 # vira log — mesma regra do passo 3/8.
