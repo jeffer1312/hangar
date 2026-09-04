@@ -1393,7 +1393,7 @@
   "par_falhou_pareamento": "Pairing with {nomes} failed.",
   "par_falhou_saida": "Failed to leave the group.",
   "par_aria_sheet": "Pair sessions",
-  "par_grupo_titulo": "🤝 Working group ({n})",
+  "par_grupo_titulo": "Working group ({n})",
   "par_membros_hint": "Members work together: they exchange contract, notices and questions via hangar-send on their own, each in their own repo. Leaving notifies the group (the rest keep going).",
   "par_abrir_conversa_de": "Open {nome}'s conversation",
   "par_abrir_lado": "Open {nome} side by side",

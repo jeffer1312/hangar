@@ -249,13 +249,15 @@ export type PairRow<T> =
 // pode ficar vazia sem mudar a altura — é o que iguala `hangar` e `storefront-web`.
 export const RAIL_MAX = 8;
 export function railLabel(name: string, grupo?: string | null): [string, string] {
-  let parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-  if (!parts.length) return [name.slice(0, RAIL_MAX), ''];
+  // Classe unicode, não ASCII: com `[^a-zA-Z0-9]` o acento virava separador e `análise-app`
+  // saía como `an` / `lise-app` — nome errado na tela, sem aviso.
+  let parts = name.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  if (!parts.length) return [name.slice(0, RAIL_MAX) || '?', ''];
   if (grupo) {
     // Só a CHAVE do grupo (a primeira palavra: `ABC-1234`), não a tarefa inteira — ela cita os
     // nomes dos membros, e casar contra ela apagava o nome todo (`api-1234` ficava sem sobra).
     const chave = grupo.trim().split(/\s/)[0];
-    const doGrupo = new Set(chave.split(/[^a-zA-Z0-9]+/).filter(Boolean).map((t) => t.toLowerCase()));
+    const doGrupo = new Set(chave.split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((t) => t.toLowerCase()));
     const sobra = parts.filter((p) => !doGrupo.has(p.toLowerCase()));
     if (sobra.length) parts = sobra;   // nome INTEIRO igual ao grupo: fica como está
   }

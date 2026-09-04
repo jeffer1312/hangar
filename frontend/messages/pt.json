@@ -1393,7 +1393,7 @@
   "par_falhou_pareamento": "Falhou o pareamento com {nomes}.",
   "par_falhou_saida": "Falhou a saída do grupo.",
   "par_aria_sheet": "Parear sessões",
-  "par_grupo_titulo": "🤝 Grupo de trabalho ({n})",
+  "par_grupo_titulo": "Grupo de trabalho ({n})",
   "par_membros_hint": "Os membros trabalham juntos: trocam contrato, avisos e dúvidas via hangar-send por conta própria, cada um no seu repo. Sair avisa o grupo (os demais continuam entre si).",
   "par_abrir_conversa_de": "Abrir a conversa de {nome}",
   "par_abrir_lado": "Abrir {nome} lado a lado",

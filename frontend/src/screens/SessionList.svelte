@@ -8,6 +8,7 @@
   import { onMount } from 'svelte';
 import * as m from '../paraglide/messages';
   import HangarMark from '../components/icons/HangarMark.svelte';
+  import GroupGlyph from '../components/icons/GroupGlyph.svelte';
   import SessionCard from '../components/SessionCard.svelte';
   import CreateSessionSheet from '../components/CreateSessionSheet.svelte';
   import BottomSheet from '../components/BottomSheet.svelte';
@@ -420,7 +421,7 @@ import * as m from '../paraglide/messages';
                     <button class="pair-head" onclick={() => model.toggleGroup(`pair:${item.gid}`)}
                             aria-expanded={!model.collapsed.has(`pair:${item.gid}`)}>
                       <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
-                      <span class="pair-label">🤝&nbsp;{item.label}</span>
+                      <span class="pair-label"><GroupGlyph size={13} />&nbsp;{item.label}</span>
                       <span class="pair-count">{item.count}</span>
                     </button>
                   {:else if !item.gid || !model.collapsed.has(`pair:${item.gid}`)}
@@ -456,7 +457,7 @@ import * as m from '../paraglide/messages';
               <button class="pair-head" onclick={() => model.toggleGroup(`pair:${item.gid}`)}
                       aria-expanded={!model.collapsed.has(`pair:${item.gid}`)}>
                 <span class="pair-chev" class:collapsed={model.collapsed.has(`pair:${item.gid}`)} aria-hidden="true">▾</span>
-                <span class="pair-label">🤝&nbsp;{item.label}</span>
+                <span class="pair-label"><GroupGlyph size={13} />&nbsp;{item.label}</span>
                 <span class="pair-count">{item.count}</span>
               </button>
             {:else if !item.gid || !model.collapsed.has(`pair:${item.gid}`)}
@@ -703,7 +704,7 @@ import * as m from '../paraglide/messages';
   }
   .pair-chev { flex-shrink: 0; font-size: 10px; transition: transform 160ms var(--ease-out); }
   .pair-chev.collapsed { transform: rotate(-90deg); }
-  .pair-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .pair-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; display: inline-flex; align-items: center; }
   .pair-count {
     flex-shrink: 0; font-size: var(--text-xs); color: var(--accent);
     background: var(--accent-dim); border-radius: var(--radius-full); padding: 1px 8px;

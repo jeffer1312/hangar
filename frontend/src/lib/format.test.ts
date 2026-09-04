@@ -461,8 +461,13 @@ describe('railLabel', () => {
   it('nome igual ao grupo inteiro não some', () => {
     expect(railLabel('abc-1234', 'ABC-1234')).toEqual(['abc', '1234']);
   });
-  it('nome só de símbolos cai no nome cru', () => {
+  it('nome só de símbolos cai no nome cru; vazio nunca fica em branco', () => {
     expect(railLabel('---')).toEqual(['---', '']);
+    expect(railLabel('')).toEqual(['?', '']);
+  });
+  it('acento é letra, não separador', () => {
+    expect(railLabel('análise-app')).toEqual(['análise', 'app']);
+    expect(railLabel('café')).toEqual(['café', '']);
   });
 });
 

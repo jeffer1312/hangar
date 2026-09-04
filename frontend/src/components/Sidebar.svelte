@@ -1314,7 +1314,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .sidebar.collapsed .sess-row.pair-member.pair-last {
     border-bottom: 1px solid var(--border-subtle); border-radius: 0 0 12px 12px; margin-bottom: 0;
   }
-  .sidebar.collapsed .sess-row.pair-member.active { box-shadow: inset 3px 0 0 0 var(--accent); }
+  /* A pílula pinta o fundo dos membros com mais especificidade que `.active`; repõe o realce da
+     sessão aberta (fundo E barra), senão dentro do grupo a aberta fica igual às ociosas. */
+  .sidebar.collapsed .sess-row.pair-member.active {
+    background: var(--accent-dim);
+    box-shadow: inset 3px 0 0 0 var(--accent);
+  }
   .sidebar.collapsed .side-foot.rail .cta-new {
     height: 36px;
     border-radius: var(--radius-md);
@@ -1466,6 +1471,12 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   .sidebar:not(.collapsed) .sess-row.pair-member.pair-last {
     border-bottom: 1px solid var(--border-subtle); border-radius: 0 0 var(--radius-md) var(--radius-md);
     margin-bottom: 0;
+  }
+  /* Mesma especificidade que o fundo da pílula: sem isto a sessão aberta e o hover somem dentro
+     do grupo (o fundo plano do membro vencia `.sess-row.active` e `.sess-row:hover`). */
+  @media (hover: hover) { .sidebar:not(.collapsed) .sess-row.pair-member:hover { background: var(--bg-hover); } }
+  .sidebar:not(.collapsed) .sess-row.pair-member.active {
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
   }
   .grp-chevron {
     flex-shrink: 0; font-size: 9px; color: var(--text-muted);

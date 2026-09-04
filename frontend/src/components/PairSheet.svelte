@@ -181,7 +181,7 @@
     {#if peers.length}
       <!-- Tudo que ROLA fica aqui; o rodape com "Sair do grupo" fica preso embaixo. -->
       <div class="pair-scroll">
-      <h2 class="title">{m.par_grupo_titulo({ n: peers.length + 1 })}</h2>
+      <h2 class="title"><GroupGlyph size={18} /> {m.par_grupo_titulo({ n: peers.length + 1 })}</h2>
       <p class="hint">
         {m.par_membros_hint()}
       </p>
@@ -341,7 +341,7 @@
 <style>
   .pair { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
 
-  .title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); }
+  .title { font-size: var(--text-base); font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-2); }
 
   .hint { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
 
