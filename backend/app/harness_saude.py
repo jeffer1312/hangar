@@ -20,9 +20,13 @@ import time
 import tomllib
 from pathlib import Path
 
-from app import contas, hook_installer, kimi_hook_installer, oauth_codex, skill_bridge
+import sqlite3
+
+from app import agentes_sync, contas, engine_probe, engines, hook_installer, kimi_hook_installer, oauth_codex, skill_bridge
 from app.adapters.kimi.sessions import kimi_home
+from app.agentes_sync import _codex_dir, provedor_embutido_do_pi
 from app.config import list_config_dirs
+from app.oauth_codex import PROVEDOR
 
 _log = logging.getLogger("hangar.harness_saude")
 
@@ -155,12 +159,107 @@ def _hooks_kimi(home: Path) -> dict:
     return _item("hooks", True, "hooks_ok", n=len(kimi_hook_installer._ENTRIES))
 
 
-def _login(tem: bool) -> dict:
-    if tem:
-        return _item("login", True, "login_ok")
-    if oauth_codex.ler_cofre() or oauth_codex._codex_tem_login(None):
-        return _item("login", False, "sem_login_com_cofre", "oauth")
-    return _item("login", False, "sem_login")
+# ---------------------------------------------------------------- credenciais por harness
+
+def _no_harness(cli: str) -> set[str]:
+    """Nomes de provedor que o harness já tem credencial gravada, no vocabulário DELE."""
+    home = Path.home()
+    tem: set[str] = set()
+    try:
+        if cli == "pi":
+            d = home / ".pi" / "agent"
+            tem |= set(json.loads((d / "auth.json").read_text(encoding="utf-8")).keys())
+            if (d / "models.json").is_file():
+                tem |= set((json.loads((d / "models.json").read_text(encoding="utf-8")).get("providers") or {}).keys())
+        elif cli == "omp":
+            db = oauth_codex._omp_db(None)
+            if db.is_file():
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+                try:
+                    tem |= {r[0] for r in con.execute("select provider from auth_credentials where disabled_cause is null")}
+                finally:
+                    con.close()
+        elif cli == "kimi":
+            cfg = kimi_home() / "config.toml"
+            if cfg.is_file():
+                provs = tomllib.loads(cfg.read_text(encoding="utf-8")).get("providers") or {}
+                tem |= {n.removeprefix("managed:") for n in provs}
+        elif cli == "codex":
+            cfg = _codex_dir(None) / "config.toml"
+            if cfg.is_file():
+                tem |= set((tomllib.loads(cfg.read_text(encoding="utf-8")).get("model_providers") or {}).keys())
+            if oauth_codex._codex_tem_login(None):
+                tem.add(PROVEDOR)
+    except (OSError, ValueError, sqlite3.Error, tomllib.TOMLDecodeError):
+        pass
+    return tem
+
+
+def _do_app(cli: str) -> dict[str, dict | None]:
+    """Credenciais que o app conhece, já com o nome que ESTE harness usaria: chave de API do
+    engines.json (Pi/omp têm nome embutido por endereço; Kimi/Codex usam o nome do motor) e o
+    login do ChatGPT, quando há um pra espalhar. Valor None = OAuth."""
+    saida: dict[str, dict | None] = {}
+    for nome, dados in engines.listar().items():
+        base = dados.get("base_url") or ""
+        if not base or not dados.get("api_key"):
+            continue
+        alvo = (provedor_embutido_do_pi(base) if cli in ("pi", "omp") else None) or nome
+        saida[alvo] = {"nome": nome, "base_url": base, "api_key": dados["api_key"]}
+    if cli != "kimi" and (oauth_codex.ler_cofre() or oauth_codex._codex_tem_login(None)):
+        saida[PROVEDOR] = None
+    return saida
+
+
+def _credenciais(cli: str) -> dict:
+    tem = _no_harness(cli)
+    faltam = sorted(n for n in _do_app(cli) if n not in tem)
+    lista = ", ".join(sorted(tem)) or "—"
+    if faltam:
+        return _item("credenciais", False, "credenciais_faltam", f"sync:{cli}", tem=lista, faltam=", ".join(faltam))
+    return _item("credenciais", True, "credenciais_ok", tem=lista)
+
+
+def _omp_gravar_chave(provedor: str, api_key: str) -> tuple[bool, str]:
+    db = oauth_codex._omp_db(None)
+    if not db.is_file():
+        return False, "nao-instalado"
+    try:
+        con = sqlite3.connect(db, timeout=5)
+        try:
+            con.execute("insert into auth_credentials (provider, credential_type, data) values (?, 'api_key', ?)",
+                        (provedor, json.dumps({"key": api_key, "source": "manual"})))
+            con.commit()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return False, f"sqlite: {e}"
+    return True, str(db)
+
+
+def _sincronizar(cli: str) -> str:
+    """Grava no harness o que o app tem e ele não. Reusa o agentes_sync (pi/kimi/codex) e o
+    propagar do OAuth; o omp guarda chave no mesmo SQLite do login."""
+    tem = _no_harness(cli)
+    feitos = []
+    for alvo, cred in _do_app(cli).items():
+        if alvo in tem:
+            continue
+        if cred is None:
+            r = oauth_codex.propagar()
+            feitos.append(f"{PROVEDOR}: {r.get(cli, {}).get('motivo', '?')}")
+            continue
+        if cli == "omp":
+            ok, motivo = _omp_gravar_chave(alvo, cred["api_key"])
+        else:
+            try:
+                modelos = engine_probe.listar_modelos(cred["base_url"], cred["api_key"])
+            except Exception:  # noqa: BLE001 — lista de modelos é opcional
+                modelos = []
+            r = agentes_sync.sincronizar(cred["nome"], cred["base_url"], cred["api_key"], modelos, (cli,))
+            ok, motivo = r[cli]["ok"], r[cli]["motivo"]
+        feitos.append(f"{alvo}: {'ok' if ok else motivo}")
+    return "; ".join(feitos) or "nada faltava"
 
 
 def diagnosticar() -> list[dict]:
@@ -178,26 +277,26 @@ def diagnosticar() -> list[dict]:
     v = _versao("codex")
     d = home / ".codex"
     saida.append({"id": "codex", "nome": "Codex", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_login(oauth_codex._codex_tem_login(None)), _ponte_skills("codex", home)]
+                  "itens": [_credenciais("codex"), _ponte_skills("codex", home)]
                   if d.is_dir() else []})
 
     v = _versao("pi")
     d = home / ".pi" / "agent"
     saida.append({"id": "pi", "nome": "Pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_login(oauth_codex._pi_tem_login(None)), _extensoes("pi"), _ponte_skills("pi", home)]
+                  "itens": [_credenciais("pi"), _extensoes("pi"), _ponte_skills("pi", home)]
                   if d.is_dir() else []})
 
     v = _versao("omp")
     d = _raiz_agente("omp")
     saida.append({"id": "omp", "nome": "oh-my-pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_login(oauth_codex._omp_tem_login(None)), _extensoes("omp")] if d.is_dir() else []})
+                  "itens": [_credenciais("omp"), _extensoes("omp")] if d.is_dir() else []})
 
     v = _versao("kimi")
     d = kimi_home()
     itens = []
     if d.is_dir():
         tem_status = (d / "statusline.js").is_file()
-        itens = [_hooks_kimi(d), _ponte_skills("kimi", home),
+        itens = [_credenciais("kimi"), _hooks_kimi(d), _ponte_skills("kimi", home),
                  _item("statusline", tem_status, "statusline_ok" if tem_status else "sem_statusline")]
     saida.append({"id": "kimi", "nome": "Kimi Code", "instalado": v is not None or d.is_dir(), "versao": v, "itens": itens})
     return saida
@@ -251,6 +350,8 @@ def consertar(id_: str) -> str:
         if not any(v["ok"] for v in r.values()):
             raise ValueError(linha)
         return linha
+    if id_ in ("sync:pi", "sync:omp", "sync:kimi", "sync:codex"):
+        return _sincronizar(id_.split(":", 1)[1])
     # Só os dois agentes que o diagnóstico conhece: o id vem do cliente e vira caminho.
     if id_ in ("extensoes:pi", "extensoes:omp"):
         return _ligar_extensoes(id_.split(":", 1)[1])

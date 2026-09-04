@@ -6,6 +6,7 @@
   // no meio do trabalho.
   import { listarHarnesses, consertarHarness, type Harness, type ItemHarness } from '../../lib/credenciais';
   import * as m from '../../paraglide/messages';
+  import ProvedorIcone from '../icons/ProvedorIcone.svelte';
   import type { Server } from '../../lib/auth';
 
   interface Props { apiTarget: Server | null }
@@ -66,14 +67,13 @@
     contas_ok: (p) => m.harness_contas_ok({ n: p.n ?? '', lista: p.lista ?? '' }),
     plugins_ok: (p) => m.harness_plugins_ok({ n: p.n ?? '', lista: p.lista ?? '' }),
     plugins_com_problema: (p) => m.harness_plugins_com_problema({ n: p.n ?? '', lista: p.lista ?? '' }),
-    login_ok: () => m.harness_login_ok(),
-    sem_login: () => m.harness_sem_login(),
-    sem_login_com_cofre: () => m.harness_sem_login_com_cofre(),
+    credenciais_ok: (p) => m.harness_credenciais_ok({ tem: p.tem ?? '' }),
+    credenciais_faltam: (p) => m.harness_credenciais_faltam({ tem: p.tem ?? '', faltam: p.faltam ?? '' }),
     statusline_ok: () => m.harness_statusline_ok(),
     sem_statusline: () => m.harness_sem_statusline(),
   };
   const ROTULOS: Record<string, () => string> = {
-    hooks: m.harness_item_hooks, contas: m.harness_item_contas, login: m.harness_item_login,
+    hooks: m.harness_item_hooks, contas: m.harness_item_contas, credenciais: m.harness_item_credenciais,
     plugins: m.harness_item_plugins,
     skills: m.harness_item_skills, extensoes: m.harness_item_extensoes, statusline: m.harness_item_statusline,
   };
@@ -94,6 +94,9 @@
       <div class="hs-topo">
         <span class="hs-ponto" class:ok={h.instalado && h.itens.every((i) => i.ok !== false)}
               class:ruim={h.instalado && h.itens.some((i) => i.ok === false)} aria-hidden="true"></span>
+        <ProvedorIcone tipo={h.id === 'claude' ? 'claude' : 'chave'}
+          baseUrl={h.id === 'kimi' ? 'https://api.kimi.com' : h.id === 'codex' ? 'https://api.openai.com' : ''}
+          iniciais={h.id === 'omp' ? 'ω' : h.id === 'pi' ? 'π' : h.nome.slice(0, 2).toUpperCase()} size={22} />
         <span class="hs-nome">{h.nome}</span>
         <span class="hs-versao">{h.instalado ? (h.versao || m.harness_instalado()) : m.harness_nao_instalado()}</span>
       </div>
@@ -105,7 +108,9 @@
           {#if i.conserto}
             <button type="button" class="hs-btn" onclick={() => consertar(i.conserto!)}
               disabled={consertando !== null}
-              >{consertando === i.conserto ? '…' : (i.ok === false ? m.harness_consertar() : m.harness_refazer())}</button>
+              >{consertando === i.conserto ? '…'
+                : i.conserto.startsWith('sync:') ? m.harness_sincronizar()
+                : (i.ok === false ? m.harness_consertar() : m.harness_refazer())}</button>
           {/if}
         </div>
       {/each}
