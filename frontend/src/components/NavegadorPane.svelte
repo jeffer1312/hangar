@@ -60,7 +60,40 @@
     aberta = u;
     atualizarNavUrl(navKey, u);
     void abrirNativo(u);
+    void importarSeNovo(u);
   }
+
+  // Login trazido do Chrome real (CDP). Automático por host, uma vez por carga da página; com o
+  // Chrome fechado, para até o próximo clique manual — senão cada URL nova viraria um erro igual.
+  let cookiesStatus = $state('');
+  const hostsImportados = new Set<string>();
+  let chromeFechado = false;
+  const hostLocal = (h: string) =>
+    /^(localhost|127\.|10\.|192\.168\.)/.test(h) || /\.(ts\.net|local)$/.test(h) || !h.includes('.');
+  function hostDe(u: string): string {
+    try { return new URL(u).hostname; } catch { return ''; }
+  }
+  async function importarCookies(u: string, manual: boolean) {
+    const host = hostDe(u);
+    if (!nativo?.importCookies || !host) return;
+    if (!manual && (hostLocal(host) || hostsImportados.has(host) || chromeFechado)) return;
+    hostsImportados.add(host);
+    if (manual) cookiesStatus = m.nav_cookies_buscando();
+    const r = await nativo.importCookies(navKey, host);
+    if (r.ok) {
+      chromeFechado = false;
+      if (manual || r.gravados > 0) cookiesStatus = m.nav_cookies_ok({ n: r.gravados });
+      return;
+    }
+    if (r.erro === 'chrome_fechado') {
+      chromeFechado = true;
+      hostsImportados.delete(host);   // volta a tentar quando o Chrome abrir e a pessoa clicar
+      if (manual) cookiesStatus = m.nav_cookies_chrome_fechado();
+      return;
+    }
+    if (manual) cookiesStatus = m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
+  }
+  const importarSeNovo = (u: string) => importarCookies(u, false);
 
   // URL empurrada de fora (o agente, via `hangar-preview open`): o store é a via de entrada; se
   // ela difere da aberta, navega. O ir() do usuário escreve no store junto, então não há loop.
@@ -70,6 +103,7 @@
       endereco = externa;
       aberta = externa;
       void abrirNativo(externa);
+      void importarSeNovo(externa);
     }
   });
 
@@ -134,6 +168,15 @@
       aria-label={m.nav_recarregar()}
       title={m.nav_recarregar()}
     >↻</button>
+    {#if nativo?.importCookies}
+      <button
+        class="nav-btn"
+        onclick={() => void importarCookies(aberta, true)}
+        disabled={!aberta}
+        aria-label={m.nav_cookies_trazer()}
+        title={m.nav_cookies_trazer()}
+      >🍪</button>
+    {/if}
     <!-- O × fecha o navegador DE VERDADE (mata o view) e volta pra aba Contexto — esconder sem
          fechar é trocar de aba. -->
     <button
@@ -143,6 +186,9 @@
       title={m.shell_fechar_painel()}
     >×</button>
   </header>
+  {#if cookiesStatus}
+    <p class="nav-status" role="status">{cookiesStatus}</p>
+  {/if}
 
   {#if nativo}
     <!-- O âncora precisa existir MESMO vazio: é ele que o ResizeObserver mede pro shell. -->
@@ -198,6 +244,7 @@
   }
   .nav-btn:hover:not(:disabled) { background: var(--surface-raised); }
   .nav-btn:disabled { opacity: 0.4; cursor: default; }
+  .nav-status { margin: 0; padding: 2px var(--space-3) 4px; font-size: var(--text-xs); color: var(--text-muted); }
   .nav-body { flex: 1; min-height: 0; display: grid; place-items: center; }
   .nav-frame { border: 0; width: 100%; height: 100%; display: block; }
   .nav-hint { opacity: 0.55; font-size: var(--text-sm); padding: var(--space-4); text-align: center; }

@@ -17,6 +17,9 @@ export type NavNativo = {
   bounds: (chave: string, b: NavBounds) => void;
   reload: (chave: string) => void;
   close: (chave: string) => void;
+  /** Cookies do Chrome real (CDP) pro view. Opcional: shell antigo não tem. Nunca rejeita. */
+  importCookies?: (chave: string, host: string, porta?: number) =>
+    Promise<{ ok: boolean; gravados: number; falhos: number; erro?: string; detalhe?: string }>;
 };
 
 export function navegadorNativo(): NavNativo | undefined {

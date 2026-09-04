@@ -37,6 +37,16 @@ systemd-run --user --collect --unit=cockpit-shell \
 systemctl --user stop cockpit-shell     # fechar
 ```
 
+## Login do Chrome no navegador embutido
+
+O navegador embutido guarda cookies numa partição persistente (`persist:nav`): site que aceita o
+login continua logado nas próximas aberturas. O que barra é a **tela de login** do Google e afins,
+que recusa navegador com depuração ligada. O botão 🍪 do painel (e a importação automática ao abrir
+um host novo) traz os cookies do seu Chrome real por CDP — já decifrados, sem ler o arquivo
+`Cookies` do perfil. Precisa do Chrome aberto com `google-chrome-stable --remote-debugging-port=9222`
+(porta trocável em `settings.json` do userData, campo `chromeCdpPort`). Cookie do Google expira e
+rotaciona: quando cair, clique de novo.
+
 ## Desfoque atrás da janela
 
 A transparência é do app; o **desfoque** é do compositor, e o app não mexe na sua configuração.

@@ -30,5 +30,7 @@ contextBridge.exposeInMainWorld('hangar', {
     bounds: (chave, b) => ipcRenderer.send('hangar:nav-bounds', { chave, bounds: b }),
     reload: (chave) => ipcRenderer.send('hangar:nav-reload', { chave }),
     close: (chave) => ipcRenderer.send('hangar:nav-close', { chave }),
+    // Cookies do Chrome real (CDP) -> partição do view. Resolve sempre; erro vem no objeto.
+    importCookies: (chave, host, porta) => ipcRenderer.invoke('hangar:nav-import-cookies', { chave, host, porta }),
   },
 });

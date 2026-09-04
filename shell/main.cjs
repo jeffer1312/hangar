@@ -1,5 +1,5 @@
 // Janela nativa do hangar. Ver docs/superpowers/specs/2026-08-05-shell-electron-design.md.
-const { app, BrowserWindow, WebContentsView, dialog, ipcMain, screen, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, dialog, ipcMain, screen, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -7,6 +7,7 @@ const { ler, gravar } = require('./settings.cjs');
 const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar } = require('./navegador.cjs');
 const { criarControlador } = require('./preview_ctl.cjs');
 const { commitDoCheckout } = require('./versao.cjs');
+const { importarCookiesDoChrome } = require('./cookies_chrome.cjs');
 
 // Lido UMA vez, na subida: é o código que este processo de fato carregou, e é isso que a tela de
 // atualização compara com o commit atualizado pra saber se "feche e abra o Hangar" ainda vale.
@@ -507,6 +508,27 @@ ipcMain.on('hangar:nav-hide', (ev, { chave } = {}) => {
 ipcMain.on('hangar:nav-bounds', (ev, { chave, bounds } = {}) => {
   const view = viewDe(ev, chave);
   if (view) view.setBounds(normalizaBounds(bounds));
+});
+
+// Cookies do Chrome real -> partição do navegador embutido. Nunca rejeita: o front lê `erro`.
+// Porta: argumento > `chromeCdpPort` das configurações > 9222.
+ipcMain.handle('hangar:nav-import-cookies', async (ev, { chave, host, porta } = {}) => {
+  if (!host) return { ok: false, gravados: 0, falhos: 0, erro: 'sem_host' };
+  const p = porta || ler(app.getPath('userData')).chromeCdpPort || 9222;
+  let cookies;
+  try {
+    cookies = await importarCookiesDoChrome({ porta: p, dominio: host });
+  } catch (e) {
+    return { ok: false, gravados: 0, falhos: 0, erro: e.code || 'cdp', detalhe: e.message };
+  }
+  const ses = session.fromPartition('persist:nav');
+  let gravados = 0, falhos = 0;
+  for (const c of cookies) {
+    try { await ses.cookies.set(c); gravados++; } catch { falhos++; }
+  }
+  const view = viewDe(ev, chave);
+  if (view && gravados) view.webContents.reload();
+  return { ok: true, gravados, falhos };
 });
 
 ipcMain.on('hangar:nav-reload', (ev, { chave } = {}) => {
