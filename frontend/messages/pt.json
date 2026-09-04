@@ -397,6 +397,7 @@
   "sessao_fechar": "Fechar",
   "toast_copiar": "Copiar o erro",
   "toast_copiado": "Copiado",
+  "toast_copiar_falhou": "Não deu pra copiar (o navegador não liberou a área de transferência) — selecione o texto.",
   "sessao_poe_stash": "põe elas no stash (recupera com “pop” na aba Git).",
   "sessao_sem_previa": "(sem prévia)",
   "board_vazio": "vazio",

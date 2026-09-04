@@ -1049,16 +1049,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   {@const rotulo = sep > 0 && sep < 40 ? menuMsg.slice(0, sep) : ''}
   {@const corpo = rotulo ? menuMsg.slice(sep + 2) : menuMsg}
   <!-- Mouse em cima segura o toast (o erro sumia antes de dar pra ler ou copiar). -->
-  <div class="menu-toast" role="status"
-       onmouseenter={() => clearTimeout(flashTimer)}
-       onmouseleave={() => { flashTimer = setTimeout(() => { menuMsg = ''; }, 3000); }}>
-    <span class="toast-texto">
+  <div class="menu-toast"
+       onpointerenter={() => clearTimeout(flashTimer)}
+       onpointerleave={() => { clearTimeout(flashTimer); flashTimer = setTimeout(() => { menuMsg = ''; }, 3000); }}>
+    <span class="toast-texto" role="status">
       {#if rotulo}<span class="toast-rotulo">{rotulo}</span>{/if}
       <span class="toast-corpo">{corpo}</span>
     </span>
     <span class="toast-acoes">
+      <!-- Sem clipboard (HTTP puro na LAN) a promessa rejeita: avisa, em vez de clique mudo. -->
       <button type="button" class="toast-bt" title={m.toast_copiar()} aria-label={m.toast_copiar()}
-              onclick={() => { void navigator.clipboard?.writeText(menuMsg).then(() => flash(m.toast_copiado())); }}>⧉</button>
+              onclick={() => { const txt = menuMsg; void (navigator.clipboard?.writeText(txt) ?? Promise.reject(new Error('sem clipboard')))
+                .then(() => flash(m.toast_copiado()), () => flash(m.toast_copiar_falhou())); }}>⧉</button>
       <button type="button" class="toast-bt" title={m.sessao_fechar()} aria-label={m.sessao_fechar()}
               onclick={() => { menuMsg = ''; }}>✕</button>
     </span>

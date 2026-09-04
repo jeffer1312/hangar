@@ -397,6 +397,7 @@
   "sessao_fechar": "Close",
   "toast_copiar": "Copy the error",
   "toast_copiado": "Copied",
+  "toast_copiar_falhou": "Couldn't copy (the browser didn't grant the clipboard) — select the text instead.",
   "sessao_poe_stash": "puts them in the stash (recover with \"pop\" in the Git tab).",
   "sessao_sem_previa": "(no preview)",
   "board_vazio": "empty",
