@@ -648,6 +648,8 @@
   "preview_parar": "stop",
   "preview_reduzir_curto": "⤢ shrink",
   "preview_maior": "⛶ enlarge",
+  "preview_navegador_sessao": "session browser",
+  "preview_navegador_abrir": "open here",
   "ctx_navegador": "Browser",
   "nav_url_dica": "Address (e.g. localhost:3000)",
   "nav_vazio": "Type an address above to open it here",

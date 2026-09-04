@@ -648,6 +648,8 @@
   "preview_parar": "parar",
   "preview_reduzir_curto": "⤢ reduzir",
   "preview_maior": "⛶ maior",
+  "preview_navegador_sessao": "navegador da sessão",
+  "preview_navegador_abrir": "abrir aqui",
   "ctx_navegador": "Navegador",
   "nav_url_dica": "Endereço (ex.: localhost:3000)",
   "nav_vazio": "Digite um endereço acima para abrir aqui dentro",

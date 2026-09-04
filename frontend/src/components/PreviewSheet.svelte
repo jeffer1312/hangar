@@ -2,13 +2,39 @@
 import BottomSheet from './BottomSheet.svelte';
 import * as m from '../paraglide/messages';
   import ModalDialog from './ModalDialog.svelte';
-  import { getPreview, startPreview, stopPreview } from '../lib/api';
+  import { getNavegadorDaSessao, getPreview, startPreview, stopPreview } from '../lib/api';
 
   interface Props {
     open: boolean;
+    sessionName?: string;
     onClose: () => void;
   }
-  let { open, onClose }: Props = $props();
+  let { open, sessionName = '', onClose }: Props = $props();
+
+  // Navegador embutido da sessão (app desktop): só entra no atalho quando aponta pra uma porta
+  // local — o túnel só alcança esta máquina; URL externa (google.com) não tem como passar por ele.
+  let navUrl = $state('');
+  let navPorta = $state<number | null>(null);
+  let navPath = $state('/');
+  async function lerNavegador() {
+    navUrl = ''; navPorta = null; navPath = '/';
+    if (!sessionName) return;
+    try {
+      const u = (await getNavegadorDaSessao(sessionName)).url;
+      if (!u) return;
+      const p = new URL(u);
+      if (!['localhost', '127.0.0.1'].includes(p.hostname)) return;
+      navUrl = u;
+      navPorta = p.port ? Number(p.port) : 80;
+      navPath = p.pathname + p.search + p.hash;
+    } catch { /* sem navegador ou fora do app desktop */ }
+  }
+  async function abrirNavegador() {
+    if (navPorta == null) return;
+    port = String(navPorta);
+    await openTunnel();
+    if (url) url = url.replace(/\/$/, '') + navPath;
+  }
 
   let port = $state('3000');    // porta local digitada
   let url = $state('');         // url do túnel ativo ('' = nenhum -> mostra o formulário)
@@ -24,7 +50,7 @@ import * as m from '../paraglide/messages';
 
   // Ao abrir: consulta o túnel atual (pode já haver um preview no ar de antes). Fechar não mexe.
   $effect(() => {
-    if (open) { error = ''; refresh(); }
+    if (open) { error = ''; refresh(); lerNavegador(); }
   });
 
   async function refresh() {
@@ -89,6 +115,13 @@ import * as m from '../paraglide/messages';
       <h2 class="pv-title">{m.preview_titulo()}</h2>
       <p class="pv-sub">{m.preview_descricao()}</p>
     </div>
+
+    {#if navUrl}
+      <div class="pv-bar">
+        <span class="pv-url" title={navUrl}>{m.preview_navegador_sessao()} · {navUrl}</span>
+        <button class="pv-ext" disabled={busy} onclick={abrirNavegador}>{m.preview_navegador_abrir()}</button>
+      </div>
+    {/if}
 
     <div class="pv-form">
       <input

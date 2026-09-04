@@ -2179,7 +2179,7 @@
 
   <CodexLimitsSheet open={limitsOpen} {sessionName} onClose={() => (limitsOpen = false)} />
 
-  <PreviewSheet open={previewOpen} onClose={() => (previewOpen = false)} />
+  <PreviewSheet open={previewOpen} {sessionName} onClose={() => (previewOpen = false)} />
 
   <ActivitySheet open={activityOpen} {activity} {sessionName} onClose={() => (activityOpen = false)}
     showPlan={!desktop} session={planSession} {planDetail} {planLoading} {planError} />

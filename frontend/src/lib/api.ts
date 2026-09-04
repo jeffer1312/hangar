@@ -1783,6 +1783,11 @@ export function stopPreview(): Promise<PreviewState> {
   return apiFetch('/api/preview', { method: 'DELETE' });
 }
 
+/** URL aberta no navegador embutido da sessão (app desktop). `null` = a sessão não tem navegador. */
+export function getNavegadorDaSessao(name: string): Promise<{ url: string | null }> {
+  return apiFetch(`/api/sessions/${encodeURIComponent(name)}/navegador`);
+}
+
 export function getRunners(name: string): Promise<RunnersResponse> {
   return apiFetch(`/api/sessions/${encodeURIComponent(name)}/runners`);
 }
