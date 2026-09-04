@@ -71,7 +71,10 @@ tire `snapshot` de novo antes de agir.
   sozinho). `sistema` volta ao tema real da máquina.
 - `hangar-preview console [--limpar]` — log do console da página (`console.log`/`warn`/`error` e
   erros de runtime). `--limpar` esvazia o buffer depois de ler.
-- `hangar-preview network` — últimas respostas de rede (status + URL).
+- `hangar-preview network` — últimas respostas de rede (status + URL). A escuta de rede só liga na
+  **primeira** chamada de `network` ou de `wait --idle` (custa CPU o tempo todo, então não fica
+  ligada à toa): a primeira leitura devolve pouco ou nada, e o buffer só enxerga daí pra frente.
+  Quer ver as requisições de um clique? Chame `network` uma vez ANTES do clique.
 - `hangar-preview url` — URL atual.
 - `hangar-preview shot [arq.png]` — screenshot; default `/tmp/hangar-preview-<sessao>.png`. Leia o
   PNG com a ferramenta de leitura de imagem.
@@ -99,7 +102,9 @@ hangar-preview wait 800                 # ms fixo — só quando nada acima serv
 `--idle` **não** é "a página respondeu" — é rede parada de verdade: zero requisição em voo, mais
 500ms de silêncio depois da última resposta, mais `document.readyState === 'complete'`. Uma SPA que
 dispara um fetch logo após a navegação (dashboard carregando dados) só passa no `--idle` depois
-desse fetch terminar, que é o ponto que importa pro agente.
+desse fetch terminar, que é o ponto que importa pro agente. A escuta de rede liga no primeiro
+`--idle` (ou `network`) da sessão, e o silêncio conta a partir dali — o primeiro `--idle` leva pelo
+menos 500ms mesmo em página parada, e uma requisição que já estava em voo antes dele não é vista.
 
 Todo `wait` tem teto (15s por padrão); estourar devolve `erro: wait ... nao aconteceu em 15000ms`
 em vez de travar o comando pra sempre.

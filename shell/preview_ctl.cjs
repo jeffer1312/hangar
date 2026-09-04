@@ -23,22 +23,40 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
     if (lista.length > teto) lista.shift();
   };
 
-  dbg.on('Runtime.consoleAPICalled', (_e, p) => {
-    const texto = (p.args || []).map((a) => (a.value !== undefined ? a.value : a.description || a.type)).join(' ');
-    guardar(console_, `${p.type}: ${texto}`, TETO_CONSOLE);
-  });
-  dbg.on('Log.entryAdded', (_e, p) => guardar(console_, `${p.entry.level}: ${p.entry.text}`, TETO_CONSOLE));
-  dbg.on('Network.requestWillBeSent', (_e, _p) => {
-    requisicoesEmVoo++;
-  });
-  dbg.on('Network.responseReceived', (_e, p) => {
-    requisicoesEmVoo = Math.max(0, requisicoesEmVoo - 1);
-    ultimaRede = Date.now();   // alimenta o `wait --idle` da Task 4
-    guardar(rede, `${p.response.status} ${p.response.url}`, TETO_REDE);
-  });
-  dbg.on('Network.loadingFailed', (_e, _p) => {
-    requisicoesEmVoo = Math.max(0, requisicoesEmVoo - 1);
-  });
+  // O depurador do Electron emite UM evento, 'message', com o método CDP como argumento — não
+  // um evento por método. `dbg.on('Network.responseReceived')` registra e nunca dispara.
+  const eventos = {
+    'Runtime.consoleAPICalled': (p) => {
+      const texto = (p.args || []).map((a) => (a.value !== undefined ? a.value : a.description || a.type)).join(' ');
+      guardar(console_, `${p.type}: ${texto}`, TETO_CONSOLE);
+    },
+    'Log.entryAdded': (p) => guardar(console_, `${p.entry.level}: ${p.entry.text}`, TETO_CONSOLE),
+    'Network.requestWillBeSent': () => { requisicoesEmVoo++; },
+    'Network.responseReceived': (p) => {
+      requisicoesEmVoo = Math.max(0, requisicoesEmVoo - 1);
+      ultimaRede = Date.now();
+      guardar(rede, `${p.response.status} ${p.response.url}`, TETO_REDE);
+    },
+    'Network.loadingFailed': () => { requisicoesEmVoo = Math.max(0, requisicoesEmVoo - 1); },
+  };
+  dbg.on('message', (_e, metodo, p) => { if (Object.hasOwn(eventos, metodo)) eventos[metodo](p); });
+
+  // Network e Accessibility custam o tempo todo (toda resposta de rede vai pro processo principal;
+  // a árvore de acessibilidade é mantida viva), então só entram na primeira vez que um verbo pede.
+  // Falha NÃO fica lembrada: a próxima chamada tenta de novo em vez de responder vazio pra sempre.
+  const ligados = new Map();
+  function ligar(dominio) {
+    if (!ligados.has(dominio)) {
+      const p = dbg.sendCommand(`${dominio}.enable`).then(() => {
+        if (dominio === 'Network') ultimaRede = Date.now();   // o silêncio do --idle conta daqui
+      }, (err) => {
+        ligados.delete(dominio);
+        throw new Error(`${dominio}.enable falhou: ${err && err.message ? err.message : err}`);
+      });
+      ligados.set(dominio, p);
+    }
+    return ligados.get(dominio);
+  }
 
   async function aplicarTema() {
     const valor = TEMAS[temaAtual] ?? '';
@@ -50,6 +68,9 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
   // refs apontam pra nós que já não existem. Os dois se resolvem no mesmo gancho.
   aoNavegar(async () => {
     refs = new Map();
+    // Requisição cancelada pela navegação nem sempre vira loadingFailed; sem zerar, o --idle
+    // ficaria preso até o teto na página nova.
+    requisicoesEmVoo = 0;
     if (temaAtual !== 'sistema') await aplicarTema();
   });
 
@@ -62,7 +83,9 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
   return {
     enfileirar,
     refDe: (ref) => (refs.has(ref) ? refs.get(ref) : null),
+    ligar,
     async snapshot() {
+      await ligar('Accessibility');
       const { nodes } = await dbg.sendCommand('Accessibility.getFullAXTree');
       const compacto = compactarAX(nodes || []);
       refs = compacto.refs;
@@ -79,7 +102,7 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
       if (limpar) console_.length = 0;
       return saida;
     },
-    rede: () => rede.join('\n'),
+    async rede() { await ligar('Network'); return rede.join('\n'); },
     capturarPagina,
     fechar() { console_.length = 0; rede.length = 0; refs = new Map(); },
     // Ref VELHA e ref INEXISTENTE dão no mesmo lugar de propósito: o `backendDOMNodeId` morre em
@@ -159,6 +182,9 @@ function criarControlador({ dbg, capturarPagina, aoNavegar, tetoEspera = 15000 }
         await new Promise((r) => setTimeout(r, Number(alvo)));
         return `ok: wait ${alvo}ms`;
       }
+      // Antes do laço, não dentro do cheque: o cheque tem teto de 100ms e um enable lento
+      // viraria "não aconteceu" sem a rede nunca ter sido observada.
+      if (alvo === '--idle') await ligar('Network');
       const limite = Date.now() + tetoEspera;
       const cheque = async () => {
         if (String(alvo).startsWith('@')) { await this.snapshot(); return refs.has(alvo); }

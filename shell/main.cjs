@@ -449,7 +449,9 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     try {
       const dbg = view.webContents.debugger;
       if (!dbg.isAttached()) dbg.attach('1.3');
-      for (const dominio of ['Runtime.enable', 'Log.enable', 'Network.enable', 'DOM.enable', 'Accessibility.enable']) {
+      // Network e Accessibility ficam de fora de propósito: o controlador os liga no primeiro
+      // verbo que precisa (são os dois que custam CPU o tempo todo, mesmo sem ninguém dirigir).
+      for (const dominio of ['Runtime.enable', 'Log.enable', 'DOM.enable']) {
         dbg.sendCommand(dominio).catch(() => {});
       }
       controladores.set(chave, { ctl: criarControlador({

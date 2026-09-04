@@ -7,7 +7,8 @@ function dubleDbg(respostas = {}) {
   const ouvintes = new Map();
   return {
     chamadas,
-    emitir: (ev, p) => (ouvintes.get(ev) || []).forEach((cb) => cb(null, p)),
+    // Mesma forma do Electron: um só evento 'message' com (event, método, params).
+    emitir: (ev, p) => (ouvintes.get('message') || []).forEach((cb) => cb(null, ev, p)),
     on: (ev, cb) => ouvintes.set(ev, [...(ouvintes.get(ev) || []), cb]),
     sendCommand: async (m, p) => { chamadas.push([m, p]); return respostas[m] ?? {}; },
   };
@@ -70,7 +71,7 @@ test('rede guarda no maximo o teto e devolve as ultimas', async () => {
   const dbg = dubleDbg();
   const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
   for (let i = 0; i < 250; i++) dbg.emitir('Network.responseReceived', { response: { status: 200, url: `http://ex.com/r${i}` } });
-  const saida = ctl.rede();
+  const saida = await ctl.rede();
   assert.equal(saida.split('\n').length, 200);
   assert.match(saida, /r249/);
   assert.doesNotMatch(saida, /r49\b/);
@@ -309,4 +310,53 @@ test('wait --idle detecta requisição em voo e bloqueia', async () => {
   await new Promise((r) => setTimeout(r, 520)); // um pouco além de 500ms
   const saida = await promiseWait;
   assert.match(saida, /^ok: wait/);
+});
+
+test('criar o controlador NAO liga Network nem Accessibility', () => {
+  const dbg = dubleDbg();
+  criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  assert.deepEqual(dbg.chamadas.filter(([m]) => m.endsWith('.enable')), []);
+});
+
+test('snapshot liga Accessibility na primeira chamada, antes da arvore, e nunca de novo', async () => {
+  const dbg = dubleDbg({ 'Accessibility.getFullAXTree': { nodes: [] } });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await ctl.snapshot();
+  await ctl.snapshot();
+  const metodos = dbg.chamadas.map(([m]) => m);
+  assert.deepEqual(metodos, ['Accessibility.enable', 'Accessibility.getFullAXTree', 'Accessibility.getFullAXTree']);
+});
+
+test('network e wait --idle compartilham UM Network.enable', async () => {
+  const dbg = dubleDbg({ 'Runtime.evaluate': { result: { value: 'complete' } } });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {}, tetoEspera: 1500 });
+  await ctl.rede();
+  await new Promise((r) => setTimeout(r, 520));
+  assert.match(await ctl.esperar(['--idle']), /^ok: wait/);
+  await ctl.rede();
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Network.enable').length, 1);
+});
+
+test('wait --idle liga Network e o silencio conta a partir do ligamento', async () => {
+  const dbg = dubleDbg({ 'Runtime.evaluate': { result: { value: 'complete' } } });
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {}, tetoEspera: 1500 });
+  await new Promise((r) => setTimeout(r, 600));   // controlador velho, rede nunca observada
+  const inicio = Date.now();
+  assert.match(await ctl.esperar(['--idle']), /^ok: wait/);
+  assert.ok(Date.now() - inicio >= 500, 'nao pode dizer "parada" sobre uma rede que acabou de comecar a observar');
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Network.enable').length, 1);
+});
+
+test('enable que falha vira erro nomeado no verbo, e a proxima chamada tenta de novo', async () => {
+  let falhas = 1;
+  const dbg = dubleDbg({ 'Accessibility.getFullAXTree': { nodes: [] } });
+  const original = dbg.sendCommand;
+  dbg.sendCommand = async (m, p) => {
+    if (m === 'Accessibility.enable' && falhas-- > 0) { dbg.chamadas.push([m, p]); throw new Error('Target closed'); }
+    return original(m, p);
+  };
+  const ctl = criarControlador({ dbg, capturarPagina: async () => Buffer.alloc(0), aoNavegar: () => {} });
+  await assert.rejects(() => ctl.snapshot(), /Accessibility\.enable falhou: Target closed/);
+  await ctl.snapshot();
+  assert.equal(dbg.chamadas.filter(([m]) => m === 'Accessibility.enable').length, 2);
 });
