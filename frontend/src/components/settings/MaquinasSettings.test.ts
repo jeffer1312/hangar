@@ -862,3 +862,32 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(t.comp);
   });
 });
+
+describe('MaquinasSettings — ordem dos blocos', () => {
+  it('esta máquina vem antes das que ela alcança, e os servidores deste aparelho por último', async () => {
+    const { el, comp } = montar();
+    await tick();
+    const texto = el.textContent ?? '';
+    const esta = texto.indexOf(m.peers_esta_maquina());
+    const alcance = texto.indexOf(m.peers_secao_alcance());
+    const aparelho = texto.indexOf(m.maquinas_este_aparelho());
+    expect(esta).toBeGreaterThanOrEqual(0);
+    expect(esta).toBeLessThan(alcance);
+    expect(alcance).toBeLessThan(aparelho);
+    expect(texto).toContain(m.maquinas_este_aparelho_legenda());
+    unmount(comp);
+  });
+
+  it('sem servidor resolvido, só o bloco deste aparelho aparece', async () => {
+    authMock.listServers.mockReturnValue([]);
+    authMock.getActiveId.mockReturnValue(null);
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const comp = mount(MaquinasSettings, { target: el, props: { resolvedServer: null, apiTarget: null, onPickTarget: vi.fn(), onLogout: vi.fn(async () => {}) } });
+    await tick();
+    expect(el.textContent).not.toContain(m.peers_esta_maquina());
+    expect(el.textContent).not.toContain(m.peers_secao_alcance());
+    expect(el.textContent).toContain(m.maquinas_este_aparelho());
+    unmount(comp as never);
+  });
+});

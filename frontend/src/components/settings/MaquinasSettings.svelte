@@ -410,6 +410,110 @@
 {#if avisoRemocao}<p class="ss-aviso" role="status">{avisoRemocao}</p>{/if}
 {#if logoutMsg}<p class="ss-aviso" role="status">{logoutMsg}</p>{/if}
 
+{#if resolvedServer}
+  <!-- Bloco 1: esta máquina — como ela se chama para as outras, por onde responde, QR.
+       Identificador (Task 5): é o CP_SERVER_ID, gravado no .env — o mesmo que o hangar-send usa
+       no endereço de resposta srv::sessao. Vazio = pareamento entre servidores recusado. -->
+  <p class="ss-secao">{m.peers_esta_maquina()}</p>
+  {#if !identificador}
+    <p class="ss-legenda">{m.peers_legenda_identificador()}</p>
+    <p class="id-aviso">{m.peers_aviso_nao_definido()}</p>
+  {/if}
+  <div class="id-linha">
+    <span class="id-rot">{m.peers_identificador()}
+      {#if identificador}
+        <small>{m.peers_identificador_definido({ nome: identificador })}</small>
+      {:else}
+        <small>{ID_DICA()}</small>
+      {/if}
+    </span>
+    <input class="id-campo" class:vazio={!identificador} bind:value={identificador}
+           placeholder={m.peers_identificador_placeholder()}
+           aria-label={m.peers_identificador()}
+           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+           disabled={!idCarregado}
+           readonly={idSalvando}
+           onkeydown={(e) => { idErro = ''; if (e.key === 'Enter' && !idSalvando) salvarIdentificador(); }}
+           onblur={salvarIdentificador} />
+  </div>
+  {#if idErro}<p class="id-erro" role="alert">{idErro}</p>{/if}
+
+  <AcessoSettings alvo={resolvedServer} />
+
+  <div class="ss-sep"></div>
+  <!-- Bloco 2: máquinas que este servidor alcança (Task 5): a lista do peers.json. O estado das
+       duas pontas (testar/liga) é da Task 8 — aqui se mostra e se edita o vínculo local. -->
+  <p class="ss-secao">{m.peers_secao_alcance()}</p>
+  {#if peers.length}
+    <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
+    <div class="pr-cartao">
+      {#each peers as peer (peer.id)}
+        {@const st = estados[peer.id]}
+        {@const ida = st?.lados.find((l) => l.lado === 'ida')}
+        {@const volta = st?.lados.find((l) => l.lado === 'volta')}
+        {@const ok = ida?.estado === 'ok' && volta?.estado === 'ok'}
+        {@const meio = st && !ok}
+        <div class="pr-linha">
+          <span class="pr-farol" class:ok class:nao={meio} class:test={!st}>
+            {st ? (ok ? '●' : '◌') : '◌'}
+          </span>
+          <span class="pr-txt">
+            <span class="pr-nome">{peer.id}</span>
+            <span class="pr-url">{peer.base_url}</span>
+            {#if st}
+              {#if ok}
+                <span class="pr-estado ok">{m.peers_estado_ok()}</span>
+              {:else}
+                <span class="pr-estado nao">{m.peers_estado_parcial()}</span>
+              {/if}
+            {:else}
+              <span class="pr-estado neutro">{m.peers_estado_testando()}</span>
+            {/if}
+          </span>
+          {#if st}
+            <span class="pr-lados">
+          <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>{selo(ida)} {m.peers_lado_ida()}</span>
+              <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>{selo(volta)} {m.peers_lado_volta()}</span>
+            </span>
+          {/if}
+          <button class="pr-btn min" onclick={() => (removerPeerId = peer.id)}>{m.peers_remover()}</button>
+        </div>
+        {#if st && !ok && corrigeId === peer.id}
+          <div class="corrige">
+            <p>
+              {m.peers_corrige_1({ nome: peer.id, endereco: peer.base_url })}
+            </p>
+            <p><b>{m.peers_corrige_pergunta({ nome: peer.id })}</b></p>
+            <input class="corrige-input" bind:value={corrigeUrl} aria-label={m.peers_corrige_pergunta({ nome: peer.id })} />
+            <div class="acoes">
+              <button class="btn primaria" onclick={() => testarDeNovo(peer)}>{m.peers_testar_novamente()}</button>
+              <button class="btn" onclick={() => fecharCorrige()}>{m.peers_so_ida()}</button>
+            </div>
+          </div>
+        {/if}
+      {/each}
+    </div>
+  {:else if peersCarregando}
+    <p class="ss-legenda">{m.comum_carregando()}</p>
+  {:else if identificador}
+    <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
+  {:else}
+    <p class="ss-legenda">{m.peers_vazio()}</p>
+  {/if}
+  {#if identificador}
+    <div class="pr-acoes">
+      <button class="pr-btn primaria" onclick={abrirRegistro}>{m.peers_registrar()}</button>
+    </div>
+  {/if}
+  {#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
+
+  <div class="ss-sep"></div>
+{/if}
+
+<!-- Bloco 3: os servidores que ESTE navegador conhece. Fora do {#if}: é por aqui que se cadastra
+     o primeiro, e é a única saída quando o ativo morreu. -->
+<p class="ss-secao">{m.maquinas_este_aparelho()}</p>
+<p class="ss-legenda">{m.maquinas_este_aparelho_legenda()}</p>
 <ServerManager
   {servers}
   targetId={resolvedServer?.id ?? null}
@@ -420,114 +524,10 @@
   onRemove={abrirRemocao}
   onAdd={() => { showAdd = true; addUrlText = ''; addError = ''; }}
 />
-
-<div class="ss-sep"></div>
-<!-- Fronteira explícita: daqui pra baixo NADA vai pro servidor escolhido acima. Reconectar refaz as
-     conexões deste aparelho e Sair apaga os tokens guardados AQUI — em todos os servidores. Era o
-     que mais confundia: a tela misturava as duas coisas sem dizer qual era qual. -->
-<p class="ss-secao">{m.config_servidores_neste_aparelho()}</p>
 <div class="ss-acoes">
   <button class="ss-btn" onclick={() => sessionsStore.reconnect()} disabled={logoutInFlight}>{m.config_servidores_reconectar()}</button>
   <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)} disabled={logoutInFlight}>{m.sessao_sair_curto()}</button>
 </div>
-
-<div class="ss-sep"></div>
-<!-- Identificador desta máquina (Task 5): é o CP_SERVER_ID, gravado no .env — o mesmo que o
-     hangar-send usa no endereço de resposta srv::sessao. Vazio = pareamento entre servidores recusado. -->
-<p class="ss-secao">{m.peers_esta_maquina()}</p>
-{#if !identificador}
-  <p class="ss-legenda">{m.peers_legenda_identificador()}</p>
-  <p class="id-aviso">{m.peers_aviso_nao_definido()}</p>
-{/if}
-<div class="id-linha">
-  <span class="id-rot">{m.peers_identificador()}
-    {#if identificador}
-      <small>{m.peers_identificador_definido({ nome: identificador })}</small>
-    {:else}
-      <small>{ID_DICA()}</small>
-    {/if}
-  </span>
-  <input class="id-campo" class:vazio={!identificador} bind:value={identificador}
-         placeholder={m.peers_identificador_placeholder()}
-         aria-label={m.peers_identificador()}
-         autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
-         disabled={!idCarregado}
-         readonly={idSalvando}
-         onkeydown={(e) => { idErro = ''; if (e.key === 'Enter' && !idSalvando) salvarIdentificador(); }}
-         onblur={salvarIdentificador} />
-</div>
-{#if idErro}<p class="id-erro" role="alert">{idErro}</p>{/if}
-
-{#if resolvedServer}
-  <AcessoSettings alvo={resolvedServer} />
-{/if}
-
-<div class="ss-sep"></div>
-<!-- Máquinas que este servidor alcança (Task 5): a lista do peers.json. O estado das duas pontas
-     (testar/liga) é da Task 8 — aqui se mostra e se edita o vínculo local. -->
-<p class="ss-secao">{m.peers_secao_alcance()}</p>
-{#if peers.length}
-  <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
-  <div class="pr-cartao">
-    {#each peers as peer (peer.id)}
-      {@const st = estados[peer.id]}
-      {@const ida = st?.lados.find((l) => l.lado === 'ida')}
-      {@const volta = st?.lados.find((l) => l.lado === 'volta')}
-      {@const ok = ida?.estado === 'ok' && volta?.estado === 'ok'}
-      {@const meio = st && !ok}
-      <div class="pr-linha">
-        <span class="pr-farol" class:ok class:nao={meio} class:test={!st}>
-          {st ? (ok ? '●' : '◌') : '◌'}
-        </span>
-        <span class="pr-txt">
-          <span class="pr-nome">{peer.id}</span>
-          <span class="pr-url">{peer.base_url}</span>
-          {#if st}
-            {#if ok}
-              <span class="pr-estado ok">{m.peers_estado_ok()}</span>
-            {:else}
-              <span class="pr-estado nao">{m.peers_estado_parcial()}</span>
-            {/if}
-          {:else}
-            <span class="pr-estado neutro">{m.peers_estado_testando()}</span>
-          {/if}
-        </span>
-        {#if st}
-          <span class="pr-lados">
-        <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>{selo(ida)} {m.peers_lado_ida()}</span>
-            <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>{selo(volta)} {m.peers_lado_volta()}</span>
-          </span>
-        {/if}
-        <button class="pr-btn min" onclick={() => (removerPeerId = peer.id)}>{m.peers_remover()}</button>
-      </div>
-      {#if st && !ok && corrigeId === peer.id}
-        <div class="corrige">
-          <p>
-            {m.peers_corrige_1({ nome: peer.id, endereco: peer.base_url })}
-          </p>
-          <p><b>{m.peers_corrige_pergunta({ nome: peer.id })}</b></p>
-          <input class="corrige-input" bind:value={corrigeUrl} aria-label={m.peers_corrige_pergunta({ nome: peer.id })} />
-          <div class="acoes">
-            <button class="btn primaria" onclick={() => testarDeNovo(peer)}>{m.peers_testar_novamente()}</button>
-            <button class="btn" onclick={() => fecharCorrige()}>{m.peers_so_ida()}</button>
-          </div>
-        </div>
-      {/if}
-    {/each}
-  </div>
-{:else if peersCarregando}
-  <p class="ss-legenda">{m.comum_carregando()}</p>
-{:else if identificador}
-  <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
-{:else}
-  <p class="ss-legenda">{m.peers_vazio()}</p>
-{/if}
-{#if identificador}
-  <div class="pr-acoes">
-    <button class="pr-btn primaria" onclick={abrirRegistro}>{m.peers_registrar()}</button>
-  </div>
-{/if}
-{#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
 
 {#if showAdd}
   <ConfirmDialog title={m.sessao_adicionar_servidor()} aria={m.sessao_adicionar_servidor()} role="dialog"

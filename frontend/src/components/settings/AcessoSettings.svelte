@@ -322,6 +322,10 @@
     {/if}
   </ul>
 
+  {#if !carregando && !erro && bind}
+    <p class="ac-legenda">{m.acesso_escuta_em({ ip: bind })}</p>
+  {/if}
+
   <hr class="ac-sep">
 
   <p class="ac-secao">{m.acesso_parear_titulo()}</p>
