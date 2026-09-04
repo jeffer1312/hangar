@@ -914,6 +914,28 @@ if (Test-Path "$shellDir\package.json") {
     } else {
         Ok 'janela nativa ja com as dependencias em dia'
     }
+    # Atalho no Menu Iniciar: sem ele o app so abre por `npm start` e ninguem descobre que a
+    # janela existe. Reescrito sempre (o caminho do checkout pode mudar). O icone vem do proprio
+    # electron.exe: o .lnk nao aceita PNG, e o build\icon.png so serve ao empacotador.
+    $electronExe = "$shellDir\node_modules\electron\dist\electron.exe"
+    if (Test-Path $electronExe) {
+        $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Hangar.lnk'
+        try {
+            $ws = New-Object -ComObject WScript.Shell
+            $atalho = $ws.CreateShortcut($lnk)
+            $atalho.TargetPath = $electronExe
+            $atalho.Arguments = 'main.cjs'
+            $atalho.WorkingDirectory = $shellDir
+            $atalho.IconLocation = "$electronExe,0"
+            $atalho.Description = 'Hangar'
+            $atalho.Save()
+        } catch { }
+        # Prova, nao anuncio: o Save() do COM falha calado com caminho estranho.
+        if (Test-Path $lnk) { Ok "Hangar no Menu Iniciar ($lnk)" }
+        else { Falta 'nao consegui criar o atalho Hangar.lnk no Menu Iniciar (abra com: cd shell ; npm start)' }
+    } else {
+        Falta "electron.exe nao encontrado em $electronExe - atalho do Menu Iniciar nao criado"
+    }
 }
 
 # -- 5/8 Wrapper do claude ---------------------------------------------------

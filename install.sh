@@ -330,6 +330,25 @@ if [ -d shell ] && [ -f shell/package.json ]; then
   else
     ok "janela nativa já com as dependências em dia"
   fi
+  # Registro no lançador: o `.desktop` do repo com o marcador trocado pelo caminho real. Sem isto
+  # o app só abre por `npm start` e ninguém descobre que a janela existe. Reescrito sempre — o
+  # caminho do checkout pode ter mudado, e o arquivo é nosso.
+  ELECTRON_BIN=shell/node_modules/electron/dist/electron
+  if [ -x "$ELECTRON_BIN" ]; then
+    APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+    mkdir -p "$APPS_DIR"
+    sed "s|__SHELL_DIR__|$PWD/shell|g" shell/hangar.desktop > "$APPS_DIR/hangar.desktop"
+    if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$APPS_DIR" 2>/dev/null || true; fi
+    ok "Hangar registrado no lançador ($APPS_DIR/hangar.desktop)"
+    # Abre a janela ao fim de uma instalação interativa com sessão gráfica. Não no --update (o
+    # app já está aberto, é ele que chamou) nem sem TTY (provisionamento). Se já há um Hangar no
+    # ar, o Electron entrega a chamada pra instância viva em vez de abrir outra.
+    if [ "$TEM_TTY" = 1 ] && [ "$UPDATE" = 0 ] && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
+      ABRIR_SHELL=1
+    fi
+  else
+    falta "binário do Electron não encontrado em $ELECTRON_BIN — o lançador não foi registrado"
+  fi
 fi
 
 # ── 5/8 Wrappers do claude e do codex ────────────────────────────────────────
@@ -598,6 +617,11 @@ if [ ${#PROBLEMAS[@]} -gt 0 ]; then
   fi
 else
   say "Pronto"
+fi
+if [ "${ABRIR_SHELL:-0}" = 1 ]; then
+  # Destacado do instalador (setsid + sem stdio): fechar o terminal não leva a janela junto.
+  (cd shell && setsid ./node_modules/electron/dist/electron main.cjs </dev/null >/dev/null 2>&1 &)
+  ok "janela do Hangar aberta"
 fi
 PORTA_FIM=$(grep '^CP_PORT=' backend/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
 PORTA_FIM=${PORTA_FIM:-8765}
