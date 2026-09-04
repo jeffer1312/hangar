@@ -39,15 +39,13 @@ if [ ! -f "$SETTINGS" ] || [ ! -f "$INSTALLED" ]; then
 fi
 
 python3 - <<'PYEOF'
-import glob, json, os, re
+import json, os
 
 home = os.path.expanduser("~")
-cache_prefix = os.path.join(home, ".claude/plugins/cache")
 CLAUDE_MD = os.path.join(home, ".claude/CLAUDE.md")
 
 settings = json.load(open(os.path.join(home, ".claude/settings.json")))
 installed = json.load(open(os.path.join(home, ".claude/plugins/installed_plugins.json")))
-enabled = {k for k, v in settings.get("enabledPlugins", {}).items() if v}
 
 # Plugin que o Pi carrega como PACOTE em vez de skill em ponte, porque o package.json dele declara
 # um bloco `pi` (extensão + skills). O `superpowers` precisa disso: a extensão dele injeta o
@@ -58,18 +56,6 @@ PI_PACKAGES = {
     "superpowers@claude-plugins-official": "superpowers",
     "ponytail@ponytail": "ponytail",
 }
-# Plugin que NÃO deve entrar na ponte. Dois casos: o que já chega ao Pi por outro caminho (o
-# settings.json dele aponta direto pro marketplace) — bridgeá-lo de novo carregaria cada skill duas
-# vezes, com colisão de nome; e o de PI_PACKAGES, que traz as próprias skills dentro do pacote.
-#
-# O primeiro caso é por máquina, não do app: cada um tem os seus. Um por linha em
-# ~/.claude/skills-bridge-skip.txt, no formato `plugin@marketplace`; `#` comenta.
-skip_file = os.path.join(home, ".claude/skills-bridge-skip.txt")
-PI_SKIP = set(PI_PACKAGES)
-if os.path.isfile(skip_file):
-    with open(skip_file, encoding="utf-8") as fh:
-        PI_SKIP |= {ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")}
-
 # Eventos de hook que o Codex tem. MEDIDO em 29/08/2026 contra codex-cli 0.146.1, com uma sonda que
 # gravava o stdin: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop e SessionEnd
 # dispararam num turno real; os quatro restantes estão na enumeração do binário mas não tiveram
@@ -84,96 +70,19 @@ EVENTOS_CODEX = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse",
                  "Stop", "PermissionRequest", "PreCompact", "PostCompact",
                  "SubagentStart", "SubagentStop")
 
-def extra_skill_dirs_kimi():
-    """Os diretórios que o Kimi já varre sozinho, lidos do `extra_skill_dirs` do config dele.
-
-    Lido do arquivo e não escrito aqui porque a lista é da MÁQUINA (inclui os marketplaces de cada
-    um). A própria ponte sai da lista: contá-la faria toda skill já bridgeada aparecer como "ele já
-    tem", e a ponte congelava. Config ilegível cai no mínimo conhecido."""
-    try:
-        import tomllib
-        with open(os.path.join(home, ".kimi-code/config.toml"), "rb") as fh:
-            dirs = tomllib.load(fh).get("extra_skill_dirs") or []
-    except Exception:
-        return (".claude/skills",)
-    fora = os.path.join(home, ".kimi-code/skills-bridge")
-    out = []
-    for d in dirs:
-        d = os.path.expanduser(d).rstrip("/")
-        if d.startswith(home + os.sep) and d != fora:
-            out.append(os.path.relpath(d, home))
-    return tuple(out) or (".claude/skills",)
-
-
 # Um agente = uma entrada. `raiz` é o que decide se ele está instalado; `ponte` é onde entram os
-# symlinks de skill; `persona` é o nome com que ELE lê o CLAUDE.md (o Kimi e o Codex leem
-# AGENTS.md, o Pi lê CLAUDE.md); `ja_varre` são diretórios que o próprio agente já lê sozinho —
-# bridgeá-los de novo só produz colisão de nome.
+# symlinks de skill (quem os faz é a skill_bridge.py); `persona` é o nome com que ELE lê o
+# CLAUDE.md (o Kimi e o Codex leem AGENTS.md, o Pi lê CLAUDE.md).
 AGENTES = [
-    # `ja_varre` do Kimi sai do `extra_skill_dirs` dele, lido do config — não chumbado aqui: a
-    # lista tem os marketplaces de cada máquina. Sem isto a ponte duplicava as 22 skills pessoais,
-    # que ele já lê direto de ~/.claude/skills.
     {"nome": "kimi", "raiz": ".kimi-code", "ponte": ".kimi-code/skills-bridge",
-     "persona": "AGENTS.md", "ja_varre": extra_skill_dirs_kimi(),
-     "skip": frozenset(), "hooks": None},
-    # O Pi varre ~/.claude/skills sozinho e roda os hooks do Claude pelo adaptador nativo dele
-    # (~/.pi/agent/claude-hooks-adapter.json, com allowlist) — nada a gerar aqui.
+     "persona": "AGENTS.md", "hooks": None},
+    # O Pi roda os hooks do Claude pelo adaptador nativo dele (~/.pi/agent/claude-hooks-adapter.json,
+    # com allowlist) — nada a gerar aqui.
     {"nome": "pi", "raiz": ".pi/agent", "ponte": ".pi/agent/skills-bridge",
-     "persona": "CLAUDE.md", "ja_varre": (".claude/skills",), "skip": PI_SKIP, "hooks": None},
-    # O Codex varre ~/.agents/skills sozinho (inclusive seguindo os symlinks de lá pro repo de
-    # skills pessoais). O que falta são as de plugin.
+     "persona": "CLAUDE.md", "hooks": None},
     {"nome": "codex", "raiz": ".codex", "ponte": ".codex/skills",
-     "persona": "AGENTS.md", "ja_varre": (".agents/skills",), "skip": frozenset(),
-     "hooks": "hooks.json"},
+     "persona": "AGENTS.md", "hooks": "hooks.json"},
 ]
-
-
-def skill_name(d):
-    """Nome do frontmatter, caindo no nome do diretório — a mesma regra que o Pi usa."""
-    try:
-        with open(os.path.join(d, "SKILL.md"), encoding="utf-8") as fh:
-            for i, line in enumerate(fh):
-                if i > 40 or (i and line.strip() == "---"):
-                    break
-                m = re.match(r"^name:\s*(\S+)", line)
-                if m:
-                    return m.group(1)
-    except (OSError, UnicodeDecodeError):
-        pass
-    return os.path.basename(d)
-
-
-def skill_dirs(install_path):
-    """Um plugin traz skills/<nome>/SKILL.md, ou um SKILL.md único na raiz."""
-    if os.path.isfile(os.path.join(install_path, "SKILL.md")):
-        return [install_path]
-    return [d for d in sorted(glob.glob(os.path.join(install_path, "skills", "*")))
-            if os.path.isfile(os.path.join(d, "SKILL.md"))]
-
-
-def skills_de_dir(raiz):
-    """{nome: caminho} das skills soltas num diretório (o ~/.claude/skills e afins)."""
-    return {skill_name(d): d for d in sorted(glob.glob(os.path.join(raiz, "*")))
-            if os.path.isfile(os.path.join(d, "SKILL.md"))}
-
-
-def collect(plugins):
-    wanted = {}
-    for name, entries in installed.get("plugins", {}).items():
-        if name not in plugins:
-            continue
-        # O mesmo plugin pode estar instalado em mais de um config dir (~/.claude e
-        # ~/.claude-<conta>): quem sobrescreve é o ÚLTIMO, então a ordenação estável põe o do home
-        # principal por último e ele ganha. Sem isto as skills espelhadas para Pi, Kimi e Codex
-        # ficavam apontando para uma conta secundária — se ela limpa ou atualiza o cache dela, as
-        # skills somem dos outros agentes sem explicação. Empate (nenhum ou os dois sob o
-        # principal) segue resolvido pela última entrada, como sempre foi.
-        ordenadas = sorted(entries, key=lambda e: os.path.abspath(
-            e["installPath"]).startswith(cache_prefix + os.sep))
-        for e in ordenadas:
-            for d in skill_dirs(e["installPath"]):
-                wanted[skill_name(d)] = d
-    return wanted
 
 
 def ligar(link, target):
@@ -188,35 +97,6 @@ def ligar(link, target):
         return False
     os.symlink(target, link)
     return True
-
-
-def _nosso(alvo):
-    """Link que ESTE script cria — o único que ele pode remover; um posto à mão apontando pra
-    outro lugar não é nosso.
-
-    O cache de plugin conta em QUALQUER config dir do Claude (`~/.claude` e `~/.claude-<conta>`),
-    não só no principal: link pra conta secundária foi feito por nós antes do desempate de
-    `collect`, e reconhecer só o principal deixava-o parado pra sempre — foi o caso medido de um
-    plugin de marketplace no Kimi, que ele já varre sozinho e por isso nunca volta pro `wanted`."""
-    if alvo.startswith(os.path.join(home, ".claude/skills") + os.sep):
-        return True
-    return bool(re.match(re.escape(home + os.sep) + r"\.claude[^/]*/plugins/cache/", alvo))
-
-
-def sync(bridge, wanted):
-    os.makedirs(bridge, exist_ok=True)
-    for name, target in wanted.items():
-        ligar(os.path.join(bridge, name), target)
-    # Remove link de plugin desabilitado, apagado ou que mudou de versão. Conjunto vazio quase
-    # sempre significa que o JSON acima não disse nada (mudou de formato, arquivo ilegível) e quase
-    # nunca "todo plugin está desligado" — então não poda, em vez de esvaziar a ponte inteira por
-    # causa de uma surpresa de parse.
-    if not wanted:
-        return
-    for f in os.listdir(bridge):
-        link = os.path.join(bridge, f)
-        if os.path.islink(link) and _nosso(os.readlink(link)) and f not in wanted:
-            os.unlink(link)
 
 
 def _e_do_hangar(cmd):
@@ -306,7 +186,6 @@ def gravar_hooks(raiz, arquivo, eventos):
     return sum(len(g.get("hooks", [])) for gs in cfg.values() for g in gs), fora
 
 
-pessoais = skills_de_dir(os.path.join(home, ".claude/skills"))
 feito, avisos = [], []
 
 for ag in AGENTES:
@@ -314,14 +193,10 @@ for ag in AGENTES:
     if not os.path.isdir(raiz):
         continue
 
-    # Skills: as de plugin habilitado + as pessoais soltas em ~/.claude/skills, menos o que aquele
-    # agente já varre por conta própria (senão o nome colide e ele avisa duplicata).
-    wanted = dict(pessoais)
-    wanted.update(collect(enabled - set(ag["skip"])))
-    taken = set()
-    for d in ag["ja_varre"]:
-        taken |= set(skills_de_dir(os.path.join(home, d)))
-    sync(os.path.join(home, ag["ponte"]), {n: t for n, t in wanted.items() if n not in taken})
+    # Skills: NÃO é mais daqui. A ponte de skills é `backend/app/skill_bridge.py` (chamada no fim
+    # deste script); dois donos da mesma pasta se desfaziam a cada largada — esta poda apagava as
+    # 67 skills pessoais/marketplace que a ponte nova cria, e o Pi abria listando cada uma como
+    # "skill path does not exist".
 
     # Persona: o mesmo ~/.claude/CLAUDE.md, com o nome que cada agente procura.
     if os.path.isfile(CLAUDE_MD) and not ligar(os.path.join(raiz, ag["persona"]), CLAUDE_MD):
@@ -361,3 +236,7 @@ print("ponte: " + (", ".join(feito) if feito else "nenhum agente instalado, nada
 for a in avisos:
     print("  " + a)
 PYEOF
+
+# A ponte de skills de verdade (um link por skill, todas as fontes, só a versão mais nova de
+# cada plugin). stdlib-only, roda com o python3 do sistema.
+python3 "$REPO/backend/app/skill_bridge.py" --quiet || echo "  ⚠ ponte de skills falhou"
