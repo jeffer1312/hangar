@@ -514,12 +514,15 @@ ipcMain.on('hangar:nav-bounds', (ev, { chave, bounds } = {}) => {
 // Porta: argumento > `chromeCdpPort` das configurações > 9222.
 // 9226, não 9222: a 9222 costuma estar com um Chrome headless de automação (agent-browser), e
 // o Chrome real nem consegue a porta. O usuário nunca precisa saber o número — o botão abre.
-const PORTA_CHROME = () => ler(app.getPath('userData')).chromeCdpPort || 9226;
+// Porta SEMPRE inteiro: no Windows o spawn roda com `shell: true` e o valor vai numa linha de
+// comando — um settings.json adulterado ou um caller de IPC com "9226 & calc" executaria isso.
+const portaValida = (v) => (Number.isInteger(+v) && +v > 0 && +v < 65536 ? +v : null);
+const PORTA_CHROME = () => portaValida(ler(app.getPath('userData')).chromeCdpPort) || 9226;
 
 // Abre o Chrome do usuário (perfil normal) com a porta de depuração. Se já há um Chrome aberto
 // SEM a porta, o Chrome reaproveita o processo e a porta nunca sobe: o resultado diz isso.
 ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
-  const p = porta || PORTA_CHROME();
+  const p = portaValida(porta) || PORTA_CHROME();
   const { spawn } = require('child_process');
   const candidatos = process.platform === 'win32'
     ? ['chrome', 'msedge']
@@ -528,14 +531,16 @@ ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
       : ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser', 'brave'];
   let aberto = false;
   for (const bin of candidatos) {
-    try {
-      const ch = spawn(bin, [`--remote-debugging-port=${p}`], { detached: true, stdio: 'ignore',
-        ...(process.platform === 'win32' ? { shell: true } : {}) });
-      ch.on('error', () => {});
-      ch.unref();
-      aberto = true;
-      break;
-    } catch { /* tenta o próximo */ }
+    // ENOENT chega pelo evento `error`, não por exceção: esperar `spawn` é o que separa
+    // "sem Chrome instalado" de "Chrome já aberto sem a porta".
+    const ch = spawn(bin, [`--remote-debugging-port=${p}`], { detached: true, stdio: 'ignore',
+      ...(process.platform === 'win32' ? { shell: true } : {}) });
+    const nasceu = await new Promise((res) => {
+      ch.once('spawn', () => res(true));
+      ch.once('error', () => res(false));
+      setTimeout(() => res(false), 1500);
+    });
+    if (nasceu) { ch.unref(); aberto = true; break; }
   }
   if (!aberto) return { ok: false, porta: p, motivo: 'sem_binario' };
   for (let i = 0; i < 12; i++) {
@@ -548,9 +553,9 @@ ipcMain.handle('hangar:chrome-abrir', async (_ev, { porta } = {}) => {
   return { ok: false, porta: p, motivo: 'ja_aberto_sem_porta' };
 });
 
-ipcMain.handle('hangar:nav-import-cookies', async (ev, { chave, host, porta } = {}) => {
+ipcMain.handle('hangar:nav-import-cookies', async (ev, { chave, host, porta, recarregar = true } = {}) => {
   if (!host) return { ok: false, gravados: 0, falhos: 0, erro: 'sem_host' };
-  const p = porta || PORTA_CHROME();
+  const p = portaValida(porta) || PORTA_CHROME();
   let cookies;
   try {
     cookies = await importarCookiesDoChrome({ porta: p, dominio: host });
@@ -562,8 +567,10 @@ ipcMain.handle('hangar:nav-import-cookies', async (ev, { chave, host, porta } = 
   for (const c of cookies) {
     try { await ses.cookies.set(c); gravados++; } catch { falhos++; }
   }
+  // Reload só quando pedido: a importação automática roda em cima de uma navegação que pode ser
+  // do agente (hangar-preview) no meio de um formulário — recarregar ali jogaria o estado fora.
   const view = viewDe(ev, chave);
-  if (view && gravados) view.webContents.reload();
+  if (view && gravados && recarregar) view.webContents.reload();
   return { ok: true, gravados, falhos };
 });
 

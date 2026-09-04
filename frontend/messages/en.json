@@ -665,6 +665,7 @@
   "nav_cookies_trazer": "Bring login from Chrome",
   "nav_cookies_buscando": "Fetching the login from Chrome…",
   "nav_cookies_ok": "{n} cookies imported from Chrome",
+  "nav_cookies_ok_parcial": "{n} cookies imported from Chrome, {f} rejected by the embedded browser",
   "nav_cookies_chrome_fechado": "Your Chrome isn't open with the debugging port.",
   "nav_cookies_abrir_chrome": "Open Chrome",
   "nav_cookies_abrindo_chrome": "Opening Chrome…",

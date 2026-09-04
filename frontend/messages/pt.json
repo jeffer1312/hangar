@@ -665,6 +665,7 @@
   "nav_cookies_trazer": "Trazer login do Chrome",
   "nav_cookies_buscando": "Buscando o login no Chrome…",
   "nav_cookies_ok": "{n} cookies trazidos do Chrome",
+  "nav_cookies_ok_parcial": "{n} cookies trazidos do Chrome, {f} recusados pelo navegador embutido",
   "nav_cookies_chrome_fechado": "O seu Chrome não está aberto com a porta de depuração.",
   "nav_cookies_abrir_chrome": "Abrir o Chrome",
   "nav_cookies_abrindo_chrome": "Abrindo o Chrome…",

@@ -81,16 +81,22 @@
     if (manual) cookiesStatus = m.nav_cookies_buscando();
     // O invoke rejeita quando o shell é mais velho que este front (sem o handler) — sem o catch
     // o status ficava em "Buscando…" pra sempre.
-    const r = await nativo.importCookies(navKey, host).catch((e: unknown) =>
+    // Reload do view só no clique: o automático roda em cima de uma navegação que pode ser do
+    // agente, no meio de um formulário.
+    const r = await nativo.importCookies(navKey, host, undefined, manual).catch((e: unknown) =>
       ({ ok: false as const, gravados: 0, falhos: 0, erro: 'shell', detalhe: e instanceof Error ? e.message : String(e) }));
     if (r.ok) {
       chromeFechado = false;
-      if (manual || r.gravados > 0) cookiesStatus = m.nav_cookies_ok({ n: r.gravados });
+      if (manual || r.gravados > 0) {
+        cookiesStatus = r.falhos > 0
+          ? m.nav_cookies_ok_parcial({ n: r.gravados, f: r.falhos })
+          : m.nav_cookies_ok({ n: r.gravados });
+      }
       return;
     }
+    hostsImportados.delete(host);   // qualquer falha volta a tentar depois (a causa pode ser passageira)
     if (r.erro === 'chrome_fechado') {
       chromeFechado = true;
-      hostsImportados.delete(host);   // volta a tentar quando o Chrome abrir e a pessoa clicar
       if (manual) { cookiesStatus = m.nav_cookies_chrome_fechado(); ofereceAbrir = !!nativo.abrirChrome; }
       return;
     }
