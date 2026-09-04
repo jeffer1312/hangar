@@ -28,6 +28,9 @@ describe('parseConfig', () => {
   it('config vazio e tratado como painel fechado', () => {
     expect(parseConfig('#/?config=')).toBeNull();
   });
+  it('rota antiga do ditado abre a tela de Voz', () => {
+    expect(parseConfig('#/?config=ditado')).toEqual({ tela: 'voz', srv: null });
+  });
 });
 
 describe('comConfig', () => {
@@ -49,6 +52,6 @@ describe('comConfig', () => {
     expect(parseConfig(h)).toEqual({ tela: 'notificacoes', srv: 'srv-1' });
   });
   it('as telas de servidor sao as que exigem alvo', () => {
-    expect(TELAS_DE_SERVIDOR).toEqual(['acesso', 'contas', 'notificacoes', 'anexos', 'avancado', 'motores', 'orquestracao']);
+    expect(TELAS_DE_SERVIDOR).toEqual(['acesso', 'contas', 'notificacoes', 'anexos', 'avancado', 'motores', 'orquestracao', 'voz']);
   });
 });

@@ -3,7 +3,7 @@
   import SettingsRow from './SettingsRow.svelte';
   import GeneralSettings from './GeneralSettings.svelte';
   import AppearanceSettings from './AppearanceSettings.svelte';
-  import DictationSettings from './DictationSettings.svelte';
+  import VozSettings from './VozSettings.svelte';
   import ServerSettings from './ServerSettings.svelte';
   import EnginesSettings from './EnginesSettings.svelte';
   import SobreSettings from './SobreSettings.svelte';
@@ -90,14 +90,14 @@
     root: m.config_modal_titulo(),
     geral: m.config_geral_titulo(),
     aparencia: m.config_modal_aparencia(),
-    ditado: m.config_modal_ditado(),
+    voz: m.voz_titulo(),
     sobre: m.config_modal_sobre(),
     diario: m.config_diag_titulo(),
     servidores: m.config_modal_servidores(),
     acesso: m.acesso_titulo(),
     contas: m.contas_titulo(),
     notificacoes: m.config_modal_notificacoes(),
-    anexos: m.config_modal_anexos(),
+    anexos: m.config_modal_anexos_curto(),
     avancado: m.config_modal_avancado(),
     motores: m.config_modal_motores(),
     orquestracao: m.config_modal_orquestracao(),
@@ -108,14 +108,14 @@
   const LINHAS = [
     { id: 'geral', secao: 'app', rotulo: m.config_geral_linha(), icone: 'globo', servidor: false },
     { id: 'aparencia', secao: 'app', rotulo: m.config_modal_aparencia(), icone: 'pincel', servidor: false },
-    { id: 'ditado', secao: 'app', rotulo: m.config_modal_ditado(), icone: 'mic', servidor: false },
     { id: 'diario', secao: 'app', rotulo: m.config_diag_titulo(), icone: 'recibo', servidor: false },
     { id: 'sobre', secao: 'app', rotulo: m.config_modal_sobre(), icone: 'info', servidor: false },
     { id: 'acesso', secao: 'servidor', rotulo: m.acesso_titulo(), icone: 'sinal', servidor: true },
     { id: 'contas', secao: 'servidor', rotulo: m.contas_titulo(), icone: 'pessoa', servidor: true },
     { id: 'servidores', secao: 'servidor', rotulo: m.config_modal_servidores(), icone: 'tela', servidor: false },
+    { id: 'voz', secao: 'servidor', rotulo: m.voz_titulo(), icone: 'mic', servidor: true },
     { id: 'notificacoes', secao: 'servidor', rotulo: m.config_modal_notificacoes(), icone: 'sino', servidor: true },
-    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos(), icone: 'clipe', servidor: true },
+    { id: 'anexos', secao: 'servidor', rotulo: m.config_modal_anexos_curto(), icone: 'clipe', servidor: true },
     { id: 'avancado', secao: 'servidor', rotulo: m.config_modal_avancado(), icone: 'chave', servidor: true },
     { id: 'motores', secao: 'servidor', rotulo: m.config_modal_motores(), icone: 'plug', servidor: true },
     { id: 'orquestracao', secao: 'servidor', rotulo: m.config_modal_orquestracao(), icone: 'sliders', servidor: true },
@@ -346,8 +346,6 @@
     <GeneralSettings />
   {:else if telaAtual === 'aparencia'}
     <AppearanceSettings podeAoVivo={isDesktop} onVerAoVivo={() => (aoVivo = true)} />
-  {:else if telaAtual === 'ditado'}
-    <DictationSettings />
   {:else if telaAtual === 'motores'}
     <EnginesSettings targetServer={alvo} />
   {:else if telaAtual === 'orquestracao'}
@@ -366,6 +364,8 @@
     <AcessoSettings alvo={resolvedServer} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
+  {:else if telaAtual === 'voz'}
+    <VozSettings {store} />
   {:else}
     <ServerSettings {store} secao={telaAtual} />
   {/if}
@@ -507,10 +507,13 @@
        app.css) — medido no navegador, não os 32px do CSS. */
     padding-top: calc(var(--space-3) + 44px + var(--space-2));
   }
+  /* O halo (box-shadow da cor do painel) existe porque o conteúdo ROLA por baixo do ✕: sem ele,
+     texto e slider passavam encostados no botão e a leitura embolava. */
   .st-fechar {
     position: absolute; top: var(--space-3); right: var(--space-3); z-index: 1;
     width: 32px; height: 32px; border-radius: var(--radius-full);
-    border: 1px solid var(--border-subtle); background: var(--surface-raised);
+    border: 1px solid var(--border-subtle); background: var(--glass-modal);
+    box-shadow: 0 0 0 8px var(--glass-modal);
     color: var(--text-secondary); font-size: var(--text-base); line-height: 1; cursor: pointer;
   }
   .st-nav-item {
