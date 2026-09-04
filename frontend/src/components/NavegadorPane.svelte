@@ -105,7 +105,10 @@
       }
       return;
     }
-    if (manual) cookiesStatus = m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
+    if (manual) {
+      cookiesStatus = /No handler registered/.test(r.detalhe ?? '') ? m.nav_shell_velho()
+        : m.nav_cookies_erro({ e: r.detalhe ?? r.erro ?? '' });
+    }
   }
   const importarSeNovo = (u: string) => importarCookies(u, false);
 
@@ -122,7 +125,9 @@
       if (r.ok) { cookiesStatus = m.nav_cookies_ativar_instrucao(); ofereceAtivar = true; }
       else { cookiesStatus = m.nav_cookies_sem_chrome(); ofereceAtivar = false; }
     } catch (e) {
-      cookiesStatus = m.nav_cookies_erro({ e: e instanceof Error ? e.message : String(e) });
+      // Shell mais velho que o front (sem o handler): a saída é reabrir o app, não um stack de IPC.
+      const msg = e instanceof Error ? e.message : String(e);
+      cookiesStatus = /No handler registered/.test(msg) ? m.nav_shell_velho() : m.nav_cookies_erro({ e: msg });
     } finally {
       abrindo = false;
     }

@@ -205,6 +205,15 @@ async function criarJanela() {
     urlBoa = u;
     gravar(dir, { url: u, janela: win.getBounds() });
   });
+  // Reload/navegação da página (Ctrl+R) derruba o DOM sem rodar o desmonte do NavegadorPane,
+  // então o view nativo ficava pintado no lugar antigo, por cima do chat, até alguém abrir a aba
+  // Navegador de novo. Esconde todos os views da janela na hora; quem reexibe é o painel ao montar.
+  win.webContents.on('did-start-navigation', (_e, _u, _inPlace, isMainFrame) => {
+    if (!isMainFrame) return;
+    for (const v of navegadores.get(win)?.values() ?? []) {
+      try { v.setBounds({ x: 0, y: 0, width: 0, height: 0 }); } catch { /* view já morto */ }
+    }
+  });
   // Carga que falha (backend caiu no meio, URL errada) traz a tela de volta. Mas só se for a
   // página principal: o app mantém SSE e faz XHR de sessão o tempo todo, e um recurso solto que
   // falhou no meio de uma página que carregou bem também dispara este evento — sem o filtro, a
