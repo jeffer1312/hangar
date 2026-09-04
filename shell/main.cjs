@@ -5,6 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const { ler, gravar } = require('./settings.cjs');
 const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar } = require('./navegador.cjs');
+const { criarControlador } = require('./preview_ctl.cjs');
+const { subirServidor } = require('./preview_srv.cjs');
 
 // O navegador embutido (WebContentsView, handlers hangar:nav-*) é dirigível por CDP na 9223 — o
 // agent-browser conecta nela como conecta no Chrome do usuário (9222), sem backend no meio. A
@@ -165,7 +167,12 @@ async function criarJanela() {
     const views = navegadores.get(win);
     if (views) {
       navegadores.delete(win);
-      for (const v of views.values()) { try { v.webContents.close(); } catch { /* já morreu */ } }
+      for (const [chave, v] of views) {
+        const ctl = controladores.get(chave);
+        if (ctl) { ctl.fechar(); controladores.delete(chave); }
+        try { v.webContents.debugger.detach(); } catch { /* já solto */ }
+        try { v.webContents.close(); } catch { /* já morreu */ }
+      }
       // ...e os sidecars das chaves dela, senão o CLI lista "MORTO" acumulando lixo a cada quit.
       for (const chave of views.keys()) {
         try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
@@ -291,6 +298,10 @@ function abrirJanela(origem) {
 // quando um overlay DOM abre, e o layout do Chat reserva a faixa pra nada cobrir texto/composer.
 const navegadores = new Map();   // BrowserWindow -> Map<chave, WebContentsView>
 
+// chave da sessão -> controlador. Vive fora do `navegadores` porque a vida é a mesma do VIEW,
+// não a da janela, e é por ele que o servidor local acha o alvo de um comando.
+const controladores = new Map();
+
 function viewsDa(win) {
   let m = navegadores.get(win);
   if (!m) { m = new Map(); navegadores.set(win, m); }
@@ -303,6 +314,9 @@ function fecharNavegador(win, chave) {
   if (!view) return;
   m.delete(chave);
   if (m.size === 0) navegadores.delete(win);
+  const ctl = controladores.get(chave);
+  if (ctl) { ctl.fechar(); controladores.delete(chave); }
+  try { view.webContents.debugger.detach(); } catch { /* já solto */ }
   try { win.contentView.removeChildView(view); } catch { /* janela já destruída */ }
   try { view.webContents.close(); } catch { /* idem */ }
   try { fs.rmSync(path.join(NAV_SIDECARS, `${nomeSidecar(chave)}.json`), { force: true }); } catch { /* sem sidecar */ }
@@ -327,6 +341,7 @@ function limparSidecaresNav() {
   } catch { return; }                 // pasta ainda não existe: nada a limpar
   for (const nome of restos) {
     if (!nome.endsWith('.json') && !nome.endsWith('.tmp')) continue;
+    if (nome === '_srv.json') continue;   // é do processo VIVO, não resto de execução morta
     try { fs.rmSync(path.join(NAV_SIDECARS, nome), { force: true }); } catch { /* já sumiu */ }
   }
 }
@@ -341,15 +356,19 @@ function limparSidecaresNav() {
 // Solta na hora: enquanto anexado, o alvo não aceita outro cliente CDP (é o `hangar-preview`).
 async function targetIdDe(view) {
   const dbg = view.webContents.debugger;
+  // Task 6 passou a anexar o mesmo depurador PERMANENTEMENTE (controlador do preview) antes de
+  // chamar isto via `gravarSidecarNav`: sem esta checagem, o `attach` daqui falhava com "already
+  // attached" e o `detach` do finally derrubava a sessão permanente que ainda nem tinha sido usada.
+  const jaAnexado = dbg.isAttached();
   try {
-    dbg.attach('1.3');
+    if (!jaAnexado) dbg.attach('1.3');
     const info = await dbg.sendCommand('Target.getTargetInfo');
     return info?.targetInfo?.targetId ?? null;
   } catch (err) {
     console.error('[nav] targetId indisponivel:', err?.message || err);
     return null;   // o CLI cai no casamento por URL, como já fazia
   } finally {
-    try { dbg.detach(); } catch { /* já solto */ }
+    if (!jaAnexado) { try { dbg.detach(); } catch { /* já solto */ } }
   }
 }
 
@@ -404,6 +423,25 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     });
     win.contentView.addChildView(view);
     views.set(chave, view);
+    // O depurador fica ANEXADO enquanto o view viver: é o que dá tema, console e rede contínuos.
+    // O `targetIdDe` que já existia anexa e solta na hora, e por isso não servia pra guardar estado.
+    // `isAttached` antes: reabrir o painel da mesma sessão passa por aqui de novo, e o Electron
+    // lança quando já há depurador anexado — sem a guarda, a sessão ficava sem controlador.
+    try {
+      const dbg = view.webContents.debugger;
+      if (!dbg.isAttached()) dbg.attach('1.3');
+      for (const dominio of ['Runtime.enable', 'Log.enable', 'Network.enable', 'DOM.enable', 'Accessibility.enable']) {
+        dbg.sendCommand(dominio).catch(() => {});
+      }
+      controladores.set(chave, criarControlador({
+        dbg,
+        capturarPagina: () => view.webContents.capturePage(),
+        aoNavegar: (cb) => view.webContents.on('did-navigate', cb),
+      }));
+    } catch (err) {
+      // Falha aqui custa os verbos novos, não o navegador: o painel abre e o usuário navega na mão.
+      console.error('[nav] depurador nao anexou:', err && err.message);
+    }
     view.webContents.loadURL(destino).catch((err) => console.error('[nav] loadURL falhou:', err?.message || err));
     gravarSidecarNav(chave, destino, view);   // async, não bloqueia o IPC
   } else {
@@ -448,7 +486,17 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => abrirJanela('segunda janela'));
-  app.whenReady().then(() => { limparSidecaresNav(); abrirJanela('arranque'); });
+  app.whenReady().then(() => {
+    limparSidecaresNav();
+    subirServidor({
+      controladorDe: (chave) => controladores.get(chave) || null,
+      escrever: (dados) => {
+        fs.mkdirSync(NAV_SIDECARS, { recursive: true });
+        fs.writeFileSync(path.join(NAV_SIDECARS, '_srv.json'), JSON.stringify(dados), { mode: 0o600 });
+      },
+    }).catch((err) => console.error('[nav] servidor do preview nao subiu:', err && err.message));
+    abrirJanela('arranque');
+  });
 }
 
 app.on('window-all-closed', () => app.quit());
