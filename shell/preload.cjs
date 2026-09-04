@@ -2,13 +2,20 @@
 // sendo o front normal servido por HTTP (inclusive remoto), então a superfície exposta é mínima
 // e só de leitura do que o usuário escolheu no diálogo — nada de fs/exec.
 const { contextBridge, ipcRenderer } = require('electron');
-const path = require('path');
-const { commitDoCheckout } = require('./versao.cjs');
+
+// Commit que o main.cjs carregou, vindo por argv (ver `additionalArguments` no main). Não é lido
+// do .git aqui de propósito: este arquivo roda de novo a cada reload da página e veria o checkout
+// já atualizado com o main ainda velho. Main sem o flag (mais velho que este preload) = null.
+const shellCommit = (() => {
+  const arg = process.argv.find((a) => a.startsWith('--hangar-shell-commit='));
+  const v = arg ? arg.slice('--hangar-shell-commit='.length) : '';
+  return /^[0-9a-f]{40}$/.test(v) ? v : null;
+})();
 
 contextBridge.exposeInMainWorld('hangar', {
-  // Commit do checkout que ESTE shell carregou (lido uma vez, na abertura). A tela de atualização
-  // compara com o commit atualizado: igual = a janela já é a nova, o "feche e abra" não vale mais.
-  shellCommit: commitDoCheckout(path.join(__dirname, '..')),
+  // A tela de atualização compara com o commit atualizado: igual = a janela já é a nova, o
+  // "feche e abra o Hangar" não vale mais.
+  shellCommit,
   // Fecha e reabre o app (o restart do backend não alcança o main.cjs já carregado).
   relaunch: () => ipcRenderer.invoke('hangar:relaunch'),
   // Abre o diálogo nativo de diretório; resolve com o caminho absoluto ou null (cancelado).

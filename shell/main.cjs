@@ -6,6 +6,11 @@ const os = require('os');
 const { ler, gravar } = require('./settings.cjs');
 const { uaDeChrome, normalizaBounds, urlNavegavel, nomeSidecar } = require('./navegador.cjs');
 const { criarControlador } = require('./preview_ctl.cjs');
+const { commitDoCheckout } = require('./versao.cjs');
+
+// Lido UMA vez, na subida: é o código que este processo de fato carregou, e é isso que a tela de
+// atualização compara com o commit atualizado pra saber se "feche e abra o Hangar" ainda vale.
+const SHELL_COMMIT = commitDoCheckout(path.join(__dirname, '..'));
 const { subirServidor } = require('./preview_srv.cjs');
 
 // O navegador embutido (WebContentsView, handlers hangar:nav-*) é dirigível por CDP na 9223 — o
@@ -128,7 +133,15 @@ async function criarJanela() {
     backgroundColor: fundo.transparente ? '#00000000' : '#1a181d',
     ...fundo.extra,
     // O preload expõe SÓ window.hangar.pickFolder (seletor nativo de pasta) — ver preload.cjs.
-    webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.cjs') },
+    webPreferences: {
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+      // O commit que ESTE main.cjs carregou vai por argv, não lido pelo preload: o preload roda
+      // de novo a cada reload da página e leria o .git JÁ atualizado com o main ainda velho —
+      // escondendo o "feche e abra" exatamente quando ele vale. Main velho não manda o flag, e o
+      // preload novo devolve null (= avisa), que é o certo.
+      additionalArguments: [`--hangar-shell-commit=${SHELL_COMMIT ?? ''}`],
+    },
   });
   win.removeMenu();
 
