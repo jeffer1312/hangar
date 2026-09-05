@@ -10,10 +10,11 @@ celular e o que o nativo já tem. Complementa, não substitui, a pesquisa de 21/
 Os dois no mesmo tema escuro, mesma sessão: os tokens de cor são os mesmos (`packages/core/src/theme.ts`
 espelha o `app.css`), mas o nativo está numa etapa anterior da PWA. Os planos 1 (fundação) e 2
 (paridade) entregaram funcionalidade; nenhum dos 71 commits da branch é de aparência. Da pilha visual
-decidida em 21/08, **cinco libs nunca foram instaladas**: `@lodev09/react-native-true-sheet`,
-`@legendapp/list`, `sonner-native`, `lucide-react-native`, `expo-symbols`. O que está instalado e em
-uso: `expo-glass-effect`, `expo-blur`, `@react-native-menu/menu`, `react-native-unistyles`,
-`react-native-enriched-markdown`.
+decidida em 21/08, **quatro libs nunca foram instaladas**: `@lodev09/react-native-true-sheet`,
+`sonner-native`, `lucide-react-native`, `expo-symbols` (e `expo-sharing`, que a spec precisa, também
+não). O que está instalado e em uso: `expo-glass-effect`, `expo-blur` (num `ui/Glass.tsx` que já
+existe), `@react-native-menu/menu`, `react-native-unistyles`, `react-native-enriched-markdown`,
+`@legendapp/list` (lista de sessões, chat e espelho do terminal), `expo-localization`.
 
 ## 1. Pilha visual: o que mudou desde 21/08
 
@@ -140,8 +141,8 @@ existe por sessão (terminal, atividade, loop, par, arquivos, anexos, limites) v
 
 ## 4. Mudanças em relação à pesquisa de 21/08
 
-- **Manter**: toda a pilha decidida. Instalar o que ficou de fora (`true-sheet`, `@legendapp/list`,
-  `sonner-native`, `lucide-react-native`, `expo-symbols`) e atualizar expo/reanimated/keyboard-controller.
+- **Manter**: toda a pilha decidida. Instalar o que ficou de fora (`true-sheet`, `sonner-native`,
+  `lucide-react-native`, `expo-symbols`, `expo-sharing`) e atualizar expo/reanimated/keyboard-controller.
 - **Trocar**: `experimentalBlurMethod` → `blurMethod`.
 - **Adicionar**: blur nunca dentro de `Modal` no Android; sheet cross-platform com ≤3 detents;
   `@react-native-menu/menu` só depois de build real em RN 0.86 (plano B `@expo/ui`, não `zeego`);
