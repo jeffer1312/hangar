@@ -5,6 +5,7 @@ import { getPermissionModes, setPermissionMode } from '@hangar/core';
 import { useSessions } from '../../stores/sessions';
 import * as m from '../../paraglide/messages';
 import { PillMenu, type PillMenuItem } from './PillMenu';
+import { superficie } from '../../theme/superficie';
 
 interface Props {
   serverId: string;
@@ -85,7 +86,7 @@ export function PermissionPill({ serverId, name }: Props) {
     <>
       <Pressable
         onPress={() => setOpen(true)}
-        style={[styles.pill, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}
+        style={[styles.pill, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}
         accessibilityRole="button"
         accessibilityLabel={m.composer_permissao()}
       >

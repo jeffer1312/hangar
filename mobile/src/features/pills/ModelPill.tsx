@@ -8,6 +8,7 @@ import * as m from '../../paraglide/messages';
 import { ContextRing } from '../../chat/ContextRing';
 import { PillMenu, type PillMenuItem } from './PillMenu';
 import { pillLabels, reconcileChosen } from './pills';
+import { superficie } from '../../theme/superficie';
 
 interface Props {
   serverId: string;
@@ -170,7 +171,7 @@ export function ModelPill({ serverId, name }: Props) {
     <>
       <Pressable
         onPress={() => setOpen(true)}
-        style={[styles.pill, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}
+        style={[styles.pill, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}
         accessibilityRole="button"
         accessibilityLabel={m.composer_modelo()}
       >

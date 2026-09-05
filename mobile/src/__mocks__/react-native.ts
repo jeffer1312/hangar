@@ -20,3 +20,7 @@ export const ActivityIndicator = () => React.createElement('div', null, 'loading
 export const Platform = { OS: 'android', select: (x: any) => x.android ?? x.default };
 export const TextInput = (props: any) => React.createElement('textarea', domProps(props));
 export const StyleSheet = { create: (x: any) => x, flatten: (x: any) => x };
+export const AccessibilityInfo = {
+  isReduceTransparencyEnabled: () => Promise.resolve(false),
+  addEventListener: () => ({ remove: () => {} }),
+};

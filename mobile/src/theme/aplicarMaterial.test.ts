@@ -19,6 +19,13 @@ describe('aplicarMaterial', () => {
     expect(novo.tokens.accent.base).toBe('#ff0000');
   });
 
+  it('reduzir transparência cola os dois alphas em 1', () => {
+    aplicarMaterial({ panelAlpha: 0.4, surfaceAlpha: 0.3, acento: null }, { reduzir: true });
+    const novo = updateTheme.mock.calls[0][1]({ tokens: null, panelAlpha: 0, surfaceAlpha: 0 });
+    expect(novo.panelAlpha).toBe(1);
+    expect(novo.surfaceAlpha).toBe(1);
+  });
+
   it('sem acento devolve os tokens de fábrica do tema', () => {
     aplicarMaterial({ panelAlpha: 0.86, surfaceAlpha: 1, acento: null });
     const claro = updateTheme.mock.calls[0][1]({ tokens: null, panelAlpha: 0, surfaceAlpha: 0 });

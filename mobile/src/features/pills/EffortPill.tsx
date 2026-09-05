@@ -7,6 +7,7 @@ import { useSessions } from '../../stores/sessions';
 import * as m from '../../paraglide/messages';
 import { PillMenu, type PillMenuItem } from './PillMenu';
 import { pillLabels, semEsforco } from './pills';
+import { superficie } from '../../theme/superficie';
 
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
 
@@ -138,7 +139,7 @@ export function EffortPill({ serverId, name }: Props) {
     <>
       <Pressable
         onPress={() => setOpen(true)}
-        style={[styles.pill, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}
+        style={[styles.pill, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}
         accessibilityRole="button"
         accessibilityLabel={m.composer_nivel()}
       >

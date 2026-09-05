@@ -6,6 +6,20 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useBlurTarget } from './blurTarget';
 
 type Props = ViewProps & { variant?: 'panel' | 'modal' | 'chrome' };
+export type GlassVariant = NonNullable<Props['variant']>;
+
+// Todo painel de vidro anda com o slider de Transparência, não só o `panel`: o slider é a razão
+// entre o que a pessoa pediu e o padrão de fábrica, e ela multiplica o alpha próprio de cada
+// variante. Com o slider no padrão a conta devolve exatamente os valores de hoje. Piso 0.3 pelo
+// mesmo motivo do piso do store: abaixo disso não dá pra ler o que está escrito por cima.
+export function alphaDoVidro(
+  theme: { panelAlpha: number; tokens: { glass: { panelAlpha: number; solidAlpha: number; modalAlpha: number } } },
+  variant: GlassVariant,
+): number {
+  const { panelAlpha, solidAlpha, modalAlpha } = theme.tokens.glass;
+  const base = variant === 'modal' ? modalAlpha : variant === 'chrome' ? solidAlpha : panelAlpha;
+  return Math.max(0.3, Math.min(1, base * (theme.panelAlpha / panelAlpha)));
+}
 
 export function useReduceTransparency() {
   const [on, setOn] = useState(false);
@@ -23,13 +37,7 @@ export function Glass({ variant = 'panel', style, children, ...rest }: Props) {
   const reduzir = useReduceTransparency();
   const alvoBlur = useBlurTarget();
   const [r, g, b] = theme.tokens.glass.panelRgb;
-  const alpha =
-    variant === 'modal'
-      ? theme.tokens.glass.modalAlpha
-      : variant === 'chrome'
-        ? theme.tokens.glass.solidAlpha
-        : theme.panelAlpha;
-  const bg = `rgba(${r},${g},${b},${alpha})`;
+  const bg = `rgba(${r},${g},${b},${alphaDoVidro(theme, variant)})`;
   if (reduzir) {
     return <View style={[styles.box, { backgroundColor: `rgb(${r},${g},${b})` }, style]} {...rest}>{children}</View>;
   }

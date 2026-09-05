@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { AccessibilityInfo } from 'react-native';
 import { UnistylesRuntime } from 'react-native-unistyles';
 import { PENSAMENTO_TOOLS, hexParaRgb, type PensamentoTools, type GroupBy } from '@hangar/core';
 import { prefs } from './prefs';
@@ -21,7 +22,10 @@ const K_ACENTO = 'aparencia.acento';
 // Piso do painel: abaixo de 0.3 o texto do header/composer deixa de ter contraste sobre foto clara.
 const PANEL_MIN = 0.3;
 const PANEL_PADRAO = 0.86;
-const faixa = (v: number, min: number) => Math.max(min, Math.min(1, v));
+// NaN passa por Math.max/min sem virar nada: sem o Number.isFinite um slider quebrado escreveria
+// NaN no tema e todo rgba() do app viraria cor inválida.
+const faixa = (v: number, min: number, padrao: number) =>
+  Number.isFinite(v) ? Math.max(min, Math.min(1, v)) : padrao;
 
 function ler(): Tema {
   const v = prefs.getString(K) as Tema | undefined;
@@ -57,7 +61,7 @@ function lerFundo(): Fundo {
 
 function lerAlpha(k: string, padrao: number, min: number): number {
   const v = prefs.getNumber(k);
-  return typeof v === 'number' && Number.isFinite(v) ? faixa(v, min) : padrao;
+  return typeof v === 'number' ? faixa(v, min, padrao) : padrao;
 }
 
 function lerAcento(): string | null {
@@ -85,11 +89,40 @@ interface Aparencia {
   setAcento: (v: string | null) => void;
 }
 
+// "Reduzir transparência" do sistema não é preferência do app: não persiste, e vale por cima do
+// que estiver gravado. Mora aqui, e não em cada componente, porque quem apaga o vidro é o TEMA.
+let reduzirTransparencia = false;
+AccessibilityInfo.isReduceTransparencyEnabled()
+  .then((v) => { reduzirTransparencia = v; if (v) reaplicarMaterial(); })
+  .catch(() => {});
+AccessibilityInfo.addEventListener('reduceTransparencyChanged', (v) => {
+  reduzirTransparencia = v;
+  reaplicarMaterial();
+});
+
+function reaplicarMaterial() {
+  aplicarMaterial(useAparencia.getState(), { reduzir: reduzirTransparencia });
+}
+
 export const useAparencia = create<Aparencia>((set, get) => {
-  // Um só caminho pros três valores que vivem no tema: grava, guarda no estado e reaplica.
-  const material = (patch: Partial<Pick<Aparencia, 'panelAlpha' | 'surfaceAlpha' | 'acento'>>) => {
+  // Um apply por tick: arrastar um slider dispara um setter por quadro, e cada apply é uma escrita
+  // no MMKV mais dois updateTheme (re-render da árvore inteira). O estado muda na hora — a tela
+  // responde —, mas a preferência só desce pro disco DEPOIS de o tema aceitar o valor: apply que
+  // levanta deixa a fila intacta pro tick seguinte, em vez de persistir o que não pintou.
+  const aGravar: Array<() => void> = [];
+  let agendado: ReturnType<typeof setTimeout> | null = null;
+  const material = (
+    patch: Partial<Pick<Aparencia, 'panelAlpha' | 'surfaceAlpha' | 'acento'>>,
+    gravar: () => void,
+  ) => {
     set(patch);
-    aplicarMaterial(get());
+    aGravar.push(gravar);
+    if (agendado) return;
+    agendado = setTimeout(() => {
+      agendado = null;
+      aplicarMaterial(get(), { reduzir: reduzirTransparencia });
+      for (const f of aGravar.splice(0)) f();
+    }, 0);
   };
   return {
     tema: ler(),
@@ -122,14 +155,19 @@ export const useAparencia = create<Aparencia>((set, get) => {
       }
     },
     panelAlpha: lerAlpha(K_PANEL, PANEL_PADRAO, PANEL_MIN),
-    setPanelAlpha: (v) => { const n = faixa(v, PANEL_MIN); prefs.set(K_PANEL, n); material({ panelAlpha: n }); },
+    setPanelAlpha: (v) => {
+      const n = faixa(v, PANEL_MIN, PANEL_PADRAO);
+      material({ panelAlpha: n }, () => prefs.set(K_PANEL, n));
+    },
     surfaceAlpha: lerAlpha(K_SURFACE, 1, 0),
-    setSurfaceAlpha: (v) => { const n = faixa(v, 0); prefs.set(K_SURFACE, n); material({ surfaceAlpha: n }); },
+    setSurfaceAlpha: (v) => {
+      const n = faixa(v, 0, 1);
+      material({ surfaceAlpha: n }, () => prefs.set(K_SURFACE, n));
+    },
     acento: lerAcento(),
     setAcento: (v) => {
       const hex = v && hexParaRgb(v) ? v : null;
-      if (hex) prefs.set(K_ACENTO, hex); else prefs.remove(K_ACENTO);
-      material({ acento: hex });
+      material({ acento: hex }, () => { if (hex) prefs.set(K_ACENTO, hex); else prefs.remove(K_ACENTO); });
     },
   };
 });

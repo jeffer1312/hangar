@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, type ReactNode } from 'react';
 import { TrueSheet, type SheetDetent } from '@lodev09/react-native-true-sheet';
 import { useUnistyles } from 'react-native-unistyles';
-import { useReduceTransparency } from './Glass';
+import { alphaDoVidro, useReduceTransparency } from './Glass';
 import { toast } from './Toast';
 import * as m from '../paraglide/messages';
 
@@ -52,7 +52,7 @@ export const Sheet = forwardRef<TrueSheet, Props>(function Sheet({ sizes = ['aut
       detents={sizes.slice(0, 3).map((s) => DETENT[s])}
       cornerRadius={theme.base.radius.xl}
       backgroundBlur={reduzir ? undefined : rt.themeName === 'dark' ? 'dark' : 'light'}
-      backgroundColor={reduzir ? `rgb(${r},${g},${b})` : `rgba(${r},${g},${b},${theme.tokens.glass.modalAlpha})`}
+      backgroundColor={reduzir ? `rgb(${r},${g},${b})` : `rgba(${r},${g},${b},${alphaDoVidro(theme, 'modal')})`}
       grabber
       scrollable={scrollable}
       onDidDismiss={() => {

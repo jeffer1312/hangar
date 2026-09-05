@@ -14,6 +14,9 @@
       "Icon": "Icon.tsx — membro do namespace do lucide que NAO e icone, excluido do tipo IconName; nome de exportacao, nao texto de tela.",
       "aparencia.tema": "stores/aparencia.ts — chave do armazenamento local da preferencia de tema, nao texto de tela.",
       "aparencia.fundo": "stores/aparencia.ts — chave do armazenamento local do papel de parede escolhido, nao texto de tela. As irmas (imagemUri, panelAlpha, surfaceAlpha, acento) nao caem na heuristica por serem camelCase.",
+      "Background: papel de parede não abriu": "ui/Background.tsx — mensagem de console.warn (arquivo do papel de parede sumiu do disco), nao texto de tela: quem le e quem abre o log pra diagnosticar. O aviso pra pessoa e um toast com chave.",
+      "Check": "NOME DE ICONE do lucide, mesma razao de 'Terminal': ServerSheet.tsx (marca do servidor ativo). Vale para 'Plus' (ServerSheet.tsx), 'Hourglass' e 'Cog' (SessionRow.tsx) e 'Server'/'Settings' (app/index.tsx).",
+      "Git": "Nome do produto, escrito igual em pt e en — rotulo da acao de Git no menu da linha (SessionMenu.tsx, SessionMenu.android.tsx) e nome do icone em SessionRow.tsx. Mesmo precedente do ariaLabel=\"Git\" da PWA.",
       "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
       "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo",
       "Kimi Code": "NovaCredencialSheet.svelte — NOME DE MARCA do provedor no catálogo, não texto de interface: marca não se traduz. Os outros do mesmo catálogo (OpenCode Zen, Anthropic, OpenRouter, DeepSeek) não caem na heurística; estes dois caem por serem duas palavras curtas.",
@@ -279,5 +282,13 @@
   "Flag",
   "Icon",
   "aparencia.tema",
-  "aparencia.fundo"
+  "aparencia.fundo",
+  "Check",
+  "Plus",
+  "Git",
+  "Hourglass",
+  "Cog",
+  "Server",
+  "Settings",
+  "Background: papel de parede não abriu"
 ]

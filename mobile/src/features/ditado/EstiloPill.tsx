@@ -5,6 +5,7 @@ import { estilosDitado } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { useDitadoEstiloStore } from './ditadoEstiloStore';
 import { PillMenu } from '../pills/PillMenu';
+import { superficie } from '../../theme/superficie';
 
 export function EstiloPill() {
   const { theme } = useUnistyles();
@@ -59,7 +60,7 @@ export function EstiloPill() {
         onPress={handleOpen}
         style={[
           styles.pill,
-          { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle },
+          { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle },
         ]}
         accessibilityRole="button"
         accessibilityLabel={m.ditado_estilo_titulo()}
