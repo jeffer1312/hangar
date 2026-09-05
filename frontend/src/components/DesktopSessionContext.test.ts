@@ -114,16 +114,18 @@ describe('DesktopSessionContext — toggle na barra (follow-up visual)', () => {
     marcarNavAberto('srv-test::sess-1');
     const t = montar(false);
     await tick();
-    expect(document.querySelector('.session-context .ctx-heading')).not.toBeNull();
-    ctxPanel.aba = 'navegador';
-    await tick();
-    // o header do painel (nome+estado) some; o <header class=nav-bar> que fica é a barra de
-    // endereço DO NAVEGADOR, que é dele e tem que ficar.
+    // Sessão com navegador que nunca escolheu aba entra DIRETO no Navegador (o agente pode ter
+    // aberto com ela fora da tela): o header do painel (nome+estado) some; o <header class=nav-bar>
+    // que fica é a barra de endereço DO NAVEGADOR, que é dele e tem que ficar.
+    expect(ctxPanel.aba).toBe('navegador');
     expect(document.querySelector('.session-context .ctx-heading')).toBeNull();
     expect(document.querySelector('.ctx-actions')).toBeNull();
     ctxPanel.aba = 'contexto';
     await tick();
     expect(document.querySelector('.session-context .ctx-heading')).not.toBeNull();
+    ctxPanel.aba = 'navegador';
+    await tick();
+    expect(document.querySelector('.session-context .ctx-heading')).toBeNull();
     unmount(t.comp);
     fecharNav('srv-test::sess-1');
   });
