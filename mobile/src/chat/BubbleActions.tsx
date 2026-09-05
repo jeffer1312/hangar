@@ -1,6 +1,7 @@
+import { useEffect, useRef } from 'react';
 import { Pressable, Share, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { createAudioPlayer } from 'expo-audio';
+import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { sintetizarTts, ttsAudioUrl } from '@hangar/core';
 import { Icon } from '../ui/Icon';
@@ -11,20 +12,55 @@ function hora(ts?: number | null) {
   return ts ? new Date(ts * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
 }
 
+// UM tocador por vez, no módulo: o AudioPlayer é objeto nativo que só some com `remove()`, e o
+// "Ouvir" de outra bolha tem que interromper o anterior em vez de sobrepor as duas vozes.
+let tocando: AudioPlayer | null = null;
+function pararTocando() {
+  tocando?.remove();
+  tocando = null;
+}
+
+// O `addListener` vem do EventEmitter que o AudioPlayer herda, mas o expo-modules-core está
+// aninhado em expo/node_modules e o TS não resolve a classe base daqui — só a assinatura que
+// usamos, então, em vez do tipo inteiro.
+type ComListener = { addListener(evento: 'playbackStatusUpdate', fn: (s: { didJustFinish: boolean }) => void): unknown };
+
 // Hora + copiar/compartilhar/ouvir. Compartilhar usa o Share do RN (texto puro, sem lib). Ouvir
 // chama o mesmo POST /api/tts da PWA e toca a URL devolvida.
 export function BubbleActions({ text, ts, ouvir = true }: { text: string; ts?: number | null; ouvir?: boolean }) {
   const { theme } = useUnistyles();
   const c = theme.tokens.text.muted;
+  // A lista é virtualizada: a bolha pode sair da tela antes de o /api/tts responder.
+  const vivo = useRef(true);
+  useEffect(() => () => { vivo.current = false; }, []);
+
   const copiar = async () => {
-    await Clipboard.setStringAsync(text);
-    toast.ok(m.toast_copiado());
+    try {
+      await Clipboard.setStringAsync(text);
+      toast.ok(m.toast_copiado());
+    } catch (e) {
+      toast.erro(e instanceof Error ? e.message : String(e));
+    }
   };
-  const compartilhar = () => Share.share({ message: text }).catch(() => {});
+  // Cancelar resolve com `dismissedAction`; rejeição aqui é falha de verdade.
+  const compartilhar = async () => {
+    try {
+      await Share.share({ message: text });
+    } catch (e) {
+      toast.erro(e instanceof Error ? e.message : String(e));
+    }
+  };
   const falar = async () => {
     try {
       const r = await sintetizarTts({ text });
-      createAudioPlayer(ttsAudioUrl(r.url)).play();
+      if (!vivo.current) return;
+      pararTocando();
+      const p = createAudioPlayer(ttsAudioUrl(r.url));
+      tocando = p;
+      (p as unknown as ComListener).addListener('playbackStatusUpdate', (s) => {
+        if (s.didJustFinish && tocando === p) pararTocando();
+      });
+      p.play();
     } catch (e) {
       toast.erro(e instanceof Error ? e.message : String(e));
     }
@@ -35,7 +71,7 @@ export function BubbleActions({ text, ts, ouvir = true }: { text: string; ts?: n
       <Pressable onPress={() => void copiar()} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.bubble_copiar()}>
         <Icon name="Copy" size={13} color={c} />
       </Pressable>
-      <Pressable onPress={compartilhar} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.bolha_compartilhar()}>
+      <Pressable onPress={() => void compartilhar()} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.bolha_compartilhar()}>
         <Icon name="Share2" size={13} color={c} />
       </Pressable>
       {ouvir ? (

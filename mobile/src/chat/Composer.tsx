@@ -20,6 +20,7 @@ import { useDitado } from '../features/ditado/useDitado';
 import { useDitadoEstiloStore } from '../features/ditado/ditadoEstiloStore';
 import { PillMenu } from '../features/pills/PillMenu';
 import { CommandSheet } from './CommandSheet';
+import { comandoParcial } from './comandoParcial';
 
 interface Props {
   serverId: string;
@@ -104,13 +105,11 @@ export function Composer({ serverId, name, draft }: Props) {
     autoAlvoRef.current = 0;
   }, []);
 
-  // Atalho `/`: enquanto a linha é só o nome do comando (sem espaço), a lista fica aberta e
-  // filtrada. O espaço já é argumento — aí a lista sai da frente.
+  // Atalho `/`: enquanto a linha é só o nome do comando, a lista fica aberta e filtrada.
   const handleChangeText = useCallback(
     (v: string) => {
       setText(v);
-      const cmd = v.startsWith('/') && !v.includes(' ') ? v.slice(1) : null;
-      setCmdFiltro(cmd);
+      setCmdFiltro(comandoParcial(v));
       if (undo) limparUndo();
       if (autoN !== null) cancelarAuto();
     },
