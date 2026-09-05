@@ -113,6 +113,28 @@ describe('ListaMaquinas', () => {
     unmount(t.comp);
   });
 
+  it('farol mostra "testando" mesmo sem peer, e falha real mesmo sem peer', () => {
+    const semPeer: LinhaMaquina = { ...D, identificador: 'd' };
+    const t = montar([semPeer], { estados: { d: { lados: [], ok: false, testando: true } } });
+    const farolT = t.linha('srv:srv-d').querySelector('.mq-farol')!;
+    expect(farolT.textContent?.trim()).toBe('◌');
+    unmount(t.comp);
+    const t2 = montar([semPeer], { estados: { d: { ok: false, lados: [{ lado: 'ida', estado: 'falhou' }] } } });
+    const farolN = t2.linha('srv:srv-d').querySelector('.mq-farol')!;
+    expect(farolN.textContent?.trim()).toBe('●');
+    expect(farolN.classList.contains('nao')).toBe(true);
+    unmount(t2.comp);
+  });
+
+  it('motivo da falha vai no title da pílula', () => {
+    const t = montar([B], { estados: {
+      notebook: { ok: false, lados: [{ lado: 'ida', estado: 'ok' }, { lado: 'volta', estado: 'falhou', motivo: 'fetch failed' }] },
+    } });
+    const pilulas = t.linha('srv:srv-b').querySelectorAll<HTMLElement>('.pr-lado');
+    expect(pilulas[1].title).toBe('fetch failed');
+    unmount(t.comp);
+  });
+
   it('lista vazia: carregando não afirma "nenhuma"; sem carregar, diz e oferece adicionar', () => {
     const a = montar([], { carregando: true });
     expect(a.el.textContent).not.toContain(m.maquinas_vazio());

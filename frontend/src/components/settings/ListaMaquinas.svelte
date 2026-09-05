@@ -30,8 +30,10 @@
     return st?.lados.find((l) => l.lado === lado);
   }
   function farol(temPeer: boolean, st: EstadoPeer | undefined, falhaReal: boolean): 'ok' | 'nao' | 'test' | 'neutro' {
-    if (!temPeer) return 'neutro';   // só navegador, nada pra testar — não é "testando"
-    if (!st || st.testando) return 'test';
+    // testando pode chegar antes do peer existir (registro em curso) — checa primeiro
+    if (st?.testando) return 'test';
+    if (!temPeer && !st) return 'neutro'; // só navegador, nada pra testar — não é "testando"
+    if (!st) return 'test';
     if (st.ok) return 'ok';
     return falhaReal ? 'nao' : 'test'; // nao_configurado (sem token/registro) não é falha, é cinza
   }
@@ -67,8 +69,8 @@
           <span class="mq-hint">
             {m.peers_estado_parcial()}
             <span class="pr-lados">
-              <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>{selo(ida)} {m.peers_lado_ida()}</span>
-              <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>{selo(volta)} {m.peers_lado_volta()}</span>
+              <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'} title={ida && ida.estado !== 'ok' ? ida.motivo : undefined}>{selo(ida)} {m.peers_lado_ida()}</span>
+              <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'} title={volta && volta.estado !== 'ok' ? volta.motivo : undefined}>{selo(volta)} {m.peers_lado_volta()}</span>
             </span>
           </span>
         {:else if volta?.estado === 'nao_configurado' && volta.motivo === 'token'}
