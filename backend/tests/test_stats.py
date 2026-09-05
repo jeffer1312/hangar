@@ -360,6 +360,19 @@ def test_compartilhado_nao_rele_o_transcript_para_a_segunda_conexao(tmp_path, mo
     assert Accumulator.compartilhado("claude", str(p)) is not a  # ultimo soltou -> instancia nova
 
 
+def test_soltar_acha_a_entrada_mesmo_com_caminho_nao_canonico(tmp_path):
+    # `compartilhado` recebia a string crua e `soltar` procurava por `str(Path)`: com `./` ou
+    # barra dupla no caminho as chaves divergiam, o refcount ficava negativo e a entrada nunca
+    # saia do dicionario.
+    p = tmp_path / "s.jsonl"
+    _w(p, [_claude_user("2026-08-17T12:00:00Z")])
+    torto = f"{tmp_path}/./s.jsonl"
+    a = Accumulator.compartilhado("claude", torto)
+    a.soltar()
+    assert Accumulator._compartilhados == {} or all(
+        v is not a for v in Accumulator._compartilhados.values())
+
+
 def test_compartilhado_por_provider_e_caminho(tmp_path):
     p = tmp_path / "s.jsonl"
     _w(p, [_claude_user("2026-08-17T12:00:00Z")])

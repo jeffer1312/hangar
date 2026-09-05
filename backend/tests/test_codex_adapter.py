@@ -1034,6 +1034,43 @@ async def test_dois_sse_na_mesma_sessao_recebem_a_resposta_inteira():
     assert CodexPreviewSource.get("dois").text == "Faria em mudancas pequenas"
 
 
+async def test_ouvinte_que_chega_na_janela_do_cancel_ganha_bomba_nova():
+    # `Task.cancel()` so agenda; a task continua `not done()` ate a proxima volta do loop. Um
+    # ouvinte que entra nessa janela (celular reconectando) nao pode herdar a bomba que esta
+    # morrendo — ela nunca mais espalha nada, e ele ficaria mudo.
+    adapter = CodexAdapter()
+    client = _QueueClient([{"method": "turn/started", "params": {}}] * 6)
+    adapter.attach("janela", client, "t")
+    primeiro = adapter.state_monitor("janela", lambda: "janela")
+    await primeiro.__anext__()                 # retrato
+    await primeiro.__anext__()                 # 1o evento da bomba
+    await primeiro.aclose()                    # ultimo ouvinte sai -> cancel() agendado
+    vistos = []
+    async with asyncio.timeout(5):
+        async for ev in adapter.state_monitor("janela", lambda: "janela"):
+            vistos.append(ev.state)
+    assert client.aberturas == 2, "o 2o ouvinte precisa de uma bomba nova, nao da que morre"
+    assert len(vistos) >= 2                    # retrato + pelo menos um evento vivo
+
+
+async def test_excecao_na_bomba_chega_no_ouvinte_em_vez_de_pendurar():
+    # A bomba roda numa task propria: uma excecao la dentro nao sobe sozinha ate o pump do SSE.
+    # Sem repassar, cada ouvinte ficaria em `fila.get()` pra sempre, com a tela "conectada" e muda.
+    class _Quebra:
+        closed = False
+
+        async def notifications(self):
+            yield {"method": "turn/started", "params": {}}
+            raise RuntimeError("app-server mandou lixo")
+
+    adapter = CodexAdapter()
+    adapter.attach("quebra", _Quebra(), "t")
+    with pytest.raises(RuntimeError, match="lixo"):
+        async with asyncio.timeout(5):
+            async for _ in adapter.state_monitor("quebra", lambda: "quebra"):
+                pass
+
+
 async def test_previa_zera_a_cada_agent_message_do_mesmo_turno():
     # Um turno do Codex pode ter mais de um agentMessage ("Vou conferir…" e depois a resposta).
     # O buffer colava os dois, e como o preambulo ja tinha caido no rollout (bolha propria), a

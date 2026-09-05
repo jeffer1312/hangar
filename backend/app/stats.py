@@ -370,7 +370,7 @@ class Accumulator:
     def compartilhado(cls, provider: str, path: str) -> "Accumulator | None":
         if provider not in _FOLDS or not path:
             return None
-        chave = (provider, path)
+        chave = (provider, str(Path(path)))   # a mesma forma que `soltar` usa
         with cls._trava_compartilhados:
             acc = cls._compartilhados.get(chave)
             if acc is None:

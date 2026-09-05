@@ -687,12 +687,18 @@ class CodexAdapter:
                 ev = await fila.get()
                 if ev is None:
                     return
+                if isinstance(ev, BaseException):
+                    raise ev     # a bomba quebrou: sobe ate o pump do SSE, que fecha e reconecta
                 yield ev
         finally:
             if fila in ouvintes:
                 ouvintes.remove(fila)
-            if not ouvintes and not sess["bomba"].done():
-                sess["bomba"].cancel()
+            if not ouvintes and sess.get("bomba") is not None:
+                # `cancel()` so agenda: a task segue `not done()` ate a proxima volta do loop. O
+                # slot e a lista saem AGORA, senao um ouvinte que chega nessa janela herda a bomba
+                # que esta morrendo (e o sentinela final dela).
+                sess.pop("bomba").cancel()
+                sess["ouvintes"] = []
 
     @staticmethod
     def _status_line(sess: dict) -> Optional[str]:
@@ -706,14 +712,30 @@ class CodexAdapter:
 
     async def _bombear(self, name: str, client: AppServerClient) -> None:
         """Le a fila do app-server, aplica o efeito de cada notification na sessao (estado, previa,
-        drain-on-complete) e espalha os StateEvents pros ouvintes. Vive enquanto houver um SSE."""
-        sess = self._sessions[name]
-        preview = CodexPreviewSource.get(name)
+        drain-on-complete) e espalha os StateEvents pros ouvintes. Vive enquanto houver um SSE.
 
-        def espalhar(ev: Optional[StateEvent]) -> None:
-            for fila in sess["ouvintes"]:
+        Roda numa task propria, entao uma excecao aqui nao sobe sozinha: ela e repassada aos
+        ouvintes (que a levantam no SSE) e o sentinela final sai SEMPRE — sem isso cada ouvinte
+        ficava em `fila.get()` pra sempre, com a tela "conectada" e muda."""
+        sess = self._sessions[name]
+        ouvintes = sess["ouvintes"]   # a lista DESTA bomba: a sucessora ganha outra (ver _state_stream)
+
+        def espalhar(ev) -> None:
+            for fila in ouvintes:
                 fila.put_nowait(ev)
 
+        try:
+            await self._consumir(name, client, sess, espalhar)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.exception("codex bomba quebrou name=%s", name)
+            espalhar(exc)
+        finally:
+            espalhar(None)
+
+    async def _consumir(self, name: str, client: AppServerClient, sess: dict, espalhar) -> None:
+        preview = CodexPreviewSource.get(name)
         # Buffer do turno em voo (deltas sao INCREMENTAIS -- concatena; ver docs/codex-app-server-
         # contract.md).
         buf = ""
@@ -795,7 +817,6 @@ class CodexAdapter:
             sess["state"] = "dead"
             self._sessions.pop(name, None)
             espalhar(StateEvent(session=name, state="dead"))
-        espalhar(None)
 
     async def send_prompt(self, name: str, text: str) -> str:
         """Envia o prompt como `turn/start` no app-server — NAO digitando no pane do tmux.
