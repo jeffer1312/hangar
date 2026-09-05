@@ -335,6 +335,7 @@
   }
 </script>
 
+<p class="ss-legenda">{m.maquinas_intro()}</p>
 {#if resolvedServer}
   <p class="ss-editando">
     {m.config_servidores_editando_1()} <strong>{resolvedServer.label}</strong>{m.config_servidores_editando_2()}
