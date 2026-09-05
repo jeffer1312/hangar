@@ -41,7 +41,8 @@ export function SessionList() {
   const agrupar = useAparencia((s) => s.agrupar);
   const [filtro, setFiltro] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const [renomeando, setRenomeando] = useState<string | null>(null);
+  // guarda a sessão inteira, não o nome: dois servidores podem ter sessões de mesmo nome
+  const [renomeando, setRenomeando] = useState<AggSession | null>(null);
 
   // 1 stream por servidor via refcount compartilhado
   useEffect(() => {
@@ -72,7 +73,7 @@ export function SessionList() {
           onPress: () =>
             comServidor(s, () => {
               deleteSession(s.name)
-                .then(() => toast.ok(m.sessao_excluir_curto()))
+                .then(() => toast.ok(s.name))
                 .catch((e: unknown) => toast.erro(formataErro(e) ?? (e instanceof Error ? e.message : String(e))));
             }),
         },
@@ -82,18 +83,16 @@ export function SessionList() {
 
   const renomear = useCallback(
     (novo: string) => {
-      const antigo = renomeando;
+      const s = renomeando;
       setRenomeando(null);
-      if (!antigo) return;
-      const s = rows.find((r) => r.name === antigo);
       if (!s) return;
       comServidor(s, () => {
-        renameSession(antigo, novo)
+        renameSession(s.name, novo)
           .then(() => toast.ok(novo))
           .catch((e: unknown) => toast.erro(formataErro(e) ?? (e instanceof Error ? e.message : String(e))));
       });
     },
-    [comServidor, renomeando, rows],
+    [comServidor, renomeando],
   );
 
   const retomar = useCallback(
@@ -208,7 +207,7 @@ export function SessionList() {
         renderItem={({ item }) => (
           <SessionMenu
             temCwd={!!item.cwd}
-            onRenomear={() => setRenomeando(item.name)}
+            onRenomear={() => setRenomeando(item)}
             onGit={() => abrirGit(item)}
             onLoop={() => abrirLoop(item)}
             onExcluir={() => excluir(item)}
@@ -233,7 +232,7 @@ export function SessionList() {
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       />
-      <RenameSheet nome={renomeando} onConfirmar={renomear} onFechar={() => setRenomeando(null)} />
+      <RenameSheet nome={renomeando?.name ?? null} onConfirmar={renomear} onFechar={() => setRenomeando(null)} />
     </>
   );
 }
