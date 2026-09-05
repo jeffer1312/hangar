@@ -59,6 +59,7 @@ vi.mock('../../lib/peers', () => ({
   listarPeers: vi.fn(async () => []),
   gravarPeer: vi.fn(),
   removerPeer: vi.fn(),
+  removerPeerDoisLados: vi.fn(),
   checkPeer: vi.fn(async () => ({ estado: 'ok' })),
 }));
 vi.mock('../../lib/alcance', () => ({

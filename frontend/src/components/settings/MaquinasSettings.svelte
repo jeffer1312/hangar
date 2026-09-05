@@ -1,14 +1,16 @@
 <script lang="ts">
   import { listServers, getActiveId, renameServer, updateServer, removeServer,
            onServersChanged, snapshotRemocao, removalStillMatches } from '../../lib/auth';
-  import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeer,
+  import { checkPeer, getIdentificador, setIdentificador, listarPeers, removerPeerDoisLados,
            type PeerView } from '../../lib/peers';
   import { registrarPeerDoisLados, type LadoState } from '../../lib/registrarPeerDoisLados';
+  import { unirMaquinas, type LinhaMaquina } from '../../lib/maquinas';
   import { sessionsStore } from '../../lib/sessionsStore.svelte';
-  import ServerManager from '../ServerManager.svelte';
   import ConfirmDialog from '../ConfirmDialog.svelte';
   import AdicionarMaquina from './AdicionarMaquina.svelte';
   import AcessoSettings from './AcessoSettings.svelte';
+  import ListaMaquinas from './ListaMaquinas.svelte';
+  import ServerEditSheet from '../ServerEditSheet.svelte';
   import type { RemovalSnapshot, Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
 
@@ -57,10 +59,11 @@
   // O que se escolhe aqui é o ALVO das telas de config de servidor, e só.
 
   let showAdd = $state(false);
+  let addEndereco = $state('');   // enderecoInicial do AdicionarMaquina, pré-preenchido por Acompanhar
 
   // Remoção com confirmação REAL (ConfirmDialog). O ÚLTIMO servidor é removível de propósito:
   // remover tudo dispara o logout global (única saída pra deslogar o aparelho) — por isso o
-  // ServerManager recebe `podeRemoverUltimo`.
+  // diálogo ganha o aviso extra quando é o último.
   let pendingRemoval = $state<(RemovalSnapshot & { label: string }) | null>(null);
   let avisoRemocao = $state('');
   function abrirRemocao(id: string) {
@@ -132,6 +135,17 @@
   let peersCarregando = $state(false);
   let peersErro = $state('');
 
+  // Server.id + token → identificador (Task 4): busca o id que o NAVEGADOR conhece de cada
+  // máquina, pra casar com o id que o SERVIDOR conhece (peers) e desenhar uma linha só por
+  // máquina. Não depende do alvo escolhido: sobrevive à troca de servidor no cabeçalho, só
+  // máquina nova (ou token trocado) volta a ser perguntada.
+  const cacheIds = new Map<string, string | null>();
+  let idsNavegador = $state<Record<string, string | null>>({});   // Server.id → identificador
+  let idsCarregando = $state(false);
+  let emEdicao = $state<Server | null>(null);        // ServerEditSheet
+  let removerLadoDeLaFalhou = $state(false);         // aviso depois de remover peer
+  const linhas = $derived(unirMaquinas(servers, idsNavegador, peers, resolvedServer?.id ?? null));
+
   // Geração da carga em voo: a resposta de um alvo que a aba já não mostra não escreve na
   // tela. Sem isto, trocar de servidor com uma chamada pendente deixa o dado do anterior
   // na tela e a remoção clicada nele sai para a máquina errada.
@@ -140,12 +154,14 @@
   $effect(() => {
     const meu = ++geracao;
     // Troca de alvo apaga o que era do anterior: erro, carregamento e diálogo aberto
-    // pertencem à máquina que saiu da tela.
-    idErro = ''; peersErro = ''; mostrandoRegistro = false; removerPeerId = null;
-    corrigeId = null; corrigeUrl = ''; corrigeToken = '';
+    // pertencem à máquina que saiu da tela. idsNavegador NÃO zera — o cache é por máquina do
+    // navegador, não por alvo escolhido.
+    idErro = ''; peersErro = ''; removerPeerId = null;
+    corrigeId = null; corrigeUrl = '';
+    removerLadoDeLaFalhou = false;
     // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
-    idSalvando = false; regSalvando = false;
+    idSalvando = false;
     // Estados de checagem pertencem ao alvo que saiu da tela (Task 8).
     estados = {};
     if (!resolvedServer) {
@@ -155,8 +171,14 @@
       peersCarregando = false; idCarregado = true;
       return;
     }
-    void carregarIdentificador(meu);
-    void carregarPeers(meu);
+    void (async () => {
+      // Ordem de carga (Task 4): espera os identificadores do navegador ANTES de medir. Sem
+      // isso `checarLista` lê `linhas` com `idsNavegador` vazio, nenhuma linha casa navegador
+      // com peer, e a volta cai em `nao_configurado` sempre — a feature central não roda.
+      await Promise.all([carregarIdentificador(meu), carregarPeers(meu), carregarIdsNavegador(meu)]);
+      if (meu !== geracao) return;
+      await checarLista(meu);
+    })();
   });
 
   async function carregarIdentificador(meu: number) {
@@ -181,11 +203,6 @@
       const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
       peers = lista;
-      // Task 8 (rodada 3): cada peer da lista ganha o estado REAL da ida ao montar — uma linha
-      // nunca fica em "Testando as duas pontas…" quando ninguém está testando. Só a IDA: o token
-      // do peer não volta da lista (PeerView.token é máscara), então a volta honesta é o selo
-      // '·' ("não sei daqui"); a volta real só existe a partir do gesto de registrar.
-      void checarLista(meu);
     } catch (e) {
       if (meu !== geracao) return;
       peersErro = msgErro(e);
@@ -194,22 +211,52 @@
     }
   }
 
-  async function checarLista(meu: number) {
-    const resultados = await Promise.all(peers.map(async (p) => {
-      const ida = await checkPeer(apiTarget, p.base_url, p.id).catch((e) => ({
-        estado: 'falhou' as const,
-        motivo: String((e as Error)?.message ?? e),
-      }));
-      return [p.id, ida] as const;
+  async function carregarIdsNavegador(meu: number) {
+    idsCarregando = true;
+    const pares = await Promise.all(servers.map(async (s) => {
+      const k = `${s.id}:${s.token}`;
+      if (cacheIds.has(k)) return [s.id, cacheIds.get(k)!] as const;
+      let id: string | null = null;
+      try { id = (await getIdentificador(s)).identificador || null; } catch { id = null; }
+      cacheIds.set(k, id);
+      return [s.id, id] as const;
     }));
-    // Guard de geração: a resposta de um alvo que a aba já não mostra não escreve na tela.
     if (meu !== geracao) return;
-    for (const [id, ida] of resultados) {
-      estados = { ...estados, [id]: {
-        lados: [{ lado: 'ida', ...ida }, { lado: 'volta', estado: 'nao_configurado' }],
-        ok: false,
-      } };
-    }
+    idsNavegador = Object.fromEntries(pares);
+    idsCarregando = false;
+  }
+
+  // Mede os dois lados de cada peer: a IDA (este servidor -> peer) e a VOLTA pelo endereço que o
+  // LADO DE LÁ guardou para esta máquina (decisão 3 da spec: aqui é LAN, lá pode ser Tailscale —
+  // medir a volta pelo endereço deste navegador daria `falhou` num par que funciona).
+  async function checarLista(meu: number) {
+    const meuId = identificador;
+    await Promise.all(peers.map(async (p) => {
+      const linha = linhas.find((l) => l.peer?.id === p.id);
+      const idaP = checkPeer(apiTarget, p.base_url, p.id).then((r) => ({ lado: 'ida', ...r }) as LadoState);
+      let voltaP: Promise<LadoState>;
+      if (!linha?.navegador || !meuId) {
+        voltaP = Promise.resolve({ lado: 'volta', estado: 'nao_configurado', motivo: 'token' } as LadoState);
+      } else {
+        const nav = linha.navegador;
+        voltaP = listarPeers(nav)
+          .then((deLa) => {
+            const eu = deLa.find((x) => x.id === meuId);
+            if (!eu) return { lado: 'volta', estado: 'nao_configurado', motivo: 'registro' } as LadoState;
+            return checkPeer(nav, eu.base_url, meuId).then((r) => ({ lado: 'volta', ...r, url: eu.base_url }) as LadoState & { url: string });
+          })
+          .catch((e) => ({ lado: 'volta', estado: 'falhou', motivo: e instanceof Error ? e.message : String(e) } as LadoState));
+      }
+      const [ida, volta] = await Promise.all([idaP, voltaP]);
+      if (meu !== geracao) return;
+      estados[p.id] = { lados: [ida, volta], ok: ida.estado === 'ok' && volta.estado === 'ok' };
+      // Decisão 5 da spec: a correção de endereço abre também na montagem, quando a volta falhou
+      // de verdade e este navegador tem o token para re-registrar.
+      if (volta.estado === 'falhou' && linha?.navegador && !corrigeId) {
+        corrigeId = p.id;
+        corrigeUrl = (volta as { url?: string }).url ?? p.base_url;
+      }
+    }));
   }
 
   // Enter salva; blur salva SÓ se mudou (sair do campo sem tocar não re-PUTa o mesmo valor).
@@ -230,65 +277,49 @@
       .finally(() => { if (meu === geracao) idSalvando = false; });
   }
 
-  // Registrar um peer (Task 5 → 8): o gesto único agora registra os DOIS lados de uma vez
-  // (A em B e B em A, com a credencial que o celular já guarda de cada um) e testa cada lado
-  // com a primitiva da Task 3. A tela mostra o estado de cada lado e, quando um falha, abre o
-  // bloco de correção de endereço (mock estado 3).
-  let mostrandoRegistro = $state(false);
-  let regId = $state('');
-  let regUrl = $state('');
-  let regToken = $state('');
-  let regErro = $state('');
-  let regSalvando = $state(false);
-  // Estados de checagem por peer: id -> {lados, ok, endereco_alternativo} (Task 8).
-  let estados = $state<Record<string, { lados: LadoState[]; ok: boolean; endereco_alternativo?: string }>>({});
+  // Estados de checagem por peer: id -> {lados, ok} (Task 8).
+  let estados = $state<Record<string, { lados: LadoState[]; ok: boolean }>>({});
   let corrigeId = $state<string | null>(null);
   let corrigeUrl = $state('');       // endereço digitado no bloco de correção (bind:value)
-  let corrigeToken = $state('');     // credencial do gesto que abriu o bloco (não volta da lista)
 
-  // Selo de UM lado derivado do estado (Task 8, rodada 3): ✓ passou, ✗ falhou, · não sei
-  // (nao_configurado — nunca é nem uma coisa nem outra). O glifo não é mais texto chumbado.
-  const selo = (l?: LadoState) =>
-    l?.estado === 'ok' ? '✓' : l && l.estado !== 'nao_configurado' ? '✗' : '·';
-
-  function abrirRegistro() {
-    mostrandoRegistro = true;
-    regId = ''; regUrl = ''; regToken = ''; regErro = '';
+  // Ações da lista unificada (Task 4): Acompanhar reusa a remoção/adição de servidor de hoje;
+  // Servidores se falam registra ou remove os dois lados de uma vez.
+  function onAcompanhar(linha: LinhaMaquina, ligar: boolean) {
+    if (!ligar && linha.navegador) { abrirRemocao(linha.navegador.id); return; }   // confirmação de hoje
+    if (ligar && linha.peer) { addEndereco = linha.peer.base_url; showAdd = true; } // pede só o token
   }
 
-  async function registrarPeer() {
-    if (regSalvando) return;
-    const id = regId.trim();
-    const url = regUrl.trim();
-    const token = regToken.trim();
-    if (!ID_OK.test(id)) { regErro = ID_DICA(); return; }
-    if (!/^https?:\/\//.test(url)) { regErro = m.url_invalida(); return; }
-    regSalvando = true;
-    regErro = '';
-    const meu = geracao;
-    try {
-      // Task 8: um gesto registra os dois lados e testa os dois — a lista volta do backend.
-      const r = await registrarPeerDoisLados(apiTarget, { id, base_url: url, token });
-      if (meu !== geracao) return;
-      // A lista nova vem da gravação no DONO (o backend devolve a lista atualizada).
-      const lista = await listarPeers(apiTarget);
-      if (meu !== geracao) return;
-      peers = lista;
-      // O estado dos dois lados fica na tela (mock estados 2 e 3).
-      estados = { ...estados, [id]: { lados: r.lados, ok: r.ok, endereco_alternativo: r.endereco_alternativo } };
-      if (!r.ok) {
-        // Bloco de correção aberto no endereço que FALHOU — com a credencial do gesto guardada
-        // (o token não volta da lista; é o que "Testar de novo" reusa no endereço digitado).
-        corrigeId = id;
-        corrigeUrl = url;
-        corrigeToken = token;
+  async function onFalar(linha: LinhaMaquina, ligar: boolean) {
+    if (!ligar && linha.peer) { removerPeerId = linha.peer.id; return; }            // confirmação de hoje
+    if (ligar && linha.navegador && linha.identificador) {
+      const meu = geracao;
+      peersErro = '';
+      try {
+        const r = await registrarPeerDoisLados(apiTarget, { id: linha.identificador, base_url: linha.navegador.baseUrl, token: linha.navegador.token });
+        if (meu !== geracao) return;
+        peers = await listarPeers(apiTarget);
+        estados[r.id] = { lados: r.lados, ok: r.ok };
+        if (!r.ok) { corrigeId = r.id; corrigeUrl = r.base_url; }
+      } catch (e) {
+        if (meu === geracao) peersErro = msgErro(e);
       }
-      mostrandoRegistro = false;
+    }
+  }
+
+  // "Testar de novo": re-registra e re-testa o peer no ENDEREÇO DIGITADO (o bloco de correção
+  // existe justamente para testar um endereço novo). Só fecha quando o par fecha; senão o estado
+  // novo fica à vista. O token vem do NAVEGADOR: só há bloco de correção em linha com navegador.
+  async function testarDeNovo(linha: LinhaMaquina) {
+    const url = corrigeUrl.trim();
+    if (!/^https?:\/\//.test(url)) { peersErro = m.url_invalida(); return; }
+    try {
+      const r = await registrarPeerDoisLados(apiTarget, { id: linha.identificador!, base_url: url, token: linha.navegador!.token });
+      const lista = await listarPeers(apiTarget);
+      peers = lista;
+      estados[r.id] = { lados: r.lados, ok: r.ok };
+      if (r.ok) { corrigeId = null; corrigeUrl = ''; }
     } catch (e) {
-      if (meu !== geracao) return;
-      regErro = msgErro(e);
-    } finally {
-      if (meu === geracao) regSalvando = false;
+      peersErro = msgErro(e);
     }
   }
 
@@ -296,25 +327,6 @@
   function fecharCorrige() {
     corrigeId = null;
     corrigeUrl = '';
-    corrigeToken = '';
-  }
-
-  // "Testar de novo": re-registra e re-testa o peer no ENDEREÇO DIGITADO (o bloco de correção
-  // existe justamente para testar um endereço novo). Só fecha quando o par fecha; senão o estado
-  // novo fica à vista. Risco do token guardado: regToken do gesto que abriu o bloco (não volta
-  // da lista, que mascara) — mesmo contrato do registrarPeer.
-  async function testarDeNovo(peer: PeerView) {
-    const url = corrigeUrl.trim();
-    if (!/^https?:\/\//.test(url)) { peersErro = m.url_invalida(); return; }
-    try {
-      const r = await registrarPeerDoisLados(apiTarget, { id: peer.id, base_url: url, token: corrigeToken });
-      const lista = await listarPeers(apiTarget);
-      peers = lista;
-      estados = { ...estados, [peer.id]: { lados: r.lados, ok: r.ok, endereco_alternativo: r.endereco_alternativo } };
-      if (r.ok) { corrigeId = null; corrigeUrl = ''; corrigeToken = ''; }
-    } catch (e) {
-      peersErro = msgErro(e);
-    }
   }
 
   let removerPeerId = $state<string | null>(null);
@@ -324,8 +336,14 @@
     if (!id) return;
     const meu = geracao;
     peersErro = '';
+    // O navegador conhece o peer que sai (mesmo motivo de removerPeerDoisLados existir): sem o
+    // token dele, o lado de lá não dá pra desfazer, e a tela avisa em vez de fingir que desfez.
+    const remoto = linhas.find((l) => l.peer?.id === id)?.navegador ?? null;
     try {
-      const lista = await removerPeer(apiTarget, id);
+      const resultado = await removerPeerDoisLados(apiTarget, id, remoto);
+      if (meu !== geracao) return;
+      removerLadoDeLaFalhou = resultado === false;
+      const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
       peers = lista;
     } catch (e) {
@@ -375,134 +393,35 @@
   {#if idErro}<p class="id-erro" role="alert">{idErro}</p>{/if}
 
   <AcessoSettings alvo={resolvedServer} />
-
-  <div class="ss-sep"></div>
-  <!-- Bloco 2: máquinas que este servidor alcança (Task 5): a lista do peers.json. O estado das
-       duas pontas (testar/liga) é da Task 8 — aqui se mostra e se edita o vínculo local. -->
-  <p class="ss-secao">{m.peers_secao_alcance()}</p>
-  {#if peers.length}
-    <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
-    <div class="pr-cartao">
-      {#each peers as peer (peer.id)}
-        {@const st = estados[peer.id]}
-        {@const ida = st?.lados.find((l) => l.lado === 'ida')}
-        {@const volta = st?.lados.find((l) => l.lado === 'volta')}
-        {@const ok = ida?.estado === 'ok' && volta?.estado === 'ok'}
-        {@const meio = st && !ok}
-        <div class="pr-linha">
-          <span class="pr-farol" class:ok class:nao={meio} class:test={!st}>
-            {st ? (ok ? '●' : '◌') : '◌'}
-          </span>
-          <span class="pr-txt">
-            <span class="pr-nome">{peer.id}</span>
-            <span class="pr-url">{peer.base_url}</span>
-            {#if st}
-              {#if ok}
-                <span class="pr-estado ok">{m.peers_estado_ok()}</span>
-              {:else}
-                <span class="pr-estado nao">{m.peers_estado_parcial()}</span>
-              {/if}
-            {:else}
-              <span class="pr-estado neutro">{m.peers_estado_testando()}</span>
-            {/if}
-          </span>
-          {#if st}
-            <span class="pr-lados">
-          <span class="pr-lado" class:ok={ida?.estado === 'ok'} class:nao={ida && ida.estado !== 'ok' && ida.estado !== 'nao_configurado'}>{selo(ida)} {m.peers_lado_ida()}</span>
-              <span class="pr-lado" class:ok={volta?.estado === 'ok'} class:nao={volta && volta.estado !== 'ok' && volta.estado !== 'nao_configurado'}>{selo(volta)} {m.peers_lado_volta()}</span>
-            </span>
-          {/if}
-          <button class="pr-btn min" onclick={() => (removerPeerId = peer.id)}>{m.peers_remover()}</button>
-        </div>
-        {#if st && !ok && corrigeId === peer.id}
-          <div class="corrige">
-            <p>
-              {m.peers_corrige_1({ nome: peer.id, endereco: peer.base_url })}
-            </p>
-            <p><b>{m.peers_corrige_pergunta({ nome: peer.id })}</b></p>
-            <input class="corrige-input" bind:value={corrigeUrl} aria-label={m.peers_corrige_pergunta({ nome: peer.id })} />
-            <div class="acoes">
-              <button class="btn primaria" onclick={() => testarDeNovo(peer)}>{m.peers_testar_novamente()}</button>
-              <button class="btn" onclick={() => fecharCorrige()}>{m.peers_so_ida()}</button>
-            </div>
-          </div>
-        {/if}
-      {/each}
-    </div>
-  {:else if peersCarregando}
-    <p class="ss-legenda">{m.comum_carregando()}</p>
-  {:else if identificador}
-    <p class="ss-legenda">{m.peers_legenda_alcance()}</p>
-  {:else}
-    <p class="ss-legenda">{m.peers_vazio()}</p>
-  {/if}
-  {#if identificador}
-    <div class="pr-acoes">
-      <button class="pr-btn primaria" onclick={abrirRegistro}>{m.peers_registrar()}</button>
-    </div>
-  {/if}
-  {#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
-
-  <div class="ss-sep"></div>
 {/if}
 
-<!-- Bloco 3: os servidores que ESTE navegador conhece. Fora do {#if}: é por aqui que se cadastra
-     o primeiro, e é a única saída quando o ativo morreu. -->
-<p class="ss-secao">{m.maquinas_este_aparelho()}</p>
-<p class="ss-legenda">{m.maquinas_este_aparelho_legenda()}</p>
-<ServerManager
-  {servers}
-  targetId={resolvedServer?.id ?? null}
-  {onPickTarget}
-  podeRemoverUltimo
-  onRename={rename}
-  onUpdateToken={updateToken}
-  onRemove={abrirRemocao}
-  onAdd={() => (showAdd = true)}
-/>
+<div class="ss-sep"></div>
+<p class="ss-secao">{m.maquinas_secao()}</p>
+<p class="ss-legenda">{m.maquinas_secao_legenda()}</p>
+<ListaMaquinas
+  {linhas} {estados} meuIdentificador={identificador}
+  carregando={idsCarregando || peersCarregando}
+  corrige={corrigeId ? { id: corrigeId, url: corrigeUrl } : null}
+  {onAcompanhar} {onFalar}
+  onEditar={(l) => (emEdicao = l.navegador)}
+  onCorrige={(u) => { if (u === null) fecharCorrige(); else corrigeUrl = u; }}
+  onTestarDeNovo={testarDeNovo}
+  onAdicionar={() => { addEndereco = ''; showAdd = true; }} />
+{#if peersErro}<p class="id-erro" role="status">{peersErro}</p>{/if}
+{#if removerLadoDeLaFalhou}<p class="ss-aviso" role="status">{m.maquinas_remover_peer_lado_de_la_falhou()}</p>{/if}
 <div class="ss-acoes">
   <button class="ss-btn" onclick={() => sessionsStore.reconnect()} disabled={logoutInFlight}>{m.config_servidores_reconectar()}</button>
   <button class="ss-btn ss-danger" onclick={() => (confirmLogout = true)} disabled={logoutInFlight}>{m.sessao_sair_curto()}</button>
 </div>
 
+<ServerEditSheet open={!!emEdicao} server={emEdicao} onClose={() => (emEdicao = null)} onRename={rename} onUpdateToken={updateToken} />
 {#if showAdd}
-  <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)} />
-{/if}
-
-{#if mostrandoRegistro}
-  <ConfirmDialog title={m.peers_registrar()} aria={m.peers_registrar()} role="dialog"
-    {fallbackFocus}
-    onClose={() => (mostrandoRegistro = false)}
-    actions={[
-      { label: m.comum_cancelar(), onClick: () => (mostrandoRegistro = false) },
-      { label: m.comum_confirmar(), kind: 'primary',
-        disabled: regSalvando || !regId.trim() || !regUrl.trim() || !regToken.trim(),
-        onClick: registrarPeer },
-    ]}>
-    <label class="pr-form-campo">
-      <span class="pr-form-rot">{m.peers_identificador()}</span>
-      <input class="pr-form-input" bind:value={regId}
-             placeholder={m.peers_identificador_placeholder()}
-             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
-             onkeydown={(e) => { regErro = ''; if (e.key === 'Enter' && regSalvando === false && regId.trim() && regUrl.trim() && regToken.trim()) registrarPeer(); }} />
-    </label>
-    <label class="pr-form-campo">
-      <span class="pr-form-rot">{m.sessao_url_servidor()}</span>
-      <input class="pr-form-input" bind:value={regUrl}
-             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
-             onkeydown={(e) => { regErro = ''; if (e.key === 'Enter' && regSalvando === false && regId.trim() && regUrl.trim() && regToken.trim()) registrarPeer(); }} />
-    </label>
-    <label class="pr-form-campo">
-      <span class="pr-form-rot">{m.sessao_token()}</span>
-      <input class="pr-form-input" bind:value={regToken}
-             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
-             onkeydown={(e) => { regErro = ''; if (e.key === 'Enter' && regSalvando === false && regId.trim() && regUrl.trim() && regToken.trim()) registrarPeer(); }} />
-    </label>
-    {#if regErro}<p class="pr-form-erro" role="alert">{regErro}</p>{/if}
-  </ConfirmDialog>
+  <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)}
+    apiTarget={apiTarget} podeFalar={!!resolvedServer && !!identificador} enderecoInicial={addEndereco} />
 {/if}
 
 {#if removerPeerId}
+  {@const linhaRem = linhas.find((l) => l.peer?.id === removerPeerId)}
   <ConfirmDialog title={m.config_servidores_remover({ nome: removerPeerId })} aria={m.config_servidores_remover_aria()}
     {fallbackFocus}
     onClose={() => (removerPeerId = null)}
@@ -510,7 +429,7 @@
       { label: m.comum_cancelar(), onClick: () => (removerPeerId = null) },
       { label: m.peers_remover(), kind: 'danger', onClick: removerPeerConfirmado },
     ]}>
-    <p class="ss-dialog-copy">{m.config_servidores_token_removido()}</p>
+    <p class="ss-dialog-copy">{linhaRem?.navegador ? m.maquinas_remover_peer_lados() : m.maquinas_remover_peer_so_aqui()}</p>
   </ConfirmDialog>
 {/if}
 
@@ -523,6 +442,7 @@
       { label: m.lista_remover(), kind: 'danger', onClick: confirmRemoval },
     ]}>
     <p class="ss-dialog-copy">{m.config_servidores_token_removido()}</p>
+    {#if servers.length === 1}<p class="ss-dialog-copy">{m.config_servidores_voltar()}</p>{/if}
   </ConfirmDialog>
 {/if}
 
@@ -569,7 +489,7 @@
 
   .ss-dialog-copy { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); }
 
-  /* ── Seções Task 5: identificador + máquinas que este servidor alcança ──────────────────
+  /* ── Seção Task 5: identificador desta máquina ─────────────────────────────────────────
      Classes espelhando o mock de servidores.html (que por sua vez veio destas mesmas telas e
      dos tokens de app.css) — o pedaço novo tem que ser do mesmo peso do resto da aba. */
   .id-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; }
@@ -588,57 +508,4 @@
   .id-campo:read-only { opacity: 0.6; }
   .id-aviso { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--warning); }
   .id-erro { margin: 0 0 var(--space-2) var(--space-2); font-size: var(--text-xs); color: var(--error); }
-
-  .pr-cartao { background: var(--surface-card); border: 1px solid var(--border-subtle);
-               border-radius: var(--radius-md); overflow: hidden; }
-  /* celular estreito: as pílulas descem de linha em vez de esmagar a URL */
-  .pr-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); flex-wrap: wrap; }
-  .pr-linha + .pr-linha { border-top: 1px solid var(--border-subtle); }
-  .pr-farol { flex-shrink: 0; width: 1.2em; text-align: center; font-size: 14px; }
-  .pr-farol.ok { color: var(--success); }
-  .pr-farol.nao { color: var(--error); }
-  .pr-farol.test { color: var(--text-muted); }
-  .pr-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
-  .pr-nome { font-size: var(--text-sm); color: var(--text-primary); }
-  .pr-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
-            word-break: break-all; }
-  .pr-estado { font-size: var(--text-xs); line-height: 1.35; }
-  .pr-estado.ok { color: var(--success); }
-  .pr-estado.nao { color: var(--warning); }
-  .pr-estado.neutro { color: var(--text-muted); }
-  .pr-lados { display: flex; gap: var(--space-2); flex-shrink: 0; }
-  .pr-lado { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted);
-             padding: 2px var(--space-2); border-radius: var(--radius-full);
-             background: var(--surface-raised); border: 1px solid var(--border-subtle); }
-  .pr-lado.ok { color: var(--success); }
-  .pr-lado.nao { color: var(--error); }
-  .corrige { margin-top: var(--space-3); padding: var(--space-3); background: var(--surface-card);
-             border: 1px solid var(--border-default); border-left: 3px solid var(--warning);
-             border-radius: var(--radius-md); }
-  .corrige p { margin: 0 0 var(--space-2); font-size: var(--text-xs); color: var(--text-secondary);
-               line-height: 1.45; }
-  .corrige b { color: var(--text-primary); font-weight: 600; }
-  .corrige input { width: 100%; height: 34px; padding: 0 var(--space-3);
-                   background: var(--surface-inset); border: 1px solid var(--border-default);
-                   border-radius: var(--radius-sm); color: var(--text-primary);
-                   font-family: var(--font-mono); font-size: var(--text-sm); box-sizing: border-box; }
-  .acoes { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
-  .btn { height: 36px; min-height: 0; padding: 0 var(--space-4); border-radius: var(--radius-sm);
-         border: 1px solid var(--border-subtle); background: var(--surface-raised);
-         color: var(--text-primary); font-size: var(--text-sm); font-family: inherit; }
-  .btn.primaria { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .pr-acoes { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
-  .pr-btn.min { height: 30px; padding: 0 var(--space-3); font-size: var(--text-xs); }
-  .pr-btn:disabled { opacity: 0.45; }
-
-  .pr-form-campo { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: var(--space-3); }
-  .pr-form-rot { font-size: var(--text-xs); color: var(--text-secondary); }
-  .pr-form-input {
-    height: 40px; padding: 0 var(--space-3);
-    background: var(--surface-inset); border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm); color: var(--text-primary);
-    font-family: var(--font-mono); font-size: var(--text-sm); outline: none;
-  }
-  .pr-form-input:focus { border-color: var(--accent); }
-  .pr-form-erro { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--error); }
 </style>
