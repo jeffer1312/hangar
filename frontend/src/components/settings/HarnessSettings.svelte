@@ -78,6 +78,9 @@
     config_ilegivel: () => m.harness_config_ilegivel(),
     extensoes_ok: (p) => m.harness_extensoes_ok({ n: p.n ?? '' }),
     faltam: (p) => m.harness_faltam({ lista: p.lista ?? '' }),
+    extensoes_outra_fonte: (p) => (p.faltam
+      ? m.harness_extensoes_outra_fonte_e_faltam({ lista: p.lista ?? '', faltam: p.faltam })
+      : m.harness_extensoes_outra_fonte({ lista: p.lista ?? '' })),
     faltam_n: (p) => m.harness_faltam_n({ n: p.n ?? '' }),
     hooks_ok: (p) => m.harness_hooks_ok({ n: p.n ?? '' }),
     nenhuma_conta: () => m.harness_nenhuma_conta(),

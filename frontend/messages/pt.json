@@ -2140,6 +2140,8 @@
   "harness_credenciais_faltam": "tem: {tem} · faltam (o app tem): {faltam}",
   "harness_statusline_ok": "statusline publica a linha pro app",
   "harness_sem_statusline": "sem statusline.js — rode o install-claude-wrapper.sh",
+  "harness_extensoes_outra_fonte": "apontam pra outra fonte, não pra deste repo: {lista}",
+  "harness_extensoes_outra_fonte_e_faltam": "faltam: {faltam}; apontam pra outra fonte: {lista}",
   "criar_provider_ausente": "«{p}» não encontrado no PATH — instale o CLI para criar sessões {p}",
   "atividade_mostrar_prompt": "mostrar o prompt inteiro",
   "atividade_conversa_so_leitura": "Conversa só-leitura — este agente pertence à sessão {nome}.",
