@@ -1071,6 +1071,8 @@
   "maquinas_add_token_ajuda": "Está no QR do servidor, ou na variável {variavel} do .env dele.",
   "maquinas_add_testar": "Testar e adicionar",
   "maquinas_add_testando": "Testando…",
+  "maquinas_add_falar": "Os servidores também se falam",
+  "maquinas_add_falar_ajuda": "Registra esta máquina no servidor escolhido, e ele nela, para as sessões trocarem recados. Dá para mudar depois na lista.",
   "maquinas_add_erro_endereco": "Endereço inválido — use IP ou nome, com porta se precisar.",
   "maquinas_add_erro_token": "Informe o token do servidor.",
   "config_servidores_remover": "Remover {nome}?",

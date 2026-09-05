@@ -9,19 +9,26 @@
   import { normalizarEndereco } from '../../lib/url';
   import { getConfigForServer } from '../../lib/api';
   import { addServer } from '../../lib/auth';
+  import { getIdentificador } from '../../lib/peers';
+  import { registrarPeerDoisLados } from '../../lib/registrarPeerDoisLados';
+  import type { Server } from '../../lib/auth';
 
   interface Props {
     fallbackFocus?: HTMLElement | null;
     onFechar: () => void;
+    apiTarget?: Server | null;
+    podeFalar?: boolean;
+    enderecoInicial?: string;
   }
-  let { fallbackFocus = null, onFechar }: Props = $props();
+  let { fallbackFocus = null, onFechar, apiTarget = null, podeFalar = false, enderecoInicial = '' }: Props = $props();
 
-  let endereco = $state('');
+  let endereco = $state(enderecoInicial);
   let token = $state('');
   let erro = $state('');
   let ocupado = $state(false);
   let scanning = $state(false);
   let enderecoEl = $state<HTMLInputElement | null>(null);
+  let falar = $state(false);   // é uma pergunta: quem quer, marca
 
   // Link de pareamento colado inteiro: o token vai para o campo dele e o endereço fica só a origem.
   // Roda no blur, não no input — normalizar a cada tecla reescreveria o que a pessoa está digitando.
@@ -68,6 +75,16 @@
     }
     // Fora do try/catch acima: erro daqui pra baixo não é do probe, e rotulá-lo de "falha na
     // conexão" mentiria sobre a causa.
+    // Registrar o peer antes de gravar no navegador: o reload que vem a seguir apaga este componente,
+    // e a lista mostra o estado do registro quando voltar. Falha aqui não é motivo para não acompanhar.
+    if (podeFalar && falar) {
+      try {
+        const { identificador } = await getIdentificador({ id: 'candidato', label: base, baseUrl: base, token: tok });
+        if (identificador) await registrarPeerDoisLados(apiTarget, { id: identificador, base_url: base, token: tok });
+      } catch {
+        // a lista dirá "só uma das pontas responde"; o que a pessoa pediu — acompanhar — segue.
+      }
+    }
     addServer(base, tok);
     window.location.reload();
     ocupado = false;
@@ -122,6 +139,15 @@
              onkeydown={(e) => { if (e.key === 'Enter') void testarEAdicionar(); }} />
       <span class="am-ajuda">{m.maquinas_add_token_ajuda({ variavel: 'CP_AUTH_TOKEN' })}</span>
     </label>
+    {#if podeFalar}
+      <label class="am-falar-linha">
+        <input class="switch am-falar" type="checkbox" bind:checked={falar} disabled={ocupado} />
+        <span class="am-falar-txt">
+          <span>{m.maquinas_add_falar()}</span>
+          <span class="am-ajuda">{m.maquinas_add_falar_ajuda()}</span>
+        </span>
+      </label>
+    {/if}
     {#if ocupado}<p class="am-status" aria-live="polite">{m.maquinas_add_testando()}</p>{/if}
     {#if erro}<p class="am-erro" id="am-erro" role="alert">{erro}</p>{/if}
   </ConfirmDialog>
@@ -139,6 +165,8 @@
     font: inherit;
   }
   .am-ajuda { font-size: 0.8rem; color: var(--text-muted); }
+  .am-falar-linha { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+  .am-falar-txt { display: flex; flex-direction: column; gap: 2px; }
   .am-status { font-size: 0.85rem; color: var(--text-muted); margin: 0; }
   .am-erro { color: var(--error); font-size: 0.85rem; margin: 0; }
 </style>

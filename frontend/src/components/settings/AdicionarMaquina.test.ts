@@ -9,15 +9,19 @@ const getConfigForServer = vi.fn();
 // de zero parâmetros e o wrapper `(...a) => addServer(...a)` do vi.mock abaixo não compila
 // ("spread argument must ... be passed to a rest parameter").
 const addServer = vi.fn((..._args: unknown[]) => ({ id: 'srv-n', existed: false }));
+const getIdentificador = vi.fn();
+const registrarPeerDoisLados = vi.fn();
 vi.mock('../../lib/api', () => ({ getConfigForServer: (...a: unknown[]) => getConfigForServer(...a) }));
 vi.mock('../../lib/auth', () => ({ addServer: (...a: unknown[]) => addServer(...a) }));
 vi.mock('../QrScanner.svelte', () => ({ default: () => {} }));
+vi.mock('../../lib/peers', () => ({ getIdentificador: (...a: unknown[]) => getIdentificador(...a) }));
+vi.mock('../../lib/registrarPeerDoisLados', () => ({ registrarPeerDoisLados: (...a: unknown[]) => registrarPeerDoisLados(...a) }));
 
-function montar() {
+function montar(props: Record<string, unknown> = {}) {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const onFechar = vi.fn();
-  const comp = mount(AdicionarMaquina, { target: el, props: { onFechar } });
+  const comp = mount(AdicionarMaquina, { target: el, props: { onFechar, ...props } });
   const campo = (rot: string) => document.body.querySelector<HTMLInputElement>(`input[aria-label="${rot}"]`)!;
   const botao = (rot: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === rot)!;
   return { el, comp, onFechar, campo, botao };
@@ -183,6 +187,77 @@ describe('AdicionarMaquina', () => {
     rejeitar(new Error('401: token'));
     await tick(); await tick();
     expect(document.body.querySelector('[role="alert"]')?.textContent).toContain('401');
+    unmount(t.comp);
+  });
+});
+
+describe('AdicionarMaquina — servidores se falam', () => {
+  const ALVO = { id: 'srv-a', label: 'A', baseUrl: 'http://a', token: 'ta' };
+
+  it('com a caixa marcada, registra o peer nas duas pontas antes de gravar no navegador', async () => {
+    getConfigForServer.mockResolvedValue({ campos: {}, somente_leitura: {} });
+    getIdentificador.mockResolvedValue({ identificador: 'notebook' });
+    registrarPeerDoisLados.mockResolvedValue({ ok: true, id: 'notebook', base_url: 'http://192.168.0.10:8765', lados: [] });
+    const t = montar({ apiTarget: ALVO, podeFalar: true });
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    const caixa = document.body.querySelector<HTMLInputElement>('input.am-falar')!;
+    expect(caixa.checked).toBe(false);   // nasce desmarcada: é uma pergunta, não um pressuposto
+    caixa.click();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(getIdentificador).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://192.168.0.10:8765', token: 'abc' }));
+    expect(registrarPeerDoisLados).toHaveBeenCalledWith(ALVO, { id: 'notebook', base_url: 'http://192.168.0.10:8765', token: 'abc' });
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
+    unmount(t.comp);
+  });
+
+  it('caixa desmarcada (o padrão): grava no navegador sem registrar peer', async () => {
+    getConfigForServer.mockResolvedValue({ campos: {}, somente_leitura: {} });
+    const t = montar({ apiTarget: ALVO, podeFalar: true });
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick(); await tick(); await tick();
+    expect(registrarPeerDoisLados).not.toHaveBeenCalled();
+    expect(addServer).toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('sem podeFalar a caixa não existe e nada de peer acontece', async () => {
+    getConfigForServer.mockResolvedValue({ campos: {}, somente_leitura: {} });
+    const t = montar();
+    expect(document.body.querySelector('input.am-falar')).toBeNull();
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick(); await tick(); await tick();
+    expect(getIdentificador).not.toHaveBeenCalled();
+    expect(addServer).toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('registro do peer falhando não impede gravar no navegador', async () => {
+    getConfigForServer.mockResolvedValue({ campos: {}, somente_leitura: {} });
+    getIdentificador.mockResolvedValue({ identificador: 'notebook' });
+    registrarPeerDoisLados.mockRejectedValue(new Error('500: x'));
+    const t = montar({ apiTarget: ALVO, podeFalar: true });
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    document.body.querySelector<HTMLInputElement>('input.am-falar')!.click();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick(); await tick(); await tick(); await tick();
+    expect(addServer).toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('enderecoInicial preenche o campo', () => {
+    const t = montar({ enderecoInicial: 'https://vps.exemplo.com' });
+    expect(t.campo(m.maquinas_add_endereco()).value).toBe('https://vps.exemplo.com');
     unmount(t.comp);
   });
 });

@@ -1071,6 +1071,8 @@
   "maquinas_add_token_ajuda": "It is in the server's QR code, or in the {variavel} variable of its .env.",
   "maquinas_add_testar": "Test and add",
   "maquinas_add_testando": "Testing…",
+  "maquinas_add_falar": "The servers also talk to each other",
+  "maquinas_add_falar_ajuda": "Registers this machine on the chosen server, and it on this one, so sessions can message each other. You can change it later in the list.",
   "maquinas_add_erro_endereco": "Invalid address — use an IP or a name, with a port if needed.",
   "maquinas_add_erro_token": "Enter the server's token.",
   "config_servidores_remover": "Remove {nome}?",
