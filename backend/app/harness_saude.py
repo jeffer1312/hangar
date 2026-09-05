@@ -223,6 +223,9 @@ def _extensoes(cli: str) -> dict:
     raiz = _raiz_agente(cli)
     ext = raiz / "extensions"
     faltam = []
+    # Link vivo pra outra fonte (o repo antigo das extensões, tipicamente): a extensão RODA, só não
+    # é a daqui. Dizer "falta" pra isso contradiz a linha de fullscreen logo abaixo dizendo "ligado".
+    outra_fonte = []
     for nome in _EXTENSOES_PI:
         p = ext / f"{nome}.ts"
         fonte = _REPO / "scripts" / "pi" / f"{nome}.ts"
@@ -230,10 +233,25 @@ def _extensoes(cli: str) -> dict:
             continue
         if p.exists() and not p.is_symlink():
             continue  # arquivo do usuário com o mesmo nome: é dele, não conta como falta
+        if p.is_symlink() and p.exists():
+            outra_fonte.append(f"{nome} → {_abreviar_home(p.resolve())}")
+            continue
         faltam.append(nome)
+    if outra_fonte:
+        params = {"lista": ", ".join(outra_fonte)}
+        if faltam:
+            params["faltam"] = ", ".join(faltam)
+        return _item("extensoes", False, "extensoes_outra_fonte", f"extensoes:{cli}", **params)
     if faltam:
         return _item("extensoes", False, "faltam", f"extensoes:{cli}", lista=", ".join(faltam))
     return _item("extensoes", True, "extensoes_ok", n=len(_EXTENSOES_PI))
+
+
+def _abreviar_home(p: Path) -> str:
+    try:
+        return "~/" + str(p.relative_to(Path.home()))
+    except ValueError:
+        return str(p)
 
 
 def _fullscreen(cli: str) -> dict:
@@ -451,7 +469,9 @@ def diagnosticar() -> list[dict]:
     v = _versao("omp")
     d = _raiz_agente("omp")
     saida.append({"id": "omp", "nome": "oh-my-pi", "instalado": v is not None or d.is_dir(), "versao": v,
-                  "itens": [_credenciais("omp"), _extensoes("omp"), _fullscreen("omp"), _mcp("omp"),
+                  # Sem `_fullscreen("omp")`: a conversa do omp mora no scrollback do terminal por
+                  # desenho — em alternate screen ela some e a roda vira seta (historico no composer).
+                  "itens": [_credenciais("omp"), _extensoes("omp"), _mcp("omp"),
                             _modelo_padrao("omp")] if d.is_dir() else []})
 
     v = _versao("kimi")
@@ -546,8 +566,11 @@ def consertar(id_: str) -> str:
         d["tui"] = "fullscreen"
         hook_installer._write(settings, d)
         return "tui = fullscreen no settings.json; vale nas sessões novas"
-    if id_ in ("fullscreen:pi", "fullscreen:omp"):
-        cfg = _raiz_agente(id_.split(":", 1)[1]) / "fullscreen-tui.json"
+    if id_ == "fullscreen:omp":
+        # Tela cacheada de antes: o botao sumiu porque a rolagem do omp e a do scrollback.
+        raise ValueError("o omp não tem tela cheia: a rolagem dele é a do terminal (ver CLAUDE.md)")
+    if id_ == "fullscreen:pi":
+        cfg = _raiz_agente("pi") / "fullscreen-tui.json"
         if cfg.exists():
             raise ValueError("já configurado — /fullscreen-on na TUI")
         cfg.parent.mkdir(parents=True, exist_ok=True)

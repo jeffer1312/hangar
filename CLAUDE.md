@@ -477,7 +477,17 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   roda hooks, e quem instala o Hangar não deveria precisar de um segundo repo pra isso. O
   `install-claude-wrapper.sh` symlinka as sete (`link_agent_extensions`) em
   `~/.pi/agent/extensions/` e `~/.omp/agent/extensions/`. No Pi com fullscreen nativo, a extensão
-  não assume o alternate screen para evitar dupla posse; no OMP, ela liga na primeira instalação.
+  não assume o alternate screen para evitar dupla posse. **No omp ela fica DESLIGADA, e a tela
+  Harnesses não oferece o botão** (05/09/2026): a conversa do omp mora no scrollback do terminal
+  por desenho — o renderizador nunca consulta a posição de rolagem (issue can1357/oh-my-pi#10232,
+  #7893 fechada como duplicata da RFC #2040). Medido no tmux e no kitty: em alternate screen sem
+  pedir mouse (`alternate_on=1`, `mouse_any_flag=0`), a roda vira seta e o composer mostra o
+  histórico de prompts (`❯ ola`); sem alternate screen, a roda rola o scrollback (copy-mode no
+  tmux, `history=51`) e o composer some enquanto se lê — que é como o omp funciona em qualquer
+  terminal. O Pi nativo escapa porque **pede o mouse** (`mouse_any_flag=1`) e rola a própria tela;
+  no omp o renderizador é privado (`#doRender`), então nem as extensões do Pi (`pi-sticky-input`,
+  `pi-claude-style-scroll`) conseguem — só suporte no núcleo. O instalador desfaz o
+  `enabled: true` que ele mesmo escrevia; `/fullscreen-on` continua existindo pra quem insistir.
   regras herdadas do adapter: a allowlist embutida libera só `~/.claude/hooks/` — hook que mora
   noutro lugar entra por `~/.pi/agent/claude-hooks-adapter.json`, e `allowPatterns` ali
   **substitui** a lista, não soma; e os hooks só-Claude do próprio app (`state_hook`, `askq_capture`,

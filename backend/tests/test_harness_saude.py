@@ -24,6 +24,32 @@ def test_extensoes_faltando_e_o_conserto_liga(tmp_path, monkeypatch):
     assert (raiz / "extensions" / "claude-todo.ts").read_text() == "meu"
 
 
+def test_extensao_apontando_pra_outra_fonte_nao_e_falta(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    (repo / "scripts" / "pi").mkdir(parents=True)
+    for nome in h._EXTENSOES_PI:
+        (repo / "scripts" / "pi" / f"{nome}.ts").write_text("")
+    monkeypatch.setattr(h, "_REPO", repo)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    raiz = tmp_path / ".pi" / "agent"
+    ext = raiz / "extensions"
+    ext.mkdir(parents=True)
+    velho = tmp_path / "repo-velho" / "fullscreen-tui.ts"
+    velho.parent.mkdir()
+    velho.write_text("antigo")
+    for nome in h._EXTENSOES_PI:
+        if nome not in ("fullscreen-tui", "claude-todo"):
+            (ext / f"{nome}.ts").symlink_to(repo / "scripts" / "pi" / f"{nome}.ts")
+    (ext / "fullscreen-tui.ts").symlink_to(velho)
+    item = h._extensoes("pi")
+    assert item["ok"] is False and item["codigo"] == "extensoes_outra_fonte"
+    assert item["params"]["lista"] == "fullscreen-tui → ~/repo-velho/fullscreen-tui.ts"
+    assert item["params"]["faltam"] == "claude-todo"
+    h.consertar(item["conserto"])
+    assert h._extensoes("pi")["ok"] is True
+
+
 def test_hooks_do_claude_faltando_apontam_o_conserto(tmp_path):
     (tmp_path / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": "x state_hook.py"}]}]}}))
     item = h._hooks_claude(tmp_path)
@@ -31,6 +57,24 @@ def test_hooks_do_claude_faltando_apontam_o_conserto(tmp_path):
     assert "askq_capture.py" in item["params"]["lista"] and "state_hook.py" not in item["params"]["lista"]
     (tmp_path / "settings.json").write_text("{quebrado")
     assert h._hooks_claude(tmp_path)["ok"] is None
+
+
+def test_omp_nao_oferece_fullscreen(tmp_path, monkeypatch):
+    # A conversa do omp mora no scrollback do terminal por desenho (renderizador nunca consulta a
+    # posicao de rolagem; issue #10232). Em alternate screen ela some, e a roda vira seta =
+    # historico no composer. A tela de saude nao pode oferecer o botao que liga isso.
+    raiz = tmp_path / "omp-agent"
+    (raiz / "extensions").mkdir(parents=True)
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(raiz))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))   # credenciais/cofre
+    monkeypatch.setattr(h, "_versao", lambda cli: "18.1.6" if cli == "omp" else None)
+    omp = next(b for b in h.diagnosticar() if b["id"] == "omp")
+    assert "fullscreen" not in [i["id"] for i in omp["itens"]]
+    try:
+        h.consertar("fullscreen:omp")
+    except ValueError:
+        return
+    raise AssertionError("fullscreen:omp não pode ser conserto — liga o que quebra a rolagem")
 
 
 def test_conserto_desconhecido_ou_caminho_arbitrario_falha_alto():

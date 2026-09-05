@@ -313,7 +313,13 @@ OMP_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
 link_agent_extensions pi  "$PI_AGENT_DIR/extensions"
 link_agent_extensions omp "$OMP_AGENT_DIR/extensions"
 enable_fullscreen pi  "$PI_AGENT_DIR"
-enable_fullscreen omp "$OMP_AGENT_DIR"
+# omp NAO: a conversa dele mora no scrollback do terminal por desenho (renderizador nunca consulta
+# a rolagem; issue can1357/oh-my-pi#10232). Em alternate screen ela some, e a roda vira seta =
+# historico no composer. Um `enabled: true` la e o que este instalador escrevia — desfaz.
+if [ -f "$OMP_AGENT_DIR/fullscreen-tui.json" ] && grep -q '"enabled": *true' "$OMP_AGENT_DIR/fullscreen-tui.json"; then
+  printf '{\n\t"enabled": false\n}\n' >"$OMP_AGENT_DIR/fullscreen-tui.json"
+  echo "  fullscreen-tui DESLIGADO no omp (a rolagem dele e a do terminal; ver CLAUDE.md)"
+fi
 
 # --- ponte de skills (pi/kimi/codex) -----------------------------------------------------------
 # O omp descobre as skills dos outros CLIs sozinho na largada; pi, kimi e codex nao — leem so as
