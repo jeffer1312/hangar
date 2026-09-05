@@ -79,6 +79,7 @@ set -g @continuum-save-interval '0'   # save driven by systemd timer (status bar
 # Bring the claude conversation back (not a bare shell): save name->uuid, restore via --resume.
 set -g @resurrect-hook-post-save-all    '$RESUME_SH save'
 set -g @resurrect-hook-post-restore-all '$RESUME_SH restore'
+run-shell '$RESUME_SH fix-last'      # empty \`last\` (save cut by a crash) -> newest good save
 run '$PLUGIN_DIR/tpm/tpm'             # keep TPM init at the very end
 # <<< hangar tmux-persist <<<
 EOF
@@ -95,6 +96,7 @@ if ! grep -qF "tmux-claude-resume.sh" "$CONF"; then
 # Bring the claude conversation back (not a bare shell): save name->uuid, restore via --resume.
 set -g @resurrect-hook-post-save-all    '$RESUME_SH save'
 set -g @resurrect-hook-post-restore-all '$RESUME_SH restore'
+run-shell '$RESUME_SH fix-last'
 # <<< hangar resume hooks <<<
 EOF
 fi

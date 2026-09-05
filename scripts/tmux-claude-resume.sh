@@ -32,7 +32,7 @@
 # thread is the main conversation. Upgrade path: read the live fd / newest-after-clear like the
 # backend's registry does, if post-clear loss ever bites.
 #
-# Usage: tmux-claude-resume.sh save | restore
+# Usage: tmux-claude-resume.sh save | restore | fix-last (before tpm loads: repoint `last` off an empty save)
 set -euo pipefail
 
 MAP="${TMUX_RESURRECT_DIR:-$HOME/.local/share/tmux/resurrect}/claude-sessions.tsv"
@@ -109,7 +109,10 @@ ticket_field() {  # <kimi|pi> <pane id> <agent pid> <json key>
 
 save() {
   mkdir -p "$(dirname "$MAP")"
-  local tmp name pane pid id cfg engine; tmp=$(mktemp)
+  # tmp no MESMO fs do MAP: o mv vira rename atomico (de /tmp era copia, e um crash no meio deixava
+  # o MAP vazio em disco). fsync no fim porque o btrfs so grava os dados no commit (~30s): crash
+  # logo apos o save deixava o arquivo do resurrect com 0 bytes e o boot seguinte nao trazia nada.
+  local tmp name pane pid id cfg engine; tmp=$(mktemp "$(dirname "$MAP")/.claude-sessions.XXXXXX")
   # One pid per session (active pane); these sessions are single-pane by design.
   while read -r name pane pid; do
     [ -n "${pid:-}" ] || continue
@@ -132,7 +135,21 @@ save() {
     engine=$(_env_of "$AGENT_PID" CP_ENGINE) || engine=""
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$AGENT_PROV" "$id" "$cfg" "$engine" >> "$tmp"
   done < <(tmux list-sessions -F '#{session_name} #{pane_id} #{pane_pid}' 2>/dev/null)
+  sync "$tmp"
   mv "$tmp" "$MAP"
+  sync "$MAP" "$(readlink -f "$(dirname "$MAP")/last")" 2>/dev/null || true
+}
+
+# Antes do restore: `last` apontando pra arquivo vazio (save cortado por crash) = boot sem nenhuma
+# sessao. Volta pro save nao-vazio mais recente e apaga os vazios.
+fix_last() {
+  local dir last f; dir=$(dirname "$MAP"); last="$dir/last"
+  [ -s "$last" ] && return 0
+  find "$dir" -maxdepth 1 -name 'tmux_resurrect_2*.txt' -empty -delete
+  f=$(ls -t "$dir"/tmux_resurrect_2*.txt 2>/dev/null | head -1)
+  [ -n "$f" ] || return 0
+  ln -fs "$(basename "$f")" "$last"
+  echo "$(date '+%F %T') fix-last: last was empty -> $(basename "$f")" >> "$LOG"
 }
 
 restore() {
@@ -181,5 +198,6 @@ restore() {
 case "${1:-}" in
   save) save ;;
   restore) restore ;;
-  *) echo "usage: $0 save|restore" >&2; exit 2 ;;
+  fix-last) fix_last ;;
+  *) echo "usage: $0 save|restore|fix-last" >&2; exit 2 ;;
 esac
