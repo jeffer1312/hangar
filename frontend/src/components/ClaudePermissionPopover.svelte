@@ -4,15 +4,9 @@
   // os que só existem na criação (dontAsk isolado, bypassPermissions fora do ciclo).
   import * as m from '../paraglide/messages';
   import Popover from './Popover.svelte';
+  import { glifoPermissao, rotuloPermissao } from '../lib/permissaoRotulo';
 
   const MODOS_TODOS = ['plan', 'auto', 'manual', 'acceptEdits', 'bypassPermissions', 'dontAsk'] as const;
-  type Modo = typeof MODOS_TODOS[number];
-
-  // Rótulo humano para a pill (curto). O id do CLI já é o nome real da flag —
-  // dado, não interface — então o rótulo é o próprio id.
-  function rotulo(modo: string): string {
-    return modo;
-  }
 
   interface Props {
     open: boolean;
@@ -85,7 +79,8 @@
             onclick={() => escolher(modo)}
             title={!habilitado ? m.permissao_so_criacao() : undefined}
           >
-            <span class="nome">{rotulo(modo)}</span>
+            <span class="glifo" aria-hidden="true">{glifoPermissao(modo)}</span>
+            <span class="nome">{rotuloPermissao(modo)} <span class="id">{modo}</span></span>
             {#if !habilitado}
               <span class="dica-desab" aria-hidden="true">{m.permissao_so_criacao_curto()}</span>
             {:else if aplicando === modo}
@@ -125,6 +120,8 @@
   .linha.desabilitado { opacity: 0.5; cursor: not-allowed; }
 
   .nome { flex: 1; text-transform: none; }
+  .glifo { flex: none; width: 1.6em; font-size: 0.85em; color: var(--text-muted); }
+  .id { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); margin-left: 4px; }
   .dica-desab { font-size: var(--text-xs); color: var(--text-muted); flex: none; }
   .tick { flex: none; color: var(--accent); }
 

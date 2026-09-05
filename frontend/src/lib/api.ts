@@ -1914,7 +1914,8 @@ export function setKimiModel(
 
 // ── Modo de permissão do Claude (Task 5) ────────────────────────────────────────
 // Leitura pelo rodapé (⏸/⏵⏵) e troca via BTab. 409 = sessão não é claude, terminal
-// aberto, sessão trabalhando, ou alvo fora do ciclo / teto de 6 teclas.
+// aberto, menu aberto no pane, ou alvo fora do ciclo / teto de 6 teclas. Sessão trabalhando
+// NÃO recusa: BTab troca o modo no meio do turno, como no terminal.
 // GET devolve o ciclo vivo (4 ou 5) + o atual; POST devolve o que FICOU.
 
 export function writeFile(name: string, path: string, text: string, digest: string | null): Promise<{ path: string; size: number; digest: string }> {

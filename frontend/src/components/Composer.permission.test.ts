@@ -74,4 +74,52 @@ describe('Composer — pílula de permissão reage a sessionState', () => {
     unmount(harness as never);
     document.body.innerHTML = '';
   });
+
+  it('sem ciclo em cache, o atalho SONDA (sondar=1) em vez de morrer calado', async () => {
+    vi.mocked(api.getPermissionModes)
+      .mockResolvedValueOnce({ current: 'plan', modes: [], sondavel: true })          // poll da montagem
+      .mockResolvedValueOnce({ current: 'plan', modes: ['plan', 'auto'], sondavel: true }); // sonda do atalho
+    vi.mocked(api.setPermissionMode).mockResolvedValue({ mode: 'auto', current: 'auto' });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const harness = mount(Harness as never, { target: el });
+    await tick(); await tick(); await tick();
+    await new Promise((r) => setTimeout(r, 0));
+    await tick();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', key: 'P', altKey: true, shiftKey: true, bubbles: true }));
+    await tick(); await new Promise((r) => setTimeout(r, 0)); await tick();
+    await new Promise((r) => setTimeout(r, 0)); await tick();
+    expect(vi.mocked(api.getPermissionModes).mock.calls.at(-1)).toEqual(['perm-test', true]);
+    expect(vi.mocked(api.setPermissionMode)).toHaveBeenCalledWith('perm-test', 'auto');
+
+    unmount(harness as never);
+    document.body.innerHTML = '';
+  });
+
+  it('Shift+Tab com o foco no campo cicla; Ctrl+L foca o campo de qualquer lugar', async () => {
+    vi.mocked(api.getPermissionModes).mockResolvedValue({ current: 'plan', modes: ['plan', 'auto'], sondavel: true });
+    vi.mocked(api.setPermissionMode).mockResolvedValue({ mode: 'auto', current: 'auto' });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const harness = mount(Harness as never, { target: el });
+    await tick(); await tick(); await tick();
+    await new Promise((r) => setTimeout(r, 0));
+    await tick();
+
+    const ta = el.querySelector('textarea')!;
+    ta.blur();
+    expect(document.activeElement).not.toBe(ta);
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyL', key: 'l', ctrlKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(ta);
+
+    const ev = new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    ta.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    await tick(); await new Promise((r) => setTimeout(r, 0)); await tick();
+    expect(vi.mocked(api.setPermissionMode)).toHaveBeenCalledWith('perm-test', 'auto');
+
+    unmount(harness as never);
+    document.body.innerHTML = '';
+  });
 });

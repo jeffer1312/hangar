@@ -21,6 +21,7 @@
   import { novoEstadoVad, passoVad } from '../lib/vad';
   import type { EstadoVad } from '../lib/vad';
   import { lerMaosLivres } from '../lib/maosLivres';
+  import { glifoPermissao, rotuloPermissao } from '../lib/permissaoRotulo';
   import { podeEnviarSozinho } from '../lib/autoEnvio';
   import type { MotivoFim } from '../lib/autoEnvio';
   import IconSend from './icons/IconSend.svelte';
@@ -451,20 +452,31 @@
     return () => document.removeEventListener('keydown', aoAtalhoMic);
   });
 
-  // Atalho de permissão (só desktop, só Claude): Alt+Shift+P passa pro PRÓXIMO modo do ciclo
-  // vivo — a mesma lista que a pílula mostra (4 ou 5 modos lidos da sessão), nunca a lista
-  // canônica: modo só-de-criação não entra no ciclo. Mesmos guards do atalho do mic.
+  // Atalho de permissão (só Claude): Alt+Shift+P em qualquer lugar da tela, e Shift+Tab com o
+  // foco no campo de texto (a mesma tecla do terminal), passam pro PRÓXIMO modo do ciclo vivo —
+  // a mesma lista que a pílula mostra (4 ou 5 modos lidos da sessão), nunca a lista canônica:
+  // modo só-de-criação não entra no ciclo. Mesmos guards do atalho do mic.
   function aoAtalhoPermissao(e: KeyboardEvent) {
     if (e.repeat || !e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== 'KeyP') return;
-    if (!isClaude || !window.matchMedia('(min-width: 820px)').matches) return;
+    if (!isClaude) return;
     if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     void ciclarPermissao();
   }
 
+  // Ctrl+L: foco no campo de texto de onde estiver (lista, painel, terminal embutido).
+  function aoAtalhoFoco(e: KeyboardEvent) {
+    if (e.repeat || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.code !== 'KeyL') return;
+    if (document.querySelector('[role="dialog"]:not(.board-overlay)')) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    textareaEl?.focus();
+  }
+
   async function ciclarPermissao() {
-    if (permCarregando || !permSondavel) return;
+    if (permCarregando) return;
+    if (!permSondavel) { permError = m.permissao_sem_ciclo(); return; }
     // Mesmo token de sequência e mesma amarra de sessão do poll (permSeq / sn): a resposta de
     // uma sessão que saiu da tela não pode escrever o ciclo da que entrou, nem o atalho aplicar
     // na sessão atual um modo calculado pelo ciclo da anterior.
@@ -474,7 +486,9 @@
     if (modos.length === 0) {
       permCarregando = true;
       try {
-        const res = await getPermissionModes(sn);
+        // Sonda (sondar=1), como a pílula: sem ela o servidor devolve [] enquanto não tem cache e
+        // o atalho morria calado até a pílula ser aberta uma vez.
+        const res = await getPermissionModes(sn, true);
         if (seq !== permSeq || sn !== sessionName) return;
         permCurrent = res.current;
         permModes = res.modes;
@@ -496,7 +510,11 @@
 
   $effect(() => {
     document.addEventListener('keydown', aoAtalhoPermissao);
-    return () => document.removeEventListener('keydown', aoAtalhoPermissao);
+    document.addEventListener('keydown', aoAtalhoFoco);
+    return () => {
+      document.removeEventListener('keydown', aoAtalhoPermissao);
+      document.removeEventListener('keydown', aoAtalhoFoco);
+    };
   });
 
   // ── Pills de modelo e de esforco: cada uma abre seu popover (aplica via endpoint dedicado) ──
@@ -877,6 +895,13 @@
         && window.matchMedia('(min-width: 820px)').matches) {
       e.preventDefault();
       submit();
+      return;
+    }
+    // Shift+Tab no campo = a tecla do terminal do Claude. Só com o foco aqui, pra não roubar a
+    // navegação por teclado do resto da tela.
+    if (e.key === 'Tab' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && isClaude) {
+      e.preventDefault();
+      void ciclarPermissao();
     }
   }
 
@@ -1876,6 +1901,7 @@
                 aria-label={m.composer_esforco_raciocinio()}
               >
                 <span class="pill-label">
+                  <span class="pill-glifo" aria-hidden="true">✦</span>
                   <span class="pill-model">{pillEffort ?? m.composer_esforco()}</span>
                 </span>
               </button>
@@ -1883,7 +1909,8 @@
             <!-- Permissão: linha dentro do seletor de modelo (ClaudeModelPopover) em qualquer tela,
                  e pill própria SÓ no desktop (.pill-perm some no celular via media query): ali a
                  palavra do modo ("bypassPermissions") estourava a linha e derrubava os controles.
-                 Alt+Shift+P passa pro próximo modo do ciclo. -->
+                 Glifo + rótulo curto são os do rodapé do próprio Claude (⏸/⏵⏵). Shift+Tab no
+                 campo ou Alt+Shift+P passam pro próximo modo do ciclo. -->
             {#if permCurrent}
               <button
                 class="model-pill pill-perm"
@@ -1894,7 +1921,8 @@
                 title={m.permissao_atalho()}
               >
                 <span class="pill-label">
-                  <span class="pill-model">{permCurrent}</span>
+                  <span class="pill-glifo" aria-hidden="true">{glifoPermissao(permCurrent)}</span>
+                  <span class="pill-model">{rotuloPermissao(permCurrent)}</span>
                 </span>
               </button>
             {/if}
@@ -2393,6 +2421,8 @@
     gap: 4px;
     min-width: 0;
   }
+
+  .pill-glifo { flex-shrink: 0; font-size: 0.85em; color: var(--text-muted); }
 
   .pill-model {
     white-space: nowrap;
