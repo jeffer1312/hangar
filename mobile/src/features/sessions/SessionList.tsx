@@ -21,7 +21,6 @@ import { Glass } from '../../ui/Glass';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { SessionRow } from './SessionRow';
-import { SessionMenu } from './SessionMenu';
 import { AttentionStrip } from './AttentionStrip';
 import { RenameSheet } from './RenameSheet';
 import * as m from '../../paraglide/messages';
@@ -48,8 +47,6 @@ export function SessionList() {
   const [refreshing, setRefreshing] = useState(false);
   // guarda a sessão inteira, não o nome: dois servidores podem ter sessões de mesmo nome
   const [renomeando, setRenomeando] = useState<AggSession | null>(null);
-  // uma folha de ações só, da linha que foi pressionada — não uma por linha
-  const [menuDe, setMenuDe] = useState<AggSession | null>(null);
   // uma linha aberta por vez: a anterior fecha quando outra abre, e ao rolar
   const aberta = useRef<SwipeableMethods | null>(null);
   const trocarAberta = useCallback((nova: SwipeableMethods | null) => {
@@ -232,7 +229,8 @@ export function SessionList() {
             onPress={() => abrir(item)}
             onGit={() => abrirGit(item)}
             onExcluir={() => excluir(item)}
-            onMenu={() => setMenuDe(item)}
+            onRenomear={() => setRenomeando(item)}
+            onLoop={() => abrirLoop(item)}
             onResume={() => retomar(item)}
             aoAbrir={trocarAberta}
           />
@@ -247,14 +245,6 @@ export function SessionList() {
         }
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      />
-      <SessionMenu
-        sessao={menuDe}
-        onFechar={() => setMenuDe(null)}
-        onRenomear={setRenomeando}
-        onGit={abrirGit}
-        onLoop={abrirLoop}
-        onExcluir={excluir}
       />
       <RenameSheet nome={renomeando?.name ?? null} onConfirmar={renomear} onFechar={() => setRenomeando(null)} />
     </>

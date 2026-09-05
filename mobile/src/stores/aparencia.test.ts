@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+// Import estático só pelo efeito: transforma o @hangar/core (e as ~2400 mensagens do paraglide que
+// ele arrasta) na COLETA, fora do relógio de qualquer teste. Sem isto o primeiro `await import()`
+// paga a transformação fria dentro do próprio timeout e estoura sob carga.
+import '@hangar/core';
 
 const mem = new Map<string, string>();
 vi.mock('react-native-mmkv', () => ({
@@ -8,10 +12,6 @@ vi.mock('react-native-mmkv', () => ({
     remove: (k: string) => void mem.delete(k),
   }),
 }));
-
-// O `resetModules` faz cada `import('./aparencia')` reexecutar o grafo inteiro, e o store puxa o
-// @hangar/core — a primeira transformação dele passa dos 5s padrão do vitest.
-vi.setConfig({ testTimeout: 30_000 });
 
 describe('aparencia', () => {
   beforeEach(() => { mem.clear(); vi.resetModules(); });

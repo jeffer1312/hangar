@@ -1,30 +1,31 @@
+import type { ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import type { AggSession } from '@hangar/core';
 import { Sheet } from '../../ui/Sheet';
 import { Icon, type IconName } from '../../ui/Icon';
 import * as m from '../../paraglide/messages';
 
-interface Props {
-  sessao: AggSession | null;
+export interface Props {
+  children: ReactNode;
+  // Controlado: quem detecta o toque longo é o gesto da linha (`SessionRow`), que precisa ser o
+  // mesmo reconhecedor que convive com o arrasto do swipe.
+  aberto: boolean;
   onFechar: () => void;
-  onRenomear: (s: AggSession) => void;
-  onGit: (s: AggSession) => void;
-  onLoop: (s: AggSession) => void;
-  onExcluir: (s: AggSession) => void;
+  temCwd: boolean;
+  onRenomear: () => void;
+  onGit: () => void;
+  onLoop: () => void;
+  onExcluir: () => void;
 }
 
-// Folha de ações do toque longo. NÃO é o menu nativo do `@react-native-menu/menu`: medido no
-// emulador (RN 0.86, New Arch), o `shouldOpenOnLongPress` dele só dispara em algumas linhas, e o
-// `show()` por ref é no-op no Android — a implementação usa o UIManager antigo. Sem isto, renomear
-// e Loop ficariam inalcançáveis na maioria das linhas.
-export function SessionMenu({ sessao, onFechar, onRenomear, onGit, onLoop, onExcluir }: Props) {
+// Variante padrão (iOS e o que não for Android): folha de ações do próprio app.
+// O Android tem a sua em `SessionMenu.android.tsx`, com o menu nativo do Compose.
+export function SessionMenu({ children, aberto, onFechar, temCwd, onRenomear, onGit, onLoop, onExcluir }: Props) {
   const { theme } = useUnistyles();
-  const s = sessao;
 
-  const item = (icone: IconName, rotulo: string, acao: (x: AggSession) => void, destrutivo?: boolean) => (
+  const item = (icone: IconName, rotulo: string, acao: () => void, destrutivo?: boolean) => (
     <Pressable
-      onPress={() => { onFechar(); if (s) acao(s); }}
+      onPress={() => { onFechar(); acao(); }}
       style={styles.item}
       accessibilityRole="button"
       accessibilityLabel={rotulo}
@@ -35,21 +36,22 @@ export function SessionMenu({ sessao, onFechar, onRenomear, onGit, onLoop, onExc
   );
 
   return (
-    <Sheet open={!!s} sizes={['auto']} onDismiss={onFechar}>
-      <View style={styles.inner}>
-        <Text style={[styles.titulo, { color: theme.tokens.text.muted }]} numberOfLines={1}>{s?.name ?? ''}</Text>
-        {item('PenLine', m.sessao_renomear(), onRenomear)}
-        {s?.cwd ? item('GitBranch', 'Git', onGit) : null}
-        {item('RefreshCw', m.loop_titulo(), onLoop)}
-        {item('Trash2', m.sessao_excluir_curto(), onExcluir, true)}
-      </View>
-    </Sheet>
+    <View>
+      {children}
+      <Sheet open={aberto} sizes={['auto']} onDismiss={onFechar}>
+        <View style={styles.inner}>
+          {item('PenLine', m.sessao_renomear(), onRenomear)}
+          {temCwd ? item('GitBranch', 'Git', onGit) : null}
+          {item('RefreshCw', m.loop_titulo(), onLoop)}
+          {item('Trash2', m.sessao_excluir_curto(), onExcluir, true)}
+        </View>
+      </Sheet>
+    </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
   inner: { padding: theme.base.space[3], gap: theme.base.space[1], paddingBottom: theme.base.space[5] },
-  titulo: { fontSize: theme.base.text.xs, fontWeight: '600', paddingHorizontal: theme.base.space[2], marginBottom: theme.base.space[1] },
   item: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], minHeight: 52, paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.md },
   rotulo: { fontSize: theme.base.text.base },
 }));

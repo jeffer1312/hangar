@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
+    "@expo/ui": "~57.0.16",
     "@hangar/core": "*",
     "@legendapp/list": "^3.3.8",
     "@lodev09/react-native-true-sheet": "^3.11.12",

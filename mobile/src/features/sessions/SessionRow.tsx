@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -9,6 +9,7 @@ import { Chip, type Tone } from '../../ui/Chip';
 import { StateDot } from '../../ui/StateDot';
 import { Icon } from '../../ui/Icon';
 import { PlanBar } from '../plan/PlanBar';
+import { SessionMenu } from './SessionMenu';
 import * as m from '../../paraglide/messages';
 
 // LOOP_TONE_COLOR do core é CSS var (`var(--accent)`) — não serve em RN; o tom vira `Chip tone`.
@@ -25,15 +26,17 @@ interface Props {
   onPress: () => void;
   onGit: () => void;
   onExcluir: () => void;
-  onMenu: () => void;
+  onRenomear: () => void;
+  onLoop: () => void;
   onResume: () => void;
   // a lista fecha a linha aberta anterior quando esta abre (uma aberta por vez)
   aoAbrir?: (metodos: SwipeableMethods | null) => void;
 }
 
-export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcluir, onMenu, onResume, aoAbrir }: Props) {
+export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcluir, onRenomear, onLoop, onResume, aoAbrir }: Props) {
   const { theme } = useUnistyles();
   const swipe = useRef<SwipeableMethods>(null);
+  const [menuAberto, setMenuAberto] = useState(false);
   // Toque longo pelo gesture-handler, não pelo `Pressable`: assim ele convive com o arrasto do
   // swipe (o mesmo reconhecedor decide quem ganha) em vez de disputar o toque com ele.
   const toqueLongo = useMemo(
@@ -43,9 +46,9 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
         .runOnJS(true)
         .onStart(() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-          onMenu();
+          setMenuAberto(true);
         }),
-    [onMenu],
+    [],
   );
   const untracked = s.tracked === false;
   const cwd = cwdParts(s.cwd);
@@ -76,6 +79,15 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
       onSwipeableWillOpen={() => aoAbrir?.(swipe.current)}
       simultaneousWithExternalGesture={toqueLongo}
     >
+      <SessionMenu
+        aberto={menuAberto}
+        onFechar={() => setMenuAberto(false)}
+        temCwd={!!s.cwd}
+        onRenomear={onRenomear}
+        onGit={onGit}
+        onLoop={onLoop}
+        onExcluir={onExcluir}
+      >
       <GestureDetector gesture={toqueLongo}>
         <Pressable
           onPress={onPress}
@@ -142,6 +154,7 @@ export function SessionRow({ session: s, mostrarServidor, onPress, onGit, onExcl
           <Icon name="ChevronRight" size={16} color={theme.tokens.text.muted} />
         </Pressable>
       </GestureDetector>
+      </SessionMenu>
     </ReanimatedSwipeable>
   );
 }
