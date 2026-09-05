@@ -325,7 +325,13 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `messages/*.json` no mesmo commit. O `lib/gitTabs.ts` + `GitTabs.svelte` continuam sendo o
   precedente de navegação por abas DENTRO de uma tela (incluindo nível por aba no celular).
   Servidores e Acesso viraram **Máquinas** (2026-09-04); as rotas antigas seguem por
-  `RENOMEADAS`.
+  `RENOMEADAS`. Dentro de Máquinas as duas listas — a do navegador (`cp_servers`, este aparelho
+  acompanha) e a do servidor (`peers.json`, os servidores se falam) — são **uma linha por máquina,
+  casada pelo identificador** (`lib/maquinas.ts`, `unirMaquinas`), com duas caixas. O identificador
+  da outra máquina vem dela mesma (`GET /api/peers/identificador` com o token que o navegador
+  guarda); nada no navegador o persiste. Casar pela URL viraria duas linhas (IP da LAN no celular,
+  Tailscale no servidor). O interruptor nunca muda sozinho: `checked` é o dado, o `onchange` repõe
+  o dado e chama a ação, e a ação confirmada é quem muda a lista.
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and
