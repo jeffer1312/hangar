@@ -135,7 +135,7 @@
   let peersCarregando = $state(false);
   let peersErro = $state('');
 
-  // Server.id + token → identificador (Task 4): busca o id que o NAVEGADOR conhece de cada
+  // Server.id + token → identificador: busca o id que o NAVEGADOR conhece de cada
   // máquina, pra casar com o id que o SERVIDOR conhece (peers) e desenhar uma linha só por
   // máquina. Não depende do alvo escolhido: sobrevive à troca de servidor no cabeçalho, só
   // máquina nova (ou token trocado) volta a ser perguntada.
@@ -168,11 +168,11 @@
       // Servidor indisponível (resolvedServer null): não há o que ler — sem este gate a seção
       // lia o servidor ATIVO com a aba dizendo que o escolhido não existe.
       peers = []; identificador = ''; idOriginal = '';
-      peersCarregando = false; idCarregado = true;
+      peersCarregando = false; idsCarregando = false; idCarregado = true;
       return;
     }
     void (async () => {
-      // Ordem de carga (Task 4): espera os identificadores do navegador ANTES de medir. Sem
+      // Ordem de carga: espera os identificadores do navegador ANTES de medir. Sem
       // isso `checarLista` lê `linhas` com `idsNavegador` vazio, nenhuma linha casa navegador
       // com peer, e a volta cai em `nao_configurado` sempre — a feature central não roda.
       await Promise.all([carregarIdentificador(meu), carregarPeers(meu), carregarIdsNavegador(meu)]);
@@ -277,12 +277,13 @@
       .finally(() => { if (meu === geracao) idSalvando = false; });
   }
 
-  // Estados de checagem por peer: id -> {lados, ok} (Task 8).
-  let estados = $state<Record<string, { lados: LadoState[]; ok: boolean }>>({});
+  // Estados de checagem por peer: id -> {lados, ok, testando?} — testando é o gesto de registrar
+  // em voo (farol cinza + "Testando…" em ListaMaquinas, e trava clique duplo em onFalar).
+  let estados = $state<Record<string, { lados: LadoState[]; ok: boolean; testando?: boolean }>>({});
   let corrigeId = $state<string | null>(null);
   let corrigeUrl = $state('');       // endereço digitado no bloco de correção (bind:value)
 
-  // Ações da lista unificada (Task 4): Acompanhar reusa a remoção/adição de servidor de hoje;
+  // Ações da lista unificada: Acompanhar reusa a remoção/adição de servidor de hoje;
   // Servidores se falam registra ou remove os dois lados de uma vez.
   function onAcompanhar(linha: LinhaMaquina, ligar: boolean) {
     if (!ligar && linha.navegador) { abrirRemocao(linha.navegador.id); return; }   // confirmação de hoje
@@ -291,18 +292,22 @@
 
   async function onFalar(linha: LinhaMaquina, ligar: boolean) {
     if (!ligar && linha.peer) { removerPeerId = linha.peer.id; return; }            // confirmação de hoje
-    if (ligar && linha.navegador && linha.identificador) {
-      const meu = geracao;
-      peersErro = '';
-      try {
-        const r = await registrarPeerDoisLados(apiTarget, { id: linha.identificador, base_url: linha.navegador.baseUrl, token: linha.navegador.token });
-        if (meu !== geracao) return;
-        peers = await listarPeers(apiTarget);
-        estados[r.id] = { lados: r.lados, ok: r.ok };
-        if (!r.ok) { corrigeId = r.id; corrigeUrl = r.base_url; }
-      } catch (e) {
-        if (meu === geracao) peersErro = msgErro(e);
-      }
+    if (!ligar || !linha.navegador || !linha.identificador) return;
+    const id = linha.identificador;
+    if (estados[id]?.testando) return;   // clique duplo: já tem um registro em voo
+    const meu = geracao;
+    peersErro = '';
+    estados[id] = { lados: [], ok: false, testando: true };   // gesto em voo: farol cinza + "Testando…"
+    try {
+      const r = await registrarPeerDoisLados(apiTarget, { id, base_url: linha.navegador.baseUrl, token: linha.navegador.token });
+      if (meu !== geracao) return;
+      peers = await listarPeers(apiTarget);
+      estados[r.id] = { lados: r.lados, ok: r.ok };
+      if (!r.ok) { corrigeId = r.id; corrigeUrl = r.base_url; }
+    } catch (e) {
+      if (meu !== geracao) return;
+      estados[id] = { lados: [], ok: false };   // sai do "testando": a listagem que falhou não deixa estado preso
+      peersErro = msgErro(e);
     }
   }
 
@@ -393,9 +398,10 @@
   {#if idErro}<p class="id-erro" role="alert">{idErro}</p>{/if}
 
   <AcessoSettings alvo={resolvedServer} />
+
+  <div class="ss-sep"></div>
 {/if}
 
-<div class="ss-sep"></div>
 <p class="ss-secao">{m.maquinas_secao()}</p>
 <p class="ss-legenda">{m.maquinas_secao_legenda()}</p>
 <ListaMaquinas
@@ -417,7 +423,7 @@
 <ServerEditSheet open={!!emEdicao} server={emEdicao} onClose={() => (emEdicao = null)} onRename={rename} onUpdateToken={updateToken} />
 {#if showAdd}
   <AdicionarMaquina {fallbackFocus} onFechar={() => (showAdd = false)}
-    apiTarget={apiTarget} podeFalar={!!resolvedServer && !!identificador} enderecoInicial={addEndereco} />
+    {apiTarget} podeFalar={!!resolvedServer && !!identificador} enderecoInicial={addEndereco} />
 {/if}
 
 {#if removerPeerId}

@@ -42,7 +42,7 @@ vi.mock('../../lib/api', () => ({
 }));
 vi.mock('../../lib/push', () => ({ enablePush: vi.fn(), pushSupported: () => true }));
 vi.mock('../../lib/peers', () => ({
-  // Distingue o próprio servidor (null ou srv-a) de outro — Task 4: carregarIdsNavegador chama
+  // Distingue o próprio servidor (null ou srv-a) de outro — carregarIdsNavegador chama
   // getIdentificador por Server real, não só pelo apiTarget da aba.
   getIdentificador: vi.fn(async (alvo: Server | null) => ({ identificador: alvo && alvo.id !== 'srv-a' ? `id-${alvo.id}` : '' })),
   setIdentificador: vi.fn(async (v: string) => ({ identificador: v })),
@@ -315,6 +315,9 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
     peersMock.listarPeers.mockResolvedValueOnce([]).mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
+    // um teste anterior (ordem embaralhada) pode deixar gravarPeer pendurado num mockReturnValue —
+    // clearAllMocks só limpa chamadas, nunca a implementação (vitest não reseta mockImplementation).
+    peersMock.gravarPeer.mockImplementation(async (_alvo, dado) => [dado] as never);
     peersMock.checkPeer.mockResolvedValue({ estado: 'ok' });
     const { el, comp } = montar({ servers: [SRV, B] });
     await esperarCarga();
@@ -325,6 +328,22 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(null, { id: 'nb', base_url: 'http://b', token: 'tb' });
     expect(peersMock.gravarPeer).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'http://b' }), expect.objectContaining({ id: 'casa' }));
     expect(el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!.checked).toBe(true);
+    unmount(comp);
+  });
+
+  it('marcar "servidores se falam" duas vezes seguidas não dispara dois registros (trava de clique duplo)', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValue([]);
+    peersMock.gravarPeer.mockReturnValue(new Promise(() => {}) as never);   // fica pendurado: gesto em voo
+    const { el, comp } = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    const cb = el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!;
+    cb.click();
+    cb.click();   // segundo clique com o primeiro ainda em voo
+    await tick();
+    expect(peersMock.gravarPeer).toHaveBeenCalledTimes(1);
+    expect(el.querySelector('.mq-linha[data-chave="srv:srv-b"]')!.textContent).toContain(m.peers_estado_testando());
     unmount(comp);
   });
 
@@ -342,7 +361,39 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     unmount(comp);
   });
 
+  it('desmarcar "servidores se falam" numa máquina COM navegador avisa que os dois lados saem', async () => {
+    const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
+    peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    peersMock.listarPeers.mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
+    const { el, comp } = montar({ servers: [SRV, B] });
+    await esperarCarga();
+    el.querySelector<HTMLInputElement>('.mq-linha[data-chave="srv:srv-b"] .mq-falar')!.click();
+    await tick();
+    expect(document.body.textContent).toContain(m.maquinas_remover_peer_lados());
+    [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === m.peers_remover())!.click();
+    await tick(); await tick();
+    expect(peersMock.removerPeerDoisLados).toHaveBeenCalledWith(null, 'nb', B);
+    unmount(comp);
+  });
+
+  it('remover peer com o lado de lá falhando mostra o aviso específico', async () => {
+    peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
+    peersMock.listarPeers.mockResolvedValue([{ id: 'vps', base_url: 'https://vps', token: '••' }]);
+    peersMock.removerPeerDoisLados.mockResolvedValueOnce(false);
+    const { el, comp } = montar();
+    await esperarCarga();
+    el.querySelector<HTMLInputElement>('.mq-linha[data-chave="peer:vps"] .mq-falar')!.click();
+    await tick();
+    [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === m.peers_remover())!.click();
+    await esperarCarga();
+    expect(el.textContent).toContain(m.maquinas_remover_peer_lado_de_la_falhou());
+    unmount(comp);
+  });
+
   it('fala com o servidor ESCOLHIDO na aba, não com o ativo', async () => {
+    // listServers explícito (não residual de outro teste): carregarIdsNavegador busca o id de
+    // cada máquina do NAVEGADOR, e a asserção abaixo depende de SRV estar nessa lista.
+    authMock.listServers.mockReturnValue([SRV]);
     peersMock.getIdentificador.mockResolvedValue({ identificador: 'casa' });
     peersMock.listarPeers.mockResolvedValue([]);
     const outro = { id: 'srv-b', label: 'B', baseUrl: 'http://b', token: 'tb' } as Server;
@@ -353,13 +404,13 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     await esperarCarga();
     expect(peersMock.getIdentificador).toHaveBeenCalledWith(outro);
     expect(peersMock.listarPeers).toHaveBeenCalledWith(outro);
-    // Task 4: carregarIdsNavegador também busca o id de cada máquina do NAVEGADOR (listServers()
-    // residual desta suíte ainda devolve [SRV] — nenhum montar() rodou pra trocar isso aqui).
     expect(peersMock.getIdentificador).toHaveBeenCalledWith(SRV);
     unmount(comp as never);
   });
 
   it('servidor indisponível não carrega nada', async () => {
+    authMock.listServers.mockReturnValue([]);   // explícito: sem isso, ordem embaralhada pode
+    // deixar listServers() sem implementação nenhuma (undefined), e unirMaquinas quebra no .map.
     const el = document.createElement('div');
     document.body.appendChild(el);
     const comp = mount(MaquinasSettings, { target: el, props: {
@@ -525,6 +576,9 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     // chega na tela vem da RELISTAGEM depois do registro, não do próprio registro.
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo && alvo.id === 'srv-b' ? 'nb' : 'casa' }));
+    // explícito, não o default do topo — um teste anterior (ordem embaralhada) pode ter deixado
+    // gravarPeer pendurado num mockReturnValue, e clearAllMocks não desfaz isso.
+    peersMock.gravarPeer.mockImplementation(async (_alvo, dado) => [dado] as never);
     peersMock.listarPeers.mockResolvedValueOnce([]);
     peersMock.listarPeers.mockRejectedValueOnce(new Error('Failed to fetch'));
     const t = montar({ servers: [SRV, B] });
