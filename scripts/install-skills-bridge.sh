@@ -31,7 +31,8 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK_ESTADO="$REPO/backend/hooks/state_hook.py"
 PY_HOOK="$REPO/backend/.venv/bin/python"
 [ -x "$PY_HOOK" ] || PY_HOOK="$(command -v python3 || true)"
-export HOOK_ESTADO PY_HOOK
+FILTRO_ALLOW="$REPO/scripts/codex-hook-allow.py"
+export HOOK_ESTADO PY_HOOK FILTRO_ALLOW
 
 if [ ! -f "$SETTINGS" ] || [ ! -f "$INSTALLED" ]; then
   echo "pulado: sem $SETTINGS ou $INSTALLED (Claude Code não instalado nesta conta)"
@@ -109,6 +110,16 @@ def _e_do_hangar(cmd):
     return "backend/hooks/" in cmd.replace("\\", "/")
 
 
+def _para_o_codex(cmd):
+    """O rtk devolve `updatedInput` sem `permissionDecision` quando reescreve só um pedaço de um
+    comando composto; o Codex recusa a reescrita e roda o original. Só ele passa pelo filtro:
+    embrulhar outro hook num pipe esconderia o rc=2 com que ele bloqueia."""
+    filtro = os.environ.get("FILTRO_ALLOW") or ""
+    if cmd.startswith("rtk hook") and filtro and os.path.isfile(filtro):
+        return f"{cmd} | python3 {filtro}"
+    return cmd
+
+
 def hooks_para(eventos_suportados):
     """Os hooks do settings.json do Claude que fazem sentido noutro agente, no mesmo formato.
     Devolve (config, descartados) — o que não atravessa é DITO, nunca sumido em silêncio."""
@@ -119,7 +130,7 @@ def hooks_para(eventos_suportados):
             continue
         novos = []
         for g in grupos:
-            entradas = [e for e in g.get("hooks", [])
+            entradas = [dict(e, command=_para_o_codex(e["command"])) for e in g.get("hooks", [])
                         if e.get("type") == "command" and e.get("command")
                         and not _e_do_hangar(e["command"])]
             if not entradas:

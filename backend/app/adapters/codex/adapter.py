@@ -670,14 +670,52 @@ class CodexAdapter:
             yield StateEvent(session=name, state="dead")
             return
         sess = self._sessions[name]
+        # A fila do app-server tem UM consumidor por sessao (a bomba); cada SSE e um ouvinte que
+        # recebe copia dos StateEvents. Dois consumidores na mesma fila DIVIDIAM os deltas: desktop
+        # e celular no mesmo chat mostravam metade da frase cada um, sobrescrevendo a previa.
+        fila: asyncio.Queue = asyncio.Queue()
+        ouvintes: list[asyncio.Queue] = sess.setdefault("ouvintes", [])
+        ouvintes.append(fila)
+        bomba = sess.get("bomba")
+        if bomba is None or bomba.done():
+            sess["bomba"] = asyncio.create_task(self._bombear(name, client))
+        try:
+            # Retrato do que ja se sabe: quem reabre o chat no meio de um turno nao espera a
+            # proxima notification pra ver estado, contexto e limites.
+            yield StateEvent(session=name, state=sess["state"], status_line=self._status_line(sess))
+            while True:
+                ev = await fila.get()
+                if ev is None:
+                    return
+                yield ev
+        finally:
+            if fila in ouvintes:
+                ouvintes.remove(fila)
+            if not ouvintes and not sess["bomba"].done():
+                sess["bomba"].cancel()
+
+    @staticmethod
+    def _status_line(sess: dict) -> Optional[str]:
+        # model-or-default (mesma regra de current_model): sem escolha explicita, mostra o
+        # default real da thread em vez de omitir o 🤖 inteiro.
+        return format_status_line(
+            sess.get("model") or sess.get("default_model"),
+            sess.get("effort") or sess.get("default_effort"),
+            sess.get("token_usage"), sess.get("rate_limits"),
+        )
+
+    async def _bombear(self, name: str, client: AppServerClient) -> None:
+        """Le a fila do app-server, aplica o efeito de cada notification na sessao (estado, previa,
+        drain-on-complete) e espalha os StateEvents pros ouvintes. Vive enquanto houver um SSE."""
+        sess = self._sessions[name]
         preview = CodexPreviewSource.get(name)
+
+        def espalhar(ev: Optional[StateEvent]) -> None:
+            for fila in sess["ouvintes"]:
+                fila.put_nowait(ev)
+
         # Buffer do turno em voo (deltas sao INCREMENTAIS -- concatena; ver docs/codex-app-server-
-        # contract.md). Local ao generator: 1 state_monitor ativo por sessao no uso normal (1 SSE
-        # aberto por sessao); N conexoes simultaneas cada uma chamaria ensure_running de novo e
-        # teria seu proprio buffer, mas todas empurram pro MESMO CodexPreviewSource (registry por
-        # nome) -- ainda convergem, so nao e o caso comum.
-        # ponytail: buffer por-generator, nao por-sessao no adapter; multi-consumidor corrigido se
-        # virar necessario (hoje o front so abre 1 SSE por sessao).
+        # contract.md).
         buf = ""
         async for notif in client.notifications():
             mapped = map_state(notif)
@@ -707,9 +745,9 @@ class CodexAdapter:
                 sess["turn_id"] = None
                 # drain-on-complete (P2): turno terminou -> entrega a fila pendente (msgs enviadas
                 # via /input enquanto o Codex trabalhava). Reusa adapter.drain (claim-1-envia-1 pela
-                # TUI). ACOPLADO ao SSE ativo -- este generator so roda com um consumidor
-                # aberto; sem celular conectado nao ha drain-on-complete (mesma limitacao do preview,
-                # ver ponytail acima). Best-effort: falha aqui nunca derruba o state stream.
+                # TUI). ACOPLADO ao SSE ativo -- a bomba so roda com um ouvinte aberto; sem
+                # celular conectado nao ha drain-on-complete (mesma limitacao do preview).
+                # Best-effort: falha aqui nunca derruba o state stream.
                 try:
                     await self.drain(name, "")
                 except Exception:
@@ -740,14 +778,8 @@ class CodexAdapter:
             # dict quente + token_usage/rate_limits guardados acima) -- nao so quando ESTE notif
             # trouxe token/limite novo, senao o front perderia contexto/limites em StateEvents de
             # working/idle puros (a maioria).
-            # model-or-default (mesma regra de current_model): sem escolha explicita, mostra o
-            # default real da thread em vez de omitir o 🤖 inteiro.
-            status_line = format_status_line(
-                sess.get("model") or sess.get("default_model"),
-                sess.get("effort") or sess.get("default_effort"),
-                sess.get("token_usage"), sess.get("rate_limits"),
-            )
-            yield StateEvent(session=name, state=sess["state"], status_line=status_line)
+            espalhar(StateEvent(session=name, state=sess["state"],
+                                status_line=self._status_line(sess)))
         # notifications() terminou = EOF do app-server (o read loop empurra o sentinela ao morrer).
         # Dead-detection (backlog T4-m2): emite dead pra o front + limpa a sessao da memoria (o
         # sidecar duravel fica; ensure_running reabre num acesso futuro). getattr: um client FAKE de
@@ -755,7 +787,8 @@ class CodexAdapter:
         if getattr(client, "closed", False):
             sess["state"] = "dead"
             self._sessions.pop(name, None)
-            yield StateEvent(session=name, state="dead")
+            espalhar(StateEvent(session=name, state="dead"))
+        espalhar(None)
 
     async def send_prompt(self, name: str, text: str) -> str:
         """Envia o prompt como `turn/start` no app-server — NAO digitando no pane do tmux.

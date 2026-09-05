@@ -37,6 +37,21 @@ only peeks at the tmux pane for live **state**. Backend pieces (`backend/app/`):
   morre, o tmux imprime `[exited]` e o `hangar-codex` apaga a sessão em menos de 1s. Só aparece com a
   máquina carregada (load ~5 com suítes rodando): aí o servidor perde a corrida pro bind e a TUI
   chega antes. Com a máquina folgada nunca reproduzia, em nenhum terminal.
+  **A fila de notifications do app-server tem UM consumidor por sessão** (`_bombear`, 04/09/2026):
+  cada SSE é um ouvinte que recebe cópia dos `StateEvent`s, e o primeiro evento é o retrato do
+  que a sessão já sabe (estado + status line). Antes, cada SSE lia a fila direto e o comentário
+  dizia que "ainda convergem" — o contrário: `queue.get()` entrega cada delta a UM consumidor, e
+  desktop + celular no mesmo chat mostravam metade da frase cada ("Faria em pequenas, o atual."
+  no lugar de "Faria em mudanças pequenas, preservando o comportamento atual.", reproduzido com
+  o `AppServerClient` real). E sem o retrato inicial, reabrir o chat no meio do turno deixava a
+  tela sem estado nem contexto até a próxima notification — o que parecia "o Codex perdeu o
+  contexto" com o rollout íntegro. A bomba morre com o último ouvinte (drain-on-complete
+  continua acoplado a haver um SSE aberto, como antes).
+  **O `rtk` no `hooks.json` do Codex passa por `scripts/codex-hook-allow.py`**: o rtk 0.43.0
+  devolve `updatedInput` sem `permissionDecision` quando reescreve só um pedaço de um comando
+  com `;`; Claude Code aceita, o Codex recusa a reescrita ("PreToolUse hook returned
+  updatedInput without permissionDecision:allow") e roda o original. Só o rtk é embrulhado —
+  um pipe em volta de outro hook esconderia o rc=2 com que ele bloqueia.
 - `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
   same tmux-native shape as Pi: TUI in the pane, chat from
   `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in
