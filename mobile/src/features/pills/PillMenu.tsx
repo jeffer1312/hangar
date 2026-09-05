@@ -1,6 +1,7 @@
-import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Glass } from '../../ui/Glass';
+import { Sheet, type SheetRef } from '../../ui/Sheet';
 import * as m from '../../paraglide/messages';
 
 export interface PillMenuItem {
@@ -22,79 +23,72 @@ interface Props {
 
 export function PillMenu({ open, onClose, items, loading, error, onRetry, onSelect, title }: Props) {
   const { theme } = useUnistyles();
-  if (!open) return null;
+  const ref = useRef<SheetRef>(null);
+
+  useEffect(() => {
+    if (open) void ref.current?.present();
+    else void ref.current?.dismiss();
+  }, [open]);
+
   return (
-    <Modal transparent visible={open} animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable onPress={(e) => e.stopPropagation()} style={styles.sheetWrap}>
-          <Glass variant="modal" style={styles.sheet}>
-            {title ? <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{title}</Text> : null}
-            {loading ? (
-              <View style={styles.center}>
-                <ActivityIndicator color={theme.tokens.text.secondary} />
-                <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
-              </View>
-            ) : error ? (
-              <View style={styles.center}>
-                <Text style={[styles.err, { color: theme.tokens.status.error }]}>{error}</Text>
-                {onRetry ? (
-                  <Pressable onPress={onRetry} style={[styles.retryBtn, { borderColor: theme.tokens.border.subtle }]}>
-                    <Text style={[styles.retryText, { color: theme.tokens.accent.base }]}>{m.lista_tentar_novamente()}</Text>
-                  </Pressable>
+    <Sheet ref={ref} sizes={['auto']} onDismiss={onClose}>
+      <View style={styles.sheet}>
+        {title ? <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{title}</Text> : null}
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator color={theme.tokens.text.secondary} />
+            <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_carregando()}</Text>
+          </View>
+        ) : error ? (
+          <View style={styles.center}>
+            <Text style={[styles.err, { color: theme.tokens.status.error }]}>{error}</Text>
+            {onRetry ? (
+              <Pressable onPress={onRetry} style={[styles.retryBtn, { borderColor: theme.tokens.border.subtle }]}>
+                <Text style={[styles.retryText, { color: theme.tokens.accent.base }]}>{m.lista_tentar_novamente()}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : items.length === 0 ? (
+          <View style={styles.center}>
+            <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_nenhum_modelo()}</Text>
+          </View>
+        ) : (
+          <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+            {items.map((it, idx) => (
+              <Pressable
+                key={`${it.label}-${idx}-${it.hint ?? ''}`}
+                onPress={() => onSelect(it)}
+                style={[styles.row, it.selected && { backgroundColor: theme.tokens.bg.elevated }]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: !!it.selected }}
+              >
+                <View style={styles.rowText}>
+                  <Text style={[styles.label, { color: theme.tokens.text.primary }]} numberOfLines={1}>
+                    {it.label}
+                  </Text>
+                  {it.hint ? (
+                    <Text style={[styles.hint, { color: theme.tokens.text.muted }]} numberOfLines={1}>
+                      {it.hint}
+                    </Text>
+                  ) : null}
+                </View>
+                {it.selected ? (
+                  <Text style={[styles.tick, { color: theme.tokens.accent.base }]}>✓</Text>
                 ) : null}
-              </View>
-            ) : items.length === 0 ? (
-              <View style={styles.center}>
-                <Text style={[styles.muted, { color: theme.tokens.text.muted }]}>{m.comum_nenhum_modelo()}</Text>
-              </View>
-            ) : (
-              <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-                {items.map((it, idx) => (
-                  <Pressable
-                    key={`${it.label}-${idx}-${it.hint ?? ''}`}
-                    onPress={() => onSelect(it)}
-                    style={[styles.row, it.selected && { backgroundColor: theme.tokens.bg.elevated }]}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: !!it.selected }}
-                  >
-                    <View style={styles.rowText}>
-                      <Text style={[styles.label, { color: theme.tokens.text.primary }]} numberOfLines={1}>
-                        {it.label}
-                      </Text>
-                      {it.hint ? (
-                        <Text style={[styles.hint, { color: theme.tokens.text.muted }]} numberOfLines={1}>
-                          {it.hint}
-                        </Text>
-                      ) : null}
-                    </View>
-                    {it.selected ? (
-                      <Text style={[styles.tick, { color: theme.tokens.accent.base }]}>✓</Text>
-                    ) : null}
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
-            <Pressable onPress={onClose} style={[styles.closeBtn, { borderColor: theme.tokens.border.subtle }]}>
-              <Text style={[styles.closeText, { color: theme.tokens.text.secondary }]}>{m.sessao_fechar()}</Text>
-            </Pressable>
-          </Glass>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
+        <Pressable onPress={onClose} style={[styles.closeBtn, { borderColor: theme.tokens.border.subtle }]}>
+          <Text style={[styles.closeText, { color: theme.tokens.text.secondary }]}>{m.sessao_fechar()}</Text>
         </Pressable>
-      </Pressable>
-    </Modal>
+      </View>
+    </Sheet>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
-  sheetWrap: {
-    maxHeight: '70%',
-  },
   sheet: {
-    margin: theme.base.space[2],
     padding: theme.base.space[2],
     gap: theme.base.space[2],
   },

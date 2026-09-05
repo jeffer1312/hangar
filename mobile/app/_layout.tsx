@@ -7,8 +7,11 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { configureCore } from '../src/net/configureCore';
 import { useServers } from '../src/stores/servers';
+import { aplicarTemaSalvo } from '../src/stores/aparencia';
+import { Toaster } from '../src/ui/Toast';
 
 configureCore();
+aplicarTemaSalvo();
 
 export default function Layout() {
   const router = useRouter();
@@ -42,6 +45,7 @@ export default function Layout() {
           <Stack.Screen name="s/[server]/[name]/attachments" options={{ presentation: 'formSheet', headerShown: false, sheetAllowedDetents: [0.92], sheetGrabberVisible: true }} />
           <Stack.Screen name="s/[server]/[name]/codex-limits" options={{ presentation: 'formSheet', headerShown: false, sheetAllowedDetents: [0.92], sheetGrabberVisible: true }} />
         </Stack>
+        <Toaster position="bottom-center" />
       </GestureHandlerRootView>
     </KeyboardProvider>
   );

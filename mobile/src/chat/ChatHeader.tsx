@@ -1,9 +1,9 @@
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Ionicons } from '@expo/vector-icons';
 import type { State } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { StatePill } from '../features/sessions/StatePill';
+import { Icon } from '../ui/Icon';
 
 // Cabeçalho do chat: voltar (44pt, HIG), nome da sessão e pílula de estado.
 export function ChatHeader({
@@ -31,7 +31,7 @@ export function ChatHeader({
         accessibilityRole="button"
         accessibilityLabel={m.chat_voltar_sessoes()}
       >
-        <Ionicons name="chevron-back" size={24} color={theme.tokens.accent.base} />
+        <Icon name="ChevronLeft" size={24} color={theme.tokens.accent.base} />
       </Pressable>
       <Text style={[styles.name, { color: theme.tokens.text.primary }]} numberOfLines={1}>
         {name}
@@ -46,7 +46,7 @@ export function ChatHeader({
         accessibilityRole="button"
         accessibilityLabel={m.navbar_mais_acoes()}
       >
-        <Ionicons name="ellipsis-horizontal" size={20} color={theme.tokens.text.primary} />
+        <Icon name="Ellipsis" size={20} color={theme.tokens.text.primary} />
       </Pressable>
     </View>
   );

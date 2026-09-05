@@ -1,8 +1,9 @@
-import { Modal, Pressable, Text, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { Glass } from '../ui/Glass';
+import { Sheet, type SheetRef } from '../ui/Sheet';
+import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 
 interface Props {
@@ -13,7 +14,7 @@ interface Props {
 }
 
 type Item = {
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: IconName;
   label: string;
   sub?: string;
   route: string;
@@ -22,16 +23,22 @@ type Item = {
 export function MoreSheet({ open, onClose, serverId, name }: Props) {
   const { theme } = useUnistyles();
   const router = useRouter();
+  const ref = useRef<SheetRef>(null);
+
+  useEffect(() => {
+    if (open) void ref.current?.present();
+    else void ref.current?.dismiss();
+  }, [open]);
 
   const items: Item[] = [
-    { icon: 'help-circle-outline', label: m.askq_sua_resposta(), route: 'ask' },
-    { icon: 'pulse-outline', label: m.ctx_atividade(), sub: m.more_tarefas_agentes(), route: 'activity' },
-    { icon: 'repeat-outline', label: m.loop_titulo(), sub: m.loop_objetivo(), route: 'loop' },
-    { icon: 'people-outline', label: m.par_titulo(), sub: m.ctx_grupo(), route: 'pair' },
-    { icon: 'folder-outline', label: m.arq_aba(), sub: m.ctx_repositorio(), route: 'files' },
-    { icon: 'terminal-outline', label: m.term_titulo(), sub: m.ctx_terminal(), route: 'terminal' },
-    { icon: 'attach-outline', label: m.ctx_anexos(), sub: m.more_fotos_videos_arquivos(), route: 'attachments' },
-    { icon: 'speedometer-outline', label: m.codex_limites_titulo(), sub: m.ctx_limites(), route: 'codex-limits' },
+    { icon: 'CircleHelp', label: m.askq_sua_resposta(), route: 'ask' },
+    { icon: 'Activity', label: m.ctx_atividade(), sub: m.more_tarefas_agentes(), route: 'activity' },
+    { icon: 'Repeat', label: m.loop_titulo(), sub: m.loop_objetivo(), route: 'loop' },
+    { icon: 'Users', label: m.par_titulo(), sub: m.ctx_grupo(), route: 'pair' },
+    { icon: 'Folder', label: m.arq_aba(), sub: m.ctx_repositorio(), route: 'files' },
+    { icon: 'Terminal', label: m.term_titulo(), sub: m.ctx_terminal(), route: 'terminal' },
+    { icon: 'Paperclip', label: m.ctx_anexos(), sub: m.more_fotos_videos_arquivos(), route: 'attachments' },
+    { icon: 'Gauge', label: m.codex_limites_titulo(), sub: m.ctx_limites(), route: 'codex-limits' },
   ];
 
   const go = (route: string) => {
@@ -39,52 +46,37 @@ export function MoreSheet({ open, onClose, serverId, name }: Props) {
     router.push(`/s/${serverId}/${name}/${route}` as never);
   };
 
-  if (!open) return null;
-
   return (
-    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Glass variant="modal" style={styles.sheet}>
-          <Pressable onPress={() => {}} style={styles.inner}>
-            <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.navbar_mais_acoes()}</Text>
-            {items.map((it) => (
-              <Pressable
-                key={it.route}
-                onPress={() => go(it.route)}
-                style={styles.item}
-                accessibilityRole="button"
-                accessibilityLabel={it.label}
-              >
-                <View style={[styles.ico, { backgroundColor: theme.tokens.bg.elevated }]}>
-                  <Ionicons name={it.icon} size={20} color={theme.tokens.text.secondary} />
-                </View>
-                <View style={styles.txt}>
-                  <Text style={[styles.label, { color: theme.tokens.text.primary }]}>{it.label}</Text>
-                  {it.sub ? <Text style={[styles.sub, { color: theme.tokens.text.muted }]} numberOfLines={1}>{it.sub}</Text> : null}
-                </View>
-                <Ionicons name="chevron-forward" size={16} color={theme.tokens.text.muted} />
-              </Pressable>
-            ))}
+    <Sheet ref={ref} sizes={['auto']} onDismiss={onClose}>
+      <View style={styles.inner}>
+        <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.navbar_mais_acoes()}</Text>
+        {items.map((it) => (
+          <Pressable
+            key={it.route}
+            onPress={() => go(it.route)}
+            style={styles.item}
+            accessibilityRole="button"
+            accessibilityLabel={it.label}
+          >
+            <View style={[styles.ico, { backgroundColor: theme.tokens.bg.elevated }]}>
+              <Icon name={it.icon} size={20} color={theme.tokens.text.secondary} />
+            </View>
+            <View style={styles.txt}>
+              <Text style={[styles.label, { color: theme.tokens.text.primary }]}>{it.label}</Text>
+              {it.sub ? <Text style={[styles.sub, { color: theme.tokens.text.muted }]} numberOfLines={1}>{it.sub}</Text> : null}
+            </View>
+            <Icon name="ChevronRight" size={16} color={theme.tokens.text.muted} />
           </Pressable>
-        </Glass>
-      </Pressable>
-    </Modal>
+        ))}
+      </View>
+    </Sheet>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'flex-end',
-    padding: theme.base.space[4],
-  },
-  sheet: {
-    padding: theme.base.space[3],
-    maxHeight: '80%',
-  },
   inner: {
     gap: theme.base.space[1],
+    padding: theme.base.space[3],
   },
   title: {
     fontSize: theme.base.text.base,

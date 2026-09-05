@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { Pressable, Text, TextInput, View, Modal } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Screen } from '../src/ui/Screen';
 import { Glass } from '../src/ui/Glass';
+import { Sheet, type SheetRef } from '../src/ui/Sheet';
 import { QrScanner } from '../src/features/login/QrScanner';
 import { parsePairing } from '../src/features/login/pairing';
 import { useServers } from '../src/stores/servers';
@@ -17,6 +18,12 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const scanRef = useRef<SheetRef>(null);
+
+  useEffect(() => {
+    if (scanning) void scanRef.current?.present();
+    else void scanRef.current?.dismiss();
+  }, [scanning]);
 
   const handleScan = (texto: string) => {
     const cru = texto.trim();
@@ -135,9 +142,9 @@ export default function Login() {
         </Glass>
       </View>
 
-      <Modal visible={scanning} animationType="slide" onRequestClose={() => setScanning(false)}>
+      <Sheet ref={scanRef} sizes={['large']} onDismiss={() => setScanning(false)}>
         <QrScanner onScan={handleScan} onClose={() => setScanning(false)} />
-      </Modal>
+      </Sheet>
     </Screen>
   );
 }
