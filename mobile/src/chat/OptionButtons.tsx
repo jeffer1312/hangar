@@ -2,6 +2,7 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { kindOf, isPermission } from '@hangar/core';
 import * as m from '../paraglide/messages';
+import { superficie } from '../theme/superficie';
 
 interface Props {
   question: string;
@@ -25,7 +26,7 @@ export function OptionButtons({ question, options, onSelect, onCancel }: Props) 
       <Text style={[styles.question, { color: theme.tokens.text.primary }]}>
         {question.split('`').map((part, i) =>
           i % 2 === 1 ? (
-            <Text key={i} style={[styles.qCode, { backgroundColor: theme.tokens.bg.elevated, color: theme.tokens.text.primary }]}>
+            <Text key={i} style={[styles.qCode, { backgroundColor: superficie(theme, 0.8), color: theme.tokens.text.primary }]}>
               {part}
             </Text>
           ) : (
@@ -45,7 +46,7 @@ export function OptionButtons({ question, options, onSelect, onCancel }: Props) 
               onPress={() => onSelect(i + 1)}
               style={[
                 styles.btn,
-                { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.default },
+                { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.default },
                 isAllow && { backgroundColor: theme.tokens.accent.base, borderColor: theme.tokens.accent.base },
                 isAlways && { backgroundColor: theme.tokens.accent.dim, borderColor: theme.tokens.accent.base },
                 isDeny && { borderColor: theme.tokens.status.error },

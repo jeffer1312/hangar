@@ -429,6 +429,7 @@
   "config_fundo_remover": "remover",
   "config_fundo_erro_cota": "não coube no armazenamento do navegador; tente uma imagem menor",
   "config_fundo_erro_leitura": "não consegui ler essa imagem (formato não suportado neste navegador?)",
+  "aparencia_fundo_erro_copia": "Não deu pra guardar essa imagem — o papel de parede continua o mesmo.",
   "switcher_atual": "atual",
   "paleta_placeholder": "Ir para uma sessão ou visualização…",
   "paleta_buscar_aria": "Buscar sessão ou comando",

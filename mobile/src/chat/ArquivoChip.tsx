@@ -2,6 +2,7 @@ import { Pressable, Text } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { svgIcone } from '@hangar/core';
+import { superficie } from '../theme/superficie';
 
 export function ArquivoChip({ caminho, onPress }: { caminho: string; onPress: () => void }) {
   const { theme } = useUnistyles();
@@ -24,7 +25,7 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: theme.base.radius.full,
-    backgroundColor: `rgba(${theme.tokens.glass.rgb.join(',')},${theme.surfaceAlpha * 0.6})`,
+    backgroundColor: superficie(theme),
     alignSelf: 'flex-start',
     maxWidth: 220,
   },

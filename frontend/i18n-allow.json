@@ -13,6 +13,7 @@
       "Terminal": "NOME DE ICONE do lucide (a chave que o componente Icon resolve), nao texto de tela: nenhum deles chega ao usuario. A heuristica marca qualquer palavra unica capitalizada. Vale para 'Eye', 'Pencil', 'Search', 'Globe', 'Puzzle', 'Bot', 'Sparkles' e 'Wrench' (toolIcon.ts), 'Ellipsis' (ChatHeader.tsx), 'Activity', 'Repeat', 'Users', 'Folder', 'Paperclip', 'Gauge', 'Flag' (MoreSheet.tsx), 'Copy' (BubbleActions.tsx) e 'Brain' (ThinkingBlock.tsx); os compostos (FilePlus, FolderSearch, ListTodo, CircleHelp) e os que levam digito (Share2, Volume2) nao caem na heuristica.",
       "Icon": "Icon.tsx — membro do namespace do lucide que NAO e icone, excluido do tipo IconName; nome de exportacao, nao texto de tela.",
       "aparencia.tema": "stores/aparencia.ts — chave do armazenamento local da preferencia de tema, nao texto de tela.",
+      "aparencia.fundo": "stores/aparencia.ts — chave do armazenamento local do papel de parede escolhido, nao texto de tela. As irmas (imagemUri, panelAlpha, surfaceAlpha, acento) nao caem na heuristica por serem camelCase.",
       "Aguardando sua resposta": "sw.ts:47 — fallback de notificacao push para payload malformado; o corpo normal vem traduzido do backend (app/push.py, locale da inscricao) e import de paraglide aqui quebraria o dev (esbuild cru no devServiceWorker, ver sw.ts:43-45); precedente: Hangar (mesma notificacao) ja esta no allow",
       "* Regras, na ordem em que importam:": "typewriter.svelte.ts — linhas de COMENTARIO (docblock) que a heuristica leu como string; nenhuma e texto exibido. Vale para as 7 entradas '* ...' e '/** ... */' deste arquivo",
       "Kimi Code": "NovaCredencialSheet.svelte — NOME DE MARCA do provedor no catálogo, não texto de interface: marca não se traduz. Os outros do mesmo catálogo (OpenCode Zen, Anthropic, OpenRouter, DeepSeek) não caem na heurística; estes dois caem por serem duas palavras curtas.",
@@ -277,5 +278,6 @@
   "Brain",
   "Flag",
   "Icon",
-  "aparencia.tema"
+  "aparencia.tema",
+  "aparencia.fundo"
 ]

@@ -12,6 +12,7 @@ import { TableChart } from './TableChart';
 import { ArquivoChip } from './ArquivoChip';
 import { BubbleActions } from './BubbleActions';
 import { getTableChartPref, setTableChartPref } from './tableChartPref';
+import { superficie } from '../theme/superficie';
 
 // Tema completo do unistyles (tokens + base) — UnistylesTheme não é exportado na raiz.
 type TemaApp = UnistylesThemes[keyof UnistylesThemes];
@@ -106,7 +107,7 @@ export function AssistantBubble({
               setPref(next);
               setTableChartPref(next);
             }}
-            style={[styles.chartBtn, { borderColor: theme.tokens.border.subtle, backgroundColor: theme.tokens.bg.surface }]}
+            style={[styles.chartBtn, { borderColor: theme.tokens.border.subtle, backgroundColor: superficie(theme) }]}
             accessibilityRole="button"
           >
             <Text style={[styles.chartBtnText, { color: theme.tokens.accent.base }]}>
@@ -142,7 +143,7 @@ export function AssistantBubble({
             }
             const icon = r.kind === 'pdf' ? '📄' : r.kind === 'html' ? '🌐' : r.kind === 'audio' ? '🎵' : '📎';
             return (
-              <View key={r.path} style={[styles.chip, { backgroundColor: theme.tokens.bg.surface, borderColor: theme.tokens.border.subtle }]}>
+              <View key={r.path} style={[styles.chip, { backgroundColor: superficie(theme), borderColor: theme.tokens.border.subtle }]}>
                 <Text style={styles.chipIco}>{icon}</Text>
                 <Text style={[styles.chipName, { color: theme.tokens.text.primary }]} numberOfLines={1}>
                   {r.name}
@@ -172,7 +173,7 @@ const styles = StyleSheet.create((theme) => ({
   wrap: {
     alignSelf: 'flex-start',
     maxWidth: '92%',
-    backgroundColor: theme.tokens.bg.elevated,
+    backgroundColor: superficie(theme, 0.8),
     borderRadius: theme.base.radius.lg,
     paddingHorizontal: theme.base.space[3],
     paddingVertical: theme.base.space[2],
@@ -188,7 +189,7 @@ const styles = StyleSheet.create((theme) => ({
     width: 96,
     height: 96,
     borderRadius: theme.base.radius.md,
-    backgroundColor: theme.tokens.bg.surface,
+    backgroundColor: superficie(theme),
   },
   chip: {
     flexDirection: 'row',

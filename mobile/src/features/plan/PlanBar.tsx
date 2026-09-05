@@ -3,6 +3,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { PlanDetail } from '@hangar/core';
 import { planBadge } from '@hangar/core';
 import type { SessionInfo } from '@hangar/core';
+import { superficie } from '../../theme/superficie';
 
 interface Props {
   session?: SessionInfo | null;
@@ -54,7 +55,7 @@ const styles = StyleSheet.create((theme) => ({
   compact: { position: 'absolute', left: theme.base.space[1], right: theme.base.space[1], bottom: 2, marginTop: 0 },
   bar: { flex: 1, flexDirection: 'row', gap: 3, minWidth: 0 },
   solid: { gap: 0 },
-  seg: { flex: 1, height: 5, borderRadius: theme.base.radius.full, backgroundColor: theme.tokens.bg.elevated, overflow: 'hidden' },
+  seg: { flex: 1, height: 5, borderRadius: theme.base.radius.full, backgroundColor: superficie(theme, 0.8), overflow: 'hidden' },
   fill: { height: '100%', borderRadius: theme.base.radius.full },
   lbl: { fontSize: 10, fontVariant: ['tabular-nums'], flexShrink: 0 },
 }));

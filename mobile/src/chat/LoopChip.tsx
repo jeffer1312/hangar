@@ -3,6 +3,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { loopBadge } from '@hangar/core';
 import type { LoopState } from '@hangar/core';
 import * as m from '../paraglide/messages';
+import { superficie } from '../theme/superficie';
 
 interface Props {
   status: LoopState['status'] | null | undefined;
@@ -25,7 +26,7 @@ export function LoopChip({ status, iter, max, onPress }: Props) {
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.chip, { backgroundColor: theme.tokens.bg.surface, borderColor: color }]}
+      style={[styles.chip, { backgroundColor: superficie(theme), borderColor: color }]}
       accessibilityRole="button"
       accessibilityLabel={m.loop_titulo()}
     >

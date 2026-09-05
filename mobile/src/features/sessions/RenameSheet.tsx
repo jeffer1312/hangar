@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Sheet } from '../../ui/Sheet';
 import { MultilineInput } from '../../ui/MultilineInput';
 import * as m from '../../paraglide/messages';
+import { superficie } from '../../theme/superficie';
 
 // Renomear pede um campo de texto, e `Alert.prompt` só existe no iOS — uma folha serve os dois
 // sistemas com o mesmo código.
@@ -25,7 +26,7 @@ export function RenameSheet({
     <Sheet open={!!nome} sizes={['auto']} onDismiss={onFechar}>
       <View style={styles.inner}>
         <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.sessao_renomear()}</Text>
-        <View style={[styles.campo, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}>
+        <View style={[styles.campo, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}>
           <MultilineInput
             multiline={false}
             value={valor}

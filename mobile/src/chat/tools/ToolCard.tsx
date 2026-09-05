@@ -3,6 +3,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { summarizeToolInput, summarizeToolResult, toolPhase, type ChatEvent } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
 import { toolIcon } from './toolIcon';
+import { superficie } from '../../theme/superficie';
 import * as m from '../../paraglide/messages';
 
 // ChatEvent.ts é epoch em SEGUNDOS (backend/app/transcript.py:_ts).
@@ -43,7 +44,7 @@ const styles = StyleSheet.create((theme) => ({
   card: {
     flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 7,
     borderRadius: theme.base.radius.sm,
-    backgroundColor: `rgba(${theme.tokens.glass.rgb.join(',')},${theme.surfaceAlpha * 0.6})`,
+    backgroundColor: superficie(theme),
   },
   nome: { fontSize: theme.base.text.xs, fontWeight: '600' },
   resumo: { flex: 1, fontSize: theme.base.text.xs, fontFamily: theme.base.fontMono },

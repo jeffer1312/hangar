@@ -3,6 +3,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { parseImageMessage, uploadUrlNative, fileAuthHeader } from '@hangar/core';
 import { BubbleActions } from './BubbleActions';
+import { superficie } from '../theme/superficie';
 
 // Bolha do usuário: alinhada à direita, cor bubbleUser do tema (espelho do app.css).
 // Se parseImageMessage(text) não nulo → legenda + miniaturas (uploadUrl/fileUrl).
@@ -80,6 +81,6 @@ const styles = StyleSheet.create((theme) => ({
     width: 96,
     height: 96,
     borderRadius: theme.base.radius.md,
-    backgroundColor: theme.tokens.bg.elevated,
+    backgroundColor: superficie(theme, 0.8),
   },
 }));

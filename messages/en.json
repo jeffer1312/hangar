@@ -429,6 +429,7 @@
   "config_fundo_remover": "remove",
   "config_fundo_erro_cota": "did not fit in the browser storage; try a smaller image",
   "config_fundo_erro_leitura": "could not read this image (unsupported format in this browser?)",
+  "aparencia_fundo_erro_copia": "Could not save that image — the wallpaper is unchanged.",
   "switcher_atual": "current",
   "paleta_placeholder": "Go to a session or view…",
   "paleta_buscar_aria": "Search session or command",

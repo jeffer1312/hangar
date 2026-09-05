@@ -21,6 +21,7 @@ import { useDitadoEstiloStore } from '../features/ditado/ditadoEstiloStore';
 import { PillMenu } from '../features/pills/PillMenu';
 import { CommandSheet } from './CommandSheet';
 import { comandoParcial } from './comandoParcial';
+import { superficie } from '../theme/superficie';
 
 interface Props {
   serverId: string;
@@ -467,7 +468,7 @@ export function Composer({ serverId, name, draft }: Props) {
           {isCodex ? (
             <Pressable
               onPress={() => router.push(`/s/${serverId}/${name}/codex-limits` as never)}
-              style={[styles.codexChip, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}
+              style={[styles.codexChip, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}
               accessibilityRole="button"
               accessibilityLabel={m.codex_limites_titulo()}
             >
@@ -477,11 +478,11 @@ export function Composer({ serverId, name, draft }: Props) {
         </ScrollView>
 
         {pendingAttach ? (
-          <View style={[styles.attachPreview, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}>
+          <View style={[styles.attachPreview, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}>
             {pendingAttach.kind === 'image' ? (
               <Image source={{ uri: pendingAttach.uri }} style={styles.attachThumb} contentFit="cover" transition={150} />
             ) : (
-              <View style={[styles.attachFileIcon, { backgroundColor: theme.tokens.bg.surface }]}>
+              <View style={[styles.attachFileIcon, { backgroundColor: superficie(theme) }]}>
                 <Text style={styles.attachFileIco}>📎</Text>
               </View>
             )}
@@ -561,7 +562,7 @@ export function Composer({ serverId, name, draft }: Props) {
         </View>
 
         {gravando ? (
-          <View style={[styles.rmsTrack, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]} accessibilityLabel={m.composer_gravando_audio()}>
+          <View style={[styles.rmsTrack, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]} accessibilityLabel={m.composer_gravando_audio()}>
             <View style={[styles.rmsFill, { width: `${Math.round(Math.min(1, rms) * 100)}%`, backgroundColor: theme.tokens.accent.base }]} />
           </View>
         ) : null}
@@ -571,7 +572,7 @@ export function Composer({ serverId, name, draft }: Props) {
         ) : null}
 
         {autoN !== null ? (
-          <Pressable onPress={cancelarAuto} style={[styles.autoChip, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
+          <Pressable onPress={cancelarAuto} style={[styles.autoChip, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
             <Text style={[styles.autoText, { color: theme.tokens.text.primary }]}>{m.composer_enviando_cancelar({ n: autoN })}</Text>
           </Pressable>
         ) : null}
@@ -640,7 +641,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.base.space[2],
-    backgroundColor: theme.tokens.bg.elevated,
+    backgroundColor: superficie(theme, 0.8),
     borderRadius: theme.base.radius.full,
     paddingHorizontal: theme.base.space[2],
     paddingVertical: 4,
@@ -712,7 +713,7 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minHeight: 44,
     justifyContent: 'center',
-    backgroundColor: theme.tokens.bg.surface,
+    backgroundColor: superficie(theme),
     borderRadius: theme.base.radius.lg,
     borderWidth: 1,
     borderColor: theme.tokens.border.subtle,
@@ -725,7 +726,7 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.base.radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.tokens.bg.elevated,
+    backgroundColor: superficie(theme, 0.8),
     borderWidth: 1,
     borderColor: theme.tokens.border.subtle,
   },
@@ -823,7 +824,7 @@ const styles = StyleSheet.create((theme) => ({
     width: 48,
     height: 48,
     borderRadius: theme.base.radius.sm,
-    backgroundColor: theme.tokens.bg.surface,
+    backgroundColor: superficie(theme),
   },
   attachFileIcon: {
     width: 48,

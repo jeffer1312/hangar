@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Sheet } from '../ui/Sheet';
 import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
+import { superficie } from '../theme/superficie';
 
 interface Props {
   open: boolean;
@@ -52,7 +53,7 @@ export function MoreSheet({ open, onClose, serverId, name }: Props) {
             accessibilityRole="button"
             accessibilityLabel={it.label}
           >
-            <View style={[styles.ico, { backgroundColor: theme.tokens.bg.elevated }]}>
+            <View style={[styles.ico, { backgroundColor: superficie(theme, 0.8) }]}>
               <Icon name={it.icon} size={20} color={theme.tokens.text.secondary} />
             </View>
             <View style={styles.txt}>

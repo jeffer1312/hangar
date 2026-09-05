@@ -3,6 +3,7 @@ import { AccessibilityInfo, Platform, View, type ViewProps } from 'react-native'
 import { BlurView } from 'expo-blur';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useBlurTarget } from './blurTarget';
 
 type Props = ViewProps & { variant?: 'panel' | 'modal' | 'chrome' };
 
@@ -20,6 +21,7 @@ export function useReduceTransparency() {
 export function Glass({ variant = 'panel', style, children, ...rest }: Props) {
   const { theme, rt } = useUnistyles();
   const reduzir = useReduceTransparency();
+  const alvoBlur = useBlurTarget();
   const [r, g, b] = theme.tokens.glass.panelRgb;
   const alpha =
     variant === 'modal'
@@ -42,7 +44,15 @@ export function Glass({ variant = 'panel', style, children, ...rest }: Props) {
     );
   }
   return (
-    <BlurView intensity={40} blurMethod="dimezisBlurView" tint={rt.themeName === 'dark' ? 'dark' : 'light'} style={[styles.box, style]} {...rest}>
+    <BlurView
+      intensity={40}
+      blurMethod="dimezisBlurView"
+      // Sem alvo (tela que não passa pela Screen) o Android cai em "none" — o rgba abaixo cobre o caso.
+      blurTarget={alvoBlur ?? undefined}
+      tint={rt.themeName === 'dark' ? 'dark' : 'light'}
+      style={[styles.box, style]}
+      {...rest}
+    >
       <View style={[StyleSheet.absoluteFillObject, { backgroundColor: bg }]} />
       {children}
     </BlurView>

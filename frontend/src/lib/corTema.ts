@@ -8,6 +8,8 @@
 // UI da Aparência nem mostra a seção (mesmo gate da "Cor do texto", só que invertido). Os dois
 // nunca escrevem ao mesmo tempo.
 
+import { hexParaRgb } from '@hangar/core';
+
 export type ModoCor = 'dark' | 'light';
 
 export interface CorTema {
@@ -102,17 +104,13 @@ export function limparCorTema(): void {
 
 type Rgb = [number, number, number];
 
-function hexPraRgb(hex: string): Rgb {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
 // Computed style de custom property devolve o valor ESPECIFICADO: hex ("#100e11") pras cores da
 // rampa, "rgb(16, 14, 17)" ou a tripla crua "16 14 17" pras triplas. Hex primeiro — sem isto a
 // tinta nunca tocava --bg-* (o regex lia "8","6","2" de "#f8f6f2" e o claro ficava lamacento).
 function parseCor(v: string): Rgb | null {
   const t = v.trim();
-  if (/^#[0-9a-fA-F]{6}$/.test(t)) return hexPraRgb(t);
+  const hex = hexParaRgb(t);
+  if (hex) return hex;
   const nums = t.match(/[\d.]+/g);
   if (!nums || nums.length < 3) return null;
   return [+nums[0], +nums[1], +nums[2]];
@@ -153,22 +151,22 @@ export function aplicarCorTema(): void {
   for (const k of chaves) raiz.style.removeProperty(k);
   if (!c.destaque && !c.tinta) { sincronizarMeta(); return; }
 
-  if (c.destaque) {
-    const rgb = hexPraRgb(c.destaque);
+  const rgb = c.destaque ? hexParaRgb(c.destaque) : null;
+  if (rgb) {
     const press = escurecer(rgb);
     raiz.style.setProperty('--accent', c.destaque);
     // Alfa por modo, como a fábrica: 0.18 no escuro, 0.12 no claro (app.css).
     raiz.style.setProperty('--accent-dim', `rgb(${rgb.join(' ')} / ${modo === 'light' ? 0.12 : 0.18})`);
     raiz.style.setProperty('--accent-press', `rgb(${press.join(' ')})`);
   }
-  if (c.tinta) {
+  const tintaRgb = c.tinta ? hexParaRgb(c.tinta) : null;
+  if (tintaRgb) {
     const frac = (c.forca / 100) * TINTA_MAX;
-    const t = hexPraRgb(c.tinta);
     const cs = getComputedStyle(raiz);
     for (const k of CHAVES_TINTA) {
       const base = parseCor(cs.getPropertyValue(k));
       if (!base) continue;
-      const m = misturar(base, t, frac);
+      const m = misturar(base, tintaRgb, frac);
       // Triplas cruas voltam como "r g b" (o formato que entra em rgb(.../alfa) e color-mix);
       // as cores diretas voltam como rgb() resolvido.
       raiz.style.setProperty(k, k.endsWith('-rgb') ? m.join(' ') : `rgb(${m.join(' ')})`);

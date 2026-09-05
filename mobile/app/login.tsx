@@ -10,6 +10,7 @@ import { parsePairing } from '../src/features/login/pairing';
 import { useServers } from '../src/stores/servers';
 import { getSessions } from '@hangar/core';
 import * as m from '../src/paraglide/messages';
+import { superficie } from '../src/theme/superficie';
 
 export default function Login() {
   const router = useRouter();
@@ -187,7 +188,7 @@ const styles = StyleSheet.create((theme, rt) => ({
   },
   input: {
     height: 48,
-    backgroundColor: theme.tokens.bg.elevated,
+    backgroundColor: superficie(theme, 0.8),
     borderWidth: 1,
     borderColor: theme.tokens.border.default,
     borderRadius: theme.base.radius.md,

@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { EnrichedMarkdownText } from 'react-native-enriched-markdown';
 import { splitTodoBlock } from '@hangar/core';
 import { mkMarkdownStyle } from './AssistantBubble';
+import { superficie } from '../theme/superficie';
 
 interface Props {
   text: string;
@@ -74,7 +75,7 @@ const styles = StyleSheet.create((theme) => ({
   wrap: {
     alignSelf: 'flex-start',
     maxWidth: '92%',
-    backgroundColor: theme.tokens.bg.elevated,
+    backgroundColor: superficie(theme, 0.8),
     borderRadius: theme.base.radius.lg,
     paddingHorizontal: theme.base.space[3],
     paddingVertical: theme.base.space[2],

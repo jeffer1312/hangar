@@ -2,6 +2,7 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import * as m from '../paraglide/messages';
+import { superficie } from '../theme/superficie';
 
 interface Props {
   serverId: string;
@@ -22,7 +23,7 @@ export function TuiPill({ serverId, name, overlay, login }: Props) {
   return (
     <Pressable
       onPress={() => router.push(`/s/${serverId}/${name}/terminal` as never)}
-      style={[styles.pill, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}
+      style={[styles.pill, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}
       accessibilityRole="button"
       accessibilityLabel={a11y}
     >

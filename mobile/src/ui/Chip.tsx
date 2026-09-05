@@ -1,6 +1,7 @@
 import { Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon, type IconName } from './Icon';
+import { superficie } from '../theme/superficie';
 
 export type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'error';
 
@@ -22,11 +23,10 @@ export function Chip({ children, tone = 'neutral', icon, mono }: { children: str
 }
 
 const styles = StyleSheet.create((theme) => ({
-  // rgba com o alpha das caixas: acompanha o slider de Solidez, nunca bg cru.
   chip: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 6, paddingVertical: 2, borderRadius: theme.base.radius.full, borderWidth: 1,
-    backgroundColor: `rgba(${theme.tokens.glass.rgb.join(',')},${theme.surfaceAlpha * 0.5})`,
+    backgroundColor: superficie(theme, 0.5),
   },
   txt: { fontSize: theme.base.text.xxs, fontWeight: '600' },
   mono: { fontFamily: theme.base.fontMono, fontWeight: '500' },

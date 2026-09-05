@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { parseStatusLine } from '@hangar/core';
 import { ContextRing } from './ContextRing';
 import { statusChips } from './statusChips';
+import { superficie } from '../theme/superficie';
 
 // Statusline parseada (parseStatusLine do core): anel de contexto + modelo/effort + chips
 // (custo, janelas de cota, repo/branch, tempo). Sessão sem marcador nenhum segue mostrando a
@@ -70,7 +71,7 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.base.text.xxs,
     fontFamily: theme.base.fontMono,
     color: theme.tokens.text.secondary,
-    backgroundColor: theme.tokens.bg.surface,
+    backgroundColor: superficie(theme),
     borderColor: theme.tokens.border.subtle,
     borderWidth: 1,
     borderRadius: 999,

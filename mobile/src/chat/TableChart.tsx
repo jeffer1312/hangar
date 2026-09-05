@@ -5,6 +5,7 @@ import { BarChart } from 'react-native-gifted-charts';
 import { formatarValor } from '@hangar/core';
 import type { TabelaLida } from '@hangar/core';
 import { PillMenu, type PillMenuItem } from '../features/pills/PillMenu';
+import { superficie } from '../theme/superficie';
 
 interface Props {
   tabela: TabelaLida;
@@ -38,7 +39,7 @@ export function TableChart({ tabela, coluna, onColuna }: Props) {
       {tabela.colunas.length > 1 ? (
         <Pressable
           onPress={() => setOpen(true)}
-          style={[styles.selector, { borderColor: theme.tokens.border.subtle, backgroundColor: theme.tokens.bg.surface }]}
+          style={[styles.selector, { borderColor: theme.tokens.border.subtle, backgroundColor: superficie(theme) }]}
           accessibilityRole="button"
         >
           <Text style={[styles.selectorText, { color: theme.tokens.text.primary }]} numberOfLines={1}>

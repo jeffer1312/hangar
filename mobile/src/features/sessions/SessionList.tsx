@@ -24,6 +24,7 @@ import { SessionRow } from './SessionRow';
 import { AttentionStrip } from './AttentionStrip';
 import { RenameSheet } from './RenameSheet';
 import * as m from '../../paraglide/messages';
+import { superficie } from '../../theme/superficie';
 
 const ROTULO_AGRUPAR: Record<GroupBy, () => string> = {
   none: m.lista_agrupar_nenhum,
@@ -144,7 +145,7 @@ export function SessionList() {
     <View style={styles.topo}>
       <AttentionStrip sessions={rows} onOpen={abrir} />
       <View style={styles.barra}>
-        <View style={[styles.campo, { backgroundColor: theme.tokens.bg.elevated, borderColor: theme.tokens.border.subtle }]}>
+        <View style={[styles.campo, { backgroundColor: superficie(theme, 0.8), borderColor: theme.tokens.border.subtle }]}>
           <Icon name="Search" size={16} color={theme.tokens.text.muted} />
           <TextInput
             value={filtro}

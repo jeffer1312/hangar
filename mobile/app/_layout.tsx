@@ -7,11 +7,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { configureCore } from '../src/net/configureCore';
 import { useServers } from '../src/stores/servers';
-import { aplicarTemaSalvo } from '../src/stores/aparencia';
+import { aplicarTemaSalvo, useAparencia } from '../src/stores/aparencia';
+import { aplicarMaterial } from '../src/theme/aplicarMaterial';
 import { Toaster } from '../src/ui/Toast';
 
 configureCore();
 aplicarTemaSalvo();
+aplicarMaterial(useAparencia.getState());
 
 export default function Layout() {
   const router = useRouter();

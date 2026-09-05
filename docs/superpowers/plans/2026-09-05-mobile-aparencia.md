@@ -1340,7 +1340,7 @@ git commit -m "feat(mobile): lista densa de sessões em seções com cabeçalho 
 - Produces (core): `comAcento(tokens: ThemeTokens, hex: string | null): ThemeTokens` (devolve tokens com `accent.base/dim/press` e `pill.working` derivados do hex; `null` = tokens originais).
 - Produces (mobile): `useAparencia` ganha `fundo: 'flat'|'texture'|'aurora'|'image'`, `imagemUri: string|null`, `panelAlpha: number (0.3–1)`, `surfaceAlpha: number (0–1)`, `acento: string|null` e setters; `aplicarMaterial(state)` escreve nos dois temas via `UnistylesRuntime.updateTheme`; `Background` desenha o fundo escolhido atrás de tudo.
 
-- [ ] **Step 1: Teste da derivação de acento (core)**
+- [x] **Step 1: Teste da derivação de acento (core)**
 
 Ler `frontend/src/lib/corTema.ts:11-60` para a fórmula de `dim`/`press` (mistura com alpha e escurecimento). `packages/core/src/corTema.test.ts`:
 
@@ -1363,9 +1363,9 @@ describe('comAcento', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** — `npx vitest run src/corTema.test.ts --root packages/core` → FAIL.
+- [x] **Step 2: Rodar e ver falhar** — `npx vitest run src/corTema.test.ts --root packages/core` → FAIL.
 
-- [ ] **Step 3: Implementar `packages/core/src/corTema.ts`**
+- [x] **Step 3: Implementar `packages/core/src/corTema.ts`**
 
 ```ts
 import type { ThemeTokens } from './theme';
@@ -1396,7 +1396,7 @@ export function comAcento(tokens: ThemeTokens, hex: string | null): ThemeTokens 
 
 `index.ts`: `export * from './corTema';`. Em `frontend/src/lib/corTema.ts`, se houver função equivalente de derivação, trocar pelo `comAcento`/`hexParaRgb` do core (sem mudar comportamento; `npm run check -w frontend` e o `corTema.test.ts` da PWA continuam verdes). Run core → PASS.
 
-- [ ] **Step 4: Store de aparência: fundo, alphas, acento**
+- [x] **Step 4: Store de aparência: fundo, alphas, acento**
 
 Em `mobile/src/stores/aparencia.ts`:
 
@@ -1450,7 +1450,7 @@ Run: `cd mobile && npx vitest run src/theme/aplicarMaterial.test.ts` → PASS. E
 
 `Glass.tsx`: o `variant === 'panel'` já lê `theme.panelAlpha` — nada a mudar; no iOS 26, passar `tintColor` com esse alpha (já faz). Onde hoje há `backgroundColor: theme.tokens.bg.elevated` em componentes de conteúdo (`grep -rn "bg.elevated\|bg.base" mobile/src --include=*.tsx | grep backgroundColor`), trocar por `rgba(${glass.rgb},${surfaceAlpha})` como `Chip` e `ToolCard` fazem; deixar `bg.hover` só em `pressed`.
 
-- [ ] **Step 5: `Background`**
+- [x] **Step 5: `Background`**
 
 `mobile/src/ui/Background.tsx`:
 
@@ -1485,14 +1485,14 @@ export function Background() {
 
 `mobile/src/ui/Screen.tsx`: renderizar `<Background />` como primeiro filho e o fundo próprio do `Screen` vira `transparent`. `setImagemUri` no store recebe o `uri` do `expo-image-picker` e copia com `FileSystem.copyAsync` pra `${FileSystem.documentDirectory}wallpaper.jpg` (import `* as FileSystem from 'expo-file-system/legacy'` — o SDK 57 tem a API nova; se `legacy` não existir, usar `new File(uri).copy(new File(Paths.document, 'wallpaper.jpg'))` de `expo-file-system`); falha na cópia → `toast.erro` e mantém o fundo anterior.
 
-- [ ] **Step 6: Typecheck, testes, prova visual**
+- [x] **Step 6: Typecheck, testes, prova visual**
 
 Run: `npm run check -w @hangar/core && npm run typecheck -w mobile && npm run check -w frontend`; `npm run test -w @hangar/core && npm run test -w mobile`.
 Expected: 0 erros; core +3; mobile +1 (aplicarMaterial) mais os do store.
 
 Emulador (sem tela de configuração ainda): forçar pela `adb shell` não dá; então um teste manual temporário — em `_layout.tsx` chamar `useAparencia.getState().setFundo('aurora')` e `setPanelAlpha(0.5)` uma vez, tirar os prints `t4-aurora.png` (lista) e `t4-chat.png`, conferir que header/composer deixam o gradiente atravessar e que os cards ficam mais opacos que o painel; remover a chamada antes do commit. Regra do `CLAUDE.md`: retângulo que não deixa o fundo atravessar enquanto o painel em volta deixa é bug. Comparação com a PWA com aurora ligada (Aparência → Fundo), julgando opacidade e leiaute.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/core/src/corTema.ts packages/core/src/corTema.test.ts packages/core/src/index.ts frontend/src/lib/corTema.ts mobile/src/ui/Background.tsx mobile/src/ui/Screen.tsx mobile/src/ui/Glass.tsx mobile/src/theme mobile/src/stores/aparencia.ts mobile/src/stores/aparencia.test.ts mobile/app/_layout.tsx
