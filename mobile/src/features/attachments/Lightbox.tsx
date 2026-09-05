@@ -1,11 +1,10 @@
-import { useEffect, useRef } from 'react';
 import { Pressable, StatusBar, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Sheet, type SheetRef } from '../../ui/Sheet';
+import { Sheet } from '../../ui/Sheet';
 import * as m from '../../paraglide/messages';
 
 interface Props {
@@ -19,7 +18,6 @@ interface Props {
 export function Lightbox({ visible, uri, headers, filename, onClose }: Props) {
   const { theme } = useUnistyles();
   const insets = useSafeAreaInsets();
-  const ref = useRef<SheetRef>(null);
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -72,13 +70,8 @@ export function Lightbox({ visible, uri, headers, filename, onClose }: Props) {
     onClose();
   };
 
-  useEffect(() => {
-    if (visible) void ref.current?.present();
-    else void ref.current?.dismiss();
-  }, [visible]);
-
   return (
-    <Sheet ref={ref} sizes={['large']} onDismiss={handleClose}>
+    <Sheet open={visible} sizes={['large']} onDismiss={handleClose}>
       <View style={styles.backdrop}>
         <Pressable style={[styles.closeArea, { top: (insets.top > 0 ? insets.top : (StatusBar.currentHeight ?? 24)) + theme.base.space[2] }]} onPress={handleClose} accessibilityLabel={m.anexos_fechar_imagem()} accessibilityRole="button">
           <View style={[styles.closeBtn, { backgroundColor: 'rgba(0,0,0,0.6)', borderColor: 'rgba(255,255,255,0.25)' }]}>

@@ -1,7 +1,6 @@
-import { useEffect, useRef } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Sheet, type SheetRef } from '../../ui/Sheet';
+import { Sheet } from '../../ui/Sheet';
 import * as m from '../../paraglide/messages';
 
 export interface PillMenuItem {
@@ -23,15 +22,9 @@ interface Props {
 
 export function PillMenu({ open, onClose, items, loading, error, onRetry, onSelect, title }: Props) {
   const { theme } = useUnistyles();
-  const ref = useRef<SheetRef>(null);
-
-  useEffect(() => {
-    if (open) void ref.current?.present();
-    else void ref.current?.dismiss();
-  }, [open]);
 
   return (
-    <Sheet ref={ref} sizes={['auto']} onDismiss={onClose}>
+    <Sheet open={open} sizes={['auto']} onDismiss={onClose}>
       <View style={styles.sheet}>
         {title ? <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{title}</Text> : null}
         {loading ? (

@@ -19,7 +19,8 @@ function aplicar(t: Tema) {
 
 export const useAparencia = create<{ tema: Tema; setTema: (t: Tema) => void }>((set) => ({
   tema: ler(),
-  setTema: (t) => { prefs.set(K, t); aplicar(t); set({ tema: t }); },
+  // aplicar primeiro: se o Unistyles falhar, nada persiste — senão o cold start seguinte repete a falha.
+  setTema: (t) => { aplicar(t); prefs.set(K, t); set({ tema: t }); },
 }));
 
 export function aplicarTemaSalvo() { aplicar(useAparencia.getState().tema); }

@@ -1,8 +1,7 @@
-import { useEffect, useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
-import { Sheet, type SheetRef } from '../ui/Sheet';
+import { Sheet } from '../ui/Sheet';
 import { Icon, type IconName } from '../ui/Icon';
 import * as m from '../paraglide/messages';
 
@@ -23,12 +22,6 @@ type Item = {
 export function MoreSheet({ open, onClose, serverId, name }: Props) {
   const { theme } = useUnistyles();
   const router = useRouter();
-  const ref = useRef<SheetRef>(null);
-
-  useEffect(() => {
-    if (open) void ref.current?.present();
-    else void ref.current?.dismiss();
-  }, [open]);
 
   const items: Item[] = [
     { icon: 'CircleHelp', label: m.askq_sua_resposta(), route: 'ask' },
@@ -47,7 +40,7 @@ export function MoreSheet({ open, onClose, serverId, name }: Props) {
   };
 
   return (
-    <Sheet ref={ref} sizes={['auto']} onDismiss={onClose}>
+    <Sheet open={open} sizes={['auto']} onDismiss={onClose}>
       <View style={styles.inner}>
         <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.navbar_mais_acoes()}</Text>
         {items.map((it) => (

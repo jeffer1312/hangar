@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 type Props = ViewProps & { variant?: 'panel' | 'modal' | 'chrome' };
 
-function useReduceTransparency() {
+export function useReduceTransparency() {
   const [on, setOn] = useState(false);
   useEffect(() => {
     AccessibilityInfo.isReduceTransparencyEnabled().then(setOn).catch(() => setOn(false));
@@ -32,11 +32,13 @@ export function Glass({ variant = 'panel', style, children, ...rest }: Props) {
     return <View style={[styles.box, { backgroundColor: `rgb(${r},${g},${b})` }, style]} {...rest}>{children}</View>;
   }
   if (Platform.OS === 'ios' && isLiquidGlassAvailable()) {
-    // key pelo tema: o material do glass-effect não acompanha setColorScheme (expo/expo#43743).
     return (
-      <GlassView key={rt.themeName} glassEffectStyle="regular" tintColor={bg} style={[styles.box, style]} {...rest}>
+      <View style={[styles.box, style]} {...rest}>
+        {/* key pelo tema: o material do glass-effect não acompanha troca de tema em runtime.
+            Isolado do children (só o fundo remonta) pra não perder rascunho/foco de um input dentro. */}
+        <GlassView key={rt.themeName} glassEffectStyle="regular" tintColor={bg} style={StyleSheet.absoluteFillObject} pointerEvents="none" />
         {children}
-      </GlassView>
+      </View>
     );
   }
   return (
