@@ -56,4 +56,12 @@ describe('unirMaquinas', () => {
     expect(linhas.map((l) => l.nome)).toEqual(['Casa', 'Notebook']);
     expect(linhas.every((l) => !l.estaMaquina)).toBe(true);
   });
+
+  it('dois servidores do navegador com o mesmo identificador não duplicam o peer', () => {
+    const A2: Server = { id: 'srv-a2', label: 'Casa (Tailscale)', baseUrl: 'https://casa.ts.net', token: 'ta2' };
+    const pCasa: PeerView = { id: 'casa', base_url: 'https://casa.ts.net', token: 'ta••' };
+    const linhas = unirMaquinas([A, A2], { 'srv-a': 'casa', 'srv-a2': 'casa' }, [pCasa], null);
+    expect(linhas.find((l) => l.navegador === A)!.peer).toBe(pCasa);
+    expect(linhas.find((l) => l.navegador === A2)!.peer).toBeNull();
+  });
 });

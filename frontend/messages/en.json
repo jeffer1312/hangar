@@ -1082,6 +1082,7 @@
   "maquinas_so_no_servidor": "Only the server knows this machine. To follow it here, enter its token.",
   "maquinas_volta_sem_medir": "This way answers. The way back can't be measured from this device — it has no token for it.",
   "maquinas_volta_sem_registro": "This way answers, but the other side has not registered this machine. Ticking Servers talk registers both ends.",
+  "maquinas_volta_token_recusado": "The other side refused the token this device has for it. Edit the token (✎) and the way back is measured again.",
   "maquinas_vazio": "No machines yet — add the first one.",
   "maquinas_remover_peer_lados": "The servers stop talking: the registration is removed here and there.",
   "maquinas_remover_peer_so_aqui": "The registration is removed here only — this device has no token for it to undo the other side.",

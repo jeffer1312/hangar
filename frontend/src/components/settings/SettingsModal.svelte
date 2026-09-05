@@ -357,7 +357,7 @@
   {:else if telaAtual === 'maquinas'}
     <MaquinasSettings resolvedServer={resolvedServer} apiTarget={alvo}
       fallbackFocus={fecharEl}
-      onPickTarget={onPickServer ?? (() => {})} onLogout={onLogout ?? (() => {})} />
+      onLogout={onLogout ?? (() => {})} />
   {:else if telaAtual === 'contas'}
     <ContasSettings apiTarget={alvo} />
   {:else if telaAtual === 'harnesses'}

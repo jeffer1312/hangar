@@ -36,7 +36,8 @@
       "sse.abrir": "screens/Chat.svelte — VERBO de evento do diario de uso (mesmo alfabeto de 'tela.ver', 'opcao.tocar'), chave de dado num arquivo JSONL. Nunca exibido.",
       "[hl] pedaco do realce nao carregou": "highlightLazy.ts — mensagem de console.warn de quando o pedaco do Shiki nao baixa (rede caiu, ou deploy trocou o hash). Nao e texto de tela: o usuario ve o codigo sem cor, e quem le isto e quem abre o devtools. Mesmo caso de 'visor: falhou ao abrir'.",
       "[hl] realce do diff falhou": "EditDiff.svelte — mensagem de console.warn irma da de cima, no diff. Nao e texto de tela pelo mesmo motivo.",
-      "pedaco do app segue faltando depois de recarregar — deploy incompleto?": "main.ts — console.error do segundo `vite:preloadError` na mesma aba (o primeiro recarrega). Nao e texto de tela: quem le e quem abre o devtools pra entender por que a pagina nao se resolveu sozinha."
+      "pedaco do app segue faltando depois de recarregar — deploy incompleto?": "main.ts — console.error do segundo `vite:preloadError` na mesma aba (o primeiro recarrega). Nao e texto de tela: quem le e quem abre o devtools pra entender por que a pagina nao se resolveu sozinha.",
+      "sem identificador": "MaquinasSettings.svelte — trecho de COMENTARIO da linha do cacheIds (\"nao trava 'sem identificador' pra sempre\"), lido pela heuristica como string exibida; o rotulo real da tela e m.peers_aviso_nao_definido()."
     }
   },
   "não reescreva a tabela",
@@ -247,5 +248,6 @@
   "[hl] pedaco do realce nao carregou",
   "[hl] realce do diff falhou",
   "pedaco do app segue faltando depois de recarregar — deploy incompleto?",
-  "Files"
+  "Files",
+  "sem identificador"
 ]

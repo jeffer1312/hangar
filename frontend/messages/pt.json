@@ -1082,6 +1082,7 @@
   "maquinas_so_no_servidor": "Só o servidor conhece esta máquina. Para acompanhá-la aqui, informe o token dela.",
   "maquinas_volta_sem_medir": "Daqui pra lá responde. A volta não dá para medir deste aparelho — ele não tem o token dela.",
   "maquinas_volta_sem_registro": "Daqui pra lá responde, mas o lado de lá não registrou esta máquina. Marcar Servidores se falam registra as duas pontas.",
+  "maquinas_volta_token_recusado": "O lado de lá recusou o token que este aparelho tem para ela. Edite o token (✎) e a volta é medida de novo.",
   "maquinas_vazio": "Nenhuma máquina ainda — adicione a primeira.",
   "maquinas_remover_peer_lados": "Os servidores deixam de se falar: o registro sai daqui e de lá.",
   "maquinas_remover_peer_so_aqui": "O registro sai só daqui — este aparelho não tem o token dela para desfazer o lado de lá.",

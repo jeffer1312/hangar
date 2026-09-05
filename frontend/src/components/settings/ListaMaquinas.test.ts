@@ -96,6 +96,23 @@ describe('ListaMaquinas', () => {
     unmount(t.comp);
   });
 
+  it('volta recusada por token (401) ganha dica própria, não a de parcial', () => {
+    const t = montar([B], { estados: {
+      notebook: { ok: false, lados: [{ lado: 'ida', estado: 'ok' }, { lado: 'volta', estado: 'recusou', motivo: 'credencial' }] },
+    } });
+    expect(t.linha('srv:srv-b').textContent).toContain(m.maquinas_volta_token_recusado());
+    expect(t.linha('srv:srv-b').textContent).not.toContain(m.peers_estado_parcial());
+    unmount(t.comp);
+  });
+
+  it('linha só do navegador (sem peer) mostra farol neutro, não "testando"', () => {
+    const t = montar([A]);
+    const farol = t.linha('srv:srv-a').querySelector('.mq-farol')!;
+    expect(farol.textContent?.trim()).toBe('·');
+    expect(farol.classList.contains('neutro')).toBe(true);
+    unmount(t.comp);
+  });
+
   it('lista vazia: carregando não afirma "nenhuma"; sem carregar, diz e oferece adicionar', () => {
     const a = montar([], { carregando: true });
     expect(a.el.textContent).not.toContain(m.maquinas_vazio());

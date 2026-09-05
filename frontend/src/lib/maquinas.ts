@@ -22,10 +22,13 @@ export function unirMaquinas(
 ): LinhaMaquina[] {
   const porId = new Map(peers.map((p) => [p.id, p]));
   const usados = new Set<string>();
+  // Dois servidores do navegador (LAN + Tailscale da mesma máquina) podem ter o MESMO
+  // identificador: o segundo a casar fica sem peer, senão duas linhas renderizam o mesmo `corrige`.
+  const idsCasados = new Set<string>();
   const linhas: LinhaMaquina[] = servidores.map((s) => {
     const identificador = ids[s.id] ?? null;
-    const peer = identificador ? porId.get(identificador) ?? null : null;
-    if (peer) usados.add(peer.id);
+    const peer = identificador && !idsCasados.has(identificador) ? porId.get(identificador) ?? null : null;
+    if (peer) { usados.add(peer.id); idsCasados.add(identificador!); }
     return {
       chave: `srv:${s.id}`,
       nome: s.label,

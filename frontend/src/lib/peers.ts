@@ -112,6 +112,6 @@ export async function removerPeerDoisLados(
     await removerPeer(remoto, identificador);
     return true;
   } catch (e) {
-    return (e instanceof Error && (e as any).status === 404);
+    return (e instanceof Error && (e as Error & { status?: number }).status === 404);
   }
 }

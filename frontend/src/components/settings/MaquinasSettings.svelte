@@ -29,10 +29,9 @@
     // Fallback de foco das confirmações: o botão FECHAR do modal é o controle que sempre sobra
     // acessível, mesmo quando o gatilho (linha de servidor, Sair) sai da a11y tree.
     fallbackFocus?: HTMLElement | null;
-    onPickTarget: (id: string) => void;
     onLogout: () => void | Promise<void>;
   }
-  let { resolvedServer, apiTarget, fallbackFocus = null, onPickTarget, onLogout }: Props = $props();
+  let { resolvedServer, apiTarget, fallbackFocus = null, onLogout }: Props = $props();
 
   // lista reativa local: listServers() lê localStorage e não é reativo; o contador sobe pelo mesmo
   // onServersChanged que o App usa (o sync cross-aparelho também passa por ele).
@@ -159,6 +158,7 @@
     idErro = ''; peersErro = ''; removerPeerId = null;
     corrigeId = null; corrigeUrl = '';
     removerLadoDeLaFalhou = false;
+    emEdicao = null; avisoRemocao = ''; logoutMsg = '';
     // Gravação em voo pertence ao alvo que saiu da tela: sem isto o campo fica `readonly`
     // e o Confirmar do diálogo nasce desabilitado, para sempre, no alvo novo.
     idSalvando = false;
@@ -218,7 +218,7 @@
       if (cacheIds.has(k)) return [s.id, cacheIds.get(k)!] as const;
       let id: string | null = null;
       try { id = (await getIdentificador(s)).identificador || null; } catch { id = null; }
-      cacheIds.set(k, id);
+      if (id) cacheIds.set(k, id);   // só sucesso entra no cache — fracasso não trava "sem identificador" pra sempre
       return [s.id, id] as const;
     }));
     if (meu !== geracao) return;
@@ -233,7 +233,9 @@
     const meuId = identificador;
     await Promise.all(peers.map(async (p) => {
       const linha = linhas.find((l) => l.peer?.id === p.id);
-      const idaP = checkPeer(apiTarget, p.base_url, p.id).then((r) => ({ lado: 'ida', ...r }) as LadoState);
+      const idaP = checkPeer(apiTarget, p.base_url, p.id)
+        .then((r) => ({ lado: 'ida', ...r }) as LadoState)
+        .catch((e) => ({ lado: 'ida', estado: 'falhou', motivo: e instanceof Error ? e.message : String(e) } as LadoState));
       let voltaP: Promise<LadoState>;
       if (!linha?.navegador || !meuId) {
         voltaP = Promise.resolve({ lado: 'volta', estado: 'nao_configurado', motivo: 'token' } as LadoState);
@@ -245,7 +247,12 @@
             if (!eu) return { lado: 'volta', estado: 'nao_configurado', motivo: 'registro' } as LadoState;
             return checkPeer(nav, eu.base_url, meuId).then((r) => ({ lado: 'volta', ...r, url: eu.base_url }) as LadoState & { url: string });
           })
-          .catch((e) => ({ lado: 'volta', estado: 'falhou', motivo: e instanceof Error ? e.message : String(e) } as LadoState));
+          .catch((e) => {
+            // 401 é o token DESTE aparelho para aquela máquina recusado, não a máquina fora do ar —
+            // não é o mesmo caso de "falhou" que abre a correção de endereço.
+            const st = (e as Error & { status?: number }).status;
+            return { lado: 'volta', estado: st === 401 ? 'recusou' : 'falhou', motivo: st === 401 ? 'credencial' : (e instanceof Error ? e.message : String(e)) } as LadoState;
+          });
       }
       const [ida, volta] = await Promise.all([idaP, voltaP]);
       if (meu !== geracao) return;
@@ -301,7 +308,9 @@
     try {
       const r = await registrarPeerDoisLados(apiTarget, { id, base_url: linha.navegador.baseUrl, token: linha.navegador.token });
       if (meu !== geracao) return;
-      peers = await listarPeers(apiTarget);
+      const lista = await listarPeers(apiTarget);
+      if (meu !== geracao) return;
+      peers = lista;
       estados[r.id] = { lados: r.lados, ok: r.ok };
       if (!r.ok) { corrigeId = r.id; corrigeUrl = r.base_url; }
     } catch (e) {
@@ -315,15 +324,20 @@
   // existe justamente para testar um endereço novo). Só fecha quando o par fecha; senão o estado
   // novo fica à vista. O token vem do NAVEGADOR: só há bloco de correção em linha com navegador.
   async function testarDeNovo(linha: LinhaMaquina) {
+    const meu = geracao;
     const url = corrigeUrl.trim();
     if (!/^https?:\/\//.test(url)) { peersErro = m.url_invalida(); return; }
+    peersErro = '';
     try {
       const r = await registrarPeerDoisLados(apiTarget, { id: linha.identificador!, base_url: url, token: linha.navegador!.token });
+      if (meu !== geracao) return;
       const lista = await listarPeers(apiTarget);
+      if (meu !== geracao) return;
       peers = lista;
       estados[r.id] = { lados: r.lados, ok: r.ok };
       if (r.ok) { corrigeId = null; corrigeUrl = ''; }
     } catch (e) {
+      if (meu !== geracao) return;
       peersErro = msgErro(e);
     }
   }
@@ -351,9 +365,14 @@
       const lista = await listarPeers(apiTarget);
       if (meu !== geracao) return;
       peers = lista;
+      // Peer que saiu não pode deixar farol/estado ou correção presos a um id que não existe mais.
+      const { [id]: _descartado, ...resto } = estados;
+      estados = resto;
+      if (corrigeId === id) fecharCorrige();
     } catch (e) {
       if (meu !== geracao) return;
       peersErro = msgErro(e);
+      removerLadoDeLaFalhou = false;
     }
   }
 </script>

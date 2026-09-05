@@ -29,7 +29,8 @@
   function ladoDe(st: EstadoPeer | undefined, lado: 'ida' | 'volta'): LadoState | undefined {
     return st?.lados.find((l) => l.lado === lado);
   }
-  function farol(st: EstadoPeer | undefined, falhaReal: boolean): 'ok' | 'nao' | 'test' {
+  function farol(temPeer: boolean, st: EstadoPeer | undefined, falhaReal: boolean): 'ok' | 'nao' | 'test' | 'neutro' {
+    if (!temPeer) return 'neutro';   // só navegador, nada pra testar — não é "testando"
     if (!st || st.testando) return 'test';
     if (st.ok) return 'ok';
     return falhaReal ? 'nao' : 'test'; // nao_configurado (sem token/registro) não é falha, é cinza
@@ -48,9 +49,10 @@
     {@const ida = ladoDe(st, 'ida')}
     {@const volta = ladoDe(st, 'volta')}
     {@const falhaReal = !!st && !st.ok && (ida?.estado === 'falhou' || ida?.estado === 'recusou' || ida?.estado === 'estranho' || volta?.estado === 'falhou' || volta?.estado === 'recusou' || volta?.estado === 'estranho')}
+    {@const farolEstado = farol(!!linha.peer, st, falhaReal)}
     <li class="mq-linha" data-chave={linha.chave}>
-      <span class="mq-farol" class:ok={farol(st, falhaReal) === 'ok'} class:nao={farol(st, falhaReal) === 'nao'}>
-        {farol(st, falhaReal) === 'test' ? '◌' : '●'}
+      <span class="mq-farol" class:ok={farolEstado === 'ok'} class:nao={farolEstado === 'nao'} class:neutro={farolEstado === 'neutro'}>
+        {farolEstado === 'test' ? '◌' : farolEstado === 'neutro' ? '·' : '●'}
       </span>
       <span class="mq-txt">
         <span class="mq-nome">{linha.nome}</span>
@@ -59,6 +61,8 @@
           <span class="mq-hint">{m.maquinas_sem_identificador()}</span>
         {:else if st?.testando}
           <span class="mq-hint">{m.peers_estado_testando()}</span>
+        {:else if volta?.estado === 'recusou' && volta.motivo === 'credencial'}
+          <span class="mq-hint">{m.maquinas_volta_token_recusado()}</span>
         {:else if falhaReal}
           <span class="mq-hint">
             {m.peers_estado_parcial()}
@@ -73,7 +77,7 @@
           <span class="mq-hint">{m.maquinas_volta_sem_registro()}</span>
         {/if}
         <!-- Independente do estado acima: "só o servidor conhece" é sempre a instrução acionável
-             quando não há navegador, mesmo com um estado de teste já rodado (Fix round 1). -->
+             quando não há navegador, mesmo com um estado de teste já rodado. -->
         {#if !linha.navegador && linha.peer}
           <span class="mq-hint">{m.maquinas_so_no_servidor()}</span>
         {/if}
@@ -123,18 +127,24 @@
 <button class="ss-btn mq-add" onclick={onAdicionar}>+ {m.sessao_adicionar_servidor()}</button>
 
 <style>
-  .mq-lista { list-style: none; margin: 0; padding: 0; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+  .mq-lista { list-style: none; margin: 0; padding: 0; background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; container-type: inline-size; }
   .mq-linha { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-3); }
   .mq-linha + .mq-linha { border-top: 1px solid var(--border-subtle); }
   .mq-farol { flex-shrink: 0; width: 1.2em; text-align: center; font-size: 14px; color: var(--text-muted); }
   .mq-farol.ok { color: var(--success); }
   .mq-farol.nao { color: var(--error); }
+  .mq-farol.neutro { color: var(--text-muted); }
   .mq-txt { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .mq-nome { font-size: var(--text-sm); color: var(--text-primary); }
   .mq-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); word-break: break-all; }
   .mq-hint { font-size: var(--text-xs); line-height: 1.35; color: var(--text-muted); }
-  .mq-caixas { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); flex-shrink: 0; }
+  .mq-caixas { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
   .mq-caixa { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-muted); }
+  /* Celular estreito: caixas com max-content estouravam a largura e empurravam o ✎ pra baixo do
+     painel — container query porque quem aperta é a largura do PAINEL, não a da janela. */
+  @container (max-width: 420px) {
+    .mq-caixas { flex-basis: 100%; }
+  }
   .mq-tag { flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--accent); }
   .mq-editar { width: 32px; height: 32px; min-height: 0; flex-shrink: 0; color: var(--text-muted); font-size: var(--text-sm); border-radius: var(--radius-sm); }
   .mq-editar:hover { color: var(--accent); background: var(--bg-hover); }
