@@ -218,7 +218,7 @@
       if (cacheIds.has(k)) return [s.id, cacheIds.get(k)!] as const;
       let id: string | null = null;
       try { id = (await getIdentificador(s)).identificador || null; } catch { id = null; }
-      if (id) cacheIds.set(k, id);   // só sucesso entra no cache — fracasso não trava "sem identificador" pra sempre
+      if (id) cacheIds.set(k, id);   // só sucesso entra no cache — fracasso não trava sem identificador pra sempre
       return [s.id, id] as const;
     }));
     if (meu !== geracao) return;

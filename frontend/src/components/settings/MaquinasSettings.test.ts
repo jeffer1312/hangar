@@ -786,7 +786,7 @@ describe('MaquinasSettings — identificador e peers (Task 5)', () => {
     const B: Server = { id: 'srv-b', label: 'Notebook', baseUrl: 'http://b', token: 'tb' } as Server;
     peersMock.getIdentificador.mockImplementation(async (alvo) => ({ identificador: alvo?.id === 'srv-b' ? 'nb' : 'casa' }));
     peersMock.listarPeers.mockResolvedValue([{ id: 'nb', base_url: 'http://b', token: '••' }]);
-    peersMock.checkPeer.mockRejectedValue(new Error('fetch failed'));
+    peersMock.checkPeer.mockRejectedValueOnce(new Error('fetch failed'));
     const t = montar({ servers: [SRV, B] });
     await esperarCarga();
     expect(t.el.textContent).not.toContain(m.peers_estado_testando());
