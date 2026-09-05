@@ -437,6 +437,37 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `GET {base_url}/v1/models` — no static catalog, because the value varies by the user's
   subscription tier. The statusline only hides `💵`/cost-sidecar writes on an engine session — the
   effort chip (`(high✦)`) is untouched, it's not faked.
+- **`hangar-preview open` com a sessão FORA da tela** (`sse.nav_*`, `sessionsStore` →
+  `lib/navPelaLista.ts`, `hangar:nav-open` com `oculto`, 05/09/2026). O pedido do agente era um
+  `pop` em memória entregue ao PRIMEIRO stream da sessão que passasse: o celular lendo a mesma
+  sessão comia o evento (medido: 7 conexões da VPS contra 2 locais) e o desktop nunca via; e
+  reiniciar o backend perdia o pedido. Hoje é um marcador `{url, ts}` por sessão em
+  `~/.hangar/nav/pendentes.json`, entregue **uma vez por conexão** nos dois streams — o da sessão
+  e o da **lista**, que é o único que o desktop mantém aberto o tempo todo — e apagado quando o
+  shell confirma que criou o view (`DELETE /nav`) ou em 10 min. Do lado do shell, o view nasce
+  **escondido** (`setVisible(false)`) e já carrega: o agente dirige por CDP na hora, e o
+  `NavegadorPane` só reexibe quando o usuário abrir a sessão. View já visível não é tocado pelo
+  pedido oculto — ali quem manda é o painel montado. Trocar `main.cjs`/`preload.cjs` exige
+  reabrir o app desktop; o front e o backend não. Três limites medidos no teste de ponta a ponta:
+  (1) view escondido **não é pintado** — `capturePage` volta vazio (e `Page.captureScreenshot`
+  por CDP pendura), então `shot` devolve `erro: ... escondido` em vez de um PNG de 0 bytes;
+  `text`/`snapshot`/`click` funcionam; (2) a sessão que ganhou navegador fora da tela entra
+  direto na aba **Navegador** ao ser aberta (`DesktopSessionContext`, só quando ela nunca
+  escolheu aba); (3) **tudo isso é do layout desktop**: com a janela do Electron abaixo de 820px
+  (estava com 757px numa tile do Hyprland) o app está no layout de celular — sem sidebar, sem
+  stream da lista, sem `NavegadorPane` — e o pedido só marca o store. O `dist` novo ainda passa
+  pelo service worker: reload comum serve o bundle velho, é Ctrl+Shift+R.
+- **Modo de permissão troca COM a sessão trabalhando** (`api._guard_perm`, `permission_mode.py`,
+  medido 05/09/2026): BTab é tecla, não texto — com `✻ Ebbing… (6s · thinking)` na tela, um BTab
+  levou de bypass pra auto na hora, como no Pi. O guard de "está trabalhando"
+  (`terminal._require_drivable`) existe pro `/model`, que é TEXTO e cairia no campo de entrada
+  como mensagem; aplicado à permissão ele recusava com 409 o que o terminal aceita. O que resta
+  no guard é menu aberto no pane (engoliria a tecla) e painel de terminal aberto. Do lado do
+  app: o atalho (Alt+Shift+P, e Shift+Tab com foco no campo — a tecla do terminal) **sonda** o
+  ciclo quando não há cache; antes pedia sem `sondar`, recebia `[]` e morria calado até a
+  pílula ser aberta uma vez (0 POSTs em 7 dias de log). Ctrl+L foca o campo de qualquer lugar.
+  Ciclo: sessão nascida em bypass tem 5 posições (bypass → auto → manual → acceptEdits → plan);
+  as outras, 4 — bypass nunca é alcançável de fora, e `dontAsk` não tem volta.
 - **Modelo de uma sessão Claude Code: a lista NUNCA é constante** (`app/model_picker.py` +
   `terminal_input.list_model_options` / `set_engine_model` + `app/default_model.py` +
   `components/ClaudeModelPopover.svelte` + `components/ClaudeEffortPopover.svelte`). Duas fontes, escolhidas pelo que a sessão é — medido em

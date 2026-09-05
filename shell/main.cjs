@@ -485,11 +485,16 @@ function viewDe(ev, chave) {
   return navegadores.get(BrowserWindow.fromWebContents(ev.sender))?.get(chave);
 }
 
-ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
+// `oculto`: pedido que veio pelo stream da LISTA (agente abriu com a sessão fora da tela). O view
+// nasce escondido e já carrega — o agente dirige via CDP desde já; o NavegadorPane reexibe quando
+// o usuário abrir a sessão. View já VISÍVEL fica como está: ali quem manda é o painel montado.
+ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}) => {
   const win = BrowserWindow.fromWebContents(ev.sender);
   if (!win || !chave) return { ok: false };
   const views = viewsDa(win);
   let view = views.get(chave);
+  if (oculto && view && view.webContents && !view.webContents.isDestroyed() && view.getVisible?.()) return { ok: true };
+  const novo = !view || !view.webContents || view.webContents.isDestroyed();
   // O webContents pode ter morrido por fora (fechado via CDP Target.closeTarget, crash do
   // renderer): sem esta checagem o view volta invisível e nunca mais pinta — a área fica preta.
   // Medido: um Target.closeTarget externo pode deixar `view.webContents` undefined (não só
@@ -580,6 +585,10 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds } = {}) => {
     // agente clicou em links) e o front só manda `url` quando o usuário digita uma nova.
     const destino = url ? urlNavegavel(url) : null;
     if (destino && view.webContents.getURL() !== destino) view.webContents.loadURL(destino);
+  }
+  if (oculto) {
+    if (novo) view.setVisible(false);
+    return { ok: true };
   }
   view.setVisible(true);
   view.setBounds(normalizaBounds(bounds));

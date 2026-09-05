@@ -58,6 +58,46 @@ def test_emits_again_only_on_change(monkeypatch):
     assert json.loads(evs[1]["data"])[0]["state"] == "working"
 
 
+def test_nav_marcador_vai_a_toda_conexao_uma_vez_e_sai_no_ack(monkeypatch, tmp_path):
+    # O celular lendo a sessão não pode mais "comer" o pedido do agente: cada conexão recebe o
+    # marcador uma vez, ele fica até o desktop confirmar (DELETE /nav) e sobrevive em disco.
+    monkeypatch.setattr(sse, "_nav_arquivo", lambda: tmp_path / "pendentes.json")
+    sse._NAV_MARCADORES.clear()
+    async def fake_list(_snap=None):
+        return []
+    monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
+    sse.nav_pendente("hangar-2", "http://127.0.0.1:8765/")
+    assert json.loads((tmp_path / "pendentes.json").read_text())["hangar-2"]["url"] == "http://127.0.0.1:8765/"
+
+    async def primeiro_nav(gen):
+        async for ev in gen:
+            if ev["event"] == "nav":
+                return json.loads(ev["data"])
+    # duas conexões (celular + desktop): as duas recebem
+    a = asyncio.run(primeiro_nav(sse.list_events(ping_secs=9999)))
+    b = asyncio.run(primeiro_nav(sse.list_events(ping_secs=9999)))
+    assert a == b == {"name": "hangar-2", "url": "http://127.0.0.1:8765/"}
+    # a mesma conexão não recebe duas vezes o mesmo marcador
+    vistos: dict = {}
+    assert [n for n, _ in sse.nav_novos(vistos)] == ["hangar-2"]
+    assert sse.nav_novos(vistos) == []
+    # url nova = ts novo = entrega de novo
+    sse.nav_pendente("hangar-2", "http://127.0.0.1:8765/#/x")
+    assert [m["url"] for _, m in sse.nav_novos(vistos)] == ["http://127.0.0.1:8765/#/x"]
+    # ack tira do ar e do disco
+    sse.nav_confirmar("hangar-2")
+    assert sse.nav_novos({}) == []
+    assert json.loads((tmp_path / "pendentes.json").read_text()) == {}
+    # reinício do backend: relê o disco
+    sse.nav_pendente("outra", "http://a")
+    sse._NAV_MARCADORES.clear()
+    assert [n for n, _ in sse.nav_novos({})] == ["outra"]
+    # vencido sai sozinho
+    sse._NAV_MARCADORES["outra"]["ts"] -= sse._NAV_TTL_S + 1
+    assert sse.nav_novos({}) == []
+    sse._NAV_MARCADORES.clear()
+
+
 def test_no_reemit_on_last_activity_only_change(monkeypatch):
     # last_activity = mtime do jsonl (float sub-segundo); muda a cada escrita de uma sessao ativa.
     # Sozinho NAO pode re-emitir (senao a lista inteira pisca a cada poll). State change SIM emite.

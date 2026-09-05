@@ -8,6 +8,7 @@
 import * as m from '../paraglide/messages';
 import { openSessionsStream } from './api';
 import { listServers, onServersChanged, type Server } from './auth';
+import { navPelaLista } from './navPelaLista';
 import { aggregateSessions, sweepHidden, type Slot, type Aggregate } from './sessions';
 
 function createSessionsStore() {
@@ -94,6 +95,12 @@ function createSessionsStore() {
           slots.set(s.id, { sessions: slots.get(s.id)?.sessions ?? null, error: 'offline' });
         }
         recompute();
+      });
+      // O agente abriu o navegador embutido de uma sessão (possivelmente fora da tela) — ver
+      // navPelaLista. Vai pelo stream da lista porque é o único que o desktop mantém sempre aberto.
+      es.addEventListener('nav', (e) => {
+        arm();
+        void navPelaLista(s, (e as MessageEvent).data);
       });
       // Refresher do backend falhou (achado do hunter): sem isto, lista vazia por erro interno era
       // indistinguível de zero sessões. Mantém a última lista boa; o erro aparece distinto de offline.

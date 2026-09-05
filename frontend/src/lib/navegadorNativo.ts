@@ -12,8 +12,9 @@ export type NavBounds = { x: number; y: number; width: number; height: number };
 export type NavEstado = { chave: string; url: string; carregando: boolean; voltar: boolean; avancar: boolean };
 
 export type NavNativo = {
-  /** Cria ou reexibe o view da sessão. Sem `url`: só reexibe — ok:false se o main não tem o view. */
-  open: (chave: string, url: string | undefined, bounds: NavBounds) => Promise<{ ok: boolean }>;
+  /** Cria ou reexibe o view da sessão. Sem `url`: só reexibe — ok:false se o main não tem o view.
+   *  `oculto`: cria escondido (sessão fora da tela) — o painel reexibe depois; view visível não muda. */
+  open: (chave: string, url: string | undefined, bounds: NavBounds, extra?: { oculto?: boolean }) => Promise<{ ok: boolean }>;
   hide: (chave: string) => void;
   bounds: (chave: string, b: NavBounds) => void;
   reload: (chave: string) => void;

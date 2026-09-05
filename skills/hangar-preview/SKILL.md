@@ -85,9 +85,12 @@ tire `snapshot` de novo antes de agir.
 
 ## Comandos
 
-- `hangar-preview open <url>` — abre o navegador desta sessão com a url (o painel monta sozinho na
-  tela do usuário; se a sessão estiver fora da tela, abre quando ele abrir ela). **Avise o usuário**
-  no texto da resposta que você abriu — a janela dele muda na hora.
+- `hangar-preview open <url>` — abre o navegador desta sessão com a url. Com o app desktop aberto
+  ele nasce em segundos **mesmo com a sessão fora da tela** (escondido; `list` mostra `vivo`), e
+  você já pode dirigir: `text`, `snapshot`, `click`, `fill`, `eval` funcionam. Só `shot` não —
+  view escondido não é pintado e o verbo devolve `erro: ... escondido`; o print vem quando o
+  usuário abrir a sessão (aí o painel aparece com o navegador já na página em que você deixou).
+  **Avise o usuário** no texto da resposta que você abriu — a janela dele muda quando ele for lá.
 - `hangar-preview snapshot` — árvore de acessibilidade compacta, com as refs atuais.
 - `hangar-preview click @eN` — clica (evento de mouse real, não `.click()` em JS).
 - `hangar-preview fill @eN <texto>` — foca o campo e substitui o conteúdo pelo texto.

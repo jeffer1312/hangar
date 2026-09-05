@@ -97,12 +97,13 @@ function nomeSessao() {
 function lerSidecars() {
   if (!existsSync(DIR)) return [];
   return readdirSync(DIR)
-    // _srv.json é o sidecar do PROCESSO (porta+token do servidor local), não de um navegador.
-    .filter((a) => a.endsWith('.json') && !a.startsWith('.') && a !== '_srv.json')
+    // Arquivos com `_` são de processo (_srv.json: porta+token do servidor local; _pendentes.json:
+    // marcadores do backend), não de um navegador.
+    .filter((a) => a.endsWith('.json') && !a.startsWith('.') && !a.startsWith('_'))
     .map((a) => {
       try { return JSON.parse(readFileSync(join(DIR, a), 'utf8')); } catch { return null; }
     })
-    .filter(Boolean);
+    .filter((s) => s && typeof s.chave === 'string');
 }
 
 function sidecarDa(nome) {
@@ -183,7 +184,7 @@ if (cmd === 'open') {
   });
   if (res.status === 404) erro(`a sessão "${nome}" não existe no backend`);
   if (!res.ok) erro(`o backend recusou: ${res.status} ${await res.text()}`);
-  console.log(`navegador de "${nome}" abrindo com ${url} (se a sessão estiver fora da tela, abre quando o usuário abrir ela)`);
+  console.log(`navegador de "${nome}" abrindo com ${url} (com o app desktop aberto ele nasce em segundos, mesmo com a sessão fora da tela; o painel aparece quando o usuário abrir ela)`);
   process.exit(0);
 }
 

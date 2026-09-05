@@ -113,7 +113,7 @@ test('verbo url devolve location.href via avaliar', async () => {
 
 test('verbo shot grava PNG no caminho pedido', async () => {
   const destino = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'preview-shot-')), 'print.png');
-  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ toPNG: () => Buffer.from('png') }) };
+  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('png') }) };
   const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });
   const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
     method: 'POST',
@@ -123,6 +123,20 @@ test('verbo shot grava PNG no caminho pedido', async () => {
   assert.equal(r.status, 200);
   assert.equal(await r.text(), `ok: shot ${destino}`);
   assert.ok(fs.existsSync(destino));
+  srv.fechar();
+});
+
+test('verbo shot em view escondido devolve erro claro em vez de PNG vazio', async () => {
+  const destino = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'preview-shot-')), 'print.png');
+  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) }) };
+  const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });
+  const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
+    method: 'POST',
+    body: JSON.stringify({ chave: 'srv::d2', verbo: 'shot', args: [destino] }),
+    headers: { Authorization: `Bearer ${srv.token}` },
+  });
+  assert.match(await r.text(), /^erro: .*escondido/);
+  assert.ok(!fs.existsSync(destino));
   srv.fechar();
 });
 
@@ -139,7 +153,7 @@ test('verbo "constructor" nao alcanca o prototype de VERBOS', async () => {
 });
 
 test('verbo shot sem caminho devolve erro', async () => {
-  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ toPNG: () => Buffer.from('png') }) };
+  const ctl = { enfileirar: (fn) => fn(), capturarPagina: async () => ({ isEmpty: () => false, toPNG: () => Buffer.from('png') }) };
   const srv = await subirServidor({ controladorDe: () => ctl, escrever: () => {} });
   const r = await fetch(`http://127.0.0.1:${srv.porta}/cmd`, {
     method: 'POST',

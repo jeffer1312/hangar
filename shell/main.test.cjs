@@ -48,9 +48,11 @@ function criarWebContentsFalso() {
     debugger: dbg,
   };
 }
+const viewsFalsos = [];
 class WebContentsViewFalso {
-  constructor() { this.webContents = criarWebContentsFalso(); }
-  setVisible() {}
+  constructor() { this.webContents = criarWebContentsFalso(); this.visivel = null; viewsFalsos.push(this); }
+  setVisible(v) { this.visivel = v; }
+  getVisible() { return this.visivel === true; }
   setBounds() {}
 }
 
@@ -112,4 +114,29 @@ test('fechar o painel de uma janela nao mata o controlador vivo da MESMA sessao 
   // Fechar B de verdade ainda funciona — a guarda não deixa a entrada travada pra sempre.
   fechar(b.ev, { chave });
   assert.equal(ctlB.fechado, true, 'o proprio close de B fecha o controlador de B');
+});
+
+test('open oculto cria o view escondido e ja dirigivel; view visivel nao e tocado', async () => {
+  const a = novaJanela();
+  const chave = 'srv::fora-da-tela';
+  const abrir = handlers.get('hangar:nav-open');
+  const antes = criadas.length;
+
+  // Sessão fora da tela: o pedido chega pela lista, o view nasce escondido, com controlador.
+  const r1 = await abrir(a.ev, { chave, url: 'https://x.test', bounds: {}, oculto: true });
+  assert.equal(r1.ok, true);
+  assert.equal(criadas.length, antes + 1, 'controlador criado mesmo escondido (o agente dirige via CDP)');
+  const view = viewsFalsos.at(-1);
+  assert.equal(view.visivel, false, 'nasce escondido');
+
+  // O usuário abre a sessão: o painel reexibe sem url, como sempre.
+  const r2 = await abrir(a.ev, { chave, url: undefined, bounds: { x: 1, y: 1, width: 10, height: 10 } });
+  assert.equal(r2.ok, true);
+  assert.equal(view.visivel, true);
+
+  // Outro pedido oculto com o painel montado não esconde nem recria.
+  const r3 = await abrir(a.ev, { chave, url: 'https://y.test', bounds: {}, oculto: true });
+  assert.equal(r3.ok, true);
+  assert.equal(view.visivel, true, 'view visível fica como está');
+  assert.equal(criadas.length, antes + 1, 'sem controlador novo');
 });

@@ -283,6 +283,17 @@ export async function fetchSessionsForServer(s: Server): Promise<SessionInfo[]> 
   return res.json() as Promise<SessionInfo[]>;
 }
 
+// O shell criou o view do navegador embutido da sessão: o marcador 'nav' daquele servidor sai, e
+// nenhuma outra conexão (celular, outra janela) o recebe de novo.
+export async function confirmarNavForServer(s: Server, name: string): Promise<void> {
+  const res = await fetch(`${s.baseUrl}/api/sessions/${encodeURIComponent(name)}/nav`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${s.token}` },
+    signal: AbortSignal.timeout(4000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 // Custo de UM servidor (baseUrl+token explicitos), sem mexer no ativo. Igual fetchSessionsForServer:
 // a visao agregada chama todos em paralelo; um servidor lento/offline falha rapido (timeout 4s) e e
 // pulado, sem segurar os demais.

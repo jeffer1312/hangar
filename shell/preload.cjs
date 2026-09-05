@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('hangar', {
   // `bounds` vai por send, não invoke: dispara a cada frame de resize e não precisa de resposta.
   // O view não tem preload — o site aberto nele NUNCA recebe esta ponte; só o cockpit tem.
   nav: {
-    open: (chave, url, bounds) => ipcRenderer.invoke('hangar:nav-open', { chave, url, bounds }),
+    open: (chave, url, bounds, extra) => ipcRenderer.invoke('hangar:nav-open', { chave, url, bounds, ...(extra || {}) }),
     hide: (chave) => ipcRenderer.send('hangar:nav-hide', { chave }),
     bounds: (chave, b) => ipcRenderer.send('hangar:nav-bounds', { chave, bounds: b }),
     reload: (chave) => ipcRenderer.send('hangar:nav-reload', { chave }),
