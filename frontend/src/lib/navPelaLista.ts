@@ -25,7 +25,12 @@ export async function navPelaLista(s: Server, data: string): Promise<void> {
   atualizarNavUrl(chave, url);
   const nativo = navegadorNativo();
   if (!nativo) return;
-  const r = await nativo.open(chave, url, { x: 0, y: 0, width: 0, height: 0 }, { oculto: true }).catch(() => ({ ok: false }));
-  // Só quem criou o view confirma: no celular o marcador tem que sobreviver até o desktop ver.
-  if (r.ok) await confirmarNavForServer(s, name).catch(() => {});
+  const r = await nativo.open(chave, url, { x: 0, y: 0, width: 0, height: 0 }, { oculto: true })
+    .catch((e: unknown) => { console.warn('nav: shell não abriu o view escondido', e); return { ok: false as const }; });
+  // Só quem criou o view ESCONDIDO confirma: no celular o marcador tem que sobreviver até o
+  // desktop ver, e um shell antigo (que ignora `oculto` e não o ecoa) deixa o marcador vivo pra
+  // o NavegadorPane cuidar quando o usuário abrir a sessão.
+  if (r.ok && (r as { oculto?: boolean }).oculto === true) {
+    await confirmarNavForServer(s, name).catch((e: unknown) => console.warn('nav: ack falhou, o marcador segue vivo', e));
+  }
 }

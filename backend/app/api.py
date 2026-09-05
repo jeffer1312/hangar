@@ -2572,7 +2572,7 @@ async def abrir_nav_sessao(name: str, body: NavBody):
     u = body.url.strip()
     if not re.match(r"^https?://", u, re.I):
         u = "http://" + u
-    nav_pendente(name, u)
+    await asyncio.to_thread(nav_pendente, name, u)   # grava em disco: fora do loop
     return {"ok": True}
 
 
@@ -2580,7 +2580,7 @@ async def abrir_nav_sessao(name: str, body: NavBody):
 async def confirmar_nav_sessao(name: str):
     """O shell desktop criou o view da sessão: o marcador 'nav' sai, e nenhuma outra conexão o
     recebe de novo."""
-    nav_confirmar(name)
+    await asyncio.to_thread(nav_confirmar, name)
     return {"ok": True}
 
 

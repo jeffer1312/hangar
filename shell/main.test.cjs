@@ -124,7 +124,7 @@ test('open oculto cria o view escondido e ja dirigivel; view visivel nao e tocad
 
   // Sessão fora da tela: o pedido chega pela lista, o view nasce escondido, com controlador.
   const r1 = await abrir(a.ev, { chave, url: 'https://x.test', bounds: {}, oculto: true });
-  assert.equal(r1.ok, true);
+  assert.deepEqual(r1, { ok: true, oculto: true }, 'ecoa `oculto`: é a prova que o front exige antes de confirmar');
   assert.equal(criadas.length, antes + 1, 'controlador criado mesmo escondido (o agente dirige via CDP)');
   const view = viewsFalsos.at(-1);
   assert.equal(view.visivel, false, 'nasce escondido');

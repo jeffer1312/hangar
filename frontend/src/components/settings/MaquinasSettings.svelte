@@ -359,14 +359,18 @@
     const linha = removerLinha;
     removerLinha = null;
     if (!linha) return;
-    if (linha.peer) await removerPeer(linha.peer.id);
+    // O lado do servidor primeiro: se ele falhar, a entrada deste navegador FICA — é o token dela
+    // que permite tentar de novo. Apagar os dois com o peer ainda lá deixaria a máquina sem
+    // linha pra remover e sem como refazer.
+    if (linha.peer && !(await removerPeer(linha.peer.id))) return;
     if (linha.navegador && !linha.estaMaquina) {
       removeServer(linha.navegador.id);
       sessionsStore.refreshServers();
     }
   }
 
-  async function removerPeer(id: string) {
+  // true = o peer saiu deste servidor (o lado de lá pode ter ficado, e a tela avisa).
+  async function removerPeer(id: string): Promise<boolean> {
     const meu = geracao;
     peersErro = '';
     // O navegador conhece o peer que sai (mesmo motivo de removerPeerDoisLados existir): sem o
@@ -374,19 +378,21 @@
     const remoto = linhas.find((l) => l.peer?.id === id)?.navegador ?? null;
     try {
       const resultado = await removerPeerDoisLados(apiTarget, id, remoto);
-      if (meu !== geracao) return;
+      if (meu !== geracao) return false;
       removerLadoDeLaFalhou = resultado === false;
       const lista = await listarPeers(apiTarget);
-      if (meu !== geracao) return;
+      if (meu !== geracao) return false;
       peers = lista;
       // Peer que saiu não pode deixar farol/estado ou correção presos a um id que não existe mais.
       const { [id]: _descartado, ...resto } = estados;
       estados = resto;
       if (corrigeId === id) fecharCorrige();
+      return true;
     } catch (e) {
-      if (meu !== geracao) return;
+      if (meu !== geracao) return false;
       peersErro = msgErro(e);
       removerLadoDeLaFalhou = false;
+      return false;
     }
   }
 </script>

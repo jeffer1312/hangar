@@ -493,7 +493,7 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}
   if (!win || !chave) return { ok: false };
   const views = viewsDa(win);
   let view = views.get(chave);
-  if (oculto && view && view.webContents && !view.webContents.isDestroyed() && view.getVisible?.()) return { ok: true };
+  if (oculto && view && view.webContents && !view.webContents.isDestroyed() && view.getVisible?.()) return { ok: true, oculto: true };
   const novo = !view || !view.webContents || view.webContents.isDestroyed();
   // O webContents pode ter morrido por fora (fechado via CDP Target.closeTarget, crash do
   // renderer): sem esta checagem o view volta invisível e nunca mais pinta — a área fica preta.
@@ -588,7 +588,9 @@ ipcMain.handle('hangar:nav-open', async (ev, { chave, url, bounds, oculto } = {}
   }
   if (oculto) {
     if (novo) view.setVisible(false);
-    return { ok: true };
+    // `oculto: true` na resposta é a prova de que este shell entendeu o pedido: um shell antigo
+    // ignora o campo, cria o view visível com bounds zero e devolve só {ok} — o front não confirma.
+    return { ok: true, oculto: true };
   }
   view.setVisible(true);
   view.setBounds(normalizaBounds(bounds));

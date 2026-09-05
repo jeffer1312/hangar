@@ -63,6 +63,7 @@ def test_nav_marcador_vai_a_toda_conexao_uma_vez_e_sai_no_ack(monkeypatch, tmp_p
     # marcador uma vez, ele fica até o desktop confirmar (DELETE /nav) e sobrevive em disco.
     monkeypatch.setattr(sse, "_nav_arquivo", lambda: tmp_path / "pendentes.json")
     sse._NAV_MARCADORES.clear()
+    monkeypatch.setattr(sse, "_nav_carregado", False)
     async def fake_list(_snap=None):
         return []
     monkeypatch.setattr(sse._list_registry, "list_with_state", fake_list)
@@ -88,9 +89,11 @@ def test_nav_marcador_vai_a_toda_conexao_uma_vez_e_sai_no_ack(monkeypatch, tmp_p
     sse.nav_confirmar("hangar-2")
     assert sse.nav_novos({}) == []
     assert json.loads((tmp_path / "pendentes.json").read_text()) == {}
-    # reinício do backend: relê o disco
+    # reinício do backend: relê o disco (uma vez por processo — dict vazio sozinho não relê)
     sse.nav_pendente("outra", "http://a")
     sse._NAV_MARCADORES.clear()
+    assert sse.nav_novos({}) == []
+    sse._nav_carregado = False
     assert [n for n, _ in sse.nav_novos({})] == ["outra"]
     # vencido sai sozinho
     sse._NAV_MARCADORES["outra"]["ts"] -= sse._NAV_TTL_S + 1

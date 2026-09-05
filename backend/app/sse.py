@@ -206,6 +206,9 @@ _list_lock = asyncio.Lock()
 # reiniciar o backend perdia o pedido.
 _NAV_TTL_S = 600.0
 _NAV_MARCADORES: dict[str, dict] = {}
+# Disco é lido UMA vez por processo (na primeira consulta). "Dict vazio" é o estado normal —
+# marcador é evento raro — e reler a cada poll de cada SSE seria I/O síncrono no loop.
+_nav_carregado = False
 # Monitores de estado compartilhados entre as conexoes de um mesmo chat (ver _monitor_de).
 _ESTADOS = Difusor()
 
@@ -217,14 +220,17 @@ def _nav_arquivo() -> Path:
 
 
 def _nav_carregar() -> None:
-    if _NAV_MARCADORES:
+    global _nav_carregado
+    if _nav_carregado:
         return
+    _nav_carregado = True
     try:
         d = json.loads(_nav_arquivo().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     if isinstance(d, dict):
-        _NAV_MARCADORES.update({k: v for k, v in d.items() if isinstance(v, dict) and "url" in v})
+        _NAV_MARCADORES.update({k: v for k, v in d.items()
+                                if isinstance(v, dict) and isinstance(v.get("url"), str) and isinstance(v.get("ts"), (int, float))})
 
 
 def _nav_gravar() -> None:
@@ -271,9 +277,10 @@ def nav_novos(vistos: dict[str, float], name: str | None = None) -> list[tuple[s
     for n, m in nav_vivos().items():
         if name is not None and n != name:
             continue
-        if vistos.get(n) == m["ts"]:
+        ts = m.get("ts", 0)
+        if vistos.get(n) == ts:
             continue
-        vistos[n] = m["ts"]
+        vistos[n] = ts
         saida.append((n, m))
     return saida
 
@@ -507,10 +514,15 @@ async def list_events(ping_secs: float = 8.0):
         # A lista e o unico stream que o desktop mantem aberto o tempo todo: e por aqui que "abrir
         # navegador" chega com a sessao FORA da tela, e o shell cria o view escondido.
         vistos: dict[str, float] = {}
-        while True:
-            await asyncio.sleep(1.0)
-            for nome, marc in nav_novos(vistos):
-                queue.put_nowait(("nav", json.dumps({"name": nome, "url": marc["url"]})))
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                for nome, marc in nav_novos(vistos):
+                    queue.put_nowait(("nav", json.dumps({"name": nome, "url": marc["url"]})))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("sse: nav_pump da lista morreu")
 
     tasks = [asyncio.create_task(reader()), asyncio.create_task(ping_loop()), asyncio.create_task(nav_pump())]
     try:
@@ -604,10 +616,17 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # Entrega o marcador "abrir navegador" DESTA sessao uma vez por conexao (ver nav_novos).
         # Poll de 1s basta: e evento raro e humano, nao canal quente.
         vistos: dict[str, float] = {}
-        while True:
-            await asyncio.sleep(1.0)
-            for _, marc in nav_novos(vistos, name):
-                queue.put_nowait(("nav", json.dumps({"url": marc["url"]})))
+        try:
+            while True:
+                await asyncio.sleep(1.0)
+                for _, marc in nav_novos(vistos, name):
+                    queue.put_nowait(("nav", json.dumps({"url": marc["url"]})))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Feature, não núcleo (mesmo trato do stats_pump): morrer calado deixaria "abrir
+            # navegador" mudo nesta conexão sem rastro nenhum.
+            _log.exception("sse: nav_pump da sessão %s morreu", name)
 
     def _enqueue_preview(text: str, md: bool = False, full: bool = False):
         # Atualiza o slot e enfileira UM marcador 'preview' por vez (drop-old). Sem await entre as
