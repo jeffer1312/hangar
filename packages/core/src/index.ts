@@ -20,6 +20,7 @@ export * from './detectarLinguagem';
 export * from './peek';
 export * from './covers';
 export * from './format';
+export * from './agruparSessoes';
 export * from './plan';
 export * from './activity';
 export * from './statusline';

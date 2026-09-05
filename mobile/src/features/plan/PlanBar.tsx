@@ -12,8 +12,9 @@ interface Props {
 
 export function PlanBar({ session, detail, compact = false }: Props) {
   const { theme } = useUnistyles();
-  // se veio detail.tasks, usa ele; senão tenta session.plan_tasks (legado)
-  const tasks = detail?.tasks ?? null;
+  // se veio detail.tasks, usa ele; senão tenta session.plan_tasks (o que a lista tem sem abrir o plano)
+  const tasks: { done: number; total: number }[] | null =
+    detail?.tasks ?? session?.plan_tasks?.map(([done, total]) => ({ done, total })) ?? null;
   const badge = session ? planBadge(session) : null;
   const label = detail ? `${detail.done}/${detail.total}` : badge ? `${badge.pct.toFixed(0)}%` : '';
 

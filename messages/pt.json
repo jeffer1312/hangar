@@ -108,6 +108,7 @@
   "lista_enviar_todas": "Enviar p/ todas",
   "sessao_excluir": "Fechar esta sessão?",
   "lista_filtrar": "Filtrar sessões",
+  "lista_filtro_placeholder": "Filtrar sessões…",
   "lista_msg_selecionadas": "Mensagem para as sessões selecionadas",
   "lista_cancelar_selecao": "Cancelar seleção",
   "lista_comparar_selecionadas": "Comparar sessões selecionadas",

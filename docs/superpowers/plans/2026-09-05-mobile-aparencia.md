@@ -1101,7 +1101,7 @@ git commit -m "feat(mobile): pensamento colapsado, ações por bolha, header com
 - Produces (mobile): `SessionRow({ session, onPress, onGit, onExcluir, onRenomear, onLoop, onResume })`; `SessionMenu` (menu nativo); `AttentionStrip({ sessions, onOpen })`; `ServerSheet` (ref).
 - Consumes: `attentionFeed`, `effectiveGroupBy`, `planBadge`, `loopBadge`, `providerTag`, `relativeTime`, `cwdParts`, `resumeSession`, `deleteSession`, `renameSession` do core; `PlanBar`/`PlanChip` (`features/plan`), `LoopChip` (`chat/`), `Chip`/`StateDot`/`Icon`/`Sheet` (Task 1).
 
-- [ ] **Step 1: Teste de `agruparSessoes` (core)**
+- [x] **Step 1: Teste de `agruparSessoes` (core)**
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -1130,9 +1130,9 @@ describe('agruparSessoes', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** — `npx vitest run src/agruparSessoes.test.ts --root packages/core` → FAIL.
+- [x] **Step 2: Rodar e ver falhar** — `npx vitest run src/agruparSessoes.test.ts --root packages/core` → FAIL.
 
-- [ ] **Step 3: Implementar `packages/core/src/agruparSessoes.ts`**
+- [x] **Step 3: Implementar `packages/core/src/agruparSessoes.ts`**
 
 ```ts
 import type { AggSession } from './types';
@@ -1156,11 +1156,11 @@ export function agruparSessoes(rows: AggSession[], modo: GroupBy): GrupoSessoes[
 
 `index.ts`: `export * from './agruparSessoes';`. Run → PASS (3).
 
-- [ ] **Step 4: Preferência de agrupamento**
+- [x] **Step 4: Preferência de agrupamento**
 
 `stores/aparencia.ts`: `agrupar: GroupBy` (MMKV `lista.agrupar`, padrão `'server'`, aceita `none|server|project`) + `setAgrupar`. Teste no `aparencia.test.ts`.
 
-- [ ] **Step 5: `SessionRow` (linha densa) com swipe**
+- [x] **Step 5: `SessionRow` (linha densa) com swipe**
 
 `mobile/src/features/sessions/SessionRow.tsx` — porte de `frontend/src/components/SessionCard.svelte:296-390`:
 
@@ -1267,7 +1267,7 @@ const styles = StyleSheet.create((theme) => ({
 
 Os tons do `LoopBadge` são `ok | warn | attention | muted` (`packages/core/src/loop.ts:5`). Chave `sessao_excluir` já existe? `grep '"sessao_excluir"' messages/pt.json`; se não, criar ("Excluir"/"Delete").
 
-- [ ] **Step 6: `SessionMenu` (menu nativo no toque longo)**
+- [x] **Step 6: `SessionMenu` (menu nativo no toque longo)**
 
 `mobile/src/features/sessions/SessionMenu.tsx`:
 
@@ -1298,7 +1298,7 @@ export function SessionMenu({ children, temCwd, onRenomear, onGit, onLoop, onExc
 
 **Disputa de gesto** (segunda prova deste Step): o `MenuView` com `shouldOpenOnLongPress` e o `ReanimatedSwipeable` competem pelo mesmo toque. Ordem de aninhamento: `ReanimatedSwipeable` por fora, `SessionMenu` por dentro envolvendo só o `Pressable` da linha, e o `Pressable` **sem** `onLongPress` (o menu nativo é quem responde ao toque longo; o haptic vai no `onPressAction`). No emulador: segurar 600ms → menu abre e a linha não desliza; arrastar 40px pra esquerda → desliza e o menu não abre; toque curto → abre a sessão. Se no Android o swipe engolir o toque longo, passar `simultaneousHandlers` do `ReanimatedSwipeable` apontando pra um `Gesture.LongPress()` que chama `menuRef.current?.show()` em vez de `shouldOpenOnLongPress` — decisão registrada no commit, não contornada.
 
-- [ ] **Step 7: `AttentionStrip`, `ServerSheet`, filtro e a `SectionList`**
+- [x] **Step 7: `AttentionStrip`, `ServerSheet`, filtro e a `SectionList`**
 
 `AttentionStrip.tsx`: faixa horizontal no topo com `attentionFeed(rows)` — um `Chip tone="warning" icon="CircleHelp"` por sessão aguardando (`nome · pergunta` truncada), toque abre a sessão; some quando vazio.
 `ServerSheet.tsx`: `Sheet sizes={['auto']}` com os servidores de `useServers`, ativo marcado, toque seleciona (`useServers.getState().setActive(id)`, `stores/servers.ts:24`), botão "Adicionar" → `router.push('/login')`.
@@ -1312,14 +1312,14 @@ export function SessionMenu({ children, temCwd, onRenomear, onGit, onLoop, onExc
 
 Chaves: `lista_filtro_placeholder` ("Filtrar sessões…"/"Filter sessions…"), `lista_agrupar_servidor`/`_projeto`/`_nao` ("Por servidor"/"Por projeto"/"Sem agrupar" · "By server"/"By project"/"No grouping") — usadas no menu de agrupamento (um `MenuView` no cabeçalho da lista) e na tela Geral da Task 5.
 
-- [ ] **Step 8: Typecheck, testes, prova visual**
+- [x] **Step 8: Typecheck, testes, prova visual**
 
 Run: `npm run check -w @hangar/core && npm run typecheck -w mobile`; `npm run test -w @hangar/core && npm run test -w mobile`.
 Expected: 0 erros; core +3; mobile +2 (aparencia, demo).
 
 Emulador: lista agrupada por servidor com cabeçalho fixo; linha densa com branch, chips de plano/loop; swipe pra esquerda mostra Git/Excluir; toque longo abre o menu nativo; filtro reduz a lista; faixa "precisa de você" quando houver sessão aguardando (criar uma sessão de teste e mandar uma pergunta se não houver). Prints `t3-lista.png`, `t3-swipe.png`, `t3-menu.png`. Comparação cega com `pwa-01-lista.png` regravado na hora (até 2 rodadas).
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add packages/core/src/agruparSessoes.ts packages/core/src/agruparSessoes.test.ts packages/core/src/index.ts mobile/src/features/sessions mobile/src/stores/aparencia.ts mobile/src/stores/aparencia.test.ts mobile/app/index.tsx messages/pt.json messages/en.json

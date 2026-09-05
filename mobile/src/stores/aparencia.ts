@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import { UnistylesRuntime } from 'react-native-unistyles';
-import { PENSAMENTO_TOOLS, type PensamentoTools } from '@hangar/core';
+import { PENSAMENTO_TOOLS, type PensamentoTools, type GroupBy } from '@hangar/core';
 import { prefs } from './prefs';
 
 export type Tema = 'system' | 'light' | 'dark';
 const TEMAS: Tema[] = ['system', 'light', 'dark'];
+const AGRUPAR: GroupBy[] = ['none', 'server', 'project'];
 const K = 'aparencia.tema';
 const K_PENSAMENTO = 'aparencia.pensamentoTools';
+const K_AGRUPAR = 'lista.agrupar';
 
 function ler(): Tema {
   const v = prefs.getString(K) as Tema | undefined;
@@ -20,6 +22,11 @@ function lerPensamento(): PensamentoTools {
   return v && PENSAMENTO_TOOLS.includes(v) ? v : 'busca';
 }
 
+function lerAgrupar(): GroupBy {
+  const v = prefs.getString(K_AGRUPAR) as GroupBy | undefined;
+  return v && AGRUPAR.includes(v) ? v : 'server';
+}
+
 // Unistyles: `adaptiveThemes` segue o SO; fixar tema exige desligar o adaptativo antes de setTheme.
 function aplicar(t: Tema) {
   if (t === 'system') UnistylesRuntime.setAdaptiveThemes(true);
@@ -31,6 +38,8 @@ interface Aparencia {
   setTema: (t: Tema) => void;
   pensamentoTools: PensamentoTools;
   setPensamentoTools: (v: PensamentoTools) => void;
+  agrupar: GroupBy;
+  setAgrupar: (v: GroupBy) => void;
 }
 
 export const useAparencia = create<Aparencia>((set) => ({
@@ -39,6 +48,8 @@ export const useAparencia = create<Aparencia>((set) => ({
   setTema: (t) => { aplicar(t); prefs.set(K, t); set({ tema: t }); },
   pensamentoTools: lerPensamento(),
   setPensamentoTools: (v) => { prefs.set(K_PENSAMENTO, v); set({ pensamentoTools: v }); },
+  agrupar: lerAgrupar(),
+  setAgrupar: (v) => { prefs.set(K_AGRUPAR, v); set({ agrupar: v }); },
 }));
 
 export function aplicarTemaSalvo() { aplicar(useAparencia.getState().tema); }

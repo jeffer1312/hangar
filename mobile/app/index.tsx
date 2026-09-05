@@ -1,29 +1,56 @@
+import { useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { Screen } from '../src/ui/Screen';
+import { Icon } from '../src/ui/Icon';
+import type { SheetRef } from '../src/ui/Sheet';
 import { SessionList } from '../src/features/sessions/SessionList';
+import { ServerSheet } from '../src/features/sessions/ServerSheet';
 import * as m from '../src/paraglide/messages';
 
 export default function Index() {
   const router = useRouter();
+  const servidores = useRef<SheetRef>(null);
   return (
     <Screen>
       <View style={styles.header}>
         <Text style={styles.title}>{m.lista_titulo()}</Text>
-        <Pressable
-          onPress={() => router.push('/create' as never)}
-          style={styles.fab}
-          accessibilityLabel={m.sessao_nova()}
-          accessibilityRole="button"
-          hitSlop={8}
-        >
-          <Text style={styles.fabTxt}>＋</Text>
-        </Pressable>
+        <View style={styles.acoes}>
+          <Pressable
+            onPress={() => servidores.current?.present().catch(() => {})}
+            style={styles.icone}
+            accessibilityLabel={m.maquinas_este_aparelho()}
+            accessibilityRole="button"
+            hitSlop={8}
+          >
+            <Icon name="Server" size={20} />
+          </Pressable>
+          {/* Sem onPress até a tela /config existir — botão morto avisa que está desligado. */}
+          <Pressable
+            disabled
+            style={[styles.icone, styles.desligado]}
+            accessibilityLabel={m.config_modal_titulo()}
+            accessibilityRole="button"
+            hitSlop={8}
+          >
+            <Icon name="Settings" size={20} />
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/create' as never)}
+            style={styles.fab}
+            accessibilityLabel={m.sessao_nova()}
+            accessibilityRole="button"
+            hitSlop={8}
+          >
+            <Text style={styles.fabTxt}>＋</Text>
+          </Pressable>
+        </View>
       </View>
       <View style={styles.listWrap}>
         <SessionList />
       </View>
+      <ServerSheet ref={servidores} />
     </Screen>
   );
 }
@@ -43,6 +70,9 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.tokens.text.primary,
     letterSpacing: -0.5,
   },
+  acoes: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
+  icone: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  desligado: { opacity: 0.4 },
   listWrap: { flex: 1 },
   fab: {
     width: 44,

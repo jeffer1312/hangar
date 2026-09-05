@@ -44,4 +44,18 @@ describe('aparencia', () => {
     const { useAparencia: comLixo } = await import('./aparencia');
     expect(comLixo.getState().pensamentoTools).toBe('busca');
   });
+
+  it('agrupar padrão server, persiste e valor desconhecido cai em server', async () => {
+    const { useAparencia } = await import('./aparencia');
+    expect(useAparencia.getState().agrupar).toBe('server');
+    useAparencia.getState().setAgrupar('project');
+    expect(mem.get('lista.agrupar')).toBe('project');
+    vi.resetModules();
+    const { useAparencia: deNovo } = await import('./aparencia');
+    expect(deNovo.getState().agrupar).toBe('project');
+    mem.set('lista.agrupar', 'roxo');
+    vi.resetModules();
+    const { useAparencia: comLixo } = await import('./aparencia');
+    expect(comLixo.getState().agrupar).toBe('server');
+  });
 });
