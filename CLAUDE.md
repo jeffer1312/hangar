@@ -502,24 +502,38 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
 - **As extensões de FUNCIONAMENTO da experiência Claude no Pi moram aqui** (`scripts/pi/`,
   04/09/2026): `claude-bridge.ts` (agents/commands/skills do `~/.claude` como recursos do Pi),
   `claude-todo.ts` (painel de tarefas), `claude-hooks-adapter.ts` (hooks do `settings.json` nos
-  eventos do Pi), `git-checkpoint.ts` (`/rewind`) e `fullscreen-tui.ts` (alternate screen no OMP)
+  eventos do Pi), `git-checkpoint.ts` (`/rewind`) e `fullscreen-tui.ts` (alternate screen no Pi)
   vieram do repo `pi-claude-bridge`, que ficou só com aparência (caixa da mensagem, título do
   terminal e temas). Motivo: sem elas uma sessão Pi criada pelo app não enxerga skills/agents nem
   roda hooks, e quem instala o Hangar não deveria precisar de um segundo repo pra isso. O
-  `install-claude-wrapper.sh` symlinka as sete (`link_agent_extensions`) em
-  `~/.pi/agent/extensions/` e `~/.omp/agent/extensions/`. No Pi com fullscreen nativo, a extensão
-  não assume o alternate screen para evitar dupla posse. **No omp ela fica DESLIGADA, e a tela
-  Harnesses não oferece o botão** (05/09/2026): a conversa do omp mora no scrollback do terminal
-  por desenho — o renderizador nunca consulta a posição de rolagem (issue can1357/oh-my-pi#10232,
-  #7893 fechada como duplicata da RFC #2040). Medido no tmux e no kitty: em alternate screen sem
-  pedir mouse (`alternate_on=1`, `mouse_any_flag=0`), a roda vira seta e o composer mostra o
-  histórico de prompts (`❯ ola`); sem alternate screen, a roda rola o scrollback (copy-mode no
-  tmux, `history=51`) e o composer some enquanto se lê — que é como o omp funciona em qualquer
-  terminal. O Pi nativo escapa porque **pede o mouse** (`mouse_any_flag=1`) e rola a própria tela;
-  no omp o renderizador é privado (`#doRender`), então nem as extensões do Pi (`pi-sticky-input`,
-  `pi-claude-style-scroll`) conseguem — só suporte no núcleo. O instalador desfaz o
-  `enabled: true` que ele mesmo escrevia; `/fullscreen-on` continua existindo pra quem insistir.
-  regras herdadas do adapter: a allowlist embutida libera só `~/.claude/hooks/` — hook que mora
+  `install-claude-wrapper.sh` symlinka as sete no Pi e cinco no OMP: neste, `claude-todo` e
+  `fullscreen-tui` ficam com o núcleo. O painel de saúde usa a mesma seleção por CLI e não
+  oferece fullscreen no OMP. No Pi com fullscreen nativo, a extensão não assume o buffer
+  alternativo para evitar dupla posse.
+  **Comparação com OMP 18.1.11 (05/09/2026):** em uma HOME descartável, sem chamadas a modelos,
+  `getAllTools()` mostrou que `claude-todo` substituía a ferramenta `<builtin:todo>` pela extensão:
+  o contrato `action/id/activeForm` tomava o lugar de `op/task/phase`, fases e bloqueios usados
+  pelo próprio núcleo. Com a proteção no entrypoint, a origem continua `builtin`. A proteção
+  também cobre quem atualiza só com `git pull`, sem rodar o instalador.
+  Na mesma prova com o binário real e sockets tmux separados, o nativo usou
+  `alternate_on=0, mouse_any_flag=0`; fullscreen externo ativado usou `1,0`. Após a correção,
+  mesmo carregado explicitamente com `enabled: true`, permaneceu `0,0`. O OMP depende do
+  scrollback normal; colocar a conversa no buffer alternativo não cria um renderizador com
+  rolagem (issues can1357/oh-my-pi#10232 e #2040).
+  **Migração não edita preferências:** instalador e reparo removem somente symlinks próprios
+  dessas duas extensões. Arquivos reais, symlinks para outra fonte e `fullscreen-tui.json`
+  ficam intactos. A configuração do OMP não é reescrita.
+  **Não estender essa conclusão às demais extensões.** A descoberta nativa do OMP respeita
+  registros/escopo de plugins e reduz a necessidade de espelhar skills e comandos, mas não
+  importa todos os agents pessoais do Claude, sua normalização de modelos nem o índice de
+  memória. Hooks JS/TS nativos não executam automaticamente o protocolo CLI do `settings.json`.
+  E checkpoint/rewind nativos reduzem contexto: não restauram arquivos como o shadow Git do
+  Hangar. Essas capacidades continuam complementares, não substituídas por nome.
+  A comparação identificou limitações separadas, não corrigidas por esta seleção: caminhos
+  Pi fixos nas extensões complementares, `agent_settled` ausente no OMP, `/rewind` reservado
+  pelo núcleo e ausência de uma barreira assíncrona em `turn_start`. Não anunciar equivalência
+  ou compatibilidade completa dessas extensões no OMP sem provar os respectivos fluxos.
+  Regras herdadas do adapter: a allowlist embutida libera só `~/.claude/hooks/` — hook que mora
   noutro lugar entra por `~/.pi/agent/claude-hooks-adapter.json`, e `allowPatterns` ali
   **substitui** a lista, não soma; e os hooks só-Claude do próprio app (`state_hook`, `askq_capture`,
   `preview_hook`, `subagent_hook`) ficam no `skipPatterns` porque o Pi tem extensão própria pra isso.

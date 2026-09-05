@@ -135,9 +135,13 @@ Install the wrapper once so sessions receive stable ids and appear reliably in t
 ./scripts/install-claude-wrapper.sh
 ```
 
-On Linux/macOS, the wrapper installer also links the shared fullscreen TUI extension into Pi and
-Oh My Pi and enables it on first install. Use `/fullscreen-off` in either agent to opt out; the
-installer preserves that choice. To zoom an individual tmux pane, use `Ctrl-b z`.
+No Linux/macOS, o instalador habilita a extensão fullscreen no Pi na primeira instalação;
+`/fullscreen-off` preserva a escolha de desligá-la. No Oh My Pi (OMP), tarefas e rolagem ficam
+com o núcleo: `claude-todo` e `fullscreen-tui` não são instaladas nem exigidas pelo painel de
+saúde. Atualizações removem somente links dessas duas extensões que apontem para este checkout,
+sem alterar configurações ou extensões personalizadas. As demais integrações do Hangar são
+mantidas; descoberta de skills não substitui execução de hooks CLI nem snapshots de código.
+Para ampliar um painel do tmux, use `Ctrl-b z`.
 
 Start the backend on loopback:
 
