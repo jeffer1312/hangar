@@ -590,13 +590,14 @@
 
   .pr-cartao { background: var(--surface-card); border: 1px solid var(--border-subtle);
                border-radius: var(--radius-md); overflow: hidden; }
-  .pr-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); }
+  /* celular estreito: as pílulas descem de linha em vez de esmagar a URL */
+  .pr-linha { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); flex-wrap: wrap; }
   .pr-linha + .pr-linha { border-top: 1px solid var(--border-subtle); }
   .pr-farol { flex-shrink: 0; width: 1.2em; text-align: center; font-size: 14px; }
   .pr-farol.ok { color: var(--success); }
   .pr-farol.nao { color: var(--error); }
   .pr-farol.test { color: var(--text-muted); }
-  .pr-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .pr-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
   .pr-nome { font-size: var(--text-sm); color: var(--text-primary); }
   .pr-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
             word-break: break-all; }

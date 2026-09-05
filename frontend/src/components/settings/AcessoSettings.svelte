@@ -343,14 +343,14 @@
     container-type: inline-size;
   }
   .ac-secao {
-    margin: 0 0 var(--space-1);
+    margin: 0 0 var(--space-1) var(--space-2);
     color: var(--text-muted);
     font-size: var(--text-xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   .ac-legenda {
-    margin: 0 0 var(--space-3);
+    margin: 0 var(--space-2) var(--space-3);
     color: var(--text-muted);
     font-size: var(--text-xs);
     line-height: 1.4;
