@@ -46,6 +46,15 @@ describe('normalizarEndereco', () => {
     expect(normalizarEndereco('http://h:1/?token=')).toBeNull();
     expect(normalizarEndereco('http://h:1/?token=a%20b')).toBeNull();
   });
+  it('porta explícita igual à padrão do esquema não é engolida', () => {
+    expect(normalizarEndereco('192.168.0.10:80')).toEqual({ base: 'http://192.168.0.10', token: null, alternativa: null });
+    expect(normalizarEndereco('casa.ts.net:80')).toEqual({ base: 'http://casa.ts.net', token: null, alternativa: null });
+    expect(normalizarEndereco('casa.ts.net:443')).toEqual({ base: 'http://casa.ts.net:443', token: null, alternativa: null });
+  });
+  it('IPv6 com e sem porta explícita', () => {
+    expect(normalizarEndereco('[::1]:9000')).toEqual({ base: 'http://[::1]:9000', token: null, alternativa: null });
+    expect(normalizarEndereco('[::1]')).toEqual({ base: 'http://[::1]:8765', token: null, alternativa: null });
+  });
   it('lixo recusa', () => {
     expect(normalizarEndereco('')).toBeNull();
     expect(normalizarEndereco('   ')).toBeNull();

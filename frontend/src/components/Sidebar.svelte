@@ -188,7 +188,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     };
   });
 
-  // Web push + horas silenciosas vivem na tela Servidores da Configuração (ServidoresSettings,
+  // Web push + horas silenciosas vivem na tela Notificações da Configuração (ServidoresSettings,
   // extraído na Task 4a/4b) — não existem mais aqui.
 
   // ── Retomar sessao "sem id" (paridade com o SessionCard do mobile): relança o pane com

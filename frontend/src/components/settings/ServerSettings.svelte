@@ -106,7 +106,7 @@
   );
 </script>
 
-<div class="cfg" class:com-rodape={rodapeVisivel}>
+<div class="cfg" class:com-rodape={rodapeVisivel && secao !== 'notificacoes'}>
   <header class="cfg-head">
     <h2>{TITULOS[secao]}</h2>
     <p class="sub">{m.config_server_valem()}</p>
@@ -160,18 +160,20 @@
         {#if nativo.erro}<p class="aviso erro" role="alert">{nativo.erro}</p>{/if}
       </div>
 
-      <div class="somente-leitura">
-        <h3>{m.config_server_so_servidor()}</h3>
-        <p class="ajuda">
-          {m.config_server_so_servidor_1()} <code>.env</code>{m.config_server_so_servidor_2()}
-        </p>
-        {#each leituraVisivel as [k, v] (k)}
-          <div class="ro-linha">
-            <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
-            <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? m.config_server_sim() : m.config_server_nao()) : v}</span>
-          </div>
-        {/each}
-      </div>
+      {#if leituraVisivel.length}
+        <div class="somente-leitura">
+          <h3>{m.config_server_so_servidor()}</h3>
+          <p class="ajuda">
+            {m.config_server_so_servidor_1()} <code>.env</code>{m.config_server_so_servidor_2()}
+          </p>
+          {#each leituraVisivel as [k, v] (k)}
+            <div class="ro-linha">
+              <span class="ro-rot">{ROTULO_LEITURA[k] ?? k}</span>
+              <span class="ro-val">{v === '' ? '—' : typeof v === 'boolean' ? (v ? m.config_server_sim() : m.config_server_nao()) : v}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   {/if}
 
@@ -179,7 +181,7 @@
 </div>
 
 {#if secao === 'notificacoes'}
-  <div class="cfg push">
+  <div class="cfg push" class:com-rodape={rodapeVisivel}>
     {#if pushSupported()}
       <p class="ajuda">{m.notif_push_legenda()}</p>
       <PushQuiet target={pushTarget} open={true} />

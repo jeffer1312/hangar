@@ -307,8 +307,10 @@ The frontend `EventSource` (`screens/Chat.svelte`) listens for:
   `LINHAS` — hoje Geral, Aparência, Diário, Sobre (aplicativo) e Máquinas, Contas, Harnesses, Voz,
   Notificações, Anexos, Avançado, Motores, Orquestração (servidor). Quem for adicionar aba: registra no `LINHAS` do `SettingsModal.svelte` e no
   `lib/configRoute.ts` (`TelaConfig`/`TELAS_DE_SERVIDOR`), com chave de idioma nos dois
-  `messages/*.json` no mesmo commit. Servidores e Acesso viraram **Máquinas** (2026-09-04); as rotas antigas seguem por `RENOMEADAS`. O `lib/gitTabs.ts` + `GitTabs.svelte` continuam sendo o
+  `messages/*.json` no mesmo commit. O `lib/gitTabs.ts` + `GitTabs.svelte` continuam sendo o
   precedente de navegação por abas DENTRO de uma tela (incluindo nível por aba no celular).
+  Servidores e Acesso viraram **Máquinas** (2026-09-04); as rotas antigas seguem por
+  `RENOMEADAS`.
 - **The message list is windowed.** `MessageList.svelte` mounts only the last `WINDOW=120` events; scroll-to-top
   reveals older pages (in-memory, no backend call). Don't render the whole transcript at once.
 - **Queue/pending dedup.** Messages sent while Claude is `working` echo as `pending` / `queued-` bubbles and

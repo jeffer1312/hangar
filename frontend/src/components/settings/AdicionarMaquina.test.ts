@@ -55,20 +55,88 @@ describe('AdicionarMaquina', () => {
     unmount(t.comp);
   });
 
-  it('servidor que não responde: erro visível, nada gravado, diálogo aberto', async () => {
+  it('resposta HTTP não tenta a alternativa: erro é o da 1ª chamada, sem 2ª tentativa', async () => {
+    // 'casa.ts.net' tem alternativa (é FQDN — mesma dedução do teste "nome com ponto"), mas quem
+    // respondeu 401 já é um servidor de verdade: tentar a alternativa trocaria essa mensagem por
+    // um "fetch failed" da porta que ninguém abriu.
     getConfigForServer.mockRejectedValue(new Error('401: token'));
     const t = montar();
     digitar(t.campo(m.maquinas_add_endereco()), 'casa.ts.net');
     digitar(t.campo(m.sessao_token()), 'abc');
     await tick();
     t.botao(m.maquinas_add_testar()).click();
-    // 'casa.ts.net' tem alternativa (é FQDN, mesma dedução da porta padrão do teste "nome com
-    // ponto"): duas chamadas em sequência, mesmos 3 ticks daquele teste (2 awaits + o flush do
-    // erro) — 2 ticks não bastam pra estabilizar aqui.
-    await tick(); await tick(); await tick();
+    await tick(); await tick();
+    expect(getConfigForServer).toHaveBeenCalledTimes(1);
     expect(addServer).not.toHaveBeenCalled();
     expect(document.body.querySelector('[role="alert"]')?.textContent).toContain('401');
     expect(t.onFechar).not.toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('as duas tentativas falham por rede: a mensagem junta as duas origens', async () => {
+    getConfigForServer
+      .mockRejectedValueOnce(new Error('fetch failed'))
+      .mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    const t = montar();
+    digitar(t.campo(m.maquinas_add_endereco()), 'casa.ts.net');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick(); await tick(); await tick();
+    expect(getConfigForServer).toHaveBeenCalledTimes(2);
+    const alerta = document.body.querySelector('[role="alert"]')?.textContent ?? '';
+    expect(alerta).toContain('fetch failed');
+    expect(alerta).toContain('ECONNREFUSED');
+    expect(addServer).not.toHaveBeenCalled();
+    unmount(t.comp);
+  });
+
+  it('link colado com token quebrado mostra erro de token, não de endereço', async () => {
+    const t = montar();
+    digitar(t.campo(m.maquinas_add_endereco()), 'http://192.168.0.10:8765/?token=');
+    await tick();
+    t.botao(m.maquinas_add_testar()).click();
+    await tick();
+    expect(getConfigForServer).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(m.maquinas_add_erro_token());
+    unmount(t.comp);
+  });
+
+  it('guard de duplo envio: clique repetido e Enter no endereço não abrem 2ª chamada', async () => {
+    getConfigForServer.mockReturnValue(new Promise(() => {}));
+    const t = montar();
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    const botaoTestar = t.botao(m.maquinas_add_testar());
+    botaoTestar.click();
+    await tick();
+    botaoTestar.click();
+    t.campo(m.maquinas_add_endereco()).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await tick();
+    expect(getConfigForServer).toHaveBeenCalledTimes(1);
+    unmount(t.comp);
+  });
+
+  it('retry: novo clique tenta de novo, e digitar limpa o erro anterior', async () => {
+    getConfigForServer
+      .mockRejectedValueOnce(new Error('401: token'))
+      .mockResolvedValueOnce({ campos: {}, somente_leitura: {} });
+    const t = montar();
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    digitar(t.campo(m.sessao_token()), 'abc');
+    await tick();
+    const botaoTestar = t.botao(m.maquinas_add_testar());
+    botaoTestar.click();
+    await tick(); await tick();
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toContain('401');
+    digitar(t.campo(m.maquinas_add_endereco()), '192.168.0.10');
+    await tick();
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
+    botaoTestar.click();
+    await tick(); await tick();
+    expect(getConfigForServer).toHaveBeenCalledTimes(2);
+    expect(addServer).toHaveBeenCalledWith('http://192.168.0.10:8765', 'abc');
     unmount(t.comp);
   });
 

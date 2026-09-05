@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-// Round 1 da 4b: a tela Servidores NÃO chama store.carregar (zero GET /api/config) — o controller
-// da tela é o ServidoresSettings; as outras telas seguem carregando o config do alvo.
+// Round 1 da 4b: a tela Máquinas NÃO chama store.carregar (zero GET /api/config) — o controller
+// da tela é o MaquinasSettings; as outras telas seguem carregando o config do alvo.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mount, unmount, tick } from 'svelte';
 import SettingsModal from './SettingsModal.svelte';

@@ -204,4 +204,60 @@ describe('ServerSettings — somente leitura', () => {
     unmount(app);
     alvo.remove();
   });
+
+  it('sem nada em somente-leitura, o bloco "Só pelo servidor" não aparece', async () => {
+    const store = {
+      // Os quatro já moram em Máquinas — sem sobra nenhuma, leituraVisivel fica vazio.
+      get campos() { return {}; }, get leitura() { return { port: 8765, lan_bind_ip: '0.0.0.0', server_id: 'casa', public_url: '' }; },
+      get carregando() { return false; }, get salvando() { return false; },
+      get erro() { return ''; }, get salvo() { return false; }, get temMudanca() { return false; },
+      valorAtual: () => '', rascunhoDe: () => '', setRascunho: vi.fn(),
+      carregar: vi.fn(), salvar: vi.fn(), invalidar: vi.fn(),
+    } as unknown as ConfigServidorStore;
+    const alvo = document.createElement('div');
+    document.body.appendChild(alvo);
+    const app = mount(ServerSettings, { target: alvo, props: { store, secao: 'avancado' } });
+    await tick();
+    expect(alvo.textContent).not.toContain(m.config_server_so_servidor());
+    unmount(app);
+    alvo.remove();
+  });
+});
+
+describe('ServerSettings — respiro do rodapé', () => {
+  function storeComMudanca() {
+    return {
+      get campos() { return { notify_finished: { valor: true, origem: 'env' } }; },
+      get leitura() { return {}; },
+      get carregando() { return false; }, get salvando() { return false; },
+      get erro() { return ''; }, get salvo() { return false; }, get temMudanca() { return true; },
+      valorAtual: () => '', rascunhoDe: () => '', setRascunho: vi.fn(),
+      carregar: vi.fn(), salvar: vi.fn(), invalidar: vi.fn(),
+    } as unknown as ConfigServidorStore;
+  }
+
+  it('em Notificações o respiro vai pro bloco de push, o último renderizado', async () => {
+    const alvo = document.createElement('div');
+    document.body.appendChild(alvo);
+    const app = mount(ServerSettings, { target: alvo, props: { store: storeComMudanca(), secao: 'notificacoes' } });
+    await tick();
+    const blocos = [...alvo.querySelectorAll('.cfg')];
+    expect(blocos.length).toBe(2);
+    expect(blocos[0].classList.contains('com-rodape')).toBe(false);
+    expect(blocos[1].classList.contains('com-rodape')).toBe(true);
+    unmount(app);
+    alvo.remove();
+  });
+
+  it('no Avançado o respiro continua no único bloco', async () => {
+    const alvo = document.createElement('div');
+    document.body.appendChild(alvo);
+    const app = mount(ServerSettings, { target: alvo, props: { store: storeComMudanca(), secao: 'avancado' } });
+    await tick();
+    const blocos = [...alvo.querySelectorAll('.cfg')];
+    expect(blocos.length).toBe(1);
+    expect(blocos[0].classList.contains('com-rodape')).toBe(true);
+    unmount(app);
+    alvo.remove();
+  });
 });

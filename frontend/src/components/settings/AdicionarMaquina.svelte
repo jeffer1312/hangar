@@ -31,31 +31,46 @@
   }
 
   // Responde? Grava. Nome com ponto veio como https por dedução; se ninguém atendeu lá, o mesmo
-  // nome em http na porta padrão é a segunda e última tentativa (FQDN de rede local).
+  // nome em http na porta padrão é a segunda e última tentativa (FQDN de rede local) — só quando a
+  // 1ª falha foi de REDE: uma resposta HTTP (401 etc) já veio de alguém, tentar a alternativa
+  // trocaria essa mensagem por um "fetch failed" da porta que ninguém abriu.
   async function testarEAdicionar() {
     if (ocupado) return;
     const n = normalizarEndereco(endereco);
-    if (!n) { erro = m.maquinas_add_erro_endereco(); return; }
+    if (!n) {
+      erro = /[?&]token=/.test(endereco) ? m.maquinas_add_erro_token() : m.maquinas_add_erro_endereco();
+      return;
+    }
     const tok = (n.token ?? token).trim();
     if (!tok || /\s/.test(tok)) { erro = m.maquinas_add_erro_token(); return; }
     ocupado = true;
     erro = '';
+    let base = n.base;
     try {
-      let base = n.base;
+      await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok });
+    } catch (e) {
+      const msg1 = e instanceof Error ? e.message : String(e);
+      const respostaHttp = e instanceof Error && /^\d{3}:/.test(e.message);
+      if (!n.alternativa || respostaHttp) {
+        erro = e instanceof Error ? `${m.falha_conexao()}: ${msg1}` : m.erro_desconhecido();
+        ocupado = false;
+        return;
+      }
+      base = n.alternativa;
       try {
         await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok });
-      } catch (e) {
-        if (!n.alternativa) throw e;
-        base = n.alternativa;
-        await getConfigForServer({ id: 'candidato', label: base, baseUrl: base, token: tok });
+      } catch (e2) {
+        const msg2 = e2 instanceof Error ? e2.message : String(e2);
+        erro = `${m.falha_conexao()}: ${msg1} · ${msg2}`;
+        ocupado = false;
+        return;
       }
-      addServer(base, tok);
-      window.location.reload();
-    } catch (e) {
-      erro = e instanceof Error ? `${m.falha_conexao()}: ${e.message}` : m.erro_desconhecido();
-    } finally {
-      ocupado = false;
     }
+    // Fora do try/catch acima: erro daqui pra baixo não é do probe, e rotulá-lo de "falha na
+    // conexão" mentiria sobre a causa.
+    addServer(base, tok);
+    window.location.reload();
+    ocupado = false;
   }
 
   function lerQr(texto: string) {
@@ -88,6 +103,7 @@
       <span class="am-rot">{m.maquinas_add_endereco()}</span>
       <input class="am-input" bind:this={enderecoEl} bind:value={endereco}
              aria-label={m.maquinas_add_endereco()}
+             aria-invalid={!!erro} aria-describedby={erro ? 'am-erro' : undefined}
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
              disabled={ocupado}
              onblur={separarToken}
@@ -99,6 +115,7 @@
       <span class="am-rot">{m.sessao_token()}</span>
       <input class="am-input" bind:value={token}
              aria-label={m.sessao_token()}
+             aria-invalid={!!erro} aria-describedby={erro ? 'am-erro' : undefined}
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
              disabled={ocupado}
              oninput={() => (erro = '')}
@@ -106,7 +123,7 @@
       <span class="am-ajuda">{m.maquinas_add_token_ajuda({ variavel: 'CP_AUTH_TOKEN' })}</span>
     </label>
     {#if ocupado}<p class="am-status" aria-live="polite">{m.maquinas_add_testando()}</p>{/if}
-    {#if erro}<p class="am-erro" role="alert">{erro}</p>{/if}
+    {#if erro}<p class="am-erro" id="am-erro" role="alert">{erro}</p>{/if}
   </ConfirmDialog>
 {/if}
 

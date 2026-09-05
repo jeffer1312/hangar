@@ -12,7 +12,7 @@
   import type { RemovalSnapshot, Server } from '../../lib/auth';
   import * as m from '../../paraglide/messages';
 
-  // Tela Servidores das Configurações (item C): controller LOCAL do CRUD de servidores, do alvo de
+  // Tela Máquinas das Configurações (item C): controller LOCAL do CRUD de servidores, do alvo de
   // edição e do logout global. O App continua dono do roteamento, do servidor resolvido e do
   // logout/sync — nada disso é duplicado aqui.
   //

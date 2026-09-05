@@ -37,8 +37,12 @@ export function normalizarEndereco(cru: string): EnderecoNormalizado | null {
   const token = tokens.length === 1 ? tokens[0] : null;
   if (token !== null && (!token || /\s/.test(token))) return null;
 
+  // URL.port some quando a porta digitada é a padrão do esquema (":80" em http, ":443" em https) —
+  // por isso "porta foi digitada" se decide pelo texto original, não por url.port.
+  const portaDigitada = /^[^/?#]*:\d+(?=[/?#]|$)/.test(semEsquema ? s : s.replace(TEM_ESQUEMA, ''));
+
   let alternativa: string | null = null;
-  if (semEsquema && !url.port) {
+  if (semEsquema && !portaDigitada) {
     const host = url.hostname;
     const redeLocal = IPV4.test(host) || host === 'localhost' || !host.includes('.') || host.endsWith('.local');
     if (redeLocal) {

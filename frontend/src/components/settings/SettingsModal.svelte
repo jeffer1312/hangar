@@ -47,7 +47,7 @@
   // Seletor de servidor do grupo "Servidor" (pedido repetido do usuário, 19/08/2026): o rótulo
   // "Servidor · X" dizia o alvo mas não trocava — trocar exigia ir à tela Servidores e voltar.
   // listServers() lê localStorage e não é reativo; o contador sobe pelo mesmo onServersChanged
-  // que o App e o ServidoresSettings usam.
+  // que o App e o MaquinasSettings usam.
   let versaoServidores = $state(0);
   $effect(() => onServersChanged(() => versaoServidores++));
   const servidores = $derived.by(() => {
@@ -65,11 +65,11 @@
   const mostrarSeletor = $derived(servidores.length > 1 && !!onPickServer && !!resolvedServer);
   function trocarServidor(id: string) { onPickServer?.(id); }
 
-  // Na tela Servidores o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
+  // Na tela Máquinas o store fica EM SILENCIO (zero GET /api/config) e a operacao pendente é
   // INVALIDADA sem nova chamada: quem manda la sao os controllers proprios (ServerManager/
   // PushQuiet). O store SÓ carrega quando (a) a IDENTIDADE mudou (troca real de alvo: outro
   // servidor, ou o mesmo id com base/token/label diferentes — limpa o estado do alvo anterior) ou
-  // (b) se voltou de Servidores pro alvo corrente — trocar de tela no MESMO alvo preserva o
+  // (b) se voltou de Máquinas pro alvo corrente — trocar de tela no MESMO alvo preserva o
   // rascunho único (decisão do usuário; o store decide pelo ultimoDono, não pela tela).
   let identidadeAnterior = $state<string | undefined>(undefined);
   // null no primeiro run: `veioDeMaquinas` exige telaAnterior === 'maquinas', então o boot
@@ -139,7 +139,7 @@
   }
 
   let tituloEl = $state<HTMLElement | null>(null);
-  // Fallback de foco das confirmações da tela Servidores: o botão FECHAR do modal é o controle que
+  // Fallback de foco das confirmações da tela Máquinas: o botão FECHAR do modal é o controle que
   // sempre sobra acessível. Desktop e mobile têm botões diferentes — ambos fazem bind no MESMO ref.
   let fecharEl = $state<HTMLElement | null>(null);
 
