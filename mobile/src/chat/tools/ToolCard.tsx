@@ -1,6 +1,6 @@
 import { Pressable, Text } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { summarizeToolInput, toolPhase, type ChatEvent } from '@hangar/core';
+import { summarizeToolInput, summarizeToolResult, toolPhase, type ChatEvent } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
 import { toolIcon } from './toolIcon';
 import * as m from '../../paraglide/messages';
@@ -19,17 +19,21 @@ export function ToolCard({ use, result, onPress, semNome }: { use: ChatEvent; re
   const fase = toolPhase(result ?? null);
   const resumo = summarizeToolInput(use.tool_name, use.tool_input);
   const cor = fase === 'error' ? theme.tokens.status.error : fase === 'pending' ? theme.tokens.accent.base : theme.tokens.text.muted;
+  // Coluna direita: nunca vazia. Sem os dois `ts` não dá pra medir duração, e aí vale o desfecho em
+  // palavra ("Pronto (38 linhas)"), que é o que a PWA mostra — cor sozinha não conta o estado.
+  const direita = fase === 'pending' ? '…' : fase === 'error' ? '!' : duracao(use, result) ?? summarizeToolResult(result, use.tool_name);
+  const estado = fase === 'pending' ? m.formato_rodando({ n: 1 }) : summarizeToolResult(result, use.tool_name);
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
       accessibilityRole="button"
-      accessibilityLabel={`${use.tool_name ?? m.formato_tool_generico()}: ${resumo}`}
+      accessibilityLabel={`${use.tool_name ?? m.formato_tool_generico()}: ${resumo} — ${estado}`}
     >
       <Icon name={toolIcon(use.tool_name)} size={15} color={cor} />
       {!semNome ? <Text style={[styles.nome, { color: theme.tokens.text.secondary }]}>{use.tool_name}</Text> : null}
       <Text style={[styles.resumo, { color: theme.tokens.text.primary }]} numberOfLines={1}>{resumo}</Text>
-      <Text style={[styles.dir, { color: cor }]}>{fase === 'pending' ? '…' : fase === 'error' ? '!' : duracao(use, result) ?? ''}</Text>
+      <Text style={[styles.dir, { color: cor }]} numberOfLines={1}>{direita}</Text>
     </Pressable>
   );
 }
@@ -43,5 +47,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   nome: { fontSize: theme.base.text.xs, fontWeight: '600' },
   resumo: { flex: 1, fontSize: theme.base.text.xs, fontFamily: theme.base.fontMono },
-  dir: { fontSize: theme.base.text.xxs, fontFamily: theme.base.fontMono, minWidth: 28, textAlign: 'right' },
+  // maxWidth: o desfecho em palavra é bem mais largo que "1.2s" e sem teto ele espremia o resumo.
+  dir: { fontSize: theme.base.text.xxs, fontFamily: theme.base.fontMono, minWidth: 28, maxWidth: '38%', textAlign: 'right' },
 }));

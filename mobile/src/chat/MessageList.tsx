@@ -64,11 +64,10 @@ export function MessageList({
 
   const renderItem = ({ item }: { item: ItemConversa }) => {
     if (item.type === 'group') {
-      return <ToolGroup tools={item.tools} resultOf={resultDe} onAbrir={(u, r) => detail.current?.abrir(u, r)} />;
+      return <ToolGroup tools={item.tools} resultOf={resultDe} onAbrir={(u) => detail.current?.abrir(u)} />;
     }
     if (item.type === 'tool') {
-      const r = resultDe(item.ev);
-      return <ToolCard use={item.ev} result={r} onPress={() => detail.current?.abrir(item.ev, r)} />;
+      return <ToolCard use={item.ev} result={resultDe(item.ev)} onPress={() => detail.current?.abrir(item.ev)} />;
     }
     if (item.type !== 'event') return null;
     const ev = item.ev;
@@ -127,7 +126,7 @@ export function MessageList({
       }
       accessibilityLabel={m.msg_aria_mensagens()}
     />
-    <ToolDetailSheet ref={detail} />
+    <ToolDetailSheet ref={detail} resultOf={resultDe} />
     </>
   );
 }

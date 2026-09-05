@@ -39,6 +39,8 @@
   "formato_concluido_1": "{n} concluído",
   "formato_concluidos": "{n} concluídos",
   "formato_com_erro": "{n} com erro",
+  "tool_mostrar_mais_linhas": "Mostrar mais {n} linhas",
+  "tool_mostrar_todas": "Mostrar todas ({n})",
   "lista_vazia_filtro": "Nenhuma sessão corresponde ao filtro.",
   "lista_comparar": "Comparar",
   "lista_broadcast_aviso": "Slash-commands não têm broadcast — envie dentro da sessão.",

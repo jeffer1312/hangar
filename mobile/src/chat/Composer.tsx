@@ -336,8 +336,13 @@ export function Composer({ serverId, name, draft }: Props) {
     (ev: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
       // Enter envia só no web (no celular é quebra de linha). O shiftKey vem do evento do DOM que o
       // react-native-web repassa em nativeEvent — o tipo do RN não o declara.
-      const nat = ev.nativeEvent as TextInputKeyPressEventData & { shiftKey?: boolean };
-      if (nat.key === 'Enter' && !nat.shiftKey && Platform.OS === 'web') void handleSend();
+      const nat: TextInputKeyPressEventData = ev.nativeEvent;
+      const shift = 'shiftKey' in nat && Boolean((nat as { shiftKey?: boolean }).shiftKey);
+      if (nat.key === 'Enter' && !shift && Platform.OS === 'web') {
+        // Sem isto o Enter TAMBÉM insere a quebra de linha, que corre contra o setText('') do envio.
+        ev.preventDefault();
+        void handleSend();
+      }
     },
     [handleSend],
   );

@@ -39,6 +39,8 @@
   "formato_concluido_1": "{n} done",
   "formato_concluidos": "{n} done",
   "formato_com_erro": "{n} with error",
+  "tool_mostrar_mais_linhas": "Show {n} more lines",
+  "tool_mostrar_todas": "Show all ({n})",
   "lista_vazia_filtro": "No sessions match the filter.",
   "lista_comparar": "Compare",
   "lista_broadcast_aviso": "Slash-commands have no broadcast — send inside the session.",
